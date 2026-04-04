@@ -121,6 +121,9 @@ pub struct VenusConfig {
     #[serde(default)]
     pub normal_samples: Vec<Sample>,
 
+    /// Known variants file (e.g., dbSNP) for BQSR.
+    pub known_sites: Option<String>,
+
     /// Target BED file (for WES/Panel).
     pub target_bed: Option<String>,
 
@@ -210,6 +213,8 @@ pub enum VenusStep {
     HaplotypeCaller,
     /// Somatic variant calling (Mutect2).
     Mutect2,
+    /// Filter Mutect2 calls.
+    FilterMutectCalls,
     /// Somatic variant calling (Strelka2).
     Strelka2,
     /// Variant annotation (VEP).
@@ -227,6 +232,7 @@ impl std::fmt::Display for VenusStep {
             Self::Bqsr => write!(f, "bqsr"),
             Self::HaplotypeCaller => write!(f, "haplotype_caller"),
             Self::Mutect2 => write!(f, "mutect2"),
+            Self::FilterMutectCalls => write!(f, "filter_mutect_calls"),
             Self::Strelka2 => write!(f, "strelka2"),
             Self::Vep => write!(f, "vep"),
             Self::ClinicalReport => write!(f, "clinical_report"),
@@ -302,6 +308,7 @@ impl VenusPipelineBuilder {
         match self.config.mode {
             AnalysisMode::TumorOnly => {
                 rules.extend(self.mutect2_rules());
+                rules.extend(self.filter_mutect_calls_rules());
             }
             AnalysisMode::NormalOnly => {
                 rules.extend(self.haplotype_caller_rules());
@@ -309,6 +316,8 @@ impl VenusPipelineBuilder {
             AnalysisMode::TumorNormal => {
                 rules.extend(self.haplotype_caller_rules());
                 rules.extend(self.mutect2_rules());
+                rules.extend(self.filter_mutect_calls_rules());
+                rules.extend(self.strelka2_rules());
             }
         }
 
@@ -395,6 +404,12 @@ impl VenusPipelineBuilder {
 
     fn bqsr_rules(&self) -> Vec<Rule> {
         let ref_path = &self.config.reference_fasta;
+        let known_sites_flag = self
+            .config
+            .known_sites
+            .as_deref()
+            .map(|ks| format!(" --known-sites {ks}"))
+            .unwrap_or_default();
         self.config
             .all_samples()
             .into_iter()
@@ -405,7 +420,7 @@ impl VenusPipelineBuilder {
                     vec![format!("dedup/{name}.dedup.bam")],
                     vec![format!("recal/{name}.recal.bam")],
                     &format!(
-                        "gatk BaseRecalibrator -I {{input[0]}} -R {ref_path} -O recal/{name}.recal.table && \
+                        "gatk BaseRecalibrator -I {{input[0]}} -R {ref_path}{known_sites_flag} -O recal/{name}.recal.table && \
                          gatk ApplyBQSR -I {{input[0]}} -R {ref_path} --bqsr-recal-file recal/{name}.recal.table -O {{output[0]}}"
                     ),
                     4,
@@ -475,6 +490,61 @@ impl VenusPipelineBuilder {
             .collect()
     }
 
+    fn filter_mutect_calls_rules(&self) -> Vec<Rule> {
+        let ref_path = &self.config.reference_fasta;
+        self.config
+            .tumor_samples
+            .iter()
+            .map(|s| {
+                make_rule(
+                    &format!("filter_mutect_calls_{}", s.name),
+                    vec![format!("variants/{}.mutect2.vcf.gz", s.name)],
+                    vec![format!("variants/{}.mutect2.filtered.vcf.gz", s.name)],
+                    &format!(
+                        "gatk FilterMutectCalls -V {{input[0]}} -R {ref_path} -O {{output[0]}}"
+                    ),
+                    4,
+                    "8G",
+                    "envs/gatk.yaml",
+                )
+            })
+            .collect()
+    }
+
+    fn strelka2_rules(&self) -> Vec<Rule> {
+        if self.config.mode != AnalysisMode::TumorNormal {
+            return Vec::new();
+        }
+        let normal_name = match self.config.normal_samples.first() {
+            Some(s) => &s.name,
+            None => return Vec::new(),
+        };
+        let ref_path = &self.config.reference_fasta;
+        self.config
+            .tumor_samples
+            .iter()
+            .map(|s| {
+                make_rule(
+                    &format!("strelka2_{}", s.name),
+                    vec![
+                        format!("recal/{}.recal.bam", s.name),
+                        format!("recal/{normal_name}.recal.bam"),
+                    ],
+                    vec![format!("variants/{}.strelka2.vcf.gz", s.name)],
+                    &format!(
+                        "configureStrelkaSomaticWorkflow.py --tumorBam {{input[0]}} --normalBam {{input[1]}} --referenceFasta {ref_path} --runDir strelka2_{tumor} && \
+                         strelka2_{tumor}/runWorkflow.py -m local -j {{threads}} && \
+                         cp strelka2_{tumor}/results/variants/somatic.snvs.vcf.gz {{output[0]}}",
+                        tumor = s.name
+                    ),
+                    8,
+                    "16G",
+                    "envs/strelka2.yaml",
+                )
+            })
+            .collect()
+    }
+
     fn annotation_rules(&self) -> Vec<Rule> {
         self.called_samples()
             .into_iter()
@@ -523,7 +593,7 @@ impl VenusPipelineBuilder {
         match self.config.mode {
             AnalysisMode::TumorOnly => {
                 for s in &self.config.tumor_samples {
-                    result.push((s, format!("variants/{}.mutect2.vcf.gz", s.name)));
+                    result.push((s, format!("variants/{}.mutect2.filtered.vcf.gz", s.name)));
                 }
             }
             AnalysisMode::NormalOnly => {
@@ -533,7 +603,7 @@ impl VenusPipelineBuilder {
             }
             AnalysisMode::TumorNormal => {
                 for s in &self.config.tumor_samples {
-                    result.push((s, format!("variants/{}.mutect2.vcf.gz", s.name)));
+                    result.push((s, format!("variants/{}.mutect2.filtered.vcf.gz", s.name)));
                 }
                 for s in &self.config.normal_samples {
                     result.push((s, format!("variants/{}.g.vcf.gz", s.name)));
@@ -632,6 +702,7 @@ mod tests {
                 is_tumor: true,
             }],
             normal_samples: vec![],
+            known_sites: None,
             target_bed: None,
             threads: 8,
             output_dir: "output".to_string(),
@@ -652,6 +723,7 @@ mod tests {
             reference_fasta: "/ref/hg38.fa".to_string(),
             tumor_samples: vec![],
             normal_samples: vec![],
+            known_sites: None,
             target_bed: None,
             threads: 8,
             output_dir: "output".to_string(),
@@ -677,6 +749,7 @@ mod tests {
                 is_tumor: true,
             }],
             normal_samples: vec![],
+            known_sites: None,
             target_bed: None,
             threads: 8,
             output_dir: "output".to_string(),
@@ -707,6 +780,7 @@ mod tests {
                 r2_fastq: None,
                 is_tumor: false,
             }],
+            known_sites: None,
             target_bed: None,
             threads: 8,
             output_dir: "output".to_string(),
@@ -744,6 +818,7 @@ mod tests {
             reference_fasta: "/ref/hg38.fa".to_string(),
             tumor_samples: vec![],
             normal_samples: vec![],
+            known_sites: None,
             target_bed: None,
             threads: 8,
             output_dir: "output".to_string(),
@@ -763,14 +838,15 @@ mod tests {
         let builder = VenusPipelineBuilder::new(config);
         let rules = builder.build().unwrap();
 
-        // fastp + bwa_mem2 + mark_dup + bqsr + mutect2 + annotate + report = 7
-        assert_eq!(rules.len(), 7);
+        // fastp + bwa_mem2 + mark_dup + bqsr + mutect2 + filter_mutect_calls + annotate + report = 8
+        assert_eq!(rules.len(), 8);
         let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
         assert!(names.contains(&"fastp_T1"));
         assert!(names.contains(&"bwa_mem2_T1"));
         assert!(names.contains(&"mark_duplicates_T1"));
         assert!(names.contains(&"bqsr_T1"));
         assert!(names.contains(&"mutect2_T1"));
+        assert!(names.contains(&"filter_mutect_calls_T1"));
         assert!(names.contains(&"annotate_T1"));
         assert!(names.contains(&"report_T1"));
         assert!(!names.iter().any(|n| n.starts_with("haplotype_caller")));
@@ -800,10 +876,12 @@ mod tests {
         let builder = VenusPipelineBuilder::new(config);
         let rules = builder.build().unwrap();
 
-        // 2*(fastp + bwa_mem2 + mark_dup + bqsr) + haplotype_caller + mutect2 = 10
-        assert_eq!(rules.len(), 10);
+        // 2*(fastp + bwa_mem2 + mark_dup + bqsr) + haplotype_caller + mutect2 + filter_mutect_calls + strelka2 = 12
+        assert_eq!(rules.len(), 12);
         let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
         assert!(names.contains(&"mutect2_T1"));
+        assert!(names.contains(&"filter_mutect_calls_T1"));
+        assert!(names.contains(&"strelka2_T1"));
         assert!(names.contains(&"haplotype_caller_N1"));
     }
 
@@ -837,10 +915,76 @@ mod tests {
             .unwrap();
         let bqsr_pos = order.iter().position(|n| n == "bqsr_T1").unwrap();
         let mutect2_pos = order.iter().position(|n| n == "mutect2_T1").unwrap();
+        let filter_pos = order
+            .iter()
+            .position(|n| n == "filter_mutect_calls_T1")
+            .unwrap();
 
         assert!(fastp_pos < bwa_pos);
         assert!(bwa_pos < markdup_pos);
         assert!(markdup_pos < bqsr_pos);
         assert!(bqsr_pos < mutect2_pos);
+        assert!(mutect2_pos < filter_pos);
+    }
+
+    #[test]
+    fn build_tumor_normal_strelka2() {
+        let mut config = base_config(AnalysisMode::TumorNormal);
+        config.tumor_samples = vec![tumor_sample("T1")];
+        config.normal_samples = vec![normal_sample("N1")];
+
+        let builder = VenusPipelineBuilder::new(config);
+        let rules = builder.build().unwrap();
+
+        let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
+        assert!(names.contains(&"strelka2_T1"));
+
+        // Strelka2 should use recal BAMs as input
+        let strelka_rule = rules.iter().find(|r| r.name == "strelka2_T1").unwrap();
+        assert_eq!(strelka_rule.input[0], "recal/T1.recal.bam");
+        assert_eq!(strelka_rule.input[1], "recal/N1.recal.bam");
+        assert_eq!(strelka_rule.output[0], "variants/T1.strelka2.vcf.gz");
+    }
+
+    #[test]
+    fn strelka2_not_in_tumor_only() {
+        let mut config = base_config(AnalysisMode::TumorOnly);
+        config.tumor_samples = vec![tumor_sample("T1")];
+
+        let builder = VenusPipelineBuilder::new(config);
+        let rules = builder.build().unwrap();
+
+        let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
+        assert!(!names.iter().any(|n| n.starts_with("strelka2")));
+    }
+
+    #[test]
+    fn known_sites_in_bqsr() {
+        let mut config = base_config(AnalysisMode::TumorOnly);
+        config.tumor_samples = vec![tumor_sample("T1")];
+        config.known_sites = Some("/ref/dbsnp.vcf.gz".to_string());
+
+        let builder = VenusPipelineBuilder::new(config);
+        let rules = builder.build().unwrap();
+
+        let bqsr_rule = rules.iter().find(|r| r.name == "bqsr_T1").unwrap();
+        let shell = bqsr_rule.shell.as_ref().unwrap();
+        assert!(shell.contains("--known-sites /ref/dbsnp.vcf.gz"));
+    }
+
+    #[test]
+    fn filter_mutect_calls_uses_filtered_vcf_in_annotation() {
+        let mut config = base_config(AnalysisMode::TumorOnly);
+        config.tumor_samples = vec![tumor_sample("T1")];
+        config.annotate = true;
+
+        let builder = VenusPipelineBuilder::new(config);
+        let rules = builder.build().unwrap();
+
+        let annotate_rule = rules.iter().find(|r| r.name == "annotate_T1").unwrap();
+        assert_eq!(
+            annotate_rule.input[0],
+            "variants/T1.mutect2.filtered.vcf.gz"
+        );
     }
 }
