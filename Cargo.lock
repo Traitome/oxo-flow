@@ -872,6 +872,7 @@ dependencies = [
  "colored",
  "indicatif",
  "oxo-flow-core",
+ "oxo-flow-web",
  "serde_json",
  "tokio",
  "tracing",
