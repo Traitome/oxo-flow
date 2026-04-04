@@ -664,4 +664,102 @@ mod tests {
         resolver.cache_mut().mark_ready(&key);
         assert!(resolver.cache().is_ready(&key));
     }
+
+    // ── Additional wrap_command tests ──────────────────────────────
+
+    #[test]
+    fn conda_wrap_command() {
+        let backend = CondaBackend;
+        let result = backend
+            .wrap_command("fastqc reads.fq", "envs/qc.yaml")
+            .unwrap();
+        assert!(
+            result.contains("conda run"),
+            "expected 'conda run' in: {result}"
+        );
+        assert!(result.contains("fastqc reads.fq"));
+    }
+
+    #[test]
+    fn venv_wrap_command() {
+        let backend = VenvBackend;
+        let result = backend.wrap_command("pip list", ".venv").unwrap();
+        assert!(result.contains("source .venv/bin/activate"));
+        assert!(result.contains("pip list"));
+    }
+
+    #[test]
+    fn pixi_wrap_command() {
+        let backend = PixiBackend;
+        let result = backend.wrap_command("python main.py", "default").unwrap();
+        assert_eq!(result, "pixi run -e default python main.py");
+    }
+
+    #[test]
+    fn resolver_wraps_conda_spec() {
+        let resolver = EnvironmentResolver::new();
+        let spec = EnvironmentSpec {
+            conda: Some("envs/qc.yaml".to_string()),
+            ..Default::default()
+        };
+        let result = resolver.wrap_command("fastqc reads.fq", &spec).unwrap();
+        assert!(
+            result.contains("conda run"),
+            "expected conda wrapping, got: {result}"
+        );
+    }
+
+    #[test]
+    fn resolver_wraps_docker_spec() {
+        let resolver = EnvironmentResolver::new();
+        let spec = EnvironmentSpec {
+            docker: Some("biocontainers/bwa:0.7.17".to_string()),
+            ..Default::default()
+        };
+        let result = resolver
+            .wrap_command("bwa mem ref.fa reads.fq", &spec)
+            .unwrap();
+        assert!(result.contains("docker run"));
+        assert!(result.contains("biocontainers/bwa:0.7.17"));
+        assert!(result.contains("bwa mem ref.fa reads.fq"));
+    }
+
+    #[test]
+    fn venv_teardown_guards_unsafe_paths() {
+        let backend = VenvBackend;
+        // Absolute paths must be rejected
+        assert!(backend.teardown_command("/usr/local").is_err());
+        assert!(backend.teardown_command("/home/user/.venv").is_err());
+        // Traversal paths must be rejected
+        assert!(backend.teardown_command("../escape").is_err());
+        assert!(backend.teardown_command("foo/../bar").is_err());
+        // Empty spec must be rejected
+        assert!(backend.teardown_command("").is_err());
+        // Relative, safe paths must succeed
+        assert!(backend.teardown_command(".venv").is_ok());
+        assert!(backend.teardown_command("my_env").is_ok());
+    }
+
+    #[test]
+    fn environment_cache_operations() {
+        let mut cache = EnvironmentCache::new();
+
+        // Initially nothing is ready
+        assert!(!cache.is_ready("conda:envs/qc.yaml"));
+        assert!(!cache.is_ready("docker:ubuntu:22.04"));
+
+        // Mark one ready and verify
+        cache.mark_ready("conda:envs/qc.yaml");
+        assert!(cache.is_ready("conda:envs/qc.yaml"));
+        assert!(!cache.is_ready("docker:ubuntu:22.04"));
+
+        // Mark another and verify both
+        cache.mark_ready("docker:ubuntu:22.04");
+        assert!(cache.is_ready("conda:envs/qc.yaml"));
+        assert!(cache.is_ready("docker:ubuntu:22.04"));
+
+        // Idempotent — marking twice doesn't break anything
+        cache.mark_ready("conda:envs/qc.yaml");
+        assert!(cache.is_ready("conda:envs/qc.yaml"));
+    }
 }

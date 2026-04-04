@@ -987,4 +987,83 @@ mod tests {
             "variants/T1.mutect2.filtered.vcf.gz"
         );
     }
+
+    #[test]
+    fn validate_tumor_normal_needs_both_samples() {
+        let mut config = base_config(AnalysisMode::TumorNormal);
+        config.tumor_samples = vec![tumor_sample("T1")];
+        // normal_samples left empty — TumorNormal requires both
+        assert!(config.validate().is_err());
+        let err = config.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("both"),
+            "expected 'both' in error message, got: {err}"
+        );
+    }
+
+    #[test]
+    fn pipeline_rule_environments() {
+        let mut config = base_config(AnalysisMode::TumorOnly);
+        config.tumor_samples = vec![tumor_sample("T1")];
+
+        let builder = VenusPipelineBuilder::new(config);
+        let rules = builder.build().unwrap();
+
+        for rule in &rules {
+            assert!(
+                rule.environment.conda.is_some(),
+                "rule '{}' should have a conda environment spec",
+                rule.name
+            );
+            let conda = rule.environment.conda.as_ref().unwrap();
+            assert!(
+                !conda.is_empty(),
+                "rule '{}' has empty conda spec",
+                rule.name
+            );
+        }
+    }
+
+    #[test]
+    fn generate_oxoflow_round_trip() {
+        let mut config = base_config(AnalysisMode::TumorOnly);
+        config.tumor_samples = vec![tumor_sample("T1")];
+        config.annotate = true;
+        config.report = true;
+
+        // Generate TOML
+        let toml_str = generate_oxoflow(&config).unwrap();
+
+        // Parse it back
+        let wf = oxo_flow_core::config::WorkflowConfig::parse(&toml_str).unwrap();
+        assert_eq!(wf.workflow.name, "TestProject");
+        assert!(!wf.rules.is_empty());
+
+        // Build DAG from parsed rules and verify validity
+        let dag = oxo_flow_core::WorkflowDag::from_rules(&wf.rules).unwrap();
+        assert!(dag.validate().is_ok());
+        assert!(dag.node_count() > 0);
+        assert_eq!(dag.node_count(), wf.rules.len());
+    }
+
+    #[test]
+    fn panel_sequencing_with_bed() {
+        let config = VenusConfig {
+            mode: AnalysisMode::TumorOnly,
+            seq_type: SeqType::Panel,
+            genome_build: GenomeBuild::GRCh38,
+            reference_fasta: "/ref/hg38.fa".to_string(),
+            tumor_samples: vec![tumor_sample("T1")],
+            normal_samples: vec![],
+            known_sites: None,
+            target_bed: Some("targets/panel.bed".to_string()),
+            threads: 8,
+            output_dir: "output".to_string(),
+            annotate: false,
+            report: false,
+            project_name: Some("PanelTest".to_string()),
+        };
+
+        assert!(config.validate().is_ok());
+    }
 }

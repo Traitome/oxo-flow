@@ -960,4 +960,130 @@ docker = "biocontainers/bwa:0.7.17"
             .files_to_clean
             .contains(&"aligned/{sample}.bam".to_string()));
     }
+
+    // -- Additional error-path & edge-case tests --------------------------------
+
+    #[tokio::test]
+    async fn run_invalid_toml_returns_400() {
+        let resp = post_json(
+            "/api/workflows/run",
+            &DryRunRequest {
+                toml_content: "not valid toml {{{{".to_string(),
+                config: None,
+            },
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let err: ErrorResponse = serde_json::from_slice(&body).unwrap();
+        assert!(!err.error.is_empty());
+    }
+
+    #[tokio::test]
+    async fn clean_invalid_toml_returns_400() {
+        let resp = post_json(
+            "/api/workflows/clean",
+            &ValidateRequest {
+                toml_content: "not valid toml {{{{".to_string(),
+            },
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let err: ErrorResponse = serde_json::from_slice(&body).unwrap();
+        assert!(!err.error.is_empty());
+    }
+
+    #[tokio::test]
+    async fn validate_workflow_with_cycle() {
+        let cycle_toml = r#"
+[workflow]
+name = "cycle-test"
+version = "1.0.0"
+
+[[rules]]
+name = "step_a"
+input = ["b_output.txt"]
+output = ["a_output.txt"]
+shell = "echo a"
+
+[[rules]]
+name = "step_b"
+input = ["a_output.txt"]
+output = ["b_output.txt"]
+shell = "echo b"
+"#;
+
+        let resp = post_json(
+            "/api/workflows/validate",
+            &ValidateRequest {
+                toml_content: cycle_toml.to_string(),
+            },
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: ValidateResponse = serde_json::from_slice(&body).unwrap();
+        assert!(!parsed.valid);
+        assert!(!parsed.errors.is_empty());
+        let joined = parsed.errors.join(" ");
+        assert!(
+            joined.to_lowercase().contains("cycle"),
+            "expected cycle error, got: {joined}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dag_invalid_toml_returns_400() {
+        let resp = post_json(
+            "/api/workflows/dag",
+            &ValidateRequest {
+                toml_content: "not valid toml {{{{".to_string(),
+            },
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let err: ErrorResponse = serde_json::from_slice(&body).unwrap();
+        assert!(!err.error.is_empty());
+    }
+
+    #[tokio::test]
+    async fn dry_run_without_config() {
+        let resp = post_json(
+            "/api/workflows/dry-run",
+            &DryRunRequest {
+                toml_content: VALID_TOML.to_string(),
+                config: None,
+            },
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        let status = &value["status"];
+        assert_eq!(status["status"], "dry-run");
+        assert_eq!(status["rules_total"], 2);
+
+        let order = value["execution_order"].as_array().unwrap();
+        assert_eq!(order.len(), 2);
+        assert_eq!(order[0], "step_a");
+        assert_eq!(order[1], "step_b");
+    }
 }
