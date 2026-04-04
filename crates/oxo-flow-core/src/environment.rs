@@ -4,13 +4,15 @@
 //! managers (conda, pixi, docker, singularity, venv) and a resolver that
 //! selects the appropriate backend for each rule.
 
+use std::collections::HashMap;
+
 use crate::error::{OxoFlowError, Result};
 use crate::rule::EnvironmentSpec;
 
 /// Trait for environment backends.
 ///
 /// Each backend (conda, docker, etc.) implements this trait to provide
-/// environment detection, creation, and command wrapping.
+/// environment detection, creation, command wrapping, and lifecycle management.
 pub trait EnvironmentBackend: Send + Sync {
     /// Returns the name of this environment type.
     fn name(&self) -> &str;
@@ -20,6 +22,17 @@ pub trait EnvironmentBackend: Send + Sync {
 
     /// Wrap a shell command to run inside this environment.
     fn wrap_command(&self, command: &str, spec: &str) -> Result<String>;
+
+    /// Return the shell command to set up / create this environment.
+    fn setup_command(&self, spec: &str) -> Result<String>;
+
+    /// Return the shell command to tear down / remove this environment,
+    /// or `None` if no cleanup is needed.
+    fn teardown_command(&self, spec: &str) -> Result<Option<String>>;
+
+    /// Return a cache key that uniquely identifies this environment
+    /// configuration so it can be reused across rules.
+    fn cache_key(&self, spec: &str) -> String;
 }
 
 /// Conda environment backend.
@@ -43,6 +56,23 @@ impl EnvironmentBackend for CondaBackend {
         Ok(format!(
             "conda run --no-banner -n $(conda env list --json | python3 -c \"import sys,json; print(next((e.split('/')[-1] for e in json.load(sys.stdin)['envs'] if '{spec}' in e), '{spec}'))\") {command}"
         ))
+    }
+
+    fn setup_command(&self, spec: &str) -> Result<String> {
+        Ok(format!("conda env create -f {spec}"))
+    }
+
+    fn teardown_command(&self, spec: &str) -> Result<Option<String>> {
+        // Derive env name from the YAML filename (strip path & extension).
+        let env_name = std::path::Path::new(spec)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(spec);
+        Ok(Some(format!("conda env remove -n {env_name} -y")))
+    }
+
+    fn cache_key(&self, spec: &str) -> String {
+        format!("conda:{spec}")
     }
 }
 
@@ -70,6 +100,18 @@ impl EnvironmentBackend for DockerBackend {
         Ok(format!(
             "docker run --rm -v {workdir}:{workdir} -w {workdir} {spec} sh -c '{command}'"
         ))
+    }
+
+    fn setup_command(&self, spec: &str) -> Result<String> {
+        Ok(format!("docker pull {spec}"))
+    }
+
+    fn teardown_command(&self, _spec: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn cache_key(&self, spec: &str) -> String {
+        format!("docker:{spec}")
     }
 }
 
@@ -102,6 +144,18 @@ impl EnvironmentBackend for SingularityBackend {
             "singularity exec --bind {workdir}:{workdir} {spec} sh -c '{command}'"
         ))
     }
+
+    fn setup_command(&self, spec: &str) -> Result<String> {
+        Ok(format!("singularity pull {spec}"))
+    }
+
+    fn teardown_command(&self, _spec: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn cache_key(&self, spec: &str) -> String {
+        format!("singularity:{spec}")
+    }
 }
 
 /// Python venv environment backend.
@@ -122,6 +176,27 @@ impl EnvironmentBackend for VenvBackend {
 
     fn wrap_command(&self, command: &str, spec: &str) -> Result<String> {
         Ok(format!("source {spec}/bin/activate && {command}"))
+    }
+
+    fn setup_command(&self, spec: &str) -> Result<String> {
+        Ok(format!(
+            "python3 -m venv {spec} && source {spec}/bin/activate && pip install -r requirements.txt"
+        ))
+    }
+
+    fn teardown_command(&self, spec: &str) -> Result<Option<String>> {
+        // Guard against dangerous paths — only allow relative, simple venv dirs.
+        if spec.is_empty() || spec.contains("..") || spec.starts_with('/') {
+            return Err(OxoFlowError::Environment {
+                kind: "venv".to_string(),
+                message: format!("refusing to remove unsafe path: {spec}"),
+            });
+        }
+        Ok(Some(format!("rm -rf {spec}")))
+    }
+
+    fn cache_key(&self, spec: &str) -> String {
+        format!("venv:{spec}")
     }
 }
 
@@ -144,6 +219,18 @@ impl EnvironmentBackend for PixiBackend {
     fn wrap_command(&self, command: &str, spec: &str) -> Result<String> {
         Ok(format!("pixi run -e {spec} {command}"))
     }
+
+    fn setup_command(&self, spec: &str) -> Result<String> {
+        Ok(format!("pixi install -e {spec}"))
+    }
+
+    fn teardown_command(&self, _spec: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn cache_key(&self, spec: &str) -> String {
+        format!("pixi:{spec}")
+    }
 }
 
 /// System (no-op) environment backend for rules without environment specs.
@@ -162,6 +249,43 @@ impl EnvironmentBackend for SystemBackend {
     fn wrap_command(&self, command: &str, _spec: &str) -> Result<String> {
         Ok(command.to_string())
     }
+
+    fn setup_command(&self, _spec: &str) -> Result<String> {
+        // No setup needed for the system backend.
+        Ok("true".to_string())
+    }
+
+    fn teardown_command(&self, _spec: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn cache_key(&self, _spec: &str) -> String {
+        "system".to_string()
+    }
+}
+
+/// Tracks which environments have already been set up so duplicate
+/// setup work can be avoided across rules sharing the same environment.
+#[derive(Debug, Default)]
+pub struct EnvironmentCache {
+    ready: HashMap<String, bool>,
+}
+
+impl EnvironmentCache {
+    /// Create a new, empty cache.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns `true` if the environment identified by `key` has been set up.
+    pub fn is_ready(&self, key: &str) -> bool {
+        self.ready.get(key).copied().unwrap_or(false)
+    }
+
+    /// Mark the environment identified by `key` as ready.
+    pub fn mark_ready(&mut self, key: &str) {
+        self.ready.insert(key.to_string(), true);
+    }
 }
 
 /// Resolves the appropriate environment backend for a rule's environment spec.
@@ -172,6 +296,7 @@ pub struct EnvironmentResolver {
     venv: VenvBackend,
     pixi: PixiBackend,
     system: SystemBackend,
+    cache: EnvironmentCache,
 }
 
 impl Default for EnvironmentResolver {
@@ -190,7 +315,18 @@ impl EnvironmentResolver {
             venv: VenvBackend,
             pixi: PixiBackend,
             system: SystemBackend,
+            cache: EnvironmentCache::new(),
         }
+    }
+
+    /// Return a reference to the environment cache.
+    pub fn cache(&self) -> &EnvironmentCache {
+        &self.cache
+    }
+
+    /// Return a mutable reference to the environment cache.
+    pub fn cache_mut(&mut self) -> &mut EnvironmentCache {
+        &mut self.cache
     }
 
     /// Wrap a command using the appropriate environment backend.
@@ -268,6 +404,8 @@ impl EnvironmentResolver {
 mod tests {
     use super::*;
 
+    // ── SystemBackend ──────────────────────────────────────────────
+
     #[test]
     fn system_backend_always_available() {
         let backend = SystemBackend;
@@ -283,6 +421,55 @@ mod tests {
     }
 
     #[test]
+    fn system_setup_command() {
+        let backend = SystemBackend;
+        assert_eq!(backend.setup_command("").unwrap(), "true");
+    }
+
+    #[test]
+    fn system_teardown_command() {
+        let backend = SystemBackend;
+        assert!(backend.teardown_command("").unwrap().is_none());
+    }
+
+    #[test]
+    fn system_cache_key() {
+        let backend = SystemBackend;
+        assert_eq!(backend.cache_key("anything"), "system");
+    }
+
+    // ── CondaBackend ───────────────────────────────────────────────
+
+    #[test]
+    fn conda_setup_command() {
+        let backend = CondaBackend;
+        let cmd = backend.setup_command("envs/qc.yaml").unwrap();
+        assert_eq!(cmd, "conda env create -f envs/qc.yaml");
+    }
+
+    #[test]
+    fn conda_teardown_command() {
+        let backend = CondaBackend;
+        let cmd = backend.teardown_command("envs/qc.yaml").unwrap().unwrap();
+        assert_eq!(cmd, "conda env remove -n qc -y");
+    }
+
+    #[test]
+    fn conda_teardown_bare_name() {
+        let backend = CondaBackend;
+        let cmd = backend.teardown_command("myenv").unwrap().unwrap();
+        assert_eq!(cmd, "conda env remove -n myenv -y");
+    }
+
+    #[test]
+    fn conda_cache_key() {
+        let backend = CondaBackend;
+        assert_eq!(backend.cache_key("envs/qc.yaml"), "conda:envs/qc.yaml");
+    }
+
+    // ── DockerBackend ──────────────────────────────────────────────
+
+    #[test]
     fn docker_wrap_command() {
         let backend = DockerBackend;
         let result = backend
@@ -293,6 +480,33 @@ mod tests {
     }
 
     #[test]
+    fn docker_setup_command() {
+        let backend = DockerBackend;
+        let cmd = backend.setup_command("biocontainers/bwa:0.7.17").unwrap();
+        assert_eq!(cmd, "docker pull biocontainers/bwa:0.7.17");
+    }
+
+    #[test]
+    fn docker_teardown_is_noop() {
+        let backend = DockerBackend;
+        assert!(backend
+            .teardown_command("biocontainers/bwa:0.7.17")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn docker_cache_key() {
+        let backend = DockerBackend;
+        assert_eq!(
+            backend.cache_key("biocontainers/bwa:0.7.17"),
+            "docker:biocontainers/bwa:0.7.17"
+        );
+    }
+
+    // ── SingularityBackend ─────────────────────────────────────────
+
+    #[test]
     fn singularity_wrap_command() {
         let backend = SingularityBackend;
         let result = backend
@@ -301,6 +515,119 @@ mod tests {
         assert!(result.contains("singularity exec"));
         assert!(result.contains("image.sif"));
     }
+
+    #[test]
+    fn singularity_setup_command() {
+        let backend = SingularityBackend;
+        let cmd = backend.setup_command("docker://ubuntu:22.04").unwrap();
+        assert_eq!(cmd, "singularity pull docker://ubuntu:22.04");
+    }
+
+    #[test]
+    fn singularity_teardown_is_noop() {
+        let backend = SingularityBackend;
+        assert!(backend.teardown_command("image.sif").unwrap().is_none());
+    }
+
+    #[test]
+    fn singularity_cache_key() {
+        let backend = SingularityBackend;
+        assert_eq!(backend.cache_key("image.sif"), "singularity:image.sif");
+    }
+
+    // ── VenvBackend ────────────────────────────────────────────────
+
+    #[test]
+    fn venv_setup_command() {
+        let backend = VenvBackend;
+        let cmd = backend.setup_command(".venv").unwrap();
+        assert!(cmd.contains("python3 -m venv .venv"));
+        assert!(cmd.contains("pip install -r requirements.txt"));
+    }
+
+    #[test]
+    fn venv_teardown_command() {
+        let backend = VenvBackend;
+        let cmd = backend.teardown_command(".venv").unwrap().unwrap();
+        assert_eq!(cmd, "rm -rf .venv");
+    }
+
+    #[test]
+    fn venv_teardown_rejects_absolute_path() {
+        let backend = VenvBackend;
+        assert!(backend.teardown_command("/usr").is_err());
+    }
+
+    #[test]
+    fn venv_teardown_rejects_traversal() {
+        let backend = VenvBackend;
+        assert!(backend.teardown_command("../escape").is_err());
+    }
+
+    #[test]
+    fn venv_cache_key() {
+        let backend = VenvBackend;
+        assert_eq!(backend.cache_key(".venv"), "venv:.venv");
+    }
+
+    // ── PixiBackend ────────────────────────────────────────────────
+
+    #[test]
+    fn pixi_setup_command() {
+        let backend = PixiBackend;
+        let cmd = backend.setup_command("default").unwrap();
+        assert_eq!(cmd, "pixi install -e default");
+    }
+
+    #[test]
+    fn pixi_teardown_is_noop() {
+        let backend = PixiBackend;
+        assert!(backend.teardown_command("default").unwrap().is_none());
+    }
+
+    #[test]
+    fn pixi_cache_key() {
+        let backend = PixiBackend;
+        assert_eq!(backend.cache_key("default"), "pixi:default");
+    }
+
+    // ── EnvironmentCache ───────────────────────────────────────────
+
+    #[test]
+    fn cache_initially_empty() {
+        let cache = EnvironmentCache::new();
+        assert!(!cache.is_ready("conda:envs/qc.yaml"));
+    }
+
+    #[test]
+    fn cache_mark_and_query() {
+        let mut cache = EnvironmentCache::new();
+        cache.mark_ready("docker:ubuntu:22.04");
+        assert!(cache.is_ready("docker:ubuntu:22.04"));
+        assert!(!cache.is_ready("docker:alpine:3.18"));
+    }
+
+    #[test]
+    fn cache_multiple_entries() {
+        let mut cache = EnvironmentCache::new();
+        cache.mark_ready("conda:envs/qc.yaml");
+        cache.mark_ready("docker:ubuntu:22.04");
+        cache.mark_ready("venv:.venv");
+        assert!(cache.is_ready("conda:envs/qc.yaml"));
+        assert!(cache.is_ready("docker:ubuntu:22.04"));
+        assert!(cache.is_ready("venv:.venv"));
+        assert!(!cache.is_ready("pixi:default"));
+    }
+
+    #[test]
+    fn cache_idempotent_mark() {
+        let mut cache = EnvironmentCache::new();
+        cache.mark_ready("system");
+        cache.mark_ready("system");
+        assert!(cache.is_ready("system"));
+    }
+
+    // ── EnvironmentResolver ────────────────────────────────────────
 
     #[test]
     fn resolver_empty_spec_uses_system() {
@@ -327,5 +654,14 @@ mod tests {
         let resolver = EnvironmentResolver::new();
         let available = resolver.available_backends();
         assert!(available.contains(&"system"));
+    }
+
+    #[test]
+    fn resolver_cache_integration() {
+        let mut resolver = EnvironmentResolver::new();
+        let key = CondaBackend.cache_key("envs/qc.yaml");
+        assert!(!resolver.cache().is_ready(&key));
+        resolver.cache_mut().mark_ready(&key);
+        assert!(resolver.cache().is_ready(&key));
     }
 }
