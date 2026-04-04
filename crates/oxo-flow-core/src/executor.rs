@@ -7,7 +7,8 @@ use crate::error::{OxoFlowError, Result};
 use crate::rule::Rule;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::process::Command;
@@ -227,6 +228,106 @@ impl LocalExecutor {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Benchmark & checkpoint support
+// ---------------------------------------------------------------------------
+
+/// Performance metrics recorded after executing a rule.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BenchmarkRecord {
+    /// Name of the rule that was benchmarked.
+    pub rule: String,
+    /// Wall-clock time in seconds.
+    pub wall_time_secs: f64,
+    /// Peak resident memory in megabytes (placeholder — not yet measured).
+    pub max_memory_mb: Option<u64>,
+    /// Total CPU seconds consumed (placeholder — not yet measured).
+    pub cpu_seconds: Option<f64>,
+}
+
+/// Persistent checkpoint state for resumable workflow execution.
+///
+/// Tracks which rules have completed or failed so that a restarted workflow
+/// can skip already-finished work.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointState {
+    /// Rules that completed successfully.
+    pub completed_rules: HashSet<String>,
+    /// Rules that failed during execution.
+    pub failed_rules: HashSet<String>,
+    /// Benchmark records keyed by rule name.
+    pub benchmarks: HashMap<String, BenchmarkRecord>,
+}
+
+impl CheckpointState {
+    /// Create a new, empty checkpoint state.
+    pub fn new() -> Self {
+        Self {
+            completed_rules: HashSet::new(),
+            failed_rules: HashSet::new(),
+            benchmarks: HashMap::new(),
+        }
+    }
+
+    /// Mark a rule as successfully completed and store its benchmark.
+    pub fn mark_completed(&mut self, rule: &str, benchmark: BenchmarkRecord) {
+        self.completed_rules.insert(rule.to_string());
+        self.failed_rules.remove(rule);
+        self.benchmarks.insert(rule.to_string(), benchmark);
+    }
+
+    /// Mark a rule as failed.
+    pub fn mark_failed(&mut self, rule: &str) {
+        self.failed_rules.insert(rule.to_string());
+        self.completed_rules.remove(rule);
+    }
+
+    /// Returns `true` if the rule finished successfully.
+    pub fn is_completed(&self, rule: &str) -> bool {
+        self.completed_rules.contains(rule)
+    }
+
+    /// Returns `true` if the rule should be skipped (i.e., it already completed).
+    pub fn should_skip(&self, rule: &str) -> bool {
+        self.is_completed(rule)
+    }
+
+    /// Serialize the checkpoint state to a JSON string.
+    pub fn to_json(&self) -> Result<String> {
+        serde_json::to_string_pretty(self).map_err(|e| OxoFlowError::Config {
+            message: format!("failed to serialize checkpoint: {e}"),
+        })
+    }
+
+    /// Deserialize a checkpoint state from a JSON string.
+    pub fn from_json(json: &str) -> Result<Self> {
+        serde_json::from_str(json).map_err(|e| OxoFlowError::Config {
+            message: format!("failed to deserialize checkpoint: {e}"),
+        })
+    }
+}
+
+impl Default for CheckpointState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Returns `true` if `source` is newer than `target` (Make-style freshness check).
+///
+/// If either file does not exist or its metadata cannot be read, returns `false`.
+pub fn file_is_newer(source: &Path, target: &Path) -> bool {
+    let source_modified = match std::fs::metadata(source).and_then(|m| m.modified()) {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+    let target_modified = match std::fs::metadata(target).and_then(|m| m.modified()) {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+    source_modified > target_modified
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,5 +445,167 @@ mod tests {
         let record = executor.execute_rule(&rule, &values).await.unwrap();
         assert_eq!(record.status, JobStatus::Success);
         assert!(record.stdout.unwrap().contains("TUMOR_01"));
+    }
+
+    // -- BenchmarkRecord tests -----------------------------------------------
+
+    #[test]
+    fn benchmark_record_creation() {
+        let b = BenchmarkRecord {
+            rule: "fastqc".to_string(),
+            wall_time_secs: 42.5,
+            max_memory_mb: Some(1024),
+            cpu_seconds: Some(38.0),
+        };
+        assert_eq!(b.rule, "fastqc");
+        assert!((b.wall_time_secs - 42.5).abs() < f64::EPSILON);
+        assert_eq!(b.max_memory_mb, Some(1024));
+        assert_eq!(b.cpu_seconds, Some(38.0));
+    }
+
+    #[test]
+    fn benchmark_record_placeholder_fields() {
+        let b = BenchmarkRecord {
+            rule: "bwa".to_string(),
+            wall_time_secs: 10.0,
+            max_memory_mb: None,
+            cpu_seconds: None,
+        };
+        assert!(b.max_memory_mb.is_none());
+        assert!(b.cpu_seconds.is_none());
+    }
+
+    // -- CheckpointState tests -----------------------------------------------
+
+    #[test]
+    fn checkpoint_mark_completed() {
+        let mut state = CheckpointState::new();
+        let bench = BenchmarkRecord {
+            rule: "step1".to_string(),
+            wall_time_secs: 5.0,
+            max_memory_mb: None,
+            cpu_seconds: None,
+        };
+        state.mark_completed("step1", bench);
+        assert!(state.is_completed("step1"));
+        assert!(state.should_skip("step1"));
+        assert!(!state.failed_rules.contains("step1"));
+    }
+
+    #[test]
+    fn checkpoint_mark_failed() {
+        let mut state = CheckpointState::new();
+        state.mark_failed("step2");
+        assert!(!state.is_completed("step2"));
+        assert!(!state.should_skip("step2"));
+        assert!(state.failed_rules.contains("step2"));
+    }
+
+    #[test]
+    fn checkpoint_completed_clears_failed() {
+        let mut state = CheckpointState::new();
+        state.mark_failed("step1");
+        assert!(state.failed_rules.contains("step1"));
+
+        let bench = BenchmarkRecord {
+            rule: "step1".to_string(),
+            wall_time_secs: 3.0,
+            max_memory_mb: None,
+            cpu_seconds: None,
+        };
+        state.mark_completed("step1", bench);
+        assert!(state.is_completed("step1"));
+        assert!(!state.failed_rules.contains("step1"));
+    }
+
+    #[test]
+    fn checkpoint_failed_clears_completed() {
+        let mut state = CheckpointState::new();
+        let bench = BenchmarkRecord {
+            rule: "step1".to_string(),
+            wall_time_secs: 1.0,
+            max_memory_mb: None,
+            cpu_seconds: None,
+        };
+        state.mark_completed("step1", bench);
+        state.mark_failed("step1");
+        assert!(!state.is_completed("step1"));
+        assert!(state.failed_rules.contains("step1"));
+    }
+
+    #[test]
+    fn checkpoint_json_round_trip() {
+        let mut state = CheckpointState::new();
+        state.mark_completed(
+            "align",
+            BenchmarkRecord {
+                rule: "align".to_string(),
+                wall_time_secs: 120.0,
+                max_memory_mb: Some(8192),
+                cpu_seconds: Some(110.0),
+            },
+        );
+        state.mark_failed("variant_call");
+
+        let json = state.to_json().unwrap();
+        let restored = CheckpointState::from_json(&json).unwrap();
+
+        assert!(restored.is_completed("align"));
+        assert!(restored.failed_rules.contains("variant_call"));
+        assert!(!restored.is_completed("variant_call"));
+
+        let bench = restored.benchmarks.get("align").unwrap();
+        assert!((bench.wall_time_secs - 120.0).abs() < f64::EPSILON);
+        assert_eq!(bench.max_memory_mb, Some(8192));
+    }
+
+    #[test]
+    fn checkpoint_default_is_empty() {
+        let state = CheckpointState::default();
+        assert!(state.completed_rules.is_empty());
+        assert!(state.failed_rules.is_empty());
+        assert!(state.benchmarks.is_empty());
+    }
+
+    // -- file_is_newer tests -------------------------------------------------
+
+    #[test]
+    fn file_is_newer_nonexistent_returns_false() {
+        let source = Path::new("nonexistent_src_12345.txt");
+        let target = Path::new("nonexistent_tgt_12345.txt");
+        assert!(!file_is_newer(source, target));
+    }
+
+    #[test]
+    fn file_is_newer_with_real_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let older = dir.path().join("older.txt");
+        let newer = dir.path().join("newer.txt");
+
+        std::fs::write(&older, "old").unwrap();
+        // Sleep briefly to ensure different modification times.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(&newer, "new").unwrap();
+
+        assert!(file_is_newer(&newer, &older));
+        assert!(!file_is_newer(&older, &newer));
+    }
+
+    #[test]
+    fn file_is_newer_missing_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("exists.txt");
+        std::fs::write(&existing, "data").unwrap();
+
+        assert!(!file_is_newer(Path::new("no_such_file.txt"), &existing));
+    }
+
+    #[test]
+    fn file_is_newer_missing_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("exists.txt");
+        std::fs::write(&existing, "data").unwrap();
+
+        assert!(!file_is_newer(&existing, Path::new("no_such_file.txt")));
     }
 }

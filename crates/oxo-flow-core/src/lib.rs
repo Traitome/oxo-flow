@@ -36,6 +36,7 @@
 //! assert_eq!(order, vec!["step1"]);
 //! ```
 
+pub mod cluster;
 pub mod config;
 pub mod container;
 pub mod dag;
