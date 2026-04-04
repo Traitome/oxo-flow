@@ -903,6 +903,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "chrono",
  "oxo-flow-core",
  "serde",
  "serde_json",
@@ -910,6 +911,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
