@@ -11,6 +11,7 @@ use axum::{
     Router,
 };
 use serde::{Deserialize, Serialize};
+use tower_http::cors::{Any, CorsLayer};
 
 // ---------------------------------------------------------------------------
 // Data types
@@ -125,6 +126,31 @@ pub struct ReportRequest {
 pub struct ErrorResponse {
     pub error: String,
     pub detail: Option<String>,
+}
+
+/// Response from the run endpoint.
+#[derive(Serialize, Deserialize)]
+pub struct RunResponse {
+    pub run_id: String,
+    pub status: String,
+    pub execution_order: Vec<String>,
+    pub rules_total: usize,
+}
+
+/// Response from the version endpoint.
+#[derive(Serialize, Deserialize)]
+pub struct VersionResponse {
+    pub version: String,
+    pub crate_name: String,
+    pub rust_version: String,
+}
+
+/// Response from the clean endpoint.
+#[derive(Serialize, Deserialize)]
+pub struct CleanResponse {
+    pub workflow_name: String,
+    pub files_to_clean: Vec<String>,
+    pub total_files: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -442,22 +468,76 @@ async fn generate_report(Json(req): Json<ReportRequest>) -> Result<impl IntoResp
     }
 }
 
+/// `POST /api/workflows/run` — Validate and return an execution plan as if starting a run.
+async fn run_workflow(Json(req): Json<DryRunRequest>) -> Result<impl IntoResponse, ApiError> {
+    let config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
+        .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
+
+    let dag = oxo_flow_core::WorkflowDag::from_rules(&config.rules)
+        .map_err(|e| ApiError::unprocessable("DAG construction failed", Some(e.to_string())))?;
+
+    let order = dag.execution_order().map_err(|e| {
+        ApiError::unprocessable("Cannot determine execution order", Some(e.to_string()))
+    })?;
+
+    Ok(Json(RunResponse {
+        run_id: uuid::Uuid::new_v4().to_string(),
+        status: "started".to_string(),
+        execution_order: order.clone(),
+        rules_total: order.len(),
+    }))
+}
+
+/// `GET /api/version` — Return crate version and build info.
+async fn version() -> Json<VersionResponse> {
+    Json(VersionResponse {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        crate_name: env!("CARGO_PKG_NAME").to_string(),
+        rust_version: option_env!("CARGO_PKG_RUST_VERSION")
+            .unwrap_or("unknown")
+            .to_string(),
+    })
+}
+
+/// `POST /api/workflows/clean` — List output files that would be cleaned.
+async fn clean_workflow(Json(req): Json<ValidateRequest>) -> Result<Json<CleanResponse>, ApiError> {
+    let config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
+        .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
+
+    let files_to_clean: Vec<String> = config.rules.iter().flat_map(|r| r.output.clone()).collect();
+
+    Ok(Json(CleanResponse {
+        workflow_name: config.workflow.name.clone(),
+        total_files: files_to_clean.len(),
+        files_to_clean,
+    }))
+}
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
 /// Build the web application router.
 pub fn build_router() -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
     Router::new()
         .route("/api/health", get(health))
+        .route("/api/version", get(version))
         .route("/api/workflows", get(list_workflows))
         .route("/api/workflows/validate", post(validate_workflow))
         .route("/api/workflows/parse", post(parse_workflow))
         .route("/api/workflows/dag", post(build_dag))
         .route("/api/workflows/dry-run", post(dry_run))
+        .route("/api/workflows/run", post(run_workflow))
+        .route("/api/workflows/clean", post(clean_workflow))
         .route("/api/environments", get(list_environments))
         .route("/api/reports/generate", post(generate_report))
         .fallback(not_found)
+        .layer(cors)
 }
 
 /// Start the web server.
@@ -802,5 +882,82 @@ docker = "biocontainers/bwa:0.7.17"
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["workflow_name"], "test-pipeline");
         assert!(value["sections"].as_array().unwrap().len() >= 2);
+    }
+
+    // -- Run endpoint ------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_workflow_endpoint() {
+        let resp = post_json(
+            "/api/workflows/run",
+            &DryRunRequest {
+                toml_content: VALID_TOML.to_string(),
+                config: None,
+            },
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: RunResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.status, "started");
+        assert_eq!(parsed.rules_total, 2);
+        assert!(!parsed.run_id.is_empty());
+        assert_eq!(parsed.execution_order.len(), 2);
+        assert_eq!(parsed.execution_order[0], "step_a");
+        assert_eq!(parsed.execution_order[1], "step_b");
+    }
+
+    // -- Version endpoint --------------------------------------------------------
+
+    #[tokio::test]
+    async fn version_endpoint() {
+        let app = build_router();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/version")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: VersionResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(parsed.crate_name, "oxo-flow-web");
+    }
+
+    // -- Clean endpoint ----------------------------------------------------------
+
+    #[tokio::test]
+    async fn clean_workflow_endpoint() {
+        let resp = post_json(
+            "/api/workflows/clean",
+            &ValidateRequest {
+                toml_content: VALID_TOML.to_string(),
+            },
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: CleanResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.workflow_name, "test-pipeline");
+        assert_eq!(parsed.total_files, 2);
+        assert!(parsed
+            .files_to_clean
+            .contains(&"trimmed/{sample}.fastq".to_string()));
+        assert!(parsed
+            .files_to_clean
+            .contains(&"aligned/{sample}.bam".to_string()));
     }
 }
