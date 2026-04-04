@@ -89,13 +89,46 @@ docker = "biocontainers/bwa-mem2:2.2.1"
 | `oxo-flow package` | Package workflow as container |
 | `oxo-flow serve` | Start web interface |
 | `oxo-flow init` | Create a new pipeline project |
+| `oxo-flow status` | Show checkpoint execution status |
+| `oxo-flow clean` | Clean workflow outputs |
+| `oxo-flow completions` | Generate shell completions |
+
+## Web API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/health` | Health check |
+| `GET` | `/api/version` | Version info |
+| `GET` | `/api/workflows` | List workflows |
+| `GET` | `/api/environments` | Available env backends |
+| `POST` | `/api/workflows/validate` | Validate workflow TOML |
+| `POST` | `/api/workflows/parse` | Parse and return workflow detail |
+| `POST` | `/api/workflows/dag` | Build DAG, return DOT |
+| `POST` | `/api/workflows/dry-run` | Simulate execution |
+| `POST` | `/api/workflows/run` | Start workflow execution |
+| `POST` | `/api/workflows/clean` | List outputs to clean |
+| `POST` | `/api/reports/generate` | Generate report (HTML/JSON) |
 
 ## Venus Pipeline 🌟
 
 Venus (启明星 — "Morning Star") is a clinical-grade tumor variant detection pipeline built on oxo-flow.
 It supports tumor-only, normal-only, and tumor-normal paired analysis modes for WGS, WES, and panel sequencing.
 
-See [ROADMAP.md](ROADMAP.md) for details.
+### Pipeline Steps
+
+```
+FASTQ → fastp → bwa-mem2 → MarkDuplicates → BQSR → Mutect2 → FilterMutectCalls → VEP → Report
+                                                   → HaplotypeCaller → VEP → Report
+                                                   → Strelka2 (paired mode)
+```
+
+### Analysis Modes
+
+- **Tumor-only**: Mutect2 somatic calling + FilterMutectCalls + annotation + clinical report
+- **Normal-only**: HaplotypeCaller germline calling + annotation
+- **Tumor-Normal**: Paired Mutect2 + Strelka2 + HaplotypeCaller + annotation + clinical report
+
+See [pipelines/venus/](pipelines/venus/) for full pipeline configuration and [ROADMAP.md](ROADMAP.md) for the project roadmap.
 
 ## Architecture
 

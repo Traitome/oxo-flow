@@ -1,0 +1,11 @@
+name: report
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.11
+  - jinja2=3.1
+  - pandas=2.1
+  - matplotlib=3.8
+  - pysam=0.22
+  - cyvcf2=0.31
