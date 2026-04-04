@@ -131,6 +131,24 @@ enum Commands {
         #[arg(short = 'd', long)]
         dir: Option<PathBuf>,
     },
+
+    /// Show execution status from a checkpoint file.
+    Status {
+        /// Path to checkpoint JSON file.
+        #[arg(value_name = "CHECKPOINT")]
+        checkpoint: PathBuf,
+    },
+
+    /// Clean workflow outputs and temporary files.
+    Clean {
+        /// Path to the .oxoflow workflow file.
+        #[arg(value_name = "WORKFLOW")]
+        workflow: PathBuf,
+
+        /// Only show what would be cleaned (dry-run).
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -436,7 +454,7 @@ async fn main() -> Result<()> {
         Commands::Serve { host, port } => {
             print_banner();
             eprintln!("Starting web server at {}:{} ...", host, port);
-            eprintln!("Web interface not yet implemented (see ROADMAP.md Phase 5)");
+            oxo_flow_web::start_server(&host, port).await?;
         }
 
         Commands::Init { name, dir } => {
@@ -477,6 +495,56 @@ memory = "8G"
                 "  Edit {} to define your pipeline.",
                 workflow_path.display()
             );
+        }
+
+        Commands::Status { checkpoint } => {
+            print_banner();
+            let content = std::fs::read_to_string(&checkpoint)
+                .with_context(|| format!("failed to read {}", checkpoint.display()))?;
+            let state = oxo_flow_core::executor::CheckpointState::from_json(&content)
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+            eprintln!("{}", "Checkpoint Status:".bold());
+            for rule in &state.completed_rules {
+                eprintln!("  {} {}", "✓".green().bold(), rule);
+            }
+            for rule in &state.failed_rules {
+                eprintln!("  {} {}", "✗".red().bold(), rule);
+            }
+            let completed = state.completed_rules.len();
+            let failed = state.failed_rules.len();
+            eprintln!(
+                "\n{} {} completed, {} failed",
+                "Summary:".bold(),
+                completed,
+                failed
+            );
+        }
+
+        Commands::Clean { workflow, dry_run } => {
+            print_banner();
+            let config = WorkflowConfig::from_file(&workflow)
+                .with_context(|| format!("failed to parse {}", workflow.display()))?;
+
+            let mut outputs: Vec<String> = Vec::new();
+            for rule in &config.rules {
+                for output in &rule.output {
+                    if !outputs.contains(output) {
+                        outputs.push(output.clone());
+                    }
+                }
+            }
+
+            if dry_run {
+                eprintln!("{}", "Would clean (dry-run):".bold().yellow());
+            } else {
+                eprintln!("{}", "Cleaning outputs:".bold());
+            }
+
+            for output in &outputs {
+                eprintln!("  {}", output);
+            }
+            eprintln!("\n{} {} output patterns", "Total:".bold(), outputs.len());
         }
     }
 
@@ -553,6 +621,40 @@ mod tests {
                 assert!(keep_going);
             }
             _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_status() {
+        let cli = Cli::try_parse_from(["oxo-flow", "status", "checkpoint.json"]).unwrap();
+        match cli.command {
+            Commands::Status { checkpoint } => {
+                assert_eq!(checkpoint, PathBuf::from("checkpoint.json"));
+            }
+            _ => panic!("expected Status command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_clean() {
+        let cli = Cli::try_parse_from(["oxo-flow", "clean", "test.oxoflow"]).unwrap();
+        match cli.command {
+            Commands::Clean { workflow, dry_run } => {
+                assert_eq!(workflow, PathBuf::from("test.oxoflow"));
+                assert!(!dry_run);
+            }
+            _ => panic!("expected Clean command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_clean_dry_run() {
+        let cli = Cli::try_parse_from(["oxo-flow", "clean", "test.oxoflow", "-n"]).unwrap();
+        match cli.command {
+            Commands::Clean { dry_run, .. } => {
+                assert!(dry_run);
+            }
+            _ => panic!("expected Clean command"),
         }
     }
 }
