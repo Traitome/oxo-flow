@@ -20,6 +20,7 @@ uuid = { workspace = true }
 petgraph = { workspace = true }
 globset = { workspace = true }
 regex = { workspace = true }
+tera = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -62,6 +62,10 @@ pub enum OxoFlowError {
     /// Serialization error.
     #[error("serialization error: {0}")]
     SerdeJson(#[from] serde_json::Error),
+
+    /// Template rendering error.
+    #[error("template error: {0}")]
+    Template(#[from] tera::Error),
 }
 
 /// Convenience alias for `Result<T, OxoFlowError>`.
