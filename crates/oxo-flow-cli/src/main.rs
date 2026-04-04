@@ -216,6 +216,8 @@ async fn main() -> Result<()> {
                 dry_run: false,
                 workdir: workdir.unwrap_or_else(|| std::env::current_dir().unwrap_or_default()),
                 keep_going,
+                retry_count: 0,
+                timeout: None,
             };
 
             let executor = LocalExecutor::new(exec_config);

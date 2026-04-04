@@ -3,6 +3,7 @@
 //! Executes workflow rules as local processes, handling concurrency,
 //! status tracking, and environment activation.
 
+use crate::environment::EnvironmentResolver;
 use crate::error::{OxoFlowError, Result};
 use crate::rule::Rule;
 use chrono::{DateTime, Utc};
@@ -67,6 +68,15 @@ pub struct JobRecord {
 
     /// Shell command that was executed.
     pub command: Option<String>,
+
+    /// Number of retries attempted so far.
+    #[serde(default)]
+    pub retries: u32,
+
+    /// Timeout configured for this job (not serializable; lives only in memory).
+    // TODO: implement timeout enforcement in the executor run loop.
+    #[serde(skip)]
+    pub timeout: Option<std::time::Duration>,
 }
 
 /// Configuration for the executor.
@@ -83,6 +93,13 @@ pub struct ExecutorConfig {
 
     /// Whether to keep going on errors.
     pub keep_going: bool,
+
+    /// Number of times to retry a failed job before giving up.
+    pub retry_count: u32,
+
+    /// Optional timeout per job.
+    // TODO: enforce timeout in the executor run loop.
+    pub timeout: Option<std::time::Duration>,
 }
 
 impl Default for ExecutorConfig {
@@ -92,6 +109,8 @@ impl Default for ExecutorConfig {
             dry_run: false,
             workdir: std::env::current_dir().unwrap_or_default(),
             keep_going: false,
+            retry_count: 0,
+            timeout: None,
         }
     }
 }
@@ -100,13 +119,35 @@ impl Default for ExecutorConfig {
 pub struct LocalExecutor {
     config: ExecutorConfig,
     semaphore: Arc<Semaphore>,
+    env_resolver: EnvironmentResolver,
 }
 
 impl LocalExecutor {
     /// Create a new local executor with the given configuration.
     pub fn new(config: ExecutorConfig) -> Self {
         let semaphore = Arc::new(Semaphore::new(config.max_jobs));
-        Self { config, semaphore }
+        let env_resolver = EnvironmentResolver::new();
+        Self {
+            config,
+            semaphore,
+            env_resolver,
+        }
+    }
+
+    /// Wrap a command through the environment resolver, falling back to the
+    /// original command on error and emitting a warning.
+    fn resolve_command(&self, command: &str, rule: &Rule) -> String {
+        match self.env_resolver.wrap_command(command, &rule.environment) {
+            Ok(wrapped) => wrapped,
+            Err(e) => {
+                tracing::warn!(
+                    rule = %rule.name,
+                    error = %e,
+                    "environment wrapping failed, falling back to original command"
+                );
+                command.to_string()
+            }
+        }
     }
 
     /// Execute a single rule as a local process.
@@ -124,6 +165,8 @@ impl LocalExecutor {
             stdout: None,
             stderr: None,
             command: None,
+            retries: 0,
+            timeout: self.config.timeout,
         };
 
         let shell_cmd = match &rule.shell {
@@ -141,6 +184,9 @@ impl LocalExecutor {
                 return Ok(record);
             }
         };
+
+        // Wrap the command through the environment resolver
+        let shell_cmd = self.resolve_command(&shell_cmd, rule);
 
         record.command = Some(shell_cmd.clone());
 
@@ -205,9 +251,13 @@ impl LocalExecutor {
             .iter()
             .map(|rule| {
                 let command = rule.shell.clone();
+                let wrapped = command
+                    .as_deref()
+                    .map(|cmd| self.resolve_command(cmd, rule));
                 tracing::info!(
                     rule = %rule.name,
                     command = ?command,
+                    wrapped_command = ?wrapped,
                     threads = %rule.effective_threads(),
                     env = %rule.environment.kind(),
                     "would execute"
@@ -221,7 +271,9 @@ impl LocalExecutor {
                     exit_code: None,
                     stdout: None,
                     stderr: None,
-                    command,
+                    command: wrapped.or(command),
+                    retries: 0,
+                    timeout: self.config.timeout,
                 }
             })
             .collect()
@@ -388,6 +440,8 @@ mod tests {
             dry_run: false,
             workdir: std::env::temp_dir(),
             keep_going: false,
+            retry_count: 0,
+            timeout: None,
         };
         let executor = LocalExecutor::new(config);
         let rule = make_rule("echo_test", "echo hello_oxoflow");
@@ -404,6 +458,8 @@ mod tests {
             dry_run: true,
             workdir: std::env::temp_dir(),
             keep_going: false,
+            retry_count: 0,
+            timeout: None,
         };
         let executor = LocalExecutor::new(config);
         let rule = make_rule("dry_test", "echo should_not_run");
@@ -419,6 +475,8 @@ mod tests {
             dry_run: false,
             workdir: std::env::temp_dir(),
             keep_going: true,
+            retry_count: 0,
+            timeout: None,
         };
         let executor = LocalExecutor::new(config);
         let rule = make_rule("fail_test", "exit 42");
@@ -435,6 +493,8 @@ mod tests {
             dry_run: false,
             workdir: std::env::temp_dir(),
             keep_going: false,
+            retry_count: 0,
+            timeout: None,
         };
         let executor = LocalExecutor::new(config);
         let rule = make_rule("wildcard_test", "echo {sample}");

@@ -567,6 +567,8 @@ mod tests {
                 stdout: None,
                 stderr: None,
                 command: Some("echo hello".to_string()),
+                retries: 0,
+                timeout: None,
             },
         );
 

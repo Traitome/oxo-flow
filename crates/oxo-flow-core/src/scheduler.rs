@@ -310,6 +310,8 @@ mod tests {
             stdout: None,
             stderr: None,
             command: None,
+            retries: 0,
+            timeout: None,
         });
 
         assert_eq!(state.status("a"), Some(JobStatus::Success));
