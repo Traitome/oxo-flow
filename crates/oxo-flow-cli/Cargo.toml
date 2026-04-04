@@ -1,0 +1,25 @@
+[package]
+name = "oxo-flow-cli"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "CLI for the oxo-flow bioinformatics pipeline engine"
+
+[[bin]]
+name = "oxo-flow"
+path = "src/main.rs"
+
+[dependencies]
+oxo-flow-core = { path = "../oxo-flow-core" }
+clap = { workspace = true }
+clap_complete = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+colored = { workspace = true }
+indicatif = { workspace = true }
+serde_json = { workspace = true }
