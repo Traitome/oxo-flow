@@ -1,0 +1,55 @@
+[workspace]
+members = ["crates/oxo-flow-core", "crates/oxo-flow-cli", "crates/oxo-flow-web", "crates/venus"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+authors = ["Traitome <https://github.com/Traitome>"]
+license = "Apache-2.0"
+repository = "https://github.com/Traitome/oxo-flow"
+homepage = "https://github.com/Traitome/oxo-flow"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# CLI
+clap = { version = "4.5", features = ["derive", "env"] }
+clap_complete = "4.5"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+colored = "3.0"
+indicatif = "0.17"
+petgraph = "0.7"
+globset = "0.4"
+regex = "1"
+tempfile = "3"
+
+# Web
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "fs"] }
+
+# Template
+tera = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

@@ -1,0 +1,85 @@
+# Example: Simple variant calling pipeline
+# This demonstrates a minimal oxo-flow workflow for read alignment and variant calling.
+
+[workflow]
+name = "simple-variant-calling"
+version = "0.1.0"
+description = "A simple variant calling pipeline demonstrating oxo-flow features"
+author = "Traitome"
+
+[config]
+reference = "/data/reference/GRCh38.fa"
+known_sites = "/data/reference/dbsnp_146.hg38.vcf.gz"
+
+[defaults]
+threads = 4
+memory = "8G"
+
+# Step 1: Quality control with fastp
+[[rules]]
+name = "fastp"
+input = ["raw/{sample}_R1.fastq.gz", "raw/{sample}_R2.fastq.gz"]
+output = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz", "qc/{sample}_fastp.json"]
+threads = 8
+shell = """
+fastp -i {input[0]} -I {input[1]} \
+      -o {output[0]} -O {output[1]} \
+      --json {output[2]} --thread {threads}
+"""
+
+[rules.environment]
+conda = "envs/fastp.yaml"
+
+# Step 2: Align reads with BWA-MEM2
+[[rules]]
+name = "bwa_align"
+input = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz"]
+output = ["aligned/{sample}.sorted.bam"]
+threads = 16
+memory = "32G"
+shell = """
+bwa-mem2 mem -t {threads} -R '@RG\\tID:{sample}\\tSM:{sample}\\tPL:ILLUMINA' \
+  {config.reference} {input[0]} {input[1]} \
+  | samtools sort -@ 4 -o {output[0]}
+samtools index {output[0]}
+"""
+
+[rules.environment]
+docker = "biocontainers/bwa-mem2:2.2.1"
+
+# Step 3: Mark duplicates
+[[rules]]
+name = "mark_duplicates"
+input = ["aligned/{sample}.sorted.bam"]
+output = ["dedup/{sample}.dedup.bam", "dedup/{sample}.metrics.txt"]
+threads = 4
+memory = "16G"
+shell = """
+gatk MarkDuplicates \
+  -I {input[0]} \
+  -O {output[0]} \
+  -M {output[1]} \
+  --CREATE_INDEX true
+"""
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+# Step 4: Call variants
+[[rules]]
+name = "haplotype_caller"
+input = ["dedup/{sample}.dedup.bam"]
+output = ["variants/{sample}.g.vcf.gz"]
+threads = 4
+memory = "16G"
+shell = """
+gatk HaplotypeCaller \
+  -R {config.reference} \
+  -I {input[0]} \
+  -O {output[0]} \
+  -ERC GVCF \
+  --native-pair-hmm-threads {threads}
+"""
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
