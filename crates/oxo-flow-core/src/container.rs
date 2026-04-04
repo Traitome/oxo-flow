@@ -38,6 +38,9 @@ pub struct PackageConfig {
 
     /// Additional labels/metadata.
     pub labels: Vec<(String, String)>,
+
+    /// Additional system packages to install (e.g., "samtools", "bcftools").
+    pub extra_packages: Vec<String>,
 }
 
 impl Default for PackageConfig {
@@ -47,6 +50,7 @@ impl Default for PackageConfig {
             base_image: "ubuntu:22.04".to_string(),
             include_data: false,
             labels: Vec::new(),
+            extra_packages: Vec::new(),
         }
     }
 }
@@ -76,19 +80,26 @@ pub fn generate_dockerfile(workflow: &WorkflowConfig, config: &PackageConfig) ->
     }
     dockerfile.push('\n');
 
-    // Install system dependencies
+    // Install system dependencies (including extra packages)
     dockerfile.push_str("# System dependencies\n");
     dockerfile.push_str("RUN apt-get update && apt-get install -y \\\n");
     dockerfile.push_str("    curl wget git build-essential \\\n");
+    if !config.extra_packages.is_empty() {
+        dockerfile.push_str(&format!("    {} \\\n", config.extra_packages.join(" ")));
+    }
     dockerfile.push_str("    && rm -rf /var/lib/apt/lists/*\n\n");
 
     // Collect unique environment types needed
     let mut needs_conda = false;
+    let mut needs_pixi = false;
     let mut docker_images = Vec::new();
 
     for rule in &workflow.rules {
-        if rule.environment.conda.is_some() || rule.environment.pixi.is_some() {
+        if rule.environment.conda.is_some() {
             needs_conda = true;
+        }
+        if rule.environment.pixi.is_some() {
+            needs_pixi = true;
         }
         if let Some(ref img) = rule.environment.docker {
             if !docker_images.contains(img) {
@@ -122,14 +133,46 @@ pub fn generate_dockerfile(workflow: &WorkflowConfig, config: &PackageConfig) ->
         }
     }
 
+    // Install pixi if needed
+    if needs_pixi {
+        dockerfile.push_str("# Install pixi\n");
+        dockerfile.push_str("RUN curl -fsSL https://pixi.sh/install.sh | bash \\\n");
+        dockerfile.push_str("    && mv /root/.pixi/bin/pixi /usr/local/bin/pixi\n");
+        dockerfile.push_str("ENV PATH=/usr/local/bin:$PATH\n\n");
+
+        // Create pixi environments
+        for rule in &workflow.rules {
+            if let Some(ref pixi_env) = rule.environment.pixi {
+                dockerfile.push_str(&format!("# Pixi environment for rule: {}\n", rule.name));
+                dockerfile.push_str(&format!("COPY {pixi_env} /workflow/envs/\n"));
+                let env_filename = std::path::Path::new(pixi_env)
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_else(|| pixi_env.clone());
+                dockerfile.push_str(&format!(
+                    "RUN cd /workflow/envs && pixi install --manifest-path {env_filename}\n\n"
+                ));
+            }
+        }
+    }
+
     // Copy workflow files
     dockerfile.push_str("# Copy workflow\n");
     dockerfile.push_str("WORKDIR /workflow\n");
     dockerfile.push_str("COPY . /workflow/\n\n");
 
+    // Include reference data if configured
+    if config.include_data {
+        dockerfile.push_str("# Include reference data\n");
+        dockerfile.push_str("COPY data/ /workflow/data/\n\n");
+    }
+
     // Entry point
     dockerfile.push_str("# Default entrypoint\n");
-    dockerfile.push_str("ENTRYPOINT [\"oxo-flow\", \"run\"]\n");
+    dockerfile.push_str("ENTRYPOINT [\"oxo-flow\", \"run\"]\n\n");
+
+    // Health check
+    dockerfile.push_str("HEALTHCHECK CMD [\"oxo-flow\", \"--version\"]\n");
 
     Ok(dockerfile)
 }
@@ -163,14 +206,119 @@ pub fn generate_singularity_def(
             .unwrap_or("oxo-flow workflow")
     ));
 
+    // Collect environment requirements
+    let mut needs_conda = false;
+    let mut needs_pixi = false;
+    for rule in &workflow.rules {
+        if rule.environment.conda.is_some() {
+            needs_conda = true;
+        }
+        if rule.environment.pixi.is_some() {
+            needs_pixi = true;
+        }
+    }
+
+    // Files section (data + environment specs)
+    if config.include_data {
+        def.push_str("%files\n");
+        def.push_str("    data/ /workflow/data/\n\n");
+    }
+
+    // Post section: install system deps, conda, pixi
     def.push_str("%post\n");
-    def.push_str("    apt-get update && apt-get install -y curl wget git build-essential\n");
-    def.push_str("    rm -rf /var/lib/apt/lists/*\n\n");
+    let mut apt_packages = vec!["curl", "wget", "git", "build-essential"];
+    for pkg in &config.extra_packages {
+        apt_packages.push(pkg);
+    }
+    def.push_str(&format!(
+        "    apt-get update && apt-get install -y {}\n",
+        apt_packages.join(" ")
+    ));
+    def.push_str("    rm -rf /var/lib/apt/lists/*\n");
+
+    if needs_conda {
+        def.push_str("\n    # Install Miniforge (conda)\n");
+        def.push_str("    curl -L -O https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh\n");
+        def.push_str("    bash Miniforge3-Linux-x86_64.sh -b -p /opt/conda\n");
+        def.push_str("    rm Miniforge3-Linux-x86_64.sh\n");
+
+        for rule in &workflow.rules {
+            if let Some(ref conda_env) = rule.environment.conda {
+                let env_filename = std::path::Path::new(conda_env)
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_else(|| conda_env.clone());
+                def.push_str(&format!(
+                    "    /opt/conda/bin/conda env create -f /workflow/envs/{env_filename} -n {}\n",
+                    rule.name
+                ));
+            }
+        }
+    }
+
+    if needs_pixi {
+        def.push_str("\n    # Install pixi\n");
+        def.push_str("    curl -fsSL https://pixi.sh/install.sh | bash\n");
+        def.push_str("    mv /root/.pixi/bin/pixi /usr/local/bin/pixi\n");
+
+        for rule in &workflow.rules {
+            if let Some(ref pixi_env) = rule.environment.pixi {
+                let env_filename = std::path::Path::new(pixi_env)
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_else(|| pixi_env.clone());
+                def.push_str(&format!(
+                    "    cd /workflow/envs && pixi install --manifest-path {env_filename}\n"
+                ));
+            }
+        }
+    }
+
+    def.push('\n');
+
+    // Environment section
+    def.push_str("%environment\n");
+    let mut path_entries = vec!["/usr/local/bin"];
+    if needs_conda {
+        path_entries.push("/opt/conda/bin");
+    }
+    def.push_str(&format!(
+        "    export PATH={}:$PATH\n\n",
+        path_entries.join(":")
+    ));
 
     def.push_str("%runscript\n");
-    def.push_str("    exec oxo-flow run \"$@\"\n");
+    def.push_str("    exec oxo-flow run \"$@\"\n\n");
+
+    // Test section
+    def.push_str("%test\n");
+    def.push_str("    oxo-flow --version\n");
 
     Ok(def)
+}
+
+/// Generate a docker-compose.yml string for running the workflow.
+pub fn generate_compose_file(workflow: &WorkflowConfig, config: &PackageConfig) -> Result<String> {
+    let mut compose = String::new();
+
+    compose.push_str(&format!(
+        "# Auto-generated by oxo-flow for workflow: {}\n",
+        workflow.workflow.name
+    ));
+    compose.push_str("version: \"3.8\"\n");
+    compose.push_str("services:\n");
+    compose.push_str("  oxo-flow:\n");
+    compose.push_str("    build: .\n");
+    compose.push_str("    volumes:\n");
+
+    if config.include_data {
+        compose.push_str("      - ./data:/workflow/data\n");
+    }
+    compose.push_str("      - ./results:/workflow/results\n");
+
+    compose.push_str("    command: [\"run\", \"workflow.oxoflow\"]\n");
+
+    Ok(compose)
 }
 
 #[cfg(test)]
@@ -220,6 +368,89 @@ mod tests {
     }
 
     #[test]
+    fn generate_dockerfile_with_pixi() {
+        let workflow = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "pixi-test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "step1"
+            output = ["out.txt"]
+            shell = "echo hello"
+
+            [rules.environment]
+            pixi = "envs/pixi.toml"
+        "#,
+        )
+        .unwrap();
+
+        let config = PackageConfig::default();
+        let dockerfile = generate_dockerfile(&workflow, &config).unwrap();
+        assert!(dockerfile.contains("pixi.sh/install.sh"));
+        assert!(dockerfile.contains("pixi install --manifest-path pixi.toml"));
+        assert!(
+            !dockerfile.contains("Miniforge"),
+            "pixi-only should not install conda"
+        );
+    }
+
+    #[test]
+    fn generate_dockerfile_with_extra_packages() {
+        let workflow = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "extras-test"
+            version = "1.0.0"
+        "#,
+        )
+        .unwrap();
+
+        let config = PackageConfig {
+            extra_packages: vec!["samtools".to_string(), "bcftools".to_string()],
+            ..Default::default()
+        };
+        let dockerfile = generate_dockerfile(&workflow, &config).unwrap();
+        assert!(dockerfile.contains("samtools bcftools"));
+    }
+
+    #[test]
+    fn generate_dockerfile_with_include_data() {
+        let workflow = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "data-test"
+            version = "1.0.0"
+        "#,
+        )
+        .unwrap();
+
+        let config = PackageConfig {
+            include_data: true,
+            ..Default::default()
+        };
+        let dockerfile = generate_dockerfile(&workflow, &config).unwrap();
+        assert!(dockerfile.contains("COPY data/ /workflow/data/"));
+    }
+
+    #[test]
+    fn generate_dockerfile_has_healthcheck() {
+        let workflow = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "hc-test"
+            version = "1.0.0"
+        "#,
+        )
+        .unwrap();
+
+        let config = PackageConfig::default();
+        let dockerfile = generate_dockerfile(&workflow, &config).unwrap();
+        assert!(dockerfile.contains("HEALTHCHECK"));
+    }
+
+    #[test]
     fn generate_singularity_def_basic() {
         let workflow = WorkflowConfig::parse(
             r#"
@@ -240,8 +471,176 @@ mod tests {
     }
 
     #[test]
+    fn generate_singularity_def_with_conda() {
+        let workflow = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "sing-conda"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "align"
+            output = ["out.bam"]
+            shell = "bwa mem ref.fa in.fq > out.bam"
+
+            [rules.environment]
+            conda = "envs/align.yaml"
+        "#,
+        )
+        .unwrap();
+
+        let config = PackageConfig {
+            format: ContainerFormat::Singularity,
+            ..Default::default()
+        };
+        let def = generate_singularity_def(&workflow, &config).unwrap();
+        assert!(def.contains("Miniforge"));
+        assert!(def.contains("conda env create"));
+        assert!(def.contains("/opt/conda/bin"));
+    }
+
+    #[test]
+    fn generate_singularity_def_with_pixi() {
+        let workflow = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "sing-pixi"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "step1"
+            output = ["out.txt"]
+            shell = "echo hi"
+
+            [rules.environment]
+            pixi = "envs/pixi.toml"
+        "#,
+        )
+        .unwrap();
+
+        let config = PackageConfig {
+            format: ContainerFormat::Singularity,
+            ..Default::default()
+        };
+        let def = generate_singularity_def(&workflow, &config).unwrap();
+        assert!(def.contains("pixi.sh/install.sh"));
+        assert!(def.contains("pixi install --manifest-path pixi.toml"));
+    }
+
+    #[test]
+    fn generate_singularity_def_has_environment_section() {
+        let workflow = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "env-test"
+            version = "1.0.0"
+        "#,
+        )
+        .unwrap();
+
+        let config = PackageConfig::default();
+        let def = generate_singularity_def(&workflow, &config).unwrap();
+        assert!(def.contains("%environment"));
+        assert!(def.contains("export PATH="));
+    }
+
+    #[test]
+    fn generate_singularity_def_has_test_section() {
+        let workflow = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "test-test"
+            version = "1.0.0"
+        "#,
+        )
+        .unwrap();
+
+        let config = PackageConfig::default();
+        let def = generate_singularity_def(&workflow, &config).unwrap();
+        assert!(def.contains("%test"));
+        assert!(def.contains("oxo-flow --version"));
+    }
+
+    #[test]
+    fn generate_singularity_def_with_data() {
+        let workflow = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "data-test"
+            version = "1.0.0"
+        "#,
+        )
+        .unwrap();
+
+        let config = PackageConfig {
+            format: ContainerFormat::Singularity,
+            include_data: true,
+            ..Default::default()
+        };
+        let def = generate_singularity_def(&workflow, &config).unwrap();
+        assert!(def.contains("%files"));
+        assert!(def.contains("data/ /workflow/data/"));
+    }
+
+    #[test]
     fn container_format_display() {
         assert_eq!(ContainerFormat::Docker.to_string(), "docker");
         assert_eq!(ContainerFormat::Singularity.to_string(), "singularity");
+    }
+
+    #[test]
+    fn generate_compose_file_basic() {
+        let workflow = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "compose-test"
+            version = "1.0.0"
+        "#,
+        )
+        .unwrap();
+
+        let config = PackageConfig::default();
+        let compose = generate_compose_file(&workflow, &config).unwrap();
+        assert!(compose.contains("version: \"3.8\""));
+        assert!(compose.contains("oxo-flow:"));
+        assert!(compose.contains("build: ."));
+        assert!(compose.contains("./results:/workflow/results"));
+        assert!(compose.contains("command: [\"run\", \"workflow.oxoflow\"]"));
+    }
+
+    #[test]
+    fn generate_compose_file_with_data() {
+        let workflow = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "compose-data"
+            version = "1.0.0"
+        "#,
+        )
+        .unwrap();
+
+        let config = PackageConfig {
+            include_data: true,
+            ..Default::default()
+        };
+        let compose = generate_compose_file(&workflow, &config).unwrap();
+        assert!(compose.contains("./data:/workflow/data"));
+        assert!(compose.contains("./results:/workflow/results"));
+    }
+
+    #[test]
+    fn compose_file_without_data_excludes_data_volume() {
+        let workflow = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "compose-no-data"
+            version = "1.0.0"
+        "#,
+        )
+        .unwrap();
+
+        let config = PackageConfig::default();
+        let compose = generate_compose_file(&workflow, &config).unwrap();
+        assert!(!compose.contains("./data:/workflow/data"));
     }
 }
