@@ -1131,7 +1131,17 @@ Thumbs.db
 
                     for rule_name in &order {
                         let rule = config.get_rule(rule_name).unwrap();
-                        let shell_cmd = rule.shell.as_deref().unwrap_or("echo 'no command'");
+                        let shell_cmd = match rule.shell.as_deref() {
+                            Some(cmd) => cmd,
+                            None => {
+                                eprintln!(
+                                    "  {} {} — no shell command, skipping",
+                                    "⊘".yellow(),
+                                    rule_name
+                                );
+                                continue;
+                            }
+                        };
                         let script = oxo_flow_core::cluster::generate_submit_script(
                             &cluster_backend,
                             rule,

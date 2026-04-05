@@ -95,10 +95,10 @@ th { color: var(--text-secondary); font-weight: 500; font-size: 0.75rem; text-tr
 <header>
   <h1><span>oxo-flow</span> Pipeline Engine</h1>
   <nav id="main-nav">
-    <button class="active" onclick="showView('dashboard')">Dashboard</button>
-    <button onclick="showView('editor')">Editor</button>
-    <button onclick="showView('monitor')">Monitor</button>
-    <button onclick="showView('system')">System</button>
+    <button class="active" onclick="showView('dashboard', this)">Dashboard</button>
+    <button onclick="showView('editor', this)">Editor</button>
+    <button onclick="showView('monitor', this)">Monitor</button>
+    <button onclick="showView('system', this)">System</button>
     <span id="user-info" class="user-info"></span>
   </nav>
 </header>
@@ -205,11 +205,11 @@ function authHeaders() {
   return h;
 }
 
-function showView(name) {
+function showView(name, btn) {
   document.querySelectorAll('[id^="view-"]').forEach(function(el) { el.classList.add('hidden'); });
   document.getElementById('view-' + name).classList.remove('hidden');
   document.querySelectorAll('nav button').forEach(function(b) { b.classList.remove('active'); });
-  if (event && event.target) event.target.classList.add('active');
+  if (btn) btn.classList.add('active');
   if (name === 'system') loadSystemInfo();
   if (name === 'dashboard') loadDashboard();
 }
@@ -238,7 +238,18 @@ async function doLogin() {
     var data = await res.json();
     if (data.token) {
       authToken = data.token;
-      document.getElementById('user-info').innerHTML = '<strong>' + data.username + '</strong> (' + data.role + ') <button class="btn btn-danger" onclick="doLogout()" style="padding:0.2rem 0.5rem;font-size:0.7rem">Logout</button>';
+      var info = document.getElementById('user-info');
+      info.textContent = '';
+      var strong = document.createElement('strong');
+      strong.textContent = data.username;
+      info.appendChild(strong);
+      info.appendChild(document.createTextNode(' (' + data.role + ') '));
+      var logoutBtn = document.createElement('button');
+      logoutBtn.className = 'btn btn-danger';
+      logoutBtn.style.cssText = 'padding:0.2rem 0.5rem;font-size:0.7rem';
+      logoutBtn.textContent = 'Logout';
+      logoutBtn.onclick = doLogout;
+      info.appendChild(logoutBtn);
       showView('dashboard');
       document.getElementById('view-login').classList.add('hidden');
       setStatus('Logged in as ' + data.username);
@@ -446,9 +457,12 @@ pub struct LicenseStatus {
 }
 
 /// Simple password check.  In production this should use hashed passwords
-/// and a persistent user store.  The default admin account uses `admin/admin`.
+/// and a persistent user store backed by environment variables or a config file.
+/// The default accounts (`admin/admin`, `user/user`, `viewer/viewer`) are
+/// intentionally simple for initial setup and development; they should be
+/// changed immediately in any deployment.
 fn check_credentials(username: &str, password: &str) -> Option<UserRole> {
-    // Default accounts — intentionally simple for demonstration.
+    // Default accounts — override via a real user store in production.
     match (username, password) {
         ("admin", "admin") => Some(UserRole::Admin),
         ("user", "user") => Some(UserRole::User),
@@ -457,7 +471,7 @@ fn check_credentials(username: &str, password: &str) -> Option<UserRole> {
     }
 }
 
-/// Generate a base64-encoded random session token.
+/// Generate a hex-encoded UUID session token.
 fn generate_session_token() -> String {
     use std::fmt::Write;
     let id = uuid::Uuid::new_v4();
