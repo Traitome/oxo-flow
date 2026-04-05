@@ -109,7 +109,7 @@ bismark --genome /data/references/GRCh38/bismark_index \
         -1 {input[0]} -2 {input[1]} \
         --parallel {threads} \
         -o methyl_aligned/
-deduplicate_bismark --bam methyl_aligned/{sample}*.bam \
+deduplicate_bismark --bam methyl_aligned/{sample}_R1_bismark_bt2_pe.bam \
         -o methyl_aligned/{sample}
 """
 

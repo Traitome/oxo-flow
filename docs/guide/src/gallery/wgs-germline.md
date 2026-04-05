@@ -95,7 +95,12 @@ samtools index {output[0]}
 
 [rules.environment]
 docker = "biocontainers/bwa-mem2:2.2.1"
+```
 
+!!! note "Read Group Escape Sequences"
+    The `\\t` in the read group string (`-R '@RG\\tID:...'`) is a double-escaped tab character. TOML requires `\\` to represent a literal backslash, which the shell then interprets as `\t` (tab) — the delimiter BWA expects between read group fields.
+
+```toml
 [[rules]]
 name = "mark_duplicates"
 input = ["aligned/{sample}.sorted.bam"]

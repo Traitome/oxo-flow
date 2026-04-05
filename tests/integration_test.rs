@@ -364,9 +364,9 @@ fn gallery_06_rnaseq_quantification() {
     let order = dag.execution_order().unwrap();
     assert_eq!(order.len(), 5);
     assert_eq!(order[0], "fastp_trim");
-    // index_bam and multiqc are both terminal nodes;
-    // the topological order places index_bam after multiqc
-    // since multiqc has more upstream dependencies resolved first.
+    // Both index_bam and multiqc are terminal nodes with no downstream dependents.
+    // Their relative order does not affect correctness — the DAG guarantees all
+    // upstream dependencies complete before either runs.
 }
 
 #[test]
