@@ -65,7 +65,7 @@ oxo-flow validate my-pipeline.oxoflow
 ```
 
 ```
-✓ my-pipeline.oxoflow — 2 rules, 1 dependencies
+✓ my-pipeline.oxoflow — 2 rules, 1 dependency
 ```
 
 ---
