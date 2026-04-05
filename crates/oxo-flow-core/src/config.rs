@@ -184,6 +184,55 @@ impl WorkflowConfig {
             }
         }
 
+        self.validate_execution_groups()?;
+
+        Ok(())
+    }
+
+    /// Resolve include directives by loading and merging rules from included files.
+    /// Rules from included files are optionally prefixed with the namespace.
+    pub fn resolve_includes(&mut self, base_dir: &Path) -> Result<()> {
+        let includes = std::mem::take(&mut self.includes);
+        for inc in &includes {
+            let inc_path = base_dir.join(&inc.path);
+            let content = std::fs::read_to_string(&inc_path).map_err(|e| OxoFlowError::Parse {
+                path: inc_path.clone(),
+                message: format!("failed to read include '{}': {}", inc.path, e),
+            })?;
+            let inc_config: WorkflowConfig =
+                toml::from_str(&content).map_err(|e| OxoFlowError::Parse {
+                    path: inc_path.clone(),
+                    message: e.to_string(),
+                })?;
+            for mut rule in inc_config.rules {
+                if let Some(ref ns) = inc.namespace {
+                    rule.name = format!("{}::{}", ns, rule.name);
+                }
+                if !self.rules.iter().any(|r| r.name == rule.name) {
+                    self.rules.push(rule);
+                }
+            }
+        }
+        self.includes = includes;
+        Ok(())
+    }
+
+    /// Validate that all execution group references point to existing rules.
+    pub fn validate_execution_groups(&self) -> Result<()> {
+        let rule_names: std::collections::HashSet<&str> =
+            self.rules.iter().map(|r| r.name.as_str()).collect();
+        for group in &self.execution_groups {
+            for rule_ref in &group.rules {
+                if !rule_names.contains(rule_ref.as_str()) {
+                    return Err(OxoFlowError::Config {
+                        message: format!(
+                            "execution group '{}' references unknown rule '{}'",
+                            group.name, rule_ref
+                        ),
+                    });
+                }
+            }
+        }
         Ok(())
     }
 
@@ -498,5 +547,195 @@ mod tests {
         let scatter = rule.scatter.as_ref().unwrap();
         assert_eq!(scatter.variable, "sample");
         assert_eq!(scatter.values, vec!["S1", "S2"]);
+    }
+
+    #[test]
+    fn resolve_includes_with_namespace() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let included_content = r#"
+            [workflow]
+            name = "included"
+
+            [[rules]]
+            name = "qc_step"
+            shell = "fastqc"
+
+            [[rules]]
+            name = "trim_step"
+            shell = "fastp"
+        "#;
+        let inc_path = dir.path().join("qc.oxoflow");
+        std::fs::write(&inc_path, included_content).unwrap();
+
+        let main_content = r#"
+            [workflow]
+            name = "main"
+
+            [[include]]
+            path = "qc.oxoflow"
+            namespace = "qc"
+
+            [[rules]]
+            name = "align"
+            shell = "bwa"
+        "#;
+
+        let mut config: WorkflowConfig = toml::from_str(main_content).unwrap();
+        config.resolve_includes(dir.path()).unwrap();
+
+        assert_eq!(config.rules.len(), 3);
+        assert_eq!(config.rules[0].name, "align");
+        assert_eq!(config.rules[1].name, "qc::qc_step");
+        assert_eq!(config.rules[2].name, "qc::trim_step");
+    }
+
+    #[test]
+    fn resolve_includes_without_namespace() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let included_content = r#"
+            [workflow]
+            name = "included"
+
+            [[rules]]
+            name = "helper"
+            shell = "echo help"
+        "#;
+        let inc_path = dir.path().join("helper.oxoflow");
+        std::fs::write(&inc_path, included_content).unwrap();
+
+        let main_content = r#"
+            [workflow]
+            name = "main"
+
+            [[include]]
+            path = "helper.oxoflow"
+
+            [[rules]]
+            name = "main_step"
+            shell = "echo main"
+        "#;
+
+        let mut config: WorkflowConfig = toml::from_str(main_content).unwrap();
+        config.resolve_includes(dir.path()).unwrap();
+
+        assert_eq!(config.rules.len(), 2);
+        assert_eq!(config.rules[1].name, "helper");
+    }
+
+    #[test]
+    fn resolve_includes_skips_duplicate_rules() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let included_content = r#"
+            [workflow]
+            name = "included"
+
+            [[rules]]
+            name = "shared_step"
+            shell = "echo included"
+        "#;
+        let inc_path = dir.path().join("inc.oxoflow");
+        std::fs::write(&inc_path, included_content).unwrap();
+
+        let main_content = r#"
+            [workflow]
+            name = "main"
+
+            [[include]]
+            path = "inc.oxoflow"
+
+            [[rules]]
+            name = "shared_step"
+            shell = "echo main"
+        "#;
+
+        let mut config: WorkflowConfig = toml::from_str(main_content).unwrap();
+        config.resolve_includes(dir.path()).unwrap();
+
+        // Should NOT add duplicate
+        assert_eq!(config.rules.len(), 1);
+        assert_eq!(config.rules[0].shell.as_deref(), Some("echo main"));
+    }
+
+    #[test]
+    fn resolve_includes_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let main_content = r#"
+            [workflow]
+            name = "main"
+
+            [[include]]
+            path = "nonexistent.oxoflow"
+        "#;
+
+        let mut config: WorkflowConfig = toml::from_str(main_content).unwrap();
+        let result = config.resolve_includes(dir.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_execution_groups_valid() {
+        let toml_str = r#"
+            [workflow]
+            name = "grouped"
+
+            [[execution_group]]
+            name = "prep"
+            rules = ["step1"]
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hello"
+        "#;
+
+        let config = WorkflowConfig::parse(toml_str).unwrap();
+        assert!(config.validate_execution_groups().is_ok());
+    }
+
+    #[test]
+    fn validate_execution_groups_unknown_rule() {
+        let toml_str = r#"
+            [workflow]
+            name = "grouped"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hello"
+        "#;
+
+        let mut config = WorkflowConfig::parse(toml_str).unwrap();
+        config.execution_groups.push(ExecutionGroup {
+            name: "bad_group".to_string(),
+            rules: vec!["nonexistent".to_string()],
+            mode: ExecutionMode::Parallel,
+        });
+
+        let result = config.validate_execution_groups();
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("nonexistent"));
+        assert!(err.contains("bad_group"));
+    }
+
+    #[test]
+    fn validate_rejects_bad_execution_groups() {
+        let toml_str = r#"
+            [workflow]
+            name = "test"
+
+            [[execution_group]]
+            name = "group1"
+            rules = ["missing_rule"]
+
+            [[rules]]
+            name = "real_rule"
+            shell = "echo hi"
+        "#;
+
+        let result = WorkflowConfig::parse(toml_str);
+        assert!(result.is_err());
     }
 }

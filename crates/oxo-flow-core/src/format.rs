@@ -392,6 +392,117 @@ pub fn workflow_stats(config: &WorkflowConfig) -> WorkflowStats {
     }
 }
 
+/// Verify that a TOML string conforms to the .oxoflow schema.
+///
+/// This is a lighter-weight check than full parsing — it verifies the
+/// presence of required sections and correct types without constructing
+/// a full WorkflowConfig.
+pub fn verify_schema(toml_content: &str) -> ValidationResult {
+    let mut diagnostics = Vec::new();
+
+    let table: toml::Table = match toml::from_str(toml_content) {
+        Ok(t) => t,
+        Err(e) => {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                message: format!("invalid TOML syntax: {}", e),
+                rule: None,
+                code: "S001".to_string(),
+            });
+            return ValidationResult {
+                valid: false,
+                diagnostics,
+                format_version: FORMAT_VERSION.to_string(),
+            };
+        }
+    };
+
+    // S002: [workflow] section is required
+    if !table.contains_key("workflow") {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            message: "[workflow] section is required".to_string(),
+            rule: None,
+            code: "S002".to_string(),
+        });
+    } else if let Some(wf) = table.get("workflow").and_then(|v| v.as_table()) {
+        // S003: workflow.name is required
+        if !wf.contains_key("name") {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                message: "workflow.name is required".to_string(),
+                rule: None,
+                code: "S003".to_string(),
+            });
+        }
+    }
+
+    // S004: rules must be an array of tables
+    if let Some(rules) = table.get("rules") {
+        if !rules.is_array() {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                message: "[[rules]] must be an array of tables".to_string(),
+                rule: None,
+                code: "S004".to_string(),
+            });
+        } else if let Some(arr) = rules.as_array() {
+            for (i, item) in arr.iter().enumerate() {
+                if !item.is_table() {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        message: format!("rules[{}] must be a table", i),
+                        rule: None,
+                        code: "S004".to_string(),
+                    });
+                } else if let Some(t) = item.as_table()
+                    && !t.contains_key("name")
+                {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        message: format!("rules[{}].name is required", i),
+                        rule: None,
+                        code: "S005".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    // S006: unknown top-level keys
+    let known_keys = [
+        "workflow",
+        "config",
+        "defaults",
+        "rules",
+        "report",
+        "include",
+        "execution_group",
+    ];
+    for key in table.keys() {
+        if !known_keys.contains(&key.as_str()) {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: format!("unknown top-level section: '{}'", key),
+                rule: None,
+                code: "S006".to_string(),
+            });
+        }
+    }
+
+    let valid = !diagnostics.iter().any(|d| d.severity == Severity::Error);
+    ValidationResult {
+        valid,
+        diagnostics,
+        format_version: FORMAT_VERSION.to_string(),
+    }
+}
+
+/// Check format version compatibility.
+pub fn check_format_version(version: &str) -> bool {
+    version == FORMAT_VERSION || version.starts_with("1.")
+}
+
 /// Format a workflow configuration into canonical .oxoflow TOML string.
 ///
 /// Produces a consistently formatted output suitable for version control.
@@ -468,6 +579,27 @@ pub fn format_workflow(config: &WorkflowConfig) -> String {
         if let Some(ref benchmark) = rule.benchmark {
             output.push_str(&format!("benchmark = \"{}\"\n", benchmark));
         }
+        if let Some(ref when) = rule.when {
+            output.push_str(&format!("when = \"{}\"\n", when));
+        }
+        if let Some(ref input_function) = rule.input_function {
+            output.push_str(&format!("input_function = \"{}\"\n", input_function));
+        }
+        if rule.retries > 0 {
+            output.push_str(&format!("retries = {}\n", rule.retries));
+        }
+        if !rule.temp_output.is_empty() {
+            output.push_str(&format!(
+                "temp_output = {}\n",
+                format_string_array(&rule.temp_output)
+            ));
+        }
+        if !rule.protected_output.is_empty() {
+            output.push_str(&format!(
+                "protected_output = {}\n",
+                format_string_array(&rule.protected_output)
+            ));
+        }
         if let Some(ref shell) = rule.shell {
             if shell.contains('\n') {
                 output.push_str(&format!("shell = \"\"\"\n{}\n\"\"\"\n", shell));
@@ -477,6 +609,19 @@ pub fn format_workflow(config: &WorkflowConfig) -> String {
         }
         if let Some(ref script) = rule.script {
             output.push_str(&format!("script = \"{}\"\n", script));
+        }
+        if let Some(ref scatter) = rule.scatter {
+            output.push_str("\n[rules.scatter]\n");
+            output.push_str(&format!("variable = \"{}\"\n", scatter.variable));
+            if !scatter.values.is_empty() {
+                output.push_str(&format!(
+                    "values = {}\n",
+                    format_string_array(&scatter.values)
+                ));
+            }
+            if let Some(ref gather) = scatter.gather {
+                output.push_str(&format!("gather = \"{}\"\n", gather));
+            }
         }
         if !rule.environment.is_empty() {
             output.push_str("\n[rules.environment]\n");
@@ -496,6 +641,29 @@ pub fn format_workflow(config: &WorkflowConfig) -> String {
                 output.push_str(&format!("venv = \"{}\"\n", venv));
             }
         }
+    }
+
+    // [[include]] sections
+    for inc in &config.includes {
+        output.push_str("\n[[include]]\n");
+        output.push_str(&format!("path = \"{}\"\n", inc.path));
+        if let Some(ref ns) = inc.namespace {
+            output.push_str(&format!("namespace = \"{}\"\n", ns));
+        }
+    }
+
+    // [[execution_group]] sections
+    for group in &config.execution_groups {
+        output.push_str("\n[[execution_group]]\n");
+        output.push_str(&format!("name = \"{}\"\n", group.name));
+        if !group.rules.is_empty() {
+            output.push_str(&format!("rules = {}\n", format_string_array(&group.rules)));
+        }
+        let mode_str = match group.mode {
+            crate::config::ExecutionMode::Sequential => "sequential",
+            crate::config::ExecutionMode::Parallel => "parallel",
+        };
+        output.push_str(&format!("mode = \"{}\"\n", mode_str));
     }
 
     // [report] section
@@ -771,5 +939,371 @@ mod tests {
     fn severity_ordering() {
         assert!(Severity::Info < Severity::Warning);
         assert!(Severity::Warning < Severity::Error);
+    }
+
+    // -- verify_schema tests -------------------------------------------------
+
+    #[test]
+    fn verify_schema_valid() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+        "#;
+        let result = verify_schema(toml);
+        assert!(result.valid);
+        assert!(result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn verify_schema_invalid_toml() {
+        let result = verify_schema("this is not valid toml {{{");
+        assert!(!result.valid);
+        assert!(result.diagnostics.iter().any(|d| d.code == "S001"));
+    }
+
+    #[test]
+    fn verify_schema_missing_workflow() {
+        let toml = r#"
+            [[rules]]
+            name = "step1"
+        "#;
+        let result = verify_schema(toml);
+        assert!(!result.valid);
+        assert!(result.diagnostics.iter().any(|d| d.code == "S002"));
+    }
+
+    #[test]
+    fn verify_schema_missing_workflow_name() {
+        let toml = r#"
+            [workflow]
+            version = "1.0"
+        "#;
+        let result = verify_schema(toml);
+        assert!(!result.valid);
+        assert!(result.diagnostics.iter().any(|d| d.code == "S003"));
+    }
+
+    #[test]
+    fn verify_schema_rule_missing_name() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            shell = "echo hi"
+        "#;
+        let result = verify_schema(toml);
+        assert!(!result.valid);
+        assert!(result.diagnostics.iter().any(|d| d.code == "S005"));
+    }
+
+    #[test]
+    fn verify_schema_unknown_top_level_key() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [custom_section]
+            key = "value"
+        "#;
+        let result = verify_schema(toml);
+        assert!(result.valid); // warnings don't make it invalid
+        assert!(result.diagnostics.iter().any(|d| d.code == "S006"));
+    }
+
+    #[test]
+    fn verify_schema_format_version_set() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+        "#;
+        let result = verify_schema(toml);
+        assert_eq!(result.format_version, FORMAT_VERSION);
+    }
+
+    #[test]
+    fn verify_schema_known_keys_no_warning() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [config]
+            ref = "/ref.fa"
+
+            [defaults]
+            threads = 4
+
+            [report]
+            template = "default"
+        "#;
+        let result = verify_schema(toml);
+        assert!(result.valid);
+        assert!(!result.diagnostics.iter().any(|d| d.code == "S006"));
+    }
+
+    // -- check_format_version tests ------------------------------------------
+
+    #[test]
+    fn check_format_version_exact_match() {
+        assert!(check_format_version("1.0"));
+    }
+
+    #[test]
+    fn check_format_version_compatible() {
+        assert!(check_format_version("1.1"));
+        assert!(check_format_version("1.99"));
+    }
+
+    #[test]
+    fn check_format_version_incompatible() {
+        assert!(!check_format_version("2.0"));
+        assert!(!check_format_version("0.9"));
+    }
+
+    // -- format_workflow new fields roundtrip tests ---------------------------
+
+    #[test]
+    fn format_roundtrip_with_when() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "conditional"
+            output = ["out.txt"]
+            shell = "echo hi"
+            when = "config.enabled"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let formatted = format_workflow(&config);
+        assert!(formatted.contains("when = \"config.enabled\""));
+        let reparsed = WorkflowConfig::parse(&formatted).unwrap();
+        assert_eq!(reparsed.rules[0].when.as_deref(), Some("config.enabled"));
+    }
+
+    #[test]
+    fn format_roundtrip_with_retries() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "flaky"
+            output = ["out.txt"]
+            shell = "echo hi"
+            retries = 3
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let formatted = format_workflow(&config);
+        assert!(formatted.contains("retries = 3"));
+        let reparsed = WorkflowConfig::parse(&formatted).unwrap();
+        assert_eq!(reparsed.rules[0].retries, 3);
+    }
+
+    #[test]
+    fn format_roundtrip_with_temp_and_protected_output() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "step1"
+            output = ["sorted.bam"]
+            shell = "sort input > sorted.bam"
+            temp_output = ["unsorted.bam"]
+            protected_output = ["sorted.bam"]
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let formatted = format_workflow(&config);
+        assert!(formatted.contains("temp_output"));
+        assert!(formatted.contains("protected_output"));
+        let reparsed = WorkflowConfig::parse(&formatted).unwrap();
+        assert_eq!(reparsed.rules[0].temp_output, vec!["unsorted.bam"]);
+        assert_eq!(reparsed.rules[0].protected_output, vec!["sorted.bam"]);
+    }
+
+    #[test]
+    fn format_roundtrip_with_input_function() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "dynamic"
+            output = ["out.txt"]
+            shell = "process"
+            input_function = "get_inputs"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let formatted = format_workflow(&config);
+        assert!(formatted.contains("input_function = \"get_inputs\""));
+        let reparsed = WorkflowConfig::parse(&formatted).unwrap();
+        assert_eq!(
+            reparsed.rules[0].input_function.as_deref(),
+            Some("get_inputs")
+        );
+    }
+
+    #[test]
+    fn format_roundtrip_with_scatter() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "per_sample"
+            input = ["{sample}.bam"]
+            output = ["{sample}.vcf"]
+            shell = "call {input}"
+
+            [rules.scatter]
+            variable = "sample"
+            values = ["S1", "S2"]
+            gather = "merge"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let formatted = format_workflow(&config);
+        assert!(formatted.contains("[rules.scatter]"));
+        assert!(formatted.contains("variable = \"sample\""));
+        let reparsed = WorkflowConfig::parse(&formatted).unwrap();
+        let scatter = reparsed.rules[0].scatter.as_ref().unwrap();
+        assert_eq!(scatter.variable, "sample");
+        assert_eq!(scatter.values, vec!["S1", "S2"]);
+        assert_eq!(scatter.gather.as_deref(), Some("merge"));
+    }
+
+    #[test]
+    fn format_roundtrip_with_includes() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[include]]
+            path = "common/qc.oxoflow"
+            namespace = "qc"
+
+            [[include]]
+            path = "align.oxoflow"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hi"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let formatted = format_workflow(&config);
+        assert!(formatted.contains("[[include]]"));
+        assert!(formatted.contains("path = \"common/qc.oxoflow\""));
+        assert!(formatted.contains("namespace = \"qc\""));
+        let reparsed = WorkflowConfig::parse(&formatted).unwrap();
+        assert_eq!(reparsed.includes.len(), 2);
+        assert_eq!(reparsed.includes[0].namespace.as_deref(), Some("qc"));
+    }
+
+    #[test]
+    fn format_roundtrip_with_execution_groups() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[execution_group]]
+            name = "prep"
+            rules = ["step1"]
+            mode = "sequential"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hi"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let formatted = format_workflow(&config);
+        assert!(formatted.contains("[[execution_group]]"));
+        assert!(formatted.contains("name = \"prep\""));
+        assert!(formatted.contains("mode = \"sequential\""));
+        let reparsed = WorkflowConfig::parse(&formatted).unwrap();
+        assert_eq!(reparsed.execution_groups.len(), 1);
+        assert_eq!(
+            reparsed.execution_groups[0].mode,
+            crate::config::ExecutionMode::Sequential
+        );
+    }
+
+    #[test]
+    fn format_retries_zero_not_emitted() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hi"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let formatted = format_workflow(&config);
+        assert!(!formatted.contains("retries"));
+    }
+
+    // -- lint checks for new features ----------------------------------------
+
+    #[test]
+    fn lint_when_conditional_rule() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            description = "desc"
+            author = "me"
+
+            [[rules]]
+            name = "step1"
+            description = "conditional step"
+            output = ["out.txt"]
+            shell = "echo hi"
+            when = "config.enabled"
+            log = "step1.log"
+
+            [rules.environment]
+            conda = "env.yaml"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(result.valid);
+    }
+
+    #[test]
+    fn lint_scatter_rule() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            description = "desc"
+            author = "me"
+
+            [[rules]]
+            name = "per_sample"
+            description = "scatter step"
+            input = ["{sample}.bam"]
+            output = ["{sample}.vcf"]
+            shell = "call {input}"
+            log = "per_sample.log"
+
+            [rules.scatter]
+            variable = "sample"
+            values = ["S1", "S2"]
+
+            [rules.environment]
+            conda = "env.yaml"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(result.valid);
     }
 }
