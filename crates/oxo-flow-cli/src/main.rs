@@ -55,6 +55,14 @@ enum Commands {
         /// Run specific target rules only.
         #[arg(short = 't', long)]
         target: Vec<String>,
+
+        /// Number of times to retry failed jobs.
+        #[arg(short = 'r', long, default_value = "0")]
+        retry: u32,
+
+        /// Timeout per job in seconds (0 = no timeout).
+        #[arg(long, default_value = "0")]
+        timeout: u64,
     },
 
     /// Simulate execution without running any commands.
@@ -209,6 +217,8 @@ async fn main() -> Result<()> {
             keep_going,
             workdir,
             target: _,
+            retry,
+            timeout,
         } => {
             print_banner();
             let config = WorkflowConfig::from_file(&workflow)
@@ -232,8 +242,12 @@ async fn main() -> Result<()> {
                 dry_run: false,
                 workdir: workdir.unwrap_or_else(|| std::env::current_dir().unwrap_or_default()),
                 keep_going,
-                retry_count: 0,
-                timeout: None,
+                retry_count: retry,
+                timeout: if timeout > 0 {
+                    Some(std::time::Duration::from_secs(timeout))
+                } else {
+                    None
+                },
             };
 
             let executor = LocalExecutor::new(exec_config);
@@ -837,5 +851,28 @@ mod tests {
     fn cli_parse_verbose_short_flag() {
         let cli = Cli::try_parse_from(["oxo-flow", "-v", "validate", "test.oxoflow"]).unwrap();
         assert!(cli.verbose);
+    }
+
+    #[test]
+    fn cli_parse_run_with_retry() {
+        let cli = Cli::try_parse_from(["oxo-flow", "run", "test.oxoflow", "-r", "3"]).unwrap();
+        match cli.command {
+            Commands::Run { retry, .. } => {
+                assert_eq!(retry, 3);
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_run_with_timeout() {
+        let cli =
+            Cli::try_parse_from(["oxo-flow", "run", "test.oxoflow", "--timeout", "300"]).unwrap();
+        match cli.command {
+            Commands::Run { timeout, .. } => {
+                assert_eq!(timeout, 300);
+            }
+            _ => panic!("expected Run command"),
+        }
     }
 }
