@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>oxo-flow — Rust-native bioinformatics pipeline engine</title>
+  <meta name="description" content="A high-performance, modular bioinformatics pipeline engine built in Rust. DAG execution, environment management, clinical reporting, and container packaging." />
+  <style>
+    /* ── Reset & base ───────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      color: #1a1a2e;
+      background: #ffffff;
+    }
+    a { color: #0e7c86; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Layout ─────────────────────────────────────────────────── */
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 1.5rem; }
+
+    /* ── Header / Nav ──────────────────────────────────────────── */
+    header {
+      background: #0e7c86;
+      color: white;
+      padding: 0.75rem 0;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    header .container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    header .logo {
+      font-size: 1.35rem;
+      font-weight: 700;
+      color: white;
+      letter-spacing: -0.02em;
+    }
+    header .logo:hover { text-decoration: none; }
+    header nav a {
+      color: rgba(255,255,255,0.9);
+      margin-left: 1.5rem;
+      font-size: 0.95rem;
+      font-weight: 500;
+    }
+    header nav a:hover { color: #fff; text-decoration: none; }
+
+    /* ── Hero ───────────────────────────────────────────────────── */
+    .hero {
+      background: linear-gradient(135deg, #0e7c86 0%, #065c64 40%, #1a1a2e 100%);
+      color: white;
+      padding: 5rem 0 4rem;
+      text-align: center;
+    }
+    .hero h1 {
+      font-size: 2.75rem;
+      font-weight: 800;
+      line-height: 1.15;
+      margin-bottom: 1rem;
+      letter-spacing: -0.03em;
+    }
+    .hero .subtitle {
+      font-size: 1.2rem;
+      color: rgba(255,255,255,0.85);
+      max-width: 640px;
+      margin: 0 auto 2rem;
+    }
+    .hero .cta-group { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+    .btn {
+      display: inline-block;
+      padding: 0.75rem 1.75rem;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 1rem;
+      transition: background 0.2s, transform 0.1s;
+    }
+    .btn:hover { text-decoration: none; transform: translateY(-1px); }
+    .btn-primary { background: #e8590c; color: white; }
+    .btn-primary:hover { background: #d14e0a; }
+    .btn-secondary { background: rgba(255,255,255,0.15); color: white; border: 1px solid rgba(255,255,255,0.3); }
+    .btn-secondary:hover { background: rgba(255,255,255,0.25); }
+
+    /* ── Section ────────────────────────────────────────────────── */
+    section { padding: 4rem 0; }
+    section h2 {
+      font-size: 2rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+      letter-spacing: -0.02em;
+    }
+    section .section-sub {
+      color: #555;
+      font-size: 1.05rem;
+      margin-bottom: 2.5rem;
+      max-width: 600px;
+    }
+    .alt-bg { background: #f6f9fc; }
+
+    /* ── Features grid ─────────────────────────────────────────── */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1.5rem;
+    }
+    .feature-card {
+      background: white;
+      border: 1px solid #e4e8ee;
+      border-radius: 8px;
+      padding: 1.5rem;
+      transition: box-shadow 0.2s;
+    }
+    .feature-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.08); }
+    .feature-card .icon { font-size: 1.75rem; margin-bottom: 0.75rem; }
+    .feature-card h3 { font-size: 1.15rem; margin-bottom: 0.4rem; }
+    .feature-card p { color: #555; font-size: 0.95rem; }
+
+    /* ── Code block ────────────────────────────────────────────── */
+    .code-section { text-align: center; }
+    .code-block {
+      background: #1a1a2e;
+      color: #e6edf3;
+      border-radius: 8px;
+      padding: 1.75rem 2rem;
+      text-align: left;
+      font-family: "JetBrains Mono", "Fira Code", monospace;
+      font-size: 0.9rem;
+      line-height: 1.7;
+      overflow-x: auto;
+      max-width: 700px;
+      margin: 0 auto;
+    }
+    .code-block .comment { color: #6a737d; }
+    .code-block .cmd { color: #3dbfc9; }
+    .code-block .str { color: #ff8a4c; }
+    .code-block .output { color: #8b949e; }
+
+    /* ── Install section ───────────────────────────────────────── */
+    .install-methods {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1.5rem;
+    }
+    .install-card {
+      background: white;
+      border: 1px solid #e4e8ee;
+      border-radius: 8px;
+      padding: 1.5rem;
+    }
+    .install-card h3 { font-size: 1.05rem; margin-bottom: 0.75rem; color: #0e7c86; }
+    .install-card code {
+      display: block;
+      background: #f6f9fc;
+      padding: 0.75rem 1rem;
+      border-radius: 4px;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.85rem;
+      color: #1a1a2e;
+      overflow-x: auto;
+    }
+
+    /* ── License ───────────────────────────────────────────────── */
+    .license-table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+    .license-table th, .license-table td {
+      text-align: left;
+      padding: 0.6rem 1rem;
+      border-bottom: 1px solid #e4e8ee;
+    }
+    .license-table th { font-weight: 600; color: #555; font-size: 0.9rem; }
+    .license-table td { font-size: 0.95rem; }
+
+    /* ── Footer ────────────────────────────────────────────────── */
+    footer {
+      background: #1a1a2e;
+      color: rgba(255,255,255,0.7);
+      padding: 2.5rem 0;
+      font-size: 0.9rem;
+    }
+    footer .container {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+    footer a { color: #3dbfc9; }
+
+    /* ── Responsive ────────────────────────────────────────────── */
+    @media (max-width: 640px) {
+      .hero h1 { font-size: 2rem; }
+      .hero { padding: 3rem 0 2.5rem; }
+      header nav a { margin-left: 0.75rem; font-size: 0.85rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ─── Header ──────────────────────────────────────────────── -->
+  <header>
+    <div class="container">
+      <a class="logo" href="#">oxo-flow</a>
+      <nav>
+        <a href="#features">Features</a>
+        <a href="#install">Install</a>
+        <a href="#quickstart">Quick Start</a>
+        <a href="guide/site/index.html">Documentation</a>
+        <a href="https://github.com/Traitome/oxo-flow">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- ─── Hero ────────────────────────────────────────────────── -->
+  <section class="hero">
+    <div class="container">
+      <h1>Rust-native bioinformatics<br />pipeline engine</h1>
+      <p class="subtitle">
+        Build, validate, and execute reproducible bioinformatics workflows with
+        DAG-based execution, first-class environment management, and clinical-grade reporting.
+        Designed to fully replace Snakemake — no Python runtime required.
+      </p>
+      <div class="cta-group">
+        <a class="btn btn-primary" href="guide/site/index.html">Read the Docs</a>
+        <a class="btn btn-secondary" href="https://github.com/Traitome/oxo-flow">View on GitHub</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── Features ────────────────────────────────────────────── -->
+  <section id="features" class="alt-bg">
+    <div class="container">
+      <h2>Core Capabilities</h2>
+      <p class="section-sub">Everything you need to build production-grade bioinformatics pipelines.</p>
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="icon">🔀</div>
+          <h3>DAG Execution Engine</h3>
+          <p>Automatic dependency resolution, topological sorting, cycle detection, and parallel execution groups. Built with petgraph for performance.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">📦</div>
+          <h3>Environment Management</h3>
+          <p>First-class support for conda, pixi, docker, singularity, and Python venv. Each rule declares its own isolated environment.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">📊</div>
+          <h3>Clinical Reporting</h3>
+          <p>Generate structured HTML and JSON reports with Tera templates. Designed for clinical genomics labs with regulatory requirements.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">🌐</div>
+          <h3>Web API</h3>
+          <p>Built-in REST API with axum for remote workflow validation, execution monitoring, and integration with web-based tools.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">🐳</div>
+          <h3>Container Packaging</h3>
+          <p>Package workflows into Docker or Singularity images for portable, self-contained, reproducible execution on any system.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">🧬</div>
+          <h3>Venus Pipeline</h3>
+          <p>Built-in clinical tumor variant calling pipeline — from raw FASTQ to annotated VCF with clinical reports, ready out of the box.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── Quick Start ─────────────────────────────────────────── -->
+  <section id="quickstart">
+    <div class="container code-section">
+      <h2>Quick Start</h2>
+      <p class="section-sub" style="margin-left:auto;margin-right:auto;">From zero to running pipeline in four commands.</p>
+      <div class="code-block">
+<span class="comment"># Install</span>
+<span class="cmd">cargo install oxo-flow</span>
+
+<span class="comment"># Scaffold a new project</span>
+<span class="cmd">oxo-flow init</span> <span class="str">my-pipeline</span>
+<span class="cmd">cd</span> my-pipeline
+
+<span class="comment"># Validate and preview</span>
+<span class="cmd">oxo-flow validate</span> my-pipeline.oxoflow
+<span class="output">✓ my-pipeline.oxoflow — 0 rules, 0 dependencies</span>
+
+<span class="comment"># Execute the workflow</span>
+<span class="cmd">oxo-flow run</span> my-pipeline.oxoflow <span class="str">-j 8</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── Install ─────────────────────────────────────────────── -->
+  <section id="install" class="alt-bg">
+    <div class="container">
+      <h2>Installation</h2>
+      <p class="section-sub">Three ways to get oxo-flow on your system.</p>
+      <div class="install-methods">
+        <div class="install-card">
+          <h3>Cargo (recommended)</h3>
+          <code>cargo install oxo-flow</code>
+        </div>
+        <div class="install-card">
+          <h3>Build from source</h3>
+          <code>git clone https://github.com/Traitome/oxo-flow.git<br>cd oxo-flow<br>cargo build --release</code>
+        </div>
+        <div class="install-card">
+          <h3>Pre-built binary</h3>
+          <code>curl -LO https://github.com/Traitome/<br>oxo-flow/releases/latest/download/<br>oxo-flow-linux-x86_64.tar.gz</code>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── Workflow Format ─────────────────────────────────────── -->
+  <section>
+    <div class="container code-section">
+      <h2>The .oxoflow Format</h2>
+      <p class="section-sub" style="margin-left:auto;margin-right:auto;">Define your pipeline in clean, readable TOML.</p>
+      <div class="code-block">
+<span class="comment"># align.oxoflow</span>
+[<span class="str">workflow</span>]
+name = <span class="str">"align-and-sort"</span>
+version = <span class="str">"1.0.0"</span>
+
+[<span class="str">config</span>]
+reference = <span class="str">"/data/ref/hg38.fa"</span>
+
+[[<span class="str">rules</span>]]
+name = <span class="str">"bwa_align"</span>
+input = [<span class="str">"{sample}_R1.fastq.gz"</span>, <span class="str">"{sample}_R2.fastq.gz"</span>]
+output = [<span class="str">"aligned/{sample}.bam"</span>]
+threads = <span class="cmd">16</span>
+memory = <span class="str">"32G"</span>
+environment = { docker = <span class="str">"biocontainers/bwa:0.7.17"</span> }
+shell = <span class="str">"bwa mem -t {threads} {config.reference} {input} | samtools sort -o {output}"</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── License ─────────────────────────────────────────────── -->
+  <section class="alt-bg">
+    <div class="container">
+      <h2>Licensing</h2>
+      <p class="section-sub">Open source core with flexible licensing for the web interface.</p>
+      <table class="license-table">
+        <thead>
+          <tr><th>Component</th><th>License</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>oxo-flow-core</td><td>Apache 2.0</td></tr>
+          <tr><td>oxo-flow-cli</td><td>Apache 2.0</td></tr>
+          <tr><td>venus</td><td>Apache 2.0</td></tr>
+          <tr><td>oxo-flow-web</td><td>Dual — Academic (free) / Commercial (paid)</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ─── Links / CTA ─────────────────────────────────────────── -->
+  <section>
+    <div class="container" style="text-align:center;">
+      <h2>Get Started</h2>
+      <p class="section-sub" style="margin-left:auto;margin-right:auto;">
+        Read the documentation, explore the source, or check the roadmap.
+      </p>
+      <div class="cta-group" style="justify-content:center;">
+        <a class="btn btn-primary" href="guide/site/index.html">Documentation</a>
+        <a class="btn btn-secondary" style="border-color:#0e7c86;color:#0e7c86;" href="https://github.com/Traitome/oxo-flow">GitHub</a>
+        <a class="btn btn-secondary" style="border-color:#0e7c86;color:#0e7c86;" href="https://github.com/Traitome/oxo-flow/blob/main/ROADMAP.md">Roadmap</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── Footer ──────────────────────────────────────────────── -->
+  <footer>
+    <div class="container">
+      <span>&copy; 2025 Traitome. oxo-flow is open-source software.</span>
+      <span>
+        <a href="https://github.com/Traitome/oxo-flow">GitHub</a> &middot;
+        <a href="guide/site/index.html">Docs</a> &middot;
+        <a href="https://github.com/Traitome/oxo-flow/blob/main/LICENSE">License</a>
+      </span>
+    </div>
+  </footer>
+
+</body>
+</html>

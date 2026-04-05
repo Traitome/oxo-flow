@@ -1,0 +1,140 @@
+site_name: "oxo-flow"
+site_url: https://traitome.github.io/oxo-flow/documentation/
+site_description: "oxo-flow Documentation — Rust-native bioinformatics pipeline engine"
+repo_url: https://github.com/Traitome/oxo-flow
+repo_name: Traitome/oxo-flow
+edit_uri: edit/main/docs/guide/src/
+
+docs_dir: src
+site_dir: site
+
+theme:
+  name: material
+
+  font:
+    text: Inter
+    code: JetBrains Mono
+
+  palette:
+    # Palette toggle for automatic mode
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+
+  features:
+    - content.code.copy
+    - content.code.annotate
+    - content.action.edit
+    - content.tabs.link
+    - content.tooltips
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.tracking
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - search.highlight
+    - search.suggest
+
+  icon:
+    edit: material/pencil
+    view: material/eye
+    repo: fontawesome/brands/github
+
+extra_css:
+  - stylesheets/extra.css
+
+markdown_extensions:
+  - admonition
+  - abbr
+  - def_list
+  - footnotes
+  - attr_list
+  - md_in_html
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - toc:
+      toc_depth: 3
+      permalink: "#"
+  - tables
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Traitome/oxo-flow
+      name: oxo-flow on GitHub
+
+plugins:
+  - search:
+      lang: en
+
+nav:
+  - Home: index.md
+  - Tutorials:
+      - Installation: tutorials/installation.md
+      - Quick Start: tutorials/quickstart.md
+      - Your First Workflow: tutorials/first-workflow.md
+      - Variant Calling Pipeline: tutorials/variant-calling.md
+      - Environment Management: tutorials/environment-management.md
+  - How-to Guides:
+      - Create a Workflow: how-to/create-workflow.md
+      - Use Environments: how-to/use-environments.md
+      - Run on a Cluster: how-to/run-on-cluster.md
+      - Generate Reports: how-to/generate-reports.md
+  - Command Reference:
+      - run: commands/run.md
+      - dry-run: commands/dry-run.md
+      - validate: commands/validate.md
+      - graph: commands/graph.md
+      - report: commands/report.md
+      - env: commands/env.md
+      - package: commands/package.md
+      - serve: commands/serve.md
+      - init: commands/init.md
+      - status: commands/status.md
+      - clean: commands/clean.md
+      - completions: commands/completions.md
+  - Architecture & Design:
+      - System Architecture: reference/architecture.md
+      - Workflow Format: reference/workflow-format.md
+      - DAG Engine: reference/dag-engine.md
+      - Environment System: reference/environment-system.md
+      - Reporting System: reference/reporting-system.md
+      - Web API: reference/web-api.md
+      - Venus Pipeline: reference/venus-pipeline.md
+  - Development:
+      - Contributing: development/contributing.md
+      - Changelog: development/changelog.md
