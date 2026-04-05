@@ -210,6 +210,27 @@ enum Commands {
         #[command(subcommand)]
         action: ProfileAction,
     },
+
+    /// Export a workflow to a container definition or standalone TOML.
+    Export {
+        /// Path to the .oxoflow workflow file.
+        #[arg(value_name = "WORKFLOW")]
+        workflow: PathBuf,
+
+        /// Export format: docker, singularity, toml.
+        #[arg(short = 'f', long, default_value = "docker")]
+        format: String,
+
+        /// Output file path.
+        #[arg(short = 'o', long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Manage cluster job submission and monitoring.
+    Cluster {
+        #[command(subcommand)]
+        action: ClusterAction,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -255,6 +276,50 @@ enum ConfigAction {
         /// Path to the .oxoflow workflow file.
         #[arg(value_name = "WORKFLOW")]
         workflow: PathBuf,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ClusterAction {
+    /// Submit a workflow to a cluster scheduler.
+    Submit {
+        /// Path to the .oxoflow workflow file.
+        #[arg(value_name = "WORKFLOW")]
+        workflow: PathBuf,
+
+        /// Cluster backend: slurm, pbs, sge, lsf.
+        #[arg(short = 'b', long, default_value = "slurm")]
+        backend: String,
+
+        /// Partition / queue name.
+        #[arg(short = 'q', long)]
+        queue: Option<String>,
+
+        /// Account / project name.
+        #[arg(short = 'a', long)]
+        account: Option<String>,
+
+        /// Output directory for generated job scripts.
+        #[arg(short = 'o', long, default_value = ".oxo-flow/cluster")]
+        output_dir: PathBuf,
+    },
+
+    /// Show the status of submitted cluster jobs.
+    Status {
+        /// Cluster backend: slurm, pbs, sge, lsf.
+        #[arg(short = 'b', long, default_value = "slurm")]
+        backend: String,
+    },
+
+    /// Cancel submitted cluster jobs.
+    Cancel {
+        /// Cluster backend: slurm, pbs, sge, lsf.
+        #[arg(short = 'b', long, default_value = "slurm")]
+        backend: String,
+
+        /// Job IDs to cancel.
+        #[arg(value_name = "JOB_ID")]
+        job_ids: Vec<String>,
     },
 }
 
@@ -981,6 +1046,158 @@ Thumbs.db
                 }
             }
         }
+
+        Commands::Export {
+            workflow,
+            format,
+            output,
+        } => {
+            print_banner();
+            let config = WorkflowConfig::from_file(&workflow)
+                .with_context(|| format!("failed to parse {}", workflow.display()))?;
+
+            let content = match format.as_str() {
+                "singularity" => {
+                    let pkg = oxo_flow_core::container::PackageConfig {
+                        format: oxo_flow_core::container::ContainerFormat::Singularity,
+                        ..Default::default()
+                    };
+                    oxo_flow_core::container::generate_singularity_def(&config, &pkg)?
+                }
+                "toml" => oxo_flow_core::format::format_workflow(&config),
+                _ => {
+                    let pkg = oxo_flow_core::container::PackageConfig::default();
+                    oxo_flow_core::container::generate_dockerfile(&config, &pkg)?
+                }
+            };
+
+            match output {
+                Some(path) => {
+                    std::fs::write(&path, &content)?;
+                    eprintln!(
+                        "{} Exported {} to {}",
+                        "✓".green().bold(),
+                        format,
+                        path.display()
+                    );
+                }
+                None => {
+                    println!("{content}");
+                }
+            }
+        }
+
+        Commands::Cluster { action } => {
+            print_banner();
+            match action {
+                ClusterAction::Submit {
+                    workflow,
+                    backend,
+                    queue,
+                    account,
+                    output_dir,
+                } => {
+                    let config = WorkflowConfig::from_file(&workflow)
+                        .with_context(|| format!("failed to parse {}", workflow.display()))?;
+
+                    let dag = WorkflowDag::from_rules(&config.rules)
+                        .context("failed to build workflow DAG")?;
+
+                    let order = dag.execution_order()?;
+
+                    let cluster_backend = match backend.as_str() {
+                        "pbs" => oxo_flow_core::cluster::ClusterBackend::Pbs,
+                        "sge" => oxo_flow_core::cluster::ClusterBackend::Sge,
+                        "lsf" => oxo_flow_core::cluster::ClusterBackend::Lsf,
+                        _ => oxo_flow_core::cluster::ClusterBackend::Slurm,
+                    };
+
+                    let cluster_config = oxo_flow_core::cluster::ClusterJobConfig {
+                        backend: cluster_backend,
+                        queue: queue.clone(),
+                        account: account.clone(),
+                        walltime: None,
+                        extra_args: vec![],
+                    };
+
+                    std::fs::create_dir_all(&output_dir)?;
+
+                    eprintln!(
+                        "{} Generating {} job scripts for {} rules",
+                        "Cluster:".bold().cyan(),
+                        backend,
+                        order.len()
+                    );
+
+                    for rule_name in &order {
+                        let rule = config.get_rule(rule_name).unwrap();
+                        let shell_cmd = rule.shell.as_deref().unwrap_or("echo 'no command'");
+                        let script = oxo_flow_core::cluster::generate_submit_script(
+                            &cluster_backend,
+                            rule,
+                            shell_cmd,
+                            &cluster_config,
+                        );
+                        let script_path = output_dir.join(format!("{rule_name}.sh"));
+                        std::fs::write(&script_path, &script)?;
+                        eprintln!("  {} {}", "✓".green(), script_path.display());
+                    }
+
+                    eprintln!(
+                        "\n{} {} scripts written to {}",
+                        "Done:".bold(),
+                        order.len(),
+                        output_dir.display()
+                    );
+                    eprintln!(
+                        "  Submit with: {} {}/*.sh",
+                        oxo_flow_core::cluster::submit_command(&cluster_backend),
+                        output_dir.display()
+                    );
+                }
+
+                ClusterAction::Status { backend } => {
+                    let cluster_backend = match backend.as_str() {
+                        "pbs" => oxo_flow_core::cluster::ClusterBackend::Pbs,
+                        "sge" => oxo_flow_core::cluster::ClusterBackend::Sge,
+                        "lsf" => oxo_flow_core::cluster::ClusterBackend::Lsf,
+                        _ => oxo_flow_core::cluster::ClusterBackend::Slurm,
+                    };
+
+                    eprintln!(
+                        "{} Use '{}' to check job status",
+                        "Cluster:".bold().cyan(),
+                        oxo_flow_core::cluster::status_command(&cluster_backend)
+                    );
+                }
+
+                ClusterAction::Cancel { backend, job_ids } => {
+                    let cancel_cmd = match backend.as_str() {
+                        "pbs" => "qdel",
+                        "sge" => "qdel",
+                        "lsf" => "bkill",
+                        _ => "scancel",
+                    };
+
+                    if job_ids.is_empty() {
+                        eprintln!(
+                            "{} No job IDs provided. Usage: oxo-flow cluster cancel <JOB_ID>...",
+                            "Warning:".bold().yellow()
+                        );
+                    } else {
+                        for id in &job_ids {
+                            eprintln!("  {} {} {}", cancel_cmd, id, "(would cancel)".dimmed());
+                        }
+                        eprintln!(
+                            "\n{} Run manually: {} {}",
+                            "Hint:".bold(),
+                            cancel_cmd,
+                            job_ids.join(" ")
+                        );
+                    }
+                }
+            }
+        }
     }
 
     Ok(())
@@ -1231,5 +1448,98 @@ mod tests {
                 action: ConfigAction::Stats { .. }
             }
         );
+    }
+
+    #[test]
+    fn cli_parse_export_default() {
+        let cli = Cli::try_parse_from(["oxo-flow", "export", "test.oxoflow"]).unwrap();
+        match cli.command {
+            Commands::Export {
+                workflow, format, ..
+            } => {
+                assert_eq!(workflow, PathBuf::from("test.oxoflow"));
+                assert_eq!(format, "docker");
+            }
+            _ => panic!("expected Export command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_export_singularity() {
+        let cli = Cli::try_parse_from(["oxo-flow", "export", "test.oxoflow", "-f", "singularity"])
+            .unwrap();
+        match cli.command {
+            Commands::Export { format, .. } => {
+                assert_eq!(format, "singularity");
+            }
+            _ => panic!("expected Export command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_export_toml() {
+        let cli =
+            Cli::try_parse_from(["oxo-flow", "export", "test.oxoflow", "-f", "toml"]).unwrap();
+        match cli.command {
+            Commands::Export { format, .. } => {
+                assert_eq!(format, "toml");
+            }
+            _ => panic!("expected Export command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_cluster_submit() {
+        let cli = Cli::try_parse_from([
+            "oxo-flow",
+            "cluster",
+            "submit",
+            "test.oxoflow",
+            "-b",
+            "slurm",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Cluster {
+                action:
+                    ClusterAction::Submit {
+                        workflow, backend, ..
+                    },
+            } => {
+                assert_eq!(workflow, PathBuf::from("test.oxoflow"));
+                assert_eq!(backend, "slurm");
+            }
+            _ => panic!("expected Cluster Submit command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_cluster_status() {
+        let cli = Cli::try_parse_from(["oxo-flow", "cluster", "status", "-b", "pbs"]).unwrap();
+        match cli.command {
+            Commands::Cluster {
+                action: ClusterAction::Status { backend },
+            } => {
+                assert_eq!(backend, "pbs");
+            }
+            _ => panic!("expected Cluster Status command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_cluster_cancel() {
+        let cli = Cli::try_parse_from([
+            "oxo-flow", "cluster", "cancel", "-b", "slurm", "12345", "67890",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Cluster {
+                action: ClusterAction::Cancel { backend, job_ids },
+            } => {
+                assert_eq!(backend, "slurm");
+                assert_eq!(job_ids, vec!["12345", "67890"]);
+            }
+            _ => panic!("expected Cluster Cancel command"),
+        }
     }
 }
