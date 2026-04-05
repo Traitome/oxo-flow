@@ -15,6 +15,271 @@ use serde::{Deserialize, Serialize};
 use tower_http::cors::{Any, CorsLayer};
 
 // ---------------------------------------------------------------------------
+// Embedded frontend
+// ---------------------------------------------------------------------------
+
+/// Embedded single-page web application.
+const FRONTEND_HTML: &str = r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>oxo-flow — Pipeline Engine</title>
+<style>
+:root { --bg: #0f172a; --surface: #1e293b; --border: #334155; --accent: #3b82f6; --accent-hover: #2563eb; --text: #f8fafc; --text-secondary: #94a3b8; --success: #22c55e; --error: #ef4444; --warning: #eab308; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0.75rem 1.5rem; display: flex; align-items: center; justify-content: space-between; }
+header h1 { font-size: 1.25rem; font-weight: 600; }
+header h1 span { color: var(--accent); }
+nav { display: flex; gap: 0.5rem; }
+nav button { background: transparent; border: 1px solid var(--border); color: var(--text-secondary); padding: 0.4rem 1rem; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem; transition: all 0.15s; }
+nav button:hover, nav button.active { background: var(--accent); color: white; border-color: var(--accent); }
+.container { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 0.5rem; padding: 1.25rem; margin-bottom: 1rem; }
+.card h2 { font-size: 1rem; font-weight: 600; margin-bottom: 0.75rem; color: var(--accent); }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; }
+.stat { text-align: center; }
+.stat .value { font-size: 2rem; font-weight: 700; color: var(--accent); }
+.stat .label { font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; }
+textarea { width: 100%; min-height: 300px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 0.375rem; padding: 0.75rem; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.8rem; resize: vertical; }
+.btn { display: inline-block; padding: 0.5rem 1rem; border-radius: 0.375rem; border: none; cursor: pointer; font-size: 0.875rem; font-weight: 500; transition: all 0.15s; }
+.btn-primary { background: var(--accent); color: white; }
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-success { background: var(--success); color: white; }
+.btn-danger { background: var(--error); color: white; }
+.btn-warning { background: var(--warning); color: #000; }
+.actions { display: flex; gap: 0.5rem; margin-top: 0.75rem; flex-wrap: wrap; }
+.output { background: var(--bg); border: 1px solid var(--border); border-radius: 0.375rem; padding: 0.75rem; margin-top: 0.75rem; font-family: monospace; font-size: 0.8rem; white-space: pre-wrap; max-height: 400px; overflow-y: auto; }
+.badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 0.25rem; font-size: 0.7rem; font-weight: 600; }
+.badge-ok { background: var(--success); color: white; }
+.badge-err { background: var(--error); color: white; }
+.hidden { display: none; }
+table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid var(--border); }
+th { color: var(--text-secondary); font-weight: 500; font-size: 0.75rem; text-transform: uppercase; }
+#status-bar { padding: 0.5rem 1.5rem; font-size: 0.75rem; color: var(--text-secondary); border-top: 1px solid var(--border); background: var(--surface); position: fixed; bottom: 0; width: 100%; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span>oxo-flow</span> Pipeline Engine</h1>
+  <nav>
+    <button class="active" onclick="showView('dashboard')">Dashboard</button>
+    <button onclick="showView('editor')">Editor</button>
+    <button onclick="showView('monitor')">Monitor</button>
+    <button onclick="showView('system')">System</button>
+  </nav>
+</header>
+
+<div class="container">
+  <!-- Dashboard View -->
+  <div id="view-dashboard">
+    <div class="grid" id="stats-grid">
+      <div class="card stat"><div class="value" id="stat-version">-</div><div class="label">Version</div></div>
+      <div class="card stat"><div class="value" id="stat-status">-</div><div class="label">Status</div></div>
+      <div class="card stat"><div class="value" id="stat-envs">-</div><div class="label">Environments</div></div>
+      <div class="card stat"><div class="value" id="stat-uptime">-</div><div class="label">Uptime</div></div>
+    </div>
+    <div class="card">
+      <h2>Quick Validate</h2>
+      <p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:0.5rem">Paste a .oxoflow workflow to quickly validate it.</p>
+      <textarea id="quick-toml" placeholder="[workflow]&#10;name = &quot;my-pipeline&quot;&#10;&#10;[[rules]]&#10;name = &quot;step1&quot;&#10;shell = &quot;echo hello&quot;"></textarea>
+      <div class="actions">
+        <button class="btn btn-primary" onclick="quickValidate()">Validate</button>
+        <button class="btn btn-success" onclick="quickFormat()">Format</button>
+        <button class="btn btn-warning" onclick="quickLint()">Lint</button>
+        <button class="btn btn-primary" onclick="quickDag()">Build DAG</button>
+      </div>
+      <div id="quick-output" class="output hidden"></div>
+    </div>
+  </div>
+
+  <!-- Editor View -->
+  <div id="view-editor" class="hidden">
+    <div class="card">
+      <h2>Workflow Editor</h2>
+      <textarea id="editor-toml" placeholder="[workflow]&#10;name = &quot;my-pipeline&quot;&#10;version = &quot;1.0.0&quot;"></textarea>
+      <div class="actions">
+        <button class="btn btn-primary" onclick="editorValidate()">Validate</button>
+        <button class="btn btn-success" onclick="editorFormat()">Format</button>
+        <button class="btn btn-warning" onclick="editorLint()">Lint</button>
+        <button class="btn btn-primary" onclick="editorDag()">DAG</button>
+        <button class="btn btn-primary" onclick="editorDryRun()">Dry Run</button>
+        <button class="btn btn-primary" onclick="editorParse()">Parse</button>
+        <button class="btn btn-primary" onclick="editorStats()">Stats</button>
+      </div>
+      <div id="editor-output" class="output hidden"></div>
+    </div>
+  </div>
+
+  <!-- Monitor View -->
+  <div id="view-monitor" class="hidden">
+    <div class="card">
+      <h2>Execution Monitor</h2>
+      <p style="color:var(--text-secondary);font-size:0.85rem">Real-time execution monitoring via SSE.</p>
+      <div class="actions">
+        <button class="btn btn-primary" onclick="connectSSE()">Connect</button>
+        <button class="btn btn-danger" onclick="disconnectSSE()">Disconnect</button>
+      </div>
+      <div id="sse-output" class="output" style="min-height:200px">Waiting for connection...</div>
+    </div>
+  </div>
+
+  <!-- System View -->
+  <div id="view-system" class="hidden">
+    <div class="card">
+      <h2>System Information</h2>
+      <div id="system-info">Loading...</div>
+    </div>
+    <div class="card">
+      <h2>Available Environments</h2>
+      <div id="env-list">Loading...</div>
+    </div>
+  </div>
+</div>
+
+<div id="status-bar">Ready</div>
+
+<script>
+const BASE = '';
+
+function showView(name) {
+  document.querySelectorAll('[id^="view-"]').forEach(function(el) { el.classList.add('hidden'); });
+  document.getElementById('view-' + name).classList.remove('hidden');
+  document.querySelectorAll('nav button').forEach(function(b) { b.classList.remove('active'); });
+  event.target.classList.add('active');
+  if (name === 'system') loadSystemInfo();
+  if (name === 'dashboard') loadDashboard();
+}
+
+function setStatus(msg) { document.getElementById('status-bar').textContent = msg; }
+function showOutput(id, text) { var el = document.getElementById(id); el.textContent = text; el.classList.remove('hidden'); }
+
+async function apiPost(path, body) {
+  setStatus('Requesting ' + path + '...');
+  var res = await fetch(BASE + path, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+  var data = await res.json();
+  setStatus('Done');
+  return data;
+}
+
+async function apiGet(path) {
+  var res = await fetch(BASE + path);
+  return await res.json();
+}
+
+async function loadDashboard() {
+  try {
+    var ver = await apiGet('/api/version');
+    document.getElementById('stat-version').textContent = ver.version || '-';
+    var health = await apiGet('/api/health');
+    document.getElementById('stat-status').textContent = health.status || '-';
+    var envs = await apiGet('/api/environments');
+    document.getElementById('stat-envs').textContent = (envs.available || []).length;
+    var sys = await apiGet('/api/system');
+    document.getElementById('stat-uptime').textContent = sys.uptime_secs ? Math.round(sys.uptime_secs) + 's' : '-';
+  } catch(e) { setStatus('Error: ' + e.message); }
+}
+
+async function quickValidate() {
+  var toml = document.getElementById('quick-toml').value;
+  var data = await apiPost('/api/workflows/validate', { toml_content: toml });
+  showOutput('quick-output', JSON.stringify(data, null, 2));
+}
+async function quickFormat() {
+  var toml = document.getElementById('quick-toml').value;
+  var data = await apiPost('/api/workflows/format', { toml_content: toml });
+  if (data.formatted) { document.getElementById('quick-toml').value = data.formatted; showOutput('quick-output', 'Formatted successfully.'); }
+  else showOutput('quick-output', JSON.stringify(data, null, 2));
+}
+async function quickLint() {
+  var toml = document.getElementById('quick-toml').value;
+  var data = await apiPost('/api/workflows/lint', { toml_content: toml });
+  showOutput('quick-output', JSON.stringify(data, null, 2));
+}
+async function quickDag() {
+  var toml = document.getElementById('quick-toml').value;
+  var data = await apiPost('/api/workflows/dag', { toml_content: toml });
+  showOutput('quick-output', JSON.stringify(data, null, 2));
+}
+
+async function editorValidate() {
+  var toml = document.getElementById('editor-toml').value;
+  var data = await apiPost('/api/workflows/validate', { toml_content: toml });
+  showOutput('editor-output', JSON.stringify(data, null, 2));
+}
+async function editorFormat() {
+  var toml = document.getElementById('editor-toml').value;
+  var data = await apiPost('/api/workflows/format', { toml_content: toml });
+  if (data.formatted) { document.getElementById('editor-toml').value = data.formatted; showOutput('editor-output', 'Formatted.'); }
+  else showOutput('editor-output', JSON.stringify(data, null, 2));
+}
+async function editorLint() {
+  var toml = document.getElementById('editor-toml').value;
+  var data = await apiPost('/api/workflows/lint', { toml_content: toml });
+  showOutput('editor-output', JSON.stringify(data, null, 2));
+}
+async function editorDag() {
+  var toml = document.getElementById('editor-toml').value;
+  var data = await apiPost('/api/workflows/dag', { toml_content: toml });
+  showOutput('editor-output', data.dot || JSON.stringify(data, null, 2));
+}
+async function editorDryRun() {
+  var toml = document.getElementById('editor-toml').value;
+  var data = await apiPost('/api/workflows/dry-run', { toml_content: toml });
+  showOutput('editor-output', JSON.stringify(data, null, 2));
+}
+async function editorParse() {
+  var toml = document.getElementById('editor-toml').value;
+  var data = await apiPost('/api/workflows/parse', { toml_content: toml });
+  showOutput('editor-output', JSON.stringify(data, null, 2));
+}
+async function editorStats() {
+  var toml = document.getElementById('editor-toml').value;
+  var data = await apiPost('/api/workflows/stats', { toml_content: toml });
+  showOutput('editor-output', JSON.stringify(data, null, 2));
+}
+
+var sseSource = null;
+function connectSSE() {
+  if (sseSource) sseSource.close();
+  var el = document.getElementById('sse-output');
+  el.textContent = 'Connecting...\n';
+  sseSource = new EventSource(BASE + '/api/events');
+  sseSource.onmessage = function(e) { el.textContent += e.data + '\n'; el.scrollTop = el.scrollHeight; };
+  sseSource.onerror = function() { el.textContent += '[connection error]\n'; };
+  sseSource.onopen = function() { el.textContent += '[connected]\n'; setStatus('SSE connected'); };
+}
+function disconnectSSE() {
+  if (sseSource) { sseSource.close(); sseSource = null; }
+  document.getElementById('sse-output').textContent += '[disconnected]\n';
+  setStatus('SSE disconnected');
+}
+
+async function loadSystemInfo() {
+  try {
+    var sys = await apiGet('/api/system');
+    document.getElementById('system-info').innerHTML = '<pre>' + JSON.stringify(sys, null, 2) + '</pre>';
+    var envs = await apiGet('/api/environments');
+    var list = (envs.available || []).map(function(e) { return '<span class="badge badge-ok">' + e + '</span> '; }).join('');
+    document.getElementById('env-list').innerHTML = list || '<em>None detected</em>';
+  } catch(e) { setStatus('Error: ' + e.message); }
+}
+
+loadDashboard();
+</script>
+</body>
+</html>"#;
+
+// Store server start time for uptime calculation.
+static START_TIME: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+fn get_start_time() -> std::time::Instant {
+    *START_TIME.get_or_init(std::time::Instant::now)
+}
+
+// ---------------------------------------------------------------------------
 // Data types
 // ---------------------------------------------------------------------------
 
@@ -166,6 +431,62 @@ pub struct ExportRequest {
 pub struct ExportResponse {
     pub format: String,
     pub content: String,
+}
+
+/// Request body for lint endpoint.
+#[derive(Serialize, Deserialize)]
+pub struct LintRequest {
+    pub toml_content: String,
+}
+
+/// Response from lint endpoint.
+#[derive(Serialize, Deserialize)]
+pub struct LintResponse {
+    pub diagnostics: Vec<DiagnosticItem>,
+    pub error_count: usize,
+    pub warning_count: usize,
+    pub info_count: usize,
+}
+
+/// Single diagnostic item in lint/validate response.
+#[derive(Serialize, Deserialize)]
+pub struct DiagnosticItem {
+    pub severity: String,
+    pub code: String,
+    pub message: String,
+    pub rule: Option<String>,
+}
+
+/// Response from format endpoint.
+#[derive(Serialize, Deserialize)]
+pub struct FormatResponse {
+    pub formatted: String,
+}
+
+/// Response from stats endpoint.
+#[derive(Serialize, Deserialize)]
+pub struct StatsResponse {
+    pub rule_count: usize,
+    pub shell_rules: usize,
+    pub script_rules: usize,
+    pub dependency_count: usize,
+    pub parallel_groups: usize,
+    pub max_depth: usize,
+    pub environments: Vec<String>,
+    pub total_threads: u32,
+    pub wildcard_count: usize,
+    pub wildcard_names: Vec<String>,
+}
+
+/// System information response.
+#[derive(Serialize, Deserialize)]
+pub struct SystemInfo {
+    pub version: String,
+    pub rust_version: String,
+    pub os: String,
+    pub arch: String,
+    pub pid: u32,
+    pub uptime_secs: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -580,19 +901,156 @@ async fn export_workflow(Json(req): Json<ExportRequest>) -> Result<Json<ExportRe
 }
 
 // ---------------------------------------------------------------------------
+// Frontend & new endpoints
+// ---------------------------------------------------------------------------
+
+/// Serve the embedded frontend HTML.
+async fn frontend() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [("content-type", "text/html; charset=utf-8")],
+        FRONTEND_HTML,
+    )
+}
+
+/// `POST /api/workflows/format` — Format a workflow TOML into canonical form.
+async fn format_workflow_endpoint(
+    Json(req): Json<ValidateRequest>,
+) -> Result<Json<FormatResponse>, ApiError> {
+    let config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
+        .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
+
+    let formatted = oxo_flow_core::format::format_workflow(&config);
+
+    Ok(Json(FormatResponse { formatted }))
+}
+
+/// `POST /api/workflows/lint` — Lint a workflow for best practices.
+async fn lint_workflow(Json(req): Json<LintRequest>) -> Result<Json<LintResponse>, ApiError> {
+    let config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
+        .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
+
+    let validation = oxo_flow_core::format::validate_format(&config);
+    let lint_diags = oxo_flow_core::format::lint_format(&config);
+
+    let mut diagnostics = Vec::new();
+    let mut error_count = 0;
+    let mut warning_count = 0;
+    let mut info_count = 0;
+
+    for d in validation.diagnostics.iter().chain(lint_diags.iter()) {
+        let severity = match d.severity {
+            oxo_flow_core::format::Severity::Error => {
+                error_count += 1;
+                "error"
+            }
+            oxo_flow_core::format::Severity::Warning => {
+                warning_count += 1;
+                "warning"
+            }
+            oxo_flow_core::format::Severity::Info => {
+                info_count += 1;
+                "info"
+            }
+        };
+        diagnostics.push(DiagnosticItem {
+            severity: severity.to_string(),
+            code: d.code.clone(),
+            message: d.message.clone(),
+            rule: d.rule.clone(),
+        });
+    }
+
+    Ok(Json(LintResponse {
+        diagnostics,
+        error_count,
+        warning_count,
+        info_count,
+    }))
+}
+
+/// `POST /api/workflows/stats` — Return workflow statistics.
+async fn workflow_stats_endpoint(
+    Json(req): Json<ValidateRequest>,
+) -> Result<Json<StatsResponse>, ApiError> {
+    let config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
+        .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
+
+    let stats = oxo_flow_core::format::workflow_stats(&config);
+
+    Ok(Json(StatsResponse {
+        rule_count: stats.rule_count,
+        shell_rules: stats.shell_rules,
+        script_rules: stats.script_rules,
+        dependency_count: stats.dependency_count,
+        parallel_groups: stats.parallel_groups,
+        max_depth: stats.max_depth,
+        environments: stats.environments,
+        total_threads: stats.total_threads,
+        wildcard_count: stats.wildcard_count,
+        wildcard_names: stats.wildcard_names,
+    }))
+}
+
+/// `GET /api/system` — Return system information.
+async fn system_info() -> Json<SystemInfo> {
+    let uptime = get_start_time().elapsed().as_secs_f64();
+    Json(SystemInfo {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        rust_version: option_env!("CARGO_PKG_RUST_VERSION")
+            .unwrap_or("unknown")
+            .to_string(),
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        pid: std::process::id(),
+        uptime_secs: uptime,
+    })
+}
+
+/// `GET /api/events` — SSE endpoint for real-time execution events.
+async fn sse_events() -> impl IntoResponse {
+    use axum::response::sse::{Event, Sse};
+    use tokio_stream::StreamExt as _;
+
+    let stream = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(
+        std::time::Duration::from_secs(5),
+    ))
+    .map(|_| {
+        let msg = format!(
+            r#"{{"type":"heartbeat","time":"{}"}}"#,
+            chrono::Utc::now().to_rfc3339()
+        );
+        Ok::<_, std::convert::Infallible>(Event::default().data(msg))
+    });
+
+    Sse::new(stream).keep_alive(
+        axum::response::sse::KeepAlive::new()
+            .interval(std::time::Duration::from_secs(15))
+            .text("ping"),
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
 /// Build the web application router.
 pub fn build_router() -> Router {
+    // Initialize start time
+    get_start_time();
+
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
 
     Router::new()
+        // Frontend
+        .route("/", get(frontend))
+        // API endpoints
         .route("/api/health", get(health))
         .route("/api/version", get(version))
+        .route("/api/system", get(system_info))
         .route("/api/workflows", get(list_workflows))
         .route("/api/workflows/validate", post(validate_workflow))
         .route("/api/workflows/parse", post(parse_workflow))
@@ -601,11 +1059,25 @@ pub fn build_router() -> Router {
         .route("/api/workflows/run", post(run_workflow))
         .route("/api/workflows/clean", post(clean_workflow))
         .route("/api/workflows/export", post(export_workflow))
+        .route("/api/workflows/format", post(format_workflow_endpoint))
+        .route("/api/workflows/lint", post(lint_workflow))
+        .route("/api/workflows/stats", post(workflow_stats_endpoint))
         .route("/api/environments", get(list_environments))
         .route("/api/reports/generate", post(generate_report))
+        .route("/api/events", get(sse_events))
         .fallback(not_found)
         .layer(middleware::from_fn(add_request_id))
         .layer(cors)
+}
+
+/// Build a router mounted under a configurable base path.
+pub fn build_router_with_base(base_path: &str) -> Router {
+    let app = build_router();
+    if base_path.is_empty() || base_path == "/" {
+        app
+    } else {
+        Router::new().nest(base_path, app)
+    }
 }
 
 /// Start the web server.
@@ -613,6 +1085,22 @@ pub async fn start_server(host: &str, port: u16) -> anyhow::Result<()> {
     let app = build_router();
     let addr = format!("{host}:{port}");
     tracing::info!("Starting oxo-flow web server on {}", addr);
+
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}
+
+/// Start the web server with an optional base path.
+pub async fn start_server_with_base(host: &str, port: u16, base_path: &str) -> anyhow::Result<()> {
+    let app = build_router_with_base(base_path);
+    let addr = format!("{host}:{port}");
+    tracing::info!(
+        "Starting oxo-flow web server on {} (base: {})",
+        addr,
+        if base_path.is_empty() { "/" } else { base_path }
+    );
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
@@ -1180,5 +1668,129 @@ shell = "echo b"
         assert_eq!(parsed.format, "docker");
         assert!(parsed.content.contains("FROM"));
         assert!(parsed.content.contains("test-pipeline"));
+    }
+
+    // -- Frontend endpoint -------------------------------------------------------
+
+    #[tokio::test]
+    async fn frontend_endpoint() {
+        let app = build_router();
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8_lossy(&body);
+        assert!(html.contains("oxo-flow"));
+        assert!(html.contains("Pipeline Engine"));
+    }
+
+    // -- System info endpoint ----------------------------------------------------
+
+    #[tokio::test]
+    async fn system_info_endpoint() {
+        let app = build_router();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/system")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let info: SystemInfo = serde_json::from_slice(&body).unwrap();
+        assert!(!info.version.is_empty());
+        assert!(!info.os.is_empty());
+    }
+
+    // -- Format endpoint ---------------------------------------------------------
+
+    #[tokio::test]
+    async fn format_endpoint() {
+        let body = ValidateRequest {
+            toml_content: VALID_TOML.to_string(),
+        };
+        let response = post_json("/api/workflows/format", &body).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let resp: FormatResponse = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(resp.formatted.contains("[workflow]"));
+    }
+
+    #[tokio::test]
+    async fn format_endpoint_invalid_toml() {
+        let body = ValidateRequest {
+            toml_content: "broken!!!".to_string(),
+        };
+        let response = post_json("/api/workflows/format", &body).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // -- Lint endpoint -----------------------------------------------------------
+
+    #[tokio::test]
+    async fn lint_endpoint() {
+        let body = LintRequest {
+            toml_content: VALID_TOML.to_string(),
+        };
+        let response = post_json("/api/workflows/lint", &body).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let resp: LintResponse = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(resp.error_count, 0);
+    }
+
+    #[tokio::test]
+    async fn lint_endpoint_invalid_toml() {
+        let body = LintRequest {
+            toml_content: "not valid toml [[[".to_string(),
+        };
+        let response = post_json("/api/workflows/lint", &body).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // -- Stats endpoint ----------------------------------------------------------
+
+    #[tokio::test]
+    async fn stats_endpoint() {
+        let body = ValidateRequest {
+            toml_content: VALID_TOML.to_string(),
+        };
+        let response = post_json("/api/workflows/stats", &body).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let resp: StatsResponse = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(resp.rule_count, 2);
+    }
+
+    // -- SSE events endpoint -----------------------------------------------------
+
+    #[tokio::test]
+    async fn events_endpoint_returns_sse() {
+        let app = build_router();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/events")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }
