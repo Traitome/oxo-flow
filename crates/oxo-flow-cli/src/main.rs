@@ -166,11 +166,49 @@ enum Commands {
         force: bool,
     },
 
+    /// Inspect and manage workflow configuration.
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+
     /// Generate shell completions for oxo-flow.
     Completions {
         /// Shell to generate completions for.
         #[arg(value_enum)]
         shell: clap_complete::Shell,
+    },
+
+    /// Reformat a .oxoflow file into canonical TOML form.
+    Format {
+        /// Path to the .oxoflow workflow file.
+        #[arg(value_name = "WORKFLOW")]
+        workflow: PathBuf,
+
+        /// Write formatted output to a file instead of stdout.
+        #[arg(short = 'o', long)]
+        output: Option<PathBuf>,
+
+        /// Check if the file is already formatted (exit non-zero if not).
+        #[arg(long)]
+        check: bool,
+    },
+
+    /// Run best-practice linting checks on a .oxoflow file.
+    Lint {
+        /// Path to the .oxoflow workflow file.
+        #[arg(value_name = "WORKFLOW")]
+        workflow: PathBuf,
+
+        /// Treat warnings as errors (non-zero exit).
+        #[arg(long)]
+        strict: bool,
+    },
+
+    /// Manage execution profiles (local, SLURM, PBS, SGE, LSF).
+    Profile {
+        #[command(subcommand)]
+        action: ProfileAction,
     },
 }
 
@@ -181,6 +219,39 @@ enum EnvAction {
 
     /// Check if required environments are available.
     Check {
+        /// Path to the .oxoflow workflow file.
+        #[arg(value_name = "WORKFLOW")]
+        workflow: PathBuf,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ProfileAction {
+    /// List available execution profiles.
+    List,
+
+    /// Show details of a specific profile.
+    Show {
+        /// Profile name (local, slurm, pbs, sge, lsf).
+        #[arg(value_name = "NAME")]
+        name: String,
+    },
+
+    /// Show the current active profile.
+    Current,
+}
+
+#[derive(Subcommand, Debug)]
+enum ConfigAction {
+    /// Show all configuration variables from a workflow.
+    Show {
+        /// Path to the .oxoflow workflow file.
+        #[arg(value_name = "WORKFLOW")]
+        workflow: PathBuf,
+    },
+
+    /// Show workflow statistics.
+    Stats {
         /// Path to the .oxoflow workflow file.
         #[arg(value_name = "WORKFLOW")]
         workflow: PathBuf,
@@ -697,9 +768,218 @@ Thumbs.db
             }
         }
 
+        Commands::Config { action } => {
+            print_banner();
+            match action {
+                ConfigAction::Show { workflow } => {
+                    let config = WorkflowConfig::from_file(&workflow)
+                        .with_context(|| format!("failed to parse {}", workflow.display()))?;
+
+                    eprintln!("{}", "Workflow Configuration:".bold());
+                    eprintln!("  Name:    {}", config.workflow.name);
+                    eprintln!("  Version: {}", config.workflow.version);
+                    if let Some(ref desc) = config.workflow.description {
+                        eprintln!("  Desc:    {}", desc);
+                    }
+                    if let Some(ref author) = config.workflow.author {
+                        eprintln!("  Author:  {}", author);
+                    }
+
+                    if !config.config.is_empty() {
+                        eprintln!("\n{}", "  Config Variables:".bold());
+                        let mut keys: Vec<&String> = config.config.keys().collect();
+                        keys.sort();
+                        for key in keys {
+                            eprintln!("    {} = {}", key, config.config[key]);
+                        }
+                    }
+
+                    if !config.includes.is_empty() {
+                        eprintln!("\n{}", "  Includes:".bold());
+                        for inc in &config.includes {
+                            if let Some(ref ns) = inc.namespace {
+                                eprintln!("    {} (namespace: {})", inc.path, ns);
+                            } else {
+                                eprintln!("    {}", inc.path);
+                            }
+                        }
+                    }
+
+                    if !config.execution_groups.is_empty() {
+                        eprintln!("\n{}", "  Execution Groups:".bold());
+                        for group in &config.execution_groups {
+                            eprintln!("    {} ({:?}): {:?}", group.name, group.mode, group.rules);
+                        }
+                    }
+                }
+                ConfigAction::Stats { workflow } => {
+                    let config = WorkflowConfig::from_file(&workflow)
+                        .with_context(|| format!("failed to parse {}", workflow.display()))?;
+
+                    let stats = oxo_flow_core::format::workflow_stats(&config);
+                    eprintln!("{}", "Workflow Statistics:".bold());
+                    eprintln!("  Rules:              {}", stats.rule_count);
+                    eprintln!("  Shell rules:        {}", stats.shell_rules);
+                    eprintln!("  Script rules:       {}", stats.script_rules);
+                    eprintln!("  Dependencies:       {}", stats.dependency_count);
+                    eprintln!("  Parallel groups:    {}", stats.parallel_groups);
+                    eprintln!("  Max depth:          {}", stats.max_depth);
+                    eprintln!("  Total threads:      {}", stats.total_threads);
+                    eprintln!(
+                        "  Wildcards:          {} ({:?})",
+                        stats.wildcard_count, stats.wildcard_names
+                    );
+                    if !stats.environments.is_empty() {
+                        eprintln!("  Environments:       {:?}", stats.environments);
+                    }
+                }
+            }
+        }
+
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
             clap_complete::generate(shell, &mut cmd, "oxo-flow", &mut std::io::stdout());
+        }
+
+        Commands::Format {
+            workflow,
+            output,
+            check,
+        } => {
+            let config = WorkflowConfig::from_file(&workflow)
+                .with_context(|| format!("failed to parse {}", workflow.display()))?;
+
+            let formatted = oxo_flow_core::format::format_workflow(&config);
+
+            if check {
+                let original = std::fs::read_to_string(&workflow)?;
+                if original.trim() == formatted.trim() {
+                    eprintln!(
+                        "{} {} is already formatted",
+                        "✓".green().bold(),
+                        workflow.display()
+                    );
+                } else {
+                    eprintln!(
+                        "{} {} needs formatting",
+                        "✗".red().bold(),
+                        workflow.display()
+                    );
+                    std::process::exit(1);
+                }
+            } else {
+                match output {
+                    Some(path) => {
+                        std::fs::write(&path, &formatted)?;
+                        eprintln!("Formatted workflow written to {}", path.display());
+                    }
+                    None => {
+                        print!("{formatted}");
+                    }
+                }
+            }
+        }
+
+        Commands::Lint { workflow, strict } => {
+            print_banner();
+            let config = WorkflowConfig::from_file(&workflow)
+                .with_context(|| format!("failed to parse {}", workflow.display()))?;
+
+            let validation = oxo_flow_core::format::validate_format(&config);
+            let lint_diags = oxo_flow_core::format::lint_format(&config);
+
+            let mut error_count = 0usize;
+            let mut warning_count = 0usize;
+            let mut info_count = 0usize;
+
+            for d in validation.diagnostics.iter().chain(lint_diags.iter()) {
+                let prefix = match d.severity {
+                    oxo_flow_core::format::Severity::Error => {
+                        error_count += 1;
+                        "error".red().bold().to_string()
+                    }
+                    oxo_flow_core::format::Severity::Warning => {
+                        warning_count += 1;
+                        "warning".yellow().bold().to_string()
+                    }
+                    oxo_flow_core::format::Severity::Info => {
+                        info_count += 1;
+                        "info".blue().to_string()
+                    }
+                };
+                eprint!("  {} [{}]: {}", prefix, d.code, d.message);
+                if let Some(ref rule) = d.rule {
+                    eprint!(" (rule: {})", rule);
+                }
+                eprintln!();
+            }
+
+            eprintln!(
+                "\n{} {} error(s), {} warning(s), {} info",
+                "Summary:".bold(),
+                error_count,
+                warning_count,
+                info_count
+            );
+
+            if error_count > 0 || (strict && warning_count > 0) {
+                std::process::exit(1);
+            }
+        }
+
+        Commands::Profile { action } => {
+            print_banner();
+            match action {
+                ProfileAction::List => {
+                    eprintln!("{}", "Available execution profiles:".bold());
+                    let profiles = ["local", "slurm", "pbs", "sge", "lsf"];
+                    for p in &profiles {
+                        let desc = match *p {
+                            "local" => "Local execution (default)",
+                            "slurm" => "SLURM cluster scheduler",
+                            "pbs" => "PBS/Torque cluster scheduler",
+                            "sge" => "Sun Grid Engine (SGE) scheduler",
+                            "lsf" => "IBM LSF scheduler",
+                            _ => "Unknown",
+                        };
+                        eprintln!("  {} {} — {}", "•".cyan(), p.bold(), desc);
+                    }
+                }
+                ProfileAction::Show { name } => match name.as_str() {
+                    "local" => {
+                        eprintln!("{}", "Profile: local".bold());
+                        eprintln!("  Executor:    local process");
+                        eprintln!("  Max jobs:    auto (CPU count)");
+                        eprintln!("  Retries:     0");
+                        eprintln!("  Timeout:     none");
+                    }
+                    "slurm" | "pbs" | "sge" | "lsf" => {
+                        let backend = match name.as_str() {
+                            "slurm" => oxo_flow_core::cluster::ClusterBackend::Slurm,
+                            "pbs" => oxo_flow_core::cluster::ClusterBackend::Pbs,
+                            "sge" => oxo_flow_core::cluster::ClusterBackend::Sge,
+                            _ => oxo_flow_core::cluster::ClusterBackend::Lsf,
+                        };
+                        eprintln!("{}", format!("Profile: {}", name).bold());
+                        eprintln!(
+                            "  Submit cmd:  {}",
+                            oxo_flow_core::cluster::submit_command(&backend)
+                        );
+                        eprintln!(
+                            "  Status cmd:  {}",
+                            oxo_flow_core::cluster::status_command(&backend)
+                        );
+                        eprintln!("  Executor:    cluster job submission");
+                    }
+                    other => {
+                        eprintln!("{} Unknown profile: {}", "✗".red().bold(), other);
+                        std::process::exit(1);
+                    }
+                },
+                ProfileAction::Current => {
+                    eprintln!("{} {}", "Active profile:".bold(), "local".green());
+                }
+            }
         }
     }
 
@@ -874,5 +1154,82 @@ mod tests {
             }
             _ => panic!("expected Run command"),
         }
+    }
+
+    #[test]
+    fn cli_parse_format() {
+        let cli = Cli::try_parse_from(["oxo-flow", "format", "test.oxoflow"]).unwrap();
+        matches!(cli.command, Commands::Format { .. });
+    }
+
+    #[test]
+    fn cli_parse_format_check() {
+        let cli = Cli::try_parse_from(["oxo-flow", "format", "test.oxoflow", "--check"]).unwrap();
+        match cli.command {
+            Commands::Format { check, .. } => assert!(check),
+            _ => panic!("expected Format command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_lint() {
+        let cli = Cli::try_parse_from(["oxo-flow", "lint", "test.oxoflow"]).unwrap();
+        matches!(cli.command, Commands::Lint { .. });
+    }
+
+    #[test]
+    fn cli_parse_lint_strict() {
+        let cli = Cli::try_parse_from(["oxo-flow", "lint", "test.oxoflow", "--strict"]).unwrap();
+        match cli.command {
+            Commands::Lint { strict, .. } => assert!(strict),
+            _ => panic!("expected Lint command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_profile_list() {
+        let cli = Cli::try_parse_from(["oxo-flow", "profile", "list"]).unwrap();
+        matches!(cli.command, Commands::Profile { .. });
+    }
+
+    #[test]
+    fn cli_parse_profile_show() {
+        let cli = Cli::try_parse_from(["oxo-flow", "profile", "show", "slurm"]).unwrap();
+        match cli.command {
+            Commands::Profile {
+                action: ProfileAction::Show { name },
+            } => {
+                assert_eq!(name, "slurm");
+            }
+            _ => panic!("expected Profile Show command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_profile_current() {
+        let cli = Cli::try_parse_from(["oxo-flow", "profile", "current"]).unwrap();
+        matches!(
+            cli.command,
+            Commands::Profile {
+                action: ProfileAction::Current
+            }
+        );
+    }
+
+    #[test]
+    fn cli_parse_config_show() {
+        let cli = Cli::try_parse_from(["oxo-flow", "config", "show", "test.oxoflow"]).unwrap();
+        matches!(cli.command, Commands::Config { .. });
+    }
+
+    #[test]
+    fn cli_parse_config_stats() {
+        let cli = Cli::try_parse_from(["oxo-flow", "config", "stats", "test.oxoflow"]).unwrap();
+        matches!(
+            cli.command,
+            Commands::Config {
+                action: ConfigAction::Stats { .. }
+            }
+        );
     }
 }
