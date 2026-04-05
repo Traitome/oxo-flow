@@ -341,6 +341,32 @@ pub fn lint_format(config: &WorkflowConfig) -> Vec<Diagnostic> {
                 suggestion: Some("add memory = \"64G\" or appropriate value for high-thread workloads".to_string()),
             });
         }
+
+        // W010: Rule has checkpoint = true but no output files
+        if rule.checkpoint && rule.output.is_empty() {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: "rule has checkpoint = true but no output files".to_string(),
+                rule: Some(rule.name.clone()),
+                code: "W010".to_string(),
+                suggestion: Some(
+                    "add output files to the checkpoint rule, or remove checkpoint = true"
+                        .to_string(),
+                ),
+            });
+        }
+
+        // W011: Rule uses shadow but has no inputs (shadow is unnecessary)
+        if rule.shadow.is_some() && rule.input.is_empty() {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: "rule uses shadow but has no inputs — shadow directory is unnecessary"
+                    .to_string(),
+                rule: Some(rule.name.clone()),
+                code: "W011".to_string(),
+                suggestion: Some("remove the shadow setting, or add input files".to_string()),
+            });
+        }
     }
 
     diagnostics
@@ -524,6 +550,9 @@ pub fn verify_schema(toml_content: &str) -> ValidationResult {
         "report",
         "include",
         "execution_group",
+        "citation",
+        "cluster",
+        "resource_budget",
     ];
     for key in table.keys() {
         if !known_keys.contains(&key.as_str()) {
@@ -1417,5 +1446,73 @@ mod tests {
         let config = WorkflowConfig::parse(toml).unwrap();
         let diagnostics = lint_format(&config);
         assert!(diagnostics.iter().any(|d| d.code == "W009"));
+    }
+
+    #[test]
+    fn lint_checkpoint_no_outputs() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "discover"
+            shell = "find . -name '*.fastq'"
+            checkpoint = true
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(diagnostics.iter().any(|d| d.code == "W010"));
+    }
+
+    #[test]
+    fn lint_checkpoint_with_outputs_no_w010() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "discover"
+            output = ["samples.txt"]
+            shell = "find . -name '*.fastq' > samples.txt"
+            checkpoint = true
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(!diagnostics.iter().any(|d| d.code == "W010"));
+    }
+
+    #[test]
+    fn lint_shadow_no_inputs() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "generate"
+            output = ["out.txt"]
+            shell = "echo hello > out.txt"
+            shadow = "minimal"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(diagnostics.iter().any(|d| d.code == "W011"));
+    }
+
+    #[test]
+    fn lint_shadow_with_inputs_no_w011() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "process"
+            input = ["in.txt"]
+            output = ["out.txt"]
+            shell = "cat in.txt > out.txt"
+            shadow = "minimal"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(!diagnostics.iter().any(|d| d.code == "W011"));
     }
 }

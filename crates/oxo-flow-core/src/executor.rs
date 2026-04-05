@@ -42,6 +42,36 @@ impl std::fmt::Display for JobStatus {
     }
 }
 
+/// Structured event emitted during workflow execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ExecutionEvent {
+    /// Workflow execution started.
+    WorkflowStarted {
+        workflow_name: String,
+        total_rules: usize,
+    },
+    /// A rule started execution.
+    RuleStarted {
+        rule: String,
+        command: Option<String>,
+    },
+    /// A rule completed.
+    RuleCompleted {
+        rule: String,
+        status: JobStatus,
+        duration_ms: u64,
+    },
+    /// A rule was skipped.
+    RuleSkipped { rule: String, reason: String },
+    /// Workflow execution completed.
+    WorkflowCompleted {
+        total_duration_ms: u64,
+        succeeded: usize,
+        failed: usize,
+        skipped: usize,
+    },
+}
+
 /// Record of a single job execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobRecord {
@@ -1210,5 +1240,111 @@ mod tests {
         let mut prov = ExecutionProvenance::new("abc123", Path::new("/work"));
         prov.finish();
         assert!(prov.finished_at.is_some());
+    }
+
+    #[test]
+    fn execution_event_workflow_started_serialization() {
+        let event = ExecutionEvent::WorkflowStarted {
+            workflow_name: "test-pipeline".to_string(),
+            total_rules: 5,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("WorkflowStarted"));
+        assert!(json.contains("test-pipeline"));
+        assert!(json.contains("5"));
+        let deserialized: ExecutionEvent = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            ExecutionEvent::WorkflowStarted {
+                workflow_name,
+                total_rules,
+            } => {
+                assert_eq!(workflow_name, "test-pipeline");
+                assert_eq!(total_rules, 5);
+            }
+            _ => panic!("expected WorkflowStarted"),
+        }
+    }
+
+    #[test]
+    fn execution_event_rule_started_serialization() {
+        let event = ExecutionEvent::RuleStarted {
+            rule: "fastqc".to_string(),
+            command: Some("fastqc input.fq".to_string()),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: ExecutionEvent = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            ExecutionEvent::RuleStarted { rule, command } => {
+                assert_eq!(rule, "fastqc");
+                assert_eq!(command.as_deref(), Some("fastqc input.fq"));
+            }
+            _ => panic!("expected RuleStarted"),
+        }
+    }
+
+    #[test]
+    fn execution_event_rule_completed_serialization() {
+        let event = ExecutionEvent::RuleCompleted {
+            rule: "align".to_string(),
+            status: JobStatus::Success,
+            duration_ms: 12345,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: ExecutionEvent = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            ExecutionEvent::RuleCompleted {
+                rule,
+                status,
+                duration_ms,
+            } => {
+                assert_eq!(rule, "align");
+                assert_eq!(status, JobStatus::Success);
+                assert_eq!(duration_ms, 12345);
+            }
+            _ => panic!("expected RuleCompleted"),
+        }
+    }
+
+    #[test]
+    fn execution_event_rule_skipped_serialization() {
+        let event = ExecutionEvent::RuleSkipped {
+            rule: "qc".to_string(),
+            reason: "outputs up to date".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: ExecutionEvent = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            ExecutionEvent::RuleSkipped { rule, reason } => {
+                assert_eq!(rule, "qc");
+                assert_eq!(reason, "outputs up to date");
+            }
+            _ => panic!("expected RuleSkipped"),
+        }
+    }
+
+    #[test]
+    fn execution_event_workflow_completed_serialization() {
+        let event = ExecutionEvent::WorkflowCompleted {
+            total_duration_ms: 99999,
+            succeeded: 3,
+            failed: 1,
+            skipped: 2,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: ExecutionEvent = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            ExecutionEvent::WorkflowCompleted {
+                total_duration_ms,
+                succeeded,
+                failed,
+                skipped,
+            } => {
+                assert_eq!(total_duration_ms, 99999);
+                assert_eq!(succeeded, 3);
+                assert_eq!(failed, 1);
+                assert_eq!(skipped, 2);
+            }
+            _ => panic!("expected WorkflowCompleted"),
+        }
     }
 }
