@@ -224,6 +224,29 @@ pub struct Rule {
     /// Tags for categorization and filtering (e.g., ["qc", "alignment", "variant-calling"]).
     #[serde(default)]
     pub tags: Vec<String>,
+
+    /// Shadow directory mode for atomic rule execution.
+    /// "minimal" copies only input files, "shallow" creates symlinks,
+    /// "full" copies the entire working directory.
+    #[serde(default)]
+    pub shadow: Option<String>,
+
+    /// Mark specific inputs as "ancient" - these inputs never trigger re-execution
+    /// even if they are newer than outputs.
+    #[serde(default)]
+    pub ancient: Vec<String>,
+
+    /// Whether this rule should always run locally (never submitted to cluster).
+    #[serde(default)]
+    pub localrule: bool,
+
+    /// Environment variables to inject before running this rule.
+    #[serde(default)]
+    pub envvars: HashMap<String, String>,
+
+    /// Whether this rule is a checkpoint that allows dynamic DAG modification.
+    #[serde(default)]
+    pub checkpoint: bool,
 }
 
 impl Rule {
@@ -620,5 +643,99 @@ mod tests {
         };
         assert_eq!(rule.tags.len(), 2);
         assert!(rule.tags.contains(&"alignment".to_string()));
+    }
+
+    #[test]
+    fn rule_shadow_field() {
+        let toml_str = r#"
+            name = "align"
+            input = ["reads.fq"]
+            output = ["sorted.bam"]
+            shell = "bwa mem ref reads.fq > sorted.bam"
+            shadow = "minimal"
+        "#;
+        let rule: Rule = toml::from_str(toml_str).unwrap();
+        assert_eq!(rule.shadow.as_deref(), Some("minimal"));
+    }
+
+    #[test]
+    fn rule_shadow_default_none() {
+        let rule = Rule::default();
+        assert!(rule.shadow.is_none());
+    }
+
+    #[test]
+    fn rule_ancient_field() {
+        let toml_str = r#"
+            name = "call"
+            input = ["ref.fa", "reads.bam"]
+            output = ["variants.vcf"]
+            shell = "caller ref.fa reads.bam > variants.vcf"
+            ancient = ["ref.fa"]
+        "#;
+        let rule: Rule = toml::from_str(toml_str).unwrap();
+        assert_eq!(rule.ancient, vec!["ref.fa"]);
+    }
+
+    #[test]
+    fn rule_ancient_default_empty() {
+        let rule = Rule::default();
+        assert!(rule.ancient.is_empty());
+    }
+
+    #[test]
+    fn rule_localrule_field() {
+        let toml_str = r#"
+            name = "setup"
+            shell = "mkdir -p output"
+            localrule = true
+        "#;
+        let rule: Rule = toml::from_str(toml_str).unwrap();
+        assert!(rule.localrule);
+    }
+
+    #[test]
+    fn rule_localrule_default_false() {
+        let rule = Rule::default();
+        assert!(!rule.localrule);
+    }
+
+    #[test]
+    fn rule_envvars_field() {
+        let toml_str = r#"
+            name = "step"
+            shell = "echo $MY_VAR"
+
+            [envvars]
+            MY_VAR = "hello"
+            PATH_EXTRA = "/usr/local/bin"
+        "#;
+        let rule: Rule = toml::from_str(toml_str).unwrap();
+        assert_eq!(rule.envvars.len(), 2);
+        assert_eq!(rule.envvars.get("MY_VAR").unwrap(), "hello");
+    }
+
+    #[test]
+    fn rule_envvars_default_empty() {
+        let rule = Rule::default();
+        assert!(rule.envvars.is_empty());
+    }
+
+    #[test]
+    fn rule_checkpoint_field() {
+        let toml_str = r#"
+            name = "discover"
+            output = ["samples.txt"]
+            shell = "find . -name '*.fastq' > samples.txt"
+            checkpoint = true
+        "#;
+        let rule: Rule = toml::from_str(toml_str).unwrap();
+        assert!(rule.checkpoint);
+    }
+
+    #[test]
+    fn rule_checkpoint_default_false() {
+        let rule = Rule::default();
+        assert!(!rule.checkpoint);
     }
 }

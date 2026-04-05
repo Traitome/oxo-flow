@@ -33,6 +33,10 @@ pub struct WorkflowMeta {
     /// Format specification version (e.g., "1.0").
     #[serde(default)]
     pub min_version: Option<String>,
+
+    /// Format specification version for compatibility checking.
+    #[serde(default)]
+    pub format_version: Option<String>,
 }
 
 fn default_version() -> String {
@@ -114,6 +118,54 @@ pub struct ExecutionGroup {
     pub mode: ExecutionMode,
 }
 
+/// Citation information for workflow reproducibility and publication.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CitationInfo {
+    /// DOI reference for this workflow.
+    #[serde(default)]
+    pub doi: Option<String>,
+    /// URL to the workflow repository or publication.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Authors of this workflow.
+    #[serde(default)]
+    pub authors: Vec<String>,
+    /// Associated publication title.
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
+/// Cluster execution profile for HPC deployment.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ClusterProfile {
+    /// Backend type (slurm, pbs, sge, lsf).
+    #[serde(default)]
+    pub backend: Option<String>,
+    /// Default partition/queue.
+    #[serde(default)]
+    pub partition: Option<String>,
+    /// Default account for billing.
+    #[serde(default)]
+    pub account: Option<String>,
+    /// Additional arguments passed to the scheduler.
+    #[serde(default)]
+    pub extra_args: Vec<String>,
+}
+
+/// Resource budget constraints for the entire workflow.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ResourceBudget {
+    /// Maximum total CPU threads across all running jobs.
+    #[serde(default)]
+    pub max_threads: Option<u32>,
+    /// Maximum total memory across all running jobs.
+    #[serde(default)]
+    pub max_memory: Option<String>,
+    /// Maximum total running jobs.
+    #[serde(default)]
+    pub max_jobs: Option<usize>,
+}
+
 /// Complete workflow configuration parsed from an `.oxoflow` file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowConfig {
@@ -143,6 +195,18 @@ pub struct WorkflowConfig {
     /// Explicit execution groups for sequential/parallel rule ordering.
     #[serde(default, rename = "execution_group")]
     pub execution_groups: Vec<ExecutionGroup>,
+
+    /// Citation information for reproducibility.
+    #[serde(default)]
+    pub citation: Option<CitationInfo>,
+
+    /// Cluster execution profile.
+    #[serde(default)]
+    pub cluster: Option<ClusterProfile>,
+
+    /// Resource budget for the workflow.
+    #[serde(default)]
+    pub resource_budget: Option<ResourceBudget>,
 }
 
 impl WorkflowConfig {
@@ -830,5 +894,101 @@ mod tests {
         )
         .unwrap();
         assert_ne!(c1.checksum(), c2.checksum());
+    }
+
+    #[test]
+    fn parse_citation_info() {
+        let toml_str = r#"
+            [workflow]
+            name = "test"
+
+            [citation]
+            doi = "10.1234/test"
+            url = "https://github.com/example/test"
+            authors = ["Alice", "Bob"]
+            title = "My Workflow Paper"
+        "#;
+        let config = WorkflowConfig::parse(toml_str).unwrap();
+        let citation = config.citation.unwrap();
+        assert_eq!(citation.doi.as_deref(), Some("10.1234/test"));
+        assert_eq!(
+            citation.url.as_deref(),
+            Some("https://github.com/example/test")
+        );
+        assert_eq!(citation.authors, vec!["Alice", "Bob"]);
+        assert_eq!(citation.title.as_deref(), Some("My Workflow Paper"));
+    }
+
+    #[test]
+    fn citation_defaults_to_none() {
+        let config = WorkflowConfig::parse(MINIMAL_WORKFLOW).unwrap();
+        assert!(config.citation.is_none());
+    }
+
+    #[test]
+    fn parse_cluster_profile() {
+        let toml_str = r#"
+            [workflow]
+            name = "test"
+
+            [cluster]
+            backend = "slurm"
+            partition = "gpu"
+            account = "proj123"
+            extra_args = ["--exclusive", "--gres=gpu:1"]
+        "#;
+        let config = WorkflowConfig::parse(toml_str).unwrap();
+        let cluster = config.cluster.unwrap();
+        assert_eq!(cluster.backend.as_deref(), Some("slurm"));
+        assert_eq!(cluster.partition.as_deref(), Some("gpu"));
+        assert_eq!(cluster.account.as_deref(), Some("proj123"));
+        assert_eq!(cluster.extra_args, vec!["--exclusive", "--gres=gpu:1"]);
+    }
+
+    #[test]
+    fn cluster_defaults_to_none() {
+        let config = WorkflowConfig::parse(MINIMAL_WORKFLOW).unwrap();
+        assert!(config.cluster.is_none());
+    }
+
+    #[test]
+    fn parse_resource_budget() {
+        let toml_str = r#"
+            [workflow]
+            name = "test"
+
+            [resource_budget]
+            max_threads = 64
+            max_memory = "256G"
+            max_jobs = 10
+        "#;
+        let config = WorkflowConfig::parse(toml_str).unwrap();
+        let budget = config.resource_budget.unwrap();
+        assert_eq!(budget.max_threads, Some(64));
+        assert_eq!(budget.max_memory.as_deref(), Some("256G"));
+        assert_eq!(budget.max_jobs, Some(10));
+    }
+
+    #[test]
+    fn resource_budget_defaults_to_none() {
+        let config = WorkflowConfig::parse(MINIMAL_WORKFLOW).unwrap();
+        assert!(config.resource_budget.is_none());
+    }
+
+    #[test]
+    fn parse_format_version_in_workflow_meta() {
+        let toml_str = r#"
+            [workflow]
+            name = "test"
+            format_version = "1.0"
+        "#;
+        let config = WorkflowConfig::parse(toml_str).unwrap();
+        assert_eq!(config.workflow.format_version.as_deref(), Some("1.0"));
+    }
+
+    #[test]
+    fn format_version_defaults_to_none() {
+        let config = WorkflowConfig::parse(MINIMAL_WORKFLOW).unwrap();
+        assert!(config.workflow.format_version.is_none());
     }
 }

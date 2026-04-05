@@ -735,6 +735,7 @@ pub fn generate_oxoflow(config: &VenusConfig) -> anyhow::Result<String> {
             )),
             author: None,
             min_version: None,
+            format_version: None,
         },
         config: {
             let mut map = HashMap::new();
@@ -757,6 +758,9 @@ pub fn generate_oxoflow(config: &VenusConfig) -> anyhow::Result<String> {
         rules,
         includes: Vec::new(),
         execution_groups: Vec::new(),
+        citation: None,
+        cluster: None,
+        resource_budget: None,
     };
 
     let toml_str = toml::to_string_pretty(&wf)?;
