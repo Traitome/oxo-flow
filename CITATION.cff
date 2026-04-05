@@ -21,8 +21,8 @@ keywords:
   - genomics
   - clinical
 abstract: >-
-  oxo-flow is a Rust-native bioinformatics pipeline engine designed to fully
-  replace Snakemake. It provides DAG-based workflow execution, multi-environment
+  oxo-flow is a Rust-native bioinformatics pipeline engine built from first
+  principles for performance, reproducibility, and clinical-grade rigor. It provides DAG-based workflow execution, multi-environment
   support (conda, pixi, docker, singularity, venv), resource-aware scheduling,
   clinical-grade reporting, and a REST API web interface. The Venus pipeline
   demonstrates clinical tumor variant detection built on the engine.

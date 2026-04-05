@@ -1,0 +1,61 @@
+# 05 — Environment Management
+# Use different software environments for different steps.
+# Demonstrates: conda, docker, and venv environment specifications per rule.
+
+[workflow]
+name = "environment-showcase"
+version = "1.0.0"
+description = "Demonstrates per-rule environment isolation with conda, docker, and venv"
+author = "oxo-flow examples"
+
+[defaults]
+threads = 2
+memory = "4G"
+
+[[rules]]
+name = "download_data"
+output = ["data/sequences.fasta"]
+shell = """
+mkdir -p data
+echo '>seq1' > {output[0]}
+echo 'ATCGATCGATCGATCGATCG' >> {output[0]}
+echo '>seq2' >> {output[0]}
+echo 'GCTAGCTAGCTAGCTAGCTA' >> {output[0]}
+"""
+
+[[rules]]
+name = "quality_check"
+input = ["data/sequences.fasta"]
+output = ["qc/report.txt"]
+shell = """
+mkdir -p qc
+count=$(grep -c '^>' {input[0]})
+echo "Sequence count: $count" > {output[0]}
+echo "QC: PASS" >> {output[0]}
+"""
+
+[rules.environment]
+conda = "envs/qc.yaml"
+
+[[rules]]
+name = "align_sequences"
+input = ["data/sequences.fasta"]
+output = ["aligned/alignment.bam"]
+threads = 8
+memory = "16G"
+shell = "echo 'Alignment placeholder' > {output[0]}"
+
+[rules.environment]
+docker = "biocontainers/bwa-mem2:2.2.1"
+
+[[rules]]
+name = "analyze_results"
+input = ["aligned/alignment.bam", "qc/report.txt"]
+output = ["results/analysis.json"]
+shell = """
+mkdir -p results
+echo '{"status": "complete", "qc": "pass", "aligned": true}' > {output[0]}
+"""
+
+[rules.environment]
+conda = "envs/analysis.yaml"

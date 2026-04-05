@@ -1,6 +1,6 @@
 # Introduction
 
-**oxo-flow** is a Rust-native bioinformatics pipeline engine designed to fully replace Snakemake. It compiles workflows into a Directed Acyclic Graph, manages software environments automatically, and runs jobs in parallel — all from a single, fast binary with no Python runtime required.
+**oxo-flow** is a Rust-native bioinformatics pipeline engine built from first principles for performance, reproducibility, and clinical-grade rigor. It compiles workflows into a Directed Acyclic Graph, manages software environments automatically, and runs jobs in parallel — all from a single, fast binary with no external runtime required.
 
 ```bash
 # Define your workflow in TOML
@@ -25,7 +25,7 @@ Done: 5 succeeded, 0 failed
 
 ## What Is oxo-flow?
 
-oxo-flow is a high-performance workflow engine built from the ground up in Rust for bioinformatics and clinical genomics. Instead of writing Snakefiles in Python, you define pipelines in a clean TOML format (`.oxoflow` files), and oxo-flow handles dependency resolution, environment activation, parallel execution, and report generation.
+oxo-flow is a high-performance workflow engine built from the ground up in Rust for bioinformatics and clinical genomics. You define pipelines in a clean TOML format (`.oxoflow` files), and oxo-flow handles dependency resolution, environment activation, parallel execution, and report generation — with compile-time safety guarantees and zero interpreter overhead.
 
 ### Core capabilities
 
@@ -37,14 +37,14 @@ oxo-flow is a high-performance workflow engine built from the ground up in Rust 
 | **Web API** | Built-in REST API (axum-based) for building, validating, and monitoring workflows remotely |
 | **Container packaging** | Package entire workflows into Docker or Singularity images for portable, reproducible execution |
 | **Cluster backends** | Submit jobs to SLURM, PBS, SGE, and LSF clusters with resource-aware scheduling |
-| **Wildcard expansion** | Snakemake-style `{sample}`, `{chr}` patterns that expand automatically from inputs or config |
+| **Wildcard expansion** | `{sample}`, `{chr}` patterns that expand automatically from inputs or config |
 | **Venus pipeline** | Built-in clinical tumor variant calling pipeline ready for somatic analysis |
 
 ---
 
 ## Who Is This For?
 
-**Bioinformaticians** who build and maintain analysis pipelines — oxo-flow gives you a faster, type-safe alternative to Snakemake with better error messages and no Python dependency chain.
+**Bioinformaticians** who build and maintain analysis pipelines — oxo-flow gives you a faster, type-safe workflow engine with clear error messages, reproducibility guarantees, and no external runtime dependency.
 
 **Clinical laboratories** running accredited genomics workflows — the reporting system produces structured, auditable reports, and container packaging ensures reproducibility across environments.
 
@@ -67,6 +67,19 @@ Start with the **Tutorials** in order:
 3. [Your First Workflow](./tutorials/first-workflow.md) — build a pipeline from scratch
 4. [Variant Calling Pipeline](./tutorials/variant-calling.md) — complete NGS analysis
 5. [Environment Management](./tutorials/environment-management.md) — use conda, docker, and more
+
+### If you want to learn by example
+
+Explore the **[Workflow Gallery](./gallery/index.md)** — 8 curated workflows from hello-world to multi-omics integration, each with validation output, DAG visualizations, and scientific context:
+
+1. [Hello World](./gallery/hello-world.md) ⭐ — Minimal rule structure
+2. [File Pipeline](./gallery/file-pipeline.md) ⭐⭐ — Multi-rule dependencies
+3. [Parallel Samples](./gallery/parallel-samples.md) ⭐⭐ — Wildcard expansion
+4. [Scatter-Gather](./gallery/scatter-gather.md) ⭐⭐⭐ — Parallel chunk processing
+5. [Environment Management](./gallery/environment-mgmt.md) ⭐⭐⭐ — Per-rule isolation
+6. [RNA-seq Quantification](./gallery/rnaseq.md) ⭐⭐⭐⭐ — Transcriptomics pipeline
+7. [WGS Germline Calling](./gallery/wgs-germline.md) ⭐⭐⭐⭐⭐ — GATK best practices
+8. [Multi-Omics Integration](./gallery/multiomics.md) ⭐⭐⭐⭐⭐ — WGS + RNA-seq + Methylation
 
 ### If you need to accomplish a specific task
 

@@ -1,6 +1,6 @@
 //! Wildcard pattern expansion for oxo-flow.
 //!
-//! Supports Snakemake-style `{wildcard}` patterns in file paths, expanding them
+//! Supports `{wildcard}` patterns in file paths, expanding them
 //! against provided values or input file discovery.
 
 use crate::error::{OxoFlowError, Result};

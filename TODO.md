@@ -62,7 +62,7 @@ and validation depth.
 ## Expert Evaluations
 
 ### Expert 1 — Senior Bioinformatics Scientist (NGS Pipeline Developer)
-**Background**: 12 years developing production NGS pipelines at a genome center. Expert in Snakemake, Nextflow, WDL.
+**Background**: 12 years developing production NGS pipelines at a genome center. Expert in workflow engines (Nextflow, WDL, CWL).
 
 | Criterion | Score | Notes |
 |-----------|:---:|-------|
@@ -313,7 +313,7 @@ and validation depth.
 
 **Key Findings**:
 1. Architecture paper potential: Rust type system for workflow correctness
-2. Benchmarking against Snakemake/Nextflow would strengthen claims
+2. Benchmarking against established workflow engines would strengthen claims
 3. Venus pipeline as validation case study
 4. Reproducibility checksums would strengthen scientific merit
 
@@ -322,12 +322,12 @@ and validation depth.
 ---
 
 ### Expert 13 — Graduate Student (First-year Bioinformatics PhD)
-**Background**: Learning pipeline development, familiar with Snakemake basics.
+**Background**: Learning pipeline development, familiar with workflow management basics.
 
 | Criterion | Score | Notes |
 |-----------|:---:|-------|
 | Innovation | 8 | Exciting to see Rust in bioinformatics |
-| Design | 7 | TOML format is easier to learn than Snakemake Python |
+| Design | 7 | TOML format is easier to learn than Python-based DSLs |
 | Functionality | 7 | Examples demonstrate real-world usage |
 | Usability | 7 | Init command helps getting started |
 | Maintainability | 7 | Error messages are clear |

@@ -270,3 +270,138 @@ fn report_generation_lifecycle() {
     let templated_html = engine.render_report(&report).unwrap();
     assert!(templated_html.contains("Integration Report"));
 }
+
+// === Gallery Workflow Validation Tests ===
+// Every gallery workflow must parse, build a valid DAG, and produce a non-empty execution order.
+
+#[test]
+fn gallery_01_hello_world() {
+    let toml = std::fs::read_to_string("examples/gallery/01_hello_world.oxoflow").unwrap();
+    let config = WorkflowConfig::parse(&toml).unwrap();
+    assert_eq!(config.workflow.name, "hello-world");
+    assert_eq!(config.rules.len(), 1);
+
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+    dag.validate().unwrap();
+
+    let order = dag.execution_order().unwrap();
+    assert_eq!(order, vec!["greet"]);
+}
+
+#[test]
+fn gallery_02_file_pipeline() {
+    let toml = std::fs::read_to_string("examples/gallery/02_file_pipeline.oxoflow").unwrap();
+    let config = WorkflowConfig::parse(&toml).unwrap();
+    assert_eq!(config.workflow.name, "file-pipeline");
+    assert_eq!(config.rules.len(), 3);
+
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+    dag.validate().unwrap();
+
+    let order = dag.execution_order().unwrap();
+    assert_eq!(order.len(), 3);
+    assert_eq!(order[0], "generate_data");
+    assert_eq!(order[2], "summarize");
+}
+
+#[test]
+fn gallery_03_parallel_samples() {
+    let toml = std::fs::read_to_string("examples/gallery/03_parallel_samples.oxoflow").unwrap();
+    let config = WorkflowConfig::parse(&toml).unwrap();
+    assert_eq!(config.workflow.name, "parallel-samples");
+    assert_eq!(config.rules.len(), 3);
+
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+    dag.validate().unwrap();
+
+    let order = dag.execution_order().unwrap();
+    assert_eq!(order.len(), 3);
+}
+
+#[test]
+fn gallery_04_scatter_gather() {
+    let toml = std::fs::read_to_string("examples/gallery/04_scatter_gather.oxoflow").unwrap();
+    let config = WorkflowConfig::parse(&toml).unwrap();
+    assert_eq!(config.workflow.name, "scatter-gather");
+    assert_eq!(config.rules.len(), 4);
+
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+    dag.validate().unwrap();
+
+    let order = dag.execution_order().unwrap();
+    assert_eq!(order.len(), 4);
+    assert_eq!(order[0], "prepare_input");
+    assert_eq!(order[3], "gather");
+}
+
+#[test]
+fn gallery_05_conda_environments() {
+    let toml = std::fs::read_to_string("examples/gallery/05_conda_environments.oxoflow").unwrap();
+    let config = WorkflowConfig::parse(&toml).unwrap();
+    assert_eq!(config.workflow.name, "environment-showcase");
+    assert_eq!(config.rules.len(), 4);
+
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+    dag.validate().unwrap();
+
+    let order = dag.execution_order().unwrap();
+    assert_eq!(order.len(), 4);
+    // analyze_results depends on both align_sequences and quality_check
+    assert_eq!(order.last().unwrap(), "analyze_results");
+}
+
+#[test]
+fn gallery_06_rnaseq_quantification() {
+    let toml =
+        std::fs::read_to_string("examples/gallery/06_rnaseq_quantification.oxoflow").unwrap();
+    let config = WorkflowConfig::parse(&toml).unwrap();
+    assert_eq!(config.workflow.name, "rnaseq-quantification");
+    assert_eq!(config.rules.len(), 5);
+
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+    dag.validate().unwrap();
+
+    let order = dag.execution_order().unwrap();
+    assert_eq!(order.len(), 5);
+    assert_eq!(order[0], "fastp_trim");
+    // Both index_bam and multiqc are terminal nodes with no downstream dependents.
+    // Their relative order does not affect correctness — the DAG guarantees all
+    // upstream dependencies complete before either runs.
+}
+
+#[test]
+fn gallery_07_wgs_germline() {
+    let toml = std::fs::read_to_string("examples/gallery/07_wgs_germline.oxoflow").unwrap();
+    let config = WorkflowConfig::parse(&toml).unwrap();
+    assert_eq!(config.workflow.name, "wgs-germline-calling");
+    assert_eq!(config.rules.len(), 8);
+
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+    dag.validate().unwrap();
+
+    let order = dag.execution_order().unwrap();
+    assert_eq!(order.len(), 8);
+    assert_eq!(order[0], "fastp_qc");
+    assert_eq!(order.last().unwrap(), "annotate_variants");
+}
+
+#[test]
+fn gallery_08_multiomics_integration() {
+    let toml =
+        std::fs::read_to_string("examples/gallery/08_multiomics_integration.oxoflow").unwrap();
+    let config = WorkflowConfig::parse(&toml).unwrap();
+    assert_eq!(config.workflow.name, "multiomics-integration");
+    assert_eq!(config.rules.len(), 8);
+
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+    dag.validate().unwrap();
+
+    let order = dag.execution_order().unwrap();
+    assert_eq!(order.len(), 8);
+    assert_eq!(order.last().unwrap(), "generate_report");
+
+    // Verify the branching DAG structure has parallel groups
+    let groups = dag.parallel_groups().unwrap();
+    assert!(groups.len() >= 3); // At least 3 levels of depth
+    assert!(groups[0].len() >= 3); // 3 independent alignment steps at the root
+}

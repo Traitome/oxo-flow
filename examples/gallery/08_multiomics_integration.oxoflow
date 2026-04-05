@@ -1,0 +1,182 @@
+# 08 — Multi-Omics Integration Pipeline
+# Integrates WGS variant data, RNA-seq expression data, and methylation data.
+# Demonstrates: complex DAG with multiple input branches, conditional execution,
+# advanced reporting, and cross-omics data integration.
+
+[workflow]
+name = "multiomics-integration"
+version = "1.0.0"
+description = "Multi-omics data integration: WGS + RNA-seq + Methylation"
+author = "oxo-flow examples"
+
+[config]
+reference = "/data/references/GRCh38/genome.fa"
+gene_annotation = "/data/references/GRCh38/genes.gtf"
+samples = "samples.csv"
+genome_build = "GRCh38"
+
+[defaults]
+threads = 4
+memory = "8G"
+
+# === WGS Branch ===
+
+[[rules]]
+name = "wgs_align"
+input = ["wgs/{sample}_R1.fastq.gz", "wgs/{sample}_R2.fastq.gz"]
+output = ["wgs_aligned/{sample}.sorted.bam"]
+threads = 16
+memory = "32G"
+description = "WGS read alignment with BWA-MEM2"
+shell = """
+mkdir -p wgs_aligned
+bwa-mem2 mem -t {threads} {config.reference} {input[0]} {input[1]} \
+    | samtools sort -@ 4 -o {output[0]}
+samtools index {output[0]}
+"""
+
+[rules.environment]
+docker = "biocontainers/bwa-mem2:2.2.1"
+
+[[rules]]
+name = "wgs_call_variants"
+input = ["wgs_aligned/{sample}.sorted.bam"]
+output = ["wgs_variants/{sample}.vcf.gz"]
+threads = 8
+memory = "16G"
+description = "Variant calling with GATK HaplotypeCaller"
+shell = """
+mkdir -p wgs_variants
+gatk HaplotypeCaller \
+    -I {input[0]} -R {config.reference} \
+    -O {output[0]} --native-pair-hmm-threads {threads}
+"""
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+# === RNA-seq Branch ===
+
+[[rules]]
+name = "rnaseq_align"
+input = ["rnaseq/{sample}_R1.fastq.gz", "rnaseq/{sample}_R2.fastq.gz"]
+output = ["rnaseq_aligned/{sample}/Aligned.sortedByCoord.out.bam"]
+threads = 16
+memory = "32G"
+description = "RNA-seq splice-aware alignment with STAR"
+shell = """
+mkdir -p rnaseq_aligned/{sample}
+STAR --runThreadN {threads} \
+     --genomeDir /data/references/GRCh38/star_index \
+     --readFilesIn {input[0]} {input[1]} \
+     --readFilesCommand zcat \
+     --outSAMtype BAM SortedByCoordinate \
+     --outFileNamePrefix rnaseq_aligned/{sample}/
+"""
+
+[rules.environment]
+conda = "envs/star.yaml"
+
+[[rules]]
+name = "rnaseq_quantify"
+input = ["rnaseq_aligned/{sample}/Aligned.sortedByCoord.out.bam"]
+output = ["expression/{sample}.counts.txt"]
+threads = 4
+description = "Gene expression quantification with featureCounts"
+shell = """
+mkdir -p expression
+featureCounts -T {threads} \
+              -a {config.gene_annotation} \
+              -o {output[0]} -p --countReadPairs \
+              {input[0]}
+"""
+
+[rules.environment]
+conda = "envs/subread.yaml"
+
+# === Methylation Branch ===
+
+[[rules]]
+name = "bismark_align"
+input = ["methyl/{sample}_R1.fastq.gz", "methyl/{sample}_R2.fastq.gz"]
+output = ["methyl_aligned/{sample}.deduplicated.bam"]
+threads = 8
+memory = "32G"
+description = "Bisulfite-seq alignment with Bismark"
+shell = """
+mkdir -p methyl_aligned
+bismark --genome /data/references/GRCh38/bismark_index \
+        -1 {input[0]} -2 {input[1]} \
+        --parallel {threads} \
+        -o methyl_aligned/
+deduplicate_bismark --bam methyl_aligned/{sample}_R1_bismark_bt2_pe.bam \
+        -o methyl_aligned/{sample}
+"""
+
+[rules.environment]
+conda = "envs/bismark.yaml"
+
+[[rules]]
+name = "methylation_extract"
+input = ["methyl_aligned/{sample}.deduplicated.bam"]
+output = ["methylation/{sample}.CpG_report.txt"]
+threads = 4
+memory = "16G"
+description = "Extract CpG methylation calls"
+shell = """
+mkdir -p methylation
+bismark_methylation_extractor --paired-end --comprehensive \
+    --genome_folder /data/references/GRCh38/bismark_index \
+    --parallel {threads} \
+    --CX --cytosine_report \
+    -o methylation/ {input[0]}
+"""
+
+[rules.environment]
+conda = "envs/bismark.yaml"
+
+# === Integration ===
+
+[[rules]]
+name = "integrate_omics"
+input = [
+    "wgs_variants/{sample}.vcf.gz",
+    "expression/{sample}.counts.txt",
+    "methylation/{sample}.CpG_report.txt"
+]
+output = ["integration/{sample}.integrated.json"]
+threads = 4
+memory = "16G"
+description = "Integrate multi-omics data layers for each sample"
+shell = """
+mkdir -p integration
+echo '{' > {output[0]}
+echo '  "sample": "{sample}",' >> {output[0]}
+echo '  "genome_build": "{config.genome_build}",' >> {output[0]}
+echo '  "data_layers": ["wgs_variants", "rnaseq_expression", "methylation"],' >> {output[0]}
+echo '  "variant_file": "{input[0]}",' >> {output[0]}
+echo '  "expression_file": "{input[1]}",' >> {output[0]}
+echo '  "methylation_file": "{input[2]}",' >> {output[0]}
+echo '  "status": "integrated"' >> {output[0]}
+echo '}' >> {output[0]}
+"""
+
+[[rules]]
+name = "generate_report"
+input = ["integration/{sample}.integrated.json"]
+output = ["results/{sample}.multiomics_report.html"]
+description = "Generate multi-omics integration report"
+shell = """
+mkdir -p results
+echo '<html><body>' > {output[0]}
+echo '<h1>Multi-Omics Integration Report</h1>' >> {output[0]}
+echo '<h2>Sample: {sample}</h2>' >> {output[0]}
+echo '<p>Genome Build: {config.genome_build}</p>' >> {output[0]}
+echo '<p>Data layers integrated: WGS, RNA-seq, Methylation</p>' >> {output[0]}
+echo '</body></html>' >> {output[0]}
+"""
+
+[report]
+template = "multiomics_report"
+format = ["html", "json"]
+sections = ["summary", "variants", "expression", "methylation", "integration", "provenance"]
