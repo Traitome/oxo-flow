@@ -102,8 +102,26 @@ impl EnvironmentSpec {
     }
 }
 
+/// Scatter configuration for fan-out parallel execution.
+///
+/// Distributes a rule across multiple values of a variable, executing
+/// one instance per element. The gather step collects the outputs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ScatterConfig {
+    /// The variable to scatter over (e.g., "sample", "chromosome").
+    pub variable: String,
+
+    /// The values to scatter across.
+    #[serde(default)]
+    pub values: Vec<String>,
+
+    /// Optional gather rule name that collects scattered outputs.
+    #[serde(default)]
+    pub gather: Option<String>,
+}
+
 /// A single rule (step) in a workflow.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Rule {
     /// Unique name for this rule.
     pub name: String,
@@ -167,6 +185,45 @@ pub struct Rule {
     /// Optional description of what this rule does.
     #[serde(default)]
     pub description: Option<String>,
+
+    /// Conditional execution expression.
+    ///
+    /// The rule is only executed when this expression evaluates to true.
+    /// Supports simple config-variable references (e.g., `config.enable_qc`)
+    /// and file-existence checks.
+    #[serde(default)]
+    pub when: Option<String>,
+
+    /// Scatter configuration for parallel execution across a variable.
+    ///
+    /// Fans out this rule into multiple parallel instances, one per element
+    /// of the scatter variable.
+    #[serde(default)]
+    pub scatter: Option<ScatterConfig>,
+
+    /// Temporary output files that should be cleaned up after downstream
+    /// rules complete.
+    #[serde(default)]
+    pub temp_output: Vec<String>,
+
+    /// Protected output files that should never be overwritten or deleted.
+    #[serde(default)]
+    pub protected_output: Vec<String>,
+
+    /// Dynamic input function name for runtime input resolution.
+    ///
+    /// When set, inputs are resolved at execution time by calling this
+    /// function with the current wildcard values.
+    #[serde(default)]
+    pub input_function: Option<String>,
+
+    /// Number of times to automatically retry this rule on failure.
+    #[serde(default)]
+    pub retries: u32,
+
+    /// Tags for categorization and filtering (e.g., ["qc", "alignment", "variant-calling"]).
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 impl Rule {
@@ -188,8 +245,8 @@ impl Rule {
     /// - At least shell or script is provided if outputs exist
     /// - Thread count is positive (if specified)
     pub fn validate(&self) -> std::result::Result<(), String> {
-        if self.name.is_empty() {
-            return Err("rule name cannot be empty".to_string());
+        if self.name.trim().is_empty() {
+            return Err("rule name cannot be empty or whitespace-only".to_string());
         }
         if !self
             .name
@@ -211,6 +268,23 @@ impl Rule {
             && threads == 0
         {
             return Err(format!("rule '{}' has zero threads", self.name));
+        }
+        if let Some(ref mem) = self.memory {
+            let mem_trimmed = mem.trim();
+            if !mem_trimmed.is_empty() {
+                // Must end with a valid unit suffix and have a numeric prefix
+                let valid = mem_trimmed
+                    .strip_suffix(['G', 'g', 'M', 'm', 'K', 'k', 'T', 't'])
+                    .and_then(|num_part| num_part.parse::<f64>().ok())
+                    .map(|v| v > 0.0)
+                    .unwrap_or(false);
+                if !valid {
+                    return Err(format!(
+                        "rule '{}' has invalid memory format '{}' (expected e.g. \"8G\", \"16384M\", \"1T\")",
+                        self.name, mem
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -281,6 +355,7 @@ mod tests {
             target: false,
             group: None,
             description: None,
+            ..Default::default()
         };
 
         let names = rule.wildcard_names();
@@ -311,6 +386,7 @@ mod tests {
             target: false,
             group: None,
             description: None,
+            ..Default::default()
         };
 
         assert_eq!(rule.effective_threads(), 8);
@@ -334,6 +410,7 @@ mod tests {
             target: false,
             group: None,
             description: None,
+            ..Default::default()
         }
     }
 
@@ -346,7 +423,8 @@ mod tests {
     #[test]
     fn validate_empty_name() {
         let rule = make_rule("");
-        assert_eq!(rule.validate().unwrap_err(), "rule name cannot be empty");
+        let err = rule.validate().unwrap_err();
+        assert!(err.contains("empty or whitespace-only"));
     }
 
     #[test]
@@ -391,5 +469,156 @@ mod tests {
         assert_eq!(rule.name, "fastqc");
         assert_eq!(rule.effective_threads(), 4);
         assert_eq!(rule.environment.kind(), "conda");
+    }
+
+    #[test]
+    fn rule_when_conditional() {
+        let toml_str = r#"
+            name = "optional_step"
+            output = ["opt.txt"]
+            shell = "echo opt"
+            when = "config.enable_qc"
+        "#;
+
+        let rule: Rule = toml::from_str(toml_str).unwrap();
+        assert_eq!(rule.when.as_deref(), Some("config.enable_qc"));
+    }
+
+    #[test]
+    fn rule_scatter_config() {
+        let toml_str = r#"
+            name = "per_sample"
+            input = ["{sample}.bam"]
+            output = ["{sample}.vcf"]
+            shell = "call {input} > {output}"
+
+            [scatter]
+            variable = "sample"
+            values = ["S1", "S2", "S3"]
+            gather = "merge_vcf"
+        "#;
+
+        let rule: Rule = toml::from_str(toml_str).unwrap();
+        let scatter = rule.scatter.as_ref().unwrap();
+        assert_eq!(scatter.variable, "sample");
+        assert_eq!(scatter.values, vec!["S1", "S2", "S3"]);
+        assert_eq!(scatter.gather.as_deref(), Some("merge_vcf"));
+    }
+
+    #[test]
+    fn rule_temp_and_protected_outputs() {
+        let toml_str = r#"
+            name = "align"
+            input = ["reads.fq"]
+            output = ["sorted.bam"]
+            shell = "bwa mem ref reads.fq | samtools sort -o sorted.bam"
+            temp_output = ["unsorted.bam"]
+            protected_output = ["sorted.bam"]
+        "#;
+
+        let rule: Rule = toml::from_str(toml_str).unwrap();
+        assert_eq!(rule.temp_output, vec!["unsorted.bam"]);
+        assert_eq!(rule.protected_output, vec!["sorted.bam"]);
+    }
+
+    #[test]
+    fn rule_input_function() {
+        let toml_str = r#"
+            name = "dynamic"
+            output = ["result.txt"]
+            shell = "process {input} > {output}"
+            input_function = "get_inputs"
+        "#;
+
+        let rule: Rule = toml::from_str(toml_str).unwrap();
+        assert_eq!(rule.input_function.as_deref(), Some("get_inputs"));
+    }
+
+    #[test]
+    fn rule_retries() {
+        let toml_str = r#"
+            name = "flaky"
+            output = ["out.txt"]
+            shell = "maybe_fail > out.txt"
+            retries = 3
+        "#;
+
+        let rule: Rule = toml::from_str(toml_str).unwrap();
+        assert_eq!(rule.retries, 3);
+    }
+
+    #[test]
+    fn scatter_config_deserialization() {
+        let toml_str = r#"
+            variable = "chr"
+            values = ["chr1", "chr2", "chr3"]
+        "#;
+
+        let scatter: ScatterConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(scatter.variable, "chr");
+        assert_eq!(scatter.values.len(), 3);
+        assert!(scatter.gather.is_none());
+    }
+
+    #[test]
+    fn rule_default_new_fields() {
+        let rule = Rule::default();
+        assert!(rule.when.is_none());
+        assert!(rule.scatter.is_none());
+        assert!(rule.temp_output.is_empty());
+        assert!(rule.protected_output.is_empty());
+        assert!(rule.input_function.is_none());
+        assert_eq!(rule.retries, 0);
+        assert!(rule.tags.is_empty());
+    }
+
+    #[test]
+    fn validate_whitespace_only_name() {
+        let rule = Rule {
+            name: "  ".to_string(),
+            ..Default::default()
+        };
+        assert!(rule.validate().is_err());
+    }
+
+    #[test]
+    fn validate_valid_memory() {
+        let rule = Rule {
+            name: "test".to_string(),
+            memory: Some("8G".to_string()),
+            ..Default::default()
+        };
+        assert!(rule.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_invalid_memory() {
+        let rule = Rule {
+            name: "test".to_string(),
+            memory: Some("8X".to_string()),
+            ..Default::default()
+        };
+        assert!(rule.validate().is_err());
+    }
+
+    #[test]
+    fn validate_invalid_memory_no_unit() {
+        let rule = Rule {
+            name: "test".to_string(),
+            memory: Some("abc".to_string()),
+            ..Default::default()
+        };
+        assert!(rule.validate().is_err());
+    }
+
+    #[test]
+    fn rule_with_tags() {
+        let rule = Rule {
+            name: "align".to_string(),
+            tags: vec!["alignment".to_string(), "mapping".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(rule.tags.len(), 2);
+        assert!(rule.tags.contains(&"alignment".to_string()));
     }
 }

@@ -285,6 +285,7 @@ mod tests {
             target: false,
             group: None,
             description: None,
+            ..Default::default()
         }
     }
 

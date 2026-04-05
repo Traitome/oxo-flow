@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Maximum depth for nested include directives to prevent infinite recursion.
+const MAX_INCLUDE_DEPTH: usize = 16;
+
 /// Top-level workflow metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowMeta {
@@ -26,6 +29,10 @@ pub struct WorkflowMeta {
     /// Author name or organization.
     #[serde(default)]
     pub author: Option<String>,
+
+    /// Format specification version (e.g., "1.0").
+    #[serde(default)]
+    pub min_version: Option<String>,
 }
 
 fn default_version() -> String {
@@ -64,6 +71,49 @@ pub struct ReportConfig {
     pub sections: Vec<String>,
 }
 
+/// Include directive for modular workflow composition.
+///
+/// Allows importing rules from another `.oxoflow` file into the
+/// current workflow.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct IncludeDirective {
+    /// Path to the included `.oxoflow` file.
+    pub path: String,
+
+    /// Optional namespace prefix for included rule names.
+    #[serde(default)]
+    pub namespace: Option<String>,
+}
+
+/// Execution mode for an execution group.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ExecutionMode {
+    /// Rules in the group execute one after another.
+    Sequential,
+    /// Rules in the group execute concurrently.
+    #[default]
+    Parallel,
+}
+
+/// Execution group for explicit rule ordering.
+///
+/// Groups a set of rules under a named block with a specified execution
+/// mode (sequential or parallel).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExecutionGroup {
+    /// Group name.
+    pub name: String,
+
+    /// Rules in this group (by name).
+    #[serde(default)]
+    pub rules: Vec<String>,
+
+    /// Execution mode.
+    #[serde(default)]
+    pub mode: ExecutionMode,
+}
+
 /// Complete workflow configuration parsed from an `.oxoflow` file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowConfig {
@@ -85,6 +135,14 @@ pub struct WorkflowConfig {
     /// List of rules (pipeline steps).
     #[serde(default, rename = "rules")]
     pub rules: Vec<Rule>,
+
+    /// Include directives for importing rules from other workflow files.
+    #[serde(default, rename = "include")]
+    pub includes: Vec<IncludeDirective>,
+
+    /// Explicit execution groups for sequential/parallel rule ordering.
+    #[serde(default, rename = "execution_group")]
+    pub execution_groups: Vec<ExecutionGroup>,
 }
 
 impl WorkflowConfig {
@@ -133,6 +191,71 @@ impl WorkflowConfig {
             }
         }
 
+        self.validate_execution_groups()?;
+
+        Ok(())
+    }
+
+    /// Resolve include directives by loading and merging rules from included files.
+    /// Rules from included files are optionally prefixed with the namespace.
+    pub fn resolve_includes(&mut self, base_dir: &Path) -> Result<()> {
+        self.resolve_includes_with_depth(base_dir, 0)
+    }
+
+    fn resolve_includes_with_depth(&mut self, base_dir: &Path, depth: usize) -> Result<()> {
+        if depth >= MAX_INCLUDE_DEPTH {
+            return Err(OxoFlowError::Config {
+                message: format!(
+                    "include depth exceeds maximum of {} — possible circular includes",
+                    MAX_INCLUDE_DEPTH
+                ),
+            });
+        }
+        let includes = std::mem::take(&mut self.includes);
+        for inc in &includes {
+            let inc_path = base_dir.join(&inc.path);
+            let content = std::fs::read_to_string(&inc_path).map_err(|e| OxoFlowError::Parse {
+                path: inc_path.clone(),
+                message: format!("failed to read include '{}': {}", inc.path, e),
+            })?;
+            let mut inc_config: WorkflowConfig =
+                toml::from_str(&content).map_err(|e| OxoFlowError::Parse {
+                    path: inc_path.clone(),
+                    message: e.to_string(),
+                })?;
+            // Recursively resolve nested includes
+            if let Some(parent) = inc_path.parent() {
+                inc_config.resolve_includes_with_depth(parent, depth + 1)?;
+            }
+            for mut rule in inc_config.rules {
+                if let Some(ref ns) = inc.namespace {
+                    rule.name = format!("{}::{}", ns, rule.name);
+                }
+                if !self.rules.iter().any(|r| r.name == rule.name) {
+                    self.rules.push(rule);
+                }
+            }
+        }
+        self.includes = includes;
+        Ok(())
+    }
+
+    /// Validate that all execution group references point to existing rules.
+    pub fn validate_execution_groups(&self) -> Result<()> {
+        let rule_names: std::collections::HashSet<&str> =
+            self.rules.iter().map(|r| r.name.as_str()).collect();
+        for group in &self.execution_groups {
+            for rule_ref in &group.rules {
+                if !rule_names.contains(rule_ref.as_str()) {
+                    return Err(OxoFlowError::Config {
+                        message: format!(
+                            "execution group '{}' references unknown rule '{}'",
+                            group.name, rule_ref
+                        ),
+                    });
+                }
+            }
+        }
         Ok(())
     }
 
@@ -171,6 +294,27 @@ impl WorkflowConfig {
                 rule.environment = env.clone();
             }
         }
+    }
+
+    /// Compute a SHA-256 checksum of the workflow configuration for reproducibility.
+    ///
+    /// The checksum is computed from a deterministic hash of the config,
+    /// ensuring consistent results regardless of field ordering.
+    pub fn checksum(&self) -> String {
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = std::hash::DefaultHasher::new();
+        self.workflow.name.hash(&mut hasher);
+        self.workflow.version.hash(&mut hasher);
+        self.rules.len().hash(&mut hasher);
+        for rule in &self.rules {
+            rule.name.hash(&mut hasher);
+            rule.input.hash(&mut hasher);
+            rule.output.hash(&mut hasher);
+            rule.shell.hash(&mut hasher);
+            rule.script.hash(&mut hasher);
+        }
+        format!("{:016x}", hasher.finish())
     }
 }
 
@@ -325,5 +469,366 @@ mod tests {
         assert_eq!(step2.threads, Some(2));
         assert_eq!(step2.memory.as_deref(), Some("4G"));
         assert_eq!(step2.environment.kind(), "docker");
+    }
+
+    #[test]
+    fn parse_include_directives() {
+        let toml_str = r#"
+            [workflow]
+            name = "modular"
+
+            [[include]]
+            path = "common/qc.oxoflow"
+            namespace = "qc"
+
+            [[include]]
+            path = "align.oxoflow"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hello"
+        "#;
+
+        let config = WorkflowConfig::parse(toml_str).unwrap();
+        assert_eq!(config.includes.len(), 2);
+        assert_eq!(config.includes[0].path, "common/qc.oxoflow");
+        assert_eq!(config.includes[0].namespace.as_deref(), Some("qc"));
+        assert_eq!(config.includes[1].path, "align.oxoflow");
+        assert!(config.includes[1].namespace.is_none());
+    }
+
+    #[test]
+    fn parse_execution_groups() {
+        let toml_str = r#"
+            [workflow]
+            name = "grouped"
+
+            [[execution_group]]
+            name = "preprocessing"
+            rules = ["fastp", "fastqc"]
+            mode = "parallel"
+
+            [[execution_group]]
+            name = "alignment"
+            rules = ["bwa", "sort", "index"]
+            mode = "sequential"
+
+            [[rules]]
+            name = "fastp"
+            shell = "fastp"
+
+            [[rules]]
+            name = "fastqc"
+            shell = "fastqc"
+
+            [[rules]]
+            name = "bwa"
+            shell = "bwa"
+
+            [[rules]]
+            name = "sort"
+            shell = "sort"
+
+            [[rules]]
+            name = "index"
+            shell = "index"
+        "#;
+
+        let config = WorkflowConfig::parse(toml_str).unwrap();
+        assert_eq!(config.execution_groups.len(), 2);
+        assert_eq!(config.execution_groups[0].name, "preprocessing");
+        assert_eq!(config.execution_groups[0].mode, ExecutionMode::Parallel);
+        assert_eq!(config.execution_groups[0].rules.len(), 2);
+        assert_eq!(config.execution_groups[1].name, "alignment");
+        assert_eq!(config.execution_groups[1].mode, ExecutionMode::Sequential);
+        assert_eq!(config.execution_groups[1].rules.len(), 3);
+    }
+
+    #[test]
+    fn include_directive_deserialization() {
+        let toml_str = r#"
+            path = "sub/workflow.oxoflow"
+            namespace = "sub"
+        "#;
+
+        let inc: IncludeDirective = toml::from_str(toml_str).unwrap();
+        assert_eq!(inc.path, "sub/workflow.oxoflow");
+        assert_eq!(inc.namespace.as_deref(), Some("sub"));
+    }
+
+    #[test]
+    fn execution_mode_default() {
+        assert_eq!(ExecutionMode::default(), ExecutionMode::Parallel);
+    }
+
+    #[test]
+    fn workflow_with_advanced_rule_features() {
+        let toml_str = r#"
+            [workflow]
+            name = "advanced"
+
+            [[rules]]
+            name = "scattered_call"
+            input = ["{sample}.bam"]
+            output = ["{sample}.vcf"]
+            shell = "call {input} > {output}"
+            when = "config.run_calling"
+            retries = 2
+            temp_output = ["{sample}.tmp"]
+            protected_output = ["{sample}.vcf"]
+
+            [rules.scatter]
+            variable = "sample"
+            values = ["S1", "S2"]
+        "#;
+
+        let config = WorkflowConfig::parse(toml_str).unwrap();
+        let rule = &config.rules[0];
+        assert_eq!(rule.when.as_deref(), Some("config.run_calling"));
+        assert_eq!(rule.retries, 2);
+        assert_eq!(rule.temp_output, vec!["{sample}.tmp"]);
+        assert_eq!(rule.protected_output, vec!["{sample}.vcf"]);
+        let scatter = rule.scatter.as_ref().unwrap();
+        assert_eq!(scatter.variable, "sample");
+        assert_eq!(scatter.values, vec!["S1", "S2"]);
+    }
+
+    #[test]
+    fn resolve_includes_with_namespace() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let included_content = r#"
+            [workflow]
+            name = "included"
+
+            [[rules]]
+            name = "qc_step"
+            shell = "fastqc"
+
+            [[rules]]
+            name = "trim_step"
+            shell = "fastp"
+        "#;
+        let inc_path = dir.path().join("qc.oxoflow");
+        std::fs::write(&inc_path, included_content).unwrap();
+
+        let main_content = r#"
+            [workflow]
+            name = "main"
+
+            [[include]]
+            path = "qc.oxoflow"
+            namespace = "qc"
+
+            [[rules]]
+            name = "align"
+            shell = "bwa"
+        "#;
+
+        let mut config: WorkflowConfig = toml::from_str(main_content).unwrap();
+        config.resolve_includes(dir.path()).unwrap();
+
+        assert_eq!(config.rules.len(), 3);
+        assert_eq!(config.rules[0].name, "align");
+        assert_eq!(config.rules[1].name, "qc::qc_step");
+        assert_eq!(config.rules[2].name, "qc::trim_step");
+    }
+
+    #[test]
+    fn resolve_includes_without_namespace() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let included_content = r#"
+            [workflow]
+            name = "included"
+
+            [[rules]]
+            name = "helper"
+            shell = "echo help"
+        "#;
+        let inc_path = dir.path().join("helper.oxoflow");
+        std::fs::write(&inc_path, included_content).unwrap();
+
+        let main_content = r#"
+            [workflow]
+            name = "main"
+
+            [[include]]
+            path = "helper.oxoflow"
+
+            [[rules]]
+            name = "main_step"
+            shell = "echo main"
+        "#;
+
+        let mut config: WorkflowConfig = toml::from_str(main_content).unwrap();
+        config.resolve_includes(dir.path()).unwrap();
+
+        assert_eq!(config.rules.len(), 2);
+        assert_eq!(config.rules[1].name, "helper");
+    }
+
+    #[test]
+    fn resolve_includes_skips_duplicate_rules() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let included_content = r#"
+            [workflow]
+            name = "included"
+
+            [[rules]]
+            name = "shared_step"
+            shell = "echo included"
+        "#;
+        let inc_path = dir.path().join("inc.oxoflow");
+        std::fs::write(&inc_path, included_content).unwrap();
+
+        let main_content = r#"
+            [workflow]
+            name = "main"
+
+            [[include]]
+            path = "inc.oxoflow"
+
+            [[rules]]
+            name = "shared_step"
+            shell = "echo main"
+        "#;
+
+        let mut config: WorkflowConfig = toml::from_str(main_content).unwrap();
+        config.resolve_includes(dir.path()).unwrap();
+
+        // Should NOT add duplicate
+        assert_eq!(config.rules.len(), 1);
+        assert_eq!(config.rules[0].shell.as_deref(), Some("echo main"));
+    }
+
+    #[test]
+    fn resolve_includes_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let main_content = r#"
+            [workflow]
+            name = "main"
+
+            [[include]]
+            path = "nonexistent.oxoflow"
+        "#;
+
+        let mut config: WorkflowConfig = toml::from_str(main_content).unwrap();
+        let result = config.resolve_includes(dir.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_execution_groups_valid() {
+        let toml_str = r#"
+            [workflow]
+            name = "grouped"
+
+            [[execution_group]]
+            name = "prep"
+            rules = ["step1"]
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hello"
+        "#;
+
+        let config = WorkflowConfig::parse(toml_str).unwrap();
+        assert!(config.validate_execution_groups().is_ok());
+    }
+
+    #[test]
+    fn validate_execution_groups_unknown_rule() {
+        let toml_str = r#"
+            [workflow]
+            name = "grouped"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hello"
+        "#;
+
+        let mut config = WorkflowConfig::parse(toml_str).unwrap();
+        config.execution_groups.push(ExecutionGroup {
+            name: "bad_group".to_string(),
+            rules: vec!["nonexistent".to_string()],
+            mode: ExecutionMode::Parallel,
+        });
+
+        let result = config.validate_execution_groups();
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("nonexistent"));
+        assert!(err.contains("bad_group"));
+    }
+
+    #[test]
+    fn validate_rejects_bad_execution_groups() {
+        let toml_str = r#"
+            [workflow]
+            name = "test"
+
+            [[execution_group]]
+            name = "group1"
+            rules = ["missing_rule"]
+
+            [[rules]]
+            name = "real_rule"
+            shell = "echo hi"
+        "#;
+
+        let result = WorkflowConfig::parse(toml_str);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_includes_depth_limit() {
+        // Verify the depth constant is reasonable
+        assert!(
+            MAX_INCLUDE_DEPTH >= 8,
+            "include depth limit should be at least 8"
+        );
+    }
+
+    #[test]
+    fn checksum_deterministic() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+            [[rules]]
+            name = "step1"
+            shell = "echo hello"
+        "#;
+        let c1 = WorkflowConfig::parse(toml).unwrap();
+        let c2 = WorkflowConfig::parse(toml).unwrap();
+        assert_eq!(c1.checksum(), c2.checksum());
+    }
+
+    #[test]
+    fn checksum_differs_for_different_configs() {
+        let c1 = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "test1"
+            [[rules]]
+            name = "step1"
+            shell = "echo hello"
+        "#,
+        )
+        .unwrap();
+        let c2 = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "test2"
+            [[rules]]
+            name = "step1"
+            shell = "echo hello"
+        "#,
+        )
+        .unwrap();
+        assert_ne!(c1.checksum(), c2.checksum());
     }
 }

@@ -50,24 +50,22 @@ jobs:
           VERSION="${{ steps.extract.outputs.version }}"
           CHANGED=false
 
-          update_version() {
-            local file="$1"
-            local current
-            current=$(grep -m1 '^version = ' "$file" | sed 's/version = "\(.*\)"/\1/')
-            if [ "$VERSION" != "$current" ]; then
-              echo "Updating $file: $current → $VERSION"
-              local current_esc
-              current_esc=$(printf '%s' "$current" | sed 's/[.]/\\./g')
-              sed -i "0,/^version = \"$current_esc\"/{s/^version = \"$current_esc\"/version = \"$VERSION\"/}" "$file"
-              CHANGED=true
-            fi
-          }
+          # All crates use version.workspace = true, so we only need to
+          # update the workspace version in the root Cargo.toml.
+          CURRENT=$(sed -n '/^\[workspace\.package\]/,/^\[/{ s/^version = "\(.*\)"/\1/p; }' Cargo.toml | head -1)
+          if [ "$VERSION" != "$CURRENT" ]; then
+            echo "Updating workspace version: $CURRENT → $VERSION"
+            sed -i "/^\[workspace\.package\]/,/^\[/{ s/^version = \"$CURRENT\"/version = \"$VERSION\"/; }" Cargo.toml
+            CHANGED=true
+          fi
 
-          update_version Cargo.toml
-          update_version crates/oxo-flow-core/Cargo.toml
-          update_version crates/oxo-flow-cli/Cargo.toml
-          update_version crates/oxo-flow-web/Cargo.toml
-          update_version crates/venus/Cargo.toml
+          # Also update the root [package] version
+          ROOT_VER=$(grep -m1 '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          if [ "$VERSION" != "$ROOT_VER" ]; then
+            ROOT_ESC=$(printf '%s' "$ROOT_VER" | sed 's/[.]/\\./g')
+            sed -i "0,/^version = \"$ROOT_ESC\"/{s/^version = \"$ROOT_ESC\"/version = \"$VERSION\"/}" Cargo.toml
+            CHANGED=true
+          fi
 
           if [ -f CITATION.cff ]; then
             TODAY=$(date -u +%Y-%m-%d)
@@ -93,7 +91,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml Cargo.lock crates/*/Cargo.toml
+          git add Cargo.toml Cargo.lock
           [ -f CITATION.cff ] && git add CITATION.cff
           git commit -m "chore: bump version to ${{ steps.extract.outputs.version }} [skip ci]"
           git push origin "HEAD:${{ github.event.repository.default_branch }}"

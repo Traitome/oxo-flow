@@ -74,6 +74,16 @@ pub enum OxoFlowError {
     /// Container packaging error.
     #[error("container error: {message}")]
     Container { message: String },
+
+    /// Validation error with diagnostic details.
+    #[error("validation error: {message}")]
+    Validation {
+        message: String,
+        /// Rule that triggered the error, if applicable.
+        rule: Option<String>,
+        /// Suggested fix, if available.
+        suggestion: Option<String>,
+    },
 }
 
 /// Convenience alias for `Result<T, OxoFlowError>`.
@@ -122,5 +132,15 @@ mod tests {
             message: "build failed".to_string(),
         };
         assert_eq!(err.to_string(), "container error: build failed");
+    }
+
+    #[test]
+    fn error_display_validation_with_suggestion() {
+        let err = OxoFlowError::Validation {
+            message: "empty rule name".to_string(),
+            rule: Some("step1".to_string()),
+            suggestion: Some("provide a non-empty name".to_string()),
+        };
+        assert!(err.to_string().contains("empty rule name"));
     }
 }

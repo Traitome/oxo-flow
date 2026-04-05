@@ -287,6 +287,7 @@ fn make_rule(
         target: false,
         group: None,
         description: None,
+        ..Default::default()
     }
 }
 
@@ -733,6 +734,7 @@ pub fn generate_oxoflow(config: &VenusConfig) -> anyhow::Result<String> {
                 config.mode, config.seq_type
             )),
             author: None,
+            min_version: None,
         },
         config: {
             let mut map = HashMap::new();
@@ -753,6 +755,8 @@ pub fn generate_oxoflow(config: &VenusConfig) -> anyhow::Result<String> {
         },
         report: None,
         rules,
+        includes: Vec::new(),
+        execution_groups: Vec::new(),
     };
 
     let toml_str = toml::to_string_pretty(&wf)?;

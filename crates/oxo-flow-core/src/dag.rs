@@ -9,6 +9,7 @@ use crate::rule::Rule;
 use petgraph::algo::toposort;
 use petgraph::dot::{Config, Dot};
 use petgraph::graph::{DiGraph, NodeIndex};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// A node in the workflow DAG, representing a single rule.
@@ -244,6 +245,44 @@ impl WorkflowDag {
     }
 }
 
+/// Complexity metrics for a workflow DAG.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DagMetrics {
+    /// Total number of rules (nodes).
+    pub node_count: usize,
+    /// Total number of dependencies (edges).
+    pub edge_count: usize,
+    /// Maximum depth of the DAG (longest path from root to leaf).
+    pub max_depth: usize,
+    /// Maximum width (max rules at any single depth level).
+    pub max_width: usize,
+    /// Length of the critical path (longest chain of dependencies).
+    pub critical_path_length: usize,
+    /// Number of independent parallel groups.
+    pub parallel_group_count: usize,
+}
+
+impl WorkflowDag {
+    /// Compute complexity metrics for the DAG.
+    pub fn metrics(&self) -> Result<DagMetrics> {
+        let groups = self.parallel_groups()?;
+        let max_width = groups.iter().map(|g| g.len()).max().unwrap_or(0);
+        let max_depth = groups.len();
+
+        // Critical path = longest chain = max_depth (in a DAG grouped by levels)
+        let critical_path_length = max_depth;
+
+        Ok(DagMetrics {
+            node_count: self.node_count(),
+            edge_count: self.edge_count(),
+            max_depth,
+            max_width,
+            critical_path_length,
+            parallel_group_count: groups.len(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,6 +307,7 @@ mod tests {
             target: false,
             group: None,
             description: None,
+            ..Default::default()
         }
     }
 
@@ -426,5 +466,33 @@ mod tests {
         let groups = dag.parallel_groups().unwrap();
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0], vec!["a", "b"]);
+    }
+
+    #[test]
+    fn dag_metrics_linear() {
+        let rules = vec![
+            make_rule("a", vec![], vec!["a.txt"]),
+            make_rule("b", vec!["a.txt"], vec!["b.txt"]),
+            make_rule("c", vec!["b.txt"], vec!["c.txt"]),
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let m = dag.metrics().unwrap();
+        assert_eq!(m.node_count, 3);
+        assert_eq!(m.max_depth, 3);
+        assert_eq!(m.max_width, 1);
+    }
+
+    #[test]
+    fn dag_metrics_wide() {
+        let rules = vec![
+            make_rule("a", vec![], vec!["a.txt"]),
+            make_rule("b", vec![], vec!["b.txt"]),
+            make_rule("c", vec![], vec!["c.txt"]),
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let m = dag.metrics().unwrap();
+        assert_eq!(m.node_count, 3);
+        assert_eq!(m.max_depth, 1);
+        assert_eq!(m.max_width, 3);
     }
 }

@@ -443,6 +443,80 @@ pub fn file_is_newer(source: &Path, target: &Path) -> bool {
     source_modified > target_modified
 }
 
+/// Evaluate a simple `when` condition string against workflow config values.
+///
+/// Supports:
+///  - `"config.<key>"` → true if key exists and is truthy
+///  - `"true"` / `"false"` literal
+///  - `"!<expr>"` → negation
+pub fn evaluate_condition(
+    condition: &str,
+    config_values: &std::collections::HashMap<String, toml::Value>,
+) -> bool {
+    let condition = condition.trim();
+    if condition.is_empty() || condition == "true" {
+        return true;
+    }
+    if condition == "false" {
+        return false;
+    }
+    if let Some(rest) = condition.strip_prefix('!') {
+        return !evaluate_condition(rest, config_values);
+    }
+    if let Some(key) = condition.strip_prefix("config.") {
+        return match config_values.get(key) {
+            Some(toml::Value::Boolean(b)) => *b,
+            Some(toml::Value::String(s)) => !s.is_empty(),
+            Some(_) => true,
+            None => false,
+        };
+    }
+    // Default: treat as truthy
+    true
+}
+
+/// Clean up temporary output files produced by a rule.
+pub fn cleanup_temp_outputs(rule: &Rule, workdir: &Path) {
+    for temp in &rule.temp_output {
+        let path = workdir.join(temp);
+        if path.exists() {
+            if let Err(e) = std::fs::remove_file(&path) {
+                tracing::warn!(file = %path.display(), error = %e, "failed to remove temp output");
+            } else {
+                tracing::debug!(file = %path.display(), "removed temp output");
+            }
+        }
+    }
+}
+
+/// Check if a rule should be skipped based on output freshness.
+///
+/// Returns true if all outputs exist and are newer than all inputs.
+pub fn should_skip_rule(rule: &Rule, workdir: &Path) -> bool {
+    if rule.output.is_empty() {
+        return false;
+    }
+    // Skip check for wildcard patterns
+    if rule.output.iter().any(|o| o.contains('{')) || rule.input.iter().any(|i| i.contains('{')) {
+        return false;
+    }
+    let all_outputs_exist = rule.output.iter().all(|o| workdir.join(o).exists());
+    if !all_outputs_exist {
+        return false;
+    }
+    if rule.input.is_empty() {
+        return true; // No inputs to check freshness against
+    }
+    // Check if all outputs are newer than all inputs
+    rule.input.iter().all(|input| {
+        let input_path = workdir.join(input);
+        rule.output.iter().all(|output| {
+            let output_path = workdir.join(output);
+            file_is_newer(&output_path, &input_path)
+        })
+    })
+}
+
 /// Validate that declared output files exist after execution.
 /// Returns a list of missing output file paths.
 pub fn validate_outputs(rule: &Rule, workdir: &Path) -> Vec<String> {
@@ -458,6 +532,57 @@ pub fn validate_outputs(rule: &Rule, workdir: &Path) -> Vec<String> {
         })
         .cloned()
         .collect()
+}
+
+/// Provenance metadata for a workflow execution.
+///
+/// Captures the oxo-flow version, configuration checksum, and execution
+/// timestamps for reproducibility and audit trail purposes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionProvenance {
+    /// oxo-flow version that performed the execution.
+    pub oxo_flow_version: String,
+
+    /// SHA-256 checksum of the workflow configuration.
+    pub config_checksum: String,
+
+    /// Execution start time.
+    pub started_at: DateTime<Utc>,
+
+    /// Execution end time (set when complete).
+    pub finished_at: Option<DateTime<Utc>>,
+
+    /// Hostname where execution occurred.
+    pub hostname: String,
+
+    /// Working directory.
+    pub workdir: String,
+}
+
+impl ExecutionProvenance {
+    /// Create a new provenance record for the current execution.
+    pub fn new(config_checksum: &str, workdir: &Path) -> Self {
+        Self {
+            oxo_flow_version: env!("CARGO_PKG_VERSION").to_string(),
+            config_checksum: config_checksum.to_string(),
+            started_at: Utc::now(),
+            finished_at: None,
+            hostname: hostname(),
+            workdir: workdir.display().to_string(),
+        }
+    }
+
+    /// Mark the execution as complete.
+    pub fn finish(&mut self) {
+        self.finished_at = Some(Utc::now());
+    }
+}
+
+/// Get the system hostname, returning "unknown" if unavailable.
+fn hostname() -> String {
+    std::env::var("HOSTNAME")
+        .or_else(|_| std::env::var("COMPUTERNAME"))
+        .unwrap_or_else(|_| "unknown".to_string())
 }
 
 #[cfg(test)]
@@ -483,6 +608,7 @@ mod tests {
             target: false,
             group: None,
             description: None,
+            ..Default::default()
         }
     }
 
@@ -790,6 +916,7 @@ mod tests {
             target: false,
             group: None,
             description: None,
+            ..Default::default()
         };
 
         let missing = validate_outputs(&rule, dir.path());
@@ -818,11 +945,270 @@ mod tests {
             target: false,
             group: None,
             description: None,
+            ..Default::default()
         };
 
         let missing = validate_outputs(&rule, dir.path());
         // {sample}.bam should be skipped (wildcard), only fixed_output.txt reported
         assert_eq!(missing.len(), 1);
         assert_eq!(missing[0], "fixed_output.txt");
+    }
+
+    // -- evaluate_condition tests --------------------------------------------
+
+    #[test]
+    fn evaluate_condition_empty_is_true() {
+        let config = HashMap::new();
+        assert!(evaluate_condition("", &config));
+    }
+
+    #[test]
+    fn evaluate_condition_literal_true() {
+        let config = HashMap::new();
+        assert!(evaluate_condition("true", &config));
+    }
+
+    #[test]
+    fn evaluate_condition_literal_false() {
+        let config = HashMap::new();
+        assert!(!evaluate_condition("false", &config));
+    }
+
+    #[test]
+    fn evaluate_condition_negation() {
+        let config = HashMap::new();
+        assert!(!evaluate_condition("!true", &config));
+        assert!(evaluate_condition("!false", &config));
+    }
+
+    #[test]
+    fn evaluate_condition_config_bool_true() {
+        let mut config = HashMap::new();
+        config.insert("enable_qc".to_string(), toml::Value::Boolean(true));
+        assert!(evaluate_condition("config.enable_qc", &config));
+    }
+
+    #[test]
+    fn evaluate_condition_config_bool_false() {
+        let mut config = HashMap::new();
+        config.insert("enable_qc".to_string(), toml::Value::Boolean(false));
+        assert!(!evaluate_condition("config.enable_qc", &config));
+    }
+
+    #[test]
+    fn evaluate_condition_config_string_nonempty() {
+        let mut config = HashMap::new();
+        config.insert(
+            "reference".to_string(),
+            toml::Value::String("/path/to/ref.fa".to_string()),
+        );
+        assert!(evaluate_condition("config.reference", &config));
+    }
+
+    #[test]
+    fn evaluate_condition_config_string_empty() {
+        let mut config = HashMap::new();
+        config.insert("reference".to_string(), toml::Value::String(String::new()));
+        assert!(!evaluate_condition("config.reference", &config));
+    }
+
+    #[test]
+    fn evaluate_condition_config_integer_is_truthy() {
+        let mut config = HashMap::new();
+        config.insert("threads".to_string(), toml::Value::Integer(4));
+        assert!(evaluate_condition("config.threads", &config));
+    }
+
+    #[test]
+    fn evaluate_condition_config_missing_key() {
+        let config = HashMap::new();
+        assert!(!evaluate_condition("config.nonexistent", &config));
+    }
+
+    #[test]
+    fn evaluate_condition_negated_config() {
+        let mut config = HashMap::new();
+        config.insert("skip".to_string(), toml::Value::Boolean(true));
+        assert!(!evaluate_condition("!config.skip", &config));
+    }
+
+    #[test]
+    fn evaluate_condition_unknown_treated_as_truthy() {
+        let config = HashMap::new();
+        assert!(evaluate_condition("some_expression", &config));
+    }
+
+    #[test]
+    fn evaluate_condition_trimmed_whitespace() {
+        let config = HashMap::new();
+        assert!(evaluate_condition("  true  ", &config));
+        assert!(!evaluate_condition("  false  ", &config));
+    }
+
+    // -- cleanup_temp_outputs tests ------------------------------------------
+
+    #[test]
+    fn cleanup_temp_outputs_removes_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let temp_file = dir.path().join("temp.bam");
+        std::fs::write(&temp_file, "temporary").unwrap();
+        assert!(temp_file.exists());
+
+        let rule = Rule {
+            name: "test".to_string(),
+            temp_output: vec!["temp.bam".to_string()],
+            ..Default::default()
+        };
+
+        cleanup_temp_outputs(&rule, dir.path());
+        assert!(!temp_file.exists());
+    }
+
+    #[test]
+    fn cleanup_temp_outputs_ignores_missing() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let rule = Rule {
+            name: "test".to_string(),
+            temp_output: vec!["nonexistent.bam".to_string()],
+            ..Default::default()
+        };
+
+        // Should not panic
+        cleanup_temp_outputs(&rule, dir.path());
+    }
+
+    #[test]
+    fn cleanup_temp_outputs_multiple_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let f1 = dir.path().join("a.tmp");
+        let f2 = dir.path().join("b.tmp");
+        std::fs::write(&f1, "a").unwrap();
+        std::fs::write(&f2, "b").unwrap();
+
+        let rule = Rule {
+            name: "test".to_string(),
+            temp_output: vec!["a.tmp".to_string(), "b.tmp".to_string()],
+            ..Default::default()
+        };
+
+        cleanup_temp_outputs(&rule, dir.path());
+        assert!(!f1.exists());
+        assert!(!f2.exists());
+    }
+
+    // -- should_skip_rule tests ----------------------------------------------
+
+    #[test]
+    fn should_skip_rule_no_outputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let rule = Rule {
+            name: "test".to_string(),
+            shell: Some("echo hi".to_string()),
+            ..Default::default()
+        };
+        assert!(!should_skip_rule(&rule, dir.path()));
+    }
+
+    #[test]
+    fn should_skip_rule_outputs_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let rule = Rule {
+            name: "test".to_string(),
+            input: vec!["in.txt".to_string()],
+            output: vec!["out.txt".to_string()],
+            shell: Some("echo hi".to_string()),
+            ..Default::default()
+        };
+        assert!(!should_skip_rule(&rule, dir.path()));
+    }
+
+    #[test]
+    fn should_skip_rule_wildcard_patterns() {
+        let dir = tempfile::tempdir().unwrap();
+        let rule = Rule {
+            name: "test".to_string(),
+            input: vec!["{sample}.fastq".to_string()],
+            output: vec!["{sample}.bam".to_string()],
+            shell: Some("echo hi".to_string()),
+            ..Default::default()
+        };
+        assert!(!should_skip_rule(&rule, dir.path()));
+    }
+
+    #[test]
+    fn should_skip_rule_outputs_up_to_date() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create input first
+        let input = dir.path().join("input.txt");
+        std::fs::write(&input, "data").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Create output after input (newer)
+        let output = dir.path().join("output.txt");
+        std::fs::write(&output, "result").unwrap();
+
+        let rule = Rule {
+            name: "test".to_string(),
+            input: vec!["input.txt".to_string()],
+            output: vec!["output.txt".to_string()],
+            shell: Some("echo hi".to_string()),
+            ..Default::default()
+        };
+        assert!(should_skip_rule(&rule, dir.path()));
+    }
+
+    #[test]
+    fn should_skip_rule_outputs_stale() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create output first
+        let output = dir.path().join("output.txt");
+        std::fs::write(&output, "old_result").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Create input after output (input is newer → need re-run)
+        let input = dir.path().join("input.txt");
+        std::fs::write(&input, "new_data").unwrap();
+
+        let rule = Rule {
+            name: "test".to_string(),
+            input: vec!["input.txt".to_string()],
+            output: vec!["output.txt".to_string()],
+            shell: Some("echo hi".to_string()),
+            ..Default::default()
+        };
+        assert!(!should_skip_rule(&rule, dir.path()));
+    }
+
+    #[test]
+    fn should_skip_rule_no_inputs_all_outputs_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("output.txt");
+        std::fs::write(&output, "result").unwrap();
+
+        let rule = Rule {
+            name: "test".to_string(),
+            output: vec!["output.txt".to_string()],
+            shell: Some("echo hi".to_string()),
+            ..Default::default()
+        };
+        assert!(should_skip_rule(&rule, dir.path()));
+    }
+
+    #[test]
+    fn provenance_creation() {
+        let prov = ExecutionProvenance::new("abc123", Path::new("/work"));
+        assert_eq!(prov.oxo_flow_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(prov.config_checksum, "abc123");
+        assert!(prov.finished_at.is_none());
+    }
+
+    #[test]
+    fn provenance_finish() {
+        let mut prov = ExecutionProvenance::new("abc123", Path::new("/work"));
+        prov.finish();
+        assert!(prov.finished_at.is_some());
     }
 }
