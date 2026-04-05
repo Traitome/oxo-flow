@@ -2,7 +2,7 @@
 
 # oxo-flow
 
-**A Rust-native bioinformatics pipeline engine — reimagining workflow management.**
+**A Rust-native bioinformatics pipeline engine — built from first principles for performance, reproducibility, and clinical-grade rigor.**
 
 [![CI](https://github.com/Traitome/oxo-flow/actions/workflows/ci.yml/badge.svg)](https://github.com/Traitome/oxo-flow/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/oxo-flow-core.svg)](https://crates.io/crates/oxo-flow-core)
@@ -13,7 +13,7 @@
 [![GitHub Downloads](https://img.shields.io/github/downloads/Traitome/oxo-flow/total.svg)](https://github.com/Traitome/oxo-flow/releases)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Traitome/oxo-flow)
 
-[Documentation](https://traitome.github.io/oxo-flow/documentation/) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md)
+[Documentation](https://traitome.github.io/oxo-flow/documentation/) · [Workflow Gallery](https://traitome.github.io/oxo-flow/documentation/gallery/) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md)
 
 </div>
 
@@ -47,6 +47,39 @@ oxo-flow is a high-performance, modular bioinformatics pipeline engine built fro
 | **Type safety** | Compile-time guarantees eliminate entire classes of runtime errors |
 | **Startup time** | Instant — native binary, no runtime loading |
 | **Reproducibility** | Config checksums, execution provenance, deterministic DAG scheduling |
+
+## Design Principles
+
+oxo-flow is built on six engineering and scientific principles:
+
+1. **DAG is the fundamental abstraction** — Every bioinformatics workflow is a directed acyclic graph of tasks. The engine natively constructs, validates, optimizes, and executes DAGs with maximum parallelism.
+
+2. **Environment isolation is non-negotiable** — Bioinformatics tools have conflicting dependencies. Each task runs in its own isolated environment (conda, pixi, docker, singularity, venv).
+
+3. **Reproducibility through determinism** — Given the same inputs, configuration, and environment specifications, the pipeline produces identical outputs. Config checksums, execution provenance, and container pinning guarantee this.
+
+4. **Performance through Rust** — Zero-cost abstractions, fearless concurrency, and efficient memory management make Rust the ideal foundation for orchestrating thousands of concurrent bioinformatics tasks.
+
+5. **Clinical-grade quality** — Reports are accurate, traceable, and auditable. Every step logs its provenance, inputs, outputs, software versions, and execution environment.
+
+6. **Inverse design** — Start from what the user needs (clinical report, publication figure) and work backward to determine the data, tools, and steps required.
+
+## Workflow Gallery
+
+Learn oxo-flow incrementally with curated, validated example workflows — from a one-rule hello-world to production-grade multi-omics pipelines:
+
+| # | Workflow | Complexity | Domain |
+|---|----------|-----------|--------|
+| 01 | [Hello World](examples/gallery/01_hello_world.oxoflow) | ⭐ | General |
+| 02 | [File Pipeline](examples/gallery/02_file_pipeline.oxoflow) | ⭐⭐ | Data processing |
+| 03 | [Parallel Samples](examples/gallery/03_parallel_samples.oxoflow) | ⭐⭐ | Batch processing |
+| 04 | [Scatter-Gather](examples/gallery/04_scatter_gather.oxoflow) | ⭐⭐⭐ | Parallel computing |
+| 05 | [Environment Management](examples/gallery/05_conda_environments.oxoflow) | ⭐⭐⭐ | DevOps |
+| 06 | [RNA-seq Quantification](examples/gallery/06_rnaseq_quantification.oxoflow) | ⭐⭐⭐⭐ | Transcriptomics |
+| 07 | [WGS Germline Calling](examples/gallery/07_wgs_germline.oxoflow) | ⭐⭐⭐⭐⭐ | Genomics |
+| 08 | [Multi-Omics Integration](examples/gallery/08_multiomics_integration.oxoflow) | ⭐⭐⭐⭐⭐ | Multi-omics |
+
+Every workflow passes `oxo-flow validate` and is tested in CI. See the full [Workflow Gallery documentation](https://traitome.github.io/oxo-flow/documentation/gallery/) for detailed explanations, DAG visualizations, and CLI output.
 
 ## Quick Start
 

@@ -440,3 +440,60 @@ fn web_binary_exists() {
     // Verify the web binary was built successfully
     let _cmd = oxo_flow_web_cmd();
 }
+
+// ─── Gallery workflow CLI tests ─────────────────────────────────────────────
+
+#[test]
+fn cli_validate_all_gallery_workflows() {
+    let gallery_dir = "examples/gallery";
+    let entries: Vec<_> = fs::read_dir(gallery_dir)
+        .expect("gallery directory should exist")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map_or(false, |ext| ext == "oxoflow"))
+        .collect();
+
+    assert!(
+        entries.len() >= 8,
+        "expected at least 8 gallery workflows, found {}",
+        entries.len()
+    );
+
+    for entry in &entries {
+        let path = entry.path();
+        oxo_flow_cmd()
+            .args(["validate", path.to_str().unwrap()])
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("✓"));
+    }
+}
+
+#[test]
+fn cli_dryrun_gallery_file_pipeline() {
+    oxo_flow_cmd()
+        .args(["dry-run", "examples/gallery/02_file_pipeline.oxoflow"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("3 rules would execute"))
+        .stderr(predicate::str::contains("generate_data"))
+        .stderr(predicate::str::contains("summarize"));
+}
+
+#[test]
+fn cli_graph_gallery_rnaseq() {
+    oxo_flow_cmd()
+        .args(["graph", "examples/gallery/06_rnaseq_quantification.oxoflow"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("digraph"))
+        .stdout(predicate::str::contains("fastp_trim"))
+        .stdout(predicate::str::contains("multiqc"));
+}
+
+#[test]
+fn cli_lint_gallery_wgs_germline() {
+    oxo_flow_cmd()
+        .args(["lint", "examples/gallery/07_wgs_germline.oxoflow"])
+        .assert()
+        .success();
+}

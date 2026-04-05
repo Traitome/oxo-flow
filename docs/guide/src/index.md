@@ -68,6 +68,19 @@ Start with the **Tutorials** in order:
 4. [Variant Calling Pipeline](./tutorials/variant-calling.md) — complete NGS analysis
 5. [Environment Management](./tutorials/environment-management.md) — use conda, docker, and more
 
+### If you want to learn by example
+
+Explore the **[Workflow Gallery](./gallery/index.md)** — 8 curated workflows from hello-world to multi-omics integration, each with validation output, DAG visualizations, and scientific context:
+
+1. [Hello World](./gallery/hello-world.md) ⭐ — Minimal rule structure
+2. [File Pipeline](./gallery/file-pipeline.md) ⭐⭐ — Multi-rule dependencies
+3. [Parallel Samples](./gallery/parallel-samples.md) ⭐⭐ — Wildcard expansion
+4. [Scatter-Gather](./gallery/scatter-gather.md) ⭐⭐⭐ — Parallel chunk processing
+5. [Environment Management](./gallery/environment-mgmt.md) ⭐⭐⭐ — Per-rule isolation
+6. [RNA-seq Quantification](./gallery/rnaseq.md) ⭐⭐⭐⭐ — Transcriptomics pipeline
+7. [WGS Germline Calling](./gallery/wgs-germline.md) ⭐⭐⭐⭐⭐ — GATK best practices
+8. [Multi-Omics Integration](./gallery/multiomics.md) ⭐⭐⭐⭐⭐ — WGS + RNA-seq + Methylation
+
 ### If you need to accomplish a specific task
 
 Jump to the **How-to Guides**:
