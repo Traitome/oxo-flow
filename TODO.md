@@ -10,19 +10,19 @@
 
 > Priority: 🔴 Critical · 🟡 Important · 🟢 Nice-to-have
 
-- [ ] 🔴 A01: Add `include` directive for modular workflow composition (import sub-workflows)
-- [ ] 🔴 A02: Add `scatter`/`gather` (fan-out/fan-in) pattern for parallel sample processing
-- [ ] 🔴 A03: Add conditional rule execution (`when` / `if` clauses based on config or file existence)
-- [ ] 🔴 A04: Add `group` execution blocks for explicit sequential/parallel rule grouping
-- [ ] 🔴 A05: Implement sub-workflow / nested workflow support
-- [ ] 🔴 A06: Add `input_function` / dynamic input resolution (Python-style callable)
-- [ ] 🔴 A07: Implement file-timestamp based incremental re-execution (make-style)
-- [ ] 🔴 A08: Add `protected()` and `temp()` output annotations
-- [ ] 🔴 A09: Build embedded web frontend (HTML/CSS/JS served from binary) with workflow designer
+- [x] 🔴 A01: Add `include` directive for modular workflow composition (import sub-workflows)
+- [x] 🔴 A02: Add `scatter`/`gather` (fan-out/fan-in) pattern for parallel sample processing
+- [x] 🔴 A03: Add conditional rule execution (`when` / `if` clauses based on config or file existence)
+- [x] 🔴 A04: Add `group` execution blocks for explicit sequential/parallel rule grouping
+- [x] 🔴 A05: Implement sub-workflow / nested workflow support
+- [x] 🔴 A06: Add `input_function` / dynamic input resolution (Python-style callable)
+- [x] 🔴 A07: Implement file-timestamp based incremental re-execution (make-style)
+- [x] 🔴 A08: Add `protected()` and `temp()` output annotations
+- [x] 🔴 A09: Build embedded web frontend (HTML/CSS/JS served from binary) with workflow designer
 - [ ] 🔴 A10: Add authentication and role-based access control to web interface
-- [ ] 🟡 A11: Create MkDocs documentation site with tutorials, command reference, architecture guide
-- [ ] 🟡 A12: Create landing page (docs/index.html)
-- [ ] 🟡 A13: Write comprehensive README.md with badges, quick-start, architecture diagram
+- [x] 🟡 A11: Create MkDocs documentation site with tutorials, command reference, architecture guide
+- [x] 🟡 A12: Create landing page (docs/index.html)
+- [x] 🟡 A13: Write comprehensive README.md with badges, quick-start, architecture diagram
 - [ ] 🟡 A14: Add `--profile` flag for CLI (local, slurm, pbs, sge, lsf, cloud)
 - [ ] 🟡 A15: Add `oxo-flow config` subcommand for profile management
 - [ ] 🟡 A16: Add real-time SSE/WebSocket execution monitoring to web API
@@ -33,8 +33,8 @@
 - [ ] 🟡 A21: Enhance Venus pipeline with more callers (DeepVariant, VarDict, DELLY, Manta)
 - [ ] 🟡 A22: Add clinical report PDF generation support
 - [ ] 🟡 A23: Add Snakemake workflow import/conversion tool
-- [ ] 🟡 A24: Add integration tests for CLI binary (subprocess-based)
-- [ ] 🟡 A25: Add web API integration tests with actual HTTP requests
+- [x] 🟡 A24: Add integration tests for CLI binary (subprocess-based)
+- [x] 🟡 A25: Add web API integration tests with actual HTTP requests
 - [ ] 🟡 A26: Add benchmark tests and performance regression tracking
 - [ ] 🟢 A27: Add `oxo-flow lint` as top-level command (not just format subcommand)
 - [ ] 🟢 A28: Add DAG visualization as SVG (not just DOT)
