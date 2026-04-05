@@ -21,7 +21,7 @@
 
 ## What is oxo-flow?
 
-oxo-flow is a high-performance, modular bioinformatics pipeline engine built from first principles in Rust. It is designed to fully replace [Snakemake](https://snakemake.readthedocs.io/) as the workflow engine for genomics, clinical pipelines, and reproducible research.
+oxo-flow is a high-performance, modular bioinformatics pipeline engine built from first principles in Rust. It compiles workflows into Directed Acyclic Graphs and orchestrates execution with native concurrency, environment isolation, and clinical-grade reproducibility — all from a single, fast binary.
 
 - 🔀 **DAG-based execution** — Automatic dependency resolution, topological ordering, and parallel execution
 - 📦 **Environment management** — First-class support for conda, pixi, docker, singularity, and venv
@@ -32,20 +32,21 @@ oxo-flow is a high-performance, modular bioinformatics pipeline engine built fro
 - ⚡ **Rust performance** — Fearless concurrency, zero-cost abstractions, minimal memory footprint
 - 🔧 **Resource-aware scheduling** — Jobs declare CPU, memory, GPU, and disk; the scheduler respects constraints across local and cluster backends (SLURM, PBS, SGE)
 
-## Why use oxo-flow over Snakemake?
+## Why oxo-flow?
 
-| Feature | oxo-flow | Snakemake |
-|---------|----------|-----------|
-| **Language** | Rust (compiled, type-safe) | Python (interpreted) |
-| **Performance** | Native binary, zero-cost async | Python GIL, subprocess overhead |
-| **Workflow format** | TOML (`.oxoflow`) — declarative, composable | Python DSL — powerful but implicit |
-| **Environment support** | conda, pixi, docker, singularity, venv | conda, singularity (docker via wrapper) |
-| **Web interface** | Built-in REST API + web UI | Third-party (Panoptes) |
-| **Clinical reporting** | First-class HTML/PDF/JSON report system | Manual / third-party |
-| **Container packaging** | `oxo-flow package` — one command | Manual Dockerfile authoring |
-| **Cluster backends** | SLURM, PBS, SGE (resource-aware) | SLURM, PBS, SGE (profile-based) |
-| **Type safety** | Compile-time guarantees | Runtime errors |
-| **Startup time** | Instant (native binary) | Python interpreter + import overhead |
+| Feature | oxo-flow |
+|---------|----------|
+| **Language** | Rust (compiled, type-safe, zero-cost abstractions) |
+| **Performance** | Native binary with async concurrency — no interpreter overhead |
+| **Workflow format** | TOML (`.oxoflow`) — declarative, composable, human-readable |
+| **Environment support** | conda, pixi, docker, singularity, venv — per-rule isolation |
+| **Web interface** | Built-in REST API + embedded web UI for remote monitoring |
+| **Clinical reporting** | First-class HTML/PDF/JSON report system with audit trails |
+| **Container packaging** | `oxo-flow package` — one command to produce portable images |
+| **Cluster backends** | SLURM, PBS, SGE, LSF — resource-aware scheduling |
+| **Type safety** | Compile-time guarantees eliminate entire classes of runtime errors |
+| **Startup time** | Instant — native binary, no runtime loading |
+| **Reproducibility** | Config checksums, execution provenance, deterministic DAG scheduling |
 
 ## Quick Start
 
@@ -141,7 +142,7 @@ shell = "bwa-mem2 mem -t {threads} {config.reference} {input[0]} {input[1]} | sa
 docker = "biocontainers/bwa-mem2:2.2.1"
 ```
 
-Wildcards like `{sample}` are expanded automatically based on input file discovery or explicit configuration — just like Snakemake, but with TOML syntax.
+Wildcards like `{sample}` are expanded automatically based on input file discovery or explicit configuration, enabling concise and powerful pattern-based pipeline definitions.
 
 ## CLI Commands
 

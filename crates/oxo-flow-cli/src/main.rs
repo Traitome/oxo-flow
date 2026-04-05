@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
     version,
     about = "A Rust-native bioinformatics pipeline engine",
     long_about = "oxo-flow is a high-performance, modular bioinformatics pipeline engine\n\
-                   designed to fully replace Snakemake. It supports conda, pixi, docker,\n\
+                   built from first principles in Rust. It supports conda, pixi, docker,\n\
                    singularity, and venv environments with DAG-based execution."
 )]
 struct Cli {
@@ -621,7 +621,7 @@ benchmarks/
 
 # oxo-flow internals
 .oxo-flow/
-.snakemake/
+.oxo-flow-cache/
 
 # OS files
 .DS_Store

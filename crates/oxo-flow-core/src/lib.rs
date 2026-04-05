@@ -2,12 +2,12 @@
 //!
 //! Core library for the oxo-flow bioinformatics pipeline engine.
 //!
-//! oxo-flow is a Rust-native workflow engine designed to fully replace
-//! Snakemake for bioinformatics pipelines. It provides:
+//! oxo-flow is a Rust-native workflow engine purpose-built for
+//! bioinformatics pipelines. It provides:
 //!
 //! - **DAG engine**: Build, validate, and execute directed acyclic graphs of tasks
 //! - **Environment management**: First-class support for conda, pixi, docker, singularity, venv
-//! - **Wildcard expansion**: Snakemake-style `{sample}` pattern substitution
+//! - **Wildcard expansion**: `{sample}` pattern substitution with automatic discovery
 //! - **Resource scheduling**: CPU, memory, GPU-aware job scheduling
 //! - **Report generation**: Modular, clinical-grade HTML/JSON reporting
 //! - **Container packaging**: Package workflows into portable Docker/Singularity images

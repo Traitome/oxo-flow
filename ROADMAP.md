@@ -1,6 +1,6 @@
 # oxo-flow Roadmap
 
-> **Mission**: Build a Rust-native bioinformatics pipeline engine that fully replaces Snakemake,
+> **Mission**: Build a Rust-native bioinformatics pipeline engine with first-principles design,
 > with first-class clinical-grade reporting, environment management, and a powerful web interface.
 >
 > Licensed under Apache 2.0 — fully open source and free.
@@ -16,7 +16,7 @@ project's design decisions, priorities, and architecture.
 
 | # | Role | Key Recommendation |
 |---|------|--------------------|
-| 1 | Bioinformatics Expert | Prioritize Snakemake wildcard compatibility and file-based dependency resolution |
+| 1 | Bioinformatics Expert | Prioritize wildcard compatibility and file-based dependency resolution |
 | 2 | Tumor Bioinformatics Expert | Venus pipeline must support tumor-only, normal-only, and paired modes with clinical annotations |
 | 3 | Clinical Oncologist | Reports must include variant classification (ACMG/AMP), drug annotations, and trial matching |
 | 4 | Software Engineer | Modular crate architecture with clean trait abstractions enables long-term maintainability |
@@ -33,7 +33,7 @@ project's design decisions, priorities, and architecture.
 | 15 | HPC Systems Admin | SLURM/PBS executor backends with resource declarations (CPU, memory, GPU, wall-time) |
 | 16 | Conda/Package Manager Expert | Conda env creation from YAML specs; pixi and venv for Python-only tools |
 | 17 | Docker/Container Expert | Automatic bind mount detection; image caching; multi-stage builds for smaller images |
-| 18 | Documentation Expert | MkDocs user guide, rustdoc API docs, migration guide from Snakemake |
+| 18 | Documentation Expert | MkDocs user guide, rustdoc API docs, workflow gallery, migration guides |
 | 19 | UX Designer | Clear error messages, progress bars, colored output, and helpful --help text |
 | 20 | Data Scientist | Template-based report generation with Tera; interactive plots via embedded JavaScript |
 

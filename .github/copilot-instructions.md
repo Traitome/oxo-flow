@@ -21,7 +21,7 @@ If `cargo fmt -- --check` reports diff output, fix it first with `cargo fmt` and
 
 ## Project overview
 
-**oxo-flow** is a Rust-based bioinformatics pipeline engine designed to fully replace Snakemake.
+**oxo-flow** is a Rust-based bioinformatics pipeline engine built from first principles for performance, reproducibility, and clinical-grade rigor.
 It provides a core library, CLI, and web interface for building, running, and managing
 reproducible bioinformatics workflows with first-class support for multiple software
 environment managers (conda, pixi, venv, docker, singularity, etc.).
@@ -45,7 +45,7 @@ oxo-flow/                         # Cargo workspace root
 │   │       ├── rule.rs           # Rule/step definitions with inputs, outputs, shell, resources
 │   │       ├── scheduler.rs      # Job scheduling with resource constraints
 │   │       ├── report.rs         # Modular report generation system
-│   │       ├── wildcard.rs       # Wildcard pattern expansion (like Snakemake wildcards)
+│   │       ├── wildcard.rs       # Wildcard pattern expansion ({sample}, {chr}, etc.)
 │   │       ├── error.rs          # Unified error types
 │   │       └── container.rs      # Container build & packaging utilities
 │   ├── oxo-flow-cli/             # CLI binary crate
@@ -90,7 +90,7 @@ Integration tests should test the CLI binary and core library public API.
 
 2. **Environment-agnostic** — Every rule/step can declare its software environment (conda, pixi, docker, singularity, venv). The executor resolves and activates the correct environment before running each task.
 
-3. **Wildcard expansion** — Like Snakemake, oxo-flow supports `{sample}`, `{chr}` style wildcards in file paths. The engine expands wildcards based on input file discovery or explicit configuration.
+3. **Wildcard expansion** — oxo-flow supports `{sample}`, `{chr}` style wildcards in file paths. The engine expands wildcards based on input file discovery or explicit configuration.
 
 4. **Modular reporting** — The report system generates structured HTML/PDF/JSON reports from templates. Clinical pipelines like Venus use this for patient-facing reports.
 
