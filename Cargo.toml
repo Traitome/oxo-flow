@@ -1,6 +1,16 @@
+[package]
+name = "oxo-flow"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
 [workspace]
 members = ["crates/oxo-flow-core", "crates/oxo-flow-cli", "crates/oxo-flow-web", "crates/venus"]
 resolver = "2"
+
+[dependencies]
+oxo-flow-core = { path = "crates/oxo-flow-core" }
+venus = { path = "crates/venus" }
 
 [workspace.package]
 edition = "2021"

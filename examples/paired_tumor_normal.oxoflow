@@ -1,0 +1,175 @@
+# Paired Tumor-Normal Somatic Variant Calling Pipeline
+# Demonstrates tumor-normal paired analysis for clinical use
+
+[workflow]
+name = "paired-tumor-normal"
+version = "1.0.0"
+description = "Paired tumor-normal somatic variant calling for clinical diagnostics"
+author = "oxo-flow examples"
+
+[config]
+reference_fasta = "/data/references/GRCh38/genome.fa"
+known_sites = "/data/references/GRCh38/dbsnp_146.hg38.vcf.gz"
+genome_build = "GRCh38"
+
+[defaults]
+threads = 8
+memory = "16G"
+
+# ── Quality Control ─────────────────────────────────────────────
+[[rules]]
+name = "fastp_tumor"
+input = ["raw/TUMOR_01_R1.fq.gz", "raw/TUMOR_01_R2.fq.gz"]
+output = ["trimmed/TUMOR_01_R1.fq.gz", "trimmed/TUMOR_01_R2.fq.gz", "qc/TUMOR_01_fastp.json"]
+shell = "fastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]} --json {output[2]} --thread {threads}"
+threads = 8
+
+[rules.environment]
+conda = "envs/fastp.yaml"
+
+[[rules]]
+name = "fastp_normal"
+input = ["raw/NORMAL_01_R1.fq.gz", "raw/NORMAL_01_R2.fq.gz"]
+output = ["trimmed/NORMAL_01_R1.fq.gz", "trimmed/NORMAL_01_R2.fq.gz", "qc/NORMAL_01_fastp.json"]
+shell = "fastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]} --json {output[2]} --thread {threads}"
+threads = 8
+
+[rules.environment]
+conda = "envs/fastp.yaml"
+
+# ── Alignment ───────────────────────────────────────────────────
+[[rules]]
+name = "bwa_mem2_tumor"
+input = ["trimmed/TUMOR_01_R1.fq.gz", "trimmed/TUMOR_01_R2.fq.gz"]
+output = ["aligned/TUMOR_01.sorted.bam"]
+shell = "bwa-mem2 mem -t {threads} /data/references/GRCh38/genome.fa {input[0]} {input[1]} | samtools sort -@ {threads} -o {output[0]}"
+threads = 16
+memory = "32G"
+
+[rules.environment]
+conda = "envs/bwa_mem2.yaml"
+
+[[rules]]
+name = "bwa_mem2_normal"
+input = ["trimmed/NORMAL_01_R1.fq.gz", "trimmed/NORMAL_01_R2.fq.gz"]
+output = ["aligned/NORMAL_01.sorted.bam"]
+shell = "bwa-mem2 mem -t {threads} /data/references/GRCh38/genome.fa {input[0]} {input[1]} | samtools sort -@ {threads} -o {output[0]}"
+threads = 16
+memory = "32G"
+
+[rules.environment]
+conda = "envs/bwa_mem2.yaml"
+
+# ── Deduplication ───────────────────────────────────────────────
+[[rules]]
+name = "markdup_tumor"
+input = ["aligned/TUMOR_01.sorted.bam"]
+output = ["dedup/TUMOR_01.dedup.bam", "dedup/TUMOR_01.metrics.txt"]
+shell = "gatk MarkDuplicates -I {input[0]} -O {output[0]} -M {output[1]}"
+threads = 4
+memory = "16G"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+[[rules]]
+name = "markdup_normal"
+input = ["aligned/NORMAL_01.sorted.bam"]
+output = ["dedup/NORMAL_01.dedup.bam", "dedup/NORMAL_01.metrics.txt"]
+shell = "gatk MarkDuplicates -I {input[0]} -O {output[0]} -M {output[1]}"
+threads = 4
+memory = "16G"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+# ── BQSR ────────────────────────────────────────────────────────
+[[rules]]
+name = "bqsr_tumor"
+input = ["dedup/TUMOR_01.dedup.bam"]
+output = ["recal/TUMOR_01.recal.bam"]
+shell = "gatk BaseRecalibrator -I {input[0]} -R /data/references/GRCh38/genome.fa --known-sites /data/references/GRCh38/dbsnp_146.hg38.vcf.gz -O recal/TUMOR_01.recal.table && gatk ApplyBQSR -I {input[0]} -R /data/references/GRCh38/genome.fa --bqsr-recal-file recal/TUMOR_01.recal.table -O {output[0]}"
+threads = 4
+memory = "16G"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+[[rules]]
+name = "bqsr_normal"
+input = ["dedup/NORMAL_01.dedup.bam"]
+output = ["recal/NORMAL_01.recal.bam"]
+shell = "gatk BaseRecalibrator -I {input[0]} -R /data/references/GRCh38/genome.fa --known-sites /data/references/GRCh38/dbsnp_146.hg38.vcf.gz -O recal/NORMAL_01.recal.table && gatk ApplyBQSR -I {input[0]} -R /data/references/GRCh38/genome.fa --bqsr-recal-file recal/NORMAL_01.recal.table -O {output[0]}"
+threads = 4
+memory = "16G"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+# ── Somatic Variant Calling ─────────────────────────────────────
+[[rules]]
+name = "mutect2"
+input = ["recal/TUMOR_01.recal.bam", "recal/NORMAL_01.recal.bam"]
+output = ["variants/TUMOR_01.mutect2.vcf.gz"]
+shell = "gatk Mutect2 -I {input[0]} -I {input[1]} -normal NORMAL_01 -R /data/references/GRCh38/genome.fa -O {output[0]}"
+threads = 4
+memory = "16G"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+# ── Filter Somatic Calls ────────────────────────────────────────
+[[rules]]
+name = "filter_mutect_calls"
+input = ["variants/TUMOR_01.mutect2.vcf.gz"]
+output = ["variants/TUMOR_01.mutect2.filtered.vcf.gz"]
+shell = "gatk FilterMutectCalls -V {input[0]} -R /data/references/GRCh38/genome.fa -O {output[0]}"
+threads = 2
+memory = "8G"
+description = "Filter raw Mutect2 calls for clinical use"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+# ── Germline Calling ────────────────────────────────────────────
+[[rules]]
+name = "haplotype_caller"
+input = ["recal/NORMAL_01.recal.bam"]
+output = ["variants/NORMAL_01.g.vcf.gz"]
+shell = "gatk HaplotypeCaller -I {input[0]} -R /data/references/GRCh38/genome.fa -O {output[0]} -ERC GVCF"
+threads = 4
+memory = "16G"
+description = "Germline variant calling for normal sample"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+# ── Annotation ──────────────────────────────────────────────────
+[[rules]]
+name = "annotate_somatic"
+input = ["variants/TUMOR_01.mutect2.filtered.vcf.gz"]
+output = ["annotated/TUMOR_01.annotated.vcf.gz"]
+shell = "vep --input_file {input[0]} --output_file {output[0]} --format vcf --vcf --offline --cache"
+threads = 4
+memory = "8G"
+
+[rules.environment]
+conda = "envs/vep.yaml"
+
+# ── Clinical Report ─────────────────────────────────────────────
+[[rules]]
+name = "clinical_report"
+input = ["annotated/TUMOR_01.annotated.vcf.gz"]
+output = ["reports/TUMOR_01_clinical_report.html"]
+shell = "python scripts/generate_report.py --input {input[0]} --output {output[0]} --sample TUMOR_01"
+threads = 1
+memory = "4G"
+description = "Generate clinical-grade variant report"
+
+[rules.environment]
+conda = "envs/report.yaml"
+
+[report]
+template = "report/clinical_template.html"
+format = ["html", "json"]
+sections = ["sample_info", "qc", "variants", "clinical", "provenance", "disclaimer"]
