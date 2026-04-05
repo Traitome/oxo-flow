@@ -109,6 +109,16 @@ nav:
       - Your First Workflow: tutorials/first-workflow.md
       - Variant Calling Pipeline: tutorials/variant-calling.md
       - Environment Management: tutorials/environment-management.md
+  - Workflow Gallery:
+      - Overview: gallery/index.md
+      - "01 — Hello World": gallery/hello-world.md
+      - "02 — File Pipeline": gallery/file-pipeline.md
+      - "03 — Parallel Samples": gallery/parallel-samples.md
+      - "04 — Scatter-Gather": gallery/scatter-gather.md
+      - "05 — Environment Management": gallery/environment-mgmt.md
+      - "06 — RNA-seq Quantification": gallery/rnaseq.md
+      - "07 — WGS Germline Calling": gallery/wgs-germline.md
+      - "08 — Multi-Omics Integration": gallery/multiomics.md
   - How-to Guides:
       - Create a Workflow: how-to/create-workflow.md
       - Use Environments: how-to/use-environments.md

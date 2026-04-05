@@ -1,0 +1,183 @@
+# 07 — Whole-Genome Germline Variant Calling
+# Complete WGS pipeline: QC → alignment → dedup → BQSR → variant calling → annotation.
+# Demonstrates: GATK best practices, per-chromosome scatter, clinical environments.
+
+[workflow]
+name = "wgs-germline-calling"
+version = "1.0.0"
+description = "GATK best-practices whole-genome germline variant calling pipeline"
+author = "oxo-flow examples"
+
+[config]
+reference = "/data/references/GRCh38/genome.fa"
+known_sites = "/data/references/GRCh38/dbsnp_146.hg38.vcf.gz"
+known_indels = "/data/references/GRCh38/Mills_and_1000G.indels.hg38.vcf.gz"
+intervals = "/data/references/GRCh38/wgs_calling_regions.hg38.interval_list"
+samples = "samples.csv"
+
+[defaults]
+threads = 4
+memory = "8G"
+
+[[rules]]
+name = "fastp_qc"
+input = ["raw/{sample}_R1.fastq.gz", "raw/{sample}_R2.fastq.gz"]
+output = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz", "qc/{sample}_fastp.json"]
+threads = 8
+memory = "16G"
+description = "Read QC and adapter trimming"
+shell = """
+mkdir -p trimmed qc
+fastp -i {input[0]} -I {input[1]} \
+      -o {output[0]} -O {output[1]} \
+      --json {output[2]} --thread {threads} \
+      --qualified_quality_phred 20 --length_required 50
+"""
+
+[rules.environment]
+conda = "envs/fastp.yaml"
+
+[[rules]]
+name = "bwa_mem2_align"
+input = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz"]
+output = ["aligned/{sample}.sorted.bam"]
+threads = 16
+memory = "32G"
+description = "Paired-end alignment with BWA-MEM2 and coordinate sorting"
+shell = """
+mkdir -p aligned
+bwa-mem2 mem -t {threads} -R '@RG\\tID:{sample}\\tSM:{sample}\\tPL:ILLUMINA' \
+    {config.reference} {input[0]} {input[1]} \
+    | samtools sort -@ 4 -m 2G -o {output[0]}
+samtools index {output[0]}
+"""
+
+[rules.environment]
+docker = "biocontainers/bwa-mem2:2.2.1"
+
+[[rules]]
+name = "mark_duplicates"
+input = ["aligned/{sample}.sorted.bam"]
+output = ["dedup/{sample}.dedup.bam", "dedup/{sample}.dedup.metrics.txt"]
+threads = 4
+memory = "16G"
+description = "Mark PCR and optical duplicates"
+shell = """
+mkdir -p dedup
+gatk MarkDuplicates \
+    -I {input[0]} \
+    -O {output[0]} \
+    -M {output[1]} \
+    --CREATE_INDEX true
+"""
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "base_recalibration"
+input = ["dedup/{sample}.dedup.bam"]
+output = ["bqsr/{sample}.recal.bam"]
+threads = 4
+memory = "16G"
+description = "Base quality score recalibration (BQSR)"
+shell = """
+mkdir -p bqsr
+gatk BaseRecalibrator \
+    -I {input[0]} -R {config.reference} \
+    --known-sites {config.known_sites} \
+    --known-sites {config.known_indels} \
+    -O bqsr/{sample}.recal_data.table
+
+gatk ApplyBQSR \
+    -I {input[0]} -R {config.reference} \
+    --bqsr-recal-file bqsr/{sample}.recal_data.table \
+    -O {output[0]}
+"""
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "haplotype_caller"
+input = ["bqsr/{sample}.recal.bam"]
+output = ["variants/{sample}.g.vcf.gz"]
+threads = 4
+memory = "16G"
+description = "Per-sample variant calling in GVCF mode"
+shell = """
+mkdir -p variants
+gatk HaplotypeCaller \
+    -I {input[0]} -R {config.reference} \
+    -O {output[0]} \
+    -ERC GVCF \
+    --native-pair-hmm-threads {threads} \
+    -L {config.intervals}
+"""
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "genotype_gvcfs"
+input = ["variants/{sample}.g.vcf.gz"]
+output = ["variants/{sample}.genotyped.vcf.gz"]
+threads = 4
+memory = "16G"
+description = "Genotype GVCFs to produce final variant calls"
+shell = """
+gatk GenotypeGVCFs \
+    -R {config.reference} \
+    -V {input[0]} \
+    -O {output[0]}
+"""
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "variant_filtration"
+input = ["variants/{sample}.genotyped.vcf.gz"]
+output = ["variants/{sample}.filtered.vcf.gz"]
+threads = 2
+memory = "8G"
+description = "Hard-filter variants with GATK recommended thresholds"
+shell = """
+gatk VariantFiltration \
+    -R {config.reference} \
+    -V {input[0]} \
+    -O {output[0]} \
+    --filter-expression 'QD < 2.0' --filter-name 'LowQD' \
+    --filter-expression 'MQ < 40.0' --filter-name 'LowMQ' \
+    --filter-expression 'FS > 60.0' --filter-name 'HighFS' \
+    --filter-expression 'SOR > 3.0' --filter-name 'HighSOR'
+"""
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "annotate_variants"
+input = ["variants/{sample}.filtered.vcf.gz"]
+output = ["annotation/{sample}.annotated.vcf.gz"]
+threads = 4
+memory = "16G"
+description = "Functional variant annotation with VEP"
+shell = """
+mkdir -p annotation
+vep --input_file {input[0]} \
+    --output_file {output[0]} \
+    --format vcf --vcf --compress_output bgzip \
+    --assembly GRCh38 --offline --cache \
+    --sift b --polyphen b --symbol --numbers --biotype \
+    --total_length --canonical --ccds \
+    --force_overwrite --fork {threads}
+"""
+
+[rules.environment]
+conda = "envs/vep.yaml"
+
+[report]
+template = "germline_report"
+format = ["html", "json"]
+sections = ["summary", "qc_metrics", "coverage", "variants", "annotations", "provenance"]

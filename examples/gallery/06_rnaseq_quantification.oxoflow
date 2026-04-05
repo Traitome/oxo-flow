@@ -1,0 +1,106 @@
+# 06 — RNA-seq Quantification Pipeline
+# A complete RNA-seq analysis: QC → trimming → alignment → quantification → differential expression.
+# Demonstrates: bioinformatics workflow patterns, multi-environment, wildcards, reporting.
+
+[workflow]
+name = "rnaseq-quantification"
+version = "1.0.0"
+description = "RNA-seq gene expression quantification pipeline"
+author = "oxo-flow examples"
+
+[config]
+reference_genome = "/data/references/GRCh38/genome.fa"
+gene_annotation = "/data/references/GRCh38/genes.gtf"
+star_index = "/data/references/GRCh38/star_index"
+samples = "samples.csv"
+
+[defaults]
+threads = 4
+memory = "8G"
+
+[[rules]]
+name = "fastp_trim"
+input = ["raw/{sample}_R1.fastq.gz", "raw/{sample}_R2.fastq.gz"]
+output = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz", "qc/{sample}_fastp.json"]
+threads = 8
+description = "Adapter trimming and quality filtering with fastp"
+shell = """
+mkdir -p trimmed qc
+fastp -i {input[0]} -I {input[1]} \
+      -o {output[0]} -O {output[1]} \
+      --json {output[2]} \
+      --thread {threads} \
+      --qualified_quality_phred 20 \
+      --length_required 50
+"""
+
+[rules.environment]
+conda = "envs/fastp.yaml"
+
+[[rules]]
+name = "star_align"
+input = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz"]
+output = ["aligned/{sample}/Aligned.sortedByCoord.out.bam", "aligned/{sample}/ReadsPerGene.out.tab"]
+threads = 16
+memory = "32G"
+description = "Splice-aware alignment with STAR"
+shell = """
+mkdir -p aligned/{sample}
+STAR --runThreadN {threads} \
+     --genomeDir {config.star_index} \
+     --readFilesIn {input[0]} {input[1]} \
+     --readFilesCommand zcat \
+     --outSAMtype BAM SortedByCoordinate \
+     --quantMode GeneCounts \
+     --outFileNamePrefix aligned/{sample}/
+"""
+
+[rules.environment]
+conda = "envs/star.yaml"
+
+[[rules]]
+name = "index_bam"
+input = ["aligned/{sample}/Aligned.sortedByCoord.out.bam"]
+output = ["aligned/{sample}/Aligned.sortedByCoord.out.bam.bai"]
+description = "Index aligned BAM file"
+shell = "samtools index {input[0]}"
+
+[rules.environment]
+conda = "envs/samtools.yaml"
+
+[[rules]]
+name = "featurecounts"
+input = ["aligned/{sample}/Aligned.sortedByCoord.out.bam"]
+output = ["counts/{sample}.counts.txt"]
+threads = 4
+description = "Gene-level read counting with featureCounts"
+shell = """
+mkdir -p counts
+featureCounts -T {threads} \
+              -a {config.gene_annotation} \
+              -o {output[0]} \
+              -p --countReadPairs \
+              -s 2 \
+              {input[0]}
+"""
+
+[rules.environment]
+conda = "envs/subread.yaml"
+
+[[rules]]
+name = "multiqc"
+input = ["qc/{sample}_fastp.json", "counts/{sample}.counts.txt"]
+output = ["results/multiqc_report.html"]
+description = "Aggregate QC metrics into a single report"
+shell = """
+mkdir -p results
+multiqc qc/ counts/ -o results/ --force
+"""
+
+[rules.environment]
+conda = "envs/multiqc.yaml"
+
+[report]
+template = "rnaseq_report"
+format = ["html", "json"]
+sections = ["summary", "qc_metrics", "alignment_stats", "gene_counts"]
