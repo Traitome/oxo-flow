@@ -102,8 +102,26 @@ impl EnvironmentSpec {
     }
 }
 
+/// Scatter configuration for fan-out parallel execution.
+///
+/// Distributes a rule across multiple values of a variable, executing
+/// one instance per element. The gather step collects the outputs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ScatterConfig {
+    /// The variable to scatter over (e.g., "sample", "chromosome").
+    pub variable: String,
+
+    /// The values to scatter across.
+    #[serde(default)]
+    pub values: Vec<String>,
+
+    /// Optional gather rule name that collects scattered outputs.
+    #[serde(default)]
+    pub gather: Option<String>,
+}
+
 /// A single rule (step) in a workflow.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Rule {
     /// Unique name for this rule.
     pub name: String,
@@ -167,6 +185,41 @@ pub struct Rule {
     /// Optional description of what this rule does.
     #[serde(default)]
     pub description: Option<String>,
+
+    /// Conditional execution expression.
+    ///
+    /// The rule is only executed when this expression evaluates to true.
+    /// Supports simple config-variable references (e.g., `config.enable_qc`)
+    /// and file-existence checks.
+    #[serde(default)]
+    pub when: Option<String>,
+
+    /// Scatter configuration for parallel execution across a variable.
+    ///
+    /// Fans out this rule into multiple parallel instances, one per element
+    /// of the scatter variable.
+    #[serde(default)]
+    pub scatter: Option<ScatterConfig>,
+
+    /// Temporary output files that should be cleaned up after downstream
+    /// rules complete.
+    #[serde(default)]
+    pub temp_output: Vec<String>,
+
+    /// Protected output files that should never be overwritten or deleted.
+    #[serde(default)]
+    pub protected_output: Vec<String>,
+
+    /// Dynamic input function name for runtime input resolution.
+    ///
+    /// When set, inputs are resolved at execution time by calling this
+    /// function with the current wildcard values.
+    #[serde(default)]
+    pub input_function: Option<String>,
+
+    /// Number of times to automatically retry this rule on failure.
+    #[serde(default)]
+    pub retries: u32,
 }
 
 impl Rule {
@@ -281,6 +334,7 @@ mod tests {
             target: false,
             group: None,
             description: None,
+            ..Default::default()
         };
 
         let names = rule.wildcard_names();
@@ -311,6 +365,7 @@ mod tests {
             target: false,
             group: None,
             description: None,
+            ..Default::default()
         };
 
         assert_eq!(rule.effective_threads(), 8);
@@ -334,6 +389,7 @@ mod tests {
             target: false,
             group: None,
             description: None,
+            ..Default::default()
         }
     }
 

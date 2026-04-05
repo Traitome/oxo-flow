@@ -273,6 +273,7 @@ mod tests {
                 target: false,
                 group: None,
                 description: None,
+                ..Default::default()
             },
             Rule {
                 name: "b".to_string(),
@@ -291,6 +292,7 @@ mod tests {
                 target: false,
                 group: None,
                 description: None,
+                ..Default::default()
             },
         ]
     }
@@ -392,6 +394,7 @@ mod tests {
                 target: false,
                 group: None,
                 description: None,
+                ..Default::default()
             },
             Rule {
                 name: "high".to_string(),
@@ -410,6 +413,7 @@ mod tests {
                 target: false,
                 group: None,
                 description: None,
+                ..Default::default()
             },
             Rule {
                 name: "mid".to_string(),
@@ -428,6 +432,7 @@ mod tests {
                 target: false,
                 group: None,
                 description: None,
+                ..Default::default()
             },
         ];
 

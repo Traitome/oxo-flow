@@ -483,6 +483,7 @@ mod tests {
             target: false,
             group: None,
             description: None,
+            ..Default::default()
         }
     }
 
@@ -790,6 +791,7 @@ mod tests {
             target: false,
             group: None,
             description: None,
+            ..Default::default()
         };
 
         let missing = validate_outputs(&rule, dir.path());
@@ -818,6 +820,7 @@ mod tests {
             target: false,
             group: None,
             description: None,
+            ..Default::default()
         };
 
         let missing = validate_outputs(&rule, dir.path());
