@@ -489,10 +489,12 @@ mod tests {
     #[test]
     fn docker_teardown_is_noop() {
         let backend = DockerBackend;
-        assert!(backend
-            .teardown_command("biocontainers/bwa:0.7.17")
-            .unwrap()
-            .is_none());
+        assert!(
+            backend
+                .teardown_command("biocontainers/bwa:0.7.17")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

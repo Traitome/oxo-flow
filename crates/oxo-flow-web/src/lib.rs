@@ -4,12 +4,12 @@
 //! bioinformatics workflows.
 
 use axum::{
+    Router,
     extract::Json,
     http::StatusCode,
     middleware,
     response::IntoResponse,
     routing::{get, post},
-    Router,
 };
 use serde::{Deserialize, Serialize};
 use tower_http::cors::{Any, CorsLayer};
@@ -1021,12 +1021,16 @@ docker = "biocontainers/bwa:0.7.17"
         let parsed: CleanResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed.workflow_name, "test-pipeline");
         assert_eq!(parsed.total_files, 2);
-        assert!(parsed
-            .files_to_clean
-            .contains(&"trimmed/{sample}.fastq".to_string()));
-        assert!(parsed
-            .files_to_clean
-            .contains(&"aligned/{sample}.bam".to_string()));
+        assert!(
+            parsed
+                .files_to_clean
+                .contains(&"trimmed/{sample}.fastq".to_string())
+        );
+        assert!(
+            parsed
+                .files_to_clean
+                .contains(&"aligned/{sample}.bam".to_string())
+        );
     }
 
     // -- Additional error-path & edge-case tests --------------------------------

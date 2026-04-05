@@ -886,9 +886,11 @@ mod tests {
             assert_eq!(pairs[0], ("Sample ID".to_string(), "S001".to_string()));
             assert_eq!(pairs[1], ("Sample Type".to_string(), "Tumor".to_string()));
             assert!(pairs.iter().any(|(k, v)| k == "Patient ID" && v == "P001"));
-            assert!(pairs
-                .iter()
-                .any(|(k, v)| k == "Platform" && v == "Illumina NovaSeq 6000"));
+            assert!(
+                pairs
+                    .iter()
+                    .any(|(k, v)| k == "Platform" && v == "Illumina NovaSeq 6000")
+            );
             assert!(pairs.len() >= 6);
         } else {
             panic!("Expected KeyValue content");

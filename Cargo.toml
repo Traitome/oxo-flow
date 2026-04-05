@@ -13,7 +13,7 @@ oxo-flow-core = { path = "crates/oxo-flow-core" }
 venus = { path = "crates/venus" }
 
 [workspace.package]
-edition = "2021"
+edition = "2024"
 authors = ["Traitome <https://github.com/Traitome>"]
 license = "Apache-2.0"
 repository = "https://github.com/Traitome/oxo-flow"

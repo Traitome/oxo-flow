@@ -43,6 +43,7 @@ pub mod dag;
 pub mod environment;
 pub mod error;
 pub mod executor;
+pub mod format;
 pub mod report;
 pub mod rule;
 pub mod scheduler;

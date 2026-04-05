@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use oxo-flow in your research, please cite it as below."
+title: "oxo-flow: A Rust-native bioinformatics pipeline engine"
+type: software
+authors:
+  - family-names: Wang
+    given-names: Shixiang
+    orcid: "https://orcid.org/0000-0001-9855-7357"
+    affiliation: "Traitome"
+version: 0.1.0
+date-released: "2026-04-05"
+license: Apache-2.0
+url: "https://github.com/Traitome/oxo-flow"
+repository-code: "https://github.com/Traitome/oxo-flow"
+keywords:
+  - bioinformatics
+  - pipeline
+  - workflow
+  - dag
+  - rust
+  - genomics
+  - clinical
+abstract: >-
+  oxo-flow is a Rust-native bioinformatics pipeline engine designed to fully
+  replace Snakemake. It provides DAG-based workflow execution, multi-environment
+  support (conda, pixi, docker, singularity, venv), resource-aware scheduling,
+  clinical-grade reporting, and a REST API web interface. The Venus pipeline
+  demonstrates clinical tumor variant detection built on the engine.

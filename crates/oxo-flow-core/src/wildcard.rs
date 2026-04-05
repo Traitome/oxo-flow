@@ -117,6 +117,19 @@ pub fn cartesian_product(wildcard_lists: &HashMap<String, Vec<String>>) -> Wildc
     combinations
 }
 
+/// Extract wildcard names from multiple patterns.
+pub fn extract_wildcards_from_patterns(patterns: &[String]) -> Vec<String> {
+    let mut names = Vec::new();
+    for pattern in patterns {
+        for name in extract_wildcards(pattern) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
