@@ -448,4 +448,104 @@ mod tests {
         assert_eq!(rule.effective_threads(), 4);
         assert_eq!(rule.environment.kind(), "conda");
     }
+
+    #[test]
+    fn rule_when_conditional() {
+        let toml_str = r#"
+            name = "optional_step"
+            output = ["opt.txt"]
+            shell = "echo opt"
+            when = "config.enable_qc"
+        "#;
+
+        let rule: Rule = toml::from_str(toml_str).unwrap();
+        assert_eq!(rule.when.as_deref(), Some("config.enable_qc"));
+    }
+
+    #[test]
+    fn rule_scatter_config() {
+        let toml_str = r#"
+            name = "per_sample"
+            input = ["{sample}.bam"]
+            output = ["{sample}.vcf"]
+            shell = "call {input} > {output}"
+
+            [scatter]
+            variable = "sample"
+            values = ["S1", "S2", "S3"]
+            gather = "merge_vcf"
+        "#;
+
+        let rule: Rule = toml::from_str(toml_str).unwrap();
+        let scatter = rule.scatter.as_ref().unwrap();
+        assert_eq!(scatter.variable, "sample");
+        assert_eq!(scatter.values, vec!["S1", "S2", "S3"]);
+        assert_eq!(scatter.gather.as_deref(), Some("merge_vcf"));
+    }
+
+    #[test]
+    fn rule_temp_and_protected_outputs() {
+        let toml_str = r#"
+            name = "align"
+            input = ["reads.fq"]
+            output = ["sorted.bam"]
+            shell = "bwa mem ref reads.fq | samtools sort -o sorted.bam"
+            temp_output = ["unsorted.bam"]
+            protected_output = ["sorted.bam"]
+        "#;
+
+        let rule: Rule = toml::from_str(toml_str).unwrap();
+        assert_eq!(rule.temp_output, vec!["unsorted.bam"]);
+        assert_eq!(rule.protected_output, vec!["sorted.bam"]);
+    }
+
+    #[test]
+    fn rule_input_function() {
+        let toml_str = r#"
+            name = "dynamic"
+            output = ["result.txt"]
+            shell = "process {input} > {output}"
+            input_function = "get_inputs"
+        "#;
+
+        let rule: Rule = toml::from_str(toml_str).unwrap();
+        assert_eq!(rule.input_function.as_deref(), Some("get_inputs"));
+    }
+
+    #[test]
+    fn rule_retries() {
+        let toml_str = r#"
+            name = "flaky"
+            output = ["out.txt"]
+            shell = "maybe_fail > out.txt"
+            retries = 3
+        "#;
+
+        let rule: Rule = toml::from_str(toml_str).unwrap();
+        assert_eq!(rule.retries, 3);
+    }
+
+    #[test]
+    fn scatter_config_deserialization() {
+        let toml_str = r#"
+            variable = "chr"
+            values = ["chr1", "chr2", "chr3"]
+        "#;
+
+        let scatter: ScatterConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(scatter.variable, "chr");
+        assert_eq!(scatter.values.len(), 3);
+        assert!(scatter.gather.is_none());
+    }
+
+    #[test]
+    fn rule_default_new_fields() {
+        let rule = Rule::default();
+        assert!(rule.when.is_none());
+        assert!(rule.scatter.is_none());
+        assert!(rule.temp_output.is_empty());
+        assert!(rule.protected_output.is_empty());
+        assert!(rule.input_function.is_none());
+        assert_eq!(rule.retries, 0);
+    }
 }

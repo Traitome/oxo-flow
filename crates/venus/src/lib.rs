@@ -754,6 +754,8 @@ pub fn generate_oxoflow(config: &VenusConfig) -> anyhow::Result<String> {
         },
         report: None,
         rules,
+        includes: Vec::new(),
+        execution_groups: Vec::new(),
     };
 
     let toml_str = toml::to_string_pretty(&wf)?;
