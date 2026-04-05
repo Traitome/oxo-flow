@@ -8,6 +8,10 @@ repository.workspace = true
 homepage.workspace = true
 description = "Venus: clinical-grade tumor variant detection pipeline built on oxo-flow"
 
+[[bin]]
+name = "venus"
+path = "src/main.rs"
+
 [dependencies]
 oxo-flow-core = { path = "../oxo-flow-core" }
 serde = { workspace = true }
