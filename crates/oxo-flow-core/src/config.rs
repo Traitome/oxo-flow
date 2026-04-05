@@ -150,6 +150,28 @@ impl WorkflowConfig {
     pub fn rule_names(&self) -> Vec<&str> {
         self.rules.iter().map(|r| r.name.as_str()).collect()
     }
+
+    /// Apply global defaults to all rules that don't have explicit overrides.
+    pub fn apply_defaults(&mut self) {
+        for rule in &mut self.rules {
+            // Apply default threads if rule doesn't specify one
+            if rule.threads.is_none() {
+                rule.threads = self.defaults.threads;
+            }
+            // Apply default memory if rule doesn't specify one
+            if rule.memory.is_none() {
+                if let Some(ref mem) = self.defaults.memory {
+                    rule.memory = Some(mem.clone());
+                }
+            }
+            // Apply default environment if rule doesn't specify one
+            if rule.environment.is_empty() {
+                if let Some(ref env) = self.defaults.environment {
+                    rule.environment = env.clone();
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -260,5 +282,48 @@ mod tests {
         let config = WorkflowConfig::parse(FULL_WORKFLOW).unwrap();
         assert!(config.get_rule("fastqc").is_some());
         assert!(config.get_rule("nonexistent").is_none());
+    }
+
+    #[test]
+    fn apply_defaults_propagates() {
+        let toml_str = r#"
+            [workflow]
+            name = "test"
+
+            [defaults]
+            threads = 8
+            memory = "16G"
+
+            [defaults.environment]
+            conda = "envs/default.yaml"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hello"
+
+            [[rules]]
+            name = "step2"
+            threads = 2
+            memory = "4G"
+            shell = "echo world"
+
+            [rules.environment]
+            docker = "ubuntu:latest"
+        "#;
+
+        let mut config = WorkflowConfig::parse(toml_str).unwrap();
+        config.apply_defaults();
+
+        // step1 should get defaults
+        let step1 = config.get_rule("step1").unwrap();
+        assert_eq!(step1.threads, Some(8));
+        assert_eq!(step1.memory.as_deref(), Some("16G"));
+        assert_eq!(step1.environment.kind(), "conda");
+
+        // step2 already has overrides, should keep them
+        let step2 = config.get_rule("step2").unwrap();
+        assert_eq!(step2.threads, Some(2));
+        assert_eq!(step2.memory.as_deref(), Some("4G"));
+        assert_eq!(step2.environment.kind(), "docker");
     }
 }

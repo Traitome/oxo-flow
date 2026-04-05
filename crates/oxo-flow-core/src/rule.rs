@@ -181,6 +181,40 @@ impl Rule {
         self.memory.as_deref().or(self.resources.memory.as_deref())
     }
 
+    /// Validate the rule for internal consistency.
+    ///
+    /// Checks that:
+    /// - The rule name is not empty and contains only valid characters
+    /// - At least shell or script is provided if outputs exist
+    /// - Thread count is positive (if specified)
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.name.is_empty() {
+            return Err("rule name cannot be empty".to_string());
+        }
+        if !self
+            .name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+        {
+            return Err(format!(
+                "rule name '{}' contains invalid characters (allowed: alphanumeric, _, -)",
+                self.name
+            ));
+        }
+        if !self.output.is_empty() && self.shell.is_none() && self.script.is_none() {
+            return Err(format!(
+                "rule '{}' has outputs but no shell command or script",
+                self.name
+            ));
+        }
+        if let Some(threads) = self.threads {
+            if threads == 0 {
+                return Err(format!("rule '{}' has zero threads", self.name));
+            }
+        }
+        Ok(())
+    }
+
     /// Extracts wildcard names from input/output patterns.
     ///
     /// For example, `"{sample}_R{read}.fastq.gz"` yields `["sample", "read"]`.
@@ -280,6 +314,64 @@ mod tests {
         };
 
         assert_eq!(rule.effective_threads(), 8);
+    }
+
+    fn make_rule(name: &str) -> Rule {
+        Rule {
+            name: name.to_string(),
+            input: vec![],
+            output: vec![],
+            shell: Some("echo hello".to_string()),
+            script: None,
+            threads: None,
+            memory: None,
+            resources: Resources::default(),
+            environment: EnvironmentSpec::default(),
+            log: None,
+            benchmark: None,
+            params: HashMap::new(),
+            priority: 0,
+            target: false,
+            group: None,
+            description: None,
+        }
+    }
+
+    #[test]
+    fn validate_valid_rule() {
+        let rule = make_rule("good-rule_1");
+        assert!(rule.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_empty_name() {
+        let rule = make_rule("");
+        assert_eq!(rule.validate().unwrap_err(), "rule name cannot be empty");
+    }
+
+    #[test]
+    fn validate_invalid_name_chars() {
+        let rule = make_rule("bad name");
+        let err = rule.validate().unwrap_err();
+        assert!(err.contains("invalid characters"));
+    }
+
+    #[test]
+    fn validate_zero_threads() {
+        let mut rule = make_rule("test");
+        rule.threads = Some(0);
+        let err = rule.validate().unwrap_err();
+        assert!(err.contains("zero threads"));
+    }
+
+    #[test]
+    fn validate_outputs_without_command() {
+        let mut rule = make_rule("test");
+        rule.output = vec!["out.txt".to_string()];
+        rule.shell = None;
+        rule.script = None;
+        let err = rule.validate().unwrap_err();
+        assert!(err.contains("no shell command or script"));
     }
 
     #[test]

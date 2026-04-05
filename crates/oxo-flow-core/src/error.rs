@@ -66,6 +66,14 @@ pub enum OxoFlowError {
     /// Template rendering error.
     #[error("template error: {0}")]
     Template(#[from] tera::Error),
+
+    /// Scheduler-related error.
+    #[error("scheduler error: {message}")]
+    Scheduler { message: String },
+
+    /// Container packaging error.
+    #[error("container error: {message}")]
+    Container { message: String },
 }
 
 /// Convenience alias for `Result<T, OxoFlowError>`.
@@ -98,5 +106,21 @@ mod tests {
             code: 1,
         };
         assert!(err.to_string().contains("exit code 1"));
+    }
+
+    #[test]
+    fn error_display_scheduler() {
+        let err = OxoFlowError::Scheduler {
+            message: "no available slots".to_string(),
+        };
+        assert_eq!(err.to_string(), "scheduler error: no available slots");
+    }
+
+    #[test]
+    fn error_display_container() {
+        let err = OxoFlowError::Container {
+            message: "build failed".to_string(),
+        };
+        assert_eq!(err.to_string(), "container error: build failed");
     }
 }
