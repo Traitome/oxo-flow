@@ -8,23 +8,124 @@ on:
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to build and publish (e.g. v0.1.0). Leave empty for a plain CI run.'
+        required: false
+        default: ''
 
 env:
   CARGO_TERM_COLOR: always
+  RELEASE_TAG: ${{ (github.event_name == 'workflow_dispatch' && inputs.tag != '') && inputs.tag || github.ref_name }}
 
 jobs:
-  test:
-    name: Test
+  # ─── Sync Cargo.toml / Cargo.lock version with git tag ─────────────────────
+  sync-version:
+    name: Sync version from tag
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.extract.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version from tag
+        id: extract
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Tag version: $VERSION"
+
+      - name: Check and patch Cargo.toml files
+        id: patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.extract.outputs.version }}"
+          CHANGED=false
+
+          update_version() {
+            local file="$1"
+            local current
+            current=$(grep -m1 '^version = ' "$file" | sed 's/version = "\(.*\)"/\1/')
+            if [ "$VERSION" != "$current" ]; then
+              echo "Updating $file: $current → $VERSION"
+              local current_esc
+              current_esc=$(printf '%s' "$current" | sed 's/[.]/\\./g')
+              sed -i "0,/^version = \"$current_esc\"/{s/^version = \"$current_esc\"/version = \"$VERSION\"/}" "$file"
+              CHANGED=true
+            fi
+          }
+
+          update_version Cargo.toml
+          update_version crates/oxo-flow-core/Cargo.toml
+          update_version crates/oxo-flow-cli/Cargo.toml
+          update_version crates/oxo-flow-web/Cargo.toml
+          update_version crates/venus/Cargo.toml
+
+          if [ -f CITATION.cff ]; then
+            TODAY=$(date -u +%Y-%m-%d)
+            sed -i "s/^version: .*/version: $VERSION/" CITATION.cff
+            sed -i "s/^date-released: .*/date-released: \"$TODAY\"/" CITATION.cff
+            CHANGED=true
+          fi
+
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust (stable)
+        if: steps.patch.outputs.changed == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Update Cargo.lock
+        if: steps.patch.outputs.changed == 'true'
+        run: cargo update --workspace
+
+      - name: Commit and push version bump
+        if: steps.patch.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock crates/*/Cargo.toml
+          [ -f CITATION.cff ] && git add CITATION.cff
+          git commit -m "chore: bump version to ${{ steps.extract.outputs.version }} [skip ci]"
+          git push origin "HEAD:${{ github.event.repository.default_branch }}"
+          NEW_SHA=$(git rev-parse HEAD)
+          echo "New commit: $NEW_SHA"
+          if git cat-file -t "$GITHUB_REF_NAME" 2>/dev/null | grep -q '^tag$'; then
+            TAG_MSG=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")
+            git tag -d "$GITHUB_REF_NAME"
+            git tag -a "$GITHUB_REF_NAME" "$NEW_SHA" -m "$TAG_MSG"
+          else
+            git tag -f "$GITHUB_REF_NAME" "$NEW_SHA"
+          fi
+          git push origin "$GITHUB_REF_NAME" --force
+          echo "Tag $GITHUB_REF_NAME moved to $NEW_SHA"
+
+  # ─── Quality gate: fmt + clippy + tests ────────────────────────────────────
+  test:
+    name: Test (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    needs: [sync-version]
+    if: always() && (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
-      - name: Cache cargo registry & build
+      - name: Cache cargo
         uses: actions/cache@v4
         with:
           path: |
@@ -32,7 +133,6 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
 
       - name: Check formatting
         run: cargo fmt -- --check
@@ -41,38 +141,405 @@ jobs:
         run: cargo clippy --workspace -- -D warnings
 
       - name: Build
-        run: cargo build --workspace
+        run: cargo build --workspace --verbose
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --verbose
 
-  build:
-    name: Build (${{ matrix.target }})
-    needs: test
-    if: startsWith(github.ref, 'refs/tags/v')
+      - name: Security audit
+        run: |
+          cargo install cargo-audit --quiet
+          cargo audit
+        continue-on-error: true
+
+  # ─── Build Linux binaries ──────────────────────────────────────────────────
+  build-linux:
+    name: Build Linux (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: always() && needs.test.result == 'success'
     strategy:
+      fail-fast: false
       matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-          - target: x86_64-apple-darwin
-            os: macos-latest
-          - target: aarch64-apple-darwin
-            os: macos-latest
-    runs-on: ${{ matrix.os }}
+        target:
+          - x86_64-unknown-linux-gnu
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-gnu
+          - aarch64-unknown-linux-musl
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ (github.event_name == 'workflow_dispatch' && inputs.tag != '') && format('refs/tags/{0}', inputs.tag) || github.ref }}
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }} -p oxo-flow-cli
+      - name: Install cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release binaries (cross)
+        run: |
+          cross build --release --target ${{ matrix.target }} -p oxo-flow-cli
+          cross build --release --target ${{ matrix.target }} -p oxo-flow-web
+          cross build --release --target ${{ matrix.target }} -p venus
+
+      - name: Package binaries
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+        shell: bash
+        run: |
+          set -euxo pipefail
+          TARGET_DIR="target/${{ matrix.target }}/release"
+          mkdir -p dist
+          tar -C "${TARGET_DIR}" -czvf \
+            "dist/oxo-flow-${RELEASE_TAG}-${{ matrix.target }}.tar.gz" \
+            "oxo-flow"
+          tar -C "${TARGET_DIR}" -czvf \
+            "dist/oxo-flow-web-${RELEASE_TAG}-${{ matrix.target }}.tar.gz" \
+            "oxo-flow-web"
+          tar -C "${TARGET_DIR}" -czvf \
+            "dist/venus-${RELEASE_TAG}-${{ matrix.target }}.tar.gz" \
+            "venus"
 
       - name: Upload artifact
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
         uses: actions/upload-artifact@v4
         with:
-          name: oxo-flow-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/oxo-flow
+          name: binaries-${{ matrix.target }}
+          path: dist/*.tar.gz
+
+  # ─── Build macOS binaries ──────────────────────────────────────────────────
+  build-macos:
+    name: Build macOS (${{ matrix.target }})
+    permissions:
+      contents: read
+    runs-on: ${{ matrix.runner }}
+    needs: [test]
+    if: always() && needs.test.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+          - target: aarch64-apple-darwin
+            runner: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ (github.event_name == 'workflow_dispatch' && inputs.tag != '') && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release binaries
+        run: |
+          cargo build --release --target ${{ matrix.target }} -p oxo-flow-cli
+          cargo build --release --target ${{ matrix.target }} -p oxo-flow-web
+          cargo build --release --target ${{ matrix.target }} -p venus
+
+      - name: Package binaries
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+        shell: bash
+        run: |
+          set -euxo pipefail
+          TARGET_DIR="target/${{ matrix.target }}/release"
+          mkdir -p dist
+          tar -C "${TARGET_DIR}" -czvf \
+            "dist/oxo-flow-${RELEASE_TAG}-${{ matrix.target }}.tar.gz" \
+            "oxo-flow"
+          tar -C "${TARGET_DIR}" -czvf \
+            "dist/oxo-flow-web-${RELEASE_TAG}-${{ matrix.target }}.tar.gz" \
+            "oxo-flow-web"
+          tar -C "${TARGET_DIR}" -czvf \
+            "dist/venus-${RELEASE_TAG}-${{ matrix.target }}.tar.gz" \
+            "venus"
+
+      - name: Upload artifact
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.target }}
+          path: dist/*.tar.gz
+
+  # ─── Build Windows binaries ────────────────────────────────────────────────
+  build-windows:
+    name: Build Windows (${{ matrix.target }})
+    permissions:
+      contents: read
+    runs-on: windows-latest
+    needs: [test]
+    if: always() && needs.test.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ (github.event_name == 'workflow_dispatch' && inputs.tag != '') && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\.cargo\registry
+            ~\.cargo\git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release binaries
+        run: |
+          cargo build --release --target ${{ matrix.target }} -p oxo-flow-cli
+          cargo build --release --target ${{ matrix.target }} -p oxo-flow-web
+          cargo build --release --target ${{ matrix.target }} -p venus
+
+      - name: Package binaries
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+        shell: pwsh
+        run: |
+          $TARGET_DIR = "target/${{ matrix.target }}/release"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path "${TARGET_DIR}/oxo-flow.exe" `
+            -DestinationPath "dist/oxo-flow-${env:RELEASE_TAG}-${{ matrix.target }}.zip"
+          Compress-Archive -Path "${TARGET_DIR}/oxo-flow-web.exe" `
+            -DestinationPath "dist/oxo-flow-web-${env:RELEASE_TAG}-${{ matrix.target }}.zip"
+          Compress-Archive -Path "${TARGET_DIR}/venus.exe" `
+            -DestinationPath "dist/venus-${env:RELEASE_TAG}-${{ matrix.target }}.zip"
+
+      - name: Upload artifact
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.target }}
+          path: dist/*.zip
+
+  # ─── GitHub Release ────────────────────────────────────────────────────────
+  release:
+    permissions:
+      contents: write
+    name: GitHub Release
+    needs: [sync-version, build-linux, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    if: >-
+      always() &&
+      (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')) &&
+      (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped') &&
+      needs.build-linux.result == 'success' &&
+      needs.build-macos.result == 'success' &&
+      needs.build-windows.result == 'success'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ (github.event_name == 'workflow_dispatch' && inputs.tag != '') && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      - name: Install git-cliff
+        shell: bash
+        run: |
+          set -euo pipefail
+          CLIFF_VERSION="2.12.0"
+          ARCH="x86_64-unknown-linux-gnu"
+          URL="https://github.com/orhun/git-cliff/releases/download/v${CLIFF_VERSION}/git-cliff-${CLIFF_VERSION}-${ARCH}.tar.gz"
+          curl -sSfL "$URL" -o /tmp/git-cliff.tar.gz
+          tar -xzf /tmp/git-cliff.tar.gz -C /tmp
+          install -m 755 "/tmp/git-cliff-${CLIFF_VERSION}/git-cliff" /usr/local/bin/git-cliff
+          git-cliff --version
+
+      - name: Generate changelog for this release
+        shell: bash
+        run: git-cliff --config cliff.toml --current --strip header --output RELEASE_NOTES.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate SHA256 checksums
+        shell: bash
+        run: |
+          mkdir -p artifacts/checksums
+          cd artifacts
+          find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) -print0 \
+            | while IFS= read -r -d '' f; do
+                sha256sum "$f" | awk -v name="$(basename "$f")" '{print $1 "  " name}'
+              done \
+            | sort -k2 > checksums/SHA256SUMS.txt
+          echo "=== SHA256SUMS ==="
+          cat checksums/SHA256SUMS.txt
+
+      - name: Generate full CHANGELOG.md
+        shell: bash
+        run: git-cliff --config cliff.toml --output CHANGELOG.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          body_path: RELEASE_NOTES.md
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
+            artifacts/checksums/SHA256SUMS.txt
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update CHANGELOG.md in repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
+          cp CHANGELOG.md /tmp/CHANGELOG.md
+          git fetch origin "$DEFAULT_BRANCH"
+          git checkout -B "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH"
+          cp /tmp/CHANGELOG.md CHANGELOG.md
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet CHANGELOG.md; then
+            git add CHANGELOG.md
+            git commit -m "docs: update CHANGELOG.md for ${RELEASE_TAG} [skip ci]"
+            git push origin "$DEFAULT_BRANCH"
+          else
+            echo "CHANGELOG.md is already up-to-date"
+          fi
+
+  # ─── Publish crates to crates.io (dependency order) ────────────────────────
+  publish-crates:
+    name: Publish to crates.io
+    needs: [sync-version, test]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Confirm version matches tag
+        shell: bash
+        run: |
+          set -euxo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "Tag version: $TAG"
+          for crate in oxo-flow-core oxo-flow-web oxo-flow-cli venus; do
+            VER=$(cargo metadata --no-deps --format-version=1 \
+              | python3 -c "import sys,json; pkgs=json.load(sys.stdin)['packages']; print(next(p['version'] for p in pkgs if p['name']=='$crate'))")
+            echo "$crate version: $VER"
+            if [ "$TAG" != "$VER" ]; then
+              echo "::error::Version mismatch: tag=$TAG $crate=$VER"
+              exit 1
+            fi
+          done
+
+      - name: Update lock file
+        run: cargo update --workspace
+
+      - name: Publish oxo-flow-core (lib, published first as dependency)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p oxo-flow-core --locked
+
+      - name: Wait for crates.io index update
+        run: sleep 30
+
+      - name: Publish oxo-flow-web
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p oxo-flow-web --locked
+        continue-on-error: true
+
+      - name: Publish venus
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p venus --locked
+        continue-on-error: true
+
+      - name: Wait for crates.io index update
+        run: sleep 30
+
+      - name: Publish oxo-flow-cli
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p oxo-flow-cli --locked
+        continue-on-error: true
+
+  # ─── Deploy GitHub Pages (landing page + MkDocs documentation) ─────────────
+  deploy-pages:
+    name: Deploy GitHub Pages
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: >-
+      always() &&
+      needs.test.result == 'success' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MkDocs Material
+        run: pip install mkdocs-material
+
+      - name: Build documentation
+        run: |
+          cd docs/guide
+          mkdocs build
+
+      - name: Prepare Pages artifact
+        run: |
+          cp -r docs/guide/site docs/documentation
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: docs
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
