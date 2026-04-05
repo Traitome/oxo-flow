@@ -149,7 +149,7 @@ sections = ["summary", "variants", "coverage", "qc_metrics"]
 
 ---
 
-## Phase 1: Foundation (v0.1.0)
+## Phase 1: Foundation
 
 **Goal**: Core library with DAG engine, basic execution, and CLI skeleton.
 
@@ -188,7 +188,7 @@ sections = ["summary", "variants", "coverage", "qc_metrics"]
 
 ---
 
-## Phase 2: Environment Management (v0.2.0)
+## Phase 2: Environment Management
 
 **Goal**: Full support for conda, pixi, docker, singularity, venv environments.
 
@@ -216,7 +216,7 @@ sections = ["summary", "variants", "coverage", "qc_metrics"]
 
 ---
 
-## Phase 3: Advanced Execution (v0.3.0)
+## Phase 3: Advanced Execution
 
 **Goal**: Resource-aware scheduling, cluster execution, and checkpointing.
 
@@ -240,7 +240,7 @@ sections = ["summary", "variants", "coverage", "qc_metrics"]
 
 ---
 
-## Phase 4: Reporting System (v0.4.0)
+## Phase 4: Reporting System
 
 **Goal**: Modular, clinical-grade report generation.
 
@@ -263,7 +263,7 @@ sections = ["summary", "variants", "coverage", "qc_metrics"]
 
 ---
 
-## Phase 5: Web Interface (v0.5.0)
+## Phase 5: Web Interface
 
 **Goal**: Full-featured web UI for building, running, and monitoring pipelines.
 
@@ -287,7 +287,7 @@ sections = ["summary", "variants", "coverage", "qc_metrics"]
 
 ---
 
-## Phase 6: Container Packaging (v0.6.0)
+## Phase 6: Container Packaging
 
 **Goal**: Package entire workflows into portable containers.
 
@@ -305,7 +305,7 @@ sections = ["summary", "variants", "coverage", "qc_metrics"]
 
 ---
 
-## Phase 7: Venus Pipeline (v0.7.0)
+## Phase 7: Venus Pipeline
 
 **Goal**: Clinical-grade tumor variant detection pipeline built on oxo-flow.
 
@@ -344,7 +344,7 @@ sections = ["summary", "variants", "coverage", "qc_metrics"]
 
 ---
 
-## Phase 8: Production Hardening (v1.0.0)
+## Phase 8: Production Hardening
 
 **Goal**: Production-ready release with comprehensive documentation and testing.
 
