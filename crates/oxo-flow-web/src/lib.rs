@@ -6,11 +6,13 @@
 use axum::{
     extract::Json,
     http::StatusCode,
+    middleware,
     response::IntoResponse,
     routing::{get, post},
     Router,
 };
 use serde::{Deserialize, Serialize};
+use tower_http::cors::{Any, CorsLayer};
 
 // ---------------------------------------------------------------------------
 // Data types
@@ -125,6 +127,45 @@ pub struct ReportRequest {
 pub struct ErrorResponse {
     pub error: String,
     pub detail: Option<String>,
+}
+
+/// Response from the run endpoint.
+#[derive(Serialize, Deserialize)]
+pub struct RunResponse {
+    pub run_id: String,
+    pub status: String,
+    pub execution_order: Vec<String>,
+    pub rules_total: usize,
+}
+
+/// Response from the version endpoint.
+#[derive(Serialize, Deserialize)]
+pub struct VersionResponse {
+    pub version: String,
+    pub crate_name: String,
+    pub rust_version: String,
+}
+
+/// Response from the clean endpoint.
+#[derive(Serialize, Deserialize)]
+pub struct CleanResponse {
+    pub workflow_name: String,
+    pub files_to_clean: Vec<String>,
+    pub total_files: usize,
+}
+
+/// Request body for the export endpoint.
+#[derive(Serialize, Deserialize)]
+pub struct ExportRequest {
+    pub toml_content: String,
+    pub format: Option<String>, // "docker" or "singularity", default "docker"
+}
+
+/// Response from the export endpoint.
+#[derive(Serialize, Deserialize)]
+pub struct ExportResponse {
+    pub format: String,
+    pub content: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -442,22 +483,129 @@ async fn generate_report(Json(req): Json<ReportRequest>) -> Result<impl IntoResp
     }
 }
 
+/// `POST /api/workflows/run` — Validate and return an execution plan as if starting a run.
+async fn run_workflow(Json(req): Json<DryRunRequest>) -> Result<impl IntoResponse, ApiError> {
+    let config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
+        .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
+
+    let dag = oxo_flow_core::WorkflowDag::from_rules(&config.rules)
+        .map_err(|e| ApiError::unprocessable("DAG construction failed", Some(e.to_string())))?;
+
+    let order = dag.execution_order().map_err(|e| {
+        ApiError::unprocessable("Cannot determine execution order", Some(e.to_string()))
+    })?;
+
+    Ok(Json(RunResponse {
+        run_id: uuid::Uuid::new_v4().to_string(),
+        status: "started".to_string(),
+        execution_order: order.clone(),
+        rules_total: order.len(),
+    }))
+}
+
+/// `GET /api/version` — Return crate version and build info.
+async fn version() -> Json<VersionResponse> {
+    Json(VersionResponse {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        crate_name: env!("CARGO_PKG_NAME").to_string(),
+        rust_version: option_env!("CARGO_PKG_RUST_VERSION")
+            .unwrap_or("unknown")
+            .to_string(),
+    })
+}
+
+/// `POST /api/workflows/clean` — List output files that would be cleaned.
+async fn clean_workflow(Json(req): Json<ValidateRequest>) -> Result<Json<CleanResponse>, ApiError> {
+    let config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
+        .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
+
+    let files_to_clean: Vec<String> = config.rules.iter().flat_map(|r| r.output.clone()).collect();
+
+    Ok(Json(CleanResponse {
+        workflow_name: config.workflow.name.clone(),
+        total_files: files_to_clean.len(),
+        files_to_clean,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Request ID middleware
+// ---------------------------------------------------------------------------
+
+/// Middleware that attaches a unique `x-request-id` header to every response.
+async fn add_request_id(
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        axum::http::HeaderName::from_static("x-request-id"),
+        axum::http::HeaderValue::from_str(&request_id).unwrap(),
+    );
+    response
+}
+
+// ---------------------------------------------------------------------------
+// Export endpoint
+// ---------------------------------------------------------------------------
+
+/// `POST /api/workflows/export` — Generate a Dockerfile or Singularity def.
+async fn export_workflow(Json(req): Json<ExportRequest>) -> Result<Json<ExportResponse>, ApiError> {
+    let config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
+        .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
+
+    let format = req.format.unwrap_or_else(|| "docker".to_string());
+    let pkg_config = oxo_flow_core::container::PackageConfig::default();
+
+    let content = match format.as_str() {
+        "singularity" => oxo_flow_core::container::generate_singularity_def(&config, &pkg_config)
+            .map_err(|e| {
+            ApiError::unprocessable("Singularity def generation failed", Some(e.to_string()))
+        })?,
+        _ => oxo_flow_core::container::generate_dockerfile(&config, &pkg_config).map_err(|e| {
+            ApiError::unprocessable("Dockerfile generation failed", Some(e.to_string()))
+        })?,
+    };
+
+    let actual_format = match format.as_str() {
+        "singularity" => "singularity".to_string(),
+        _ => "docker".to_string(),
+    };
+
+    Ok(Json(ExportResponse {
+        format: actual_format,
+        content,
+    }))
+}
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
 /// Build the web application router.
 pub fn build_router() -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
     Router::new()
         .route("/api/health", get(health))
+        .route("/api/version", get(version))
         .route("/api/workflows", get(list_workflows))
         .route("/api/workflows/validate", post(validate_workflow))
         .route("/api/workflows/parse", post(parse_workflow))
         .route("/api/workflows/dag", post(build_dag))
         .route("/api/workflows/dry-run", post(dry_run))
+        .route("/api/workflows/run", post(run_workflow))
+        .route("/api/workflows/clean", post(clean_workflow))
+        .route("/api/workflows/export", post(export_workflow))
         .route("/api/environments", get(list_environments))
         .route("/api/reports/generate", post(generate_report))
         .fallback(not_found)
+        .layer(middleware::from_fn(add_request_id))
+        .layer(cors)
 }
 
 /// Start the web server.
@@ -802,5 +950,231 @@ docker = "biocontainers/bwa:0.7.17"
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["workflow_name"], "test-pipeline");
         assert!(value["sections"].as_array().unwrap().len() >= 2);
+    }
+
+    // -- Run endpoint ------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_workflow_endpoint() {
+        let resp = post_json(
+            "/api/workflows/run",
+            &DryRunRequest {
+                toml_content: VALID_TOML.to_string(),
+                config: None,
+            },
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: RunResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.status, "started");
+        assert_eq!(parsed.rules_total, 2);
+        assert!(!parsed.run_id.is_empty());
+        assert_eq!(parsed.execution_order.len(), 2);
+        assert_eq!(parsed.execution_order[0], "step_a");
+        assert_eq!(parsed.execution_order[1], "step_b");
+    }
+
+    // -- Version endpoint --------------------------------------------------------
+
+    #[tokio::test]
+    async fn version_endpoint() {
+        let app = build_router();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/version")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: VersionResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(parsed.crate_name, "oxo-flow-web");
+    }
+
+    // -- Clean endpoint ----------------------------------------------------------
+
+    #[tokio::test]
+    async fn clean_workflow_endpoint() {
+        let resp = post_json(
+            "/api/workflows/clean",
+            &ValidateRequest {
+                toml_content: VALID_TOML.to_string(),
+            },
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: CleanResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.workflow_name, "test-pipeline");
+        assert_eq!(parsed.total_files, 2);
+        assert!(parsed
+            .files_to_clean
+            .contains(&"trimmed/{sample}.fastq".to_string()));
+        assert!(parsed
+            .files_to_clean
+            .contains(&"aligned/{sample}.bam".to_string()));
+    }
+
+    // -- Additional error-path & edge-case tests --------------------------------
+
+    #[tokio::test]
+    async fn run_invalid_toml_returns_400() {
+        let resp = post_json(
+            "/api/workflows/run",
+            &DryRunRequest {
+                toml_content: "not valid toml {{{{".to_string(),
+                config: None,
+            },
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let err: ErrorResponse = serde_json::from_slice(&body).unwrap();
+        assert!(!err.error.is_empty());
+    }
+
+    #[tokio::test]
+    async fn clean_invalid_toml_returns_400() {
+        let resp = post_json(
+            "/api/workflows/clean",
+            &ValidateRequest {
+                toml_content: "not valid toml {{{{".to_string(),
+            },
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let err: ErrorResponse = serde_json::from_slice(&body).unwrap();
+        assert!(!err.error.is_empty());
+    }
+
+    #[tokio::test]
+    async fn validate_workflow_with_cycle() {
+        let cycle_toml = r#"
+[workflow]
+name = "cycle-test"
+version = "1.0.0"
+
+[[rules]]
+name = "step_a"
+input = ["b_output.txt"]
+output = ["a_output.txt"]
+shell = "echo a"
+
+[[rules]]
+name = "step_b"
+input = ["a_output.txt"]
+output = ["b_output.txt"]
+shell = "echo b"
+"#;
+
+        let resp = post_json(
+            "/api/workflows/validate",
+            &ValidateRequest {
+                toml_content: cycle_toml.to_string(),
+            },
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: ValidateResponse = serde_json::from_slice(&body).unwrap();
+        assert!(!parsed.valid);
+        assert!(!parsed.errors.is_empty());
+        let joined = parsed.errors.join(" ");
+        assert!(
+            joined.to_lowercase().contains("cycle"),
+            "expected cycle error, got: {joined}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dag_invalid_toml_returns_400() {
+        let resp = post_json(
+            "/api/workflows/dag",
+            &ValidateRequest {
+                toml_content: "not valid toml {{{{".to_string(),
+            },
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let err: ErrorResponse = serde_json::from_slice(&body).unwrap();
+        assert!(!err.error.is_empty());
+    }
+
+    #[tokio::test]
+    async fn dry_run_without_config() {
+        let resp = post_json(
+            "/api/workflows/dry-run",
+            &DryRunRequest {
+                toml_content: VALID_TOML.to_string(),
+                config: None,
+            },
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        let status = &value["status"];
+        assert_eq!(status["status"], "dry-run");
+        assert_eq!(status["rules_total"], 2);
+
+        let order = value["execution_order"].as_array().unwrap();
+        assert_eq!(order.len(), 2);
+        assert_eq!(order[0], "step_a");
+        assert_eq!(order[1], "step_b");
+    }
+
+    // -- Export endpoint ---------------------------------------------------------
+
+    #[tokio::test]
+    async fn export_workflow_docker() {
+        let resp = post_json(
+            "/api/workflows/export",
+            &ExportRequest {
+                toml_content: VALID_TOML.to_string(),
+                format: None, // default → docker
+            },
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: ExportResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.format, "docker");
+        assert!(parsed.content.contains("FROM"));
+        assert!(parsed.content.contains("test-pipeline"));
     }
 }

@@ -3,6 +3,7 @@
 //! Executes workflow rules as local processes, handling concurrency,
 //! status tracking, and environment activation.
 
+use crate::environment::EnvironmentResolver;
 use crate::error::{OxoFlowError, Result};
 use crate::rule::Rule;
 use chrono::{DateTime, Utc};
@@ -67,6 +68,14 @@ pub struct JobRecord {
 
     /// Shell command that was executed.
     pub command: Option<String>,
+
+    /// Number of retries attempted so far.
+    #[serde(default)]
+    pub retries: u32,
+
+    /// Timeout configured for this job (not serializable; lives only in memory).
+    #[serde(skip)]
+    pub timeout: Option<std::time::Duration>,
 }
 
 /// Configuration for the executor.
@@ -83,6 +92,12 @@ pub struct ExecutorConfig {
 
     /// Whether to keep going on errors.
     pub keep_going: bool,
+
+    /// Number of times to retry a failed job before giving up.
+    pub retry_count: u32,
+
+    /// Optional timeout per job.
+    pub timeout: Option<std::time::Duration>,
 }
 
 impl Default for ExecutorConfig {
@@ -92,6 +107,8 @@ impl Default for ExecutorConfig {
             dry_run: false,
             workdir: std::env::current_dir().unwrap_or_default(),
             keep_going: false,
+            retry_count: 0,
+            timeout: None,
         }
     }
 }
@@ -100,13 +117,35 @@ impl Default for ExecutorConfig {
 pub struct LocalExecutor {
     config: ExecutorConfig,
     semaphore: Arc<Semaphore>,
+    env_resolver: EnvironmentResolver,
 }
 
 impl LocalExecutor {
     /// Create a new local executor with the given configuration.
     pub fn new(config: ExecutorConfig) -> Self {
         let semaphore = Arc::new(Semaphore::new(config.max_jobs));
-        Self { config, semaphore }
+        let env_resolver = EnvironmentResolver::new();
+        Self {
+            config,
+            semaphore,
+            env_resolver,
+        }
+    }
+
+    /// Wrap a command through the environment resolver, falling back to the
+    /// original command on error and emitting a warning.
+    fn resolve_command(&self, command: &str, rule: &Rule) -> String {
+        match self.env_resolver.wrap_command(command, &rule.environment) {
+            Ok(wrapped) => wrapped,
+            Err(e) => {
+                tracing::warn!(
+                    rule = %rule.name,
+                    error = %e,
+                    "environment wrapping failed, falling back to original command"
+                );
+                command.to_string()
+            }
+        }
     }
 
     /// Execute a single rule as a local process.
@@ -124,6 +163,8 @@ impl LocalExecutor {
             stdout: None,
             stderr: None,
             command: None,
+            retries: 0,
+            timeout: self.config.timeout,
         };
 
         let shell_cmd = match &rule.shell {
@@ -141,6 +182,9 @@ impl LocalExecutor {
                 return Ok(record);
             }
         };
+
+        // Wrap the command through the environment resolver
+        let shell_cmd = self.resolve_command(&shell_cmd, rule);
 
         record.command = Some(shell_cmd.clone());
 
@@ -163,36 +207,101 @@ impl LocalExecutor {
 
         tracing::info!(rule = %rule.name, threads = %rule.effective_threads(), "executing");
 
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(&shell_cmd)
-            .current_dir(&self.config.workdir)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await
-            .map_err(|e| OxoFlowError::Execution {
+        let max_attempts = 1 + self.config.retry_count;
+        for attempt in 0..max_attempts {
+            if attempt > 0 {
+                tracing::warn!(
+                    rule = %rule.name,
+                    attempt = attempt + 1,
+                    max_attempts = max_attempts,
+                    "retrying failed command"
+                );
+                record.retries = attempt;
+            }
+
+            let cmd_future = Command::new("sh")
+                .arg("-c")
+                .arg(&shell_cmd)
+                .current_dir(&self.config.workdir)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output();
+
+            let cmd_result = if let Some(duration) = self.config.timeout {
+                match tokio::time::timeout(duration, cmd_future).await {
+                    Ok(inner) => inner,
+                    Err(_) => {
+                        record.finished_at = Some(Utc::now());
+                        record.status = JobStatus::Failed;
+                        record.stderr = Some(format!(
+                            "command timed out after {duration:?} for rule '{}'",
+                            rule.name
+                        ));
+                        tracing::error!(
+                            rule = %rule.name,
+                            timeout = ?duration,
+                            "command timed out"
+                        );
+                        if !self.config.keep_going {
+                            return Err(OxoFlowError::Execution {
+                                rule: rule.name.clone(),
+                                message: format!("command timed out after {duration:?}"),
+                            });
+                        }
+                        return Ok(record);
+                    }
+                }
+            } else {
+                cmd_future.await
+            };
+
+            let output = cmd_result.map_err(|e| OxoFlowError::Execution {
                 rule: rule.name.clone(),
                 message: e.to_string(),
             })?;
 
-        record.finished_at = Some(Utc::now());
-        record.exit_code = output.status.code();
-        record.stdout = Some(String::from_utf8_lossy(&output.stdout).to_string());
-        record.stderr = Some(String::from_utf8_lossy(&output.stderr).to_string());
+            record.finished_at = Some(Utc::now());
+            record.exit_code = output.status.code();
+            record.stdout = Some(String::from_utf8_lossy(&output.stdout).to_string());
+            record.stderr = Some(String::from_utf8_lossy(&output.stderr).to_string());
 
-        if output.status.success() {
-            record.status = JobStatus::Success;
-            tracing::info!(rule = %rule.name, "completed successfully");
-        } else {
-            record.status = JobStatus::Failed;
+            if output.status.success() {
+                record.status = JobStatus::Success;
+                tracing::info!(rule = %rule.name, "completed successfully");
+
+                if !self.config.dry_run {
+                    let missing = validate_outputs(rule, &self.config.workdir);
+                    for path in &missing {
+                        tracing::warn!(
+                            rule = %rule.name,
+                            path = %path,
+                            "expected output file not found after execution"
+                        );
+                    }
+                }
+
+                return Ok(record);
+            }
+
+            // Command failed — retry if attempts remain
             let code = output.status.code().unwrap_or(-1);
-            tracing::error!(rule = %rule.name, code = %code, "failed");
-            if !self.config.keep_going {
-                return Err(OxoFlowError::TaskFailed {
-                    rule: rule.name.clone(),
-                    code,
-                });
+            if attempt + 1 < max_attempts {
+                tracing::warn!(
+                    rule = %rule.name,
+                    code = %code,
+                    attempt = attempt + 1,
+                    max_attempts = max_attempts,
+                    "command failed, will retry"
+                );
+            } else {
+                record.status = JobStatus::Failed;
+                tracing::error!(rule = %rule.name, code = %code, "failed");
+                if !self.config.keep_going {
+                    return Err(OxoFlowError::TaskFailed {
+                        rule: rule.name.clone(),
+                        code,
+                    });
+                }
             }
         }
 
@@ -205,9 +314,13 @@ impl LocalExecutor {
             .iter()
             .map(|rule| {
                 let command = rule.shell.clone();
+                let wrapped = command
+                    .as_deref()
+                    .map(|cmd| self.resolve_command(cmd, rule));
                 tracing::info!(
                     rule = %rule.name,
                     command = ?command,
+                    wrapped_command = ?wrapped,
                     threads = %rule.effective_threads(),
                     env = %rule.environment.kind(),
                     "would execute"
@@ -221,7 +334,9 @@ impl LocalExecutor {
                     exit_code: None,
                     stdout: None,
                     stderr: None,
-                    command,
+                    command: wrapped.or(command),
+                    retries: 0,
+                    timeout: self.config.timeout,
                 }
             })
             .collect()
@@ -328,6 +443,23 @@ pub fn file_is_newer(source: &Path, target: &Path) -> bool {
     source_modified > target_modified
 }
 
+/// Validate that declared output files exist after execution.
+/// Returns a list of missing output file paths.
+pub fn validate_outputs(rule: &Rule, workdir: &Path) -> Vec<String> {
+    rule.output
+        .iter()
+        .filter(|output| {
+            // Skip wildcard patterns — they can't be checked without expansion
+            if crate::wildcard::has_wildcards(output) {
+                return false;
+            }
+            let path = workdir.join(output);
+            !path.exists()
+        })
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,6 +520,8 @@ mod tests {
             dry_run: false,
             workdir: std::env::temp_dir(),
             keep_going: false,
+            retry_count: 0,
+            timeout: None,
         };
         let executor = LocalExecutor::new(config);
         let rule = make_rule("echo_test", "echo hello_oxoflow");
@@ -404,6 +538,8 @@ mod tests {
             dry_run: true,
             workdir: std::env::temp_dir(),
             keep_going: false,
+            retry_count: 0,
+            timeout: None,
         };
         let executor = LocalExecutor::new(config);
         let rule = make_rule("dry_test", "echo should_not_run");
@@ -419,6 +555,8 @@ mod tests {
             dry_run: false,
             workdir: std::env::temp_dir(),
             keep_going: true,
+            retry_count: 0,
+            timeout: None,
         };
         let executor = LocalExecutor::new(config);
         let rule = make_rule("fail_test", "exit 42");
@@ -435,6 +573,8 @@ mod tests {
             dry_run: false,
             workdir: std::env::temp_dir(),
             keep_going: false,
+            retry_count: 0,
+            timeout: None,
         };
         let executor = LocalExecutor::new(config);
         let rule = make_rule("wildcard_test", "echo {sample}");
@@ -607,5 +747,82 @@ mod tests {
         std::fs::write(&existing, "data").unwrap();
 
         assert!(!file_is_newer(&existing, Path::new("no_such_file.txt")));
+    }
+
+    #[tokio::test]
+    async fn execute_with_timeout() {
+        let config = ExecutorConfig {
+            max_jobs: 1,
+            dry_run: false,
+            workdir: std::env::temp_dir(),
+            keep_going: true,
+            retry_count: 0,
+            timeout: Some(std::time::Duration::from_millis(100)),
+        };
+        let executor = LocalExecutor::new(config);
+        let rule = make_rule("timeout_test", "sleep 30");
+
+        let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+        assert_eq!(record.status, JobStatus::Failed);
+        assert!(record.stderr.unwrap().contains("timed out"));
+    }
+
+    #[test]
+    fn validate_outputs_finds_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let rule = Rule {
+            name: "missing_out".to_string(),
+            input: vec![],
+            output: vec![
+                "does_not_exist.txt".to_string(),
+                "also_missing.bam".to_string(),
+            ],
+            shell: Some("echo hi".to_string()),
+            script: None,
+            threads: None,
+            memory: None,
+            resources: Resources::default(),
+            environment: EnvironmentSpec::default(),
+            log: None,
+            benchmark: None,
+            params: HashMap::new(),
+            priority: 0,
+            target: false,
+            group: None,
+            description: None,
+        };
+
+        let missing = validate_outputs(&rule, dir.path());
+        assert_eq!(missing.len(), 2);
+        assert!(missing.contains(&"does_not_exist.txt".to_string()));
+        assert!(missing.contains(&"also_missing.bam".to_string()));
+    }
+
+    #[test]
+    fn validate_outputs_skips_wildcards() {
+        let dir = tempfile::tempdir().unwrap();
+        let rule = Rule {
+            name: "wildcard_out".to_string(),
+            input: vec![],
+            output: vec!["{sample}.bam".to_string(), "fixed_output.txt".to_string()],
+            shell: Some("echo hi".to_string()),
+            script: None,
+            threads: None,
+            memory: None,
+            resources: Resources::default(),
+            environment: EnvironmentSpec::default(),
+            log: None,
+            benchmark: None,
+            params: HashMap::new(),
+            priority: 0,
+            target: false,
+            group: None,
+            description: None,
+        };
+
+        let missing = validate_outputs(&rule, dir.path());
+        // {sample}.bam should be skipped (wildcard), only fixed_output.txt reported
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0], "fixed_output.txt");
     }
 }

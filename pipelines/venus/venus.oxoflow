@@ -1,0 +1,159 @@
+# Venus — Clinical-grade tumor variant detection pipeline
+# Built on oxo-flow engine
+#
+# Venus (启明星) supports three analysis modes:
+# 1. Tumor-only: somatic variant calling without matched normal
+# 2. Normal-only: germline variant calling
+# 3. Tumor-Normal paired: somatic variant calling with matched normal control
+
+[workflow]
+name = "venus"
+version = "0.1.0"
+description = "Clinical-grade tumor variant detection, annotation, and reporting pipeline"
+author = "Traitome"
+
+[config]
+reference_fasta = "/data/references/GRCh38/genome.fa"
+known_sites = "/data/references/GRCh38/dbsnp_146.hg38.vcf.gz"
+genome_build = "GRCh38"
+samples = "samples.csv"
+
+[defaults]
+threads = 8
+memory = "16G"
+
+# ── Quality Control ─────────────────────────────────────────────
+[[rules]]
+name = "fastp"
+input = ["raw/{sample}_R1.fq.gz", "raw/{sample}_R2.fq.gz"]
+output = ["trimmed/{sample}_R1.fq.gz", "trimmed/{sample}_R2.fq.gz", "qc/{sample}_fastp.json"]
+shell = "fastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]} --json {output[2]} --thread {threads}"
+threads = 8
+
+[rules.environment]
+conda = "envs/fastp.yaml"
+
+# ── Read Alignment ──────────────────────────────────────────────
+[[rules]]
+name = "bwa_mem2"
+input = ["trimmed/{sample}_R1.fq.gz", "trimmed/{sample}_R2.fq.gz"]
+output = ["aligned/{sample}.sorted.bam"]
+shell = "bwa-mem2 mem -t {threads} {config.reference_fasta} {input[0]} {input[1]} | samtools sort -@ {threads} -o {output[0]}"
+threads = 16
+memory = "32G"
+
+[rules.environment]
+conda = "envs/bwa_mem2.yaml"
+
+# ── Duplicate Marking ───────────────────────────────────────────
+[[rules]]
+name = "mark_duplicates"
+input = ["aligned/{sample}.sorted.bam"]
+output = ["dedup/{sample}.dedup.bam", "dedup/{sample}.metrics.txt"]
+shell = "gatk MarkDuplicates -I {input[0]} -O {output[0]} -M {output[1]}"
+threads = 4
+memory = "16G"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+# ── Base Quality Recalibration ──────────────────────────────────
+[[rules]]
+name = "bqsr"
+input = ["dedup/{sample}.dedup.bam"]
+output = ["recal/{sample}.recal.bam"]
+shell = """
+gatk BaseRecalibrator \
+    -I {input[0]} -R {config.reference_fasta} \
+    --known-sites {config.known_sites} \
+    -O recal/{sample}.recal.table && \
+gatk ApplyBQSR \
+    -I {input[0]} -R {config.reference_fasta} \
+    --bqsr-recal-file recal/{sample}.recal.table \
+    -O {output[0]}
+"""
+threads = 4
+memory = "16G"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+# ── Germline Variant Calling (HaplotypeCaller) ──────────────────
+[[rules]]
+name = "haplotype_caller"
+input = ["recal/{sample}.recal.bam"]
+output = ["variants/{sample}.g.vcf.gz"]
+shell = "gatk HaplotypeCaller -I {input[0]} -R {config.reference_fasta} -O {output[0]} -ERC GVCF"
+threads = 4
+memory = "16G"
+description = "Germline variant calling for normal samples"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+# ── Somatic Variant Calling (Mutect2) ───────────────────────────
+[[rules]]
+name = "mutect2"
+input = ["recal/{tumor}.recal.bam", "recal/{normal}.recal.bam"]
+output = ["variants/{tumor}.mutect2.vcf.gz"]
+shell = "gatk Mutect2 -I {input[0]} -I {input[1]} -normal {normal} -R {config.reference_fasta} -O {output[0]}"
+threads = 4
+memory = "16G"
+description = "Somatic variant calling with Mutect2"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+# ── Filter Mutect Calls ────────────────────────────────────────
+[[rules]]
+name = "filter_mutect_calls"
+input = ["variants/{tumor}.mutect2.vcf.gz"]
+output = ["variants/{tumor}.mutect2.filtered.vcf.gz"]
+shell = "gatk FilterMutectCalls -V {input[0]} -R {config.reference_fasta} -O {output[0]}"
+threads = 4
+memory = "8G"
+description = "Filter raw Mutect2 calls for clinical use"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+# ── Variant Annotation (VEP) ───────────────────────────────────
+[[rules]]
+name = "annotate"
+input = ["variants/{sample}.mutect2.filtered.vcf.gz"]
+output = ["annotated/{sample}.annotated.vcf.gz"]
+shell = """
+vep --input_file {input[0]} --output_file {output[0]} \
+    --format vcf --vcf --offline --cache \
+    --assembly {config.genome_build} \
+    --dir_cache /data/vep_cache \
+    --fork {threads} --buffer_size 5000 \
+    --sift b --polyphen b --symbol --numbers --biotype \
+    --total_length --canonical --ccds --hgvs \
+    --af --af_1kg --af_gnomade --max_af \
+    --pubmed --variant_class
+"""
+threads = 4
+memory = "8G"
+description = "Variant annotation with Ensembl VEP"
+
+[rules.environment]
+conda = "envs/vep.yaml"
+
+# ── Clinical Report ─────────────────────────────────────────────
+[[rules]]
+name = "clinical_report"
+input = ["annotated/{sample}.annotated.vcf.gz"]
+output = ["reports/{sample}_clinical_report.html"]
+shell = "python scripts/generate_report.py --input {input[0]} --output {output[0]} --sample {sample}"
+threads = 1
+memory = "4G"
+description = "Generate clinical-grade variant report"
+
+[rules.environment]
+conda = "envs/report.yaml"
+
+[report]
+template = "report/clinical_template.html"
+format = ["html", "json"]
+sections = ["qc", "alignment", "variants", "clinical", "provenance"]

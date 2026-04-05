@@ -3,12 +3,12 @@
 //! Provides subcommands for running, validating, and managing workflows.
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use colored::Colorize;
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
 use oxo_flow_core::executor::{ExecutorConfig, LocalExecutor};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// oxo-flow — A Rust-native bioinformatics pipeline engine.
 ///
@@ -26,6 +26,10 @@ use std::path::PathBuf;
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+
+    /// Enable verbose (debug-level) logging.
+    #[arg(global = true, short = 'v', long)]
+    verbose: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -51,6 +55,14 @@ enum Commands {
         /// Run specific target rules only.
         #[arg(short = 't', long)]
         target: Vec<String>,
+
+        /// Number of times to retry failed jobs.
+        #[arg(short = 'r', long, default_value = "0")]
+        retry: u32,
+
+        /// Timeout per job in seconds (0 = no timeout).
+        #[arg(long, default_value = "0")]
+        timeout: u64,
     },
 
     /// Simulate execution without running any commands.
@@ -148,6 +160,17 @@ enum Commands {
         /// Only show what would be cleaned (dry-run).
         #[arg(short = 'n', long)]
         dry_run: bool,
+
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Generate shell completions for oxo-flow.
+    Completions {
+        /// Shell to generate completions for.
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
     },
 }
 
@@ -175,16 +198,17 @@ fn print_banner() {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing
+    let cli = Cli::parse();
+
+    // Initialize tracing with level based on --verbose flag
+    let default_level = if cli.verbose { "debug" } else { "info" };
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_level)),
         )
         .with_target(false)
         .init();
-
-    let cli = Cli::parse();
 
     match cli.command {
         Commands::Run {
@@ -193,6 +217,8 @@ async fn main() -> Result<()> {
             keep_going,
             workdir,
             target: _,
+            retry,
+            timeout,
         } => {
             print_banner();
             let config = WorkflowConfig::from_file(&workflow)
@@ -216,6 +242,12 @@ async fn main() -> Result<()> {
                 dry_run: false,
                 workdir: workdir.unwrap_or_else(|| std::env::current_dir().unwrap_or_default()),
                 keep_going,
+                retry_count: retry,
+                timeout: if timeout > 0 {
+                    Some(std::time::Duration::from_secs(timeout))
+                } else {
+                    None
+                },
             };
 
             let executor = LocalExecutor::new(exec_config);
@@ -486,13 +518,58 @@ memory = "8G"
 
             let workflow_path = project_dir.join(format!("{name}.oxoflow"));
             std::fs::write(&workflow_path, workflow_content)?;
+
+            // Create additional directories
+            let envs_dir = project_dir.join("envs");
+            let scripts_dir = project_dir.join("scripts");
+            std::fs::create_dir_all(&envs_dir)?;
+            std::fs::create_dir_all(&scripts_dir)?;
+
+            // Create a .gitignore with common bioinformatics patterns
+            let gitignore_content = "\
+# Alignment files
+*.bam
+*.bam.bai
+*.cram
+*.cram.crai
+*.sam
+
+# Variant files
+*.vcf.gz
+*.vcf.gz.tbi
+*.bcf
+
+# Index files
+*.fai
+*.dict
+
+# Workflow outputs
+logs/
+results/
+benchmarks/
+
+# oxo-flow internals
+.oxo-flow/
+.snakemake/
+
+# OS files
+.DS_Store
+Thumbs.db
+";
+            let gitignore_path = project_dir.join(".gitignore");
+            std::fs::write(&gitignore_path, gitignore_content)?;
+
             eprintln!(
                 "{} Created new project at {}",
                 "✓".green().bold(),
                 project_dir.display()
             );
+            eprintln!("  {}", workflow_path.display());
+            eprintln!("  {}/", envs_dir.display());
+            eprintln!("  {}/", scripts_dir.display());
+            eprintln!("  {}", gitignore_path.display());
             eprintln!(
-                "  Edit {} to define your pipeline.",
+                "\n  Edit {} to define your pipeline.",
                 workflow_path.display()
             );
         }
@@ -521,7 +598,11 @@ memory = "8G"
             );
         }
 
-        Commands::Clean { workflow, dry_run } => {
+        Commands::Clean {
+            workflow,
+            dry_run,
+            force,
+        } => {
             print_banner();
             let config = WorkflowConfig::from_file(&workflow)
                 .with_context(|| format!("failed to parse {}", workflow.display()))?;
@@ -537,14 +618,88 @@ memory = "8G"
 
             if dry_run {
                 eprintln!("{}", "Would clean (dry-run):".bold().yellow());
+                for output in &outputs {
+                    let has_wildcard = output.contains('{') && output.contains('}');
+                    if has_wildcard {
+                        eprintln!("  {} (wildcard, skipped)", output.dimmed());
+                    } else if Path::new(output).exists() {
+                        eprintln!("  {} (exists)", output);
+                    } else {
+                        eprintln!("  {} (not found)", output.dimmed());
+                    }
+                }
+                eprintln!("\n{} {} output patterns", "Total:".bold(), outputs.len());
             } else {
-                eprintln!("{}", "Cleaning outputs:".bold());
-            }
+                // Determine which files are deletable
+                let mut deletable: Vec<&String> = Vec::new();
+                let mut skipped_wildcard = 0usize;
+                let mut not_found = 0usize;
 
-            for output in &outputs {
-                eprintln!("  {}", output);
+                for output in &outputs {
+                    let has_wildcard = output.contains('{') && output.contains('}');
+                    if has_wildcard {
+                        skipped_wildcard += 1;
+                    } else if Path::new(output).exists() {
+                        deletable.push(output);
+                    } else {
+                        not_found += 1;
+                    }
+                }
+
+                if deletable.is_empty() {
+                    eprintln!(
+                        "{} Nothing to delete ({} not found, {} wildcard patterns skipped)",
+                        "Clean:".bold(),
+                        not_found,
+                        skipped_wildcard
+                    );
+                } else {
+                    // Prompt for confirmation unless --force is given
+                    if !force {
+                        eprintln!(
+                            "{} {} file(s) will be deleted. Continue? [y/N]",
+                            "Clean:".bold().yellow(),
+                            deletable.len()
+                        );
+                        let mut answer = String::new();
+                        std::io::stdin().read_line(&mut answer)?;
+                        if answer.trim().to_lowercase() != "y" {
+                            eprintln!("Aborted.");
+                            return Ok(());
+                        }
+                    }
+
+                    let mut deleted = 0usize;
+                    let mut failed = 0usize;
+
+                    for path_str in &deletable {
+                        match std::fs::remove_file(path_str) {
+                            Ok(()) => {
+                                deleted += 1;
+                                eprintln!("  {} {}", "✓".green(), path_str);
+                            }
+                            Err(e) => {
+                                failed += 1;
+                                eprintln!("  {} {} — {}", "✗".red(), path_str, e);
+                            }
+                        }
+                    }
+
+                    eprintln!(
+                        "\n{} {} deleted, {} failed, {} not found, {} wildcard skipped",
+                        "Done:".bold(),
+                        deleted,
+                        failed,
+                        not_found,
+                        skipped_wildcard
+                    );
+                }
             }
-            eprintln!("\n{} {} output patterns", "Total:".bold(), outputs.len());
+        }
+
+        Commands::Completions { shell } => {
+            let mut cmd = Cli::command();
+            clap_complete::generate(shell, &mut cmd, "oxo-flow", &mut std::io::stdout());
         }
     }
 
@@ -639,9 +794,14 @@ mod tests {
     fn cli_parse_clean() {
         let cli = Cli::try_parse_from(["oxo-flow", "clean", "test.oxoflow"]).unwrap();
         match cli.command {
-            Commands::Clean { workflow, dry_run } => {
+            Commands::Clean {
+                workflow,
+                dry_run,
+                force,
+            } => {
                 assert_eq!(workflow, PathBuf::from("test.oxoflow"));
                 assert!(!dry_run);
+                assert!(!force);
             }
             _ => panic!("expected Clean command"),
         }
@@ -655,6 +815,64 @@ mod tests {
                 assert!(dry_run);
             }
             _ => panic!("expected Clean command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_clean_force() {
+        let cli = Cli::try_parse_from(["oxo-flow", "clean", "test.oxoflow", "--force"]).unwrap();
+        match cli.command {
+            Commands::Clean { force, .. } => {
+                assert!(force);
+            }
+            _ => panic!("expected Clean command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_completions() {
+        let cli = Cli::try_parse_from(["oxo-flow", "completions", "bash"]).unwrap();
+        match cli.command {
+            Commands::Completions { shell } => {
+                assert_eq!(shell, clap_complete::Shell::Bash);
+            }
+            _ => panic!("expected Completions command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_verbose_flag() {
+        let cli =
+            Cli::try_parse_from(["oxo-flow", "--verbose", "validate", "test.oxoflow"]).unwrap();
+        assert!(cli.verbose);
+    }
+
+    #[test]
+    fn cli_parse_verbose_short_flag() {
+        let cli = Cli::try_parse_from(["oxo-flow", "-v", "validate", "test.oxoflow"]).unwrap();
+        assert!(cli.verbose);
+    }
+
+    #[test]
+    fn cli_parse_run_with_retry() {
+        let cli = Cli::try_parse_from(["oxo-flow", "run", "test.oxoflow", "-r", "3"]).unwrap();
+        match cli.command {
+            Commands::Run { retry, .. } => {
+                assert_eq!(retry, 3);
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_run_with_timeout() {
+        let cli =
+            Cli::try_parse_from(["oxo-flow", "run", "test.oxoflow", "--timeout", "300"]).unwrap();
+        match cli.command {
+            Commands::Run { timeout, .. } => {
+                assert_eq!(timeout, 300);
+            }
+            _ => panic!("expected Run command"),
         }
     }
 }

@@ -205,6 +205,43 @@ impl WorkflowDag {
     pub fn has_producer(&self, output: &str) -> bool {
         self.output_to_node.contains_key(output)
     }
+
+    /// Returns groups of rule names that can execute in parallel.
+    ///
+    /// Each group contains rules whose dependencies have all been satisfied
+    /// by rules in previous groups. This is computed by assigning each node
+    /// a "depth" equal to the length of the longest path from any root node.
+    pub fn parallel_groups(&self) -> Result<Vec<Vec<String>>> {
+        let order = self.topological_order()?;
+        let mut depth: HashMap<NodeIndex, usize> = HashMap::new();
+
+        // Compute depth for each node
+        for node_data in &order {
+            let node_idx = self.name_to_node[&node_data.name];
+            let max_parent_depth = self
+                .graph
+                .neighbors_directed(node_idx, petgraph::Direction::Incoming)
+                .map(|parent| depth.get(&parent).copied().unwrap_or(0))
+                .max()
+                .map(|d| d + 1)
+                .unwrap_or(0);
+            depth.insert(node_idx, max_parent_depth);
+        }
+
+        // Group nodes by depth
+        let max_depth = depth.values().copied().max().unwrap_or(0);
+        let mut groups: Vec<Vec<String>> = vec![Vec::new(); max_depth + 1];
+        for (&node_idx, &d) in &depth {
+            groups[d].push(self.graph[node_idx].name.clone());
+        }
+
+        // Sort each group for deterministic output
+        for group in &mut groups {
+            group.sort();
+        }
+
+        Ok(groups)
+    }
 }
 
 #[cfg(test)]
@@ -343,5 +380,51 @@ mod tests {
         let rules = vec![make_rule("a", vec![], vec!["out.txt"])];
         let dag = WorkflowDag::from_rules(&rules).unwrap();
         assert!(dag.dependencies("nonexistent").is_err());
+    }
+
+    #[test]
+    fn parallel_groups_linear() {
+        let rules = vec![
+            make_rule("a", vec!["in.txt"], vec!["mid1.txt"]),
+            make_rule("b", vec!["mid1.txt"], vec!["mid2.txt"]),
+            make_rule("c", vec!["mid2.txt"], vec!["out.txt"]),
+        ];
+
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let groups = dag.parallel_groups().unwrap();
+        assert_eq!(groups.len(), 3);
+        assert_eq!(groups[0], vec!["a"]);
+        assert_eq!(groups[1], vec!["b"]);
+        assert_eq!(groups[2], vec!["c"]);
+    }
+
+    #[test]
+    fn parallel_groups_diamond() {
+        let rules = vec![
+            make_rule("source", vec!["raw.txt"], vec!["a.txt", "b.txt"]),
+            make_rule("left", vec!["a.txt"], vec!["left.txt"]),
+            make_rule("right", vec!["b.txt"], vec!["right.txt"]),
+            make_rule("merge", vec!["left.txt", "right.txt"], vec!["final.txt"]),
+        ];
+
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let groups = dag.parallel_groups().unwrap();
+        assert_eq!(groups.len(), 3);
+        assert_eq!(groups[0], vec!["source"]);
+        assert_eq!(groups[1], vec!["left", "right"]);
+        assert_eq!(groups[2], vec!["merge"]);
+    }
+
+    #[test]
+    fn parallel_groups_independent() {
+        let rules = vec![
+            make_rule("a", vec!["x.txt"], vec!["a.txt"]),
+            make_rule("b", vec!["y.txt"], vec!["b.txt"]),
+        ];
+
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let groups = dag.parallel_groups().unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0], vec!["a", "b"]);
     }
 }
