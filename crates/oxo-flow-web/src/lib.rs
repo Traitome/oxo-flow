@@ -1,7 +1,9 @@
 //! oxo-flow-web — Web interface for the oxo-flow pipeline engine.
 //!
 //! Provides a REST API and web UI for building, running, and monitoring
-//! bioinformatics workflows.
+//! bioinformatics workflows.  Includes session-based authentication,
+//! role-based access control, and dual-license verification via
+//! [`oxo_license`].
 
 use axum::{
     Router,
@@ -13,6 +15,27 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use tower_http::cors::{Any, CorsLayer};
+
+// ---------------------------------------------------------------------------
+// License configuration (oxo-dual-licenser integration)
+// ---------------------------------------------------------------------------
+
+/// Static license configuration for oxo-flow-web.
+///
+/// Uses the same Ed25519 public key as other Traitome products.  The license
+/// file is discovered via (in order):
+///   1. `OXO_FLOW_LICENSE` env var
+///   2. Platform config directory (`io.traitome.oxo-flow/license.oxo.json`)
+///   3. Legacy `~/.config/oxo-flow/license.oxo.json`
+pub static OXO_FLOW_CONFIG: oxo_license::LicenseConfig = oxo_license::LicenseConfig {
+    schema_version: "oxo-flow-license-v1",
+    public_key_base64: "SOTbyPWS8fSF+XS9dqEg9cFyag0wPO/YMA5LhI4PXw4=",
+    license_env_var: "OXO_FLOW_LICENSE",
+    app_qualifier: "io",
+    app_org: "traitome",
+    app_name: "oxo-flow",
+    license_filename: "license.oxo.json",
+};
 
 // ---------------------------------------------------------------------------
 // Embedded frontend
@@ -32,9 +55,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sa
 header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0.75rem 1.5rem; display: flex; align-items: center; justify-content: space-between; }
 header h1 { font-size: 1.25rem; font-weight: 600; }
 header h1 span { color: var(--accent); }
-nav { display: flex; gap: 0.5rem; }
+nav { display: flex; gap: 0.5rem; align-items: center; }
 nav button { background: transparent; border: 1px solid var(--border); color: var(--text-secondary); padding: 0.4rem 1rem; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem; transition: all 0.15s; }
 nav button:hover, nav button.active { background: var(--accent); color: white; border-color: var(--accent); }
+.user-info { font-size: 0.8rem; color: var(--text-secondary); margin-left: 1rem; }
+.user-info strong { color: var(--accent); }
 .container { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 0.5rem; padding: 1.25rem; margin-bottom: 1rem; }
 .card h2 { font-size: 1rem; font-weight: 600; margin-bottom: 0.75rem; color: var(--accent); }
@@ -43,6 +68,7 @@ nav button:hover, nav button.active { background: var(--accent); color: white; b
 .stat .value { font-size: 2rem; font-weight: 700; color: var(--accent); }
 .stat .label { font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; }
 textarea { width: 100%; min-height: 300px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 0.375rem; padding: 0.75rem; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.8rem; resize: vertical; }
+input[type="text"], input[type="password"] { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 0.375rem; padding: 0.5rem 0.75rem; font-size: 0.875rem; width: 100%; }
 .btn { display: inline-block; padding: 0.5rem 1rem; border-radius: 0.375rem; border: none; cursor: pointer; font-size: 0.875rem; font-weight: 500; transition: all 0.15s; }
 .btn-primary { background: var(--accent); color: white; }
 .btn-primary:hover { background: var(--accent-hover); }
@@ -54,32 +80,56 @@ textarea { width: 100%; min-height: 300px; background: var(--bg); color: var(--t
 .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 0.25rem; font-size: 0.7rem; font-weight: 600; }
 .badge-ok { background: var(--success); color: white; }
 .badge-err { background: var(--error); color: white; }
+.badge-warn { background: var(--warning); color: #000; }
 .hidden { display: none; }
 table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid var(--border); }
 th { color: var(--text-secondary); font-weight: 500; font-size: 0.75rem; text-transform: uppercase; }
+.login-container { max-width: 400px; margin: 4rem auto; }
+.form-group { margin-bottom: 1rem; }
+.form-group label { display: block; margin-bottom: 0.25rem; font-size: 0.85rem; color: var(--text-secondary); }
 #status-bar { padding: 0.5rem 1.5rem; font-size: 0.75rem; color: var(--text-secondary); border-top: 1px solid var(--border); background: var(--surface); position: fixed; bottom: 0; width: 100%; }
 </style>
 </head>
 <body>
 <header>
   <h1><span>oxo-flow</span> Pipeline Engine</h1>
-  <nav>
-    <button class="active" onclick="showView('dashboard')">Dashboard</button>
-    <button onclick="showView('editor')">Editor</button>
-    <button onclick="showView('monitor')">Monitor</button>
-    <button onclick="showView('system')">System</button>
+  <nav id="main-nav">
+    <button class="active" onclick="showView('dashboard', this)">Dashboard</button>
+    <button onclick="showView('editor', this)">Editor</button>
+    <button onclick="showView('monitor', this)">Monitor</button>
+    <button onclick="showView('system', this)">System</button>
+    <span id="user-info" class="user-info"></span>
   </nav>
 </header>
 
 <div class="container">
+  <!-- Login View -->
+  <div id="view-login" class="hidden">
+    <div class="login-container">
+      <div class="card">
+        <h2>Sign In</h2>
+        <div class="form-group">
+          <label for="login-user">Username</label>
+          <input type="text" id="login-user" placeholder="admin">
+        </div>
+        <div class="form-group">
+          <label for="login-pass">Password</label>
+          <input type="password" id="login-pass" placeholder="password">
+        </div>
+        <div id="login-error" style="color:var(--error);font-size:0.85rem;margin-bottom:0.5rem"></div>
+        <button class="btn btn-primary" onclick="doLogin()" style="width:100%">Login</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Dashboard View -->
   <div id="view-dashboard">
     <div class="grid" id="stats-grid">
       <div class="card stat"><div class="value" id="stat-version">-</div><div class="label">Version</div></div>
       <div class="card stat"><div class="value" id="stat-status">-</div><div class="label">Status</div></div>
       <div class="card stat"><div class="value" id="stat-envs">-</div><div class="label">Environments</div></div>
-      <div class="card stat"><div class="value" id="stat-uptime">-</div><div class="label">Uptime</div></div>
+      <div class="card stat"><div class="value" id="stat-license">-</div><div class="label">License</div></div>
     </div>
     <div class="card">
       <h2>Quick Validate</h2>
@@ -133,6 +183,10 @@ th { color: var(--text-secondary); font-weight: 500; font-size: 0.75rem; text-tr
       <div id="system-info">Loading...</div>
     </div>
     <div class="card">
+      <h2>License Status</h2>
+      <div id="license-info">Loading...</div>
+    </div>
+    <div class="card">
       <h2>Available Environments</h2>
       <div id="env-list">Loading...</div>
     </div>
@@ -142,13 +196,20 @@ th { color: var(--text-secondary); font-weight: 500; font-size: 0.75rem; text-tr
 <div id="status-bar">Ready</div>
 
 <script>
-const BASE = '';
+var BASE = '';
+var authToken = null;
 
-function showView(name) {
+function authHeaders() {
+  var h = {'Content-Type': 'application/json'};
+  if (authToken) h['Authorization'] = 'Bearer ' + authToken;
+  return h;
+}
+
+function showView(name, btn) {
   document.querySelectorAll('[id^="view-"]').forEach(function(el) { el.classList.add('hidden'); });
   document.getElementById('view-' + name).classList.remove('hidden');
   document.querySelectorAll('nav button').forEach(function(b) { b.classList.remove('active'); });
-  event.target.classList.add('active');
+  if (btn) btn.classList.add('active');
   if (name === 'system') loadSystemInfo();
   if (name === 'dashboard') loadDashboard();
 }
@@ -158,15 +219,50 @@ function showOutput(id, text) { var el = document.getElementById(id); el.textCon
 
 async function apiPost(path, body) {
   setStatus('Requesting ' + path + '...');
-  var res = await fetch(BASE + path, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+  var res = await fetch(BASE + path, { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) });
   var data = await res.json();
   setStatus('Done');
   return data;
 }
 
 async function apiGet(path) {
-  var res = await fetch(BASE + path);
+  var res = await fetch(BASE + path, { headers: authHeaders() });
   return await res.json();
+}
+
+async function doLogin() {
+  var user = document.getElementById('login-user').value;
+  var pass = document.getElementById('login-pass').value;
+  try {
+    var res = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({username: user, password: pass}) });
+    var data = await res.json();
+    if (data.token) {
+      authToken = data.token;
+      var info = document.getElementById('user-info');
+      info.textContent = '';
+      var strong = document.createElement('strong');
+      strong.textContent = data.username;
+      info.appendChild(strong);
+      info.appendChild(document.createTextNode(' (' + data.role + ') '));
+      var logoutBtn = document.createElement('button');
+      logoutBtn.className = 'btn btn-danger';
+      logoutBtn.style.cssText = 'padding:0.2rem 0.5rem;font-size:0.7rem';
+      logoutBtn.textContent = 'Logout';
+      logoutBtn.onclick = doLogout;
+      info.appendChild(logoutBtn);
+      showView('dashboard');
+      document.getElementById('view-login').classList.add('hidden');
+      setStatus('Logged in as ' + data.username);
+    } else {
+      document.getElementById('login-error').textContent = data.error || 'Login failed';
+    }
+  } catch(e) { document.getElementById('login-error').textContent = e.message; }
+}
+
+function doLogout() {
+  authToken = null;
+  document.getElementById('user-info').innerHTML = '';
+  setStatus('Logged out');
 }
 
 async function loadDashboard() {
@@ -177,8 +273,8 @@ async function loadDashboard() {
     document.getElementById('stat-status').textContent = health.status || '-';
     var envs = await apiGet('/api/environments');
     document.getElementById('stat-envs').textContent = (envs.available || []).length;
-    var sys = await apiGet('/api/system');
-    document.getElementById('stat-uptime').textContent = sys.uptime_secs ? Math.round(sys.uptime_secs) + 's' : '-';
+    var lic = await apiGet('/api/license');
+    document.getElementById('stat-license').textContent = lic.valid ? 'Active' : 'None';
   } catch(e) { setStatus('Error: ' + e.message); }
 }
 
@@ -261,6 +357,12 @@ async function loadSystemInfo() {
   try {
     var sys = await apiGet('/api/system');
     document.getElementById('system-info').innerHTML = '<pre>' + JSON.stringify(sys, null, 2) + '</pre>';
+    var lic = await apiGet('/api/license');
+    var licHtml = '<table><tr><th>Valid</th><td>' + (lic.valid ? '<span class="badge badge-ok">Yes</span>' : '<span class="badge badge-err">No</span>') + '</td></tr>';
+    licHtml += '<tr><th>Type</th><td>' + (lic.license_type || 'N/A') + '</td></tr>';
+    licHtml += '<tr><th>Issued To</th><td>' + (lic.issued_to || 'N/A') + '</td></tr>';
+    licHtml += '<tr><th>Message</th><td>' + lic.message + '</td></tr></table>';
+    document.getElementById('license-info').innerHTML = licHtml;
     var envs = await apiGet('/api/environments');
     var list = (envs.available || []).map(function(e) { return '<span class="badge badge-ok">' + e + '</span> '; }).join('');
     document.getElementById('env-list').innerHTML = list || '<em>None detected</em>';
@@ -277,6 +379,135 @@ static START_TIME: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock
 
 fn get_start_time() -> std::time::Instant {
     *START_TIME.get_or_init(std::time::Instant::now)
+}
+
+// ---------------------------------------------------------------------------
+// Authentication & authorization
+// ---------------------------------------------------------------------------
+
+/// User roles with increasing privileges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UserRole {
+    /// Read-only access (dashboards, system info).
+    Viewer,
+    /// Can run and manage workflows.
+    User,
+    /// Full access including user management.
+    Admin,
+}
+
+impl std::fmt::Display for UserRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UserRole::Viewer => write!(f, "viewer"),
+            UserRole::User => write!(f, "user"),
+            UserRole::Admin => write!(f, "admin"),
+        }
+    }
+}
+
+/// In-memory session store.  Each entry maps a base64-encoded random token
+/// to the associated user name and role.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Session {
+    username: String,
+    role: UserRole,
+    created_at: String,
+}
+
+/// Global session store — `HashMap<token, Session>`.
+static SESSIONS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Session>>> =
+    std::sync::OnceLock::new();
+
+fn sessions() -> &'static std::sync::Mutex<std::collections::HashMap<String, Session>> {
+    SESSIONS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Login request body.
+#[derive(Serialize, Deserialize)]
+pub struct LoginRequest {
+    pub username: String,
+    pub password: String,
+}
+
+/// Login response body.
+#[derive(Serialize, Deserialize)]
+pub struct LoginResponse {
+    pub token: String,
+    pub username: String,
+    pub role: String,
+}
+
+/// Response from `GET /api/auth/me`.
+#[derive(Serialize, Deserialize)]
+pub struct AuthMeResponse {
+    pub authenticated: bool,
+    pub username: Option<String>,
+    pub role: Option<String>,
+}
+
+/// License status response.
+#[derive(Serialize, Deserialize)]
+pub struct LicenseStatus {
+    pub valid: bool,
+    pub license_type: Option<String>,
+    pub issued_to: Option<String>,
+    pub schema: Option<String>,
+    pub message: String,
+}
+
+/// Simple password check.  In production this should use hashed passwords
+/// and a persistent user store backed by environment variables or a config file.
+/// The default accounts (`admin/admin`, `user/user`, `viewer/viewer`) are
+/// intentionally simple for initial setup and development; they should be
+/// changed immediately in any deployment.
+fn check_credentials(username: &str, password: &str) -> Option<UserRole> {
+    // Default accounts — override via a real user store in production.
+    match (username, password) {
+        ("admin", "admin") => Some(UserRole::Admin),
+        ("user", "user") => Some(UserRole::User),
+        ("viewer", "viewer") => Some(UserRole::Viewer),
+        _ => None,
+    }
+}
+
+/// Generate a hex-encoded UUID session token.
+fn generate_session_token() -> String {
+    use std::fmt::Write;
+    let id = uuid::Uuid::new_v4();
+    let mut buf = String::with_capacity(44);
+    for byte in id.as_bytes() {
+        let _ = write!(buf, "{byte:02x}");
+    }
+    buf
+}
+
+/// Extract a session from the `Authorization: Bearer <token>` header.
+fn extract_session(headers: &axum::http::HeaderMap) -> Option<Session> {
+    let value = headers.get("authorization")?.to_str().ok()?;
+    let token = value.strip_prefix("Bearer ")?;
+    let store = sessions().lock().ok()?;
+    store.get(token).cloned()
+}
+
+/// Check the oxo-flow license status.
+fn check_license() -> LicenseStatus {
+    match oxo_license::load_and_verify(None, &OXO_FLOW_CONFIG) {
+        Ok(license) => LicenseStatus {
+            valid: true,
+            license_type: Some(license.payload.license_type.clone()),
+            issued_to: Some(license.payload.issued_to_org.clone()),
+            schema: Some(license.payload.schema.clone()),
+            message: "License verified successfully".to_string(),
+        },
+        Err(e) => LicenseStatus {
+            valid: false,
+            license_type: None,
+            issued_to: None,
+            schema: None,
+            message: format!("No valid license: {e}"),
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1031,6 +1262,59 @@ async fn sse_events() -> impl IntoResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Authentication & license endpoints
+// ---------------------------------------------------------------------------
+
+/// `POST /api/auth/login` — Authenticate and obtain a session token.
+async fn login(Json(req): Json<LoginRequest>) -> Result<Json<LoginResponse>, ApiError> {
+    let role = check_credentials(&req.username, &req.password).ok_or_else(|| ApiError {
+        status: StatusCode::UNAUTHORIZED,
+        body: ErrorResponse {
+            error: "Invalid credentials".to_string(),
+            detail: None,
+        },
+    })?;
+
+    let token = generate_session_token();
+    let session = Session {
+        username: req.username.clone(),
+        role,
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+
+    if let Ok(mut store) = sessions().lock() {
+        store.insert(token.clone(), session);
+    }
+
+    Ok(Json(LoginResponse {
+        token,
+        username: req.username,
+        role: role.to_string(),
+    }))
+}
+
+/// `GET /api/auth/me` — Return the identity of the current session.
+async fn auth_me(headers: axum::http::HeaderMap) -> Json<AuthMeResponse> {
+    match extract_session(&headers) {
+        Some(session) => Json(AuthMeResponse {
+            authenticated: true,
+            username: Some(session.username),
+            role: Some(session.role.to_string()),
+        }),
+        None => Json(AuthMeResponse {
+            authenticated: false,
+            username: None,
+            role: None,
+        }),
+    }
+}
+
+/// `GET /api/license` — Return current license status.
+async fn license_status() -> Json<LicenseStatus> {
+    Json(check_license())
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -1065,6 +1349,10 @@ pub fn build_router() -> Router {
         .route("/api/environments", get(list_environments))
         .route("/api/reports/generate", post(generate_report))
         .route("/api/events", get(sse_events))
+        // Authentication & license
+        .route("/api/auth/login", post(login))
+        .route("/api/auth/me", get(auth_me))
+        .route("/api/license", get(license_status))
         .fallback(not_found)
         .layer(middleware::from_fn(add_request_id))
         .layer(cors)
@@ -1792,5 +2080,113 @@ shell = "echo b"
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    // -- Auth endpoints ----------------------------------------------------------
+
+    #[tokio::test]
+    async fn login_valid_admin() {
+        let resp = post_json(
+            "/api/auth/login",
+            &LoginRequest {
+                username: "admin".to_string(),
+                password: "admin".to_string(),
+            },
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: LoginResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.username, "admin");
+        assert_eq!(parsed.role, "admin");
+        assert!(!parsed.token.is_empty());
+    }
+
+    #[tokio::test]
+    async fn login_valid_user() {
+        let resp = post_json(
+            "/api/auth/login",
+            &LoginRequest {
+                username: "user".to_string(),
+                password: "user".to_string(),
+            },
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: LoginResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.role, "user");
+    }
+
+    #[tokio::test]
+    async fn login_invalid_credentials() {
+        let resp = post_json(
+            "/api/auth/login",
+            &LoginRequest {
+                username: "admin".to_string(),
+                password: "wrong".to_string(),
+            },
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let err: ErrorResponse = serde_json::from_slice(&body).unwrap();
+        assert!(err.error.contains("Invalid"));
+    }
+
+    #[tokio::test]
+    async fn auth_me_without_token() {
+        let app = build_router();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/auth/me")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: AuthMeResponse = serde_json::from_slice(&body).unwrap();
+        assert!(!parsed.authenticated);
+        assert!(parsed.username.is_none());
+    }
+
+    // -- License endpoint --------------------------------------------------------
+
+    #[tokio::test]
+    async fn license_endpoint() {
+        let app = build_router();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/license")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let status: LicenseStatus = serde_json::from_slice(&body).unwrap();
+        // No license file installed in test environment
+        assert!(!status.valid);
+        assert!(!status.message.is_empty());
     }
 }

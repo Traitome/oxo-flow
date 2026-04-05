@@ -497,3 +497,100 @@ fn cli_lint_gallery_wgs_germline() {
         .assert()
         .success();
 }
+
+// ─── Export CLI tests ───────────────────────────────────────────────────────
+
+#[test]
+fn cli_export_docker() {
+    oxo_flow_cmd()
+        .args([
+            "export",
+            "examples/gallery/01_hello_world.oxoflow",
+            "-f",
+            "docker",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("FROM"));
+}
+
+#[test]
+fn cli_export_singularity() {
+    oxo_flow_cmd()
+        .args([
+            "export",
+            "examples/gallery/01_hello_world.oxoflow",
+            "-f",
+            "singularity",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Bootstrap"));
+}
+
+#[test]
+fn cli_export_toml() {
+    oxo_flow_cmd()
+        .args([
+            "export",
+            "examples/gallery/01_hello_world.oxoflow",
+            "-f",
+            "toml",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[workflow]"));
+}
+
+// ─── Cluster CLI tests ──────────────────────────────────────────────────────
+
+#[test]
+fn cli_cluster_submit() {
+    let tmp = tempfile::tempdir().unwrap();
+    let output_dir = tmp.path().join("cluster_scripts");
+    oxo_flow_cmd()
+        .args([
+            "cluster",
+            "submit",
+            "examples/gallery/02_file_pipeline.oxoflow",
+            "-b",
+            "slurm",
+            "-o",
+            output_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Generating slurm job scripts"))
+        .stderr(predicate::str::contains("scripts written to"));
+
+    // Verify scripts were created
+    assert!(output_dir.exists());
+    let scripts: Vec<_> = fs::read_dir(&output_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map_or(false, |ext| ext == "sh"))
+        .collect();
+    assert!(
+        scripts.len() >= 3,
+        "expected at least 3 cluster scripts, found {}",
+        scripts.len()
+    );
+}
+
+#[test]
+fn cli_cluster_status() {
+    oxo_flow_cmd()
+        .args(["cluster", "status", "-b", "slurm"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("squeue"));
+}
+
+#[test]
+fn cli_cluster_cancel_no_ids() {
+    oxo_flow_cmd()
+        .args(["cluster", "cancel", "-b", "slurm"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("No job IDs"));
+}
