@@ -82,6 +82,28 @@ impl SchedulerState {
         Ok(ready)
     }
 
+    /// Returns all ready rules sorted by priority (descending), then name (ascending).
+    pub fn ready_rules_prioritized(
+        &self,
+        dag: &WorkflowDag,
+        rules: &[Rule],
+    ) -> Result<Vec<String>> {
+        let mut ready = self.ready_rules(dag)?;
+
+        let priority_map: HashMap<&str, i32> = rules
+            .iter()
+            .map(|r| (r.name.as_str(), r.priority))
+            .collect();
+
+        ready.sort_by(|a, b| {
+            let pa = priority_map.get(a.as_str()).copied().unwrap_or(0);
+            let pb = priority_map.get(b.as_str()).copied().unwrap_or(0);
+            pb.cmp(&pa).then_with(|| a.cmp(b))
+        });
+
+        Ok(ready)
+    }
+
     /// Returns `true` if all rules have completed (success, failed, or skipped).
     pub fn is_complete(&self) -> bool {
         self.statuses.values().all(|s| {
@@ -347,5 +369,72 @@ mod tests {
         let rules = make_rules();
         let pool = ResourcePool::new(16, 32768);
         assert!(pool.can_accommodate(&rules[0]));
+    }
+
+    #[test]
+    fn scheduler_ready_rules_prioritized() {
+        // Create three independent rules (no deps between them) with different priorities.
+        let rules = vec![
+            Rule {
+                name: "low".to_string(),
+                input: vec![],
+                output: vec!["low.txt".to_string()],
+                shell: Some("echo low".to_string()),
+                script: None,
+                threads: None,
+                memory: None,
+                resources: Resources::default(),
+                environment: EnvironmentSpec::default(),
+                log: None,
+                benchmark: None,
+                params: HashMap::new(),
+                priority: 1,
+                target: false,
+                group: None,
+                description: None,
+            },
+            Rule {
+                name: "high".to_string(),
+                input: vec![],
+                output: vec!["high.txt".to_string()],
+                shell: Some("echo high".to_string()),
+                script: None,
+                threads: None,
+                memory: None,
+                resources: Resources::default(),
+                environment: EnvironmentSpec::default(),
+                log: None,
+                benchmark: None,
+                params: HashMap::new(),
+                priority: 10,
+                target: false,
+                group: None,
+                description: None,
+            },
+            Rule {
+                name: "mid".to_string(),
+                input: vec![],
+                output: vec!["mid.txt".to_string()],
+                shell: Some("echo mid".to_string()),
+                script: None,
+                threads: None,
+                memory: None,
+                resources: Resources::default(),
+                environment: EnvironmentSpec::default(),
+                log: None,
+                benchmark: None,
+                params: HashMap::new(),
+                priority: 5,
+                target: false,
+                group: None,
+                description: None,
+            },
+        ];
+
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let state = SchedulerState::new(&["low", "high", "mid"]);
+
+        let prioritized = state.ready_rules_prioritized(&dag, &rules).unwrap();
+        assert_eq!(prioritized, vec!["high", "mid", "low"]);
     }
 }

@@ -221,6 +221,12 @@ pub enum VenusStep {
     Vep,
     /// Clinical report generation.
     ClinicalReport,
+    /// Copy number variation calling.
+    CnvKit,
+    /// Microsatellite instability detection.
+    MsiSensor,
+    /// Tumor mutation burden calculation.
+    TmbCalc,
 }
 
 impl std::fmt::Display for VenusStep {
@@ -236,6 +242,9 @@ impl std::fmt::Display for VenusStep {
             Self::Strelka2 => write!(f, "strelka2"),
             Self::Vep => write!(f, "vep"),
             Self::ClinicalReport => write!(f, "clinical_report"),
+            Self::CnvKit => write!(f, "cnvkit"),
+            Self::MsiSensor => write!(f, "msi_sensor"),
+            Self::TmbCalc => write!(f, "tmb_calc"),
         }
     }
 }
@@ -320,6 +329,22 @@ impl VenusPipelineBuilder {
                 rules.extend(self.strelka2_rules());
             }
         }
+
+        // CNV calling for tumor samples
+        if matches!(
+            self.config.mode,
+            AnalysisMode::TumorOnly | AnalysisMode::TumorNormal
+        ) {
+            rules.extend(self.cnvkit_rules());
+        }
+
+        // MSI detection for paired tumor-normal
+        if self.config.mode == AnalysisMode::TumorNormal {
+            rules.extend(self.msi_rules());
+        }
+
+        // TMB calculation
+        rules.extend(self.tmb_rules());
 
         if self.config.annotate {
             rules.extend(self.annotation_rules());
@@ -540,6 +565,83 @@ impl VenusPipelineBuilder {
                     8,
                     "16G",
                     "envs/strelka2.yaml",
+                )
+            })
+            .collect()
+    }
+
+    fn cnvkit_rules(&self) -> Vec<Rule> {
+        self.config
+            .tumor_samples
+            .iter()
+            .map(|s| {
+                let normal_bam = self
+                    .config
+                    .normal_samples
+                    .first()
+                    .map(|n| format!("recal/{}.recal.bam", n.name));
+                let mut input = vec![format!("recal/{}.recal.bam", s.name)];
+                if let Some(ref nb) = normal_bam {
+                    input.push(nb.clone());
+                }
+                make_rule(
+                    &format!("cnvkit_{}", s.name),
+                    input,
+                    vec![format!("cnv/{}.cnr", s.name), format!("cnv/{}.cns", s.name)],
+                    &format!(
+                        "cnvkit.py batch {{input[0]}} {} -d cnv/",
+                        normal_bam
+                            .as_ref()
+                            .map(|n| format!("--normal {n}"))
+                            .unwrap_or_default()
+                    ),
+                    4,
+                    "16G",
+                    "envs/cnvkit.yaml",
+                )
+            })
+            .collect()
+    }
+
+    fn msi_rules(&self) -> Vec<Rule> {
+        self.config
+            .tumor_samples
+            .iter()
+            .filter_map(|s| {
+                let normal = self.config.normal_samples.first()?;
+                Some(make_rule(
+                    &format!("msi_sensor_{}", s.name),
+                    vec![
+                        format!("recal/{}.recal.bam", s.name),
+                        format!("recal/{}.recal.bam", normal.name),
+                    ],
+                    vec![format!("msi/{}.msi.txt", s.name)],
+                    "msisensor2 msi -t {input[0]} -n {input[1]} -o {output[0]}",
+                    4,
+                    "8G",
+                    "envs/msi.yaml",
+                ))
+            })
+            .collect()
+    }
+
+    fn tmb_rules(&self) -> Vec<Rule> {
+        self.called_samples()
+            .into_iter()
+            .map(|(sample, vcf_path)| {
+                let input = if self.config.annotate {
+                    format!("annotated/{}.annotated.vcf.gz", sample.name)
+                } else {
+                    vcf_path
+                };
+                make_rule(
+                    &format!("tmb_{}", sample.name),
+                    vec![input],
+                    vec![format!("tmb/{}.tmb.txt", sample.name)],
+                    "python scripts/calc_tmb.py --input {input[0]} --output {output[0]}",
+                    1,
+                    "4G",
+                    "envs/report.yaml",
                 )
             })
             .collect()
@@ -838,8 +940,8 @@ mod tests {
         let builder = VenusPipelineBuilder::new(config);
         let rules = builder.build().unwrap();
 
-        // fastp + bwa_mem2 + mark_dup + bqsr + mutect2 + filter_mutect_calls + annotate + report = 8
-        assert_eq!(rules.len(), 8);
+        // fastp + bwa_mem2 + mark_dup + bqsr + mutect2 + filter_mutect_calls + cnvkit + tmb + annotate + report = 10
+        assert_eq!(rules.len(), 10);
         let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
         assert!(names.contains(&"fastp_T1"));
         assert!(names.contains(&"bwa_mem2_T1"));
@@ -860,8 +962,8 @@ mod tests {
         let builder = VenusPipelineBuilder::new(config);
         let rules = builder.build().unwrap();
 
-        // fastp + bwa_mem2 + mark_dup + bqsr + haplotype_caller = 5
-        assert_eq!(rules.len(), 5);
+        // fastp + bwa_mem2 + mark_dup + bqsr + haplotype_caller + tmb = 6
+        assert_eq!(rules.len(), 6);
         let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
         assert!(names.contains(&"haplotype_caller_N1"));
         assert!(!names.iter().any(|n| n.starts_with("mutect2")));
@@ -876,8 +978,8 @@ mod tests {
         let builder = VenusPipelineBuilder::new(config);
         let rules = builder.build().unwrap();
 
-        // 2*(fastp + bwa_mem2 + mark_dup + bqsr) + haplotype_caller + mutect2 + filter_mutect_calls + strelka2 = 12
-        assert_eq!(rules.len(), 12);
+        // 2*(fastp + bwa_mem2 + mark_dup + bqsr) + haplotype_caller + mutect2 + filter_mutect_calls + strelka2 + cnvkit + msi + 2*tmb = 16
+        assert_eq!(rules.len(), 16);
         let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
         assert!(names.contains(&"mutect2_T1"));
         assert!(names.contains(&"filter_mutect_calls_T1"));
@@ -1065,5 +1167,43 @@ mod tests {
         };
 
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn venus_step_display_cnv_msi_tmb() {
+        assert_eq!(VenusStep::CnvKit.to_string(), "cnvkit");
+        assert_eq!(VenusStep::MsiSensor.to_string(), "msi_sensor");
+        assert_eq!(VenusStep::TmbCalc.to_string(), "tmb_calc");
+    }
+
+    #[test]
+    fn build_tumor_normal_has_msi() {
+        let mut config = base_config(AnalysisMode::TumorNormal);
+        config.tumor_samples = vec![tumor_sample("T1")];
+        config.normal_samples = vec![normal_sample("N1")];
+
+        let builder = VenusPipelineBuilder::new(config);
+        let rules = builder.build().unwrap();
+
+        let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
+        assert!(
+            names.contains(&"msi_sensor_T1"),
+            "TumorNormal pipeline should include MSI rules"
+        );
+    }
+
+    #[test]
+    fn build_tumor_only_no_msi() {
+        let mut config = base_config(AnalysisMode::TumorOnly);
+        config.tumor_samples = vec![tumor_sample("T1")];
+
+        let builder = VenusPipelineBuilder::new(config);
+        let rules = builder.build().unwrap();
+
+        let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
+        assert!(
+            !names.iter().any(|n| n.starts_with("msi_sensor")),
+            "TumorOnly pipeline should NOT include MSI rules"
+        );
     }
 }
