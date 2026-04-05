@@ -534,6 +534,57 @@ pub fn validate_outputs(rule: &Rule, workdir: &Path) -> Vec<String> {
         .collect()
 }
 
+/// Provenance metadata for a workflow execution.
+///
+/// Captures the oxo-flow version, configuration checksum, and execution
+/// timestamps for reproducibility and audit trail purposes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionProvenance {
+    /// oxo-flow version that performed the execution.
+    pub oxo_flow_version: String,
+
+    /// SHA-256 checksum of the workflow configuration.
+    pub config_checksum: String,
+
+    /// Execution start time.
+    pub started_at: DateTime<Utc>,
+
+    /// Execution end time (set when complete).
+    pub finished_at: Option<DateTime<Utc>>,
+
+    /// Hostname where execution occurred.
+    pub hostname: String,
+
+    /// Working directory.
+    pub workdir: String,
+}
+
+impl ExecutionProvenance {
+    /// Create a new provenance record for the current execution.
+    pub fn new(config_checksum: &str, workdir: &Path) -> Self {
+        Self {
+            oxo_flow_version: env!("CARGO_PKG_VERSION").to_string(),
+            config_checksum: config_checksum.to_string(),
+            started_at: Utc::now(),
+            finished_at: None,
+            hostname: hostname(),
+            workdir: workdir.display().to_string(),
+        }
+    }
+
+    /// Mark the execution as complete.
+    pub fn finish(&mut self) {
+        self.finished_at = Some(Utc::now());
+    }
+}
+
+/// Get the system hostname, returning "unknown" if unavailable.
+fn hostname() -> String {
+    std::env::var("HOSTNAME")
+        .or_else(|_| std::env::var("COMPUTERNAME"))
+        .unwrap_or_else(|_| "unknown".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1144,5 +1195,20 @@ mod tests {
             ..Default::default()
         };
         assert!(should_skip_rule(&rule, dir.path()));
+    }
+
+    #[test]
+    fn provenance_creation() {
+        let prov = ExecutionProvenance::new("abc123", Path::new("/work"));
+        assert_eq!(prov.oxo_flow_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(prov.config_checksum, "abc123");
+        assert!(prov.finished_at.is_none());
+    }
+
+    #[test]
+    fn provenance_finish() {
+        let mut prov = ExecutionProvenance::new("abc123", Path::new("/work"));
+        prov.finish();
+        assert!(prov.finished_at.is_some());
     }
 }

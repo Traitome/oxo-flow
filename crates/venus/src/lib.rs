@@ -734,6 +734,7 @@ pub fn generate_oxoflow(config: &VenusConfig) -> anyhow::Result<String> {
                 config.mode, config.seq_type
             )),
             author: None,
+            min_version: None,
         },
         config: {
             let mut map = HashMap::new();

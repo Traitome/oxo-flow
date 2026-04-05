@@ -99,6 +99,23 @@ impl Report {
         self.metadata.insert(key.to_string(), value.to_string());
     }
 
+    /// Add a provenance section to the report with execution metadata.
+    pub fn add_provenance(&mut self, version: &str, checksum: &str, timestamp: &str) {
+        let section = ReportSection {
+            title: "Execution Provenance".to_string(),
+            id: "provenance".to_string(),
+            content: ReportContent::KeyValue {
+                pairs: vec![
+                    ("oxo-flow Version".to_string(), version.to_string()),
+                    ("Config Checksum".to_string(), checksum.to_string()),
+                    ("Execution Time".to_string(), timestamp.to_string()),
+                ],
+            },
+            subsections: vec![],
+        };
+        self.add_section(section);
+    }
+
     /// Render the report as a JSON string.
     pub fn to_json(&self) -> Result<String> {
         Ok(serde_json::to_string_pretty(self)?)
@@ -914,5 +931,14 @@ mod tests {
         assert_eq!(deser.sample_id, "S001");
         assert_eq!(deser.patient_id.as_deref(), Some("P001"));
         assert!(deser.collection_date.is_none());
+    }
+
+    #[test]
+    fn report_provenance_section() {
+        let mut report = Report::new("Test Report", "test-pipeline", "1.0.0");
+        report.add_provenance("0.1.0", "abc123", "2026-04-05T10:00:00Z");
+        let html = report.to_html();
+        assert!(html.contains("Execution Provenance"));
+        assert!(html.contains("abc123"));
     }
 }

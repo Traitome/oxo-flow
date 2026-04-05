@@ -220,6 +220,10 @@ pub struct Rule {
     /// Number of times to automatically retry this rule on failure.
     #[serde(default)]
     pub retries: u32,
+
+    /// Tags for categorization and filtering (e.g., ["qc", "alignment", "variant-calling"]).
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 impl Rule {
@@ -241,8 +245,8 @@ impl Rule {
     /// - At least shell or script is provided if outputs exist
     /// - Thread count is positive (if specified)
     pub fn validate(&self) -> std::result::Result<(), String> {
-        if self.name.is_empty() {
-            return Err("rule name cannot be empty".to_string());
+        if self.name.trim().is_empty() {
+            return Err("rule name cannot be empty or whitespace-only".to_string());
         }
         if !self
             .name
@@ -264,6 +268,23 @@ impl Rule {
             && threads == 0
         {
             return Err(format!("rule '{}' has zero threads", self.name));
+        }
+        if let Some(ref mem) = self.memory {
+            let mem_trimmed = mem.trim();
+            if !mem_trimmed.is_empty() {
+                // Must end with a valid unit suffix and have a numeric prefix
+                let valid = mem_trimmed
+                    .strip_suffix(['G', 'g', 'M', 'm', 'K', 'k', 'T', 't'])
+                    .and_then(|num_part| num_part.parse::<f64>().ok())
+                    .map(|v| v > 0.0)
+                    .unwrap_or(false);
+                if !valid {
+                    return Err(format!(
+                        "rule '{}' has invalid memory format '{}' (expected e.g. \"8G\", \"16384M\", \"1T\")",
+                        self.name, mem
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -402,7 +423,8 @@ mod tests {
     #[test]
     fn validate_empty_name() {
         let rule = make_rule("");
-        assert_eq!(rule.validate().unwrap_err(), "rule name cannot be empty");
+        let err = rule.validate().unwrap_err();
+        assert!(err.contains("empty or whitespace-only"));
     }
 
     #[test]
@@ -547,5 +569,56 @@ mod tests {
         assert!(rule.protected_output.is_empty());
         assert!(rule.input_function.is_none());
         assert_eq!(rule.retries, 0);
+        assert!(rule.tags.is_empty());
+    }
+
+    #[test]
+    fn validate_whitespace_only_name() {
+        let rule = Rule {
+            name: "  ".to_string(),
+            ..Default::default()
+        };
+        assert!(rule.validate().is_err());
+    }
+
+    #[test]
+    fn validate_valid_memory() {
+        let rule = Rule {
+            name: "test".to_string(),
+            memory: Some("8G".to_string()),
+            ..Default::default()
+        };
+        assert!(rule.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_invalid_memory() {
+        let rule = Rule {
+            name: "test".to_string(),
+            memory: Some("8X".to_string()),
+            ..Default::default()
+        };
+        assert!(rule.validate().is_err());
+    }
+
+    #[test]
+    fn validate_invalid_memory_no_unit() {
+        let rule = Rule {
+            name: "test".to_string(),
+            memory: Some("abc".to_string()),
+            ..Default::default()
+        };
+        assert!(rule.validate().is_err());
+    }
+
+    #[test]
+    fn rule_with_tags() {
+        let rule = Rule {
+            name: "align".to_string(),
+            tags: vec!["alignment".to_string(), "mapping".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(rule.tags.len(), 2);
+        assert!(rule.tags.contains(&"alignment".to_string()));
     }
 }

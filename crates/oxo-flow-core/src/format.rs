@@ -43,6 +43,9 @@ pub struct Diagnostic {
     pub rule: Option<String>,
     /// Diagnostic code for programmatic handling (e.g. "E001", "W001").
     pub code: String,
+    /// Optional suggestion for how to fix the issue.
+    #[serde(default)]
+    pub suggestion: Option<String>,
 }
 
 impl std::fmt::Display for Diagnostic {
@@ -50,6 +53,9 @@ impl std::fmt::Display for Diagnostic {
         write!(f, "[{}] {}: {}", self.code, self.severity, self.message)?;
         if let Some(ref rule) = self.rule {
             write!(f, " (rule: {})", rule)?;
+        }
+        if let Some(ref suggestion) = self.suggestion {
+            write!(f, " — hint: {}", suggestion)?;
         }
         Ok(())
     }
@@ -118,6 +124,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
             message: "workflow name cannot be empty".to_string(),
             rule: None,
             code: "E001".to_string(),
+            suggestion: Some("add a non-empty name to the [workflow] section".to_string()),
         });
     }
 
@@ -132,6 +139,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                 message: msg,
                 rule: Some(rule.name.clone()),
                 code: "E002".to_string(),
+                suggestion: None,
             });
         }
 
@@ -145,6 +153,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                     message: format!("wildcard '{{{}}}' appears in output but not in input", wc),
                     rule: Some(rule.name.clone()),
                     code: "E003".to_string(),
+                    suggestion: Some(format!("add '{{{{{}}}}}' to the rule's input patterns", wc)),
                 });
             }
         }
@@ -158,6 +167,9 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                 message: format!("invalid memory specification: '{}'", mem),
                 rule: Some(rule.name.clone()),
                 code: "E004".to_string(),
+                suggestion: Some(
+                    "use a valid format like \"8G\", \"16384M\", or \"1T\"".to_string(),
+                ),
             });
         }
 
@@ -174,6 +186,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                         ),
                         rule: Some(rule.name.clone()),
                         code: "E005".to_string(),
+                        suggestion: Some(format!("define '{}' in the [config] section", key)),
                     });
                 }
             }
@@ -189,6 +202,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                 message: format!("DAG error: {}", e),
                 rule: None,
                 code: "E006".to_string(),
+                suggestion: Some("check for circular dependencies between rules".to_string()),
             });
         }
     }
@@ -220,6 +234,7 @@ pub fn lint_format(config: &WorkflowConfig) -> Vec<Diagnostic> {
             message: "workflow has no description".to_string(),
             rule: None,
             code: "W001".to_string(),
+            suggestion: Some("add description = \"...\" to the [workflow] section".to_string()),
         });
     }
 
@@ -230,6 +245,7 @@ pub fn lint_format(config: &WorkflowConfig) -> Vec<Diagnostic> {
             message: "workflow has no author".to_string(),
             rule: None,
             code: "W002".to_string(),
+            suggestion: Some("add author = \"...\" to the [workflow] section".to_string()),
         });
     }
 
@@ -244,6 +260,7 @@ pub fn lint_format(config: &WorkflowConfig) -> Vec<Diagnostic> {
                 message: "rule has no description".to_string(),
                 rule: Some(rule.name.clone()),
                 code: "W003".to_string(),
+                suggestion: Some("add description = \"...\" to this rule".to_string()),
             });
         }
 
@@ -254,6 +271,7 @@ pub fn lint_format(config: &WorkflowConfig) -> Vec<Diagnostic> {
                 message: "rule has a shell command but no log file specified".to_string(),
                 rule: Some(rule.name.clone()),
                 code: "W004".to_string(),
+                suggestion: Some(format!("add log = \"logs/{}.log\"", rule.name)),
             });
         }
 
@@ -264,6 +282,9 @@ pub fn lint_format(config: &WorkflowConfig) -> Vec<Diagnostic> {
                 message: "rule uses >8 threads but has no memory specification".to_string(),
                 rule: Some(rule.name.clone()),
                 code: "W005".to_string(),
+                suggestion: Some(
+                    "add memory = \"32G\" or appropriate memory specification".to_string(),
+                ),
             });
         }
 
@@ -275,6 +296,7 @@ pub fn lint_format(config: &WorkflowConfig) -> Vec<Diagnostic> {
                     .to_string(),
                 rule: Some(rule.name.clone()),
                 code: "W006".to_string(),
+                suggestion: Some(format!("rename to \"{}\"", rule.name.replace('-', "_"))),
             });
         }
 
@@ -290,6 +312,7 @@ pub fn lint_format(config: &WorkflowConfig) -> Vec<Diagnostic> {
                 message: "leaf rule (no dependents) could be marked as target = true".to_string(),
                 rule: Some(rule.name.clone()),
                 code: "W007".to_string(),
+                suggestion: Some("add target = true to this rule".to_string()),
             });
         }
 
@@ -301,6 +324,21 @@ pub fn lint_format(config: &WorkflowConfig) -> Vec<Diagnostic> {
                     .to_string(),
                 rule: Some(rule.name.clone()),
                 code: "W008".to_string(),
+                suggestion: Some(
+                    "add an [environment] section with conda, docker, or another backend"
+                        .to_string(),
+                ),
+            });
+        }
+
+        // W009: Very high thread count (>32) without memory specification
+        if rule.effective_threads() > 32 && rule.effective_memory().is_none() {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: "rule uses >32 threads but has no memory specification — high-thread jobs typically need significant memory".to_string(),
+                rule: Some(rule.name.clone()),
+                code: "W009".to_string(),
+                suggestion: Some("add memory = \"64G\" or appropriate value for high-thread workloads".to_string()),
             });
         }
     }
@@ -408,6 +446,7 @@ pub fn verify_schema(toml_content: &str) -> ValidationResult {
                 message: format!("invalid TOML syntax: {}", e),
                 rule: None,
                 code: "S001".to_string(),
+                suggestion: None,
             });
             return ValidationResult {
                 valid: false,
@@ -424,6 +463,7 @@ pub fn verify_schema(toml_content: &str) -> ValidationResult {
             message: "[workflow] section is required".to_string(),
             rule: None,
             code: "S002".to_string(),
+            suggestion: Some("add a [workflow] section with at least a name field".to_string()),
         });
     } else if let Some(wf) = table.get("workflow").and_then(|v| v.as_table()) {
         // S003: workflow.name is required
@@ -433,6 +473,9 @@ pub fn verify_schema(toml_content: &str) -> ValidationResult {
                 message: "workflow.name is required".to_string(),
                 rule: None,
                 code: "S003".to_string(),
+                suggestion: Some(
+                    "add name = \"my-workflow\" to the [workflow] section".to_string(),
+                ),
             });
         }
     }
@@ -445,6 +488,7 @@ pub fn verify_schema(toml_content: &str) -> ValidationResult {
                 message: "[[rules]] must be an array of tables".to_string(),
                 rule: None,
                 code: "S004".to_string(),
+                suggestion: Some("use [[rules]] syntax for rule definitions".to_string()),
             });
         } else if let Some(arr) = rules.as_array() {
             for (i, item) in arr.iter().enumerate() {
@@ -454,6 +498,7 @@ pub fn verify_schema(toml_content: &str) -> ValidationResult {
                         message: format!("rules[{}] must be a table", i),
                         rule: None,
                         code: "S004".to_string(),
+                        suggestion: None,
                     });
                 } else if let Some(t) = item.as_table()
                     && !t.contains_key("name")
@@ -463,6 +508,7 @@ pub fn verify_schema(toml_content: &str) -> ValidationResult {
                         message: format!("rules[{}].name is required", i),
                         rule: None,
                         code: "S005".to_string(),
+                        suggestion: Some("add a name field to each [[rules]] entry".to_string()),
                     });
                 }
             }
@@ -486,8 +532,29 @@ pub fn verify_schema(toml_content: &str) -> ValidationResult {
                 message: format!("unknown top-level section: '{}'", key),
                 rule: None,
                 code: "S006".to_string(),
+                suggestion: Some(format!("remove or rename '{}' — it is not recognized", key)),
             });
         }
+    }
+
+    // S007: Warn if format_version is present but unrecognized
+    if let Some(wf) = table.get("workflow").and_then(|v| v.as_table())
+        && let Some(fmt_ver) = wf.get("format_version").and_then(|v| v.as_str())
+        && !check_format_version(fmt_ver)
+    {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            message: format!(
+                "format_version '{}' is newer than supported version '{}'",
+                fmt_ver, FORMAT_VERSION
+            ),
+            rule: None,
+            code: "S007".to_string(),
+            suggestion: Some(format!(
+                "use format_version = \"{}\" or upgrade oxo-flow",
+                FORMAT_VERSION
+            )),
+        });
     }
 
     let valid = !diagnostics.iter().any(|d| d.severity == Severity::Error);
@@ -928,6 +995,7 @@ mod tests {
             message: "test error".to_string(),
             rule: Some("step1".to_string()),
             code: "E001".to_string(),
+            suggestion: None,
         };
         let s = format!("{}", d);
         assert!(s.contains("E001"));
@@ -1305,5 +1373,49 @@ mod tests {
         let config = WorkflowConfig::parse(toml).unwrap();
         let result = validate_format(&config);
         assert!(result.valid);
+    }
+
+    #[test]
+    fn verify_schema_unknown_format_version() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            format_version = "99.0"
+            [[rules]]
+            name = "step1"
+            shell = "echo hi"
+        "#;
+        let result = verify_schema(toml);
+        assert!(result.diagnostics.iter().any(|d| d.code == "S007"));
+    }
+
+    #[test]
+    fn diagnostic_with_suggestion() {
+        let d = Diagnostic {
+            severity: Severity::Warning,
+            message: "missing description".to_string(),
+            rule: Some("test".to_string()),
+            code: "W003".to_string(),
+            suggestion: Some("add description field".to_string()),
+        };
+        let display = d.to_string();
+        assert!(display.contains("hint: add description field"));
+    }
+
+    #[test]
+    fn lint_very_high_threads_no_memory() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            threads = 64
+            output = ["out.txt"]
+            shell = "echo hello"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(diagnostics.iter().any(|d| d.code == "W009"));
     }
 }
