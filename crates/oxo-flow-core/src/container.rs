@@ -101,10 +101,10 @@ pub fn generate_dockerfile(workflow: &WorkflowConfig, config: &PackageConfig) ->
         if rule.environment.pixi.is_some() {
             needs_pixi = true;
         }
-        if let Some(ref img) = rule.environment.docker {
-            if !docker_images.contains(img) {
-                docker_images.push(img.clone());
-            }
+        if let Some(ref img) = rule.environment.docker
+            && !docker_images.contains(img)
+        {
+            docker_images.push(img.clone());
         }
     }
 

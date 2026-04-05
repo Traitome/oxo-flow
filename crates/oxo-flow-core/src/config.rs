@@ -159,16 +159,16 @@ impl WorkflowConfig {
                 rule.threads = self.defaults.threads;
             }
             // Apply default memory if rule doesn't specify one
-            if rule.memory.is_none() {
-                if let Some(ref mem) = self.defaults.memory {
-                    rule.memory = Some(mem.clone());
-                }
+            if rule.memory.is_none()
+                && let Some(ref mem) = self.defaults.memory
+            {
+                rule.memory = Some(mem.clone());
             }
             // Apply default environment if rule doesn't specify one
-            if rule.environment.is_empty() {
-                if let Some(ref env) = self.defaults.environment {
-                    rule.environment = env.clone();
-                }
+            if rule.environment.is_empty()
+                && let Some(ref env) = self.defaults.environment
+            {
+                rule.environment = env.clone();
             }
         }
     }

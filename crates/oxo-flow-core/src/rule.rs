@@ -207,10 +207,10 @@ impl Rule {
                 self.name
             ));
         }
-        if let Some(threads) = self.threads {
-            if threads == 0 {
-                return Err(format!("rule '{}' has zero threads", self.name));
-            }
+        if let Some(threads) = self.threads
+            && threads == 0
+        {
+            return Err(format!("rule '{}' has zero threads", self.name));
         }
         Ok(())
     }
