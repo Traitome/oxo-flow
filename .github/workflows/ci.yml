@@ -14,8 +14,14 @@ on:
         required: false
         default: ''
 
+# Cancel in-progress runs for the same branch/PR; preserve tag releases.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
   RELEASE_TAG: ${{ (github.event_name == 'workflow_dispatch' && inputs.tag != '') && inputs.tag || github.ref_name }}
 
 jobs:
@@ -28,6 +34,8 @@ jobs:
       contents: write
     outputs:
       version: ${{ steps.extract.outputs.version }}
+      # SHA of the post-bump commit (or the original trigger SHA when nothing changed).
+      updated_sha: ${{ steps.push.outputs.updated_sha || github.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -85,6 +93,7 @@ jobs:
         run: cargo update --workspace
 
       - name: Commit and push version bump
+        id: push
         if: steps.patch.outputs.changed == 'true'
         shell: bash
         run: |
@@ -96,6 +105,7 @@ jobs:
           git commit -m "chore: bump version to ${{ steps.extract.outputs.version }} [skip ci]"
           git push origin "HEAD:${{ github.event.repository.default_branch }}"
           NEW_SHA=$(git rev-parse HEAD)
+          echo "updated_sha=$NEW_SHA" >> "$GITHUB_OUTPUT"
           echo "New commit: $NEW_SHA"
           if git cat-file -t "$GITHUB_REF_NAME" 2>/dev/null | grep -q '^tag$'; then
             TAG_MSG=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")
@@ -113,24 +123,34 @@ jobs:
     runs-on: ubuntu-latest
     needs: [sync-version]
     if: always() && (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped')
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ needs.sync-version.outputs.updated_sha || github.sha }}
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
-      - name: Cache cargo
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-registry-
+
+      - name: Cache build artifacts
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-build-
 
       - name: Check formatting
         run: cargo fmt -- --check
@@ -139,15 +159,21 @@ jobs:
         run: cargo clippy --workspace -- -D warnings
 
       - name: Build
-        run: cargo build --workspace --verbose
+        run: cargo build --workspace
 
       - name: Test
-        run: cargo test --workspace --verbose
+        run: cargo test --workspace
+        env:
+          RUST_BACKTRACE: "1"
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+        continue-on-error: true
 
       - name: Security audit
-        run: |
-          cargo install cargo-audit --quiet
-          cargo audit
+        run: cargo audit
         continue-on-error: true
 
   # ─── Build Linux binaries ──────────────────────────────────────────────────
@@ -156,6 +182,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [test]
     if: always() && needs.test.result == 'success'
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -179,14 +207,15 @@ jobs:
         with:
           tool: cross
 
-      - name: Cache cargo
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-registry-
 
       - name: Build release binaries (cross)
         run: |
@@ -217,6 +246,7 @@ jobs:
         with:
           name: binaries-${{ matrix.target }}
           path: dist/*.tar.gz
+          retention-days: 7
 
   # ─── Build macOS binaries ──────────────────────────────────────────────────
   build-macos:
@@ -230,10 +260,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # macos-13 is the last GitHub-hosted x86_64 macOS runner;
+          # macos-14 and macos-latest (macos-15+) are both ARM64.
           - target: x86_64-apple-darwin
-            runner: macos-latest
+            runner: macos-13
           - target: aarch64-apple-darwin
-            runner: macos-14
+            runner: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -244,14 +276,15 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Cache cargo
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-registry-${{ matrix.target }}-
 
       - name: Build release binaries
         run: |
@@ -282,6 +315,7 @@ jobs:
         with:
           name: binaries-${{ matrix.target }}
           path: dist/*.tar.gz
+          retention-days: 7
 
   # ─── Build Windows binaries ────────────────────────────────────────────────
   build-windows:
@@ -306,14 +340,15 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Cache cargo
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
-            ~\.cargo\registry
-            ~\.cargo\git
-            target
-          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+            ~\.cargo\registry\index
+            ~\.cargo\registry\cache
+            ~\.cargo\git\db
+          key: ${{ runner.os }}-cargo-registry-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-registry-${{ matrix.target }}-
 
       - name: Build release binaries
         run: |
@@ -340,6 +375,7 @@ jobs:
         with:
           name: binaries-${{ matrix.target }}
           path: dist/*.zip
+          retention-days: 7
 
   # ─── GitHub Release ────────────────────────────────────────────────────────
   release:
@@ -362,16 +398,9 @@ jobs:
           ref: ${{ (github.event_name == 'workflow_dispatch' && inputs.tag != '') && format('refs/tags/{0}', inputs.tag) || github.ref }}
 
       - name: Install git-cliff
-        shell: bash
-        run: |
-          set -euo pipefail
-          CLIFF_VERSION="2.12.0"
-          ARCH="x86_64-unknown-linux-gnu"
-          URL="https://github.com/orhun/git-cliff/releases/download/v${CLIFF_VERSION}/git-cliff-${CLIFF_VERSION}-${ARCH}.tar.gz"
-          curl -sSfL "$URL" -o /tmp/git-cliff.tar.gz
-          tar -xzf /tmp/git-cliff.tar.gz -C /tmp
-          install -m 755 "/tmp/git-cliff-${CLIFF_VERSION}/git-cliff" /usr/local/bin/git-cliff
-          git-cliff --version
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff@2.12.0
 
       - name: Generate changelog for this release
         shell: bash
@@ -441,12 +470,20 @@ jobs:
   # ─── Publish crates to crates.io (dependency order) ────────────────────────
   publish-crates:
     name: Publish to crates.io
-    needs: [sync-version, test]
+    # Depend on `release` so publishing only happens after all binary builds
+    # succeed and the GitHub Release is created.
+    needs: [release]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
+          # The tag was force-pushed by sync-version to the version-bump commit.
+          # Checking out by tag name resolves to that latest commit.
           ref: ${{ github.ref }}
 
       - name: Install Rust (stable)
@@ -468,37 +505,71 @@ jobs:
             fi
           done
 
-      - name: Update lock file
-        run: cargo update --workspace
+      - name: Publish oxo-flow-core
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Query crates.io API to detect already-published versions (idempotent re-runs).
+          # Status 000 means a network failure; we assume not published and attempt anyway.
+          STATUS=$(curl -sf "https://crates.io/api/v1/crates/oxo-flow-core/${VERSION}" \
+            -H "User-Agent: oxo-flow-ci/1.0 (github.com/Traitome/oxo-flow)" \
+            -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
+          if [ "$STATUS" = "200" ]; then
+            echo "oxo-flow-core ${VERSION} already on crates.io, skipping"
+          else
+            [ "$STATUS" = "000" ] && echo "::warning::crates.io reachability check failed, attempting publish anyway"
+            cargo publish -p oxo-flow-core
+          fi
 
-      - name: Publish oxo-flow-core (lib, published first as dependency)
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p oxo-flow-core --locked
-
-      - name: Wait for crates.io index update
-        run: sleep 30
+      # crates.io sparse-index propagation typically completes within 30-60 s.
+      # We use 60 s to give a comfortable margin before dependent crates publish.
+      - name: Wait for crates.io index (oxo-flow-core)
+        run: sleep 60
 
       - name: Publish oxo-flow-web
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p oxo-flow-web --locked
-        continue-on-error: true
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          STATUS=$(curl -sf "https://crates.io/api/v1/crates/oxo-flow-web/${VERSION}" \
+            -H "User-Agent: oxo-flow-ci/1.0 (github.com/Traitome/oxo-flow)" \
+            -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
+          if [ "$STATUS" = "200" ]; then
+            echo "oxo-flow-web ${VERSION} already on crates.io, skipping"
+          else
+            [ "$STATUS" = "000" ] && echo "::warning::crates.io reachability check failed, attempting publish anyway"
+            cargo publish -p oxo-flow-web
+          fi
 
       - name: Publish venus
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p venus --locked
-        continue-on-error: true
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          STATUS=$(curl -sf "https://crates.io/api/v1/crates/venus/${VERSION}" \
+            -H "User-Agent: oxo-flow-ci/1.0 (github.com/Traitome/oxo-flow)" \
+            -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
+          if [ "$STATUS" = "200" ]; then
+            echo "venus ${VERSION} already on crates.io, skipping"
+          else
+            [ "$STATUS" = "000" ] && echo "::warning::crates.io reachability check failed, attempting publish anyway"
+            cargo publish -p venus
+          fi
 
-      - name: Wait for crates.io index update
-        run: sleep 30
+      - name: Wait for crates.io index (oxo-flow-web, venus)
+        run: sleep 60
 
       - name: Publish oxo-flow-cli
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p oxo-flow-cli --locked
-        continue-on-error: true
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          STATUS=$(curl -sf "https://crates.io/api/v1/crates/oxo-flow-cli/${VERSION}" \
+            -H "User-Agent: oxo-flow-ci/1.0 (github.com/Traitome/oxo-flow)" \
+            -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
+          if [ "$STATUS" = "200" ]; then
+            echo "oxo-flow-cli ${VERSION} already on crates.io, skipping"
+          else
+            [ "$STATUS" = "000" ] && echo "::warning::crates.io reachability check failed, attempting publish anyway"
+            cargo publish -p oxo-flow-cli
+          fi
 
   # ─── Deploy GitHub Pages (landing page + MkDocs documentation) ─────────────
   deploy-pages:
