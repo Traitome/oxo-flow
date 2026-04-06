@@ -1592,4 +1592,26 @@ mod tests {
         let diagnostics = lint_format(&config);
         assert!(!diagnostics.iter().any(|d| d.code == "W011"));
     }
+
+    #[test]
+    fn known_bio_formats() {
+        assert!(is_known_bio_format("sample.bam"));
+        assert!(is_known_bio_format("variants.vcf.gz"));
+        assert!(is_known_bio_format("reads.fastq.gz"));
+        assert!(!is_known_bio_format("readme.txt"));
+        assert!(!is_known_bio_format("config.toml"));
+    }
+
+    #[test]
+    fn secret_scanning_detects_aws_key() {
+        let diags = scan_for_secrets("aws_access_key = AKIAIOSFODNN7EXAMPLE");
+        assert!(!diags.is_empty());
+        assert!(diags.iter().any(|d| d.message.contains("AWS")));
+    }
+
+    #[test]
+    fn secret_scanning_clean_config() {
+        let diags = scan_for_secrets("reference = /data/hg38.fa\nthreads = 8");
+        assert!(diags.is_empty());
+    }
 }

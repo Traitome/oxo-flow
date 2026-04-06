@@ -1030,4 +1030,13 @@ mod tests {
         assert!(dockerfile.contains("USER oxoflow"));
         assert!(dockerfile.contains("HEALTHCHECK"));
     }
+
+    #[test]
+    fn generate_docker_run_basic() {
+        let resources = crate::rule::Resources::default();
+        let cmd = generate_docker_run_command("myimage:latest", &resources, "/data");
+        assert!(cmd.contains("docker run"));
+        assert!(cmd.contains("myimage:latest"));
+        assert!(cmd.contains("/data"));
+    }
 }

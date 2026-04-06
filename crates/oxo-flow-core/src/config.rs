@@ -1410,4 +1410,147 @@ mod tests {
         let config = WorkflowConfig::parse(MINIMAL_WORKFLOW).unwrap();
         assert!(config.workflow.format_version.is_none());
     }
+
+    #[test]
+    fn workflow_state_lifecycle() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+            [[rules]]
+            name = "step1"
+            input = ["a.txt"]
+            output = ["b.txt"]
+            shell = "cat a.txt > b.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let parsed = WorkflowState::new(config);
+        assert_eq!(parsed.config().workflow.name, "test");
+        let validated = parsed.validate().unwrap();
+        assert_eq!(validated.config().workflow.name, "test");
+        let ready = validated.prepare().unwrap();
+        assert_eq!(ready.config().workflow.name, "test");
+    }
+
+    #[test]
+    fn validate_reference_valid_path() {
+        let warnings = WorkflowConfig::validate_reference("ref.fa");
+        assert!(warnings.is_empty() || warnings.iter().all(|w| w.contains("index")));
+    }
+
+    #[test]
+    fn validate_reference_invalid_extension() {
+        let warnings = WorkflowConfig::validate_reference("ref.txt");
+        assert!(warnings.iter().any(|w| w.contains("recognized extension")));
+    }
+
+    #[test]
+    fn validate_sample_sheet_valid() {
+        let csv =
+            "sample_id,fastq_r1,fastq_r2\nS1,s1_R1.fq.gz,s1_R2.fq.gz\nS2,s2_R1.fq.gz,s2_R2.fq.gz";
+        let warnings = WorkflowConfig::validate_sample_sheet(csv);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn validate_sample_sheet_empty() {
+        let warnings = WorkflowConfig::validate_sample_sheet("");
+        assert!(warnings.iter().any(|w| w.contains("empty")));
+    }
+
+    #[test]
+    fn validate_sample_sheet_duplicates() {
+        let csv = "sample_id,fastq\nS1,a.fq\nS1,b.fq";
+        let warnings = WorkflowConfig::validate_sample_sheet(csv);
+        assert!(warnings.iter().any(|w| w.contains("Duplicate")));
+    }
+
+    #[test]
+    fn variant_classification_display() {
+        assert_eq!(VariantClassification::TierI.to_string(), "Tier I");
+        assert_eq!(VariantClassification::Vus.to_string(), "VUS");
+        assert_eq!(VariantClassification::Benign.to_string(), "Benign");
+    }
+
+    #[test]
+    fn biomarker_result_display() {
+        let br = BiomarkerResult {
+            name: "TMB".to_string(),
+            value: 12.5,
+            unit: "mutations/Mb".to_string(),
+            classification: Some("TMB-High".to_string()),
+            threshold: Some(10.0),
+        };
+        let s = br.to_string();
+        assert!(s.contains("TMB"));
+        assert!(s.contains("12.50"));
+        assert!(s.contains("TMB-High"));
+    }
+
+    #[test]
+    fn qc_threshold_passes() {
+        let t = QcThreshold {
+            metric: "coverage".to_string(),
+            min: Some(30.0),
+            max: Some(1000.0),
+            description: None,
+        };
+        assert!(t.passes(50.0));
+        assert!(!t.passes(10.0));
+        assert!(!t.passes(2000.0));
+    }
+
+    #[test]
+    fn gene_panel_display() {
+        let gp = GenePanel {
+            name: "Test Panel".to_string(),
+            version: Some("1.0".to_string()),
+            genes: vec!["BRCA1".to_string(), "BRCA2".to_string()],
+            bed_file: None,
+        };
+        assert_eq!(gp.to_string(), "Test Panel (2 genes) v1.0");
+    }
+
+    #[test]
+    fn rule_name_newtype() {
+        let rn = RuleName::from("align");
+        assert_eq!(rn.to_string(), "align");
+        assert_eq!(rn, RuleName("align".to_string()));
+    }
+
+    #[test]
+    fn wildcard_pattern_newtype() {
+        let wp = WildcardPattern::from("{sample}.bam");
+        assert_eq!(wp.to_string(), "{sample}.bam");
+    }
+
+    #[test]
+    fn execution_mode_display() {
+        assert_eq!(ExecutionMode::Sequential.to_string(), "sequential");
+        assert_eq!(ExecutionMode::Parallel.to_string(), "parallel");
+    }
+
+    #[test]
+    fn genome_build_in_workflow_meta() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+            genome_build = "GRCh38"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        assert_eq!(config.workflow.genome_build.as_deref(), Some("GRCh38"));
+    }
+
+    #[test]
+    fn clinical_report_section_display() {
+        assert_eq!(
+            ClinicalReportSection::SpecimenInfo.to_string(),
+            "Specimen Information"
+        );
+        assert_eq!(
+            ClinicalReportSection::Methodology.to_string(),
+            "Methodology"
+        );
+    }
 }

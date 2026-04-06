@@ -260,4 +260,11 @@ mod tests {
         let result = cartesian_product(&lists);
         assert_eq!(result.len(), 4);
     }
+
+    #[test]
+    fn paired_end_pattern_basic() {
+        let (r1, r2) = paired_end_pattern("data", "{sample}", "fastq.gz");
+        assert_eq!(r1, "data/{sample}_R1.fastq.gz");
+        assert_eq!(r2, "data/{sample}_R2.fastq.gz");
+    }
 }

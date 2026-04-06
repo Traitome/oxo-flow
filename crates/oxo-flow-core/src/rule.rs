@@ -871,4 +871,38 @@ mod tests {
         let rule = Rule::default();
         assert!(!rule.checkpoint);
     }
+
+    #[test]
+    fn rule_builder_basic() {
+        let rule = RuleBuilder::new("test_rule")
+            .input(vec!["input.txt".to_string()])
+            .output(vec!["output.txt".to_string()])
+            .shell("cat input.txt > output.txt")
+            .threads(4)
+            .memory("8G")
+            .build();
+        assert_eq!(rule.name, "test_rule");
+        assert_eq!(rule.input, vec!["input.txt"]);
+        assert_eq!(rule.shell, Some("cat input.txt > output.txt".to_string()));
+        assert_eq!(rule.effective_threads(), 4);
+    }
+
+    #[test]
+    fn rule_builder_with_all_options() {
+        let rule = RuleBuilder::new("complex")
+            .input(vec!["a.txt".into()])
+            .output(vec!["b.txt".into()])
+            .shell("process a.txt b.txt")
+            .priority(10)
+            .retries(3)
+            .tags(vec!["alignment".into()])
+            .localrule(true)
+            .description("A complex rule")
+            .build();
+        assert_eq!(rule.priority, 10);
+        assert_eq!(rule.retries, 3);
+        assert!(rule.localrule);
+        assert_eq!(rule.tags, vec!["alignment"]);
+        assert_eq!(rule.description, Some("A complex rule".to_string()));
+    }
 }

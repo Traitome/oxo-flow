@@ -605,4 +605,77 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0], vec!["only"]);
     }
+
+    #[test]
+    fn detect_output_collisions_none() {
+        let r1 = crate::rule::Rule {
+            name: "align".to_string(),
+            output: vec!["aligned/{sample}.bam".to_string()],
+            ..Default::default()
+        };
+        let r2 = crate::rule::Rule {
+            name: "sort".to_string(),
+            output: vec!["sorted/{sample}.bam".to_string()],
+            ..Default::default()
+        };
+        let warnings = WorkflowDag::detect_output_collisions(&[r1, r2]);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn detect_output_collisions_found() {
+        let r1 = crate::rule::Rule {
+            name: "caller_a".to_string(),
+            output: vec!["{sample}.vcf".to_string()],
+            ..Default::default()
+        };
+        let r2 = crate::rule::Rule {
+            name: "caller_b".to_string(),
+            output: vec!["{sample}.vcf".to_string()],
+            ..Default::default()
+        };
+        let warnings = WorkflowDag::detect_output_collisions(&[r1, r2]);
+        assert!(!warnings.is_empty());
+    }
+
+    #[test]
+    fn stress_test_large_dag() {
+        let rules: Vec<crate::rule::Rule> = (0..1000)
+            .map(|i| {
+                let input = if i == 0 {
+                    vec!["input.txt".to_string()]
+                } else {
+                    vec![format!("step_{}.out", i - 1)]
+                };
+                crate::rule::Rule {
+                    name: format!("step_{}", i),
+                    input,
+                    output: vec![format!("step_{}.out", i)],
+                    shell: Some(format!("process step_{}", i)),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        assert_eq!(dag.node_count(), 1000);
+        let order = dag.execution_order().unwrap();
+        assert_eq!(order.len(), 1000);
+        assert_eq!(order[0], "step_0");
+        assert_eq!(order[999], "step_999");
+    }
+
+    #[test]
+    fn dag_metrics_display() {
+        let metrics = DagMetrics {
+            node_count: 10,
+            edge_count: 12,
+            max_depth: 5,
+            max_width: 3,
+            critical_path_length: 5,
+            parallel_group_count: 3,
+        };
+        let s = metrics.to_string();
+        assert!(s.contains("depth=5"));
+        assert!(s.contains("width=3"));
+    }
 }
