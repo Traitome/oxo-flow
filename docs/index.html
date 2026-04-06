@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>oxo-flow — Rust-native bioinformatics pipeline engine</title>
-  <meta name="description" content="A high-performance, modular bioinformatics pipeline engine built in Rust. DAG execution, environment management, clinical reporting, and container packaging." />
+  <meta name="description" content="A high-performance, modular bioinformatics pipeline engine built in Rust. DAG execution, environment management, cluster scheduling, clinical reporting, and container packaging." />
   <style>
     /* ── Reset & base ───────────────────────────────────────────── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -67,9 +67,17 @@
     .hero .subtitle {
       font-size: 1.2rem;
       color: rgba(255,255,255,0.85);
-      max-width: 640px;
-      margin: 0 auto 2rem;
+      max-width: 680px;
+      margin: 0 auto 1.5rem;
     }
+    .hero .badges {
+      display: flex;
+      gap: 0.5rem;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 2rem;
+    }
+    .hero .badges a { display: inline-block; }
     .hero .cta-group { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
     .btn {
       display: inline-block;
@@ -131,7 +139,7 @@
       font-size: 0.9rem;
       line-height: 1.7;
       overflow-x: auto;
-      max-width: 700px;
+      max-width: 740px;
       margin: 0 auto;
     }
     .code-block .comment { color: #6a737d; }
@@ -161,17 +169,67 @@
       font-size: 0.85rem;
       color: #1a1a2e;
       overflow-x: auto;
+      white-space: pre;
     }
 
-    /* ── License ───────────────────────────────────────────────── */
-    .license-table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
-    .license-table th, .license-table td {
+    /* ── Tables ────────────────────────────────────────────────── */
+    .data-table { width: 100%; border-collapse: collapse; margin-top: 1rem; font-size: 0.95rem; }
+    .data-table th, .data-table td {
       text-align: left;
-      padding: 0.6rem 1rem;
+      padding: 0.55rem 1rem;
       border-bottom: 1px solid #e4e8ee;
+      vertical-align: top;
     }
-    .license-table th { font-weight: 600; color: #555; font-size: 0.9rem; }
-    .license-table td { font-size: 0.95rem; }
+    .data-table th { font-weight: 600; color: #555; font-size: 0.88rem; background: #f6f9fc; }
+    .data-table td code {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.85rem;
+      background: #f1f5f9;
+      padding: 0.1em 0.35em;
+      border-radius: 3px;
+    }
+
+    /* ── Gallery grid ──────────────────────────────────────────── */
+    .gallery-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1rem;
+    }
+    .gallery-card {
+      background: white;
+      border: 1px solid #e4e8ee;
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+      transition: box-shadow 0.2s;
+    }
+    .gallery-card:hover { box-shadow: 0 4px 14px rgba(0,0,0,0.08); }
+    .gallery-card .num {
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: #0e7c86;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 0.35rem;
+    }
+    .gallery-card h3 { font-size: 1rem; margin-bottom: 0.3rem; }
+    .gallery-card .stars { color: #e8590c; font-size: 0.85rem; margin-bottom: 0.3rem; }
+    .gallery-card .domain { font-size: 0.82rem; color: #888; }
+
+    /* ── Tech stack ────────────────────────────────────────────── */
+    .tech-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+    }
+    .tech-item {
+      background: white;
+      border: 1px solid #e4e8ee;
+      border-radius: 6px;
+      padding: 0.9rem 1.2rem;
+    }
+    .tech-item .tech-label { font-size: 0.78rem; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.25rem; }
+    .tech-item .tech-value { font-size: 0.95rem; color: #1a1a2e; }
+    .tech-item .tech-value a { color: #0e7c86; }
 
     /* ── Footer ────────────────────────────────────────────────── */
     footer {
@@ -205,9 +263,10 @@
       <a class="logo" href="#">oxo-flow</a>
       <nav>
         <a href="#features">Features</a>
+        <a href="#gallery">Gallery</a>
         <a href="#install">Install</a>
         <a href="#quickstart">Quick Start</a>
-        <a href="documentation/">Documentation</a>
+        <a href="documentation/">Docs</a>
         <a href="https://github.com/Traitome/oxo-flow">GitHub</a>
       </nav>
     </div>
@@ -219,11 +278,23 @@
       <h1>Rust-native bioinformatics<br />pipeline engine</h1>
       <p class="subtitle">
         Build, validate, and execute reproducible bioinformatics workflows with
-        DAG-based execution, first-class environment management, and clinical-grade reporting.
-        Built from first principles in Rust — no external runtime required.
+        DAG-based execution, first-class environment management, cluster scheduling,
+        and clinical-grade reporting — all from a single, fast Rust binary.
       </p>
+      <div class="badges">
+        <a href="https://github.com/Traitome/oxo-flow/actions/workflows/ci.yml">
+          <img src="https://github.com/Traitome/oxo-flow/actions/workflows/ci.yml/badge.svg" alt="CI" />
+        </a>
+        <a href="https://crates.io/crates/oxo-flow-core">
+          <img src="https://img.shields.io/crates/v/oxo-flow-core.svg" alt="Crates.io" />
+        </a>
+        <img src="https://img.shields.io/badge/rust-2024_edition-orange.svg" alt="Rust 2024 edition" />
+        <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg" alt="Platform" />
+        <img src="https://img.shields.io/badge/unsafe-forbidden-red.svg" alt="forbid(unsafe_code)" />
+      </div>
       <div class="cta-group">
         <a class="btn btn-primary" href="documentation/">Read the Docs</a>
+        <a class="btn btn-secondary" href="#gallery">Workflow Gallery</a>
         <a class="btn btn-secondary" href="https://github.com/Traitome/oxo-flow">View on GitHub</a>
       </div>
     </div>
@@ -238,57 +309,254 @@
         <div class="feature-card">
           <div class="icon">🔀</div>
           <h3>DAG Execution Engine</h3>
-          <p>Automatic dependency resolution, topological sorting, cycle detection, and parallel execution groups. Built with petgraph for performance.</p>
+          <p>Automatic dependency resolution, topological sorting, cycle detection, and parallel execution. Built with <a href="https://github.com/petgraph/petgraph">petgraph</a> — proven on 1 000-rule stress tests.</p>
         </div>
         <div class="feature-card">
           <div class="icon">📦</div>
           <h3>Environment Management</h3>
-          <p>First-class support for conda, pixi, docker, singularity, and Python venv. Each rule declares its own isolated environment.</p>
+          <p>First-class support for conda, pixi, Docker, Singularity, Python venv, and HPC modules. Each rule declares its own isolated environment.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">🖥️</div>
+          <h3>Cluster Scheduling</h3>
+          <p>Resource-aware scheduling across SLURM, PBS, SGE, and LSF backends. Rules declare CPU, memory, GPU, and disk requirements; the scheduler enforces them.</p>
         </div>
         <div class="feature-card">
           <div class="icon">📊</div>
-          <h3>Clinical Reporting</h3>
-          <p>Generate structured HTML and JSON reports with Tera templates. Designed for clinical genomics labs with regulatory requirements.</p>
+          <h3>Clinical-Grade Reporting</h3>
+          <p>Modular HTML/JSON report generation with Tera templates. ACMG/AMP variant classification, biomarker tracking, and compliance audit trails.</p>
         </div>
         <div class="feature-card">
           <div class="icon">🌐</div>
-          <h3>Web API</h3>
-          <p>Built-in REST API with axum for remote workflow validation, execution monitoring, and integration with web-based tools.</p>
+          <h3>REST API &amp; Web Interface</h3>
+          <p>Built-in <a href="https://github.com/tokio-rs/axum">axum</a> server with versioned REST API, RBAC (Admin/User/Viewer), rate limiting, and security headers.</p>
         </div>
         <div class="feature-card">
           <div class="icon">🐳</div>
           <h3>Container Packaging</h3>
-          <p>Package workflows into Docker or Singularity images for portable, self-contained, reproducible execution on any system.</p>
+          <p>Export workflows to multi-stage Docker builds or Singularity images. Rootless containers with HEALTHCHECK support for portable, self-contained execution.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">🔒</div>
+          <h3>Security Hardened</h3>
+          <p>Shell injection prevention, path traversal protection, secret scanning, per-IP rate limiting, and <code>#![forbid(unsafe_code)]</code> across every crate.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">⚡</div>
+          <h3>Rust Performance</h3>
+          <p>Native binary — instant startup, fearless concurrency, zero-cost abstractions. Rust 2024 edition with a type-state lifecycle (<em>Parsed → Validated → Ready</em>).</p>
         </div>
         <div class="feature-card">
           <div class="icon">🧬</div>
           <h3>Venus Pipeline</h3>
-          <p>Built-in clinical tumor variant calling pipeline — from raw FASTQ to annotated VCF with clinical reports, ready out of the box.</p>
+          <p>Built-in clinical tumor variant calling pipeline (Venus) — FASTQ → annotated VCF with clinical reports. Supports tumor-only, normal-only, and tumor-normal modes.</p>
         </div>
       </div>
     </div>
   </section>
 
+  <!-- ─── Workflow Gallery ─────────────────────────────────────── -->
+  <section id="gallery">
+    <div class="container">
+      <h2>Workflow Gallery</h2>
+      <p class="section-sub">
+        Learn oxo-flow incrementally — from a one-rule hello-world to production-grade
+        multi-omics pipelines. Every example passes <code>oxo-flow validate</code> and is tested in CI.
+      </p>
+      <div class="gallery-grid">
+        <div class="gallery-card">
+          <div class="num">01</div>
+          <h3><a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/01_hello_world.oxoflow">Hello World</a></h3>
+          <div class="stars">⭐</div>
+          <div class="domain">General</div>
+        </div>
+        <div class="gallery-card">
+          <div class="num">02</div>
+          <h3><a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/02_file_pipeline.oxoflow">File Pipeline</a></h3>
+          <div class="stars">⭐⭐</div>
+          <div class="domain">Data processing</div>
+        </div>
+        <div class="gallery-card">
+          <div class="num">03</div>
+          <h3><a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/03_parallel_samples.oxoflow">Parallel Samples</a></h3>
+          <div class="stars">⭐⭐</div>
+          <div class="domain">Batch processing</div>
+        </div>
+        <div class="gallery-card">
+          <div class="num">04</div>
+          <h3><a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/04_scatter_gather.oxoflow">Scatter-Gather</a></h3>
+          <div class="stars">⭐⭐⭐</div>
+          <div class="domain">Parallel computing</div>
+        </div>
+        <div class="gallery-card">
+          <div class="num">05</div>
+          <h3><a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/05_conda_environments.oxoflow">Environment Management</a></h3>
+          <div class="stars">⭐⭐⭐</div>
+          <div class="domain">DevOps</div>
+        </div>
+        <div class="gallery-card">
+          <div class="num">06</div>
+          <h3><a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/06_rnaseq_quantification.oxoflow">RNA-seq Quantification</a></h3>
+          <div class="stars">⭐⭐⭐⭐</div>
+          <div class="domain">Transcriptomics</div>
+        </div>
+        <div class="gallery-card">
+          <div class="num">07</div>
+          <h3><a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/07_wgs_germline.oxoflow">WGS Germline Calling</a></h3>
+          <div class="stars">⭐⭐⭐⭐⭐</div>
+          <div class="domain">Genomics</div>
+        </div>
+        <div class="gallery-card">
+          <div class="num">08</div>
+          <h3><a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/08_multiomics_integration.oxoflow">Multi-Omics Integration</a></h3>
+          <div class="stars">⭐⭐⭐⭐⭐</div>
+          <div class="domain">Multi-omics</div>
+        </div>
+      </div>
+      <p style="margin-top:1.5rem;">
+        <a href="documentation/gallery/">Browse the full Gallery documentation →</a>
+      </p>
+    </div>
+  </section>
+
   <!-- ─── Quick Start ─────────────────────────────────────────── -->
-  <section id="quickstart">
+  <section id="quickstart" class="alt-bg">
     <div class="container code-section">
       <h2>Quick Start</h2>
-      <p class="section-sub" style="margin-left:auto;margin-right:auto;">From zero to running pipeline in four commands.</p>
+      <p class="section-sub" style="margin-left:auto;margin-right:auto;">From zero to running pipeline in a few commands.</p>
       <div class="code-block">
-<span class="comment"># Install</span>
-<span class="cmd">cargo install oxo-flow</span>
+<span class="comment"># 1. Install</span>
+<span class="cmd">cargo install oxo-flow-cli</span>
 
-<span class="comment"># Scaffold a new project</span>
+<span class="comment"># 2. Scaffold a new project</span>
 <span class="cmd">oxo-flow init</span> <span class="str">my-pipeline</span>
 <span class="cmd">cd</span> my-pipeline
 
-<span class="comment"># Validate and preview</span>
+<span class="comment"># 3. Validate the workflow</span>
 <span class="cmd">oxo-flow validate</span> my-pipeline.oxoflow
-<span class="output">✓ my-pipeline.oxoflow — 0 rules, 0 dependencies</span>
+<span class="output">✓ my-pipeline.oxoflow — valid</span>
 
-<span class="comment"># Execute the workflow</span>
+<span class="comment"># 4. Preview execution plan (dry-run)</span>
+<span class="cmd">oxo-flow dry-run</span> my-pipeline.oxoflow
+
+<span class="comment"># 5. Execute with 8 parallel jobs</span>
 <span class="cmd">oxo-flow run</span> my-pipeline.oxoflow <span class="str">-j 8</span>
+
+<span class="comment"># 6. Visualise the DAG</span>
+<span class="cmd">oxo-flow graph</span> my-pipeline.oxoflow <span class="str">&gt; dag.dot</span>
+<span class="cmd">dot -Tpng</span> dag.dot <span class="str">-o dag.png</span>
+
+<span class="comment"># 7. Generate an HTML report</span>
+<span class="cmd">oxo-flow report</span> my-pipeline.oxoflow <span class="str">-f html -o report.html</span>
       </div>
+    </div>
+  </section>
+
+  <!-- ─── Workflow Format ─────────────────────────────────────── -->
+  <section>
+    <div class="container code-section">
+      <h2>The .oxoflow Format</h2>
+      <p class="section-sub" style="margin-left:auto;margin-right:auto;">
+        Define your pipeline in clean, readable TOML. Wildcards like <code>{sample}</code>
+        are expanded automatically based on input file discovery or explicit configuration.
+      </p>
+      <div class="code-block">
+<span class="comment"># variant-calling.oxoflow</span>
+[<span class="str">workflow</span>]
+name = <span class="str">"variant-calling"</span>
+version = <span class="str">"1.0.0"</span>
+
+[<span class="str">config</span>]
+reference = <span class="str">"/data/ref/GRCh38.fa"</span>
+
+[[<span class="str">rules</span>]]
+name = <span class="str">"fastp"</span>
+input  = [<span class="str">"raw/{sample}_R1.fastq.gz"</span>, <span class="str">"raw/{sample}_R2.fastq.gz"</span>]
+output = [<span class="str">"trimmed/{sample}_R1.fastq.gz"</span>, <span class="str">"trimmed/{sample}_R2.fastq.gz"</span>]
+threads = <span class="cmd">8</span>
+shell = <span class="str">"fastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]}"</span>
+
+[<span class="str">rules.environment</span>]
+conda = <span class="str">"envs/fastp.yaml"</span>
+
+[[<span class="str">rules</span>]]
+name = <span class="str">"bwa_align"</span>
+input  = [<span class="str">"trimmed/{sample}_R1.fastq.gz"</span>, <span class="str">"trimmed/{sample}_R2.fastq.gz"</span>]
+output = [<span class="str">"aligned/{sample}.bam"</span>]
+threads = <span class="cmd">16</span>
+memory = <span class="str">"32G"</span>
+shell = <span class="str">"bwa-mem2 mem -t {threads} {config.reference} {input[0]} {input[1]} | samtools sort -o {output[0]}"</span>
+
+[<span class="str">rules.environment</span>]
+docker = <span class="str">"biocontainers/bwa-mem2:2.2.1"</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── CLI Commands ────────────────────────────────────────── -->
+  <section class="alt-bg">
+    <div class="container">
+      <h2>CLI Commands</h2>
+      <p class="section-sub">
+        The <code>oxo-flow</code> binary provides 18 subcommands covering the complete workflow lifecycle.
+        Global flags: <code>-v</code> (verbose), <code>--quiet</code>, <code>--no-color</code>.
+      </p>
+      <table class="data-table">
+        <thead>
+          <tr><th>Command</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>oxo-flow run</code></td><td>Execute a workflow (<code>-j</code> jobs, <code>-k</code> keep-going, <code>--timeout</code> per-job, <code>-r</code> retries)</td></tr>
+          <tr><td><code>oxo-flow dry-run</code></td><td>Simulate execution — show what would run without executing</td></tr>
+          <tr><td><code>oxo-flow validate</code></td><td>Validate an <code>.oxoflow</code> file for syntax and semantic correctness</td></tr>
+          <tr><td><code>oxo-flow lint</code></td><td>Run best-practice linting checks (<code>--strict</code> treats warnings as errors)</td></tr>
+          <tr><td><code>oxo-flow format</code></td><td>Reformat a <code>.oxoflow</code> file into canonical TOML (<code>--check</code> mode available)</td></tr>
+          <tr><td><code>oxo-flow graph</code></td><td>Export the workflow DAG in DOT format for visualisation</td></tr>
+          <tr><td><code>oxo-flow report</code></td><td>Generate execution reports (<code>-f html|json</code>, <code>-o</code> output path)</td></tr>
+          <tr><td><code>oxo-flow init</code></td><td>Scaffold a new pipeline project (<code>-d</code> output directory)</td></tr>
+          <tr><td><code>oxo-flow env list|check</code></td><td>List available environment backends or verify all requirements are met</td></tr>
+          <tr><td><code>oxo-flow package</code></td><td>Package workflow into a container image (<code>-f docker|singularity</code>)</td></tr>
+          <tr><td><code>oxo-flow export</code></td><td>Export workflow to a Dockerfile, Singularity definition, or standalone TOML</td></tr>
+          <tr><td><code>oxo-flow cluster submit|status|cancel</code></td><td>Submit and monitor jobs on SLURM, PBS, SGE, or LSF cluster backends</td></tr>
+          <tr><td><code>oxo-flow profile list|show|current</code></td><td>Manage execution profiles (local, slurm, pbs, sge, lsf)</td></tr>
+          <tr><td><code>oxo-flow config show|stats</code></td><td>Inspect workflow configuration variables and statistics</td></tr>
+          <tr><td><code>oxo-flow status</code></td><td>Show execution status from the checkpoint file</td></tr>
+          <tr><td><code>oxo-flow clean</code></td><td>Clean workflow outputs and temp files (<code>-n</code> dry-run, <code>--force</code>)</td></tr>
+          <tr><td><code>oxo-flow serve</code></td><td>Start the web interface (<code>--host</code>, <code>-p</code> port; default <code>127.0.0.1:8080</code>)</td></tr>
+          <tr><td><code>oxo-flow completions</code></td><td>Generate shell completions (bash, zsh, fish, elvish, PowerShell)</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ─── Web API ──────────────────────────────────────────────── -->
+  <section>
+    <div class="container">
+      <h2>Web API</h2>
+      <p class="section-sub">
+        <code>oxo-flow serve</code> starts an <a href="https://github.com/tokio-rs/axum">axum</a>-powered
+        REST server with a versioned API, RBAC, rate limiting, and security headers.
+      </p>
+      <table class="data-table">
+        <thead>
+          <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>GET</code></td><td><code>/api/health</code></td><td>Health check</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/version</code></td><td>Server and engine version info</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/workflows</code></td><td>List available workflows</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/environments</code></td><td>List available environment backends</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/workflows/validate</code></td><td>Validate workflow TOML</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/workflows/dag</code></td><td>Build the DAG and return DOT representation</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/workflows/dry-run</code></td><td>Simulate execution and return the plan</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/workflows/run</code></td><td>Start workflow execution</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/workflows/export</code></td><td>Export workflow for sharing or archival</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/reports/generate</code></td><td>Generate a report (HTML or JSON)</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/auth/login</code></td><td>Authenticate and receive a session token</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/auth/me</code></td><td>Return the authenticated user details</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/license</code></td><td>Check license status</td></tr>
+        </tbody>
+      </table>
     </div>
   </section>
 
@@ -300,42 +568,79 @@
       <div class="install-methods">
         <div class="install-card">
           <h3>Cargo (recommended)</h3>
-          <code>cargo install oxo-flow</code>
-        </div>
-        <div class="install-card">
-          <h3>Build from source</h3>
-          <code>git clone https://github.com/Traitome/oxo-flow.git<br>cd oxo-flow<br>cargo build --release</code>
+          <code>cargo install oxo-flow-cli</code>
         </div>
         <div class="install-card">
           <h3>Pre-built binary</h3>
-          <code>curl -LO https://github.com/Traitome/<br>oxo-flow/releases/latest/download/<br>oxo-flow-linux-x86_64.tar.gz</code>
+          <code># Linux (x86_64)
+curl -LO https://github.com/Traitome/oxo-flow/releases/latest/download/oxo-flow-x86_64-unknown-linux-gnu.tar.gz
+tar xzf oxo-flow-x86_64-unknown-linux-gnu.tar.gz
+sudo mv oxo-flow /usr/local/bin/
+
+# macOS (Apple Silicon)
+curl -LO https://github.com/Traitome/oxo-flow/releases/latest/download/oxo-flow-aarch64-apple-darwin.tar.gz
+tar xzf oxo-flow-aarch64-apple-darwin.tar.gz
+sudo mv oxo-flow /usr/local/bin/</code>
+        </div>
+        <div class="install-card">
+          <h3>Build from source</h3>
+          <code>git clone https://github.com/Traitome/oxo-flow.git
+cd oxo-flow
+cargo build --release
+# Binaries in target/release/
+#   oxo-flow      (CLI)
+#   oxo-flow-web  (Web server)
+#   venus         (Venus pipeline)</code>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ─── Workflow Format ─────────────────────────────────────── -->
+  <!-- ─── Tech Stack ──────────────────────────────────────────── -->
   <section>
-    <div class="container code-section">
-      <h2>The .oxoflow Format</h2>
-      <p class="section-sub" style="margin-left:auto;margin-right:auto;">Define your pipeline in clean, readable TOML.</p>
-      <div class="code-block">
-<span class="comment"># align.oxoflow</span>
-[<span class="str">workflow</span>]
-name = <span class="str">"align-and-sort"</span>
-version = <span class="str">"1.0.0"</span>
-
-[<span class="str">config</span>]
-reference = <span class="str">"/data/ref/hg38.fa"</span>
-
-[[<span class="str">rules</span>]]
-name = <span class="str">"bwa_align"</span>
-input = [<span class="str">"{sample}_R1.fastq.gz"</span>, <span class="str">"{sample}_R2.fastq.gz"</span>]
-output = [<span class="str">"aligned/{sample}.bam"</span>]
-threads = <span class="cmd">16</span>
-memory = <span class="str">"32G"</span>
-environment = { docker = <span class="str">"biocontainers/bwa:0.7.17"</span> }
-shell = <span class="str">"bwa mem -t {threads} {config.reference} {input} | samtools sort -o {output}"</span>
+    <div class="container">
+      <h2>Tech Stack</h2>
+      <p class="section-sub">
+        Built on battle-tested Rust crates. 475 tests including a 1 000-rule stress test,
+        with <code>#![forbid(unsafe_code)]</code> enforced across all crates.
+      </p>
+      <div class="tech-grid">
+        <div class="tech-item">
+          <div class="tech-label">Language</div>
+          <div class="tech-value">Rust 2024 edition</div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">Async runtime</div>
+          <div class="tech-value"><a href="https://tokio.rs/">tokio</a></div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">CLI framework</div>
+          <div class="tech-value"><a href="https://github.com/clap-rs/clap">clap</a> (derive)</div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">Web framework</div>
+          <div class="tech-value"><a href="https://github.com/tokio-rs/axum">axum</a></div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">Graph library</div>
+          <div class="tech-value"><a href="https://github.com/petgraph/petgraph">petgraph</a></div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">Serialization</div>
+          <div class="tech-value"><a href="https://serde.rs/">serde</a> + TOML</div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">Templating</div>
+          <div class="tech-value"><a href="https://github.com/Keats/tera">tera</a></div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">Error handling</div>
+          <div class="tech-value"><a href="https://github.com/dtolnay/thiserror">thiserror</a> / <a href="https://github.com/dtolnay/anyhow">anyhow</a></div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">Logging</div>
+          <div class="tech-value"><a href="https://github.com/tokio-rs/tracing">tracing</a></div>
+        </div>
       </div>
     </div>
   </section>
@@ -344,30 +649,100 @@ shell = <span class="str">"bwa mem -t {threads} {config.reference} {input} | sam
   <section class="alt-bg">
     <div class="container">
       <h2>Licensing</h2>
-      <p class="section-sub">Open source core with flexible licensing for the web interface.</p>
-      <table class="license-table">
+      <p class="section-sub">
+        Open-source core with a dual-license model for the web interface.
+        The core library, CLI, and Venus pipeline are free and open-source under Apache 2.0.
+      </p>
+      <table class="data-table">
         <thead>
-          <tr><th>Component</th><th>License</th></tr>
+          <tr><th>Component</th><th>License</th><th>Details</th></tr>
         </thead>
         <tbody>
-          <tr><td>oxo-flow-core</td><td>Apache 2.0</td></tr>
-          <tr><td>oxo-flow-cli</td><td>Apache 2.0</td></tr>
-          <tr><td>venus</td><td>Apache 2.0</td></tr>
-          <tr><td>oxo-flow-web</td><td>Dual — Academic (free) / Commercial (paid)</td></tr>
+          <tr>
+            <td><code>oxo-flow-core</code></td>
+            <td>Apache 2.0</td>
+            <td>Free and open-source — use, modify, distribute without restriction</td>
+          </tr>
+          <tr>
+            <td><code>oxo-flow-cli</code></td>
+            <td>Apache 2.0</td>
+            <td>Free and open-source — use, modify, distribute without restriction</td>
+          </tr>
+          <tr>
+            <td><code>venus</code></td>
+            <td>Apache 2.0</td>
+            <td>Free and open-source — use, modify, distribute without restriction</td>
+          </tr>
+          <tr>
+            <td><code>oxo-flow-web</code></td>
+            <td>Dual — <a href="https://github.com/Traitome/oxo-flow/blob/main/LICENSE-ACADEMIC">Academic</a> / <a href="https://github.com/Traitome/oxo-flow/blob/main/LICENSE-COMMERCIAL">Commercial</a></td>
+            <td>Free for academic &amp; non-commercial use; commercial use requires a paid license</td>
+          </tr>
         </tbody>
       </table>
     </div>
   </section>
 
-  <!-- ─── Links / CTA ─────────────────────────────────────────── -->
+  <!-- ─── Contributing / Community ──────────────────────────────── -->
   <section>
+    <div class="container">
+      <h2>Contributing &amp; Community</h2>
+      <p class="section-sub">
+        Contributions are welcome. Read the guides below, ensure <code>make ci</code> passes, then open a PR.
+      </p>
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="icon">📖</div>
+          <h3>Documentation</h3>
+          <p>
+            <a href="documentation/">Full guide</a> ·
+            <a href="documentation/gallery/">Workflow Gallery</a> ·
+            <a href="https://deepwiki.com/Traitome/oxo-flow">Ask DeepWiki</a>
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">🗺️</div>
+          <h3>Project Resources</h3>
+          <p>
+            <a href="https://github.com/Traitome/oxo-flow/blob/main/ROADMAP.md">Roadmap</a> ·
+            <a href="https://github.com/Traitome/oxo-flow/blob/main/CONTRIBUTING.md">Contributing guide</a> ·
+            <a href="https://github.com/Traitome/oxo-flow/blob/main/GOVERNANCE.md">Governance</a> ·
+            <a href="https://github.com/Traitome/oxo-flow/blob/main/CODE_OF_CONDUCT.md">Code of Conduct</a>
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">🔒</div>
+          <h3>Compliance &amp; Security</h3>
+          <p>
+            <a href="https://github.com/Traitome/oxo-flow/blob/main/SECURITY.md">Security policy</a> ·
+            <a href="https://github.com/Traitome/oxo-flow/blob/main/REPRODUCIBILITY.md">Reproducibility guarantees</a> ·
+            <a href="https://github.com/Traitome/oxo-flow/blob/main/docs/VALIDATION_PROTOCOL.md">IQ/OQ/PQ validation</a> ·
+            <a href="https://github.com/Traitome/oxo-flow/blob/main/docs/CHANGE_CONTROL.md">Change control</a>
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">🐛</div>
+          <h3>Issues &amp; Feedback</h3>
+          <p>
+            <a href="https://github.com/Traitome/oxo-flow/issues/new?template=bug_report.md">Bug reports</a> ·
+            <a href="https://github.com/Traitome/oxo-flow/issues/new?template=feature_request.md">Feature requests</a> ·
+            <a href="https://github.com/Traitome/oxo-flow/blob/main/LIMITATIONS.md">Known limitations</a>
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── Links / CTA ─────────────────────────────────────────── -->
+  <section class="alt-bg">
     <div class="container" style="text-align:center;">
       <h2>Get Started</h2>
       <p class="section-sub" style="margin-left:auto;margin-right:auto;">
-        Read the documentation, explore the source, or check the roadmap.
+        Read the documentation, explore the gallery, or dive straight into the source.
       </p>
       <div class="cta-group" style="justify-content:center;">
         <a class="btn btn-primary" href="documentation/">Documentation</a>
+        <a class="btn btn-secondary" style="border-color:#0e7c86;color:#0e7c86;" href="documentation/gallery/">Workflow Gallery</a>
         <a class="btn btn-secondary" style="border-color:#0e7c86;color:#0e7c86;" href="https://github.com/Traitome/oxo-flow">GitHub</a>
         <a class="btn btn-secondary" style="border-color:#0e7c86;color:#0e7c86;" href="https://github.com/Traitome/oxo-flow/blob/main/ROADMAP.md">Roadmap</a>
       </div>
@@ -381,7 +756,9 @@ shell = <span class="str">"bwa mem -t {threads} {config.reference} {input} | sam
       <span>
         <a href="https://github.com/Traitome/oxo-flow">GitHub</a> &middot;
         <a href="documentation/">Docs</a> &middot;
-        <a href="https://github.com/Traitome/oxo-flow/blob/main/LICENSE">License</a>
+        <a href="https://github.com/Traitome/oxo-flow/blob/main/ROADMAP.md">Roadmap</a> &middot;
+        <a href="https://github.com/Traitome/oxo-flow/blob/main/LICENSE">License</a> &middot;
+        <a href="https://deepwiki.com/Traitome/oxo-flow">DeepWiki</a>
       </span>
     </div>
   </footer>
