@@ -15,6 +15,8 @@ use axum::{
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use tower_http::cors::{Any, CorsLayer};
 
 // ---------------------------------------------------------------------------
@@ -380,6 +382,128 @@ static START_TIME: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock
 
 fn get_start_time() -> std::time::Instant {
     *START_TIME.get_or_init(std::time::Instant::now)
+}
+
+// ---------------------------------------------------------------------------
+// Rate limiting
+// ---------------------------------------------------------------------------
+
+/// Configuration for the in-memory rate limiter.
+#[derive(Debug, Clone)]
+pub struct RateLimiterConfig {
+    /// Maximum number of requests allowed within the window.
+    pub max_requests: u64,
+    /// Sliding window duration.
+    pub window: std::time::Duration,
+}
+
+impl Default for RateLimiterConfig {
+    fn default() -> Self {
+        Self {
+            max_requests: 100,
+            window: std::time::Duration::from_secs(60),
+        }
+    }
+}
+
+/// Simple in-memory rate limiter that tracks request timestamps per key (IP).
+#[derive(Debug, Clone)]
+pub struct RateLimiter {
+    config: RateLimiterConfig,
+    /// Maps a client key to a list of request timestamps within the current window.
+    entries: Arc<Mutex<HashMap<String, Vec<std::time::Instant>>>>,
+}
+
+impl RateLimiter {
+    /// Create a new rate limiter with the given configuration.
+    pub fn new(config: RateLimiterConfig) -> Self {
+        Self {
+            config,
+            entries: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Check whether a request from `key` is allowed.
+    ///
+    /// Returns `Ok(())` when the request is within the limit, or
+    /// `Err(remaining_secs)` with the number of seconds until the oldest
+    /// entry expires when the limit is exceeded.
+    pub fn check_rate_limit(&self, key: &str) -> Result<(), u64> {
+        let now = std::time::Instant::now();
+        let window_start = now - self.config.window;
+
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        let timestamps = entries.entry(key.to_owned()).or_default();
+
+        // Evict timestamps outside the sliding window.
+        timestamps.retain(|t| *t > window_start);
+
+        if timestamps.len() as u64 >= self.config.max_requests {
+            let retry_after = timestamps
+                .first()
+                .map(|t| {
+                    self.config
+                        .window
+                        .saturating_sub(now.duration_since(*t))
+                        .as_secs()
+                        + 1
+                })
+                .unwrap_or(1);
+            return Err(retry_after);
+        }
+
+        timestamps.push(now);
+        Ok(())
+    }
+}
+
+/// Response returned when the rate limit is exceeded.
+#[derive(Serialize, Deserialize)]
+pub struct RateLimitResponse {
+    pub error: String,
+    pub retry_after_secs: u64,
+}
+
+/// Axum middleware that enforces per-IP rate limiting.
+///
+/// The [`RateLimiter`] instance is extracted from request extensions
+/// (added via `Extension`).  If no limiter is present the request is
+/// allowed through unconditionally so that existing tests keep passing
+/// without modification.
+async fn rate_limit_middleware(
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    // Extract the rate limiter from extensions (if present).
+    let limiter = request.extensions().get::<RateLimiter>().cloned();
+
+    if let Some(limiter) = limiter {
+        // Derive a key from the peer IP or fall back to a fixed string.
+        let key = request
+            .extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .map(|ci| ci.0.ip().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        if let Err(retry_after) = limiter.check_rate_limit(&key) {
+            let body = RateLimitResponse {
+                error: "Rate limit exceeded".to_string(),
+                retry_after_secs: retry_after,
+            };
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(
+                    axum::http::header::RETRY_AFTER,
+                    axum::http::HeaderValue::from_str(&retry_after.to_string())
+                        .unwrap_or_else(|_| axum::http::HeaderValue::from_static("60")),
+                )],
+                Json(body),
+            )
+                .into_response();
+        }
+    }
+
+    next.run(request).await
 }
 
 // ---------------------------------------------------------------------------
@@ -1321,6 +1445,16 @@ async fn license_status() -> Json<LicenseStatus> {
 
 /// Build the web application router.
 pub fn build_router() -> Router {
+    build_router_inner(None)
+}
+
+/// Build the web application router with an optional rate limiter.
+pub fn build_router_with_rate_limiter(limiter: RateLimiter) -> Router {
+    build_router_inner(Some(limiter))
+}
+
+/// Internal helper shared by the public `build_router*` constructors.
+fn build_router_inner(limiter: Option<RateLimiter>) -> Router {
     // Initialize start time
     get_start_time();
 
@@ -1329,7 +1463,7 @@ pub fn build_router() -> Router {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    Router::new()
+    let mut router = Router::new()
         // Frontend
         .route("/", get(frontend))
         // API endpoints
@@ -1356,7 +1490,13 @@ pub fn build_router() -> Router {
         .route("/api/license", get(license_status))
         .fallback(not_found)
         .layer(middleware::from_fn(add_request_id))
-        .layer(cors)
+        .layer(middleware::from_fn(rate_limit_middleware));
+
+    if let Some(limiter) = limiter {
+        router = router.layer(axum::Extension(limiter));
+    }
+
+    router.layer(cors)
 }
 
 /// Build a router mounted under a configurable base path.
@@ -1369,19 +1509,21 @@ pub fn build_router_with_base(base_path: &str) -> Router {
     }
 }
 
-/// Start the web server.
+/// Start the web server with graceful shutdown support.
 pub async fn start_server(host: &str, port: u16) -> anyhow::Result<()> {
     let app = build_router();
     let addr = format!("{host}:{port}");
     tracing::info!("Starting oxo-flow web server on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
     Ok(())
 }
 
-/// Start the web server with an optional base path.
+/// Start the web server with an optional base path and graceful shutdown.
 pub async fn start_server_with_base(host: &str, port: u16, base_path: &str) -> anyhow::Result<()> {
     let app = build_router_with_base(base_path);
     let addr = format!("{host}:{port}");
@@ -1392,9 +1534,40 @@ pub async fn start_server_with_base(host: &str, port: u16, base_path: &str) -> a
     );
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
     Ok(())
+}
+
+/// Wait for a shutdown signal (Ctrl+C or SIGTERM on Unix).
+pub async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to listen for Ctrl+C");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => {
+            tracing::info!("Received Ctrl+C, shutting down gracefully...");
+        },
+        () = terminate => {
+            tracing::info!("Received SIGTERM, shutting down gracefully...");
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------

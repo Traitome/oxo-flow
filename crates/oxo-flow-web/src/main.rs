@@ -26,7 +26,9 @@ async fn main() -> Result<()> {
     let app = oxo_flow_web::build_router();
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Listening on http://{}", addr);
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(oxo_flow_web::shutdown_signal())
+        .await?;
 
     Ok(())
 }
