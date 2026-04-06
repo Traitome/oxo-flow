@@ -736,6 +736,69 @@ impl WorkflowConfig {
         }
         format!("{:016x}", hasher.finish())
     }
+
+    /// Validate that a reference genome file path has a recognized extension
+    /// (`.fa`, `.fasta`, `.fa.gz`, `.fasta.gz`) and optionally check that
+    /// it exists on disk.
+    #[must_use]
+    pub fn validate_reference(path: &str) -> Vec<String> {
+        let mut warnings = Vec::new();
+        let valid_extensions = [".fa", ".fasta", ".fa.gz", ".fasta.gz"];
+        let has_valid_ext = valid_extensions.iter().any(|ext| path.ends_with(ext));
+        if !has_valid_ext {
+            warnings.push(format!(
+                "Reference path '{}' does not have a recognized extension (.fa, .fasta, .fa.gz, .fasta.gz)",
+                path
+            ));
+        }
+        // Check for .fai index
+        let fai_path = format!("{}.fai", path);
+        let p = std::path::Path::new(&fai_path);
+        if !p.exists() && std::path::Path::new(path).exists() {
+            warnings.push(format!(
+                "Reference index '{}' not found; you may need to run 'samtools faidx'",
+                fai_path
+            ));
+        }
+        warnings
+    }
+
+    /// Validate a sample sheet CSV/TSV: check that it has a header row,
+    /// no duplicate sample IDs, and at least one data row.
+    #[must_use]
+    pub fn validate_sample_sheet(content: &str) -> Vec<String> {
+        let mut warnings = Vec::new();
+        let lines: Vec<&str> = content.lines().collect();
+        if lines.is_empty() {
+            warnings.push("Sample sheet is empty".to_string());
+            return warnings;
+        }
+        // Detect delimiter
+        let delimiter = if lines[0].contains('\t') { '\t' } else { ',' };
+        let header: Vec<&str> = lines[0].split(delimiter).collect();
+        if header.is_empty() {
+            warnings.push("Sample sheet header is empty".to_string());
+            return warnings;
+        }
+        if lines.len() < 2 {
+            warnings.push("Sample sheet has no data rows".to_string());
+            return warnings;
+        }
+        // Check for duplicate IDs in the first column
+        let mut seen = std::collections::HashSet::new();
+        for (i, line) in lines.iter().enumerate().skip(1) {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let fields: Vec<&str> = line.split(delimiter).collect();
+            if let Some(id) = fields.first()
+                && !seen.insert(*id)
+            {
+                warnings.push(format!("Duplicate sample ID '{}' at line {}", id, i + 1));
+            }
+        }
+        warnings
+    }
 }
 
 #[cfg(test)]

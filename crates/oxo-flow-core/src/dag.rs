@@ -300,6 +300,36 @@ impl std::fmt::Display for DagMetrics {
 }
 
 impl WorkflowDag {
+    /// Detect output pattern collisions between rules.
+    ///
+    /// Returns a list of warnings when multiple rules produce outputs that
+    /// match the same pattern.
+    #[must_use]
+    pub fn detect_output_collisions(rules: &[crate::rule::Rule]) -> Vec<String> {
+        let mut warnings = Vec::new();
+        for (i, r1) in rules.iter().enumerate() {
+            for r2 in rules.iter().skip(i + 1) {
+                for o1 in &r1.output {
+                    for o2 in &r2.output {
+                        // Strip wildcards for pattern comparison
+                        let p1 = crate::wildcard::extract_wildcards(o1);
+                        let p2 = crate::wildcard::extract_wildcards(o2);
+                        // If same wildcards produce same template
+                        let t1 = o1.replace(['{', '}'], "");
+                        let t2 = o2.replace(['{', '}'], "");
+                        if t1 == t2 && !p1.is_empty() && !p2.is_empty() {
+                            warnings.push(format!(
+                                "Output pattern collision: rules '{}' and '{}' both produce '{}' with overlapping wildcards",
+                                r1.name, r2.name, o1
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        warnings
+    }
+
     /// Compute complexity metrics for the DAG.
     #[must_use = "computing metrics returns a Result that must be used"]
     pub fn metrics(&self) -> Result<DagMetrics> {

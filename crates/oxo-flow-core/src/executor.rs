@@ -638,6 +638,70 @@ impl std::fmt::Display for ExecutionProvenance {
     }
 }
 
+/// Check a shell command for potentially dangerous patterns.
+///
+/// Returns a list of warnings for any suspicious patterns found.
+/// This is a best-effort heuristic, not a security guarantee.
+#[must_use]
+pub fn sanitize_shell_command(cmd: &str) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let dangerous_patterns = [
+        ("$(", "Command substitution detected"),
+        ("`", "Backtick command substitution detected"),
+        ("&&", "Command chaining detected"),
+        ("||", "Conditional command chaining detected"),
+        (";", "Command separator detected"),
+        ("|", "Pipe detected"),
+        (">/dev/", "Redirect to /dev/ detected"),
+        ("rm -rf /", "Dangerous recursive deletion detected"),
+        ("chmod 777", "Overly permissive chmod detected"),
+        ("curl ", "Network access via curl detected"),
+        ("wget ", "Network access via wget detected"),
+        ("eval ", "eval usage detected"),
+    ];
+    for (pattern, warning) in &dangerous_patterns {
+        if cmd.contains(pattern) {
+            warnings.push(format!("Shell command warning: {} in '{}'", warning, cmd));
+        }
+    }
+    warnings
+}
+
+/// Validate that a file path does not escape the working directory
+/// (path traversal prevention).
+///
+/// Returns `Ok(())` if the path is safe, or an error if traversal is detected.
+#[must_use = "path safety validation returns a Result that must be checked"]
+pub fn validate_path_safety(workdir: &std::path::Path, path: &str) -> crate::Result<()> {
+    let resolved = workdir.join(path);
+    // Normalize: just check the string doesn't contain ..
+    if path.contains("..") {
+        // Attempt canonicalization to see if it escapes
+        if let Ok(canonical) = resolved.canonicalize() {
+            if !canonical.starts_with(workdir) {
+                return Err(crate::OxoFlowError::Validation {
+                    message: format!("Path '{}' escapes the working directory", path),
+                    rule: None,
+                    suggestion: Some(
+                        "Use relative paths within the workflow directory".to_string(),
+                    ),
+                });
+            }
+        } else {
+            // Path doesn't exist yet, but contains ".." which is suspicious
+            return Err(crate::OxoFlowError::Validation {
+                message: format!(
+                    "Path '{}' contains '..' which may escape the working directory",
+                    path
+                ),
+                rule: None,
+                suggestion: Some("Avoid using '..' in output paths".to_string()),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Get the system hostname, returning "unknown" if unavailable.
 fn hostname() -> String {
     std::env::var("HOSTNAME")
