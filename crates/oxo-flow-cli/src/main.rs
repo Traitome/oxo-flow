@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! oxo-flow CLI — Bioinformatics pipeline engine.
 //!
 //! Provides subcommands for running, validating, and managing workflows.
@@ -30,6 +31,14 @@ struct Cli {
     /// Enable verbose (debug-level) logging.
     #[arg(global = true, short = 'v', long)]
     verbose: bool,
+
+    /// Suppress non-essential output (errors only).
+    #[arg(global = true, long)]
+    quiet: bool,
+
+    /// Disable colored output. Also respects the NO_COLOR environment variable.
+    #[arg(global = true, long)]
+    no_color: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -336,8 +345,19 @@ fn print_banner() {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Initialize tracing with level based on --verbose flag
-    let default_level = if cli.verbose { "debug" } else { "info" };
+    // Disable colored output when --no-color is passed or NO_COLOR env var is set
+    if cli.no_color || std::env::var_os("NO_COLOR").is_some() {
+        colored::control::set_override(false);
+    }
+
+    // Initialize tracing with level based on --verbose / --quiet flags
+    let default_level = if cli.quiet {
+        "error"
+    } else if cli.verbose {
+        "debug"
+    } else {
+        "info"
+    };
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

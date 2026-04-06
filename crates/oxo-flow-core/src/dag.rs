@@ -40,6 +40,7 @@ impl WorkflowDag {
     ///
     /// Edges are created by matching rule outputs to downstream rule inputs.
     /// Returns an error if a cycle is detected or if duplicate rule names exist.
+    #[must_use = "building a DAG returns a Result that must be used"]
     pub fn from_rules(rules: &[Rule]) -> Result<Self> {
         let mut graph = DiGraph::new();
         let mut name_to_node = HashMap::new();
@@ -90,6 +91,7 @@ impl WorkflowDag {
     }
 
     /// Validate that the graph is a valid DAG (no cycles).
+    #[must_use = "validation returns a Result that must be checked"]
     pub fn validate(&self) -> Result<()> {
         match toposort(&self.graph, None) {
             Ok(_) => Ok(()),
@@ -103,6 +105,7 @@ impl WorkflowDag {
     }
 
     /// Returns the rules in topological order (respecting dependencies).
+    #[must_use = "topological ordering returns a Result that must be used"]
     pub fn topological_order(&self) -> Result<Vec<&DagNode>> {
         match toposort(&self.graph, None) {
             Ok(indices) => Ok(indices.iter().map(|&idx| &self.graph[idx]).collect()),
@@ -116,6 +119,7 @@ impl WorkflowDag {
     }
 
     /// Returns rule names in topological order.
+    #[must_use = "execution ordering returns a Result that must be used"]
     pub fn execution_order(&self) -> Result<Vec<String>> {
         Ok(self
             .topological_order()?
@@ -125,6 +129,7 @@ impl WorkflowDag {
     }
 
     /// Returns the direct dependencies (upstream rules) for a given rule.
+    #[must_use = "querying dependencies returns a Result that must be used"]
     pub fn dependencies(&self, rule_name: &str) -> Result<Vec<String>> {
         let node = self
             .name_to_node
@@ -141,6 +146,7 @@ impl WorkflowDag {
     }
 
     /// Returns the direct dependents (downstream rules) for a given rule.
+    #[must_use = "querying dependents returns a Result that must be used"]
     pub fn dependents(&self, rule_name: &str) -> Result<Vec<String>> {
         let node = self
             .name_to_node
@@ -232,6 +238,7 @@ impl WorkflowDag {
     /// Each group contains rules whose dependencies have all been satisfied
     /// by rules in previous groups. This is computed by assigning each node
     /// a "depth" equal to the length of the longest path from any root node.
+    #[must_use = "computing parallel groups returns a Result that must be used"]
     pub fn parallel_groups(&self) -> Result<Vec<Vec<String>>> {
         let order = self.topological_order()?;
         let mut depth: HashMap<NodeIndex, usize> = HashMap::new();
@@ -284,6 +291,7 @@ pub struct DagMetrics {
 
 impl WorkflowDag {
     /// Compute complexity metrics for the DAG.
+    #[must_use = "computing metrics returns a Result that must be used"]
     pub fn metrics(&self) -> Result<DagMetrics> {
         let groups = self.parallel_groups()?;
         let max_width = groups.iter().map(|g| g.len()).max().unwrap_or(0);

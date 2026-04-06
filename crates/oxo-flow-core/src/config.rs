@@ -211,6 +211,7 @@ pub struct WorkflowConfig {
 
 impl WorkflowConfig {
     /// Parse a workflow configuration from a TOML string.
+    #[must_use = "parsing a config returns a Result that must be used"]
     pub fn parse(content: &str) -> Result<Self> {
         let config: WorkflowConfig = toml::from_str(content)?;
         config.validate()?;
@@ -218,6 +219,7 @@ impl WorkflowConfig {
     }
 
     /// Parse a workflow configuration from a `.oxoflow` file.
+    #[must_use = "parsing a config file returns a Result that must be used"]
     pub fn from_file(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path).map_err(|e| OxoFlowError::Parse {
             path: path.to_path_buf(),
@@ -232,6 +234,7 @@ impl WorkflowConfig {
     }
 
     /// Validate the workflow configuration for internal consistency.
+    #[must_use = "validation returns a Result that must be checked"]
     pub fn validate(&self) -> Result<()> {
         // Check for duplicate rule names
         let mut seen = std::collections::HashSet::new();
@@ -262,6 +265,7 @@ impl WorkflowConfig {
 
     /// Resolve include directives by loading and merging rules from included files.
     /// Rules from included files are optionally prefixed with the namespace.
+    #[must_use = "resolving includes returns a Result that must be checked"]
     pub fn resolve_includes(&mut self, base_dir: &Path) -> Result<()> {
         self.resolve_includes_with_depth(base_dir, 0)
     }
@@ -305,6 +309,7 @@ impl WorkflowConfig {
     }
 
     /// Validate that all execution group references point to existing rules.
+    #[must_use = "validation returns a Result that must be checked"]
     pub fn validate_execution_groups(&self) -> Result<()> {
         let rule_names: std::collections::HashSet<&str> =
             self.rules.iter().map(|r| r.name.as_str()).collect();

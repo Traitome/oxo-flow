@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Venus — Clinical-grade tumor variant detection pipeline.
 //!
 //! Venus (启明星) is an end-to-end tumor mutation detection, annotation,

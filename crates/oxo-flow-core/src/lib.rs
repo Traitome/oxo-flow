@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! # oxo-flow-core
 //!
 //! Core library for the oxo-flow bioinformatics pipeline engine.

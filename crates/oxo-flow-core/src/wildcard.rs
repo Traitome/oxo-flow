@@ -49,6 +49,7 @@ pub fn extract_wildcards(pattern: &str) -> Vec<String> {
 /// let result = expand_pattern("{sample}_R{read}.fastq.gz", &values).unwrap();
 /// assert_eq!(result, "TUMOR_01_R1.fastq.gz");
 /// ```
+#[must_use = "expanding a pattern returns a Result that must be used"]
 pub fn expand_pattern(pattern: &str, values: &WildcardValues) -> Result<String> {
     let re = Regex::new(r"\{(\w+)\}").expect("valid regex");
     let mut result = pattern.to_string();
@@ -77,6 +78,7 @@ pub fn expand_pattern(pattern: &str, values: &WildcardValues) -> Result<String> 
 }
 
 /// Expands all patterns in a list using the given wildcard values.
+#[must_use = "expanding patterns returns a Result that must be used"]
 pub fn expand_patterns(patterns: &[String], values: &WildcardValues) -> Result<Vec<String>> {
     patterns.iter().map(|p| expand_pattern(p, values)).collect()
 }

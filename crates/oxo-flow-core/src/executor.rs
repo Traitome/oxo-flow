@@ -179,6 +179,7 @@ impl LocalExecutor {
     }
 
     /// Execute a single rule as a local process.
+    #[must_use = "executing a rule returns a Result that must be used"]
     pub async fn execute_rule(
         &self,
         rule: &Rule,
@@ -438,6 +439,7 @@ impl CheckpointState {
     }
 
     /// Serialize the checkpoint state to a JSON string.
+    #[must_use = "serialization returns a Result that must be used"]
     pub fn to_json(&self) -> Result<String> {
         serde_json::to_string_pretty(self).map_err(|e| OxoFlowError::Config {
             message: format!("failed to serialize checkpoint: {e}"),
@@ -445,6 +447,7 @@ impl CheckpointState {
     }
 
     /// Deserialize a checkpoint state from a JSON string.
+    #[must_use = "deserialization returns a Result that must be used"]
     pub fn from_json(json: &str) -> Result<Self> {
         serde_json::from_str(json).map_err(|e| OxoFlowError::Config {
             message: format!("failed to deserialize checkpoint: {e}"),

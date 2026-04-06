@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Venus CLI — Clinical-grade tumor variant detection pipeline generator.
 //!
 //! Generates `.oxoflow` workflow files for tumor variant analysis.

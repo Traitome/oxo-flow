@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! oxo-flow-web — Web interface for the oxo-flow pipeline engine.
 //!
 //! Provides a REST API and web UI for building, running, and monitoring

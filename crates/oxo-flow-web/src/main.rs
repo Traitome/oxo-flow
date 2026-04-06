@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! oxo-flow-web — Standalone web server for the oxo-flow pipeline engine.
 
 use anyhow::Result;

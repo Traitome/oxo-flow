@@ -267,6 +267,7 @@ impl Rule {
     /// - The rule name is not empty and contains only valid characters
     /// - At least shell or script is provided if outputs exist
     /// - Thread count is positive (if specified)
+    #[must_use = "validation returns a Result that must be checked"]
     pub fn validate(&self) -> std::result::Result<(), String> {
         if self.name.trim().is_empty() {
             return Err("rule name cannot be empty or whitespace-only".to_string());
