@@ -269,10 +269,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macos-13 is the last GitHub-hosted x86_64 macOS runner;
-          # macos-14 and macos-latest (macos-15+) are both ARM64.
+          # Both targets run on macos-latest (Apple Silicon).
+          # Rust cross-compiles to x86_64-apple-darwin natively on arm64
+          # without emulation — the macOS SDK ships both slices.
           - target: x86_64-apple-darwin
-            runner: macos-13
+            runner: macos-latest
           - target: aarch64-apple-darwin
             runner: macos-latest
     steps:
