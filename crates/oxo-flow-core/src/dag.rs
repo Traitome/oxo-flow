@@ -40,6 +40,7 @@ impl WorkflowDag {
     ///
     /// Edges are created by matching rule outputs to downstream rule inputs.
     /// Returns an error if a cycle is detected or if duplicate rule names exist.
+    #[must_use = "building a DAG returns a Result that must be used"]
     pub fn from_rules(rules: &[Rule]) -> Result<Self> {
         let mut graph = DiGraph::new();
         let mut name_to_node = HashMap::new();
@@ -90,6 +91,7 @@ impl WorkflowDag {
     }
 
     /// Validate that the graph is a valid DAG (no cycles).
+    #[must_use = "validation returns a Result that must be checked"]
     pub fn validate(&self) -> Result<()> {
         match toposort(&self.graph, None) {
             Ok(_) => Ok(()),
@@ -103,6 +105,7 @@ impl WorkflowDag {
     }
 
     /// Returns the rules in topological order (respecting dependencies).
+    #[must_use = "topological ordering returns a Result that must be used"]
     pub fn topological_order(&self) -> Result<Vec<&DagNode>> {
         match toposort(&self.graph, None) {
             Ok(indices) => Ok(indices.iter().map(|&idx| &self.graph[idx]).collect()),
@@ -116,6 +119,7 @@ impl WorkflowDag {
     }
 
     /// Returns rule names in topological order.
+    #[must_use = "execution ordering returns a Result that must be used"]
     pub fn execution_order(&self) -> Result<Vec<String>> {
         Ok(self
             .topological_order()?
@@ -125,6 +129,7 @@ impl WorkflowDag {
     }
 
     /// Returns the direct dependencies (upstream rules) for a given rule.
+    #[must_use = "querying dependencies returns a Result that must be used"]
     pub fn dependencies(&self, rule_name: &str) -> Result<Vec<String>> {
         let node = self
             .name_to_node
@@ -141,6 +146,7 @@ impl WorkflowDag {
     }
 
     /// Returns the direct dependents (downstream rules) for a given rule.
+    #[must_use = "querying dependents returns a Result that must be used"]
     pub fn dependents(&self, rule_name: &str) -> Result<Vec<String>> {
         let node = self
             .name_to_node
@@ -232,6 +238,7 @@ impl WorkflowDag {
     /// Each group contains rules whose dependencies have all been satisfied
     /// by rules in previous groups. This is computed by assigning each node
     /// a "depth" equal to the length of the longest path from any root node.
+    #[must_use = "computing parallel groups returns a Result that must be used"]
     pub fn parallel_groups(&self) -> Result<Vec<Vec<String>>> {
         let order = self.topological_order()?;
         let mut depth: HashMap<NodeIndex, usize> = HashMap::new();
@@ -282,8 +289,49 @@ pub struct DagMetrics {
     pub parallel_group_count: usize,
 }
 
+impl std::fmt::Display for DagMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "DAG metrics: depth={}, width={}, critical_path={}",
+            self.max_depth, self.max_width, self.critical_path_length
+        )
+    }
+}
+
 impl WorkflowDag {
+    /// Detect output pattern collisions between rules.
+    ///
+    /// Returns a list of warnings when multiple rules produce outputs that
+    /// match the same pattern.
+    #[must_use]
+    pub fn detect_output_collisions(rules: &[crate::rule::Rule]) -> Vec<String> {
+        let mut warnings = Vec::new();
+        for (i, r1) in rules.iter().enumerate() {
+            for r2 in rules.iter().skip(i + 1) {
+                for o1 in &r1.output {
+                    for o2 in &r2.output {
+                        // Strip wildcards for pattern comparison
+                        let p1 = crate::wildcard::extract_wildcards(o1);
+                        let p2 = crate::wildcard::extract_wildcards(o2);
+                        // If same wildcards produce same template
+                        let t1 = o1.replace(['{', '}'], "");
+                        let t2 = o2.replace(['{', '}'], "");
+                        if t1 == t2 && !p1.is_empty() && !p2.is_empty() {
+                            warnings.push(format!(
+                                "Output pattern collision: rules '{}' and '{}' both produce '{}' with overlapping wildcards",
+                                r1.name, r2.name, o1
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        warnings
+    }
+
     /// Compute complexity metrics for the DAG.
+    #[must_use = "computing metrics returns a Result that must be used"]
     pub fn metrics(&self) -> Result<DagMetrics> {
         let groups = self.parallel_groups()?;
         let max_width = groups.iter().map(|g| g.len()).max().unwrap_or(0);
@@ -556,5 +604,78 @@ mod tests {
         let groups = dag.parallel_groups().unwrap();
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0], vec!["only"]);
+    }
+
+    #[test]
+    fn detect_output_collisions_none() {
+        let r1 = crate::rule::Rule {
+            name: "align".to_string(),
+            output: vec!["aligned/{sample}.bam".to_string()],
+            ..Default::default()
+        };
+        let r2 = crate::rule::Rule {
+            name: "sort".to_string(),
+            output: vec!["sorted/{sample}.bam".to_string()],
+            ..Default::default()
+        };
+        let warnings = WorkflowDag::detect_output_collisions(&[r1, r2]);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn detect_output_collisions_found() {
+        let r1 = crate::rule::Rule {
+            name: "caller_a".to_string(),
+            output: vec!["{sample}.vcf".to_string()],
+            ..Default::default()
+        };
+        let r2 = crate::rule::Rule {
+            name: "caller_b".to_string(),
+            output: vec!["{sample}.vcf".to_string()],
+            ..Default::default()
+        };
+        let warnings = WorkflowDag::detect_output_collisions(&[r1, r2]);
+        assert!(!warnings.is_empty());
+    }
+
+    #[test]
+    fn stress_test_large_dag() {
+        let rules: Vec<crate::rule::Rule> = (0..1000)
+            .map(|i| {
+                let input = if i == 0 {
+                    vec!["input.txt".to_string()]
+                } else {
+                    vec![format!("step_{}.out", i - 1)]
+                };
+                crate::rule::Rule {
+                    name: format!("step_{}", i),
+                    input,
+                    output: vec![format!("step_{}.out", i)],
+                    shell: Some(format!("process step_{}", i)),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        assert_eq!(dag.node_count(), 1000);
+        let order = dag.execution_order().unwrap();
+        assert_eq!(order.len(), 1000);
+        assert_eq!(order[0], "step_0");
+        assert_eq!(order[999], "step_999");
+    }
+
+    #[test]
+    fn dag_metrics_display() {
+        let metrics = DagMetrics {
+            node_count: 10,
+            edge_count: 12,
+            max_depth: 5,
+            max_width: 3,
+            critical_path_length: 5,
+            parallel_group_count: 3,
+        };
+        let s = metrics.to_string();
+        assert!(s.contains("depth=5"));
+        assert!(s.contains("width=3"));
     }
 }

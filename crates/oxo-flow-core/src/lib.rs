@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! # oxo-flow-core
 //!
 //! Core library for the oxo-flow bioinformatics pipeline engine.
@@ -51,6 +52,12 @@ pub mod wildcard;
 
 // Re-export key types at the crate root for convenience.
 pub use config::WorkflowConfig;
+pub use config::{
+    ActionabilityAnnotation, BiomarkerResult, ClinicalReportSection, ComplianceEvent, FilterChain,
+    GenePanel, Parsed, QcThreshold, Ready, RuleName, TumorSampleMeta, Validated,
+    VariantClassification, WildcardPattern, WorkflowState,
+};
 pub use dag::WorkflowDag;
 pub use error::{OxoFlowError, Result};
 pub use rule::Rule;
+pub use rule::RuleBuilder;

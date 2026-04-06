@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Venus — Clinical-grade tumor variant detection pipeline.
 //!
 //! Venus (启明星) is an end-to-end tumor mutation detection, annotation,
@@ -736,6 +737,7 @@ pub fn generate_oxoflow(config: &VenusConfig) -> anyhow::Result<String> {
             author: None,
             min_version: None,
             format_version: None,
+            genome_build: None,
         },
         config: {
             let mut map = HashMap::new();

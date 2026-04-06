@@ -247,6 +247,10 @@ pub struct Rule {
     /// Whether this rule is a checkpoint that allows dynamic DAG modification.
     #[serde(default)]
     pub checkpoint: bool,
+
+    /// Whether this rule is required (pipeline fails if this rule fails).
+    #[serde(default)]
+    pub required: bool,
 }
 
 impl Rule {
@@ -267,6 +271,7 @@ impl Rule {
     /// - The rule name is not empty and contains only valid characters
     /// - At least shell or script is provided if outputs exist
     /// - Thread count is positive (if specified)
+    #[must_use = "validation returns a Result that must be checked"]
     pub fn validate(&self) -> std::result::Result<(), String> {
         if self.name.trim().is_empty() {
             return Err("rule name cannot be empty or whitespace-only".to_string());
@@ -328,6 +333,134 @@ impl Rule {
             }
         }
         names
+    }
+}
+
+/// Builder for constructing [`Rule`] instances safely with method chaining.
+///
+/// # Example
+/// ```
+/// # use oxo_flow_core::rule::RuleBuilder;
+/// let rule = RuleBuilder::new("align")
+///     .input(vec!["reads.fastq.gz".into()])
+///     .output(vec!["aligned.bam".into()])
+///     .shell("bwa mem ref.fa {input} > {output}")
+///     .threads(16)
+///     .memory("32G")
+///     .build();
+/// ```
+#[derive(Debug, Default)]
+pub struct RuleBuilder {
+    rule: Rule,
+}
+
+impl RuleBuilder {
+    /// Create a new builder with the given rule name.
+    #[must_use]
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            rule: Rule {
+                name: name.into(),
+                ..Default::default()
+            },
+        }
+    }
+
+    /// Set the input file patterns.
+    #[must_use]
+    pub fn input(mut self, input: Vec<String>) -> Self {
+        self.rule.input = input;
+        self
+    }
+
+    /// Set the output file patterns.
+    #[must_use]
+    pub fn output(mut self, output: Vec<String>) -> Self {
+        self.rule.output = output;
+        self
+    }
+
+    /// Set the shell command template.
+    #[must_use]
+    pub fn shell(mut self, shell: impl Into<String>) -> Self {
+        self.rule.shell = Some(shell.into());
+        self
+    }
+
+    /// Set the number of threads.
+    #[must_use]
+    pub fn threads(mut self, threads: u32) -> Self {
+        self.rule.threads = Some(threads);
+        self
+    }
+
+    /// Set the memory requirement (e.g., "8G", "16G").
+    #[must_use]
+    pub fn memory(mut self, memory: impl Into<String>) -> Self {
+        self.rule.memory = Some(memory.into());
+        self
+    }
+
+    /// Set the description.
+    #[must_use]
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.rule.description = Some(description.into());
+        self
+    }
+
+    /// Set priority (higher = run first).
+    #[must_use]
+    pub fn priority(mut self, priority: i32) -> Self {
+        self.rule.priority = priority;
+        self
+    }
+
+    /// Set the environment specification.
+    #[must_use]
+    pub fn environment(mut self, env: EnvironmentSpec) -> Self {
+        self.rule.environment = env;
+        self
+    }
+
+    /// Set the number of retries on failure.
+    #[must_use]
+    pub fn retries(mut self, retries: u32) -> Self {
+        self.rule.retries = retries;
+        self
+    }
+
+    /// Add tags for categorization.
+    #[must_use]
+    pub fn tags(mut self, tags: Vec<String>) -> Self {
+        self.rule.tags = tags;
+        self
+    }
+
+    /// Mark as a local-only rule (skip cluster submission).
+    #[must_use]
+    pub fn localrule(mut self, local: bool) -> Self {
+        self.rule.localrule = local;
+        self
+    }
+
+    /// Set the conditional execution expression.
+    #[must_use]
+    pub fn when(mut self, when: impl Into<String>) -> Self {
+        self.rule.when = Some(when.into());
+        self
+    }
+
+    /// Mark this rule as required (pipeline fails if this rule fails).
+    #[must_use]
+    pub fn required(mut self, required: bool) -> Self {
+        self.rule.required = required;
+        self
+    }
+
+    /// Build the [`Rule`], consuming the builder.
+    #[must_use]
+    pub fn build(self) -> Rule {
+        self.rule
     }
 }
 
@@ -737,5 +870,39 @@ mod tests {
     fn rule_checkpoint_default_false() {
         let rule = Rule::default();
         assert!(!rule.checkpoint);
+    }
+
+    #[test]
+    fn rule_builder_basic() {
+        let rule = RuleBuilder::new("test_rule")
+            .input(vec!["input.txt".to_string()])
+            .output(vec!["output.txt".to_string()])
+            .shell("cat input.txt > output.txt")
+            .threads(4)
+            .memory("8G")
+            .build();
+        assert_eq!(rule.name, "test_rule");
+        assert_eq!(rule.input, vec!["input.txt"]);
+        assert_eq!(rule.shell, Some("cat input.txt > output.txt".to_string()));
+        assert_eq!(rule.effective_threads(), 4);
+    }
+
+    #[test]
+    fn rule_builder_with_all_options() {
+        let rule = RuleBuilder::new("complex")
+            .input(vec!["a.txt".into()])
+            .output(vec!["b.txt".into()])
+            .shell("process a.txt b.txt")
+            .priority(10)
+            .retries(3)
+            .tags(vec!["alignment".into()])
+            .localrule(true)
+            .description("A complex rule")
+            .build();
+        assert_eq!(rule.priority, 10);
+        assert_eq!(rule.retries, 3);
+        assert!(rule.localrule);
+        assert_eq!(rule.tags, vec!["alignment"]);
+        assert_eq!(rule.description, Some("A complex rule".to_string()));
     }
 }

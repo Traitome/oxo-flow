@@ -12,6 +12,50 @@ use std::path::Path;
 /// Maximum depth for nested include directives to prevent infinite recursion.
 const MAX_INCLUDE_DEPTH: usize = 16;
 
+/// Strongly-typed rule name for compile-time safety.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct RuleName(pub String);
+
+impl std::fmt::Display for RuleName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<&str> for RuleName {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl From<String> for RuleName {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+/// Strongly-typed wildcard pattern.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct WildcardPattern(pub String);
+
+impl std::fmt::Display for WildcardPattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<&str> for WildcardPattern {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl From<String> for WildcardPattern {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
 /// Top-level workflow metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowMeta {
@@ -37,6 +81,10 @@ pub struct WorkflowMeta {
     /// Format specification version for compatibility checking.
     #[serde(default)]
     pub format_version: Option<String>,
+
+    /// Genome build (e.g., "GRCh38", "hg38", "GRCh37").
+    #[serde(default)]
+    pub genome_build: Option<String>,
 }
 
 fn default_version() -> String {
@@ -98,6 +146,15 @@ pub enum ExecutionMode {
     /// Rules in the group execute concurrently.
     #[default]
     Parallel,
+}
+
+impl std::fmt::Display for ExecutionMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExecutionMode::Sequential => write!(f, "sequential"),
+            ExecutionMode::Parallel => write!(f, "parallel"),
+        }
+    }
 }
 
 /// Execution group for explicit rule ordering.
@@ -209,8 +266,303 @@ pub struct WorkflowConfig {
     pub resource_budget: Option<ResourceBudget>,
 }
 
+// ---------------------------------------------------------------------------
+// Clinical & domain types (Expert 2, Expert 13, Expert 17)
+// ---------------------------------------------------------------------------
+
+/// ACMG/AMP variant classification for somatic mutations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VariantClassification {
+    /// Tier I: Strong clinical significance
+    TierI,
+    /// Tier II: Potential clinical significance
+    TierII,
+    /// Tier III: Unknown clinical significance
+    TierIII,
+    /// Tier IV: Benign or likely benign
+    TierIV,
+    /// Pathogenic (germline)
+    Pathogenic,
+    /// Likely pathogenic (germline)
+    LikelyPathogenic,
+    /// Uncertain significance (germline)
+    Vus,
+    /// Likely benign (germline)
+    LikelyBenign,
+    /// Benign (germline)
+    Benign,
+}
+
+impl std::fmt::Display for VariantClassification {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TierI => write!(f, "Tier I"),
+            Self::TierII => write!(f, "Tier II"),
+            Self::TierIII => write!(f, "Tier III"),
+            Self::TierIV => write!(f, "Tier IV"),
+            Self::Pathogenic => write!(f, "Pathogenic"),
+            Self::LikelyPathogenic => write!(f, "Likely Pathogenic"),
+            Self::Vus => write!(f, "VUS"),
+            Self::LikelyBenign => write!(f, "Likely Benign"),
+            Self::Benign => write!(f, "Benign"),
+        }
+    }
+}
+
+/// Biomarker result (MSI status, TMB value, etc.).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BiomarkerResult {
+    /// Biomarker name (e.g., "MSI", "TMB", "HRD").
+    pub name: String,
+    /// Measured value.
+    pub value: f64,
+    /// Unit of measurement (e.g., "mutations/Mb", "score").
+    pub unit: String,
+    /// Classification (e.g., "MSI-H", "TMB-High").
+    pub classification: Option<String>,
+    /// Threshold used for classification.
+    pub threshold: Option<f64>,
+}
+
+impl std::fmt::Display for BiomarkerResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {:.2} {}", self.name, self.value, self.unit)?;
+        if let Some(ref class) = self.classification {
+            write!(f, " ({})", class)?;
+        }
+        Ok(())
+    }
+}
+
+/// Tumor sample metadata.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TumorSampleMeta {
+    /// Estimated tumor purity (0.0–1.0).
+    pub tumor_purity: Option<f64>,
+    /// Estimated ploidy.
+    pub ploidy: Option<f64>,
+    /// Sample type (tumor, normal, etc.).
+    pub sample_type: Option<String>,
+    /// Match ID for tumor-normal pairing.
+    pub match_id: Option<String>,
+}
+
+/// Configurable QC threshold with pass/fail bounds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QcThreshold {
+    /// Metric name (e.g., "mean_coverage", "mapping_rate").
+    pub metric: String,
+    /// Minimum acceptable value (inclusive).
+    pub min: Option<f64>,
+    /// Maximum acceptable value (inclusive).
+    pub max: Option<f64>,
+    /// Description of this threshold.
+    pub description: Option<String>,
+}
+
+impl QcThreshold {
+    /// Check whether a value passes this threshold.
+    #[must_use]
+    pub fn passes(&self, value: f64) -> bool {
+        if let Some(min) = self.min
+            && value < min
+        {
+            return false;
+        }
+        if let Some(max) = self.max
+            && value > max
+        {
+            return false;
+        }
+        true
+    }
+}
+
+impl std::fmt::Display for QcThreshold {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.metric)?;
+        if let Some(min) = self.min {
+            write!(f, " ≥ {min:.2}")?;
+        }
+        if let Some(max) = self.max {
+            write!(f, " ≤ {max:.2}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Compliance event for CAP/CLIA audit trail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComplianceEvent {
+    /// Timestamp (ISO 8601).
+    pub timestamp: String,
+    /// Event type (e.g., "analysis_started", "result_reviewed").
+    pub event_type: String,
+    /// Operator or system that triggered the event.
+    pub actor: String,
+    /// Human-readable description.
+    pub description: String,
+    /// Optional evidence hash for traceability.
+    pub evidence_hash: Option<String>,
+}
+
+/// Gene panel definition for targeted analysis.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GenePanel {
+    /// Panel name (e.g., "Oncomine Focus Assay").
+    pub name: String,
+    /// Panel version.
+    pub version: Option<String>,
+    /// Gene symbols in the panel.
+    pub genes: Vec<String>,
+    /// BED file path for the panel regions.
+    pub bed_file: Option<String>,
+}
+
+impl std::fmt::Display for GenePanel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({} genes)", self.name, self.genes.len())?;
+        if let Some(ref v) = self.version {
+            write!(f, " v{v}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Actionability annotation from clinical databases.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActionabilityAnnotation {
+    /// Source database (e.g., "OncoKB", "ClinVar", "CIViC").
+    pub source: String,
+    /// Evidence level (e.g., "Level 1", "Level 2A").
+    pub evidence_level: String,
+    /// Associated drug or therapy.
+    pub therapy: Option<String>,
+    /// Disease context.
+    pub disease: Option<String>,
+}
+
+/// Sequential variant filter with audit trail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FilterChain {
+    /// Filter name.
+    pub name: String,
+    /// Ordered list of filter expressions.
+    pub filters: Vec<String>,
+    /// Whether each filter is hard (remove) or soft (flag).
+    pub hard: Vec<bool>,
+}
+
+/// Required sections in a clinical report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ClinicalReportSection {
+    /// Patient/specimen information.
+    SpecimenInfo,
+    /// Methodology description.
+    Methodology,
+    /// Results summary.
+    Results,
+    /// Variant interpretation.
+    Interpretation,
+    /// Quality control metrics.
+    QualityControl,
+    /// Known limitations of the assay.
+    Limitations,
+    /// References and citations.
+    References,
+    /// Appendix / supplementary data.
+    Appendix,
+}
+
+impl std::fmt::Display for ClinicalReportSection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SpecimenInfo => write!(f, "Specimen Information"),
+            Self::Methodology => write!(f, "Methodology"),
+            Self::Results => write!(f, "Results"),
+            Self::Interpretation => write!(f, "Interpretation"),
+            Self::QualityControl => write!(f, "Quality Control"),
+            Self::Limitations => write!(f, "Limitations"),
+            Self::References => write!(f, "References"),
+            Self::Appendix => write!(f, "Appendix"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Type-state pattern for workflow lifecycle
+// ---------------------------------------------------------------------------
+
+/// Marker type for a parsed (but not validated) workflow.
+#[derive(Debug, Clone)]
+pub struct Parsed;
+
+/// Marker type for a validated workflow.
+#[derive(Debug, Clone)]
+pub struct Validated;
+
+/// Marker type for a workflow that is ready to execute.
+#[derive(Debug, Clone)]
+pub struct Ready;
+
+/// Type-state wrapper for [`WorkflowConfig`] that enforces lifecycle transitions
+/// at compile time: Parsed → Validated → Ready.
+#[derive(Debug, Clone)]
+pub struct WorkflowState<S> {
+    pub config: WorkflowConfig,
+    _state: std::marker::PhantomData<S>,
+}
+
+impl WorkflowState<Parsed> {
+    /// Create a new parsed workflow state from a config.
+    #[must_use]
+    pub fn new(config: WorkflowConfig) -> Self {
+        Self {
+            config,
+            _state: std::marker::PhantomData,
+        }
+    }
+
+    /// Validate the workflow and transition to Validated state.
+    pub fn validate(self) -> crate::Result<WorkflowState<Validated>> {
+        self.config.validate()?;
+        for rule in &self.config.rules {
+            rule.validate()
+                .map_err(|e| crate::OxoFlowError::Validation {
+                    message: e,
+                    rule: Some(rule.name.clone()),
+                    suggestion: None,
+                })?;
+        }
+        Ok(WorkflowState {
+            config: self.config,
+            _state: std::marker::PhantomData,
+        })
+    }
+}
+
+impl WorkflowState<Validated> {
+    /// Build the DAG and transition to Ready state.
+    pub fn prepare(self) -> crate::Result<WorkflowState<Ready>> {
+        let _dag = crate::dag::WorkflowDag::from_rules(&self.config.rules)?;
+        Ok(WorkflowState {
+            config: self.config,
+            _state: std::marker::PhantomData,
+        })
+    }
+}
+
+impl<S> WorkflowState<S> {
+    /// Access the underlying config.
+    #[must_use]
+    pub fn config(&self) -> &WorkflowConfig {
+        &self.config
+    }
+}
+
 impl WorkflowConfig {
     /// Parse a workflow configuration from a TOML string.
+    #[must_use = "parsing a config returns a Result that must be used"]
     pub fn parse(content: &str) -> Result<Self> {
         let config: WorkflowConfig = toml::from_str(content)?;
         config.validate()?;
@@ -218,6 +570,7 @@ impl WorkflowConfig {
     }
 
     /// Parse a workflow configuration from a `.oxoflow` file.
+    #[must_use = "parsing a config file returns a Result that must be used"]
     pub fn from_file(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path).map_err(|e| OxoFlowError::Parse {
             path: path.to_path_buf(),
@@ -232,6 +585,7 @@ impl WorkflowConfig {
     }
 
     /// Validate the workflow configuration for internal consistency.
+    #[must_use = "validation returns a Result that must be checked"]
     pub fn validate(&self) -> Result<()> {
         // Check for duplicate rule names
         let mut seen = std::collections::HashSet::new();
@@ -262,6 +616,7 @@ impl WorkflowConfig {
 
     /// Resolve include directives by loading and merging rules from included files.
     /// Rules from included files are optionally prefixed with the namespace.
+    #[must_use = "resolving includes returns a Result that must be checked"]
     pub fn resolve_includes(&mut self, base_dir: &Path) -> Result<()> {
         self.resolve_includes_with_depth(base_dir, 0)
     }
@@ -305,6 +660,7 @@ impl WorkflowConfig {
     }
 
     /// Validate that all execution group references point to existing rules.
+    #[must_use = "validation returns a Result that must be checked"]
     pub fn validate_execution_groups(&self) -> Result<()> {
         let rule_names: std::collections::HashSet<&str> =
             self.rules.iter().map(|r| r.name.as_str()).collect();
@@ -379,6 +735,69 @@ impl WorkflowConfig {
             rule.script.hash(&mut hasher);
         }
         format!("{:016x}", hasher.finish())
+    }
+
+    /// Validate that a reference genome file path has a recognized extension
+    /// (`.fa`, `.fasta`, `.fa.gz`, `.fasta.gz`) and optionally check that
+    /// it exists on disk.
+    #[must_use]
+    pub fn validate_reference(path: &str) -> Vec<String> {
+        let mut warnings = Vec::new();
+        let valid_extensions = [".fa", ".fasta", ".fa.gz", ".fasta.gz"];
+        let has_valid_ext = valid_extensions.iter().any(|ext| path.ends_with(ext));
+        if !has_valid_ext {
+            warnings.push(format!(
+                "Reference path '{}' does not have a recognized extension (.fa, .fasta, .fa.gz, .fasta.gz)",
+                path
+            ));
+        }
+        // Check for .fai index
+        let fai_path = format!("{}.fai", path);
+        let p = std::path::Path::new(&fai_path);
+        if !p.exists() && std::path::Path::new(path).exists() {
+            warnings.push(format!(
+                "Reference index '{}' not found; you may need to run 'samtools faidx'",
+                fai_path
+            ));
+        }
+        warnings
+    }
+
+    /// Validate a sample sheet CSV/TSV: check that it has a header row,
+    /// no duplicate sample IDs, and at least one data row.
+    #[must_use]
+    pub fn validate_sample_sheet(content: &str) -> Vec<String> {
+        let mut warnings = Vec::new();
+        let lines: Vec<&str> = content.lines().collect();
+        if lines.is_empty() {
+            warnings.push("Sample sheet is empty".to_string());
+            return warnings;
+        }
+        // Detect delimiter
+        let delimiter = if lines[0].contains('\t') { '\t' } else { ',' };
+        let header: Vec<&str> = lines[0].split(delimiter).collect();
+        if header.is_empty() {
+            warnings.push("Sample sheet header is empty".to_string());
+            return warnings;
+        }
+        if lines.len() < 2 {
+            warnings.push("Sample sheet has no data rows".to_string());
+            return warnings;
+        }
+        // Check for duplicate IDs in the first column
+        let mut seen = std::collections::HashSet::new();
+        for (i, line) in lines.iter().enumerate().skip(1) {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let fields: Vec<&str> = line.split(delimiter).collect();
+            if let Some(id) = fields.first()
+                && !seen.insert(*id)
+            {
+                warnings.push(format!("Duplicate sample ID '{}' at line {}", id, i + 1));
+            }
+        }
+        warnings
     }
 }
 
@@ -990,5 +1409,148 @@ mod tests {
     fn format_version_defaults_to_none() {
         let config = WorkflowConfig::parse(MINIMAL_WORKFLOW).unwrap();
         assert!(config.workflow.format_version.is_none());
+    }
+
+    #[test]
+    fn workflow_state_lifecycle() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+            [[rules]]
+            name = "step1"
+            input = ["a.txt"]
+            output = ["b.txt"]
+            shell = "cat a.txt > b.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let parsed = WorkflowState::new(config);
+        assert_eq!(parsed.config().workflow.name, "test");
+        let validated = parsed.validate().unwrap();
+        assert_eq!(validated.config().workflow.name, "test");
+        let ready = validated.prepare().unwrap();
+        assert_eq!(ready.config().workflow.name, "test");
+    }
+
+    #[test]
+    fn validate_reference_valid_path() {
+        let warnings = WorkflowConfig::validate_reference("ref.fa");
+        assert!(warnings.is_empty() || warnings.iter().all(|w| w.contains("index")));
+    }
+
+    #[test]
+    fn validate_reference_invalid_extension() {
+        let warnings = WorkflowConfig::validate_reference("ref.txt");
+        assert!(warnings.iter().any(|w| w.contains("recognized extension")));
+    }
+
+    #[test]
+    fn validate_sample_sheet_valid() {
+        let csv =
+            "sample_id,fastq_r1,fastq_r2\nS1,s1_R1.fq.gz,s1_R2.fq.gz\nS2,s2_R1.fq.gz,s2_R2.fq.gz";
+        let warnings = WorkflowConfig::validate_sample_sheet(csv);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn validate_sample_sheet_empty() {
+        let warnings = WorkflowConfig::validate_sample_sheet("");
+        assert!(warnings.iter().any(|w| w.contains("empty")));
+    }
+
+    #[test]
+    fn validate_sample_sheet_duplicates() {
+        let csv = "sample_id,fastq\nS1,a.fq\nS1,b.fq";
+        let warnings = WorkflowConfig::validate_sample_sheet(csv);
+        assert!(warnings.iter().any(|w| w.contains("Duplicate")));
+    }
+
+    #[test]
+    fn variant_classification_display() {
+        assert_eq!(VariantClassification::TierI.to_string(), "Tier I");
+        assert_eq!(VariantClassification::Vus.to_string(), "VUS");
+        assert_eq!(VariantClassification::Benign.to_string(), "Benign");
+    }
+
+    #[test]
+    fn biomarker_result_display() {
+        let br = BiomarkerResult {
+            name: "TMB".to_string(),
+            value: 12.5,
+            unit: "mutations/Mb".to_string(),
+            classification: Some("TMB-High".to_string()),
+            threshold: Some(10.0),
+        };
+        let s = br.to_string();
+        assert!(s.contains("TMB"));
+        assert!(s.contains("12.50"));
+        assert!(s.contains("TMB-High"));
+    }
+
+    #[test]
+    fn qc_threshold_passes() {
+        let t = QcThreshold {
+            metric: "coverage".to_string(),
+            min: Some(30.0),
+            max: Some(1000.0),
+            description: None,
+        };
+        assert!(t.passes(50.0));
+        assert!(!t.passes(10.0));
+        assert!(!t.passes(2000.0));
+    }
+
+    #[test]
+    fn gene_panel_display() {
+        let gp = GenePanel {
+            name: "Test Panel".to_string(),
+            version: Some("1.0".to_string()),
+            genes: vec!["BRCA1".to_string(), "BRCA2".to_string()],
+            bed_file: None,
+        };
+        assert_eq!(gp.to_string(), "Test Panel (2 genes) v1.0");
+    }
+
+    #[test]
+    fn rule_name_newtype() {
+        let rn = RuleName::from("align");
+        assert_eq!(rn.to_string(), "align");
+        assert_eq!(rn, RuleName("align".to_string()));
+    }
+
+    #[test]
+    fn wildcard_pattern_newtype() {
+        let wp = WildcardPattern::from("{sample}.bam");
+        assert_eq!(wp.to_string(), "{sample}.bam");
+    }
+
+    #[test]
+    fn execution_mode_display() {
+        assert_eq!(ExecutionMode::Sequential.to_string(), "sequential");
+        assert_eq!(ExecutionMode::Parallel.to_string(), "parallel");
+    }
+
+    #[test]
+    fn genome_build_in_workflow_meta() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+            genome_build = "GRCh38"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        assert_eq!(config.workflow.genome_build.as_deref(), Some("GRCh38"));
+    }
+
+    #[test]
+    fn clinical_report_section_display() {
+        assert_eq!(
+            ClinicalReportSection::SpecimenInfo.to_string(),
+            "Specimen Information"
+        );
+        assert_eq!(
+            ClinicalReportSection::Methodology.to_string(),
+            "Methodology"
+        );
     }
 }
