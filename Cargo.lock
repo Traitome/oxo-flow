@@ -1036,7 +1036,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "oxo-flow"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "assert_cmd",
  "oxo-flow-core",
@@ -1048,7 +1048,7 @@ dependencies = [
 
 [[package]]
 name = "oxo-flow-cli"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1066,7 +1066,7 @@ dependencies = [
 
 [[package]]
 name = "oxo-flow-core"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "globset",
@@ -1085,7 +1085,7 @@ dependencies = [
 
 [[package]]
 name = "oxo-flow-venus"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "oxo-flow-core",
@@ -1097,7 +1097,7 @@ dependencies = [
 
 [[package]]
 name = "oxo-flow-web"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
