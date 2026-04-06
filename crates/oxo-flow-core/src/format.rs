@@ -1842,4 +1842,353 @@ mod tests {
         let diags = scan_for_secrets("reference = /data/hg38.fa\nthreads = 8");
         assert!(diags.is_empty());
     }
+
+    // ---- E007: depends_on references non-existent rule ----------------------
+
+    #[test]
+    fn validate_e007_depends_on_nonexistent_rule() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            depends_on = ["nonexistent"]
+            shell = "echo hello"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(!result.valid);
+        assert!(result.errors().iter().any(|d| d.code == "E007"));
+    }
+
+    #[test]
+    fn validate_e007_depends_on_valid_rule_no_error() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "setup"
+            shell = "echo setup"
+
+            [[rules]]
+            name = "step1"
+            depends_on = ["setup"]
+            shell = "echo step1"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(!result.errors().iter().any(|d| d.code == "E007"));
+    }
+
+    // ---- W012: retries without retry_delay ----------------------------------
+
+    #[test]
+    fn lint_w012_retries_without_retry_delay() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "flaky"
+            retries = 3
+            output = ["out.txt"]
+            shell = "curl http://example.com > out.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(diagnostics.iter().any(|d| d.code == "W012"));
+    }
+
+    #[test]
+    fn lint_w012_retries_with_retry_delay_no_warning() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "flaky"
+            retries = 3
+            retry_delay = "10s"
+            output = ["out.txt"]
+            shell = "curl http://example.com > out.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(!diagnostics.iter().any(|d| d.code == "W012"));
+    }
+
+    // ---- W013: on_failure without retries -----------------------------------
+
+    #[test]
+    fn lint_w013_on_failure_without_retries() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            on_failure = "echo failed"
+            output = ["out.txt"]
+            shell = "process data"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(diagnostics.iter().any(|d| d.code == "W013"));
+    }
+
+    #[test]
+    fn lint_w013_on_failure_with_retries_no_warning() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            retries = 2
+            on_failure = "echo failed"
+            output = ["out.txt"]
+            shell = "process data"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(!diagnostics.iter().any(|d| d.code == "W013"));
+    }
+
+    // ---- W014: depends_on references unknown rule ---------------------------
+
+    #[test]
+    fn lint_w014_depends_on_unknown_rule() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            depends_on = ["ghost"]
+            output = ["out.txt"]
+            shell = "echo hello"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(diagnostics.iter().any(|d| d.code == "W014"));
+    }
+
+    #[test]
+    fn lint_w014_depends_on_known_rule_no_warning() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "setup"
+            shell = "echo setup"
+
+            [[rules]]
+            name = "step1"
+            depends_on = ["setup"]
+            output = ["out.txt"]
+            shell = "echo hello"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(!diagnostics.iter().any(|d| d.code == "W014"));
+    }
+
+    // ---- diff_workflows tests -----------------------------------------------
+
+    #[test]
+    fn diff_identical_workflows() {
+        let config = WorkflowConfig::parse(sample_workflow()).unwrap();
+        let diffs = diff_workflows(&config, &config);
+        assert!(diffs.is_empty());
+    }
+
+    #[test]
+    fn diff_added_rule() {
+        let toml_a = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hello"
+        "#;
+        let toml_b = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hello"
+
+            [[rules]]
+            name = "step2"
+            shell = "echo world"
+        "#;
+        let a = WorkflowConfig::parse(toml_a).unwrap();
+        let b = WorkflowConfig::parse(toml_b).unwrap();
+        let diffs = diff_workflows(&a, &b);
+        assert!(diffs.iter().any(|d| d.description.contains("rule added")));
+    }
+
+    #[test]
+    fn diff_removed_rule() {
+        let toml_a = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hello"
+
+            [[rules]]
+            name = "step2"
+            shell = "echo world"
+        "#;
+        let toml_b = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hello"
+        "#;
+        let a = WorkflowConfig::parse(toml_a).unwrap();
+        let b = WorkflowConfig::parse(toml_b).unwrap();
+        let diffs = diff_workflows(&a, &b);
+        assert!(diffs.iter().any(|d| d.description.contains("rule removed")));
+    }
+
+    #[test]
+    fn diff_changed_field() {
+        let toml_a = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "step1"
+            output = ["out.txt"]
+            shell = "echo hello"
+            threads = 4
+        "#;
+        let toml_b = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "step1"
+            output = ["out.txt"]
+            shell = "echo hello"
+            threads = 16
+        "#;
+        let a = WorkflowConfig::parse(toml_a).unwrap();
+        let b = WorkflowConfig::parse(toml_b).unwrap();
+        let diffs = diff_workflows(&a, &b);
+        assert!(
+            diffs
+                .iter()
+                .any(|d| d.description.contains("threads changed"))
+        );
+    }
+
+    // ---- format_workflow new-fields tests -----------------------------------
+
+    #[test]
+    fn format_workflow_includes_depends_on() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "setup"
+            shell = "echo setup"
+
+            [[rules]]
+            name = "step1"
+            depends_on = ["setup"]
+            shell = "echo step1"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let formatted = format_workflow(&config);
+        assert!(formatted.contains("depends_on = [\"setup\"]"));
+    }
+
+    #[test]
+    fn format_workflow_includes_retry_delay() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "step1"
+            retries = 3
+            retry_delay = "30s"
+            shell = "echo hello"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let formatted = format_workflow(&config);
+        assert!(formatted.contains("retry_delay = \"30s\""));
+        assert!(formatted.contains("retries = 3"));
+    }
+
+    #[test]
+    fn format_workflow_includes_workdir() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "step1"
+            workdir = "/data/scratch"
+            shell = "echo hello"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let formatted = format_workflow(&config);
+        assert!(formatted.contains("workdir = \"/data/scratch\""));
+    }
+
+    #[test]
+    fn format_workflow_includes_on_success() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "step1"
+            on_success = "echo done"
+            shell = "echo hello"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let formatted = format_workflow(&config);
+        assert!(formatted.contains("on_success = \"echo done\""));
+    }
+
+    #[test]
+    fn format_workflow_includes_on_failure() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "step1"
+            on_failure = "notify admin"
+            shell = "echo hello"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let formatted = format_workflow(&config);
+        assert!(formatted.contains("on_failure = \"notify admin\""));
+    }
 }

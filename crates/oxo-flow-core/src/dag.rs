@@ -733,4 +733,88 @@ mod tests {
         assert!(s.contains("depth=5"));
         assert!(s.contains("width=3"));
     }
+
+    // ---- Tests for depends_on edges -----------------------------------------
+
+    #[test]
+    fn depends_on_creates_edge() {
+        let mut rule_a = make_rule("setup", vec![], vec![]);
+        rule_a.shell = Some("echo setup".to_string());
+
+        let mut rule_b = make_rule("align", vec!["input.fq"], vec!["output.bam"]);
+        rule_b.depends_on = vec!["setup".to_string()];
+
+        let dag = WorkflowDag::from_rules(&[rule_a, rule_b]).unwrap();
+        assert_eq!(dag.edge_count(), 1);
+        let order = dag.execution_order().unwrap();
+        assert_eq!(order[0], "setup");
+        assert_eq!(order[1], "align");
+    }
+
+    #[test]
+    fn dag_with_file_and_depends_on_edges() {
+        // step1 produces mid.txt, step2 consumes it (file edge)
+        // step2 also explicitly depends_on init (explicit edge)
+        let init = make_rule("init", vec![], vec![]);
+        let step1 = make_rule("step1", vec!["input.txt"], vec!["mid.txt"]);
+        let mut step2 = make_rule("step2", vec!["mid.txt"], vec!["output.txt"]);
+        step2.depends_on = vec!["init".to_string()];
+
+        let dag = WorkflowDag::from_rules(&[init, step1, step2]).unwrap();
+        // 1 file-based edge (step1→step2) + 1 depends_on edge (init→step2)
+        assert_eq!(dag.edge_count(), 2);
+        let order = dag.execution_order().unwrap();
+        // step2 must come last
+        assert_eq!(order.last().unwrap(), "step2");
+    }
+
+    // ---- critical_path tests ------------------------------------------------
+
+    #[test]
+    fn critical_path_linear() {
+        let rules = vec![
+            make_rule("a", vec!["in.txt"], vec!["mid1.txt"]),
+            make_rule("b", vec!["mid1.txt"], vec!["mid2.txt"]),
+            make_rule("c", vec!["mid2.txt"], vec!["out.txt"]),
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let path = dag.critical_path().unwrap();
+        assert_eq!(path, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn critical_path_diamond() {
+        let rules = vec![
+            make_rule("source", vec!["raw.txt"], vec!["a.txt", "b.txt"]),
+            make_rule("left", vec!["a.txt"], vec!["left.txt"]),
+            make_rule("right", vec!["b.txt"], vec!["right.txt"]),
+            make_rule("merge", vec!["left.txt", "right.txt"], vec!["final.txt"]),
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let path = dag.critical_path().unwrap();
+        // The critical path has 3 nodes: source → (left or right) → merge
+        assert_eq!(path.len(), 3);
+        assert_eq!(path[0], "source");
+        assert_eq!(path[2], "merge");
+    }
+
+    #[test]
+    fn critical_path_independent_rules() {
+        let rules = vec![
+            make_rule("a", vec!["x.txt"], vec!["a.txt"]),
+            make_rule("b", vec!["y.txt"], vec!["b.txt"]),
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let path = dag.critical_path().unwrap();
+        // No dependencies, so the critical path is a single node
+        assert_eq!(path.len(), 1);
+    }
+
+    #[test]
+    fn critical_path_single_node() {
+        let rules = vec![make_rule("only", vec!["in.txt"], vec!["out.txt"])];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let path = dag.critical_path().unwrap();
+        assert_eq!(path, vec!["only"]);
+    }
 }
