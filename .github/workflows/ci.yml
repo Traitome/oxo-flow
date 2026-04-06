@@ -67,6 +67,15 @@ jobs:
             CHANGED=true
           fi
 
+          # Also update the internal workspace crate versions in [workspace.dependencies]
+          # These must carry a version so that `cargo publish` can resolve them on crates.io.
+          CURRENT_DEP=${CURRENT:-$(sed -n '/^\[workspace\.dependencies\]/,/^\[/{/oxo-flow-/ s/.*version = "\([^"]*\)".*/\1/p;}' Cargo.toml | head -1)}
+          if [ -n "$CURRENT_DEP" ] && [ "$VERSION" != "$CURRENT_DEP" ]; then
+            echo "Updating workspace dependency versions: $CURRENT_DEP → $VERSION"
+            sed -i "/^\[workspace\.dependencies\]/,/^\[/{/oxo-flow-/ s/version = \"[^\"]*\"/version = \"$VERSION\"/;}" Cargo.toml
+            CHANGED=true
+          fi
+
           # Also update the root [package] version
           ROOT_VER=$(grep -m1 '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
           if [ "$VERSION" != "$ROOT_VER" ]; then

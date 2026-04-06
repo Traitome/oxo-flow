@@ -13,7 +13,7 @@ name = "venus"
 path = "src/main.rs"
 
 [dependencies]
-oxo-flow-core = { path = "../oxo-flow-core" }
+oxo-flow-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
