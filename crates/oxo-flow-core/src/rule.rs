@@ -7,6 +7,27 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Parse a duration string like "5s", "30s", "2m", "1h" into seconds.
+///
+/// Returns `None` if the format is invalid or would overflow.
+#[must_use]
+pub fn parse_duration_secs(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Some(num) = s.strip_suffix('s').or_else(|| s.strip_suffix('S')) {
+        return num.parse::<u64>().ok();
+    }
+    if let Some(num) = s.strip_suffix('m').or_else(|| s.strip_suffix('M')) {
+        return num.parse::<u64>().ok().and_then(|v| v.checked_mul(60));
+    }
+    if let Some(num) = s.strip_suffix('h').or_else(|| s.strip_suffix('H')) {
+        return num.parse::<u64>().ok().and_then(|v| v.checked_mul(3600));
+    }
+    None
+}
+
 /// Resource requirements for a rule execution.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Resources {
@@ -251,6 +272,42 @@ pub struct Rule {
     /// Whether this rule is required (pipeline fails if this rule fails).
     #[serde(default)]
     pub required: bool,
+
+    /// Explicit rule-level dependencies (rule names that must complete first).
+    ///
+    /// Unlike file-based dependency inference, `depends_on` allows declaring
+    /// ordering constraints that are not mediated by input/output patterns.
+    /// This is useful for setup/teardown steps, database migrations, or
+    /// environment initialization that other rules depend on logically.
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+
+    /// Delay between retry attempts (e.g., "5s", "30s", "2m").
+    ///
+    /// When `retries > 0`, this specifies the wait time before each retry.
+    /// Supports seconds ("10s"), minutes ("2m"), and hours ("1h").
+    #[serde(default)]
+    pub retry_delay: Option<String>,
+
+    /// Per-rule working directory override.
+    ///
+    /// If set, the rule executes in this directory instead of the workflow's
+    /// global working directory. Relative paths are resolved against the
+    /// workflow working directory.
+    #[serde(default)]
+    pub workdir: Option<String>,
+
+    /// Shell command to execute on successful completion of this rule.
+    ///
+    /// Useful for notifications, cleanup, or triggering downstream processes.
+    #[serde(default)]
+    pub on_success: Option<String>,
+
+    /// Shell command to execute when this rule fails (after all retries).
+    ///
+    /// Useful for cleanup, alerting, or fallback actions.
+    #[serde(default)]
+    pub on_failure: Option<String>,
 }
 
 impl Rule {
@@ -313,6 +370,15 @@ impl Rule {
                     ));
                 }
             }
+        }
+        // Validate retry_delay format if present
+        if let Some(ref delay) = self.retry_delay
+            && parse_duration_secs(delay).is_none()
+        {
+            return Err(format!(
+                "rule '{}' has invalid retry_delay '{}' (expected e.g. \"5s\", \"30s\", \"2m\", \"1h\")",
+                self.name, delay
+            ));
         }
         Ok(())
     }
@@ -454,6 +520,41 @@ impl RuleBuilder {
     #[must_use]
     pub fn required(mut self, required: bool) -> Self {
         self.rule.required = required;
+        self
+    }
+
+    /// Set explicit rule-level dependencies.
+    #[must_use]
+    pub fn depends_on(mut self, deps: Vec<String>) -> Self {
+        self.rule.depends_on = deps;
+        self
+    }
+
+    /// Set the delay between retry attempts (e.g., "5s", "30s", "2m").
+    #[must_use]
+    pub fn retry_delay(mut self, delay: impl Into<String>) -> Self {
+        self.rule.retry_delay = Some(delay.into());
+        self
+    }
+
+    /// Set the per-rule working directory.
+    #[must_use]
+    pub fn workdir(mut self, workdir: impl Into<String>) -> Self {
+        self.rule.workdir = Some(workdir.into());
+        self
+    }
+
+    /// Set the on-success hook command.
+    #[must_use]
+    pub fn on_success(mut self, cmd: impl Into<String>) -> Self {
+        self.rule.on_success = Some(cmd.into());
+        self
+    }
+
+    /// Set the on-failure hook command.
+    #[must_use]
+    pub fn on_failure(mut self, cmd: impl Into<String>) -> Self {
+        self.rule.on_failure = Some(cmd.into());
         self
     }
 
@@ -904,5 +1005,201 @@ mod tests {
         assert!(rule.localrule);
         assert_eq!(rule.tags, vec!["alignment"]);
         assert_eq!(rule.description, Some("A complex rule".to_string()));
+    }
+
+    // ---- Tests for new fields ------------------------------------------------
+
+    #[test]
+    fn depends_on_deserialization() {
+        let toml = r#"
+            name = "align"
+            depends_on = ["setup_ref", "index"]
+            shell = "bwa mem ref.fa input.fq"
+        "#;
+        let rule: Rule = toml::from_str(toml).unwrap();
+        assert_eq!(rule.depends_on, vec!["setup_ref", "index"]);
+    }
+
+    #[test]
+    fn depends_on_default_is_empty() {
+        let rule = Rule::default();
+        assert!(rule.depends_on.is_empty());
+    }
+
+    #[test]
+    fn retry_delay_deserialization() {
+        let toml = r#"
+            name = "flaky_step"
+            retries = 3
+            retry_delay = "30s"
+            shell = "curl http://example.com"
+        "#;
+        let rule: Rule = toml::from_str(toml).unwrap();
+        assert_eq!(rule.retry_delay, Some("30s".to_string()));
+    }
+
+    #[test]
+    fn retry_delay_default_is_none() {
+        let rule = Rule::default();
+        assert!(rule.retry_delay.is_none());
+    }
+
+    #[test]
+    fn retry_delay_valid_formats() {
+        for (input, expected) in [("5s", 5), ("30s", 30), ("2m", 120), ("1h", 3600)] {
+            let rule = Rule {
+                name: "test".to_string(),
+                retry_delay: Some(input.to_string()),
+                ..Default::default()
+            };
+            assert!(rule.validate().is_ok());
+            assert_eq!(parse_duration_secs(input), Some(expected));
+        }
+    }
+
+    #[test]
+    fn retry_delay_invalid_format_rejected_by_validate() {
+        let rule = Rule {
+            name: "test".to_string(),
+            retry_delay: Some("5x".to_string()),
+            ..Default::default()
+        };
+        let err = rule.validate().unwrap_err();
+        assert!(err.contains("invalid retry_delay"));
+    }
+
+    #[test]
+    fn workdir_deserialization() {
+        let toml = r#"
+            name = "compile"
+            workdir = "/data/scratch"
+            shell = "make all"
+        "#;
+        let rule: Rule = toml::from_str(toml).unwrap();
+        assert_eq!(rule.workdir, Some("/data/scratch".to_string()));
+    }
+
+    #[test]
+    fn workdir_default_is_none() {
+        let rule = Rule::default();
+        assert!(rule.workdir.is_none());
+    }
+
+    #[test]
+    fn on_success_deserialization() {
+        let toml = r#"
+            name = "qc"
+            on_success = "echo QC passed"
+            shell = "fastqc input.fq"
+        "#;
+        let rule: Rule = toml::from_str(toml).unwrap();
+        assert_eq!(rule.on_success, Some("echo QC passed".to_string()));
+    }
+
+    #[test]
+    fn on_success_default_is_none() {
+        let rule = Rule::default();
+        assert!(rule.on_success.is_none());
+    }
+
+    #[test]
+    fn on_failure_deserialization() {
+        let toml = r#"
+            name = "align"
+            on_failure = "notify admin"
+            shell = "bwa mem ref.fa input.fq"
+        "#;
+        let rule: Rule = toml::from_str(toml).unwrap();
+        assert_eq!(rule.on_failure, Some("notify admin".to_string()));
+    }
+
+    #[test]
+    fn on_failure_default_is_none() {
+        let rule = Rule::default();
+        assert!(rule.on_failure.is_none());
+    }
+
+    // ---- parse_duration_secs tests -------------------------------------------
+
+    #[test]
+    fn parse_duration_secs_seconds() {
+        assert_eq!(parse_duration_secs("5s"), Some(5));
+        assert_eq!(parse_duration_secs("30S"), Some(30));
+        assert_eq!(parse_duration_secs("0s"), Some(0));
+    }
+
+    #[test]
+    fn parse_duration_secs_minutes() {
+        assert_eq!(parse_duration_secs("2m"), Some(120));
+        assert_eq!(parse_duration_secs("10M"), Some(600));
+    }
+
+    #[test]
+    fn parse_duration_secs_hours() {
+        assert_eq!(parse_duration_secs("1h"), Some(3600));
+        assert_eq!(parse_duration_secs("2H"), Some(7200));
+    }
+
+    #[test]
+    fn parse_duration_secs_invalid() {
+        assert_eq!(parse_duration_secs("5x"), None);
+        assert_eq!(parse_duration_secs("abc"), None);
+        assert_eq!(parse_duration_secs(""), None);
+        assert_eq!(parse_duration_secs("s"), None);
+    }
+
+    // ---- RuleBuilder new-field tests -----------------------------------------
+
+    #[test]
+    fn rule_builder_depends_on() {
+        let rule = RuleBuilder::new("align")
+            .depends_on(vec!["setup".into(), "index".into()])
+            .build();
+        assert_eq!(rule.depends_on, vec!["setup", "index"]);
+    }
+
+    #[test]
+    fn rule_builder_retry_delay() {
+        let rule = RuleBuilder::new("flaky")
+            .retries(3)
+            .retry_delay("10s")
+            .build();
+        assert_eq!(rule.retry_delay, Some("10s".to_string()));
+        assert_eq!(rule.retries, 3);
+    }
+
+    #[test]
+    fn rule_builder_workdir() {
+        let rule = RuleBuilder::new("compile").workdir("/data/scratch").build();
+        assert_eq!(rule.workdir, Some("/data/scratch".to_string()));
+    }
+
+    #[test]
+    fn rule_builder_on_success() {
+        let rule = RuleBuilder::new("qc").on_success("echo done").build();
+        assert_eq!(rule.on_success, Some("echo done".to_string()));
+    }
+
+    #[test]
+    fn rule_builder_on_failure() {
+        let rule = RuleBuilder::new("align").on_failure("notify admin").build();
+        assert_eq!(rule.on_failure, Some("notify admin".to_string()));
+    }
+
+    #[test]
+    fn rule_builder_all_new_fields() {
+        let rule = RuleBuilder::new("full")
+            .shell("do something")
+            .depends_on(vec!["dep1".into()])
+            .retry_delay("5s")
+            .workdir("/work")
+            .on_success("echo ok")
+            .on_failure("echo fail")
+            .build();
+        assert_eq!(rule.depends_on, vec!["dep1"]);
+        assert_eq!(rule.retry_delay, Some("5s".to_string()));
+        assert_eq!(rule.workdir, Some("/work".to_string()));
+        assert_eq!(rule.on_success, Some("echo ok".to_string()));
+        assert_eq!(rule.on_failure, Some("echo fail".to_string()));
     }
 }

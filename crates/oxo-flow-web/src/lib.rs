@@ -845,6 +845,43 @@ pub struct SystemInfo {
     pub uptime_secs: f64,
 }
 
+/// Runtime metrics for monitoring and observability.
+#[derive(Debug, Serialize)]
+pub struct RuntimeMetrics {
+    pub uptime_secs: f64,
+    pub version: String,
+    pub pid: u32,
+    pub os: String,
+    pub arch: String,
+    /// Number of available CPU cores.
+    pub cpu_count: usize,
+}
+
+/// Request body for comparing two workflows.
+#[derive(Deserialize)]
+pub struct DiffRequest {
+    /// TOML content of the first workflow.
+    pub toml_a: String,
+    /// TOML content of the second workflow.
+    pub toml_b: String,
+}
+
+/// Response from workflow diff.
+#[derive(Serialize)]
+pub struct DiffResponse {
+    /// Number of differences found.
+    pub diff_count: usize,
+    /// List of differences.
+    pub diffs: Vec<DiffEntry>,
+}
+
+/// A single difference entry.
+#[derive(Serialize)]
+pub struct DiffEntry {
+    pub category: String,
+    pub description: String,
+}
+
 // ---------------------------------------------------------------------------
 // Error helper
 // ---------------------------------------------------------------------------
@@ -1348,6 +1385,29 @@ async fn workflow_stats_endpoint(
     }))
 }
 
+/// `POST /api/workflows/diff` — Compare two workflow configurations.
+async fn diff_workflows_endpoint(
+    Json(req): Json<DiffRequest>,
+) -> Result<Json<DiffResponse>, ApiError> {
+    let config_a = oxo_flow_core::WorkflowConfig::parse(&req.toml_a)
+        .map_err(|e| ApiError::bad_request("Invalid first workflow TOML", Some(e.to_string())))?;
+    let config_b = oxo_flow_core::WorkflowConfig::parse(&req.toml_b)
+        .map_err(|e| ApiError::bad_request("Invalid second workflow TOML", Some(e.to_string())))?;
+
+    let diffs = oxo_flow_core::format::diff_workflows(&config_a, &config_b);
+
+    Ok(Json(DiffResponse {
+        diff_count: diffs.len(),
+        diffs: diffs
+            .into_iter()
+            .map(|d| DiffEntry {
+                category: d.category,
+                description: d.description,
+            })
+            .collect(),
+    }))
+}
+
 /// `GET /api/system` — Return system information.
 async fn system_info() -> Json<SystemInfo> {
     let uptime = get_start_time().elapsed().as_secs_f64();
@@ -1360,6 +1420,21 @@ async fn system_info() -> Json<SystemInfo> {
         arch: std::env::consts::ARCH.to_string(),
         pid: std::process::id(),
         uptime_secs: uptime,
+    })
+}
+
+/// `GET /api/metrics` — Runtime metrics for monitoring and observability.
+async fn runtime_metrics() -> Json<RuntimeMetrics> {
+    let uptime = get_start_time().elapsed().as_secs_f64();
+    Json(RuntimeMetrics {
+        uptime_secs: uptime,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        pid: std::process::id(),
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        cpu_count: std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(1),
     })
 }
 
@@ -1470,6 +1545,7 @@ fn build_router_inner(limiter: Option<RateLimiter>) -> Router {
         .route("/api/health", get(health))
         .route("/api/version", get(version))
         .route("/api/system", get(system_info))
+        .route("/api/metrics", get(runtime_metrics))
         .route("/api/workflows", get(list_workflows))
         .route("/api/workflows/validate", post(validate_workflow))
         .route("/api/workflows/parse", post(parse_workflow))
@@ -1481,6 +1557,7 @@ fn build_router_inner(limiter: Option<RateLimiter>) -> Router {
         .route("/api/workflows/format", post(format_workflow_endpoint))
         .route("/api/workflows/lint", post(lint_workflow))
         .route("/api/workflows/stats", post(workflow_stats_endpoint))
+        .route("/api/workflows/diff", post(diff_workflows_endpoint))
         .route("/api/environments", get(list_environments))
         .route("/api/reports/generate", post(generate_report))
         .route("/api/events", get(sse_events))
@@ -2362,5 +2439,140 @@ shell = "echo b"
         // No license file installed in test environment
         assert!(!status.valid);
         assert!(!status.message.is_empty());
+    }
+
+    // ---- /api/metrics endpoint test -----------------------------------------
+
+    #[tokio::test]
+    async fn metrics_endpoint_returns_runtime_metrics() {
+        let app = build_router();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let metrics: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(metrics.get("uptime_secs").is_some());
+        assert!(metrics.get("version").is_some());
+        assert!(metrics.get("pid").is_some());
+        assert!(metrics.get("os").is_some());
+        assert!(metrics.get("arch").is_some());
+        assert!(metrics.get("cpu_count").is_some());
+        assert!(metrics["cpu_count"].as_u64().unwrap() >= 1);
+    }
+
+    // ---- /api/workflows/diff endpoint tests ---------------------------------
+
+    #[tokio::test]
+    async fn diff_endpoint_identical_workflows() {
+        let resp = post_json(
+            "/api/workflows/diff",
+            &serde_json::json!({
+                "toml_a": VALID_TOML,
+                "toml_b": VALID_TOML,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["diff_count"], 0);
+        assert!(parsed["diffs"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn diff_endpoint_different_workflows() {
+        let toml_b = r#"
+[workflow]
+name = "test-pipeline-v2"
+version = "2.0.0"
+description = "A test workflow"
+author = "Test Author"
+
+[[rules]]
+name = "step_a"
+input = ["raw/{sample}.fastq"]
+output = ["trimmed/{sample}.fastq"]
+shell = "trim {input} > {output}"
+threads = 4
+"#;
+        let resp = post_json(
+            "/api/workflows/diff",
+            &serde_json::json!({
+                "toml_a": VALID_TOML,
+                "toml_b": toml_b,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(parsed["diff_count"].as_u64().unwrap() > 0);
+        assert!(!parsed["diffs"].as_array().unwrap().is_empty());
+    }
+
+    // ---- build_router_with_base tests ---------------------------------------
+
+    #[tokio::test]
+    async fn router_with_base_path_nested() {
+        let app = build_router_with_base("/oxo-flow");
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/oxo-flow/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn router_with_root_base_path() {
+        let app = build_router_with_base("/");
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn router_with_empty_base_path() {
+        let app = build_router_with_base("");
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

@@ -140,6 +140,13 @@ enum Commands {
         /// Port to listen on.
         #[arg(short = 'p', long, default_value = "8080")]
         port: u16,
+
+        /// Base path for mounting under a sub-path (e.g., "/oxo-flow").
+        ///
+        /// When deploying behind a reverse proxy, set this to the
+        /// prefix path where the application is mounted.
+        #[arg(long, default_value = "/")]
+        base_path: String,
     },
 
     /// Initialize a new workflow project.
@@ -239,6 +246,28 @@ enum Commands {
     Cluster {
         #[command(subcommand)]
         action: ClusterAction,
+    },
+
+    /// Compare two .oxoflow workflow files and show differences.
+    Diff {
+        /// First workflow file.
+        #[arg(value_name = "WORKFLOW_A")]
+        workflow_a: PathBuf,
+
+        /// Second workflow file.
+        #[arg(value_name = "WORKFLOW_B")]
+        workflow_b: PathBuf,
+    },
+
+    /// Mark workflow outputs as up-to-date without re-executing rules.
+    Touch {
+        /// Path to the .oxoflow workflow file.
+        #[arg(value_name = "WORKFLOW")]
+        workflow: PathBuf,
+
+        /// Specific rule(s) whose outputs to touch. If omitted, all outputs are touched.
+        #[arg(short = 'r', long = "rule")]
+        rules: Vec<String>,
     },
 }
 
@@ -639,10 +668,21 @@ async fn main() -> Result<()> {
             }
         }
 
-        Commands::Serve { host, port } => {
+        Commands::Serve {
+            host,
+            port,
+            base_path,
+        } => {
             print_banner();
-            eprintln!("Starting web server at {}:{} ...", host, port);
-            oxo_flow_web::start_server(&host, port).await?;
+            if base_path != "/" {
+                eprintln!(
+                    "Starting web server at {}:{} with base path '{}' ...",
+                    host, port, base_path
+                );
+            } else {
+                eprintln!("Starting web server at {}:{} ...", host, port);
+            }
+            oxo_flow_web::start_server_with_base(&host, port, &base_path).await?;
         }
 
         Commands::Init { name, dir } => {
@@ -1228,6 +1268,114 @@ Thumbs.db
                 }
             }
         }
+
+        Commands::Diff {
+            workflow_a,
+            workflow_b,
+        } => {
+            print_banner();
+            let config_a = WorkflowConfig::from_file(&workflow_a)
+                .with_context(|| format!("failed to parse {}", workflow_a.display()))?;
+            let config_b = WorkflowConfig::from_file(&workflow_b)
+                .with_context(|| format!("failed to parse {}", workflow_b.display()))?;
+
+            let diffs = oxo_flow_core::format::diff_workflows(&config_a, &config_b);
+
+            if diffs.is_empty() {
+                eprintln!("{} Workflows are identical", "✓".green().bold());
+            } else {
+                eprintln!(
+                    "{} {} difference(s) between {} and {}:",
+                    "Diff:".bold().yellow(),
+                    diffs.len(),
+                    workflow_a.display(),
+                    workflow_b.display()
+                );
+                for diff in &diffs {
+                    eprintln!("  {} [{}] {}", "•".cyan(), diff.category, diff.description);
+                }
+            }
+        }
+
+        Commands::Touch { workflow, rules } => {
+            print_banner();
+            let config = WorkflowConfig::from_file(&workflow)
+                .with_context(|| format!("failed to parse {}", workflow.display()))?;
+
+            let rules_to_touch: Vec<&oxo_flow_core::rule::Rule> = if rules.is_empty() {
+                config.rules.iter().collect()
+            } else {
+                config
+                    .rules
+                    .iter()
+                    .filter(|r| rules.contains(&r.name))
+                    .collect()
+            };
+
+            let mut touched = 0usize;
+            let mut skipped = 0usize;
+
+            let base_dir = std::env::current_dir().unwrap_or_default();
+
+            for rule in &rules_to_touch {
+                for output in &rule.output {
+                    let has_wildcard = output.contains('{') && output.contains('}');
+                    if has_wildcard {
+                        skipped += 1;
+                        continue;
+                    }
+
+                    // Path safety: reject path traversal and absolute paths
+                    if output.contains("..") || output.starts_with('/') || output.starts_with('~') {
+                        eprintln!("  {} {} (rejected: unsafe path)", "✗".red().bold(), output);
+                        continue;
+                    }
+
+                    let path = base_dir.join(output);
+                    if path.exists() {
+                        // Update modification time
+                        match filetime::set_file_mtime(&path, filetime::FileTime::now()) {
+                            Ok(()) => {
+                                touched += 1;
+                                eprintln!("  {} {}", "✓".green(), output);
+                            }
+                            Err(e) => {
+                                eprintln!("  {} {} ({})", "✗".red(), output, e);
+                            }
+                        }
+                    } else {
+                        // Create empty file to mark as "done"
+                        if let Some(parent) = path.parent()
+                            && let Err(e) = std::fs::create_dir_all(parent)
+                        {
+                            eprintln!(
+                                "  {} {} (cannot create directory: {})",
+                                "✗".red(),
+                                output,
+                                e
+                            );
+                            continue;
+                        }
+                        match std::fs::write(&path, "") {
+                            Ok(()) => {
+                                touched += 1;
+                                eprintln!("  {} {} (created)", "✓".green(), output);
+                            }
+                            Err(e) => {
+                                eprintln!("  {} {} (failed: {})", "✗".red(), output, e);
+                            }
+                        }
+                    }
+                }
+            }
+
+            eprintln!(
+                "\n{} {} file(s) touched, {} wildcard patterns skipped",
+                "Done:".bold(),
+                touched,
+                skipped
+            );
+        }
     }
 
     Ok(())
@@ -1570,6 +1718,85 @@ mod tests {
                 assert_eq!(job_ids, vec!["12345", "67890"]);
             }
             _ => panic!("expected Cluster Cancel command"),
+        }
+    }
+
+    // ---- Tests for new subcommands ------------------------------------------
+
+    #[test]
+    fn cli_parse_diff() {
+        let cli = Cli::try_parse_from(["oxo-flow", "diff", "a.oxoflow", "b.oxoflow"]).unwrap();
+        match cli.command {
+            Commands::Diff {
+                workflow_a,
+                workflow_b,
+            } => {
+                assert_eq!(workflow_a, PathBuf::from("a.oxoflow"));
+                assert_eq!(workflow_b, PathBuf::from("b.oxoflow"));
+            }
+            _ => panic!("expected Diff command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_touch() {
+        let cli = Cli::try_parse_from(["oxo-flow", "touch", "pipeline.oxoflow"]).unwrap();
+        match cli.command {
+            Commands::Touch {
+                workflow, rules, ..
+            } => {
+                assert_eq!(workflow, PathBuf::from("pipeline.oxoflow"));
+                assert!(rules.is_empty());
+            }
+            _ => panic!("expected Touch command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_touch_with_rule_flag() {
+        let cli = Cli::try_parse_from(["oxo-flow", "touch", "pipeline.oxoflow", "--rule", "align"])
+            .unwrap();
+        match cli.command {
+            Commands::Touch {
+                workflow, rules, ..
+            } => {
+                assert_eq!(workflow, PathBuf::from("pipeline.oxoflow"));
+                assert_eq!(rules, vec!["align"]);
+            }
+            _ => panic!("expected Touch command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_serve_with_base_path() {
+        let cli = Cli::try_parse_from([
+            "oxo-flow",
+            "serve",
+            "--host",
+            "0.0.0.0",
+            "--base-path",
+            "/oxo-flow",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Serve {
+                host, base_path, ..
+            } => {
+                assert_eq!(host, "0.0.0.0");
+                assert_eq!(base_path, "/oxo-flow");
+            }
+            _ => panic!("expected Serve command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_serve_default_base_path() {
+        let cli = Cli::try_parse_from(["oxo-flow", "serve"]).unwrap();
+        match cli.command {
+            Commands::Serve { base_path, .. } => {
+                assert_eq!(base_path, "/");
+            }
+            _ => panic!("expected Serve command"),
         }
     }
 }
