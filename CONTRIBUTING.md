@@ -51,7 +51,9 @@ oxo-flow/
 
 - **Formatting**: `cargo fmt` is enforced in CI
 - **Linting**: `cargo clippy -- -D warnings` — all warnings are errors
+- **Safety**: `#![forbid(unsafe_code)]` in all crates — zero unsafe code allowed
 - **Error handling**: Use `thiserror` for library errors, `anyhow` for binary errors
+- **Result types**: Add `#[must_use]` to public functions returning `Result`
 - **Naming**: `snake_case` for functions, `PascalCase` for types
 - **Async**: Use `tokio` for async runtime
 - **Logging**: Use `tracing` for structured logging
@@ -99,6 +101,7 @@ chore: update dependencies
 ### 5. Submit a Pull Request
 
 - Target the `main` branch
+- Use the [PR template](.github/PULL_REQUEST_TEMPLATE.md) — it includes a checklist
 - Include a clear description of what changed and why
 - Reference related issues if applicable
 - Ensure CI passes
@@ -148,5 +151,11 @@ the same terms as the project.
 
 ## Questions?
 
-Open an issue at https://github.com/Traitome/oxo-flow/issues for questions,
-bug reports, or feature requests.
+- 🐛 **Bug reports** — Use the [bug report template](.github/ISSUE_TEMPLATE/bug_report.md)
+- 💡 **Feature requests** — Use the [feature request template](.github/ISSUE_TEMPLATE/feature_request.md)
+- 🔒 **Security issues** — See [SECURITY.md](SECURITY.md) for responsible disclosure
+- ❓ **General questions** — Open a [GitHub Issue](https://github.com/Traitome/oxo-flow/issues)
+
+## Governance
+
+See [GOVERNANCE.md](GOVERNANCE.md) for the project's decision-making process.

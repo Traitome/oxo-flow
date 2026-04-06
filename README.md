@@ -13,7 +13,7 @@
 [![GitHub Downloads](https://img.shields.io/github/downloads/Traitome/oxo-flow/total.svg)](https://github.com/Traitome/oxo-flow/releases)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Traitome/oxo-flow)
 
-[Documentation](https://traitome.github.io/oxo-flow/documentation/) · [Workflow Gallery](https://traitome.github.io/oxo-flow/documentation/gallery/) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md)
+[Documentation](https://traitome.github.io/oxo-flow/documentation/) · [Workflow Gallery](https://traitome.github.io/oxo-flow/documentation/gallery/) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
 </div>
 
@@ -26,27 +26,30 @@ oxo-flow is a high-performance, modular bioinformatics pipeline engine built fro
 - 🔀 **DAG-based execution** — Automatic dependency resolution, topological ordering, and parallel execution
 - 📦 **Environment management** — First-class support for conda, pixi, docker, singularity, and venv
 - 🧬 **Bioinformatics-first** — Purpose-built for genomics workflows and clinical-grade pipelines
-- 📊 **Clinical-grade reporting** — Modular HTML/PDF/JSON report generation from templates
-- 🌐 **CLI + Web interface** — 13 CLI subcommands and a full REST API with 12+ endpoints
-- 🐳 **Container packaging** — Package workflows into portable Docker/Singularity images
-- ⚡ **Rust performance** — Fearless concurrency, zero-cost abstractions, minimal memory footprint
-- 🔧 **Resource-aware scheduling** — Jobs declare CPU, memory, GPU, and disk; the scheduler respects constraints across local and cluster backends (SLURM, PBS, SGE)
+- 📊 **Clinical-grade reporting** — Modular HTML/PDF/JSON report generation with ACMG/AMP variant classification, biomarker tracking, and compliance audit trails
+- 🌐 **CLI + Web interface** — 18+ CLI subcommands and a full REST API with rate limiting and graceful shutdown
+- 🐳 **Container packaging** — Multi-stage Docker builds, rootless containers, and HEALTHCHECK support
+- ⚡ **Rust performance** — Fearless concurrency, zero-cost abstractions, `#![forbid(unsafe_code)]` across all crates
+- 🔧 **Resource-aware scheduling** — Jobs declare CPU, memory, GPU, and disk; the scheduler respects constraints across local and cluster backends (SLURM, PBS, SGE, LSF)
+- 🔒 **Security hardened** — Shell injection prevention, path traversal protection, secret scanning, and per-IP rate limiting
 
 ## Why oxo-flow?
 
 | Feature | oxo-flow |
 |---------|----------|
-| **Language** | Rust (compiled, type-safe, zero-cost abstractions) |
+| **Language** | Rust (compiled, type-safe, `#![forbid(unsafe_code)]`) |
 | **Performance** | Native binary with async concurrency — no interpreter overhead |
 | **Workflow format** | TOML (`.oxoflow`) — declarative, composable, human-readable |
 | **Environment support** | conda, pixi, docker, singularity, venv — per-rule isolation |
-| **Web interface** | Built-in REST API + embedded web UI for remote monitoring |
-| **Clinical reporting** | First-class HTML/PDF/JSON report system with audit trails |
-| **Container packaging** | `oxo-flow package` — one command to produce portable images |
+| **Web interface** | REST API with rate limiting, RBAC, security headers, graceful shutdown |
+| **Clinical reporting** | ACMG/AMP variant classification, biomarker tracking, compliance events |
+| **Container packaging** | Multi-stage builds, rootless containers, HEALTHCHECK support |
 | **Cluster backends** | SLURM, PBS, SGE, LSF — resource-aware scheduling |
-| **Type safety** | Compile-time guarantees eliminate entire classes of runtime errors |
+| **Type safety** | Type-state lifecycle (`Parsed→Validated→Ready`), `RuleBuilder`, newtypes |
+| **Security** | Shell sanitization, path traversal prevention, secret scanning, rate limiting |
 | **Startup time** | Instant — native binary, no runtime loading |
 | **Reproducibility** | Config checksums, execution provenance, deterministic DAG scheduling |
+| **Testing** | 475 tests including 1000-rule stress test |
 
 ## Design Principles
 
@@ -348,6 +351,8 @@ Contributions are welcome! Please see:
 - [CONTRIBUTING.md](CONTRIBUTING.md) — Contribution guidelines
 - [ROADMAP.md](ROADMAP.md) — Project roadmap and areas where help is needed
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — Community standards
+- [GOVERNANCE.md](GOVERNANCE.md) — Project governance and decision-making
+- [SECURITY.md](SECURITY.md) — Security vulnerability reporting
 
 Before submitting a PR, ensure all checks pass:
 
@@ -357,10 +362,19 @@ make ci
 
 ## Community
 
-- 🐛 **Bug reports** — [GitHub Issues](https://github.com/Traitome/oxo-flow/issues)
-- 💡 **Feature requests** — [GitHub Issues](https://github.com/Traitome/oxo-flow/issues)
+- 🐛 **Bug reports** — [GitHub Issues](https://github.com/Traitome/oxo-flow/issues) (use [bug report template](.github/ISSUE_TEMPLATE/bug_report.md))
+- 💡 **Feature requests** — [GitHub Issues](https://github.com/Traitome/oxo-flow/issues) (use [feature request template](.github/ISSUE_TEMPLATE/feature_request.md))
 - 📖 **Documentation** — [traitome.github.io/oxo-flow/documentation/](https://traitome.github.io/oxo-flow/documentation/)
 - ❓ **Questions** — [Ask DeepWiki](https://deepwiki.com/Traitome/oxo-flow)
+
+## Additional Resources
+
+- [LIMITATIONS.md](LIMITATIONS.md) — Known limitations and constraints
+- [REPRODUCIBILITY.md](REPRODUCIBILITY.md) — Reproducibility guarantees and methodology
+- [RELEASING.md](RELEASING.md) — Release process and versioning policy
+- [TRADEMARK.md](TRADEMARK.md) — Trademark usage guidelines
+- [docs/CHANGE_CONTROL.md](docs/CHANGE_CONTROL.md) — Change control for regulated environments
+- [docs/VALIDATION_PROTOCOL.md](docs/VALIDATION_PROTOCOL.md) — IQ/OQ/PQ validation protocol
 
 ---
 
