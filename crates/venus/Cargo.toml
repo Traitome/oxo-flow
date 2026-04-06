@@ -1,5 +1,5 @@
 [package]
-name = "venus"
+name = "oxo-flow-venus"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

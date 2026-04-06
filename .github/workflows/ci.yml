@@ -235,7 +235,7 @@ jobs:
         run: |
           cross build --release --target ${{ matrix.target }} -p oxo-flow-cli
           cross build --release --target ${{ matrix.target }} -p oxo-flow-web
-          cross build --release --target ${{ matrix.target }} -p venus
+          cross build --release --target ${{ matrix.target }} -p oxo-flow-venus
 
       - name: Package binaries
         if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
@@ -309,7 +309,7 @@ jobs:
         run: |
           cargo build --release --target ${{ matrix.target }} -p oxo-flow-cli
           cargo build --release --target ${{ matrix.target }} -p oxo-flow-web
-          cargo build --release --target ${{ matrix.target }} -p venus
+          cargo build --release --target ${{ matrix.target }} -p oxo-flow-venus
 
       - name: Package binaries
         if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
@@ -376,7 +376,7 @@ jobs:
         run: |
           cargo build --release --target ${{ matrix.target }} -p oxo-flow-cli
           cargo build --release --target ${{ matrix.target }} -p oxo-flow-web
-          cargo build --release --target ${{ matrix.target }} -p venus
+          cargo build --release --target ${{ matrix.target }} -p oxo-flow-venus
 
       - name: Package binaries
         if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
@@ -522,7 +522,7 @@ jobs:
           set -euxo pipefail
           TAG="${GITHUB_REF_NAME#v}"
           echo "Tag version: $TAG"
-          for crate in oxo-flow-core oxo-flow-web oxo-flow-cli venus; do
+          for crate in oxo-flow-core oxo-flow-web oxo-flow-cli oxo-flow-venus; do
             VER=$(cargo metadata --no-deps --format-version=1 \
               | python3 -c "import sys,json; pkgs=json.load(sys.stdin)['packages']; print(next(p['version'] for p in pkgs if p['name']=='$crate'))")
             echo "$crate version: $VER"
@@ -567,21 +567,21 @@ jobs:
             cargo publish -p oxo-flow-web
           fi
 
-      - name: Publish venus
+      - name: Publish oxo-flow-venus
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          STATUS=$(curl -sf "https://crates.io/api/v1/crates/venus/${VERSION}" \
+          STATUS=$(curl -sf "https://crates.io/api/v1/crates/oxo-flow-venus/${VERSION}" \
             -H "User-Agent: oxo-flow-ci/1.0 (github.com/Traitome/oxo-flow)" \
             -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
           if [ "$STATUS" = "200" ]; then
-            echo "venus ${VERSION} already on crates.io, skipping"
+            echo "oxo-flow-venus ${VERSION} already on crates.io, skipping"
           else
             [ "$STATUS" = "000" ] && echo "::warning::crates.io reachability check failed, attempting publish anyway"
-            cargo publish -p venus
+            cargo publish -p oxo-flow-venus
           fi
 
-      - name: Wait for crates.io index (oxo-flow-web, venus)
+      - name: Wait for crates.io index (oxo-flow-web, oxo-flow-venus)
         run: sleep 60
 
       - name: Publish oxo-flow-cli

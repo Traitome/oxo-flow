@@ -257,7 +257,7 @@ oxo-flow/
 │   │                      # config parsing, scheduler, wildcard expansion, reporting
 │   ├── oxo-flow-cli/      # CLI binary ("oxo-flow") — Clap-based, 13 subcommands
 │   ├── oxo-flow-web/      # Web server ("oxo-flow-web") — axum REST API + frontend
-│   └── venus/             # Venus pipeline ("venus") — tumor variant detection
+│   └── venus/             # Venus pipeline ("oxo-flow-venus") — tumor variant detection
 ├── pipelines/
 │   └── venus/             # Venus .oxoflow files, envs, schemas, report templates
 ├── examples/              # Example .oxoflow workflows
@@ -270,7 +270,7 @@ oxo-flow/
 | `oxo-flow-core` | Library | — | Apache-2.0 |
 | `oxo-flow-cli` | Binary | `oxo-flow` | Apache-2.0 |
 | `oxo-flow-web` | Binary | `oxo-flow-web` | Dual Academic / Commercial |
-| `venus` | Binary | `venus` | Apache-2.0 |
+| `oxo-flow-venus` | Binary | `venus` | Apache-2.0 |
 
 ### Core modules
 
@@ -337,7 +337,7 @@ This project uses a **split licensing model**:
 |-------|---------|---------|
 | `oxo-flow-core` | [Apache-2.0](LICENSE) | Free and open-source |
 | `oxo-flow-cli` | [Apache-2.0](LICENSE) | Free and open-source |
-| `venus` | [Apache-2.0](LICENSE) | Free and open-source |
+| `oxo-flow-venus` | [Apache-2.0](LICENSE) | Free and open-source |
 | `oxo-flow-web` | [Academic](LICENSE-ACADEMIC) / [Commercial](LICENSE-COMMERCIAL) | Free for academic and non-commercial use; commercial use requires a separate license |
 
 The core library, CLI, and Venus pipeline are licensed under the **Apache License 2.0** — you are free to use, modify, and distribute them without restriction.

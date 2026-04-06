@@ -10,7 +10,7 @@ resolver = "2"
 
 [dependencies]
 oxo-flow-core = { path = "crates/oxo-flow-core" }
-venus = { path = "crates/venus" }
+oxo-flow-venus = { path = "crates/venus" }
 
 [workspace.package]
 version = "0.1.2"

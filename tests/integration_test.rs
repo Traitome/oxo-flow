@@ -121,18 +121,18 @@ fn apply_defaults_in_lifecycle() {
 /// Test Venus pipeline generates valid oxoflow.
 #[test]
 fn venus_generate_and_validate() {
-    let config = venus::VenusConfig {
-        mode: venus::AnalysisMode::TumorNormal,
-        seq_type: venus::SeqType::WGS,
-        genome_build: venus::GenomeBuild::GRCh38,
+    let config = oxo_flow_venus::VenusConfig {
+        mode: oxo_flow_venus::AnalysisMode::TumorNormal,
+        seq_type: oxo_flow_venus::SeqType::WGS,
+        genome_build: oxo_flow_venus::GenomeBuild::GRCh38,
         reference_fasta: "/ref/hg38.fa".to_string(),
-        tumor_samples: vec![venus::Sample {
+        tumor_samples: vec![oxo_flow_venus::Sample {
             name: "TUMOR_01".to_string(),
             r1_fastq: "raw/TUMOR_01_R1.fq.gz".to_string(),
             r2_fastq: Some("raw/TUMOR_01_R2.fq.gz".to_string()),
             is_tumor: true,
         }],
-        normal_samples: vec![venus::Sample {
+        normal_samples: vec![oxo_flow_venus::Sample {
             name: "NORMAL_01".to_string(),
             r1_fastq: "raw/NORMAL_01_R1.fq.gz".to_string(),
             r2_fastq: Some("raw/NORMAL_01_R2.fq.gz".to_string()),
@@ -147,7 +147,7 @@ fn venus_generate_and_validate() {
         project_name: Some("VenusIntegration".to_string()),
     };
 
-    let toml_str = venus::generate_oxoflow(&config).unwrap();
+    let toml_str = oxo_flow_venus::generate_oxoflow(&config).unwrap();
     let wf = WorkflowConfig::parse(&toml_str).unwrap();
 
     assert_eq!(wf.workflow.name, "VenusIntegration");

@@ -27,13 +27,13 @@ graph TD
     CLI[oxo-flow-cli] --> Core[oxo-flow-core]
     CLI --> Web[oxo-flow-web]
     Web --> Core
-    Venus[venus] --> Core
+    Venus[oxo-flow-venus] --> Core
 ```
 
 - **oxo-flow-core** is the foundation — all other crates depend on it
 - **oxo-flow-cli** is the user-facing binary that ties everything together
 - **oxo-flow-web** provides the REST API layer on top of core
-- **venus** is a domain-specific pipeline crate built on core
+- **oxo-flow-venus** is a domain-specific pipeline crate built on core
 
 ---
 

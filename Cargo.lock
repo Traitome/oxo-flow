@@ -1026,10 +1026,10 @@ version = "0.1.2"
 dependencies = [
  "assert_cmd",
  "oxo-flow-core",
+ "oxo-flow-venus",
  "predicates",
  "serde_json",
  "tempfile",
- "venus",
 ]
 
 [[package]]
@@ -1066,6 +1066,18 @@ dependencies = [
  "toml",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "oxo-flow-venus"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "oxo-flow-core",
+ "serde",
+ "serde_json",
+ "toml",
+ "tracing",
 ]
 
 [[package]]
@@ -2013,18 +2025,6 @@ name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
-
-[[package]]
-name = "venus"
-version = "0.1.2"
-dependencies = [
- "anyhow",
- "oxo-flow-core",
- "serde",
- "serde_json",
- "toml",
- "tracing",
-]
 
 [[package]]
 name = "version_check"

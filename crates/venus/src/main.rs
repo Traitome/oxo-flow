@@ -71,7 +71,7 @@ fn cmd_generate(args: &[String]) -> Result<()> {
     let content =
         std::fs::read_to_string(&config_path).context("Failed to read configuration file")?;
 
-    let config: venus::VenusConfig =
+    let config: oxo_flow_venus::VenusConfig =
         toml::from_str(&content).context("Failed to parse Venus configuration")?;
 
     config
@@ -79,7 +79,7 @@ fn cmd_generate(args: &[String]) -> Result<()> {
         .context("Venus configuration validation failed")?;
 
     let oxoflow_toml =
-        venus::generate_oxoflow(&config).context("Failed to generate .oxoflow content")?;
+        oxo_flow_venus::generate_oxoflow(&config).context("Failed to generate .oxoflow content")?;
 
     std::fs::write(&output_path, &oxoflow_toml)
         .with_context(|| format!("Failed to write output to {}", output_path.display()))?;
@@ -97,7 +97,7 @@ fn cmd_validate(args: &[String]) -> Result<()> {
     let content =
         std::fs::read_to_string(&config_path).context("Failed to read configuration file")?;
 
-    let config: venus::VenusConfig =
+    let config: oxo_flow_venus::VenusConfig =
         toml::from_str(&content).context("Failed to parse Venus configuration")?;
 
     let total_samples = config.tumor_samples.len() + config.normal_samples.len();
