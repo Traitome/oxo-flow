@@ -289,6 +289,16 @@ pub struct DagMetrics {
     pub parallel_group_count: usize,
 }
 
+impl std::fmt::Display for DagMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "DAG metrics: depth={}, width={}, critical_path={}",
+            self.max_depth, self.max_width, self.critical_path_length
+        )
+    }
+}
+
 impl WorkflowDag {
     /// Compute complexity metrics for the DAG.
     #[must_use = "computing metrics returns a Result that must be used"]

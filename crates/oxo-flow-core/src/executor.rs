@@ -590,6 +590,19 @@ pub struct ExecutionProvenance {
 
     /// Working directory.
     pub workdir: String,
+
+    /// Operator / analyst ID (for clinical compliance).
+    #[serde(default)]
+    pub operator_id: Option<String>,
+    /// Instrument ID (for lab tracking).
+    #[serde(default)]
+    pub instrument_id: Option<String>,
+    /// Reagent lot number.
+    #[serde(default)]
+    pub reagent_lot: Option<String>,
+    /// Specimen / accession number.
+    #[serde(default)]
+    pub specimen_id: Option<String>,
 }
 
 impl ExecutionProvenance {
@@ -602,12 +615,26 @@ impl ExecutionProvenance {
             finished_at: None,
             hostname: hostname(),
             workdir: workdir.display().to_string(),
+            operator_id: None,
+            instrument_id: None,
+            reagent_lot: None,
+            specimen_id: None,
         }
     }
 
     /// Mark the execution as complete.
     pub fn finish(&mut self) {
         self.finished_at = Some(Utc::now());
+    }
+}
+
+impl std::fmt::Display for ExecutionProvenance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "oxo-flow {} on {} (config checksum: {})",
+            self.oxo_flow_version, self.hostname, self.config_checksum
+        )
     }
 }
 
