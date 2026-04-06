@@ -13,8 +13,8 @@ name = "oxo-flow"
 path = "src/main.rs"
 
 [dependencies]
-oxo-flow-core = { path = "../oxo-flow-core" }
-oxo-flow-web = { path = "../oxo-flow-web" }
+oxo-flow-core = { workspace = true }
+oxo-flow-web = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }
 anyhow = { workspace = true }

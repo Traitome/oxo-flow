@@ -21,6 +21,10 @@ repository = "https://github.com/Traitome/oxo-flow"
 homepage = "https://github.com/Traitome/oxo-flow"
 
 [workspace.dependencies]
+# Internal workspace crates
+oxo-flow-core = { path = "crates/oxo-flow-core", version = "0.1.1" }
+oxo-flow-web = { path = "crates/oxo-flow-web", version = "0.1.1" }
+
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
