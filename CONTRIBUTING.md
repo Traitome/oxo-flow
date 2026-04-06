@@ -142,7 +142,7 @@ cargo test --workspace --verbose
 
 ## Licensing
 
-- **oxo-flow-core**, **oxo-flow-cli**, **venus**: Apache 2.0
+- **oxo-flow-core**, **oxo-flow-cli**, **oxo-flow-venus**: Apache 2.0
 - **oxo-flow-web**: Dual license (Academic free / Commercial paid)
   - See `LICENSE-ACADEMIC` and `LICENSE-COMMERCIAL`
 

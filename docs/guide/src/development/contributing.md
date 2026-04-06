@@ -164,7 +164,7 @@ cargo test --workspace --verbose
 |---|---|
 | oxo-flow-core | Apache 2.0 |
 | oxo-flow-cli | Apache 2.0 |
-| venus | Apache 2.0 |
+| oxo-flow-venus | Apache 2.0 |
 | oxo-flow-web | Dual (Academic free / Commercial paid) |
 
 By contributing, you agree that your contributions will be licensed under the same terms as the project.
