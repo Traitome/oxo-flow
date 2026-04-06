@@ -184,6 +184,9 @@ jobs:
     # Skip on pull_request events — the test job already validates compilation.
     # Build and package are only needed for releases and main-branch pushes.
     if: always() && needs.test.result == 'success' && github.event_name != 'pull_request'
+    # A single target failure must not block the GitHub Release; partial
+    # artifact sets are acceptable.
+    continue-on-error: true
     permissions:
       contents: read
     strategy:
@@ -259,6 +262,9 @@ jobs:
     needs: [test]
     # Skip on pull_request events — macOS runners are slow and expensive.
     if: always() && needs.test.result == 'success' && github.event_name != 'pull_request'
+    # A cancelled/unavailable runner (e.g., deprecated macos-13) must not
+    # block the GitHub Release; partial artifact sets are acceptable.
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -329,6 +335,8 @@ jobs:
     needs: [test]
     # Skip on pull_request events — Windows runners are slow and expensive.
     if: always() && needs.test.result == 'success' && github.event_name != 'pull_request'
+    # A single target failure must not block the GitHub Release.
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -474,11 +482,16 @@ jobs:
   # ─── Publish crates to crates.io (dependency order) ────────────────────────
   publish-crates:
     name: Publish to crates.io
-    # Depend on `release` so publishing only happens after all binary builds
-    # succeed and the GitHub Release is created.
-    needs: [release]
+    # Depend directly on sync-version + test so crates.io publishing is not
+    # blocked by binary build failures or a skipped GitHub Release job.
+    # Publishing source crates is independent of the binary release artifacts.
+    needs: [sync-version, test]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      always() &&
+      startsWith(github.ref, 'refs/tags/v') &&
+      (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped') &&
+      needs.test.result == 'success'
     permissions:
       contents: read
     env:
