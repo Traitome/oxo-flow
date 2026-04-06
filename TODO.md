@@ -1,6 +1,6 @@
 # TODO: Expert Panel Evaluation — oxo-flow
 
-> **15 domain experts × 5–7 opinions each = 82 concrete, actionable items**
+> **15 domain experts × 5–7 opinions each = 89 concrete, actionable items**
 >
 > Focus areas: `.oxoflow` format spec, CLI, web application, DAG engine, and cross-cutting concerns.
 >
@@ -460,9 +460,9 @@
 
 | Category | Count |
 |----------|-------|
-| Total opinions | 82 |
-| 🔴 Critical | 28 |
-| 🟡 Important | 37 |
+| Total opinions | 89 |
+| 🔴 Critical | 27 |
+| 🟡 Important | 45 |
 | 🟢 Nice-to-have | 17 |
 | Experts consulted | 15 |
 | Unique features covered | 12 |
