@@ -193,6 +193,26 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
         }
     }
 
+    // E007: depends_on references non-existent rules
+    let rule_names: std::collections::HashSet<&str> =
+        config.rules.iter().map(|r| r.name.as_str()).collect();
+    for rule in &config.rules {
+        for dep in &rule.depends_on {
+            if !rule_names.contains(dep.as_str()) {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    message: format!("depends_on references non-existent rule '{}'", dep),
+                    rule: Some(rule.name.clone()),
+                    code: "E007".to_string(),
+                    suggestion: Some(format!(
+                        "ensure rule '{}' is defined in the workflow or remove it from depends_on",
+                        dep
+                    )),
+                });
+            }
+        }
+    }
+
     // E006: DAG cycle detection
     match WorkflowDag::from_rules(&config.rules) {
         Ok(_) => {}
@@ -366,6 +386,48 @@ pub fn lint_format(config: &WorkflowConfig) -> Vec<Diagnostic> {
                 code: "W011".to_string(),
                 suggestion: Some("remove the shadow setting, or add input files".to_string()),
             });
+        }
+
+        // W012: Rule has retries but no retry_delay
+        if rule.retries > 0 && rule.retry_delay.is_none() {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Info,
+                message: "rule has retries but no retry_delay — retries will execute immediately"
+                    .to_string(),
+                rule: Some(rule.name.clone()),
+                code: "W012".to_string(),
+                suggestion: Some(
+                    "add retry_delay = \"10s\" to add a backoff between retry attempts".to_string(),
+                ),
+            });
+        }
+
+        // W013: Rule has on_failure but no retries
+        if rule.on_failure.is_some() && rule.retries == 0 {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Info,
+                message:
+                    "rule has on_failure hook but no retries — on_failure runs on first failure"
+                        .to_string(),
+                rule: Some(rule.name.clone()),
+                code: "W013".to_string(),
+                suggestion: Some(
+                    "consider adding retries = 1 or more before triggering on_failure".to_string(),
+                ),
+            });
+        }
+
+        // W014: depends_on references non-existent rule
+        for dep in &rule.depends_on {
+            if !config.rules.iter().any(|r| r.name == *dep) {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    message: format!("depends_on references unknown rule '{}'", dep),
+                    rule: Some(rule.name.clone()),
+                    code: "W014".to_string(),
+                    suggestion: Some(format!("check that rule '{}' exists in the workflow", dep)),
+                });
+            }
         }
     }
 
@@ -761,6 +823,24 @@ pub fn format_workflow(config: &WorkflowConfig) -> String {
         if rule.retries > 0 {
             output.push_str(&format!("retries = {}\n", rule.retries));
         }
+        if let Some(ref retry_delay) = rule.retry_delay {
+            output.push_str(&format!("retry_delay = \"{}\"\n", retry_delay));
+        }
+        if !rule.depends_on.is_empty() {
+            output.push_str(&format!(
+                "depends_on = {}\n",
+                format_string_array(&rule.depends_on)
+            ));
+        }
+        if let Some(ref workdir) = rule.workdir {
+            output.push_str(&format!("workdir = \"{}\"\n", workdir));
+        }
+        if let Some(ref on_success) = rule.on_success {
+            output.push_str(&format!("on_success = \"{}\"\n", on_success));
+        }
+        if let Some(ref on_failure) = rule.on_failure {
+            output.push_str(&format!("on_failure = \"{}\"\n", on_failure));
+        }
         if !rule.temp_output.is_empty() {
             output.push_str(&format!(
                 "temp_output = {}\n",
@@ -860,6 +940,154 @@ pub fn format_workflow(config: &WorkflowConfig) -> String {
     }
 
     output
+}
+
+/// A single difference between two workflow configurations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowDiff {
+    /// Category of the change.
+    pub category: String,
+    /// Human-readable description of the difference.
+    pub description: String,
+}
+
+/// Compare two workflow configurations and return a list of differences.
+///
+/// This is useful for reviewing changes between workflow versions or
+/// comparing variants of a pipeline.
+#[must_use]
+pub fn diff_workflows(a: &WorkflowConfig, b: &WorkflowConfig) -> Vec<WorkflowDiff> {
+    let mut diffs = Vec::new();
+
+    // Compare metadata
+    if a.workflow.name != b.workflow.name {
+        diffs.push(WorkflowDiff {
+            category: "workflow".to_string(),
+            description: format!(
+                "name changed: \"{}\" → \"{}\"",
+                a.workflow.name, b.workflow.name
+            ),
+        });
+    }
+    if a.workflow.version != b.workflow.version {
+        diffs.push(WorkflowDiff {
+            category: "workflow".to_string(),
+            description: format!(
+                "version changed: \"{}\" → \"{}\"",
+                a.workflow.version, b.workflow.version
+            ),
+        });
+    }
+    if a.workflow.description != b.workflow.description {
+        diffs.push(WorkflowDiff {
+            category: "workflow".to_string(),
+            description: format!(
+                "description changed: {:?} → {:?}",
+                a.workflow.description, b.workflow.description
+            ),
+        });
+    }
+
+    // Compare rules
+    let a_names: std::collections::HashSet<&str> =
+        a.rules.iter().map(|r| r.name.as_str()).collect();
+    let b_names: std::collections::HashSet<&str> =
+        b.rules.iter().map(|r| r.name.as_str()).collect();
+
+    for name in a_names.difference(&b_names) {
+        diffs.push(WorkflowDiff {
+            category: "rules".to_string(),
+            description: format!("rule removed: \"{}\"", name),
+        });
+    }
+    for name in b_names.difference(&a_names) {
+        diffs.push(WorkflowDiff {
+            category: "rules".to_string(),
+            description: format!("rule added: \"{}\"", name),
+        });
+    }
+
+    // Compare common rules
+    for a_rule in &a.rules {
+        if let Some(b_rule) = b.rules.iter().find(|r| r.name == a_rule.name) {
+            let rule_name = &a_rule.name;
+            if a_rule.input != b_rule.input {
+                diffs.push(WorkflowDiff {
+                    category: "rules".to_string(),
+                    description: format!("rule \"{}\": input changed", rule_name),
+                });
+            }
+            if a_rule.output != b_rule.output {
+                diffs.push(WorkflowDiff {
+                    category: "rules".to_string(),
+                    description: format!("rule \"{}\": output changed", rule_name),
+                });
+            }
+            if a_rule.shell != b_rule.shell {
+                diffs.push(WorkflowDiff {
+                    category: "rules".to_string(),
+                    description: format!("rule \"{}\": shell command changed", rule_name),
+                });
+            }
+            if a_rule.effective_threads() != b_rule.effective_threads() {
+                diffs.push(WorkflowDiff {
+                    category: "rules".to_string(),
+                    description: format!(
+                        "rule \"{}\": threads changed: {} → {}",
+                        rule_name,
+                        a_rule.effective_threads(),
+                        b_rule.effective_threads()
+                    ),
+                });
+            }
+            if a_rule.effective_memory() != b_rule.effective_memory() {
+                diffs.push(WorkflowDiff {
+                    category: "rules".to_string(),
+                    description: format!(
+                        "rule \"{}\": memory changed: {:?} → {:?}",
+                        rule_name,
+                        a_rule.effective_memory(),
+                        b_rule.effective_memory()
+                    ),
+                });
+            }
+            if a_rule.environment != b_rule.environment {
+                diffs.push(WorkflowDiff {
+                    category: "rules".to_string(),
+                    description: format!("rule \"{}\": environment changed", rule_name),
+                });
+            }
+        }
+    }
+
+    // Compare config variables
+    for (key, val) in &a.config {
+        match b.config.get(key) {
+            None => {
+                diffs.push(WorkflowDiff {
+                    category: "config".to_string(),
+                    description: format!("config variable removed: \"{}\"", key),
+                });
+            }
+            Some(bval) if val != bval => {
+                diffs.push(WorkflowDiff {
+                    category: "config".to_string(),
+                    description: format!("config variable changed: \"{}\"", key),
+                });
+            }
+            _ => {}
+        }
+    }
+    for key in b.config.keys() {
+        if !a.config.contains_key(key) {
+            diffs.push(WorkflowDiff {
+                category: "config".to_string(),
+                description: format!("config variable added: \"{}\"", key),
+            });
+        }
+    }
+
+    diffs
 }
 
 fn format_string_array(arr: &[String]) -> String {

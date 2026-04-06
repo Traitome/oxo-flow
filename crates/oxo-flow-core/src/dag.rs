@@ -76,6 +76,14 @@ impl WorkflowDag {
                 }
                 // If no producer found, the input is assumed to be a source file
             }
+
+            // Step 2b: Add edges for explicit depends_on
+            for dep_name in &rule.depends_on {
+                if let Some(&dep_node) = name_to_node.get(dep_name) {
+                    graph.add_edge(dep_node, consumer_node, ());
+                }
+                // Unknown depends_on targets are validated separately
+            }
         }
 
         let dag = Self {
@@ -348,6 +356,53 @@ impl WorkflowDag {
             critical_path_length,
             parallel_group_count: groups.len(),
         })
+    }
+
+    /// Returns the critical path — the longest chain of sequential dependencies.
+    ///
+    /// This is the sequence of rules that determines the minimum execution time
+    /// even with unlimited parallelism.
+    #[must_use = "computing critical path returns a Result that must be used"]
+    pub fn critical_path(&self) -> Result<Vec<String>> {
+        let order = self.topological_order()?;
+        let mut depth: HashMap<NodeIndex, usize> = HashMap::new();
+        let mut predecessor: HashMap<NodeIndex, Option<NodeIndex>> = HashMap::new();
+
+        for node_data in &order {
+            let node_idx = self.name_to_node[&node_data.name];
+            let mut best_parent: Option<NodeIndex> = None;
+            let mut best_depth: usize = 0;
+
+            for parent in self
+                .graph
+                .neighbors_directed(node_idx, petgraph::Direction::Incoming)
+            {
+                let parent_d = depth.get(&parent).copied().unwrap_or(0) + 1;
+                if parent_d > best_depth {
+                    best_depth = parent_d;
+                    best_parent = Some(parent);
+                }
+            }
+
+            depth.insert(node_idx, best_depth);
+            predecessor.insert(node_idx, best_parent);
+        }
+
+        // Find the node with maximum depth
+        let end_node = depth.iter().max_by_key(|&(_, &d)| d).map(|(&n, _)| n);
+
+        let Some(mut current) = end_node else {
+            return Ok(vec![]);
+        };
+
+        // Trace back to build the critical path
+        let mut path = vec![self.graph[current].name.clone()];
+        while let Some(Some(prev)) = predecessor.get(&current) {
+            path.push(self.graph[*prev].name.clone());
+            current = *prev;
+        }
+        path.reverse();
+        Ok(path)
     }
 }
 

@@ -7,6 +7,27 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Parse a duration string like "5s", "30s", "2m", "1h" into seconds.
+///
+/// Returns `None` if the format is invalid.
+#[must_use]
+pub fn parse_duration_secs(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Some(num) = s.strip_suffix('s').or_else(|| s.strip_suffix('S')) {
+        return num.parse::<u64>().ok();
+    }
+    if let Some(num) = s.strip_suffix('m').or_else(|| s.strip_suffix('M')) {
+        return num.parse::<u64>().ok().map(|v| v * 60);
+    }
+    if let Some(num) = s.strip_suffix('h').or_else(|| s.strip_suffix('H')) {
+        return num.parse::<u64>().ok().map(|v| v * 3600);
+    }
+    None
+}
+
 /// Resource requirements for a rule execution.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Resources {
@@ -251,6 +272,42 @@ pub struct Rule {
     /// Whether this rule is required (pipeline fails if this rule fails).
     #[serde(default)]
     pub required: bool,
+
+    /// Explicit rule-level dependencies (rule names that must complete first).
+    ///
+    /// Unlike file-based dependency inference, `depends_on` allows declaring
+    /// ordering constraints that are not mediated by input/output patterns.
+    /// This is useful for setup/teardown steps, database migrations, or
+    /// environment initialization that other rules depend on logically.
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+
+    /// Delay between retry attempts (e.g., "5s", "30s", "2m").
+    ///
+    /// When `retries > 0`, this specifies the wait time before each retry.
+    /// Supports seconds ("10s"), minutes ("2m"), and hours ("1h").
+    #[serde(default)]
+    pub retry_delay: Option<String>,
+
+    /// Per-rule working directory override.
+    ///
+    /// If set, the rule executes in this directory instead of the workflow's
+    /// global working directory. Relative paths are resolved against the
+    /// workflow working directory.
+    #[serde(default)]
+    pub workdir: Option<String>,
+
+    /// Shell command to execute on successful completion of this rule.
+    ///
+    /// Useful for notifications, cleanup, or triggering downstream processes.
+    #[serde(default)]
+    pub on_success: Option<String>,
+
+    /// Shell command to execute when this rule fails (after all retries).
+    ///
+    /// Useful for cleanup, alerting, or fallback actions.
+    #[serde(default)]
+    pub on_failure: Option<String>,
 }
 
 impl Rule {
@@ -313,6 +370,15 @@ impl Rule {
                     ));
                 }
             }
+        }
+        // Validate retry_delay format if present
+        if let Some(ref delay) = self.retry_delay
+            && parse_duration_secs(delay).is_none()
+        {
+            return Err(format!(
+                "rule '{}' has invalid retry_delay '{}' (expected e.g. \"5s\", \"30s\", \"2m\", \"1h\")",
+                self.name, delay
+            ));
         }
         Ok(())
     }
@@ -454,6 +520,41 @@ impl RuleBuilder {
     #[must_use]
     pub fn required(mut self, required: bool) -> Self {
         self.rule.required = required;
+        self
+    }
+
+    /// Set explicit rule-level dependencies.
+    #[must_use]
+    pub fn depends_on(mut self, deps: Vec<String>) -> Self {
+        self.rule.depends_on = deps;
+        self
+    }
+
+    /// Set the delay between retry attempts (e.g., "5s", "30s", "2m").
+    #[must_use]
+    pub fn retry_delay(mut self, delay: impl Into<String>) -> Self {
+        self.rule.retry_delay = Some(delay.into());
+        self
+    }
+
+    /// Set the per-rule working directory.
+    #[must_use]
+    pub fn workdir(mut self, workdir: impl Into<String>) -> Self {
+        self.rule.workdir = Some(workdir.into());
+        self
+    }
+
+    /// Set the on-success hook command.
+    #[must_use]
+    pub fn on_success(mut self, cmd: impl Into<String>) -> Self {
+        self.rule.on_success = Some(cmd.into());
+        self
+    }
+
+    /// Set the on-failure hook command.
+    #[must_use]
+    pub fn on_failure(mut self, cmd: impl Into<String>) -> Self {
+        self.rule.on_failure = Some(cmd.into());
         self
     }
 
