@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 /// Parse a duration string like "5s", "30s", "2m", "1h" into seconds.
 ///
-/// Returns `None` if the format is invalid.
+/// Returns `None` if the format is invalid or would overflow.
 #[must_use]
 pub fn parse_duration_secs(s: &str) -> Option<u64> {
     let s = s.trim();
@@ -20,10 +20,10 @@ pub fn parse_duration_secs(s: &str) -> Option<u64> {
         return num.parse::<u64>().ok();
     }
     if let Some(num) = s.strip_suffix('m').or_else(|| s.strip_suffix('M')) {
-        return num.parse::<u64>().ok().map(|v| v * 60);
+        return num.parse::<u64>().ok().and_then(|v| v.checked_mul(60));
     }
     if let Some(num) = s.strip_suffix('h').or_else(|| s.strip_suffix('H')) {
-        return num.parse::<u64>().ok().map(|v| v * 3600);
+        return num.parse::<u64>().ok().and_then(|v| v.checked_mul(3600));
     }
     None
 }

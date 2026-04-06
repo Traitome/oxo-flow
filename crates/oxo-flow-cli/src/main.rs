@@ -1315,6 +1315,8 @@ Thumbs.db
             let mut touched = 0usize;
             let mut skipped = 0usize;
 
+            let base_dir = std::env::current_dir().unwrap_or_default();
+
             for rule in &rules_to_touch {
                 for output in &rule.output {
                     let has_wildcard = output.contains('{') && output.contains('}');
@@ -1322,22 +1324,46 @@ Thumbs.db
                         skipped += 1;
                         continue;
                     }
-                    let path = Path::new(output);
+
+                    // Path safety: reject path traversal and absolute paths
+                    if output.contains("..") || output.starts_with('/') || output.starts_with('~') {
+                        eprintln!("  {} {} (rejected: unsafe path)", "✗".red().bold(), output);
+                        continue;
+                    }
+
+                    let path = base_dir.join(output);
                     if path.exists() {
                         // Update modification time
-                        let _ = filetime::set_file_mtime(path, filetime::FileTime::now());
-                        touched += 1;
-                        eprintln!("  {} {}", "✓".green(), output);
+                        match filetime::set_file_mtime(&path, filetime::FileTime::now()) {
+                            Ok(()) => {
+                                touched += 1;
+                                eprintln!("  {} {}", "✓".green(), output);
+                            }
+                            Err(e) => {
+                                eprintln!("  {} {} ({})", "✗".red(), output, e);
+                            }
+                        }
                     } else {
                         // Create empty file to mark as "done"
-                        if let Some(parent) = path.parent() {
-                            let _ = std::fs::create_dir_all(parent);
+                        if let Some(parent) = path.parent()
+                            && let Err(e) = std::fs::create_dir_all(parent)
+                        {
+                            eprintln!(
+                                "  {} {} (cannot create directory: {})",
+                                "✗".red(),
+                                output,
+                                e
+                            );
+                            continue;
                         }
-                        if std::fs::write(path, "").is_ok() {
-                            touched += 1;
-                            eprintln!("  {} {} (created)", "✓".green(), output);
-                        } else {
-                            eprintln!("  {} {} (failed to create)", "✗".red(), output);
+                        match std::fs::write(&path, "") {
+                            Ok(()) => {
+                                touched += 1;
+                                eprintln!("  {} {} (created)", "✓".green(), output);
+                            }
+                            Err(e) => {
+                                eprintln!("  {} {} (failed: {})", "✗".red(), output, e);
+                            }
                         }
                     }
                 }
