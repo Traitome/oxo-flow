@@ -223,6 +223,39 @@ pub struct ResourceBudget {
     pub max_jobs: Option<usize>,
 }
 
+/// Reference database configuration for tracking versions and provenance.
+///
+/// Bioinformatics workflows often depend on reference databases (genome builds,
+/// annotation databases, variant databases). This section tracks versions for
+/// reproducibility.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ReferenceDatabase {
+    /// Database name (e.g., "GRCh38", "dbSNP", "ClinVar", "COSMIC").
+    pub name: String,
+    /// Version string (e.g., "p14", "b156", "v99").
+    #[serde(default)]
+    pub version: Option<String>,
+    /// URL or path to the database.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Checksum of the database file for integrity verification.
+    #[serde(default)]
+    pub checksum: Option<String>,
+    /// Date when this database version was downloaded/accessed.
+    #[serde(default)]
+    pub accessed_date: Option<String>,
+}
+
+impl std::fmt::Display for ReferenceDatabase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)?;
+        if let Some(ref v) = self.version {
+            write!(f, " v{v}")?;
+        }
+        Ok(())
+    }
+}
+
 /// Complete workflow configuration parsed from an `.oxoflow` file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowConfig {
@@ -264,6 +297,10 @@ pub struct WorkflowConfig {
     /// Resource budget for the workflow.
     #[serde(default)]
     pub resource_budget: Option<ResourceBudget>,
+
+    /// Reference database versions used by this workflow.
+    #[serde(default, rename = "reference_db")]
+    pub reference_databases: Vec<ReferenceDatabase>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1551,6 +1588,57 @@ mod tests {
         assert_eq!(
             ClinicalReportSection::Methodology.to_string(),
             "Methodology"
+        );
+    }
+
+    #[test]
+    fn reference_database_display() {
+        let db = ReferenceDatabase {
+            name: "GRCh38".to_string(),
+            version: Some("p14".to_string()),
+            source: None,
+            checksum: None,
+            accessed_date: None,
+        };
+        assert_eq!(db.to_string(), "GRCh38 vp14");
+    }
+
+    #[test]
+    fn reference_database_default() {
+        let db = ReferenceDatabase::default();
+        assert!(db.name.is_empty());
+        assert!(db.version.is_none());
+    }
+
+    #[test]
+    fn parse_workflow_with_reference_db() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[reference_db]]
+            name = "GRCh38"
+            version = "p14"
+            source = "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/GCA_000001405.15_GRCh38_genomic.fna.gz"
+            checksum = "sha256:abc123"
+
+            [[reference_db]]
+            name = "dbSNP"
+            version = "b156"
+
+            [[rules]]
+            name = "align"
+            input = ["reads.fastq"]
+            output = ["aligned.bam"]
+            shell = "bwa mem ref.fa reads.fastq > aligned.bam"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        assert_eq!(config.reference_databases.len(), 2);
+        assert_eq!(config.reference_databases[0].name, "GRCh38");
+        assert_eq!(
+            config.reference_databases[1].version,
+            Some("b156".to_string())
         );
     }
 }
