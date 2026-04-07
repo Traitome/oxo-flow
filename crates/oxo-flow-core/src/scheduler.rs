@@ -104,6 +104,48 @@ impl SchedulerState {
         Ok(ready)
     }
 
+    /// Returns ready rules prioritized by critical path membership, then by
+    /// explicit priority, then by name.
+    ///
+    /// Rules on the critical path are scheduled first because they determine
+    /// the minimum total execution time. Among equally critical rules,
+    /// explicit priority and then alphabetical name break ties.
+    pub fn ready_rules_critical_path(
+        &self,
+        dag: &WorkflowDag,
+        rules: &[Rule],
+    ) -> Result<Vec<String>> {
+        let mut ready = self.ready_rules(dag)?;
+
+        let critical_path: HashSet<String> = dag
+            .critical_path()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+
+        let priority_map: HashMap<&str, i32> = rules
+            .iter()
+            .map(|r| (r.name.as_str(), r.priority))
+            .collect();
+
+        ready.sort_by(|a, b| {
+            let a_critical = critical_path.contains(a);
+            let b_critical = critical_path.contains(b);
+            // Critical path rules first
+            b_critical
+                .cmp(&a_critical)
+                .then_with(|| {
+                    // Then by explicit priority (descending)
+                    let pa = priority_map.get(a.as_str()).copied().unwrap_or(0);
+                    let pb = priority_map.get(b.as_str()).copied().unwrap_or(0);
+                    pb.cmp(&pa)
+                })
+                .then_with(|| a.cmp(b))
+        });
+
+        Ok(ready)
+    }
+
     /// Returns `true` if all rules have completed (success, failed, or skipped).
     pub fn is_complete(&self) -> bool {
         self.statuses.values().all(|s| {
@@ -451,5 +493,73 @@ mod tests {
 
         let prioritized = state.ready_rules_prioritized(&dag, &rules).unwrap();
         assert_eq!(prioritized, vec!["high", "mid", "low"]);
+    }
+
+    #[test]
+    fn scheduler_critical_path_priority() {
+        // Create a diamond DAG: source → left, right → merge
+        let mut rules = vec![
+            Rule {
+                name: "source".to_string(),
+                output: vec!["a.txt".to_string(), "b.txt".to_string()],
+                shell: Some("echo source".to_string()),
+                ..Default::default()
+            },
+            Rule {
+                name: "left".to_string(),
+                input: vec!["a.txt".to_string()],
+                output: vec!["left.txt".to_string()],
+                shell: Some("echo left".to_string()),
+                ..Default::default()
+            },
+            Rule {
+                name: "right".to_string(),
+                input: vec!["b.txt".to_string()],
+                output: vec!["right.txt".to_string()],
+                shell: Some("echo right".to_string()),
+                ..Default::default()
+            },
+            Rule {
+                name: "merge".to_string(),
+                input: vec!["left.txt".to_string(), "right.txt".to_string()],
+                output: vec!["final.txt".to_string()],
+                shell: Some("echo merge".to_string()),
+                ..Default::default()
+            },
+        ];
+
+        for rule in &mut rules {
+            rule.resources = Resources::default();
+            rule.environment = EnvironmentSpec::default();
+        }
+
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let mut state = SchedulerState::new(&["source", "left", "right", "merge"]);
+
+        // Initially only "source" is ready
+        let ready = state.ready_rules_critical_path(&dag, &rules).unwrap();
+        assert_eq!(ready, vec!["source"]);
+
+        // Complete "source"
+        state.mark_completed(JobRecord {
+            rule: "source".to_string(),
+            status: JobStatus::Success,
+            started_at: None,
+            finished_at: None,
+            exit_code: Some(0),
+            stdout: None,
+            stderr: None,
+            command: None,
+            retries: 0,
+            timeout: None,
+        });
+
+        // Both "left" and "right" should be ready
+        let ready = state.ready_rules_critical_path(&dag, &rules).unwrap();
+        assert_eq!(ready.len(), 2);
+        // Both left and right are on a critical path in a diamond, but the function should
+        // still return them in a deterministic order
+        assert!(ready.contains(&"left".to_string()));
+        assert!(ready.contains(&"right".to_string()));
     }
 }

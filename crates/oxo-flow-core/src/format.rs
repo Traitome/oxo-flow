@@ -442,6 +442,37 @@ pub fn lint_format(config: &WorkflowConfig) -> Vec<Diagnostic> {
                 suggestion: Some(format!("check that rule '{}' exists in the workflow", base)),
             });
         }
+
+        // W016: Environment uses unpinned specification
+        if let Some(ref conda_env) = rule.environment.conda
+            && !conda_env.ends_with(".lock")
+            && !conda_env.ends_with(".lock.yml")
+        {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Info,
+                message:
+                    "conda environment file is not a lockfile — builds may not be reproducible"
+                        .to_string(),
+                rule: Some(rule.name.clone()),
+                code: "W016".to_string(),
+                suggestion: Some(format!(
+                    "generate a lockfile with 'conda-lock -f {}' for reproducible builds",
+                    conda_env
+                )),
+            });
+        }
+        if let Some(ref pixi_env) = rule.environment.pixi
+            && !pixi_env.ends_with(".lock")
+        {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Info,
+                message: "pixi environment is not a lockfile — builds may not be reproducible"
+                    .to_string(),
+                rule: Some(rule.name.clone()),
+                code: "W016".to_string(),
+                suggestion: Some("use 'pixi.lock' for reproducible builds".to_string()),
+            });
+        }
     }
 
     diagnostics
@@ -2186,6 +2217,32 @@ mod tests {
         let config = WorkflowConfig::parse(toml).unwrap();
         let formatted = format_workflow(&config);
         assert!(formatted.contains("on_success = \"echo done\""));
+    }
+
+    #[test]
+    fn lint_warns_unlocked_environment() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+            description = "test"
+            author = "author"
+
+            [[rules]]
+            name = "align"
+            description = "desc"
+            shell = "echo hi"
+            output = ["out.txt"]
+            log = "log.txt"
+
+            [rules.environment]
+            conda = "envs/align.yaml"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        let w016 = diagnostics.iter().find(|d| d.code == "W016");
+        assert!(w016.is_some(), "should warn about unlocked conda env");
+        assert!(w016.unwrap().message.contains("lockfile"));
     }
 
     #[test]
