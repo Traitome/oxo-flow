@@ -11,7 +11,7 @@ use petgraph::dot::{Config, Dot};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::NodeRef;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A node in the workflow DAG, representing a single rule.
 #[derive(Debug, Clone)]
@@ -111,12 +111,66 @@ impl WorkflowDag {
         match toposort(&self.graph, None) {
             Ok(_) => Ok(()),
             Err(cycle) => {
-                let node = &self.graph[cycle.node_id()];
+                let cycle_path = self.find_cycle_path(cycle.node_id());
+                let path_str = cycle_path.join(" → ");
                 Err(OxoFlowError::CycleDetected {
-                    details: format!("cycle involves rule '{}'", node.name),
+                    details: format!("cycle detected: {}", path_str),
                 })
             }
         }
+    }
+
+    /// Find the actual cycle path starting from a node known to be in a cycle.
+    fn find_cycle_path(&self, start: NodeIndex) -> Vec<String> {
+        let mut visited = HashSet::new();
+        let mut stack = Vec::new();
+        let mut on_stack = HashSet::new();
+
+        if let Some(cycle) = self.dfs_find_cycle(start, &mut visited, &mut stack, &mut on_stack) {
+            cycle
+        } else {
+            // Fallback: just return the start node
+            vec![self.graph[start].name.clone()]
+        }
+    }
+
+    fn dfs_find_cycle(
+        &self,
+        node: NodeIndex,
+        visited: &mut HashSet<NodeIndex>,
+        stack: &mut Vec<NodeIndex>,
+        on_stack: &mut HashSet<NodeIndex>,
+    ) -> Option<Vec<String>> {
+        visited.insert(node);
+        stack.push(node);
+        on_stack.insert(node);
+
+        for neighbor in self
+            .graph
+            .neighbors_directed(node, petgraph::Direction::Outgoing)
+        {
+            if !visited.contains(&neighbor) {
+                if let Some(cycle) = self.dfs_find_cycle(neighbor, visited, stack, on_stack) {
+                    return Some(cycle);
+                }
+            } else if on_stack.contains(&neighbor) {
+                // Found a cycle - extract it
+                let cycle_start = stack
+                    .iter()
+                    .position(|&n| n == neighbor)
+                    .expect("neighbor must be in stack when on_stack is true");
+                let mut cycle: Vec<String> = stack[cycle_start..]
+                    .iter()
+                    .map(|&n| self.graph[n].name.clone())
+                    .collect();
+                cycle.push(self.graph[neighbor].name.clone()); // Close the cycle
+                return Some(cycle);
+            }
+        }
+
+        stack.pop();
+        on_stack.remove(&node);
+        None
     }
 
     /// Returns the rules in topological order (respecting dependencies).
@@ -125,9 +179,10 @@ impl WorkflowDag {
         match toposort(&self.graph, None) {
             Ok(indices) => Ok(indices.iter().map(|&idx| &self.graph[idx]).collect()),
             Err(cycle) => {
-                let node = &self.graph[cycle.node_id()];
+                let cycle_path = self.find_cycle_path(cycle.node_id());
+                let path_str = cycle_path.join(" → ");
                 Err(OxoFlowError::CycleDetected {
-                    details: format!("cycle involves rule '{}'", node.name),
+                    details: format!("cycle detected: {}", path_str),
                 })
             }
         }
@@ -842,5 +897,38 @@ mod tests {
         let dag = WorkflowDag::from_rules(&rules).unwrap();
         let path = dag.critical_path().unwrap();
         assert_eq!(path, vec!["only"]);
+    }
+
+    #[test]
+    fn cycle_detection_shows_path() {
+        // Create a cycle: a -> b -> c -> a
+        let rules = vec![
+            make_rule("a", vec!["c.txt"], vec!["a.txt"]),
+            make_rule("b", vec!["a.txt"], vec!["b.txt"]),
+            make_rule("c", vec!["b.txt"], vec!["c.txt"]),
+        ];
+
+        let result = WorkflowDag::from_rules(&rules);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        // Should show the cycle path with arrows
+        assert!(
+            err_msg.contains('→'),
+            "error should show cycle path with arrows: {}",
+            err_msg
+        );
+        // Should mention at least two of the cycle nodes
+        let mentions_a = err_msg.contains("a");
+        let mentions_b = err_msg.contains("b");
+        let mentions_c = err_msg.contains("c");
+        assert!(
+            [mentions_a, mentions_b, mentions_c]
+                .iter()
+                .filter(|&&x| x)
+                .count()
+                >= 2,
+            "error should mention multiple cycle nodes: {}",
+            err_msg
+        );
     }
 }
