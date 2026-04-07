@@ -199,14 +199,7 @@ impl LocalExecutor {
         };
 
         let shell_cmd = match &rule.shell {
-            Some(cmd) => {
-                // Expand wildcards in the command
-                let mut expanded = cmd.clone();
-                for (key, value) in wildcard_values {
-                    expanded = expanded.replace(&format!("{{{key}}}"), value);
-                }
-                expanded
-            }
+            Some(cmd) => render_shell_command(cmd, rule, wildcard_values),
             None => {
                 record.status = JobStatus::Skipped;
                 record.finished_at = Some(Utc::now());
@@ -702,6 +695,54 @@ pub fn validate_path_safety(workdir: &std::path::Path, path: &str) -> crate::Res
     Ok(())
 }
 
+/// Render a shell command template by substituting all placeholder variables.
+///
+/// Supports the following placeholders:
+/// - `{input}` — all input files joined with a space
+/// - `{input[N]}` — the Nth input file (0-indexed)
+/// - `{output}` — all output files joined with a space
+/// - `{output[N]}` — the Nth output file (0-indexed)
+/// - `{threads}` — the rule's effective thread count
+/// - `{config.key}` — a workflow config variable (passed via `wildcard_values` with `config.` prefix)
+/// - `{key}` — a user-defined wildcard value from `wildcard_values`
+///
+/// Missing indexed accesses (out-of-range) are left unreplaced so that the
+/// shell command will fail with a clear error rather than silently producing
+/// empty substitutions.
+pub fn render_shell_command(
+    cmd: &str,
+    rule: &Rule,
+    wildcard_values: &HashMap<String, String>,
+) -> String {
+    let mut expanded = cmd.to_string();
+
+    // Expand {output} → all outputs space-joined
+    expanded = expanded.replace("{output}", &rule.output.join(" "));
+
+    // Expand {output[N]} → Nth output (0-indexed)
+    for (i, out) in rule.output.iter().enumerate() {
+        expanded = expanded.replace(&format!("{{output[{i}]}}"), out);
+    }
+
+    // Expand {input} → all inputs space-joined
+    expanded = expanded.replace("{input}", &rule.input.join(" "));
+
+    // Expand {input[N]} → Nth input (0-indexed)
+    for (i, inp) in rule.input.iter().enumerate() {
+        expanded = expanded.replace(&format!("{{input[{i}]}}"), inp);
+    }
+
+    // Expand {threads}
+    expanded = expanded.replace("{threads}", &rule.effective_threads().to_string());
+
+    // Expand user wildcards and config values (e.g. {sample}, {config.reference})
+    for (key, value) in wildcard_values {
+        expanded = expanded.replace(&format!("{{{key}}}"), value);
+    }
+
+    expanded
+}
+
 /// Get the system hostname, returning "unknown" if unavailable.
 fn hostname() -> String {
     std::env::var("HOSTNAME")
@@ -837,7 +878,90 @@ mod tests {
         assert!(record.stdout.unwrap().contains("TUMOR_01"));
     }
 
-    // -- BenchmarkRecord tests -----------------------------------------------
+    // -- render_shell_command tests -------------------------------------------
+
+    #[test]
+    fn render_shell_output_indexed() {
+        let rule = Rule {
+            name: "test".to_string(),
+            input: vec!["in.txt".to_string()],
+            output: vec!["out.txt".to_string(), "out2.txt".to_string()],
+            shell: None,
+            ..Default::default()
+        };
+        let result = render_shell_command("cat {input[0]} > {output[0]}", &rule, &HashMap::new());
+        assert_eq!(result, "cat in.txt > out.txt");
+    }
+
+    #[test]
+    fn render_shell_output_all() {
+        let rule = Rule {
+            name: "test".to_string(),
+            input: vec!["a.txt".to_string(), "b.txt".to_string()],
+            output: vec!["out.txt".to_string()],
+            shell: None,
+            ..Default::default()
+        };
+        let result = render_shell_command("cat {input} > {output}", &rule, &HashMap::new());
+        assert_eq!(result, "cat a.txt b.txt > out.txt");
+    }
+
+    #[test]
+    fn render_shell_threads() {
+        let rule = Rule {
+            name: "test".to_string(),
+            threads: Some(8),
+            output: vec!["out.bam".to_string()],
+            ..Default::default()
+        };
+        let result = render_shell_command(
+            "bwa mem -t {threads} ref.fa > {output[0]}",
+            &rule,
+            &HashMap::new(),
+        );
+        assert_eq!(result, "bwa mem -t 8 ref.fa > out.bam");
+    }
+
+    #[test]
+    fn render_shell_config_values() {
+        let rule = Rule {
+            name: "test".to_string(),
+            output: vec!["hello.txt".to_string()],
+            ..Default::default()
+        };
+        let mut values = HashMap::new();
+        values.insert("config.reference".to_string(), "/data/ref.fa".to_string());
+        let result =
+            render_shell_command("bwa mem {config.reference} > {output[0]}", &rule, &values);
+        assert_eq!(result, "bwa mem /data/ref.fa > hello.txt");
+    }
+
+    #[tokio::test]
+    async fn execute_output_index_expansion() {
+        let config = ExecutorConfig {
+            max_jobs: 1,
+            dry_run: false,
+            workdir: std::env::temp_dir(),
+            keep_going: false,
+            retry_count: 0,
+            timeout: None,
+        };
+        let executor = LocalExecutor::new(config);
+        let rule = Rule {
+            name: "output_test".to_string(),
+            input: vec![],
+            output: vec!["hello_output.txt".to_string()],
+            shell: Some("echo hello_oxoflow_{output[0]}".to_string()),
+            ..Default::default()
+        };
+        let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+        assert_eq!(record.status, JobStatus::Success);
+        let stdout = record.stdout.unwrap();
+        assert!(
+            stdout.contains("hello_oxoflow_hello_output.txt"),
+            "stdout was: {stdout}"
+        );
+    }
 
     #[test]
     fn benchmark_record_creation() {

@@ -9,6 +9,7 @@ use crate::rule::Rule;
 use petgraph::algo::toposort;
 use petgraph::dot::{Config, Dot};
 use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::visit::NodeRef;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -20,6 +21,12 @@ pub struct DagNode {
 
     /// Index into the original rule list.
     pub rule_index: usize,
+}
+
+impl std::fmt::Display for DagNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
+    }
 }
 
 /// The workflow DAG, built from rules and their input/output dependencies.
@@ -209,10 +216,19 @@ impl WorkflowDag {
     }
 
     /// Export the DAG in DOT format for visualization with Graphviz.
+    ///
+    /// Nodes are labelled with the rule name only (not the internal Rust
+    /// `DagNode` struct representation), making the output suitable for direct
+    /// use with `dot`, `neato`, etc.
     pub fn to_dot(&self) -> String {
         format!(
             "{:?}",
-            Dot::with_config(&self.graph, &[Config::EdgeNoLabel])
+            Dot::with_attr_getters(
+                &self.graph,
+                &[Config::EdgeNoLabel, Config::NodeNoLabel],
+                &|_, _| String::new(),
+                &|_, nr| format!("label = {:?}", nr.weight().name),
+            )
         )
     }
 
@@ -527,6 +543,16 @@ mod tests {
         let dag = WorkflowDag::from_rules(&rules).unwrap();
         let dot = dag.to_dot();
         assert!(dot.contains("digraph"));
+        // Node labels should use the rule name, not the Rust Debug representation.
+        assert!(dot.contains("\"a\"") || dot.contains("label = \"a\""));
+        assert!(
+            !dot.contains("DagNode"),
+            "DOT output should not contain Rust struct names"
+        );
+        assert!(
+            !dot.contains("rule_index"),
+            "DOT output should not expose internal fields"
+        );
     }
 
     #[test]

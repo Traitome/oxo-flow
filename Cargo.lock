@@ -1060,6 +1060,7 @@ dependencies = [
  "oxo-flow-web",
  "serde_json",
  "tokio",
+ "toml",
  "tracing",
  "tracing-subscriber",
 ]

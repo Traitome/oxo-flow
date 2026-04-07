@@ -370,6 +370,15 @@ impl EnvironmentResolver {
         available
     }
 
+    /// Returns the names of all supported (non-system) environment backends,
+    /// regardless of whether they are installed on the current system.
+    ///
+    /// Use this as the authoritative list when iterating over backends, so that
+    /// user-facing code stays in sync with the resolver implementation.
+    pub fn all_known_backends() -> &'static [&'static str] {
+        &["conda", "pixi", "docker", "singularity", "venv"]
+    }
+
     /// Validate that the required environment backend is available for a spec.
     pub fn validate_spec(&self, env_spec: &EnvironmentSpec) -> Result<()> {
         if env_spec.conda.is_some() && !self.conda.is_available() {
