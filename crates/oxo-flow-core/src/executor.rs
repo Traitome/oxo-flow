@@ -628,6 +628,83 @@ pub fn verify_output_checksums(
     mismatches
 }
 
+/// Check if a rule should be skipped based on content-aware caching.
+///
+/// Unlike [`should_skip_rule`] which only checks file modification times,
+/// this function also considers file content checksums. This avoids
+/// unnecessary re-execution when a file's mtime changes but its content
+/// does not (e.g., after `touch` or a no-op rebuild).
+///
+/// `known_checksums` maps file paths to their previously recorded checksums.
+/// If a file's current checksum matches its known checksum, the file is
+/// considered unchanged even if its mtime is newer.
+pub fn should_skip_rule_content_aware(
+    rule: &Rule,
+    workdir: &Path,
+    known_checksums: &HashMap<String, String>,
+) -> bool {
+    if rule.output.is_empty() {
+        return false;
+    }
+    // Skip check for wildcard patterns
+    if rule.output.iter().any(|o| o.contains('{')) || rule.input.iter().any(|i| i.contains('{')) {
+        return false;
+    }
+    let all_outputs_exist = rule.output.iter().all(|o| workdir.join(o).exists());
+    if !all_outputs_exist {
+        return false;
+    }
+    if rule.input.is_empty() {
+        return true;
+    }
+
+    // First check mtime (fast path)
+    let mtime_fresh = rule.input.iter().all(|input| {
+        let input_path = workdir.join(input);
+        rule.output.iter().all(|output| {
+            let output_path = workdir.join(output);
+            file_is_newer(&output_path, &input_path)
+        })
+    });
+
+    if mtime_fresh {
+        return true;
+    }
+
+    // Mtime says stale — check content checksums as fallback
+    // If all input files have unchanged content (matching known checksums),
+    // we can still skip the rule
+    rule.input.iter().all(|input| {
+        let input_path = workdir.join(input);
+        if let Some(known) = known_checksums.get(input) {
+            match compute_file_checksum(&input_path) {
+                Ok(current) => current == *known,
+                Err(_) => false,
+            }
+        } else {
+            false // No known checksum — can't verify content
+        }
+    })
+}
+
+/// Compute checksums for all non-wildcard input files of a rule.
+///
+/// Returns a map from file path (relative) to hex-encoded checksum.
+/// Files that cannot be read are silently skipped.
+pub fn compute_input_checksums(rule: &Rule, workdir: &Path) -> HashMap<String, String> {
+    let mut checksums = HashMap::new();
+    for input in &rule.input {
+        if crate::wildcard::has_wildcards(input) {
+            continue;
+        }
+        let path = workdir.join(input);
+        if let Ok(checksum) = compute_file_checksum(&path) {
+            checksums.insert(input.clone(), checksum);
+        }
+    }
+    checksums
+}
+
 /// Provenance metadata for a workflow execution.
 ///
 /// Captures the oxo-flow version, configuration checksum, and execution
@@ -1782,6 +1859,49 @@ mod tests {
         let mismatches = verify_output_checksums(&checksums, dir.path());
         assert_eq!(mismatches.len(), 1);
         assert_eq!(mismatches[0].0, "out.txt");
+    }
+
+    #[test]
+    fn content_aware_skip_no_outputs() {
+        let rule = Rule {
+            name: "test".to_string(),
+            input: vec!["in.txt".to_string()],
+            output: vec![],
+            ..Default::default()
+        };
+        let checksums = HashMap::new();
+        assert!(!should_skip_rule_content_aware(
+            &rule,
+            Path::new("/nonexistent"),
+            &checksums
+        ));
+    }
+
+    #[test]
+    fn content_aware_skip_wildcard_patterns() {
+        let rule = Rule {
+            name: "test".to_string(),
+            input: vec!["{sample}.txt".to_string()],
+            output: vec!["{sample}.bam".to_string()],
+            ..Default::default()
+        };
+        let checksums = HashMap::new();
+        assert!(!should_skip_rule_content_aware(
+            &rule,
+            Path::new("/nonexistent"),
+            &checksums
+        ));
+    }
+
+    #[test]
+    fn compute_input_checksums_skips_wildcards() {
+        let rule = Rule {
+            name: "test".to_string(),
+            input: vec!["{sample}.txt".to_string()],
+            ..Default::default()
+        };
+        let checksums = compute_input_checksums(&rule, Path::new("/nonexistent"));
+        assert!(checksums.is_empty());
     }
 
     #[test]

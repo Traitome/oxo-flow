@@ -429,6 +429,45 @@ impl WorkflowDag {
         })
     }
 
+    /// Export the DAG in enhanced DOT format with parallel execution groups
+    /// shown as ranked subgraph clusters.
+    ///
+    /// This produces more visually informative output than [`to_dot()`], with:
+    /// - Nodes grouped by execution level (parallel groups)
+    /// - Styled nodes with shape and color
+    /// - Edge labels omitted for cleanliness
+    pub fn to_dot_clustered(&self) -> Result<String> {
+        let groups = self.parallel_groups()?;
+        let mut dot = String::from("digraph workflow {\n");
+        dot.push_str("  rankdir=TB;\n");
+        dot.push_str("  node [shape=box, style=\"rounded,filled\", fillcolor=\"#e8f0fe\", fontname=\"Helvetica\"];\n");
+        dot.push_str("  edge [color=\"#666666\"];\n\n");
+
+        for (i, group) in groups.iter().enumerate() {
+            dot.push_str(&format!("  subgraph cluster_{} {{\n", i));
+            dot.push_str(&format!("    label = \"Level {}\";\n", i));
+            dot.push_str("    style = dashed;\n");
+            dot.push_str("    color = \"#cccccc\";\n");
+            for name in group {
+                dot.push_str(&format!("    \"{}\";\n", name));
+            }
+            dot.push_str("  }\n\n");
+        }
+
+        // Add edges
+        for edge in self.graph.edge_indices() {
+            if let Some((src, dst)) = self.graph.edge_endpoints(edge) {
+                dot.push_str(&format!(
+                    "  \"{}\" -> \"{}\";\n",
+                    self.graph[src].name, self.graph[dst].name
+                ));
+            }
+        }
+
+        dot.push_str("}\n");
+        Ok(dot)
+    }
+
     /// Returns the critical path — the longest chain of sequential dependencies.
     ///
     /// This is the sequence of rules that determines the minimum execution time
@@ -897,6 +936,26 @@ mod tests {
         let dag = WorkflowDag::from_rules(&rules).unwrap();
         let path = dag.critical_path().unwrap();
         assert_eq!(path, vec!["only"]);
+    }
+
+    #[test]
+    fn dot_clustered_output() {
+        let rules = vec![
+            make_rule("source", vec!["raw.txt"], vec!["a.txt", "b.txt"]),
+            make_rule("left", vec!["a.txt"], vec!["left.txt"]),
+            make_rule("right", vec!["b.txt"], vec!["right.txt"]),
+            make_rule("merge", vec!["left.txt", "right.txt"], vec!["final.txt"]),
+        ];
+
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let dot = dag.to_dot_clustered().unwrap();
+        assert!(dot.contains("digraph workflow"));
+        assert!(dot.contains("cluster_0"));
+        assert!(dot.contains("cluster_1"));
+        assert!(dot.contains("cluster_2"));
+        assert!(dot.contains("Level 0"));
+        assert!(dot.contains("\"source\""));
+        assert!(dot.contains("\"merge\""));
     }
 
     #[test]
