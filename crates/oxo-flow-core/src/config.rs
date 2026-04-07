@@ -838,6 +838,103 @@ impl WorkflowConfig {
     }
 }
 
+/// Resolve rule template inheritance.
+///
+/// For each rule with an `extends` field, copy missing fields from the
+/// named base rule. Only fields that are at their default values in the
+/// child rule are inherited; explicitly set fields are preserved.
+///
+/// Returns an error if an `extends` target does not exist or if a
+/// circular inheritance chain is detected.
+pub fn resolve_rule_templates(rules: &mut [crate::rule::Rule]) -> crate::Result<()> {
+    // Build a name→index map
+    let name_to_idx: std::collections::HashMap<String, usize> = rules
+        .iter()
+        .enumerate()
+        .map(|(i, r)| (r.name.clone(), i))
+        .collect();
+
+    // Detect circular inheritance
+    for rule in rules.iter() {
+        if let Some(ref base_name) = rule.extends {
+            let mut visited = std::collections::HashSet::new();
+            visited.insert(rule.name.clone());
+            let mut current = base_name.clone();
+            while let Some(&idx) = name_to_idx.get(&current) {
+                if !visited.insert(current.clone()) {
+                    return Err(crate::OxoFlowError::Config {
+                        message: format!(
+                            "circular extends chain detected: rule '{}' extends '{}' which forms a cycle",
+                            rule.name, base_name
+                        ),
+                    });
+                }
+                match &rules[idx].extends {
+                    Some(next) => current = next.clone(),
+                    None => break,
+                }
+            }
+        }
+    }
+
+    // Resolve templates (iterate by index to avoid borrow issues)
+    let snapshot: Vec<crate::rule::Rule> = rules.to_vec();
+
+    for rule in rules.iter_mut() {
+        if let Some(ref base_name) = rule.extends.clone() {
+            let base_idx =
+                name_to_idx
+                    .get(base_name)
+                    .ok_or_else(|| crate::OxoFlowError::Config {
+                        message: format!(
+                            "rule '{}' extends '{}' which does not exist",
+                            rule.name, base_name
+                        ),
+                    })?;
+            let base = &snapshot[*base_idx];
+
+            // Inherit fields that are at their default values
+            if rule.threads.is_none() && base.threads.is_some() {
+                rule.threads = base.threads;
+            }
+            if rule.memory.is_none() && base.memory.is_some() {
+                rule.memory = base.memory.clone();
+            }
+            if rule.resources == crate::rule::Resources::default()
+                && base.resources != crate::rule::Resources::default()
+            {
+                rule.resources = base.resources.clone();
+            }
+            if rule.environment.is_empty() && !base.environment.is_empty() {
+                rule.environment = base.environment.clone();
+            }
+            if rule.tags.is_empty() && !base.tags.is_empty() {
+                rule.tags = base.tags.clone();
+            }
+            if rule.retries == 0 && base.retries > 0 {
+                rule.retries = base.retries;
+            }
+            if rule.retry_delay.is_none() && base.retry_delay.is_some() {
+                rule.retry_delay = base.retry_delay.clone();
+            }
+            if rule.group.is_none() && base.group.is_some() {
+                rule.group = base.group.clone();
+            }
+            if rule.log.is_none() && base.log.is_some() {
+                rule.log = base.log.clone();
+            }
+            // Inherit params that are not already set
+            for (key, value) in &base.params {
+                let k: String = key.clone();
+                let v: toml::Value = value.clone();
+                rule.params.entry(k).or_insert(v);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1640,5 +1737,105 @@ mod tests {
             config.reference_databases[1].version,
             Some("b156".to_string())
         );
+    }
+
+    #[test]
+    fn resolve_rule_templates_basic() {
+        let mut rules = vec![
+            crate::rule::Rule {
+                name: "base_align".to_string(),
+                threads: Some(16),
+                memory: Some("32G".to_string()),
+                environment: crate::rule::EnvironmentSpec {
+                    docker: Some("biocontainers/bwa:0.7.17".to_string()),
+                    ..Default::default()
+                },
+                tags: vec!["alignment".to_string()],
+                retries: 2,
+                ..Default::default()
+            },
+            crate::rule::Rule {
+                name: "align_sample".to_string(),
+                extends: Some("base_align".to_string()),
+                input: vec!["reads.fq".to_string()],
+                output: vec!["aligned.bam".to_string()],
+                shell: Some("bwa mem ref.fa {input} > {output}".to_string()),
+                ..Default::default()
+            },
+        ];
+
+        resolve_rule_templates(&mut rules).unwrap();
+
+        let child = &rules[1];
+        assert_eq!(child.threads, Some(16));
+        assert_eq!(child.memory.as_deref(), Some("32G"));
+        assert_eq!(
+            child.environment.docker.as_deref(),
+            Some("biocontainers/bwa:0.7.17")
+        );
+        assert_eq!(child.tags, vec!["alignment"]);
+        assert_eq!(child.retries, 2);
+        // Shell should NOT be inherited (it's set on the child)
+        assert_eq!(
+            child.shell.as_deref(),
+            Some("bwa mem ref.fa {input} > {output}")
+        );
+    }
+
+    #[test]
+    fn resolve_rule_templates_override() {
+        let mut rules = vec![
+            crate::rule::Rule {
+                name: "base".to_string(),
+                threads: Some(16),
+                memory: Some("32G".to_string()),
+                ..Default::default()
+            },
+            crate::rule::Rule {
+                name: "child".to_string(),
+                extends: Some("base".to_string()),
+                threads: Some(8), // Override
+                ..Default::default()
+            },
+        ];
+
+        resolve_rule_templates(&mut rules).unwrap();
+
+        let child = &rules[1];
+        assert_eq!(child.threads, Some(8)); // Kept child's value
+        assert_eq!(child.memory.as_deref(), Some("32G")); // Inherited
+    }
+
+    #[test]
+    fn resolve_rule_templates_missing_base() {
+        let mut rules = vec![crate::rule::Rule {
+            name: "child".to_string(),
+            extends: Some("nonexistent".to_string()),
+            ..Default::default()
+        }];
+
+        let result = resolve_rule_templates(&mut rules);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("does not exist"));
+    }
+
+    #[test]
+    fn resolve_rule_templates_circular() {
+        let mut rules = vec![
+            crate::rule::Rule {
+                name: "a".to_string(),
+                extends: Some("b".to_string()),
+                ..Default::default()
+            },
+            crate::rule::Rule {
+                name: "b".to_string(),
+                extends: Some("a".to_string()),
+                ..Default::default()
+            },
+        ];
+
+        let result = resolve_rule_templates(&mut rules);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("circular"));
     }
 }

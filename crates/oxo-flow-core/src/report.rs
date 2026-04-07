@@ -51,6 +51,18 @@ pub enum ReportContent {
 
     /// Raw JSON data.
     Json { data: serde_json::Value },
+
+    /// Simple bar chart data for visualization.
+    Chart {
+        /// Chart title.
+        title: String,
+        /// Bar labels.
+        labels: Vec<String>,
+        /// Bar values.
+        values: Vec<f64>,
+        /// Unit label for values (e.g., "seconds", "MB").
+        unit: String,
+    },
 }
 
 /// Complete report document.
@@ -121,31 +133,86 @@ impl Report {
         Ok(serde_json::to_string_pretty(self)?)
     }
 
-    /// Render the report as a minimal HTML document.
+    /// Render the report as a self-contained HTML document.
+    ///
+    /// All CSS is embedded inline so the report can be viewed offline.
+    /// Includes dark mode support via `prefers-color-scheme` media query.
     pub fn to_html(&self) -> String {
         let mut html = String::new();
         html.push_str("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n");
         html.push_str(&format!("  <title>{}</title>\n", self.title));
         html.push_str("  <meta charset=\"utf-8\">\n");
+        html.push_str(
+            "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n",
+        );
         html.push_str("  <style>\n");
-        html.push_str("    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; }\n");
-        html.push_str("    table { border-collapse: collapse; width: 100%; margin: 1em 0; }\n");
-        html.push_str("    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }\n");
-        html.push_str("    th { background-color: #4a90d9; color: white; }\n");
-        html.push_str("    tr:nth-child(even) { background-color: #f2f2f2; }\n");
-        html.push_str("    .metadata { color: #666; font-size: 0.9em; }\n");
+        // Light theme
+        html.push_str("    :root { --bg: #f7fafc; --text: #1a202c; --primary: #2c5282; --border: #e2e8f0; --card-bg: #ffffff; --hover: #edf2f7; --code-bg: #edf2f7; }\n");
+        // Dark theme
+        html.push_str("    @media (prefers-color-scheme: dark) {\n");
+        html.push_str("      :root { --bg: #1a202c; --text: #e2e8f0; --primary: #63b3ed; --border: #4a5568; --card-bg: #2d3748; --hover: #4a5568; --code-bg: #2d3748; }\n");
+        html.push_str("    }\n");
+        html.push_str("    * { box-sizing: border-box; margin: 0; padding: 0; }\n");
+        html.push_str("    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: var(--text); background: var(--bg); max-width: 960px; margin: 0 auto; padding: 2rem; line-height: 1.6; }\n");
+        html.push_str("    header { border-bottom: 3px solid var(--primary); padding-bottom: 1rem; margin-bottom: 2rem; }\n");
+        html.push_str("    header h1 { color: var(--primary); font-size: 1.8rem; }\n");
+        html.push_str("    .meta { color: #718096; font-size: 0.85rem; margin-top: 0.25rem; }\n");
+        html.push_str("    nav.toc { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.5rem; margin-bottom: 2rem; }\n");
+        html.push_str(
+            "    nav.toc h2 { font-size: 1rem; margin-bottom: 0.5rem; color: var(--primary); }\n",
+        );
+        html.push_str("    nav.toc ul { list-style: none; padding-left: 0; }\n");
+        html.push_str("    nav.toc li { margin: 0.25rem 0; }\n");
+        html.push_str("    nav.toc a { color: var(--primary); text-decoration: none; }\n");
+        html.push_str("    nav.toc a:hover { text-decoration: underline; }\n");
+        html.push_str("    section { margin-bottom: 2rem; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; }\n");
+        html.push_str("    h2 { color: var(--primary); font-size: 1.3rem; border-bottom: 1px solid var(--border); padding-bottom: 0.4rem; margin-bottom: 0.8rem; }\n");
+        html.push_str("    table { border-collapse: collapse; width: 100%; margin: 0.5rem 0; font-size: 0.9rem; }\n");
+        html.push_str("    th, td { border: 1px solid var(--border); padding: 0.5rem 0.75rem; text-align: left; }\n");
+        html.push_str("    th { background: var(--primary); color: #fff; }\n");
+        html.push_str("    tr:nth-child(even) { background: var(--hover); }\n");
+        html.push_str(
+            "    dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 1rem; }\n",
+        );
+        html.push_str("    dt { font-weight: 600; }\n");
+        html.push_str("    dd { margin: 0; }\n");
+        html.push_str("    pre { background: var(--code-bg); padding: 1rem; overflow-x: auto; border-radius: 4px; font-size: 0.85rem; }\n");
+        html.push_str("    p { margin-bottom: 0.5rem; }\n");
+        html.push_str("    .disclaimer { background: #fffbeb; border-left: 4px solid #f59e0b; padding: 1rem; border-radius: 4px; margin: 1rem 0; }\n");
+        html.push_str("    footer { margin-top: 3rem; border-top: 1px solid var(--border); padding-top: 0.5rem; color: #a0aec0; font-size: 0.75rem; text-align: center; }\n");
         html.push_str("  </style>\n</head>\n<body>\n");
 
-        html.push_str(&format!("<h1>{}</h1>\n", self.title));
+        // Header
+        html.push_str("<header>\n");
+        html.push_str(&format!("  <h1>{}</h1>\n", self.title));
         html.push_str(&format!(
-            "<p class=\"metadata\">Workflow: {} v{} | Generated: {}</p>\n",
+            "  <p class=\"meta\">Workflow: {} v{} &middot; Generated: {}</p>\n",
             self.workflow_name, self.workflow_version, self.generated_at
         ));
+        for (key, value) in &self.metadata {
+            html.push_str(&format!("  <p class=\"meta\">{}: {}</p>\n", key, value));
+        }
+        html.push_str("</header>\n\n");
 
+        // Table of contents
+        if !self.sections.is_empty() {
+            html.push_str("<nav class=\"toc\">\n");
+            html.push_str("  <h2>Contents</h2>\n  <ul>\n");
+            for section in &self.sections {
+                html.push_str(&format!(
+                    "    <li><a href=\"#{}\">{}</a></li>\n",
+                    section.id, section.title
+                ));
+            }
+            html.push_str("  </ul>\n</nav>\n\n");
+        }
+
+        // Sections
         for section in &self.sections {
             render_section_html(&mut html, section, 2);
         }
 
+        html.push_str("<footer>Generated by oxo-flow</footer>\n");
         html.push_str("</body>\n</html>");
         html
     }
@@ -312,6 +379,43 @@ pub fn provenance_section(
         title: "Provenance".to_string(),
         id: "provenance".to_string(),
         content: ReportContent::KeyValue { pairs },
+        subsections: Vec::new(),
+    }
+}
+
+/// Create an execution time chart section from job records.
+///
+/// Generates an inline SVG bar chart showing the wall-clock time
+/// for each rule, sorted by duration (longest first).
+pub fn execution_time_chart(records: &HashMap<String, JobRecord>) -> ReportSection {
+    let mut entries: Vec<(String, f64)> = records
+        .iter()
+        .filter_map(
+            |(name, record)| match (record.started_at, record.finished_at) {
+                (Some(start), Some(end)) => {
+                    let duration = end.signed_duration_since(start);
+                    Some((name.clone(), duration.num_milliseconds() as f64 / 1000.0))
+                }
+                _ => None,
+            },
+        )
+        .collect();
+
+    // Sort by duration descending
+    entries.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let labels: Vec<String> = entries.iter().map(|(name, _)| name.clone()).collect();
+    let values: Vec<f64> = entries.iter().map(|(_, dur)| *dur).collect();
+
+    ReportSection {
+        title: "Execution Time".to_string(),
+        id: "execution-time-chart".to_string(),
+        content: ReportContent::Chart {
+            title: "Rule Execution Time".to_string(),
+            labels,
+            values,
+            unit: "s".to_string(),
+        },
         subsections: Vec::new(),
     }
 }
@@ -575,6 +679,59 @@ fn render_section_html(html: &mut String, section: &ReportSection, heading_level
         ReportContent::Json { data } => {
             let json_str = serde_json::to_string_pretty(data).unwrap_or_default();
             html.push_str(&format!("<pre><code>{json_str}</code></pre>\n"));
+        }
+        ReportContent::Chart {
+            title,
+            labels,
+            values,
+            unit,
+        } => {
+            let max_val = values.iter().cloned().fold(0.0_f64, f64::max).max(1.0);
+            let bar_height = 24;
+            let bar_gap = 4;
+            let label_width = 120;
+            let chart_width = 600;
+            let svg_height = (bar_height + bar_gap) * values.len() + 40;
+
+            html.push_str(&format!(
+                "<svg width=\"{}\" height=\"{}\" xmlns=\"http://www.w3.org/2000/svg\">\n",
+                chart_width + label_width + 80,
+                svg_height
+            ));
+            html.push_str(&format!(
+                "  <text x=\"{}\" y=\"20\" font-size=\"14\" font-weight=\"bold\" fill=\"var(--text, #1a202c)\">{}</text>\n",
+                (chart_width + label_width) / 2,
+                title
+            ));
+            for (i, (label, &value)) in labels.iter().zip(values.iter()).enumerate() {
+                let y = 30 + i * (bar_height + bar_gap);
+                let bar_w = if max_val > 0.0 {
+                    (value / max_val * chart_width as f64) as usize
+                } else {
+                    0
+                };
+                // Label
+                html.push_str(&format!(
+                    "  <text x=\"{}\" y=\"{}\" font-size=\"12\" text-anchor=\"end\" fill=\"var(--text, #1a202c)\">{}</text>\n",
+                    label_width - 5,
+                    y + bar_height / 2 + 4,
+                    label
+                ));
+                // Bar
+                html.push_str(&format!(
+                    "  <rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"#4a90d9\" rx=\"3\"/>\n",
+                    label_width, y, bar_w, bar_height
+                ));
+                // Value label
+                html.push_str(&format!(
+                    "  <text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"var(--text, #1a202c)\">{:.1} {}</text>\n",
+                    label_width + bar_w + 5,
+                    y + bar_height / 2 + 4,
+                    value,
+                    unit
+                ));
+            }
+            html.push_str("</svg>\n");
         }
     }
 
@@ -940,5 +1097,81 @@ mod tests {
         let html = report.to_html();
         assert!(html.contains("Execution Provenance"));
         assert!(html.contains("abc123"));
+    }
+
+    #[test]
+    fn report_html_has_toc() {
+        let mut report = Report::new("Test", "test", "1.0.0");
+        report.add_section(ReportSection {
+            title: "Section One".to_string(),
+            id: "section-one".to_string(),
+            content: ReportContent::Text {
+                text: "hello".to_string(),
+            },
+            subsections: vec![],
+        });
+        let html = report.to_html();
+        assert!(
+            html.contains("class=\"toc\""),
+            "should have table of contents"
+        );
+        assert!(html.contains("href=\"#section-one\""));
+        assert!(html.contains("Section One"));
+    }
+
+    #[test]
+    fn report_html_has_dark_mode() {
+        let report = Report::new("Test", "test", "1.0.0");
+        let html = report.to_html();
+        assert!(html.contains("prefers-color-scheme: dark"));
+    }
+
+    #[test]
+    fn chart_section_renders_svg() {
+        let section = ReportSection {
+            title: "Times".to_string(),
+            id: "times".to_string(),
+            content: ReportContent::Chart {
+                title: "Execution".to_string(),
+                labels: vec!["step1".to_string(), "step2".to_string()],
+                values: vec![10.5, 3.2],
+                unit: "s".to_string(),
+            },
+            subsections: vec![],
+        };
+        let mut html = String::new();
+        render_section_html(&mut html, &section, 2);
+        assert!(html.contains("<svg"));
+        assert!(html.contains("step1"));
+        assert!(html.contains("step2"));
+    }
+
+    #[test]
+    fn execution_time_chart_from_records() {
+        let mut records = std::collections::HashMap::new();
+        records.insert(
+            "align".to_string(),
+            crate::executor::JobRecord {
+                rule: "align".to_string(),
+                status: crate::executor::JobStatus::Success,
+                started_at: Some(chrono::Utc::now() - chrono::Duration::seconds(60)),
+                finished_at: Some(chrono::Utc::now()),
+                exit_code: Some(0),
+                stdout: None,
+                stderr: None,
+                command: None,
+                retries: 0,
+                timeout: None,
+            },
+        );
+        let section = execution_time_chart(&records);
+        assert_eq!(section.id, "execution-time-chart");
+        match &section.content {
+            ReportContent::Chart { labels, values, .. } => {
+                assert_eq!(labels.len(), 1);
+                assert!(values[0] > 0.0);
+            }
+            _ => panic!("expected Chart content"),
+        }
     }
 }

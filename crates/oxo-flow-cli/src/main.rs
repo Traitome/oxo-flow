@@ -94,6 +94,10 @@ enum Commands {
         /// Path to the .oxoflow workflow file.
         #[arg(value_name = "WORKFLOW")]
         workflow: PathBuf,
+
+        /// Use enhanced DOT output with parallel group clustering.
+        #[arg(long)]
+        clustered: bool,
     },
 
     /// Generate reports from workflow execution.
@@ -594,14 +598,24 @@ async fn main() -> Result<()> {
             }
         }
 
-        Commands::Graph { workflow } => {
+        Commands::Graph {
+            workflow,
+            clustered,
+        } => {
             let config = WorkflowConfig::from_file(&workflow)
                 .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
             let dag =
                 WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;
 
-            println!("{}", dag.to_dot());
+            if clustered {
+                let dot = dag
+                    .to_dot_clustered()
+                    .context("failed to generate clustered DOT")?;
+                println!("{}", dot);
+            } else {
+                println!("{}", dag.to_dot());
+            }
         }
 
         Commands::Report {
@@ -1415,6 +1429,12 @@ Thumbs.db
                 if let Some(ref desc) = rule.description {
                     eprintln!("  {} {}", "Description:".dimmed(), desc);
                 }
+                if let Some(ref base) = rule.extends {
+                    eprintln!("  {} {}", "Extends:".dimmed(), base);
+                }
+                if let Some(ref when) = rule.when {
+                    eprintln!("  {} {}", "Condition:".dimmed(), when);
+                }
 
                 if !rule.input.is_empty() {
                     eprintln!("  {} {:?}", "Inputs:".dimmed(), rule.input);
@@ -1457,6 +1477,23 @@ Thumbs.db
                         gpu_spec.model,
                         gpu_spec.memory_gb
                     );
+                }
+
+                // Retries & hooks
+                if rule.retries > 0 {
+                    let delay = rule.retry_delay.as_deref().unwrap_or("immediate");
+                    eprintln!(
+                        "  {} count={}, delay={}",
+                        "Retries:".dimmed(),
+                        rule.retries,
+                        delay
+                    );
+                }
+                if let Some(ref hook) = rule.on_success {
+                    eprintln!("  {} {}", "On success:".dimmed(), hook);
+                }
+                if let Some(ref hook) = rule.on_failure {
+                    eprintln!("  {} {}", "On failure:".dimmed(), hook);
                 }
 
                 // Environment

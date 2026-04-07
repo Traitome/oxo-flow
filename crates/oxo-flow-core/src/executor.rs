@@ -81,6 +81,77 @@ pub enum ExecutionEvent {
     },
 }
 
+impl ExecutionEvent {
+    /// Serialize the event to a JSON string suitable for structured logging.
+    ///
+    /// Produces a single-line JSON object (NDJSON format) with a `timestamp`
+    /// field added automatically. This format is compatible with log
+    /// aggregation tools like Elasticsearch, Datadog, and CloudWatch.
+    pub fn to_json_log(&self) -> String {
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        match self {
+            ExecutionEvent::WorkflowStarted {
+                workflow_name,
+                total_rules,
+            } => {
+                format!(
+                    r#"{{"timestamp":"{}","event":"workflow_started","workflow":"{}","total_rules":{}}}"#,
+                    timestamp, workflow_name, total_rules
+                )
+            }
+            ExecutionEvent::RuleStarted { rule, command } => {
+                let cmd = command.as_deref().unwrap_or("");
+                format!(
+                    r#"{{"timestamp":"{}","event":"rule_started","rule":"{}","command":"{}"}}"#,
+                    timestamp,
+                    rule,
+                    cmd.replace('"', "\\\"")
+                )
+            }
+            ExecutionEvent::RuleCompleted {
+                rule,
+                status,
+                duration_ms,
+            } => {
+                format!(
+                    r#"{{"timestamp":"{}","event":"rule_completed","rule":"{}","status":"{}","duration_ms":{}}}"#,
+                    timestamp, rule, status, duration_ms
+                )
+            }
+            ExecutionEvent::RuleSkipped { rule, reason } => {
+                format!(
+                    r#"{{"timestamp":"{}","event":"rule_skipped","rule":"{}","reason":"{}"}}"#,
+                    timestamp,
+                    rule,
+                    reason.replace('"', "\\\"")
+                )
+            }
+            ExecutionEvent::WorkflowCompleted {
+                total_duration_ms,
+                succeeded,
+                failed,
+                skipped,
+            } => {
+                format!(
+                    r#"{{"timestamp":"{}","event":"workflow_completed","total_duration_ms":{},"succeeded":{},"failed":{},"skipped":{}}}"#,
+                    timestamp, total_duration_ms, succeeded, failed, skipped
+                )
+            }
+        }
+    }
+
+    /// Returns the event type name as a string.
+    pub fn event_type(&self) -> &'static str {
+        match self {
+            ExecutionEvent::WorkflowStarted { .. } => "workflow_started",
+            ExecutionEvent::RuleStarted { .. } => "rule_started",
+            ExecutionEvent::RuleCompleted { .. } => "rule_completed",
+            ExecutionEvent::RuleSkipped { .. } => "rule_skipped",
+            ExecutionEvent::WorkflowCompleted { .. } => "workflow_completed",
+        }
+    }
+}
+
 /// Record of a single job execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobRecord {
@@ -476,6 +547,51 @@ impl CheckpointState {
     pub fn default_path(workdir: &Path) -> std::path::PathBuf {
         workdir.join(".oxo-flow").join("checkpoint.json")
     }
+
+    /// Generate Prometheus-style text metrics from checkpoint state.
+    ///
+    /// Returns metrics in the Prometheus text exposition format suitable
+    /// for scraping by Prometheus or compatible monitoring tools.
+    pub fn to_prometheus_metrics(&self) -> String {
+        let mut output = String::new();
+
+        output.push_str(
+            "# HELP oxo_flow_rules_completed_total Number of rules completed successfully.\n",
+        );
+        output.push_str("# TYPE oxo_flow_rules_completed_total gauge\n");
+        output.push_str(&format!(
+            "oxo_flow_rules_completed_total {}\n",
+            self.completed_rules.len()
+        ));
+
+        output.push_str("# HELP oxo_flow_rules_failed_total Number of rules that failed.\n");
+        output.push_str("# TYPE oxo_flow_rules_failed_total gauge\n");
+        output.push_str(&format!(
+            "oxo_flow_rules_failed_total {}\n",
+            self.failed_rules.len()
+        ));
+
+        output.push_str("# HELP oxo_flow_rule_duration_seconds Wall-clock time per rule.\n");
+        output.push_str("# TYPE oxo_flow_rule_duration_seconds gauge\n");
+        for (rule, benchmark) in &self.benchmarks {
+            output.push_str(&format!(
+                "oxo_flow_rule_duration_seconds{{rule=\"{}\"}} {:.3}\n",
+                rule, benchmark.wall_time_secs
+            ));
+        }
+
+        if !self.benchmarks.is_empty() {
+            let total_time: f64 = self.benchmarks.values().map(|b| b.wall_time_secs).sum();
+            output.push_str("# HELP oxo_flow_total_duration_seconds Total execution time.\n");
+            output.push_str("# TYPE oxo_flow_total_duration_seconds gauge\n");
+            output.push_str(&format!(
+                "oxo_flow_total_duration_seconds {:.3}\n",
+                total_time
+            ));
+        }
+
+        output
+    }
 }
 
 impl Default for CheckpointState {
@@ -626,6 +742,83 @@ pub fn verify_output_checksums(
         }
     }
     mismatches
+}
+
+/// Check if a rule should be skipped based on content-aware caching.
+///
+/// Unlike [`should_skip_rule`] which only checks file modification times,
+/// this function also considers file content checksums. This avoids
+/// unnecessary re-execution when a file's mtime changes but its content
+/// does not (e.g., after `touch` or a no-op rebuild).
+///
+/// `known_checksums` maps file paths to their previously recorded checksums.
+/// If a file's current checksum matches its known checksum, the file is
+/// considered unchanged even if its mtime is newer.
+pub fn should_skip_rule_content_aware(
+    rule: &Rule,
+    workdir: &Path,
+    known_checksums: &HashMap<String, String>,
+) -> bool {
+    if rule.output.is_empty() {
+        return false;
+    }
+    // Skip check for wildcard patterns
+    if rule.output.iter().any(|o| o.contains('{')) || rule.input.iter().any(|i| i.contains('{')) {
+        return false;
+    }
+    let all_outputs_exist = rule.output.iter().all(|o| workdir.join(o).exists());
+    if !all_outputs_exist {
+        return false;
+    }
+    if rule.input.is_empty() {
+        return true;
+    }
+
+    // First check mtime (fast path)
+    let mtime_fresh = rule.input.iter().all(|input| {
+        let input_path = workdir.join(input);
+        rule.output.iter().all(|output| {
+            let output_path = workdir.join(output);
+            file_is_newer(&output_path, &input_path)
+        })
+    });
+
+    if mtime_fresh {
+        return true;
+    }
+
+    // Mtime says stale — check content checksums as fallback
+    // If all input files have unchanged content (matching known checksums),
+    // we can still skip the rule
+    rule.input.iter().all(|input| {
+        let input_path = workdir.join(input);
+        if let Some(known) = known_checksums.get(input) {
+            match compute_file_checksum(&input_path) {
+                Ok(current) => current == *known,
+                Err(_) => false,
+            }
+        } else {
+            false // No known checksum — can't verify content
+        }
+    })
+}
+
+/// Compute checksums for all non-wildcard input files of a rule.
+///
+/// Returns a map from file path (relative) to hex-encoded checksum.
+/// Files that cannot be read are silently skipped.
+pub fn compute_input_checksums(rule: &Rule, workdir: &Path) -> HashMap<String, String> {
+    let mut checksums = HashMap::new();
+    for input in &rule.input {
+        if crate::wildcard::has_wildcards(input) {
+            continue;
+        }
+        let path = workdir.join(input);
+        if let Ok(checksum) = compute_file_checksum(&path) {
+            checksums.insert(input.clone(), checksum);
+        }
+    }
+    checksums
 }
 
 /// Provenance metadata for a workflow execution.
@@ -836,6 +1029,116 @@ fn hostname() -> String {
     std::env::var("HOSTNAME")
         .or_else(|_| std::env::var("COMPUTERNAME"))
         .unwrap_or_else(|_| "unknown".to_string())
+}
+
+/// Summary statistics for a workflow execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionStats {
+    /// Total number of rules.
+    pub total_rules: usize,
+    /// Rules that completed successfully.
+    pub succeeded: usize,
+    /// Rules that failed.
+    pub failed: usize,
+    /// Rules that were skipped.
+    pub skipped: usize,
+    /// Total wall-clock time in seconds.
+    pub total_duration_secs: f64,
+    /// Per-rule timing data (rule name → wall-clock seconds).
+    pub rule_durations: HashMap<String, f64>,
+    /// Longest rule execution time in seconds.
+    pub max_rule_duration_secs: f64,
+    /// Name of the longest-running rule.
+    pub bottleneck_rule: Option<String>,
+}
+
+impl ExecutionStats {
+    /// Compute execution statistics from job records.
+    pub fn from_records(records: &HashMap<String, JobRecord>) -> Self {
+        let mut succeeded = 0;
+        let mut failed = 0;
+        let mut skipped = 0;
+        let mut rule_durations = HashMap::new();
+        let mut max_duration = 0.0_f64;
+        let mut bottleneck = None;
+
+        for (name, record) in records {
+            match record.status {
+                JobStatus::Success => succeeded += 1,
+                JobStatus::Failed | JobStatus::TimedOut => failed += 1,
+                JobStatus::Skipped => skipped += 1,
+                _ => {}
+            }
+
+            if let (Some(start), Some(end)) = (record.started_at, record.finished_at) {
+                let duration = end.signed_duration_since(start).num_milliseconds() as f64 / 1000.0;
+                rule_durations.insert(name.clone(), duration);
+                if duration > max_duration {
+                    max_duration = duration;
+                    bottleneck = Some(name.clone());
+                }
+            }
+        }
+
+        let total_duration_secs: f64 = rule_durations.values().sum();
+
+        Self {
+            total_rules: records.len(),
+            succeeded,
+            failed,
+            skipped,
+            total_duration_secs,
+            rule_durations,
+            max_rule_duration_secs: max_duration,
+            bottleneck_rule: bottleneck,
+        }
+    }
+}
+
+/// Clean up old checkpoint and cache files from the .oxo-flow directory.
+///
+/// Removes checkpoint files older than `max_age_days` and returns the
+/// number of files removed.
+pub fn cleanup_cache(workdir: &Path, max_age_days: u64) -> usize {
+    let cache_dir = workdir.join(".oxo-flow");
+    if !cache_dir.exists() {
+        return 0;
+    }
+
+    let max_age = std::time::Duration::from_secs(max_age_days * 24 * 3600);
+    let now = std::time::SystemTime::now();
+    let mut removed = 0;
+
+    let entries = match std::fs::read_dir(&cache_dir) {
+        Ok(entries) => entries,
+        Err(_) => return 0,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file()
+            && let Ok(metadata) = std::fs::metadata(&path)
+            && let Ok(modified) = metadata.modified()
+            && let Ok(age) = now.duration_since(modified)
+            && age > max_age
+        {
+            if let Err(e) = std::fs::remove_file(&path) {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "failed to remove old cache file"
+                );
+            } else {
+                tracing::debug!(
+                    path = %path.display(),
+                    "removed old cache file"
+                );
+                removed += 1;
+            }
+        }
+    }
+
+    removed
 }
 
 #[cfg(test)]
@@ -1785,11 +2088,162 @@ mod tests {
     }
 
     #[test]
+    fn content_aware_skip_no_outputs() {
+        let rule = Rule {
+            name: "test".to_string(),
+            input: vec!["in.txt".to_string()],
+            output: vec![],
+            ..Default::default()
+        };
+        let checksums = HashMap::new();
+        assert!(!should_skip_rule_content_aware(
+            &rule,
+            Path::new("/nonexistent"),
+            &checksums
+        ));
+    }
+
+    #[test]
+    fn content_aware_skip_wildcard_patterns() {
+        let rule = Rule {
+            name: "test".to_string(),
+            input: vec!["{sample}.txt".to_string()],
+            output: vec!["{sample}.bam".to_string()],
+            ..Default::default()
+        };
+        let checksums = HashMap::new();
+        assert!(!should_skip_rule_content_aware(
+            &rule,
+            Path::new("/nonexistent"),
+            &checksums
+        ));
+    }
+
+    #[test]
+    fn compute_input_checksums_skips_wildcards() {
+        let rule = Rule {
+            name: "test".to_string(),
+            input: vec!["{sample}.txt".to_string()],
+            ..Default::default()
+        };
+        let checksums = compute_input_checksums(&rule, Path::new("/nonexistent"));
+        assert!(checksums.is_empty());
+    }
+
+    #[test]
     fn execution_provenance_with_lineage() {
         let prov = ExecutionProvenance::new("abc123", Path::new("/work"));
         assert!(prov.parent_run_id.is_none());
         assert!(prov.input_checksums.is_empty());
         assert!(prov.output_checksums.is_empty());
         assert!(prov.software_versions.is_empty());
+    }
+
+    #[test]
+    fn execution_event_json_log() {
+        let event = ExecutionEvent::WorkflowStarted {
+            workflow_name: "test-pipeline".to_string(),
+            total_rules: 5,
+        };
+        let json = event.to_json_log();
+        assert!(json.contains("\"event\":\"workflow_started\""));
+        assert!(json.contains("\"workflow\":\"test-pipeline\""));
+        assert!(json.contains("\"total_rules\":5"));
+        assert!(json.contains("\"timestamp\":"));
+    }
+
+    #[test]
+    fn execution_event_type() {
+        let event = ExecutionEvent::RuleStarted {
+            rule: "align".to_string(),
+            command: Some("bwa mem".to_string()),
+        };
+        assert_eq!(event.event_type(), "rule_started");
+    }
+
+    #[test]
+    fn checkpoint_prometheus_metrics() {
+        let mut state = CheckpointState::new();
+        state.mark_completed(
+            "align",
+            BenchmarkRecord {
+                rule: "align".to_string(),
+                wall_time_secs: 120.5,
+                max_memory_mb: None,
+                cpu_seconds: None,
+            },
+        );
+        state.mark_failed("variant_call");
+
+        let metrics = state.to_prometheus_metrics();
+        assert!(metrics.contains("oxo_flow_rules_completed_total 1"));
+        assert!(metrics.contains("oxo_flow_rules_failed_total 1"));
+        assert!(metrics.contains("oxo_flow_rule_duration_seconds{rule=\"align\"} 120.500"));
+        assert!(metrics.contains("oxo_flow_total_duration_seconds"));
+    }
+
+    #[test]
+    fn execution_stats_from_records() {
+        let now = chrono::Utc::now();
+        let mut records = HashMap::new();
+        records.insert(
+            "fast".to_string(),
+            JobRecord {
+                rule: "fast".to_string(),
+                status: JobStatus::Success,
+                started_at: Some(now - chrono::Duration::seconds(10)),
+                finished_at: Some(now),
+                exit_code: Some(0),
+                stdout: None,
+                stderr: None,
+                command: None,
+                retries: 0,
+                timeout: None,
+            },
+        );
+        records.insert(
+            "slow".to_string(),
+            JobRecord {
+                rule: "slow".to_string(),
+                status: JobStatus::Success,
+                started_at: Some(now - chrono::Duration::seconds(60)),
+                finished_at: Some(now),
+                exit_code: Some(0),
+                stdout: None,
+                stderr: None,
+                command: None,
+                retries: 0,
+                timeout: None,
+            },
+        );
+        records.insert(
+            "skipped".to_string(),
+            JobRecord {
+                rule: "skipped".to_string(),
+                status: JobStatus::Skipped,
+                started_at: None,
+                finished_at: None,
+                exit_code: None,
+                stdout: None,
+                stderr: None,
+                command: None,
+                retries: 0,
+                timeout: None,
+            },
+        );
+
+        let stats = ExecutionStats::from_records(&records);
+        assert_eq!(stats.total_rules, 3);
+        assert_eq!(stats.succeeded, 2);
+        assert_eq!(stats.skipped, 1);
+        assert_eq!(stats.failed, 0);
+        assert_eq!(stats.bottleneck_rule.as_deref(), Some("slow"));
+        assert!(stats.max_rule_duration_secs > 50.0);
+    }
+
+    #[test]
+    fn cleanup_cache_nonexistent_dir() {
+        let count = cleanup_cache(Path::new("/nonexistent-oxo-flow-test-dir"), 7);
+        assert_eq!(count, 0);
     }
 }
