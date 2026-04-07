@@ -842,7 +842,7 @@ impl PaginationMeta {
         let total_pages = if total_items == 0 {
             1
         } else {
-            (total_items + per_page - 1) / per_page
+            total_items.div_ceil(per_page)
         };
         Self {
             page,
