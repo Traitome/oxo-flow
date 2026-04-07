@@ -13,6 +13,130 @@ pub type WildcardValues = HashMap<String, String>;
 /// A set of wildcard value combinations for expanding rules.
 pub type WildcardCombinations = Vec<WildcardValues>;
 
+/// A map of wildcard names to regex constraints for validation.
+///
+/// When constraints are provided, wildcard values must match the corresponding
+/// regex pattern. This enables stricter validation of file patterns.
+///
+/// # Example
+///
+/// ```
+/// use oxo_flow_core::wildcard::{WildcardConstraints, validate_wildcard_constraints};
+///
+/// let mut constraints = WildcardConstraints::new();
+/// constraints.insert("sample".to_string(), r"^[A-Za-z0-9_]+$".to_string());
+/// constraints.insert("chr".to_string(), r"^chr([0-9]+|[XYM])$".to_string());
+///
+/// let mut values = std::collections::HashMap::new();
+/// values.insert("sample".to_string(), "TUMOR_01".to_string());
+/// values.insert("chr".to_string(), "chr1".to_string());
+///
+/// assert!(validate_wildcard_constraints(&values, &constraints).is_ok());
+/// ```
+pub type WildcardConstraints = HashMap<String, String>;
+
+/// Validate wildcard values against regex constraints.
+///
+/// Returns Ok(()) if all constrained wildcards match their patterns,
+/// or an error listing all violations.
+pub fn validate_wildcard_constraints(
+    values: &WildcardValues,
+    constraints: &WildcardConstraints,
+) -> Result<()> {
+    let mut violations = Vec::new();
+
+    for (name, pattern) in constraints {
+        if let Some(value) = values.get(name) {
+            match Regex::new(pattern) {
+                Ok(re) => {
+                    if !re.is_match(value) {
+                        violations.push(format!(
+                            "wildcard '{}' value '{}' does not match constraint '{}'",
+                            name, value, pattern
+                        ));
+                    }
+                }
+                Err(e) => {
+                    violations.push(format!(
+                        "invalid regex constraint '{}' for wildcard '{}': {}",
+                        pattern, name, e
+                    ));
+                }
+            }
+        }
+    }
+
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(OxoFlowError::Wildcard {
+            rule: String::new(),
+            message: violations.join("; "),
+        })
+    }
+}
+
+/// Convert a wildcard pattern (e.g., `{sample}_R{read}.fastq.gz`) to a regex
+/// for file discovery against directory listings.
+///
+/// The `{name}` placeholders are replaced with named capture groups.
+pub fn pattern_to_regex(pattern: &str) -> Result<Regex> {
+    let mut regex_str = String::from("^");
+    let re = Regex::new(r"\{(\w+)\}").expect("valid regex");
+    let mut last_end = 0;
+
+    for mat in re.find_iter(pattern) {
+        let literal = &pattern[last_end..mat.start()];
+        regex_str.push_str(&regex::escape(literal));
+
+        let cap = re.captures(&pattern[mat.start()..mat.end()]).unwrap();
+        let name = &cap[1];
+        regex_str.push_str(&format!("(?P<{}>\\S+)", name));
+
+        last_end = mat.end();
+    }
+
+    let remaining = &pattern[last_end..];
+    regex_str.push_str(&regex::escape(remaining));
+    regex_str.push('$');
+
+    Regex::new(&regex_str).map_err(|e| OxoFlowError::Wildcard {
+        rule: String::new(),
+        message: format!("failed to compile pattern regex: {}", e),
+    })
+}
+
+/// Discover files matching a wildcard pattern in a directory.
+///
+/// Returns a list of wildcard value maps, one per matching file found.
+pub fn discover_wildcards_from_pattern(
+    dir: &std::path::Path,
+    pattern: &str,
+) -> Result<WildcardCombinations> {
+    let re = pattern_to_regex(pattern)?;
+    let wildcard_names = extract_wildcards(pattern);
+    let mut results = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let filename = entry.file_name().to_string_lossy().to_string();
+            if let Some(captures) = re.captures(&filename) {
+                let mut values = WildcardValues::new();
+                for name in &wildcard_names {
+                    if let Some(m) = captures.name(name) {
+                        values.insert(name.clone(), m.as_str().to_string());
+                    }
+                }
+                if !values.is_empty() && !results.contains(&values) {
+                    results.push(values);
+                }
+            }
+        }
+    }
+
+    Ok(results)
+}
+
 /// Extracts wildcard names from a pattern string.
 ///
 /// # Examples
@@ -266,5 +390,69 @@ mod tests {
         let (r1, r2) = paired_end_pattern("data", "{sample}", "fastq.gz");
         assert_eq!(r1, "data/{sample}_R1.fastq.gz");
         assert_eq!(r2, "data/{sample}_R2.fastq.gz");
+    }
+
+    #[test]
+    fn validate_constraints_pass() {
+        let mut constraints = WildcardConstraints::new();
+        constraints.insert("sample".to_string(), r"^[A-Za-z0-9_]+$".to_string());
+
+        let mut values = WildcardValues::new();
+        values.insert("sample".to_string(), "TUMOR_01".to_string());
+
+        assert!(validate_wildcard_constraints(&values, &constraints).is_ok());
+    }
+
+    #[test]
+    fn validate_constraints_fail() {
+        let mut constraints = WildcardConstraints::new();
+        constraints.insert("chr".to_string(), r"^chr[0-9XYM]+$".to_string());
+
+        let mut values = WildcardValues::new();
+        values.insert("chr".to_string(), "invalid".to_string());
+
+        assert!(validate_wildcard_constraints(&values, &constraints).is_err());
+    }
+
+    #[test]
+    fn validate_constraints_bad_regex() {
+        let mut constraints = WildcardConstraints::new();
+        constraints.insert("x".to_string(), r"[invalid".to_string());
+
+        let mut values = WildcardValues::new();
+        values.insert("x".to_string(), "test".to_string());
+
+        assert!(validate_wildcard_constraints(&values, &constraints).is_err());
+    }
+
+    #[test]
+    fn pattern_to_regex_basic() {
+        let re = pattern_to_regex("{sample}_R{read}.fastq.gz").unwrap();
+        assert!(re.is_match("TUMOR_01_R1.fastq.gz"));
+        assert!(!re.is_match("something_else.bam"));
+
+        let caps = re.captures("TUMOR_01_R1.fastq.gz").unwrap();
+        assert_eq!(&caps["sample"], "TUMOR_01");
+        assert_eq!(&caps["read"], "1");
+    }
+
+    #[test]
+    fn pattern_to_regex_no_wildcards() {
+        let re = pattern_to_regex("output.bam").unwrap();
+        assert!(re.is_match("output.bam"));
+        assert!(!re.is_match("other.bam"));
+    }
+
+    #[test]
+    fn discover_wildcards_from_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("SAMPLE_A_R1.fastq.gz"), "").unwrap();
+        std::fs::write(dir.path().join("SAMPLE_A_R2.fastq.gz"), "").unwrap();
+        std::fs::write(dir.path().join("SAMPLE_B_R1.fastq.gz"), "").unwrap();
+        std::fs::write(dir.path().join("unrelated.txt"), "").unwrap();
+
+        let results =
+            discover_wildcards_from_pattern(dir.path(), "{sample}_R{read}.fastq.gz").unwrap();
+        assert!(results.len() >= 2);
     }
 }
