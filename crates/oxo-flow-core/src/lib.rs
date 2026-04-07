@@ -61,6 +61,8 @@ pub use config::{
 };
 pub use dag::WorkflowDag;
 pub use error::{OxoFlowError, Result};
-pub use executor::{CheckpointState, ExecutionProvenance, JobStatus};
+pub use executor::{
+    CheckpointState, ExecutionEvent, ExecutionProvenance, ExecutionStats, JobStatus,
+};
 pub use rule::Rule;
 pub use rule::{EnvironmentSpec, GpuSpec, ResourceHint, Resources, RuleBuilder};

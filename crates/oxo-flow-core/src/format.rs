@@ -213,6 +213,21 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
         }
     }
 
+    // E008: extends references non-existent rule
+    for rule in &config.rules {
+        if let Some(ref base) = rule.extends
+            && !rule_names.contains(base.as_str())
+        {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                message: format!("extends references non-existent rule '{}'", base),
+                rule: Some(rule.name.clone()),
+                code: "E008".to_string(),
+                suggestion: Some(format!("ensure rule '{}' is defined in the workflow", base)),
+            });
+        }
+    }
+
     // E006: DAG cycle detection
     match WorkflowDag::from_rules(&config.rules) {
         Ok(_) => {}
@@ -1924,6 +1939,45 @@ mod tests {
         let config = WorkflowConfig::parse(toml).unwrap();
         let result = validate_format(&config);
         assert!(!result.errors().iter().any(|d| d.code == "E007"));
+    }
+
+    // ---- E008: extends references non-existent rule --------------------------
+
+    #[test]
+    fn validate_e008_extends_nonexistent_rule() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            extends = "nonexistent"
+            shell = "echo hello"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(!result.valid);
+        assert!(result.errors().iter().any(|d| d.code == "E008"));
+    }
+
+    #[test]
+    fn validate_e008_extends_valid_rule_no_error() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "base_rule"
+            shell = "echo base"
+
+            [[rules]]
+            name = "step1"
+            extends = "base_rule"
+            shell = "echo step1"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(!result.errors().iter().any(|d| d.code == "E008"));
     }
 
     // ---- W012: retries without retry_delay ----------------------------------

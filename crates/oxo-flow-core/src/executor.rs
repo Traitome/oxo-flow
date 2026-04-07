@@ -547,6 +547,51 @@ impl CheckpointState {
     pub fn default_path(workdir: &Path) -> std::path::PathBuf {
         workdir.join(".oxo-flow").join("checkpoint.json")
     }
+
+    /// Generate Prometheus-style text metrics from checkpoint state.
+    ///
+    /// Returns metrics in the Prometheus text exposition format suitable
+    /// for scraping by Prometheus or compatible monitoring tools.
+    pub fn to_prometheus_metrics(&self) -> String {
+        let mut output = String::new();
+
+        output.push_str(
+            "# HELP oxo_flow_rules_completed_total Number of rules completed successfully.\n",
+        );
+        output.push_str("# TYPE oxo_flow_rules_completed_total gauge\n");
+        output.push_str(&format!(
+            "oxo_flow_rules_completed_total {}\n",
+            self.completed_rules.len()
+        ));
+
+        output.push_str("# HELP oxo_flow_rules_failed_total Number of rules that failed.\n");
+        output.push_str("# TYPE oxo_flow_rules_failed_total gauge\n");
+        output.push_str(&format!(
+            "oxo_flow_rules_failed_total {}\n",
+            self.failed_rules.len()
+        ));
+
+        output.push_str("# HELP oxo_flow_rule_duration_seconds Wall-clock time per rule.\n");
+        output.push_str("# TYPE oxo_flow_rule_duration_seconds gauge\n");
+        for (rule, benchmark) in &self.benchmarks {
+            output.push_str(&format!(
+                "oxo_flow_rule_duration_seconds{{rule=\"{}\"}} {:.3}\n",
+                rule, benchmark.wall_time_secs
+            ));
+        }
+
+        if !self.benchmarks.is_empty() {
+            let total_time: f64 = self.benchmarks.values().map(|b| b.wall_time_secs).sum();
+            output.push_str("# HELP oxo_flow_total_duration_seconds Total execution time.\n");
+            output.push_str("# TYPE oxo_flow_total_duration_seconds gauge\n");
+            output.push_str(&format!(
+                "oxo_flow_total_duration_seconds {:.3}\n",
+                total_time
+            ));
+        }
+
+        output
+    }
 }
 
 impl Default for CheckpointState {
@@ -984,6 +1029,116 @@ fn hostname() -> String {
     std::env::var("HOSTNAME")
         .or_else(|_| std::env::var("COMPUTERNAME"))
         .unwrap_or_else(|_| "unknown".to_string())
+}
+
+/// Summary statistics for a workflow execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionStats {
+    /// Total number of rules.
+    pub total_rules: usize,
+    /// Rules that completed successfully.
+    pub succeeded: usize,
+    /// Rules that failed.
+    pub failed: usize,
+    /// Rules that were skipped.
+    pub skipped: usize,
+    /// Total wall-clock time in seconds.
+    pub total_duration_secs: f64,
+    /// Per-rule timing data (rule name → wall-clock seconds).
+    pub rule_durations: HashMap<String, f64>,
+    /// Longest rule execution time in seconds.
+    pub max_rule_duration_secs: f64,
+    /// Name of the longest-running rule.
+    pub bottleneck_rule: Option<String>,
+}
+
+impl ExecutionStats {
+    /// Compute execution statistics from job records.
+    pub fn from_records(records: &HashMap<String, JobRecord>) -> Self {
+        let mut succeeded = 0;
+        let mut failed = 0;
+        let mut skipped = 0;
+        let mut rule_durations = HashMap::new();
+        let mut max_duration = 0.0_f64;
+        let mut bottleneck = None;
+
+        for (name, record) in records {
+            match record.status {
+                JobStatus::Success => succeeded += 1,
+                JobStatus::Failed | JobStatus::TimedOut => failed += 1,
+                JobStatus::Skipped => skipped += 1,
+                _ => {}
+            }
+
+            if let (Some(start), Some(end)) = (record.started_at, record.finished_at) {
+                let duration = end.signed_duration_since(start).num_milliseconds() as f64 / 1000.0;
+                rule_durations.insert(name.clone(), duration);
+                if duration > max_duration {
+                    max_duration = duration;
+                    bottleneck = Some(name.clone());
+                }
+            }
+        }
+
+        let total_duration_secs: f64 = rule_durations.values().sum();
+
+        Self {
+            total_rules: records.len(),
+            succeeded,
+            failed,
+            skipped,
+            total_duration_secs,
+            rule_durations,
+            max_rule_duration_secs: max_duration,
+            bottleneck_rule: bottleneck,
+        }
+    }
+}
+
+/// Clean up old checkpoint and cache files from the .oxo-flow directory.
+///
+/// Removes checkpoint files older than `max_age_days` and returns the
+/// number of files removed.
+pub fn cleanup_cache(workdir: &Path, max_age_days: u64) -> usize {
+    let cache_dir = workdir.join(".oxo-flow");
+    if !cache_dir.exists() {
+        return 0;
+    }
+
+    let max_age = std::time::Duration::from_secs(max_age_days * 24 * 3600);
+    let now = std::time::SystemTime::now();
+    let mut removed = 0;
+
+    let entries = match std::fs::read_dir(&cache_dir) {
+        Ok(entries) => entries,
+        Err(_) => return 0,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file()
+            && let Ok(metadata) = std::fs::metadata(&path)
+            && let Ok(modified) = metadata.modified()
+            && let Ok(age) = now.duration_since(modified)
+            && age > max_age
+        {
+            if let Err(e) = std::fs::remove_file(&path) {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "failed to remove old cache file"
+                );
+            } else {
+                tracing::debug!(
+                    path = %path.display(),
+                    "removed old cache file"
+                );
+                removed += 1;
+            }
+        }
+    }
+
+    removed
 }
 
 #[cfg(test)]
@@ -2004,5 +2159,91 @@ mod tests {
             command: Some("bwa mem".to_string()),
         };
         assert_eq!(event.event_type(), "rule_started");
+    }
+
+    #[test]
+    fn checkpoint_prometheus_metrics() {
+        let mut state = CheckpointState::new();
+        state.mark_completed(
+            "align",
+            BenchmarkRecord {
+                rule: "align".to_string(),
+                wall_time_secs: 120.5,
+                max_memory_mb: None,
+                cpu_seconds: None,
+            },
+        );
+        state.mark_failed("variant_call");
+
+        let metrics = state.to_prometheus_metrics();
+        assert!(metrics.contains("oxo_flow_rules_completed_total 1"));
+        assert!(metrics.contains("oxo_flow_rules_failed_total 1"));
+        assert!(metrics.contains("oxo_flow_rule_duration_seconds{rule=\"align\"} 120.500"));
+        assert!(metrics.contains("oxo_flow_total_duration_seconds"));
+    }
+
+    #[test]
+    fn execution_stats_from_records() {
+        let now = chrono::Utc::now();
+        let mut records = HashMap::new();
+        records.insert(
+            "fast".to_string(),
+            JobRecord {
+                rule: "fast".to_string(),
+                status: JobStatus::Success,
+                started_at: Some(now - chrono::Duration::seconds(10)),
+                finished_at: Some(now),
+                exit_code: Some(0),
+                stdout: None,
+                stderr: None,
+                command: None,
+                retries: 0,
+                timeout: None,
+            },
+        );
+        records.insert(
+            "slow".to_string(),
+            JobRecord {
+                rule: "slow".to_string(),
+                status: JobStatus::Success,
+                started_at: Some(now - chrono::Duration::seconds(60)),
+                finished_at: Some(now),
+                exit_code: Some(0),
+                stdout: None,
+                stderr: None,
+                command: None,
+                retries: 0,
+                timeout: None,
+            },
+        );
+        records.insert(
+            "skipped".to_string(),
+            JobRecord {
+                rule: "skipped".to_string(),
+                status: JobStatus::Skipped,
+                started_at: None,
+                finished_at: None,
+                exit_code: None,
+                stdout: None,
+                stderr: None,
+                command: None,
+                retries: 0,
+                timeout: None,
+            },
+        );
+
+        let stats = ExecutionStats::from_records(&records);
+        assert_eq!(stats.total_rules, 3);
+        assert_eq!(stats.succeeded, 2);
+        assert_eq!(stats.skipped, 1);
+        assert_eq!(stats.failed, 0);
+        assert_eq!(stats.bottleneck_rule.as_deref(), Some("slow"));
+        assert!(stats.max_rule_duration_secs > 50.0);
+    }
+
+    #[test]
+    fn cleanup_cache_nonexistent_dir() {
+        let count = cleanup_cache(Path::new("/nonexistent-oxo-flow-test-dir"), 7);
+        assert_eq!(count, 0);
     }
 }
