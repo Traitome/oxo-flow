@@ -429,6 +429,19 @@ pub fn lint_format(config: &WorkflowConfig) -> Vec<Diagnostic> {
                 });
             }
         }
+
+        // W015: Rule extends a non-existent base rule
+        if let Some(ref base) = rule.extends
+            && !config.rules.iter().any(|r| r.name == *base)
+        {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: format!("rule extends unknown base rule '{}'", base),
+                rule: Some(rule.name.clone()),
+                code: "W015".to_string(),
+                suggestion: Some(format!("check that rule '{}' exists in the workflow", base)),
+            });
+        }
     }
 
     diagnostics

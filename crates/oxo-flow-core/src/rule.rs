@@ -331,6 +331,15 @@ pub struct Rule {
     #[serde(default)]
     pub depends_on: Vec<String>,
 
+    /// Name of a base rule to inherit settings from.
+    ///
+    /// When set, this rule inherits `threads`, `memory`, `resources`,
+    /// `environment`, `tags`, `retries`, `retry_delay`, `group`, and
+    /// `params` from the named rule. Fields explicitly set on this rule
+    /// override the inherited values.
+    #[serde(default)]
+    pub extends: Option<String>,
+
     /// Delay between retry attempts (e.g., "5s", "30s", "2m").
     ///
     /// When `retries > 0`, this specifies the wait time before each retry.
@@ -614,6 +623,13 @@ impl RuleBuilder {
     #[must_use]
     pub fn depends_on(mut self, deps: Vec<String>) -> Self {
         self.rule.depends_on = deps;
+        self
+    }
+
+    /// Set the base rule to extend (inherit settings from).
+    #[must_use]
+    pub fn extends(mut self, base: impl Into<String>) -> Self {
+        self.rule.extends = Some(base.into());
         self
     }
 
