@@ -789,6 +789,72 @@ pub struct ExportResponse {
     pub content: String,
 }
 
+/// Query parameters for paginated list endpoints.
+#[derive(Debug, Deserialize)]
+pub struct PaginationParams {
+    /// Page number (1-based). Defaults to 1.
+    #[serde(default = "default_page")]
+    pub page: usize,
+    /// Items per page. Defaults to 20, max 100.
+    #[serde(default = "default_per_page")]
+    pub per_page: usize,
+}
+
+fn default_page() -> usize {
+    1
+}
+
+fn default_per_page() -> usize {
+    20
+}
+
+impl PaginationParams {
+    /// Clamp per_page to the allowed range [1, 100].
+    pub fn clamped_per_page(&self) -> usize {
+        self.per_page.clamp(1, 100)
+    }
+
+    /// Returns the offset for database-style slicing.
+    pub fn offset(&self) -> usize {
+        (self.page.saturating_sub(1)) * self.clamped_per_page()
+    }
+}
+
+/// Pagination metadata included in paginated responses.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PaginationMeta {
+    /// Current page number (1-based).
+    pub page: usize,
+    /// Items per page.
+    pub per_page: usize,
+    /// Total number of items.
+    pub total_items: usize,
+    /// Total number of pages.
+    pub total_pages: usize,
+    /// Whether there is a next page.
+    pub has_next: bool,
+    /// Whether there is a previous page.
+    pub has_prev: bool,
+}
+
+impl PaginationMeta {
+    pub fn new(page: usize, per_page: usize, total_items: usize) -> Self {
+        let total_pages = if total_items == 0 {
+            1
+        } else {
+            (total_items + per_page - 1) / per_page
+        };
+        Self {
+            page,
+            per_page,
+            total_items,
+            total_pages,
+            has_next: page < total_pages,
+            has_prev: page > 1,
+        }
+    }
+}
+
 /// Request body for lint endpoint.
 #[derive(Serialize, Deserialize)]
 pub struct LintRequest {
@@ -817,6 +883,22 @@ pub struct DiagnosticItem {
 #[derive(Serialize, Deserialize)]
 pub struct FormatResponse {
     pub formatted: String,
+}
+
+/// Paginated response from lint endpoint.
+#[derive(Serialize, Deserialize)]
+pub struct PaginatedLintResponse {
+    pub diagnostics: Vec<DiagnosticItem>,
+    pub pagination: PaginationMeta,
+    pub summary: LintSummary,
+}
+
+/// Summary counts for lint results.
+#[derive(Serialize, Deserialize)]
+pub struct LintSummary {
+    pub error_count: usize,
+    pub warning_count: usize,
+    pub info_count: usize,
 }
 
 /// Response from stats endpoint.
@@ -1362,6 +1444,69 @@ async fn lint_workflow(Json(req): Json<LintRequest>) -> Result<Json<LintResponse
     }))
 }
 
+/// `POST /api/workflows/lint/paginated` — Lint with paginated results.
+async fn lint_workflow_paginated(
+    pagination: axum::extract::Query<PaginationParams>,
+    Json(req): Json<LintRequest>,
+) -> Result<Json<PaginatedLintResponse>, ApiError> {
+    let config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
+        .map_err(|e| ApiError::bad_request("parse error", Some(e.to_string())))?;
+
+    let validation = oxo_flow_core::format::validate_format(&config);
+    let lint = oxo_flow_core::format::lint_format(&config);
+
+    let mut all_diagnostics: Vec<DiagnosticItem> = Vec::new();
+    for d in &validation.diagnostics {
+        all_diagnostics.push(DiagnosticItem {
+            severity: d.severity.to_string(),
+            code: d.code.clone(),
+            message: d.message.clone(),
+            rule: d.rule.clone(),
+        });
+    }
+    for d in &lint {
+        all_diagnostics.push(DiagnosticItem {
+            severity: d.severity.to_string(),
+            code: d.code.clone(),
+            message: d.message.clone(),
+            rule: d.rule.clone(),
+        });
+    }
+
+    let error_count = all_diagnostics
+        .iter()
+        .filter(|d| d.severity == "error")
+        .count();
+    let warning_count = all_diagnostics
+        .iter()
+        .filter(|d| d.severity == "warning")
+        .count();
+    let info_count = all_diagnostics
+        .iter()
+        .filter(|d| d.severity == "info")
+        .count();
+
+    let total = all_diagnostics.len();
+    let per_page = pagination.clamped_per_page();
+    let offset = pagination.offset();
+
+    let page_items: Vec<DiagnosticItem> = all_diagnostics
+        .into_iter()
+        .skip(offset)
+        .take(per_page)
+        .collect();
+
+    Ok(Json(PaginatedLintResponse {
+        diagnostics: page_items,
+        pagination: PaginationMeta::new(pagination.page, per_page, total),
+        summary: LintSummary {
+            error_count,
+            warning_count,
+            info_count,
+        },
+    }))
+}
+
 /// `POST /api/workflows/stats` — Return workflow statistics.
 async fn workflow_stats_endpoint(
     Json(req): Json<ValidateRequest>,
@@ -1556,6 +1701,10 @@ fn build_router_inner(limiter: Option<RateLimiter>) -> Router {
         .route("/api/workflows/export", post(export_workflow))
         .route("/api/workflows/format", post(format_workflow_endpoint))
         .route("/api/workflows/lint", post(lint_workflow))
+        .route(
+            "/api/workflows/lint/paginated",
+            post(lint_workflow_paginated),
+        )
         .route("/api/workflows/stats", post(workflow_stats_endpoint))
         .route("/api/workflows/diff", post(diff_workflows_endpoint))
         .route("/api/environments", get(list_environments))
@@ -2573,6 +2722,75 @@ threads = 4
             .await
             .unwrap();
 
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_pagination_params() {
+        let params = PaginationParams {
+            page: 1,
+            per_page: 20,
+        };
+        assert_eq!(params.offset(), 0);
+        assert_eq!(params.clamped_per_page(), 20);
+
+        let params = PaginationParams {
+            page: 3,
+            per_page: 10,
+        };
+        assert_eq!(params.offset(), 20);
+
+        let params = PaginationParams {
+            page: 1,
+            per_page: 200,
+        };
+        assert_eq!(params.clamped_per_page(), 100); // Clamped
+    }
+
+    #[tokio::test]
+    async fn test_pagination_meta() {
+        let meta = PaginationMeta::new(1, 10, 25);
+        assert_eq!(meta.total_pages, 3);
+        assert!(meta.has_next);
+        assert!(!meta.has_prev);
+
+        let meta = PaginationMeta::new(3, 10, 25);
+        assert_eq!(meta.total_pages, 3);
+        assert!(!meta.has_next);
+        assert!(meta.has_prev);
+
+        let meta = PaginationMeta::new(1, 10, 0);
+        assert_eq!(meta.total_pages, 1);
+        assert!(!meta.has_next);
+        assert!(!meta.has_prev);
+    }
+
+    #[tokio::test]
+    async fn test_paginated_lint_endpoint() {
+        let app = build_router();
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "step1"
+            input = ["input.txt"]
+            output = ["output.txt"]
+            shell = "echo hello"
+        "#;
+        let body = serde_json::json!({ "toml_content": toml });
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/workflows/lint/paginated?page=1&per_page=5")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
     }
 }
