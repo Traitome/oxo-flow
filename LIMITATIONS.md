@@ -15,6 +15,8 @@ helps contributors identify areas for improvement.
 - **File handle limits** — Workflows that produce a very large number of output
   files simultaneously may hit OS-level file descriptor limits. Increase
   `ulimit -n` as needed.
+- **Memory scaling** — DAG metadata grows linearly with the number of samples
+  and rules. For >10,000 samples, consider chunked execution strategies.
 
 ## Unsupported Features
 
@@ -32,6 +34,45 @@ helps contributors identify areas for improvement.
   management but does not include a visual drag-and-drop workflow editor.
 - **Limited Windows support** — oxo-flow is developed and tested primarily on
   Linux. macOS is supported. Windows support is experimental and limited to WSL2.
+- **No Kubernetes operator** — Cloud-native orchestration via Kubernetes CRD/operator
+  is not yet available. Users should use cluster backends (SLURM/PBS) or local execution.
+- **No native distributed consensus** — oxo-flow assumes a shared filesystem for
+  multi-node execution. True distributed execution without shared storage is not supported.
+- **No serverless execution** — AWS Lambda / Google Cloud Functions backends are
+  not implemented.
+
+## Domain-Specific Limitations
+
+- **Not a domain-specific pipeline** — oxo-flow is a general-purpose workflow engine.
+  It does not include pre-built analysis logic for specific omics domains
+  (microbiome, proteomics, metabolomics, spatial transcriptomics). The Venus pipeline
+  demonstrates clinical genomics workflows; other domains can build pipelines using
+  the same framework.
+- **No built-in bioinformatics algorithms** — oxo-flow orchestrates external tools;
+  it does not implement alignment, variant calling, or statistical analysis natively.
+- **Reference database management** — While reference database versions can be tracked
+  via the `[[reference_db]]` configuration section, oxo-flow does not automatically
+  download or update databases.
+
+## Standards Compliance
+
+- **No GA4GH TES/WES support** — Task Execution Service and Workflow Execution Service
+  APIs from GA4GH are not implemented.
+- **No FHIR/HL7 integration** — Clinical data interchange standards are not natively
+  supported. Report output is HTML/JSON which can be post-processed into FHIR resources.
+- **No OpenAPI specification** — The REST API does not yet publish an OpenAPI/Swagger spec.
+- **TOML is not an industry standard** — The `.oxoflow` format is purpose-built for
+  readability but is not an established bioinformatics standard like CWL or WDL.
+
+## Clinical Compliance
+
+- **No FDA 21 CFR Part 11 certification** — While oxo-flow provides audit trails,
+  checksums, and provenance tracking, it has not undergone formal FDA validation.
+- **No HIPAA/GDPR de-identification tools** — PHI handling and data de-identification
+  must be managed by the user or external tools.
+- **"Clinical-grade" refers to design intent** — The engineering practices (audit trails,
+  reproducibility, provenance) are designed with clinical workflows in mind, but formal
+  regulatory certification is the responsibility of the deploying organization.
 
 ## Platform Limitations
 
@@ -44,9 +85,9 @@ helps contributors identify areas for improvement.
 - **Cluster backend specifics** — SLURM, PBS, and SGE backends rely on the
   scheduler being correctly configured on the host system. oxo-flow cannot
   diagnose cluster misconfiguration.
-- **GPU scheduling** — GPU resource declarations are passed to the cluster
-  scheduler but oxo-flow does not verify GPU availability on the local
-  executor.
+- **GPU scheduling** — GPU resource declarations (including model, memory, and compute
+  capability via `gpu_spec`) are passed to the cluster scheduler but oxo-flow does not
+  verify GPU availability on the local executor.
 
 ## Known Issues
 
@@ -67,4 +108,4 @@ Many of these limitations are actively being addressed. See
 ---
 
 If you encounter a limitation not listed here, please
-[open an issue](https://github.com/oxo-flow/oxo-flow/issues).
+[open an issue](https://github.com/Traitome/oxo-flow/issues).

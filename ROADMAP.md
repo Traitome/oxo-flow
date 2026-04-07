@@ -366,6 +366,69 @@ sections = ["summary", "variants", "coverage", "qc_metrics"]
 
 ---
 
+## Phase 9: Multi-Expert Evaluation Response (v0.3.0)
+
+**Goal**: Address the 300-item expert evaluation report (Issue #29) to improve
+framework extensibility, code quality, and documentation.
+
+### Milestone 9.1: Core Framework Enhancements (Completed)
+- [x] `GpuSpec` with model, memory, compute capability fields (Expert 1.8, 21.3)
+- [x] `ResourceHint` for resource estimation and dynamic scheduling (Expert 2.1)
+- [x] `format_hint` on Rule for file format awareness (Expert 2.3, 5.1)
+- [x] `pipe` flag on Rule for streaming/FIFO support (Expert 1.3)
+- [x] `checksum` on Rule for output integrity verification (Expert 1.7, 15.6)
+- [x] `rule_metadata` for arbitrary domain metadata (Expert 2.9)
+- [x] `cache_key` for content-based caching (Expert 15.2)
+- [x] `modules` field on EnvironmentSpec for HPC module systems (Expert 13.4)
+- [x] `ReferenceDatabase` config section for reference DB versioning (Expert 4.3)
+- [x] Data lineage tracking on ExecutionProvenance (Expert 8.10)
+- [x] Checkpoint persistence with save/load to filesystem (Expert 1.1, 12.3)
+- [x] JobStatus expanded with Queued/Cancelled/TimedOut states (Expert 8.5)
+- [x] File checksum computation and non-determinism detection (Expert 1.6)
+- [x] `Checkpoint` and `Integrity` error variants with context (Expert 6.6)
+
+### Milestone 9.2: Wildcard Enhancements (Completed)
+- [x] `WildcardConstraints` for regex pattern validation (Expert 1.4)
+- [x] `pattern_to_regex` for file discovery with named captures (Expert 1.4)
+- [x] `discover_wildcards_from_pattern` directory scanner (Expert 1.4)
+
+### Milestone 9.3: CLI Enhancements (Completed)
+- [x] `oxo-flow debug` subcommand for inspecting expanded commands (Expert 17.5)
+- [x] Project root detection for `.oxoflow` file discovery (Expert 16.8)
+
+### Milestone 9.4: Code Quality (Completed)
+- [x] Enhanced rustdoc on lib.rs, error.rs, and public API types (Expert 6.10)
+- [x] New error variants with richer context (Expert 6.6)
+- [x] Additional re-exports from lib.rs for convenience (Expert 6)
+- [x] RuleBuilder complete with all field setters (Expert 6.8)
+
+### Milestone 9.5: Documentation (Completed)
+- [x] Updated LIMITATIONS.md with all known limitations (Expert 24.7)
+- [x] Updated ROADMAP.md with expert evaluation response phases
+- [x] Troubleshooting guide in docs (Expert 29.7)
+
+### Milestone 9.6: Future Work (Planned)
+- [ ] Kubernetes operator / CRD for cloud-native deployment (Expert 14.2)
+- [ ] Native S3/GCS object storage integration (Expert 14.4, 15.7)
+- [ ] OpenAPI/Swagger specification for REST API (Expert 10.6, 30.5)
+- [ ] CWL/WDL import/export converters (Expert 30.3)
+- [ ] GA4GH TES/WES API compatibility (Expert 30.4)
+- [ ] Interactive CLI wizard for new workflow creation (Expert 16.7)
+- [ ] Web UI with DAG visualization (d3.js) (Expert 11.5)
+- [ ] Webhook support for external notifications (Expert 10.10)
+- [ ] Benchmark regression tracking in CI (Expert 7.5, 9.9)
+- [ ] cargo-audit / cargo-deny integration (Expert 7.4)
+- [ ] Code coverage reporting (Expert 9.4)
+- [ ] Property-based testing with proptest (Expert 6.9)
+- [ ] Fuzz testing for parser and wildcard engine (Expert 9.6)
+- [ ] FHIR/HL7 report output format (Expert 30.6)
+- [ ] Multi-tenancy and per-user resource quotas (Expert 18.4, 18.5)
+- [ ] Job arrays for cluster backends (Expert 13.6)
+- [ ] Node feature matching for HPC scheduling (Expert 13.4)
+- [ ] Spot/preemptible instance support (Expert 14.10)
+
+---
+
 ## Technology Stack
 
 | Component | Technology |

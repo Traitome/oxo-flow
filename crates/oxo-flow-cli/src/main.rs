@@ -1463,10 +1463,10 @@ Thumbs.db
                 eprintln!("  {} {}", "Environment:".dimmed(), rule.environment.kind());
 
                 // Dependencies
-                if let Ok(deps) = dag.dependencies(&rule.name) {
-                    if !deps.is_empty() {
-                        eprintln!("  {} {:?}", "Dependencies:".dimmed(), deps);
-                    }
+                if let Ok(deps) = dag.dependencies(&rule.name)
+                    && !deps.is_empty()
+                {
+                    eprintln!("  {} {:?}", "Dependencies:".dimmed(), deps);
                 }
                 if !rule.depends_on.is_empty() {
                     eprintln!("  {} {:?}", "Explicit deps:".dimmed(), rule.depends_on);

@@ -124,11 +124,13 @@ nav:
       - Use Environments: how-to/use-environments.md
       - Run on a Cluster: how-to/run-on-cluster.md
       - Generate Reports: how-to/generate-reports.md
+      - Troubleshooting: how-to/troubleshooting.md
   - Command Reference:
       - run: commands/run.md
       - dry-run: commands/dry-run.md
       - validate: commands/validate.md
       - graph: commands/graph.md
+      - debug: commands/debug.md
       - report: commands/report.md
       - env: commands/env.md
       - package: commands/package.md

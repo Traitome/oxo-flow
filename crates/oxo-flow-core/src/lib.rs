@@ -7,11 +7,13 @@
 //! bioinformatics pipelines. It provides:
 //!
 //! - **DAG engine**: Build, validate, and execute directed acyclic graphs of tasks
-//! - **Environment management**: First-class support for conda, pixi, docker, singularity, venv
-//! - **Wildcard expansion**: `{sample}` pattern substitution with automatic discovery
-//! - **Resource scheduling**: CPU, memory, GPU-aware job scheduling
+//! - **Environment management**: First-class support for conda, pixi, docker, singularity, venv, and HPC modules
+//! - **Wildcard expansion**: `{sample}` pattern substitution with regex constraints and automatic discovery
+//! - **Resource scheduling**: CPU, memory, GPU-aware job scheduling with resource estimation hints
 //! - **Report generation**: Modular, clinical-grade HTML/JSON reporting
 //! - **Container packaging**: Package workflows into portable Docker/Singularity images
+//! - **Checkpoint & lineage**: Persistent checkpoint state, data provenance, and output integrity verification
+//! - **Multi-omics ready**: Format hints, metadata fields, and reference database tracking for any omics workflow
 //!
 //! # Quick Start
 //!
@@ -54,10 +56,11 @@ pub mod wildcard;
 pub use config::WorkflowConfig;
 pub use config::{
     ActionabilityAnnotation, BiomarkerResult, ClinicalReportSection, ComplianceEvent, FilterChain,
-    GenePanel, Parsed, QcThreshold, Ready, RuleName, TumorSampleMeta, Validated,
+    GenePanel, Parsed, QcThreshold, Ready, ReferenceDatabase, RuleName, TumorSampleMeta, Validated,
     VariantClassification, WildcardPattern, WorkflowState,
 };
 pub use dag::WorkflowDag;
 pub use error::{OxoFlowError, Result};
+pub use executor::{CheckpointState, ExecutionProvenance, JobStatus};
 pub use rule::Rule;
-pub use rule::RuleBuilder;
+pub use rule::{EnvironmentSpec, GpuSpec, ResourceHint, Resources, RuleBuilder};
