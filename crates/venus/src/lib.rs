@@ -763,6 +763,7 @@ pub fn generate_oxoflow(config: &VenusConfig) -> anyhow::Result<String> {
         citation: None,
         cluster: None,
         resource_budget: None,
+        reference_databases: Vec::new(),
     };
 
     let toml_str = toml::to_string_pretty(&wf)?;

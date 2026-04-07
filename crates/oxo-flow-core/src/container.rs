@@ -982,6 +982,7 @@ mod tests {
             threads: 4,
             memory: Some("8G".to_string()),
             gpu: None,
+            gpu_spec: None,
             disk: None,
             time_limit: None,
         };
@@ -998,6 +999,7 @@ mod tests {
             threads: 2,
             memory: None,
             gpu: None,
+            gpu_spec: None,
             disk: None,
             time_limit: None,
         };

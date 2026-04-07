@@ -1,10 +1,16 @@
 //! oxo-flow error types.
 //!
 //! Provides a unified error enum for all core library operations.
+//! Each variant carries context-rich information to help users diagnose
+//! and fix problems quickly.
 
 use std::path::PathBuf;
 
 /// Unified error type for oxo-flow core operations.
+///
+/// All public API functions in `oxo-flow-core` return `Result<T, OxoFlowError>`.
+/// Error variants are designed to carry enough context (rule names, file paths,
+/// suggestions) for actionable error messages.
 #[derive(Debug, thiserror::Error)]
 pub enum OxoFlowError {
     /// Error parsing a workflow configuration file.
@@ -84,6 +90,22 @@ pub enum OxoFlowError {
         /// Suggested fix, if available.
         suggestion: Option<String>,
     },
+
+    /// Checkpoint persistence error (save/load/corrupt).
+    #[error("checkpoint error: {message}")]
+    Checkpoint {
+        message: String,
+        /// Path to the checkpoint file, if applicable.
+        path: Option<PathBuf>,
+    },
+
+    /// Output integrity verification failure.
+    #[error("integrity error: {message}")]
+    Integrity {
+        message: String,
+        /// Files that failed verification.
+        failed_files: Vec<String>,
+    },
 }
 
 /// Convenience alias for `Result<T, OxoFlowError>`.
@@ -142,5 +164,24 @@ mod tests {
             suggestion: Some("provide a non-empty name".to_string()),
         };
         assert!(err.to_string().contains("empty rule name"));
+    }
+
+    #[test]
+    fn error_display_checkpoint() {
+        let err = OxoFlowError::Checkpoint {
+            message: "corrupt checkpoint file".to_string(),
+            path: Some(PathBuf::from("/work/.oxo-flow/checkpoint.json")),
+        };
+        assert!(err.to_string().contains("checkpoint error"));
+        assert!(err.to_string().contains("corrupt"));
+    }
+
+    #[test]
+    fn error_display_integrity() {
+        let err = OxoFlowError::Integrity {
+            message: "output checksums do not match".to_string(),
+            failed_files: vec!["output.bam".to_string()],
+        };
+        assert!(err.to_string().contains("integrity error"));
     }
 }

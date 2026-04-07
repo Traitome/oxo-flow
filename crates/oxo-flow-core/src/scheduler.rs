@@ -109,16 +109,23 @@ impl SchedulerState {
         self.statuses.values().all(|s| {
             matches!(
                 s,
-                JobStatus::Success | JobStatus::Failed | JobStatus::Skipped
+                JobStatus::Success
+                    | JobStatus::Failed
+                    | JobStatus::Skipped
+                    | JobStatus::Cancelled
+                    | JobStatus::TimedOut
             )
         })
     }
 
     /// Returns `true` if any rule has failed.
     pub fn has_failures(&self) -> bool {
-        self.statuses
-            .values()
-            .any(|s| matches!(s, JobStatus::Failed))
+        self.statuses.values().any(|s| {
+            matches!(
+                s,
+                JobStatus::Failed | JobStatus::Cancelled | JobStatus::TimedOut
+            )
+        })
     }
 
     /// Returns the number of currently running rules.
@@ -141,6 +148,9 @@ impl SchedulerState {
                 JobStatus::Success => summary.success += 1,
                 JobStatus::Failed => summary.failed += 1,
                 JobStatus::Skipped => summary.skipped += 1,
+                JobStatus::Queued => summary.pending += 1,
+                JobStatus::Cancelled => summary.failed += 1,
+                JobStatus::TimedOut => summary.failed += 1,
             }
         }
         summary.total = self.statuses.len();

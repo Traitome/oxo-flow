@@ -542,6 +542,81 @@ fn cli_export_toml() {
         .stdout(predicate::str::contains("[workflow]"));
 }
 
+// ─── Debug CLI tests ────────────────────────────────────────────────────────
+
+#[test]
+fn cli_debug_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let workflow = dir.path().join("test.oxoflow");
+    fs::write(
+        &workflow,
+        r#"
+[workflow]
+name = "debug-test"
+version = "1.0.0"
+
+[[rules]]
+name = "step1"
+input = ["input.txt"]
+output = ["output.txt"]
+shell = "cat {input} > {output}"
+threads = 4
+memory = "8G"
+description = "Copy input to output"
+tags = ["test", "debug"]
+"#,
+    )
+    .unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["debug", workflow.to_str().unwrap()])
+        .output()
+        .expect("failed to run debug command");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "debug command failed: {}", stderr);
+    assert!(stderr.contains("step1"), "should show rule name");
+    assert!(stderr.contains("cat"), "should show shell command");
+}
+
+#[test]
+fn cli_debug_specific_rule() {
+    let dir = tempfile::tempdir().unwrap();
+    let workflow = dir.path().join("test.oxoflow");
+    fs::write(
+        &workflow,
+        r#"
+[workflow]
+name = "debug-test"
+version = "1.0.0"
+
+[[rules]]
+name = "step1"
+input = ["input.txt"]
+output = ["mid.txt"]
+shell = "cat input.txt > mid.txt"
+
+[[rules]]
+name = "step2"
+input = ["mid.txt"]
+output = ["output.txt"]
+shell = "cat mid.txt > output.txt"
+"#,
+    )
+    .unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["debug", workflow.to_str().unwrap(), "-r", "step2"])
+        .output()
+        .expect("failed to run debug command");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success());
+    assert!(stderr.contains("step2"));
+    // Should only show step2, not step1
+    assert!(stderr.contains("Debugging 1 rules"));
+}
+
 // ─── Cluster CLI tests ──────────────────────────────────────────────────────
 
 #[test]

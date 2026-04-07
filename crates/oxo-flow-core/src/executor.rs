@@ -28,6 +28,12 @@ pub enum JobStatus {
     Failed,
     /// Skipped (e.g., outputs already up-to-date).
     Skipped,
+    /// Waiting in the scheduler queue (submitted but not yet running).
+    Queued,
+    /// Cancelled by user or system.
+    Cancelled,
+    /// Exceeded the configured timeout.
+    TimedOut,
 }
 
 impl std::fmt::Display for JobStatus {
@@ -38,6 +44,9 @@ impl std::fmt::Display for JobStatus {
             Self::Success => write!(f, "success"),
             Self::Failed => write!(f, "failed"),
             Self::Skipped => write!(f, "skipped"),
+            Self::Queued => write!(f, "queued"),
+            Self::Cancelled => write!(f, "cancelled"),
+            Self::TimedOut => write!(f, "timed_out"),
         }
     }
 }
@@ -446,6 +455,27 @@ impl CheckpointState {
             message: format!("failed to deserialize checkpoint: {e}"),
         })
     }
+
+    /// Save checkpoint state to a file.
+    pub fn save_to_file(&self, path: &Path) -> Result<()> {
+        let json = self.to_json()?;
+        std::fs::write(path, json).map_err(|e| OxoFlowError::Config {
+            message: format!("failed to save checkpoint to {}: {e}", path.display()),
+        })
+    }
+
+    /// Load checkpoint state from a file.
+    pub fn load_from_file(path: &Path) -> Result<Self> {
+        let json = std::fs::read_to_string(path).map_err(|e| OxoFlowError::Config {
+            message: format!("failed to read checkpoint from {}: {e}", path.display()),
+        })?;
+        Self::from_json(&json)
+    }
+
+    /// Returns the default checkpoint file path for a workflow.
+    pub fn default_path(workdir: &Path) -> std::path::PathBuf {
+        workdir.join(".oxo-flow").join("checkpoint.json")
+    }
 }
 
 impl Default for CheckpointState {
@@ -560,6 +590,44 @@ pub fn validate_outputs(rule: &Rule, workdir: &Path) -> Vec<String> {
         .collect()
 }
 
+/// Compute a checksum of a file for integrity and non-determinism detection.
+///
+/// Uses a simple hash of the file contents. Returns the hex-encoded hash string,
+/// or an error if the file cannot be read.
+pub fn compute_file_checksum(path: &Path) -> Result<String> {
+    let content = std::fs::read(path).map_err(|e| OxoFlowError::Execution {
+        rule: String::new(),
+        message: format!("failed to read {} for checksum: {e}", path.display()),
+    })?;
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    content.hash(&mut hasher);
+    Ok(format!("{:016x}", hasher.finish()))
+}
+
+/// Verify output file checksums match previously recorded values.
+///
+/// Returns a list of (file_path, expected, actual) tuples for any mismatches.
+pub fn verify_output_checksums(
+    checksums: &HashMap<String, String>,
+    workdir: &Path,
+) -> Vec<(String, String, String)> {
+    let mut mismatches = Vec::new();
+    for (file, expected) in checksums {
+        let path = workdir.join(file);
+        match compute_file_checksum(&path) {
+            Ok(actual) if actual != *expected => {
+                mismatches.push((file.clone(), expected.clone(), actual));
+            }
+            Err(_) => {
+                mismatches.push((file.clone(), expected.clone(), "<unreadable>".to_string()));
+            }
+            _ => {}
+        }
+    }
+    mismatches
+}
+
 /// Provenance metadata for a workflow execution.
 ///
 /// Captures the oxo-flow version, configuration checksum, and execution
@@ -596,6 +664,22 @@ pub struct ExecutionProvenance {
     /// Specimen / accession number.
     #[serde(default)]
     pub specimen_id: Option<String>,
+
+    /// Parent run ID for tracking re-execution lineage.
+    #[serde(default)]
+    pub parent_run_id: Option<String>,
+
+    /// Input file checksums for reproducibility verification.
+    #[serde(default)]
+    pub input_checksums: HashMap<String, String>,
+
+    /// Output file checksums computed after execution.
+    #[serde(default)]
+    pub output_checksums: HashMap<String, String>,
+
+    /// Software versions used during execution (tool name → version).
+    #[serde(default)]
+    pub software_versions: HashMap<String, String>,
 }
 
 impl ExecutionProvenance {
@@ -612,6 +696,10 @@ impl ExecutionProvenance {
             instrument_id: None,
             reagent_lot: None,
             specimen_id: None,
+            parent_run_id: None,
+            input_checksums: HashMap::new(),
+            output_checksums: HashMap::new(),
+            software_versions: HashMap::new(),
         }
     }
 
@@ -1612,9 +1700,96 @@ mod tests {
             instrument_id: None,
             reagent_lot: None,
             specimen_id: None,
+            parent_run_id: None,
+            input_checksums: HashMap::new(),
+            output_checksums: HashMap::new(),
+            software_versions: HashMap::new(),
         };
         let s = prov.to_string();
         assert!(s.contains("0.1.0"));
         assert!(s.contains("testhost"));
+    }
+
+    #[test]
+    fn job_status_new_variants_display() {
+        assert_eq!(JobStatus::Queued.to_string(), "queued");
+        assert_eq!(JobStatus::Cancelled.to_string(), "cancelled");
+        assert_eq!(JobStatus::TimedOut.to_string(), "timed_out");
+    }
+
+    #[test]
+    fn checkpoint_save_and_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test_checkpoint.json");
+
+        let mut state = CheckpointState::new();
+        state.mark_completed(
+            "rule_a",
+            BenchmarkRecord {
+                rule: "rule_a".to_string(),
+                wall_time_secs: 10.5,
+                max_memory_mb: Some(1024),
+                cpu_seconds: Some(9.0),
+            },
+        );
+        state.mark_failed("rule_b");
+
+        state.save_to_file(&path).unwrap();
+        let loaded = CheckpointState::load_from_file(&path).unwrap();
+
+        assert!(loaded.is_completed("rule_a"));
+        assert!(loaded.failed_rules.contains("rule_b"));
+    }
+
+    #[test]
+    fn checkpoint_default_path() {
+        let path = CheckpointState::default_path(Path::new("/work"));
+        assert_eq!(path, Path::new("/work/.oxo-flow/checkpoint.json"));
+    }
+
+    #[test]
+    fn compute_file_checksum_basic() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "hello world").unwrap();
+
+        let checksum1 = compute_file_checksum(&file).unwrap();
+        let checksum2 = compute_file_checksum(&file).unwrap();
+        assert_eq!(checksum1, checksum2); // Same content = same checksum
+        assert!(!checksum1.is_empty());
+
+        // Different content = different checksum
+        std::fs::write(&file, "different content").unwrap();
+        let checksum3 = compute_file_checksum(&file).unwrap();
+        assert_ne!(checksum1, checksum3);
+    }
+
+    #[test]
+    fn verify_output_checksums_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("out.txt");
+        std::fs::write(&file, "original").unwrap();
+        let original = compute_file_checksum(&file).unwrap();
+
+        let mut checksums = HashMap::new();
+        checksums.insert("out.txt".to_string(), original.clone());
+
+        // No mismatches when content unchanged
+        assert!(verify_output_checksums(&checksums, dir.path()).is_empty());
+
+        // Mismatch after content change
+        std::fs::write(&file, "modified").unwrap();
+        let mismatches = verify_output_checksums(&checksums, dir.path());
+        assert_eq!(mismatches.len(), 1);
+        assert_eq!(mismatches[0].0, "out.txt");
+    }
+
+    #[test]
+    fn execution_provenance_with_lineage() {
+        let prov = ExecutionProvenance::new("abc123", Path::new("/work"));
+        assert!(prov.parent_run_id.is_none());
+        assert!(prov.input_checksums.is_empty());
+        assert!(prov.output_checksums.is_empty());
+        assert!(prov.software_versions.is_empty());
     }
 }

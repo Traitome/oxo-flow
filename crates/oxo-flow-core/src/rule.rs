@@ -28,6 +28,43 @@ pub fn parse_duration_secs(s: &str) -> Option<u64> {
     None
 }
 
+/// GPU resource specification with detailed hardware requirements.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct GpuSpec {
+    /// Number of GPUs required.
+    #[serde(default)]
+    pub count: u32,
+    /// GPU model constraint (e.g., "A100", "V100", "RTX3090").
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Minimum GPU memory in GB (e.g., 40 for A100-40GB).
+    #[serde(default)]
+    pub memory_gb: Option<u32>,
+    /// Minimum compute capability (e.g., "7.0" for V100).
+    #[serde(default)]
+    pub compute_capability: Option<String>,
+}
+
+/// Hints for resource estimation when exact requirements are unknown.
+///
+/// Allows workflow authors to provide scaling factors and size estimates
+/// that the scheduler can use to dynamically allocate resources.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ResourceHint {
+    /// Estimated input size category: "small" (<1GB), "medium" (1-100GB), "large" (>100GB).
+    #[serde(default)]
+    pub input_size: Option<String>,
+    /// Memory scaling factor relative to input size (e.g., 2.0 means 2x input size).
+    #[serde(default)]
+    pub memory_scale: Option<f64>,
+    /// Estimated runtime category: "fast" (<10min), "medium" (10min-1h), "slow" (>1h).
+    #[serde(default)]
+    pub runtime: Option<String>,
+    /// Whether this step is I/O bound (true) or CPU bound (false).
+    #[serde(default)]
+    pub io_bound: Option<bool>,
+}
+
 /// Resource requirements for a rule execution.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Resources {
@@ -42,6 +79,10 @@ pub struct Resources {
     /// GPU requirement (number of GPUs).
     #[serde(default)]
     pub gpu: Option<u32>,
+
+    /// Detailed GPU specification (alternative to simple `gpu` count).
+    #[serde(default)]
+    pub gpu_spec: Option<GpuSpec>,
 
     /// Disk space requirement (e.g., "100G").
     #[serde(default)]
@@ -62,6 +103,7 @@ impl Default for Resources {
             threads: 1,
             memory: None,
             gpu: None,
+            gpu_spec: None,
             disk: None,
             time_limit: None,
         }
@@ -93,6 +135,10 @@ pub struct EnvironmentSpec {
     /// Python venv path or requirements file.
     #[serde(default)]
     pub venv: Option<String>,
+
+    /// HPC software modules to load (e.g., ["gcc/11.2", "cuda/11.7"]).
+    #[serde(default)]
+    pub modules: Vec<String>,
 }
 
 impl EnvironmentSpec {
@@ -103,6 +149,7 @@ impl EnvironmentSpec {
             && self.docker.is_none()
             && self.singularity.is_none()
             && self.venv.is_none()
+            && self.modules.is_empty()
     }
 
     /// Returns the primary environment kind as a string.
@@ -117,6 +164,8 @@ impl EnvironmentSpec {
             "singularity"
         } else if self.venv.is_some() {
             "venv"
+        } else if !self.modules.is_empty() {
+            "modules"
         } else {
             "system"
         }
@@ -308,6 +357,44 @@ pub struct Rule {
     /// Useful for cleanup, alerting, or fallback actions.
     #[serde(default)]
     pub on_failure: Option<String>,
+
+    /// File format hints for inputs/outputs (e.g., "bam", "vcf", "h5ad", "fastq.gz").
+    ///
+    /// Helps the engine optimize I/O and select appropriate validation.
+    #[serde(default)]
+    pub format_hint: Vec<String>,
+
+    /// Enable streaming/FIFO mode for this rule's inputs.
+    ///
+    /// When true, inputs may be provided via named pipes instead of regular files,
+    /// enabling streaming data processing without intermediate disk I/O.
+    #[serde(default)]
+    pub pipe: bool,
+
+    /// Checksum algorithm for output integrity verification ("md5", "sha256").
+    ///
+    /// When set, output file checksums are computed after execution and stored
+    /// for later verification.
+    #[serde(default)]
+    pub checksum: Option<String>,
+
+    /// Resource estimation hints for dynamic scheduling.
+    #[serde(default)]
+    pub resource_hint: Option<ResourceHint>,
+
+    /// Arbitrary domain-specific metadata (e.g., assay type, organism, data type).
+    ///
+    /// This field allows workflow authors to attach structured metadata to rules
+    /// for use by downstream tools, reports, or pipeline-specific logic.
+    #[serde(default)]
+    pub rule_metadata: HashMap<String, toml::Value>,
+
+    /// Content-based cache key override.
+    ///
+    /// When set, the scheduler uses this key (along with input checksums) to
+    /// determine if cached outputs can be reused, enabling content-addressed caching.
+    #[serde(default)]
+    pub cache_key: Option<String>,
 }
 
 impl Rule {
@@ -555,6 +642,153 @@ impl RuleBuilder {
     #[must_use]
     pub fn on_failure(mut self, cmd: impl Into<String>) -> Self {
         self.rule.on_failure = Some(cmd.into());
+        self
+    }
+
+    /// Set file format hints.
+    #[must_use]
+    pub fn format_hint(mut self, hints: Vec<String>) -> Self {
+        self.rule.format_hint = hints;
+        self
+    }
+
+    /// Enable streaming/FIFO mode.
+    #[must_use]
+    pub fn pipe(mut self, pipe: bool) -> Self {
+        self.rule.pipe = pipe;
+        self
+    }
+
+    /// Set checksum algorithm for output verification.
+    #[must_use]
+    pub fn checksum(mut self, algorithm: impl Into<String>) -> Self {
+        self.rule.checksum = Some(algorithm.into());
+        self
+    }
+
+    /// Set resource estimation hints.
+    #[must_use]
+    pub fn resource_hint(mut self, hint: ResourceHint) -> Self {
+        self.rule.resource_hint = Some(hint);
+        self
+    }
+
+    /// Set domain-specific metadata.
+    #[must_use]
+    pub fn rule_metadata(mut self, metadata: HashMap<String, toml::Value>) -> Self {
+        self.rule.rule_metadata = metadata;
+        self
+    }
+
+    /// Set content-based cache key.
+    #[must_use]
+    pub fn cache_key(mut self, key: impl Into<String>) -> Self {
+        self.rule.cache_key = Some(key.into());
+        self
+    }
+
+    /// Set full resource specification.
+    #[must_use]
+    pub fn resources(mut self, resources: Resources) -> Self {
+        self.rule.resources = resources;
+        self
+    }
+
+    /// Set the script file path.
+    #[must_use]
+    pub fn script(mut self, script: impl Into<String>) -> Self {
+        self.rule.script = Some(script.into());
+        self
+    }
+
+    /// Set the log file path.
+    #[must_use]
+    pub fn log(mut self, log: impl Into<String>) -> Self {
+        self.rule.log = Some(log.into());
+        self
+    }
+
+    /// Set the benchmark file path.
+    #[must_use]
+    pub fn benchmark(mut self, benchmark: impl Into<String>) -> Self {
+        self.rule.benchmark = Some(benchmark.into());
+        self
+    }
+
+    /// Set rule parameters.
+    #[must_use]
+    pub fn params(mut self, params: HashMap<String, toml::Value>) -> Self {
+        self.rule.params = params;
+        self
+    }
+
+    /// Set target flag.
+    #[must_use]
+    pub fn target(mut self, target: bool) -> Self {
+        self.rule.target = target;
+        self
+    }
+
+    /// Set group label.
+    #[must_use]
+    pub fn group(mut self, group: impl Into<String>) -> Self {
+        self.rule.group = Some(group.into());
+        self
+    }
+
+    /// Set scatter configuration.
+    #[must_use]
+    pub fn scatter(mut self, scatter: ScatterConfig) -> Self {
+        self.rule.scatter = Some(scatter);
+        self
+    }
+
+    /// Set temporary output files.
+    #[must_use]
+    pub fn temp_output(mut self, temp: Vec<String>) -> Self {
+        self.rule.temp_output = temp;
+        self
+    }
+
+    /// Set protected output files.
+    #[must_use]
+    pub fn protected_output(mut self, protected: Vec<String>) -> Self {
+        self.rule.protected_output = protected;
+        self
+    }
+
+    /// Set dynamic input function.
+    #[must_use]
+    pub fn input_function(mut self, func: impl Into<String>) -> Self {
+        self.rule.input_function = Some(func.into());
+        self
+    }
+
+    /// Set shadow directory mode.
+    #[must_use]
+    pub fn shadow(mut self, shadow: impl Into<String>) -> Self {
+        self.rule.shadow = Some(shadow.into());
+        self
+    }
+
+    /// Set ancient inputs.
+    #[must_use]
+    pub fn ancient(mut self, ancient: Vec<String>) -> Self {
+        self.rule.ancient = ancient;
+        self
+    }
+
+    /// Set environment variables.
+    #[must_use]
+    pub fn envvars(mut self, envvars: HashMap<String, String>) -> Self {
+        self.rule.envvars = envvars;
+        self
+    }
+
+    /// Set checkpoint flag.
+    #[must_use]
+    pub fn checkpoint(mut self, checkpoint: bool) -> Self {
+        self.rule.checkpoint = checkpoint;
         self
     }
 
@@ -1201,5 +1435,57 @@ mod tests {
         assert_eq!(rule.workdir, Some("/work".to_string()));
         assert_eq!(rule.on_success, Some("echo ok".to_string()));
         assert_eq!(rule.on_failure, Some("echo fail".to_string()));
+    }
+
+    #[test]
+    fn gpu_spec_default() {
+        let spec = GpuSpec::default();
+        assert_eq!(spec.count, 0);
+        assert!(spec.model.is_none());
+        assert!(spec.memory_gb.is_none());
+        assert!(spec.compute_capability.is_none());
+    }
+
+    #[test]
+    fn resource_hint_default() {
+        let hint = ResourceHint::default();
+        assert!(hint.input_size.is_none());
+        assert!(hint.memory_scale.is_none());
+        assert!(hint.io_bound.is_none());
+    }
+
+    #[test]
+    fn rule_builder_with_new_fields() {
+        let rule = RuleBuilder::new("test")
+            .format_hint(vec!["bam".to_string(), "vcf".to_string()])
+            .pipe(true)
+            .checksum("sha256")
+            .cache_key("v1-align")
+            .build();
+        assert_eq!(rule.format_hint, vec!["bam", "vcf"]);
+        assert!(rule.pipe);
+        assert_eq!(rule.checksum, Some("sha256".to_string()));
+        assert_eq!(rule.cache_key, Some("v1-align".to_string()));
+    }
+
+    #[test]
+    fn environment_spec_with_modules() {
+        let env = EnvironmentSpec {
+            modules: vec!["gcc/11.2".to_string(), "cuda/11.7".to_string()],
+            ..Default::default()
+        };
+        assert!(!env.is_empty());
+        assert_eq!(env.kind(), "modules");
+    }
+
+    #[test]
+    fn rule_metadata_field() {
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "organism".to_string(),
+            toml::Value::String("human".to_string()),
+        );
+        let rule = RuleBuilder::new("test").rule_metadata(metadata).build();
+        assert!(rule.rule_metadata.contains_key("organism"));
     }
 }

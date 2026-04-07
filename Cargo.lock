@@ -1059,6 +1059,7 @@ dependencies = [
  "oxo-flow-core",
  "oxo-flow-web",
  "serde_json",
+ "tempfile",
  "tokio",
  "toml",
  "tracing",
