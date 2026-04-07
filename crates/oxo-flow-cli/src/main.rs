@@ -277,10 +277,17 @@ enum EnvAction {
     List,
 
     /// Check if required environments are available.
+    ///
+    /// When a workflow file is provided, validates each rule's declared
+    /// environment.  Without a workflow file, checks the availability of all
+    /// supported backends on the current system.
     Check {
-        /// Path to the .oxoflow workflow file.
+        /// Path to the .oxoflow workflow file (optional).
+        ///
+        /// If omitted, the availability of all supported environment backends
+        /// (conda, pixi, docker, singularity, venv) is reported instead.
         #[arg(value_name = "WORKFLOW")]
-        workflow: PathBuf,
+        workflow: Option<PathBuf>,
     },
 }
 
@@ -439,12 +446,21 @@ async fn main() -> Result<()> {
             let mut success_count = 0;
             let mut fail_count = 0;
 
+            // Build wildcard values from workflow config variables so that
+            // {config.key} placeholders in shell templates are expanded.
+            let mut wildcard_values: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            for (key, value) in &config.config {
+                let string_val = match value {
+                    toml::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                wildcard_values.insert(format!("config.{key}"), string_val);
+            }
+
             for rule_name in &order {
                 let rule = config.get_rule(rule_name).unwrap();
-                match executor
-                    .execute_rule(rule, &std::collections::HashMap::new())
-                    .await
-                {
+                match executor.execute_rule(rule, &wildcard_values).await {
                     Ok(record) => {
                         if record.status == oxo_flow_core::executor::JobStatus::Success {
                             success_count += 1;
@@ -601,31 +617,51 @@ async fn main() -> Result<()> {
                     }
                 }
                 EnvAction::Check { workflow } => {
-                    let config = WorkflowConfig::from_file(&workflow)
-                        .with_context(|| format!("failed to parse {}", workflow.display()))?;
-
                     let resolver = oxo_flow_core::environment::EnvironmentResolver::new();
-                    let mut all_ok = true;
 
-                    for rule in &config.rules {
-                        match resolver.validate_spec(&rule.environment) {
-                            Ok(()) => {
-                                eprintln!(
-                                    "  {} {} ({})",
-                                    "✓".green(),
-                                    rule.name,
-                                    rule.environment.kind()
-                                );
+                    match workflow {
+                        Some(wf_path) => {
+                            // Validate each rule's declared environment in the workflow.
+                            let config =
+                                WorkflowConfig::from_file(&wf_path).with_context(|| {
+                                    format!("failed to parse {}", wf_path.display())
+                                })?;
+
+                            let mut all_ok = true;
+                            for rule in &config.rules {
+                                match resolver.validate_spec(&rule.environment) {
+                                    Ok(()) => {
+                                        eprintln!(
+                                            "  {} {} ({})",
+                                            "✓".green(),
+                                            rule.name,
+                                            rule.environment.kind()
+                                        );
+                                    }
+                                    Err(e) => {
+                                        eprintln!("  {} {} — {}", "✗".red(), rule.name, e);
+                                        all_ok = false;
+                                    }
+                                }
                             }
-                            Err(e) => {
-                                eprintln!("  {} {} — {}", "✗".red(), rule.name, e);
-                                all_ok = false;
+
+                            if !all_ok {
+                                std::process::exit(1);
                             }
                         }
-                    }
-
-                    if !all_ok {
-                        std::process::exit(1);
+                        None => {
+                            // No workflow provided: report global backend availability.
+                            eprintln!("{}", "Environment backend availability:".bold());
+                            let available = resolver.available_backends();
+                            let all_backends = ["conda", "pixi", "docker", "singularity", "venv"];
+                            for backend in all_backends {
+                                if available.contains(&backend) {
+                                    eprintln!("  {} {}", "✓".green(), backend);
+                                } else {
+                                    eprintln!("  {} {} (not found)", "✗".red(), backend);
+                                }
+                            }
+                        }
                     }
                 }
             }
