@@ -81,6 +81,77 @@ pub enum ExecutionEvent {
     },
 }
 
+impl ExecutionEvent {
+    /// Serialize the event to a JSON string suitable for structured logging.
+    ///
+    /// Produces a single-line JSON object (NDJSON format) with a `timestamp`
+    /// field added automatically. This format is compatible with log
+    /// aggregation tools like Elasticsearch, Datadog, and CloudWatch.
+    pub fn to_json_log(&self) -> String {
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        match self {
+            ExecutionEvent::WorkflowStarted {
+                workflow_name,
+                total_rules,
+            } => {
+                format!(
+                    r#"{{"timestamp":"{}","event":"workflow_started","workflow":"{}","total_rules":{}}}"#,
+                    timestamp, workflow_name, total_rules
+                )
+            }
+            ExecutionEvent::RuleStarted { rule, command } => {
+                let cmd = command.as_deref().unwrap_or("");
+                format!(
+                    r#"{{"timestamp":"{}","event":"rule_started","rule":"{}","command":"{}"}}"#,
+                    timestamp,
+                    rule,
+                    cmd.replace('"', "\\\"")
+                )
+            }
+            ExecutionEvent::RuleCompleted {
+                rule,
+                status,
+                duration_ms,
+            } => {
+                format!(
+                    r#"{{"timestamp":"{}","event":"rule_completed","rule":"{}","status":"{}","duration_ms":{}}}"#,
+                    timestamp, rule, status, duration_ms
+                )
+            }
+            ExecutionEvent::RuleSkipped { rule, reason } => {
+                format!(
+                    r#"{{"timestamp":"{}","event":"rule_skipped","rule":"{}","reason":"{}"}}"#,
+                    timestamp,
+                    rule,
+                    reason.replace('"', "\\\"")
+                )
+            }
+            ExecutionEvent::WorkflowCompleted {
+                total_duration_ms,
+                succeeded,
+                failed,
+                skipped,
+            } => {
+                format!(
+                    r#"{{"timestamp":"{}","event":"workflow_completed","total_duration_ms":{},"succeeded":{},"failed":{},"skipped":{}}}"#,
+                    timestamp, total_duration_ms, succeeded, failed, skipped
+                )
+            }
+        }
+    }
+
+    /// Returns the event type name as a string.
+    pub fn event_type(&self) -> &'static str {
+        match self {
+            ExecutionEvent::WorkflowStarted { .. } => "workflow_started",
+            ExecutionEvent::RuleStarted { .. } => "rule_started",
+            ExecutionEvent::RuleCompleted { .. } => "rule_completed",
+            ExecutionEvent::RuleSkipped { .. } => "rule_skipped",
+            ExecutionEvent::WorkflowCompleted { .. } => "workflow_completed",
+        }
+    }
+}
+
 /// Record of a single job execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobRecord {
@@ -1911,5 +1982,27 @@ mod tests {
         assert!(prov.input_checksums.is_empty());
         assert!(prov.output_checksums.is_empty());
         assert!(prov.software_versions.is_empty());
+    }
+
+    #[test]
+    fn execution_event_json_log() {
+        let event = ExecutionEvent::WorkflowStarted {
+            workflow_name: "test-pipeline".to_string(),
+            total_rules: 5,
+        };
+        let json = event.to_json_log();
+        assert!(json.contains("\"event\":\"workflow_started\""));
+        assert!(json.contains("\"workflow\":\"test-pipeline\""));
+        assert!(json.contains("\"total_rules\":5"));
+        assert!(json.contains("\"timestamp\":"));
+    }
+
+    #[test]
+    fn execution_event_type() {
+        let event = ExecutionEvent::RuleStarted {
+            rule: "align".to_string(),
+            command: Some("bwa mem".to_string()),
+        };
+        assert_eq!(event.event_type(), "rule_started");
     }
 }
