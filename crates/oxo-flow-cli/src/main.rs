@@ -9,6 +9,7 @@ use colored::Colorize;
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
 use oxo_flow_core::executor::{ExecutorConfig, LocalExecutor};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// oxo-flow — A Rust-native bioinformatics pipeline engine.
@@ -448,8 +449,7 @@ async fn main() -> Result<()> {
 
             // Build wildcard values from workflow config variables so that
             // {config.key} placeholders in shell templates are expanded.
-            let mut wildcard_values: std::collections::HashMap<String, String> =
-                std::collections::HashMap::new();
+            let mut wildcard_values: HashMap<String, String> = HashMap::new();
             for (key, value) in &config.config {
                 let string_val = match value {
                     toml::Value::String(s) => s.clone(),
@@ -653,9 +653,11 @@ async fn main() -> Result<()> {
                             // No workflow provided: report global backend availability.
                             eprintln!("{}", "Environment backend availability:".bold());
                             let available = resolver.available_backends();
-                            let all_backends = ["conda", "pixi", "docker", "singularity", "venv"];
-                            for backend in all_backends {
-                                if available.contains(&backend) {
+                            for backend in
+                                oxo_flow_core::environment::EnvironmentResolver::all_known_backends(
+                                )
+                            {
+                                if available.contains(backend) {
                                     eprintln!("  {} {}", "✓".green(), backend);
                                 } else {
                                     eprintln!("  {} {} (not found)", "✗".red(), backend);
