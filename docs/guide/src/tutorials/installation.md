@@ -78,6 +78,32 @@ mv oxo-flow ~/.local/bin/
 
 ---
 
+## Optional Dependencies
+
+### Graphviz (for Visualization)
+
+The `oxo-flow graph` command outputs workflows in [DOT format](https://graphviz.org/doc/info/lang.html). To render these graphs as images (PNG, SVG, etc.), you need to install **Graphviz**.
+
+=== "macOS"
+
+    ```bash
+    brew install graphviz
+    ```
+
+=== "Linux (Ubuntu/Debian)"
+
+    ```bash
+    sudo apt install graphviz
+    ```
+
+=== "Conda"
+
+    ```bash
+    conda install -c conda-forge graphviz
+    ```
+
+---
+
 ## Shell Completions
 
 oxo-flow can generate shell completions for Bash, Zsh, Fish, Elvish, and PowerShell:

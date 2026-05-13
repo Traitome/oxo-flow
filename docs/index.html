@@ -442,7 +442,7 @@
 <span class="comment"># 5. Execute with 8 parallel jobs</span>
 <span class="cmd">oxo-flow run</span> my-pipeline.oxoflow <span class="str">-j 8</span>
 
-<span class="comment"># 6. Visualise the DAG</span>
+<span class="comment"># 6. Visualise the DAG (macOS: brew install graphviz)</span>
 <span class="cmd">oxo-flow graph</span> my-pipeline.oxoflow <span class="str">&gt; dag.dot</span>
 <span class="cmd">dot -Tpng</span> dag.dot <span class="str">-o dag.png</span>
 

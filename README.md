@@ -117,7 +117,7 @@ cargo install oxo-flow-cli
 ```bash
 git clone https://github.com/Traitome/oxo-flow.git
 cd oxo-flow
-cargo build --release
+cargo build --release --workspace
 
 # Binaries are in target/release/
 # - oxo-flow        (CLI)

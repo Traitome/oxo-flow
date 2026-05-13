@@ -131,7 +131,7 @@ digraph workflow {
 }
 ```
 
-If you have Graphviz installed, render it:
+If you have Graphviz installed, render it (macOS: `brew install graphviz`):
 
 ```bash
 oxo-flow graph my-pipeline.oxoflow | dot -Tpng -o dag.png

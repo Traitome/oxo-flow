@@ -74,6 +74,9 @@ digraph workflow {
 ## Notes
 
 - Output is in [Graphviz DOT](https://graphviz.org/doc/info/lang.html) format
-- Requires Graphviz (`dot` command) to render images — install with your package manager: `apt install graphviz`, `brew install graphviz`, or `conda install graphviz`
+- Requires Graphviz (`dot` command) to render images. Install with your package manager:
+    - **macOS**: `brew install graphviz`
+    - **Linux**: `apt install graphviz` or `yum install graphviz`
+    - **Conda**: `conda install graphviz`
 - Nodes represent rules, edges represent dependencies
 - The graph direction is top-to-bottom (`rankdir = TB`)
