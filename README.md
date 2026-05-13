@@ -10,7 +10,7 @@
 [![Rust](https://img.shields.io/badge/rust-2024_edition-orange.svg)](https://doc.rust-lang.org/edition-guide/)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](#quick-start)
 [![Docs](https://img.shields.io/badge/docs-guide-blue.svg)](https://traitome.github.io/oxo-flow/documentation/)
-[![GitHub Downloads](https://img.shields.io/github/downloads/Traitome/oxo-flow/total.svg)](https://github.com/Traitome/oxo-flow/releases)
+[![GitHub Downloads](https://img.shields.io/github/downloads/Traitome/oxo-flow/total.svg?label=github%20downloads)](https://github.com/Traitome/oxo-flow/releases)
 [![Core Downloads](https://img.shields.io/crates/d/oxo-flow-core.svg?label=core%20downloads)](https://crates.io/crates/oxo-flow-core)
 [![CLI Downloads](https://img.shields.io/crates/d/oxo-flow-cli.svg?label=cli%20downloads)](https://crates.io/crates/oxo-flow-cli)
 [![Web Downloads](https://img.shields.io/crates/d/oxo-flow-web.svg?label=web%20downloads)](https://crates.io/crates/oxo-flow-web)
