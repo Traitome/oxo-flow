@@ -77,7 +77,7 @@ oxo-flow run pipeline.oxoflow --timeout 3600
 ## Output
 
 ```
-oxo-flow 0.1.0 — Bioinformatics Pipeline Engine
+oxo-flow 0.3.0 — Bioinformatics Pipeline Engine
 DAG: 5 rules in execution order
   1. fastqc
   2. trim_reads

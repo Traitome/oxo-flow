@@ -31,7 +31,7 @@ oxo-flow is a high-performance, modular bioinformatics pipeline engine built fro
 - 📦 **Environment management** — First-class support for conda, pixi, docker, singularity, and venv
 - 🧬 **Bioinformatics-first** — Purpose-built for genomics workflows and clinical-grade pipelines
 - 📊 **Clinical-grade reporting** — Modular HTML/PDF/JSON report generation with ACMG/AMP variant classification, biomarker tracking, and compliance audit trails
-- 🌐 **CLI + Web interface** — 18+ CLI subcommands and a full REST API with rate limiting and graceful shutdown
+- 🌐 **CLI + Web interface** — 21+ CLI subcommands and a full REST API with rate limiting and graceful shutdown
 - 🐳 **Container packaging** — Multi-stage Docker builds, rootless containers, and HEALTHCHECK support
 - ⚡ **Rust performance** — Fearless concurrency, zero-cost abstractions, `#![forbid(unsafe_code)]` across all crates
 - 🔧 **Resource-aware scheduling** — Jobs declare CPU, memory, GPU, and disk; the scheduler respects constraints across local and cluster backends (SLURM, PBS, SGE, LSF)
@@ -43,7 +43,7 @@ oxo-flow is a high-performance, modular bioinformatics pipeline engine built fro
 |---------|------------|-----------|----------|
 | **Language** | Rust — compiled, type-safe, `#![forbid(unsafe_code)]` | Python | Groovy/JVM |
 | **Performance** | Native binary, zero interpreter overhead | Python startup overhead | JVM startup overhead |
-| **Workflow format** | TOML (`.oxoflow`) — declarative, composable | Python DSL | Groovy DSL |
+| **Workflow format** | TOML (`.oxoflow`) — declarative, composable | Snakefile / `.smk` (Python DSL) | Nextflow DSL (`.nf`) (Groovy DSL) |
 | **Environment support** | conda, pixi, docker, singularity, venv — per-rule | conda, singularity, docker | conda, docker, singularity, modules |
 | **Web interface** | Built-in REST API with RBAC and rate limiting | External Snakemake-UI | Nextflow Tower (commercial) |
 | **Clinical reporting** | ACMG/AMP variant classification, compliance events | Not built-in | Not built-in |
@@ -186,7 +186,7 @@ Wildcards like `{sample}` are expanded automatically based on input file discove
 
 ## CLI Commands
 
-The `oxo-flow` binary provides 13 subcommands for the complete workflow lifecycle:
+The `oxo-flow` binary provides 21 subcommands for the complete workflow lifecycle:
 
 | Command | Description |
 |---------|-------------|
@@ -195,14 +195,22 @@ The `oxo-flow` binary provides 13 subcommands for the complete workflow lifecycl
 | `oxo-flow validate` | Validate an `.oxoflow` file for syntax and semantic correctness |
 | `oxo-flow graph` | Export the workflow DAG in DOT format for visualization |
 | `oxo-flow report` | Generate execution reports (`-f html\|json`, `-o` output path) |
-| `oxo-flow env list` | List available environment backends on the system |
-| `oxo-flow env check` | Verify that all environment requirements are satisfied |
+| `oxo-flow env` | Manage software environments (list, check) |
 | `oxo-flow package` | Package workflow into a container image (`-f docker\|singularity`) |
 | `oxo-flow serve` | Start the web interface (`--host`, `-p` port, default: `127.0.0.1:8080`) |
 | `oxo-flow init` | Scaffold a new pipeline project (`-d` output directory) |
 | `oxo-flow status` | Show execution status from the checkpoint file |
-| `oxo-flow clean` | Clean workflow outputs and temp files (`-n` dry-run, `--force`) |
+| `oxo-flow clean` | Clean workflow outputs and temporary files (`-n` dry-run, `--force`) |
+| `oxo-flow config` | Inspect and manage workflow configuration (show, stats) |
 | `oxo-flow completions` | Generate shell completions (bash, zsh, fish, elvish, PowerShell) |
+| `oxo-flow format` | Reformat a `.oxoflow` file into canonical TOML form |
+| `oxo-flow lint` | Run best-practice linting checks on a `.oxoflow` file |
+| `oxo-flow profile` | Manage execution profiles (local, SLURM, PBS, SGE, LSF) |
+| `oxo-flow export` | Export a workflow to a container definition or standalone TOML |
+| `oxo-flow cluster` | Manage cluster job submission and monitoring (submit, status, cancel) |
+| `oxo-flow diff` | Compare two `.oxoflow` workflow files and show differences |
+| `oxo-flow debug` | Show expanded commands after variable substitution |
+| `oxo-flow touch` | Mark workflow outputs as up-to-date without re-executing |
 
 ## Web API Endpoints
 

@@ -559,8 +559,7 @@ async fn main() -> Result<()> {
                     rule.environment.kind()
                 );
                 if let Some(ref cmd) = rule.shell {
-                    let preview: String = cmd.chars().take(80).collect();
-                    eprintln!("     $ {}", preview.dimmed());
+                    eprintln!("     $ {}", cmd.dimmed());
                 }
             }
         }

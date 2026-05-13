@@ -188,7 +188,7 @@ oxo-flow env list
 ```
 
 ```
-oxo-flow 0.1.0 — Bioinformatics Pipeline Engine
+oxo-flow 0.3.0 — Bioinformatics Pipeline Engine
 Available environment backends:
   ✓ conda
   ✓ docker

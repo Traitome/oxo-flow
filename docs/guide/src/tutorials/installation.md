@@ -29,7 +29,7 @@ Verify the installation:
 
 ```bash
 oxo-flow --version
-# oxo-flow 0.1.0
+# oxo-flow 0.3.0
 ```
 
 !!! tip "Updating"

@@ -11,7 +11,7 @@ oxo-flow run pipeline.oxoflow -j 8
 ```
 
 ```
-oxo-flow 0.1.0 — Bioinformatics Pipeline Engine
+oxo-flow 0.3.0 — Bioinformatics Pipeline Engine
 DAG: 5 rules in execution order
   1. fastqc
   2. trim_reads
@@ -92,7 +92,7 @@ Jump to the **How-to Guides**:
 
 ### If you need exact syntax and options
 
-See the **Command Reference** for all 12 CLI subcommands with usage, options, and examples.
+See the **Command Reference** for all 21 CLI subcommands with usage, options, and examples.
 
 ### If you want the full technical details
 
@@ -154,7 +154,7 @@ oxo-flow graph align.oxoflow | dot -Tpng -o dag.png
 
 ## Project Status
 
-oxo-flow is under active development. The current release (`v0.1.0`) includes the complete core engine, CLI, web API, and Venus pipeline. See the [Changelog](./development/changelog.md) for release history and the [Contributing guide](./development/contributing.md) if you want to get involved.
+oxo-flow is under active development. The current release (`v0.3.0`) includes the complete core engine, CLI, web API, and Venus pipeline. See the [Changelog](./development/changelog.md) for release history and the [Contributing guide](./development/contributing.md) if you want to get involved.
 
 ---
 

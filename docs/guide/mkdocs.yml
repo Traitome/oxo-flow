@@ -127,19 +127,27 @@ nav:
       - Generate Reports: how-to/generate-reports.md
       - Troubleshooting: how-to/troubleshooting.md
   - Command Reference:
-      - run: commands/run.md
-      - dry-run: commands/dry-run.md
-      - validate: commands/validate.md
-      - graph: commands/graph.md
-      - debug: commands/debug.md
-      - report: commands/report.md
-      - env: commands/env.md
-      - package: commands/package.md
-      - serve: commands/serve.md
-      - init: commands/init.md
-      - status: commands/status.md
       - clean: commands/clean.md
+      - cluster: commands/cluster.md
       - completions: commands/completions.md
+      - config: commands/config.md
+      - debug: commands/debug.md
+      - diff: commands/diff.md
+      - dry-run: commands/dry-run.md
+      - env: commands/env.md
+      - export: commands/export.md
+      - format: commands/format.md
+      - graph: commands/graph.md
+      - init: commands/init.md
+      - lint: commands/lint.md
+      - package: commands/package.md
+      - profile: commands/profile.md
+      - report: commands/report.md
+      - run: commands/run.md
+      - serve: commands/serve.md
+      - status: commands/status.md
+      - touch: commands/touch.md
+      - validate: commands/validate.md
   - Architecture & Design:
       - System Architecture: reference/architecture.md
       - Workflow Format: reference/workflow-format.md

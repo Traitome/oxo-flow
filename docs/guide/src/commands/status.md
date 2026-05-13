@@ -39,7 +39,7 @@ oxo-flow status .oxo-flow/checkpoint.json
 ## Output
 
 ```
-oxo-flow 0.1.0 — Bioinformatics Pipeline Engine
+oxo-flow 0.3.0 — Bioinformatics Pipeline Engine
 Checkpoint Status:
   ✓ trim_reads
   ✓ align
