@@ -295,7 +295,10 @@ pub fn lint_format(config: &WorkflowConfig) -> Vec<Diagnostic> {
                 message: "rule has no description".to_string(),
                 rule: Some(rule.name.clone()),
                 code: "W003".to_string(),
-                suggestion: Some("add description = \"...\" to this rule".to_string()),
+                suggestion: Some(format!(
+                    "add description = \"Brief one-line description of what {} does\" to this rule",
+                    rule.name
+                )),
             });
         }
 

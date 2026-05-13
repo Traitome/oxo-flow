@@ -243,6 +243,7 @@ impl WorkflowDag {
     }
 
     /// Returns rules that have no dependencies (entry points).
+    #[must_use]
     pub fn root_rules(&self) -> Vec<String> {
         self.graph
             .node_indices()
@@ -257,6 +258,7 @@ impl WorkflowDag {
     }
 
     /// Returns rules that have no dependents (leaf/target rules).
+    #[must_use]
     pub fn leaf_rules(&self) -> Vec<String> {
         self.graph
             .node_indices()
@@ -294,6 +296,7 @@ impl WorkflowDag {
 
     /// Returns rules that have no edges (neither produce outputs consumed by others
     /// nor consume outputs of others). These are isolated in the graph.
+    #[must_use]
     pub fn orphan_rules(&self) -> Vec<&str> {
         self.graph
             .node_indices()

@@ -6,6 +6,14 @@
 use crate::error::{OxoFlowError, Result};
 use regex::Regex;
 use std::collections::HashMap;
+use std::sync::LazyLock;
+
+/// Compiled regex that matches a single `{name}` wildcard placeholder.
+///
+/// Using a module-level static avoids recompiling the same regex on every
+/// call to `extract_wildcards`, `expand_pattern`, `has_wildcards`, etc.
+static WILDCARD_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\{(\w+)\}").expect("valid wildcard regex"));
 
 /// A single wildcard binding, e.g., `sample = "TUMOR_01"`.
 pub type WildcardValues = HashMap<String, String>;
@@ -82,14 +90,15 @@ pub fn validate_wildcard_constraints(
 /// The `{name}` placeholders are replaced with named capture groups.
 pub fn pattern_to_regex(pattern: &str) -> Result<Regex> {
     let mut regex_str = String::from("^");
-    let re = Regex::new(r"\{(\w+)\}").expect("valid regex");
     let mut last_end = 0;
 
-    for mat in re.find_iter(pattern) {
+    for mat in WILDCARD_RE.find_iter(pattern) {
         let literal = &pattern[last_end..mat.start()];
         regex_str.push_str(&regex::escape(literal));
 
-        let cap = re.captures(&pattern[mat.start()..mat.end()]).unwrap();
+        let cap = WILDCARD_RE
+            .captures(&pattern[mat.start()..mat.end()])
+            .unwrap();
         let name = &cap[1];
         regex_str.push_str(&format!("(?P<{}>\\S+)", name));
 
@@ -148,9 +157,8 @@ pub fn discover_wildcards_from_pattern(
 /// assert_eq!(names, vec!["sample", "read"]);
 /// ```
 pub fn extract_wildcards(pattern: &str) -> Vec<String> {
-    let re = Regex::new(r"\{(\w+)\}").expect("valid regex");
     let mut names = Vec::new();
-    for cap in re.captures_iter(pattern) {
+    for cap in WILDCARD_RE.captures_iter(pattern) {
         let name = cap[1].to_string();
         if !names.contains(&name) {
             names.push(name);
@@ -175,11 +183,10 @@ pub fn extract_wildcards(pattern: &str) -> Vec<String> {
 /// ```
 #[must_use = "expanding a pattern returns a Result that must be used"]
 pub fn expand_pattern(pattern: &str, values: &WildcardValues) -> Result<String> {
-    let re = Regex::new(r"\{(\w+)\}").expect("valid regex");
     let mut result = pattern.to_string();
     let mut missing = Vec::new();
 
-    for cap in re.captures_iter(pattern) {
+    for cap in WILDCARD_RE.captures_iter(pattern) {
         let name = &cap[1];
         match values.get(name) {
             Some(value) => {
@@ -209,8 +216,7 @@ pub fn expand_patterns(patterns: &[String], values: &WildcardValues) -> Result<V
 
 /// Returns `true` if the pattern contains any wildcard placeholders.
 pub fn has_wildcards(pattern: &str) -> bool {
-    let re = Regex::new(r"\{(\w+)\}").expect("valid regex");
-    re.is_match(pattern)
+    WILDCARD_RE.is_match(pattern)
 }
 
 /// Generates the Cartesian product of all wildcard value lists.

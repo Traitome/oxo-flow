@@ -287,10 +287,33 @@ impl LocalExecutor {
             }
         };
 
+        // Evaluate the `when` condition — skip execution if it resolves to false.
+        if let Some(ref condition) = rule.when {
+            // Build a config-value map from wildcard entries prefixed with "config."
+            let config_values: std::collections::HashMap<String, toml::Value> = wildcard_values
+                .iter()
+                .filter_map(|(k, v)| {
+                    k.strip_prefix("config.")
+                        .map(|key| (key.to_string(), toml::Value::String(v.clone())))
+                })
+                .collect();
+            if !evaluate_condition(condition, &config_values) {
+                tracing::debug!(rule = %rule.name, condition = %condition, "skipping rule: condition evaluated to false");
+                record.status = JobStatus::Skipped;
+                record.finished_at = Some(Utc::now());
+                return Ok(record);
+            }
+        }
+
         // Wrap the command through the environment resolver
         let shell_cmd = self.resolve_command(&shell_cmd, rule);
 
         record.command = Some(shell_cmd.clone());
+
+        // Warn about any dangerous patterns detected in the expanded command.
+        for warning in sanitize_shell_command(&shell_cmd) {
+            tracing::warn!(rule = %rule.name, "{warning}");
+        }
 
         if self.config.dry_run {
             tracing::info!(rule = %rule.name, command = %shell_cmd, "dry-run");
@@ -558,14 +581,14 @@ impl CheckpointState {
         output.push_str(
             "# HELP oxo_flow_rules_completed_total Number of rules completed successfully.\n",
         );
-        output.push_str("# TYPE oxo_flow_rules_completed_total gauge\n");
+        output.push_str("# TYPE oxo_flow_rules_completed_total counter\n");
         output.push_str(&format!(
             "oxo_flow_rules_completed_total {}\n",
             self.completed_rules.len()
         ));
 
         output.push_str("# HELP oxo_flow_rules_failed_total Number of rules that failed.\n");
-        output.push_str("# TYPE oxo_flow_rules_failed_total gauge\n");
+        output.push_str("# TYPE oxo_flow_rules_failed_total counter\n");
         output.push_str(&format!(
             "oxo_flow_rules_failed_total {}\n",
             self.failed_rules.len()
@@ -708,17 +731,25 @@ pub fn validate_outputs(rule: &Rule, workdir: &Path) -> Vec<String> {
 
 /// Compute a checksum of a file for integrity and non-determinism detection.
 ///
-/// Uses a simple hash of the file contents. Returns the hex-encoded hash string,
-/// or an error if the file cannot be read.
+/// Uses FNV-1a 64-bit hashing — a stable, deterministic algorithm whose
+/// output is consistent across Rust versions and process restarts, making
+/// it suitable for persisted checksums (e.g., in checkpoint files).
+///
+/// Returns the hex-encoded hash string, or an error if the file cannot be read.
 pub fn compute_file_checksum(path: &Path) -> Result<String> {
     let content = std::fs::read(path).map_err(|e| OxoFlowError::Execution {
         rule: String::new(),
         message: format!("failed to read {} for checksum: {e}", path.display()),
     })?;
-    use std::hash::{DefaultHasher, Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    content.hash(&mut hasher);
-    Ok(format!("{:016x}", hasher.finish()))
+    // FNV-1a 64-bit parameters
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash: u64 = FNV_OFFSET;
+    for byte in &content {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    Ok(format!("{:016x}", hash))
 }
 
 /// Verify output file checksums match previously recorded values.
@@ -914,7 +945,16 @@ impl std::fmt::Display for ExecutionProvenance {
 
 /// Check a shell command for potentially dangerous patterns.
 ///
-/// Returns a list of warnings for any suspicious patterns found.
+/// Returns a list of warnings for suspicious patterns that could indicate
+/// shell injection or destructive operations.  Common bioinformatics idioms
+/// such as pipes (`|`), command chaining (`&&`), and semicolons (`;`) are
+/// intentionally **not** flagged because they appear in virtually every
+/// genomics shell template.
+///
+/// This function checks the *literal* command string after wildcard expansion.
+/// Call it on the expanded shell command (post `render_shell_command`) to catch
+/// any dangerous content injected via wildcard values.
+///
 /// This is a best-effort heuristic, not a security guarantee.
 #[must_use]
 pub fn sanitize_shell_command(cmd: &str) -> Vec<String> {
@@ -922,15 +962,9 @@ pub fn sanitize_shell_command(cmd: &str) -> Vec<String> {
     let dangerous_patterns = [
         ("$(", "Command substitution detected"),
         ("`", "Backtick command substitution detected"),
-        ("&&", "Command chaining detected"),
-        ("||", "Conditional command chaining detected"),
-        (";", "Command separator detected"),
-        ("|", "Pipe detected"),
         (">/dev/", "Redirect to /dev/ detected"),
         ("rm -rf /", "Dangerous recursive deletion detected"),
         ("chmod 777", "Overly permissive chmod detected"),
-        ("curl ", "Network access via curl detected"),
-        ("wget ", "Network access via wget detected"),
         ("eval ", "eval usage detected"),
     ];
     for (pattern, warning) in &dangerous_patterns {
@@ -1959,16 +1993,20 @@ mod tests {
 
     #[test]
     fn sanitize_shell_safe_command() {
+        // Standard bioinformatics idioms (pipes, &&, ;) must NOT produce warnings.
         let warnings =
             sanitize_shell_command("bwa mem ref.fa reads.fq | samtools sort > aligned.bam");
-        assert!(warnings.iter().any(|w| w.contains("Pipe")));
+        assert!(
+            warnings.is_empty(),
+            "pipe in a bioinformatics command should not be flagged: {warnings:?}"
+        );
     }
 
     #[test]
     fn sanitize_shell_dangerous_command() {
-        let warnings = sanitize_shell_command("rm -rf / && curl evil.com");
+        let warnings = sanitize_shell_command("eval rm -rf /");
         assert!(warnings.iter().any(|w| w.contains("recursive deletion")));
-        assert!(warnings.iter().any(|w| w.contains("curl")));
+        assert!(warnings.iter().any(|w| w.contains("eval")));
     }
 
     #[test]

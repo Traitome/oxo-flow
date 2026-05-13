@@ -1,7 +1,7 @@
 # Venus — Clinical-grade tumor variant detection pipeline
 # Built on oxo-flow engine
 #
-# Venus (启明星) supports three analysis modes:
+# Venus (Morning Star) supports three analysis modes:
 # 1. Tumor-only: somatic variant calling without matched normal
 # 2. Normal-only: germline variant calling
 # 3. Tumor-Normal paired: somatic variant calling with matched normal control
@@ -57,11 +57,25 @@ memory = "16G"
 [rules.environment]
 conda = "envs/gatk.yaml"
 
+# ── Index deduplicated BAM (required by GATK BaseRecalibrator) ──
+[[rules]]
+name = "index_dedup_bam"
+input = ["dedup/{sample}.dedup.bam"]
+output = ["dedup/{sample}.dedup.bam.bai"]
+shell = "samtools index {input[0]}"
+threads = 2
+memory = "4G"
+description = "Index deduplicated BAM for GATK tools"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
 # ── Base Quality Recalibration ──────────────────────────────────
 [[rules]]
 name = "bqsr"
-input = ["dedup/{sample}.dedup.bam"]
-output = ["recal/{sample}.recal.bam"]
+input = ["dedup/{sample}.dedup.bam", "dedup/{sample}.dedup.bam.bai"]
+output = ["recal/{sample}.recal.bam", "recal/{sample}.recal.table"]
+temp_output = ["recal/{sample}.recal.table"]
 shell = """
 gatk BaseRecalibrator \
     -I {input[0]} -R {config.reference_fasta} \
@@ -78,10 +92,23 @@ memory = "16G"
 [rules.environment]
 conda = "envs/gatk.yaml"
 
+# ── Index recalibrated BAM (required by GATK HaplotypeCaller / Mutect2) ──
+[[rules]]
+name = "index_recal_bam"
+input = ["recal/{sample}.recal.bam"]
+output = ["recal/{sample}.recal.bam.bai"]
+shell = "samtools index {input[0]}"
+threads = 2
+memory = "4G"
+description = "Index recalibrated BAM for GATK variant callers"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
 # ── Germline Variant Calling (HaplotypeCaller) ──────────────────
 [[rules]]
 name = "haplotype_caller"
-input = ["recal/{sample}.recal.bam"]
+input = ["recal/{sample}.recal.bam", "recal/{sample}.recal.bam.bai"]
 output = ["variants/{sample}.g.vcf.gz"]
 shell = "gatk HaplotypeCaller -I {input[0]} -R {config.reference_fasta} -O {output[0]} -ERC GVCF"
 threads = 4
@@ -94,9 +121,9 @@ conda = "envs/gatk.yaml"
 # ── Somatic Variant Calling (Mutect2) ───────────────────────────
 [[rules]]
 name = "mutect2"
-input = ["recal/{tumor}.recal.bam", "recal/{normal}.recal.bam"]
+input = ["recal/{tumor}.recal.bam", "recal/{tumor}.recal.bam.bai", "recal/{normal}.recal.bam", "recal/{normal}.recal.bam.bai"]
 output = ["variants/{tumor}.mutect2.vcf.gz"]
-shell = "gatk Mutect2 -I {input[0]} -I {input[1]} -normal {normal} -R {config.reference_fasta} -O {output[0]}"
+shell = "gatk Mutect2 -I {input[0]} -I {input[2]} -normal {normal} -R {config.reference_fasta} -O {output[0]}"
 threads = 4
 memory = "16G"
 description = "Somatic variant calling with Mutect2"
@@ -120,8 +147,8 @@ conda = "envs/gatk.yaml"
 # ── Variant Annotation (VEP) ───────────────────────────────────
 [[rules]]
 name = "annotate"
-input = ["variants/{sample}.mutect2.filtered.vcf.gz"]
-output = ["annotated/{sample}.annotated.vcf.gz"]
+input = ["variants/{tumor}.mutect2.filtered.vcf.gz"]
+output = ["annotated/{tumor}.annotated.vcf.gz"]
 shell = """
 vep --input_file {input[0]} --output_file {output[0]} \
     --format vcf --vcf --offline --cache \
@@ -130,7 +157,7 @@ vep --input_file {input[0]} --output_file {output[0]} \
     --fork {threads} --buffer_size 5000 \
     --sift b --polyphen b --symbol --numbers --biotype \
     --total_length --canonical --ccds --hgvs \
-    --af --af_1kg --af_gnomade --max_af \
+    --af --af_1kg --af_gnomad --max_af \
     --pubmed --variant_class
 """
 threads = 4
@@ -143,9 +170,9 @@ conda = "envs/vep.yaml"
 # ── Clinical Report ─────────────────────────────────────────────
 [[rules]]
 name = "clinical_report"
-input = ["annotated/{sample}.annotated.vcf.gz"]
-output = ["reports/{sample}_clinical_report.html"]
-shell = "python scripts/generate_report.py --input {input[0]} --output {output[0]} --sample {sample}"
+input = ["annotated/{tumor}.annotated.vcf.gz"]
+output = ["reports/{tumor}_clinical_report.html"]
+shell = "python scripts/generate_report.py --input {input[0]} --output {output[0]} --sample {tumor}"
 threads = 1
 memory = "4G"
 description = "Generate clinical-grade variant report"
