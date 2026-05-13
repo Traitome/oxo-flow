@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! Cluster execution backends for HPC job submission.
 //!
 //! Supports SLURM, PBS/Torque, SGE, and LSF job schedulers.

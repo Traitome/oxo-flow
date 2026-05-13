@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! DAG (Directed Acyclic Graph) engine for workflow execution.
 //!
 //! Constructs a DAG from workflow rules by matching rule outputs to downstream

@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! Workflow configuration and `.oxoflow` file parsing.
 //!
 //! The `.oxoflow` format is TOML-based with workflow metadata, configuration
@@ -564,12 +565,7 @@ impl WorkflowState<Parsed> {
     pub fn validate(self) -> crate::Result<WorkflowState<Validated>> {
         self.config.validate()?;
         for rule in &self.config.rules {
-            rule.validate()
-                .map_err(|e| crate::OxoFlowError::Validation {
-                    message: e,
-                    rule: Some(rule.name.clone()),
-                    suggestion: None,
-                })?;
+            rule.validate()?;
         }
         Ok(WorkflowState {
             config: self.config,

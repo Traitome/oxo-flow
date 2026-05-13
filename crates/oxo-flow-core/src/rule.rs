@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! Rule definitions for oxo-flow workflows.
 //!
 //! A [`Rule`] describes a single step in a bioinformatics pipeline, including
@@ -214,10 +215,12 @@ pub struct Rule {
 
     /// Number of threads (shorthand for resources.threads).
     #[serde(default)]
+    #[deprecated(since = "0.4.0", note = "use resources.threads instead")]
     pub threads: Option<u32>,
 
     /// Memory requirement (shorthand for resources.memory).
     #[serde(default)]
+    #[deprecated(since = "0.4.0", note = "use resources.memory instead")]
     pub memory: Option<String>,
 
     /// Full resource specification.
@@ -425,30 +428,46 @@ impl Rule {
     /// - At least shell or script is provided if outputs exist
     /// - Thread count is positive (if specified)
     #[must_use = "validation returns a Result that must be checked"]
-    pub fn validate(&self) -> std::result::Result<(), String> {
+    pub fn validate(&self) -> crate::error::Result<()> {
         if self.name.trim().is_empty() {
-            return Err("rule name cannot be empty or whitespace-only".to_string());
+            return Err(crate::error::OxoFlowError::Validation {
+                message: "rule name cannot be empty or whitespace-only".to_string(),
+                rule: Some(self.name.clone()),
+                suggestion: None,
+            });
         }
         if !self
             .name
             .chars()
             .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
         {
-            return Err(format!(
-                "rule name '{}' contains invalid characters (allowed: alphanumeric, _, -)",
-                self.name
-            ));
+            return Err(crate::error::OxoFlowError::Validation {
+                message: format!(
+                    "rule name '{}' contains invalid characters (allowed: alphanumeric, _, -)",
+                    self.name
+                ),
+                rule: Some(self.name.clone()),
+                suggestion: None,
+            });
         }
         if !self.output.is_empty() && self.shell.is_none() && self.script.is_none() {
-            return Err(format!(
-                "rule '{}' has outputs but no shell command or script",
-                self.name
-            ));
+            return Err(crate::error::OxoFlowError::Validation {
+                message: format!(
+                    "rule '{}' has outputs but no shell command or script",
+                    self.name
+                ),
+                rule: Some(self.name.clone()),
+                suggestion: None,
+            });
         }
         if let Some(threads) = self.threads
             && threads == 0
         {
-            return Err(format!("rule '{}' has zero threads", self.name));
+            return Err(crate::error::OxoFlowError::Validation {
+                message: format!("rule '{}' has zero threads", self.name),
+                rule: Some(self.name.clone()),
+                suggestion: None,
+            });
         }
         if let Some(ref mem) = self.memory {
             let mem_trimmed = mem.trim();
@@ -460,10 +479,14 @@ impl Rule {
                     .map(|v| v > 0.0)
                     .unwrap_or(false);
                 if !valid {
-                    return Err(format!(
-                        "rule '{}' has invalid memory format '{}' (expected e.g. \"8G\", \"16384M\", \"1T\")",
-                        self.name, mem
-                    ));
+                    return Err(crate::error::OxoFlowError::Validation {
+                        message: format!(
+                            "rule '{}' has invalid memory format '{}' (expected e.g. \"8G\", \"16384M\", \"1T\")",
+                            self.name, mem
+                        ),
+                        rule: Some(self.name.clone()),
+                        suggestion: None,
+                    });
                 }
             }
         }
@@ -471,10 +494,14 @@ impl Rule {
         if let Some(ref delay) = self.retry_delay
             && parse_duration_secs(delay).is_none()
         {
-            return Err(format!(
-                "rule '{}' has invalid retry_delay '{}' (expected e.g. \"5s\", \"30s\", \"2m\", \"1h\")",
-                self.name, delay
-            ));
+            return Err(crate::error::OxoFlowError::Validation {
+                message: format!(
+                    "rule '{}' has invalid retry_delay '{}' (expected e.g. \"5s\", \"30s\", \"2m\", \"1h\")",
+                    self.name, delay
+                ),
+                rule: Some(self.name.clone()),
+                suggestion: None,
+            });
         }
         Ok(())
     }
@@ -926,14 +953,14 @@ mod tests {
     #[test]
     fn validate_empty_name() {
         let rule = make_rule("");
-        let err = rule.validate().unwrap_err();
+        let err = rule.validate().unwrap_err().to_string();
         assert!(err.contains("empty or whitespace-only"));
     }
 
     #[test]
     fn validate_invalid_name_chars() {
         let rule = make_rule("bad name");
-        let err = rule.validate().unwrap_err();
+        let err = rule.validate().unwrap_err().to_string();
         assert!(err.contains("invalid characters"));
     }
 
@@ -941,7 +968,7 @@ mod tests {
     fn validate_zero_threads() {
         let mut rule = make_rule("test");
         rule.threads = Some(0);
-        let err = rule.validate().unwrap_err();
+        let err = rule.validate().unwrap_err().to_string();
         assert!(err.contains("zero threads"));
     }
 
@@ -951,7 +978,7 @@ mod tests {
         rule.output = vec!["out.txt".to_string()];
         rule.shell = None;
         rule.script = None;
-        let err = rule.validate().unwrap_err();
+        let err = rule.validate().unwrap_err().to_string();
         assert!(err.contains("no shell command or script"));
     }
 
@@ -1310,7 +1337,7 @@ mod tests {
             retry_delay: Some("5x".to_string()),
             ..Default::default()
         };
-        let err = rule.validate().unwrap_err();
+        let err = rule.validate().unwrap_err().to_string();
         assert!(err.contains("invalid retry_delay"));
     }
 

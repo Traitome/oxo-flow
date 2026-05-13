@@ -27,3 +27,4 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 tokio-stream = { workspace = true }
+dashmap = "6.1.0"

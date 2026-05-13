@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! Job scheduling with resource constraints.
 //!
 //! The scheduler determines which jobs can run concurrently based on
@@ -252,20 +253,16 @@ pub fn parse_memory_mb(memory: &str) -> Option<u64> {
         (memory, "M")
     };
 
-    let num: f64 = num_str.parse().ok()?;
-    let mb = match unit {
-        "T" => num * 1024.0 * 1024.0,
-        "G" => num * 1024.0,
+    let num: u64 = num_str.parse().ok()?;
+    let mb_int = match unit {
+        "T" => num * 1024 * 1024,
+        "G" => num * 1024,
         "M" => num,
-        "K" => num / 1024.0,
+        "K" => num / 1024,
         _ => return None,
     };
 
-    let mb_int = mb as u64;
-    // Sub-megabyte values (e.g. "512K") are likely a mistake; return None rather
-    // than silently truncating to 0, which would cause the resource constraint
-    // to be ignored by the scheduler.
-    if mb_int == 0 && num > 0.0 {
+    if mb_int == 0 && num > 0 {
         return None;
     }
     Some(mb_int)

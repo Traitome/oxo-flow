@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! .oxoflow file format specification, validation, formatting, and linting.
 //!
 //! This module provides utilities for working with .oxoflow files beyond
@@ -133,13 +134,21 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
     // Validate each rule
     for rule in &config.rules {
         // E002: Rule validation
-        if let Err(msg) = rule.validate() {
+        if let Err(e) = rule.validate() {
+            let (msg, sugg) = match e {
+                crate::error::OxoFlowError::Validation {
+                    message,
+                    suggestion,
+                    ..
+                } => (message, suggestion),
+                _ => (e.to_string(), None),
+            };
             diagnostics.push(Diagnostic {
                 severity: Severity::Error,
                 message: msg,
                 rule: Some(rule.name.clone()),
                 code: "E002".to_string(),
-                suggestion: None,
+                suggestion: sugg,
             });
         }
 

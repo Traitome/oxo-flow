@@ -250,54 +250,74 @@ impl std::fmt::Display for VenusStep {
     }
 }
 
-/// Create a pipeline rule with common defaults.
-fn make_rule(
-    name: &str,
-    input: Vec<String>,
-    output: Vec<String>,
-    shell: &str,
-    threads: u32,
-    memory: &str,
-    env_conda: &str,
-) -> Rule {
-    Rule {
-        name: name.to_string(),
-        input,
-        output,
-        shell: Some(shell.to_string()),
-        script: None,
-        threads: Some(threads),
-        memory: if memory.is_empty() {
-            None
-        } else {
-            Some(memory.to_string())
-        },
-        resources: Resources::default(),
-        environment: EnvironmentSpec {
-            conda: if env_conda.is_empty() {
-                None
-            } else {
-                Some(env_conda.to_string())
-            },
-            ..Default::default()
-        },
-        log: None,
-        benchmark: None,
-        params: HashMap::new(),
-        priority: 0,
-        target: false,
-        group: None,
-        description: None,
-        ..Default::default()
-    }
-}
-
 /// Builds the Venus pipeline as a set of oxo-flow rules.
 pub struct VenusPipelineBuilder {
     config: VenusConfig,
 }
 
 impl VenusPipelineBuilder {
+    /// Create a pipeline rule with common defaults, respecting output_dir and scaling threads.
+    #[allow(clippy::too_many_arguments)]
+    fn make_rule(
+        &self,
+        name: &str,
+        input: Vec<String>,
+        output: Vec<String>,
+        shell: &str,
+        threads_ratio: f64, // e.g. 1.0 for max threads, 0.5 for half
+        memory_gb: u32,
+        env_conda: &str,
+    ) -> Rule {
+        let output_dir = &self.config.output_dir;
+
+        let prepend_dir = |p: &str| -> String {
+            if p.starts_with("raw/") || p.starts_with('/') {
+                p.to_string() // Assume raw data is external
+            } else {
+                format!("{}/{}", output_dir, p)
+            }
+        };
+
+        let scaled_threads = (self.config.threads as f64 * threads_ratio).max(1.0) as u32;
+        let mem_string = if memory_gb > 0 {
+            Some(format!("{}G", memory_gb))
+        } else {
+            None
+        };
+
+        #[allow(deprecated)]
+        Rule {
+            name: name.to_string(),
+            input: input.into_iter().map(|p| prepend_dir(&p)).collect(),
+            output: output.into_iter().map(|p| prepend_dir(&p)).collect(),
+            shell: Some(shell.to_string()),
+            script: None,
+            threads: Some(scaled_threads),
+            memory: mem_string.clone(),
+            resources: Resources {
+                threads: scaled_threads,
+                memory: mem_string,
+                ..Default::default()
+            },
+            environment: EnvironmentSpec {
+                conda: if env_conda.is_empty() {
+                    None
+                } else {
+                    Some(env_conda.to_string())
+                },
+                ..Default::default()
+            },
+            log: None,
+            benchmark: None,
+            params: HashMap::new(),
+            priority: 0,
+            target: false,
+            group: None,
+            description: None,
+            ..Default::default()
+        }
+    }
+
     /// Create a new pipeline builder from a Venus configuration.
     pub fn new(config: VenusConfig) -> Self {
         Self { config }
@@ -364,7 +384,7 @@ impl VenusPipelineBuilder {
             .all_samples()
             .into_iter()
             .map(|s| {
-                make_rule(
+                self.make_rule(
                     &format!("fastp_{}", s.name),
                     vec![
                         format!("raw/{}_R1.fq.gz", s.name),
@@ -376,8 +396,8 @@ impl VenusPipelineBuilder {
                         format!("qc/{}_fastp.json", s.name),
                     ],
                     "fastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]} --json {output[2]} --thread {threads}",
-                    8,
-                    "",
+                    0.5,
+                    0,
                     "envs/fastp.yaml",
                 )
             })
@@ -390,7 +410,7 @@ impl VenusPipelineBuilder {
             .all_samples()
             .into_iter()
             .map(|s| {
-                make_rule(
+                self.make_rule(
                     &format!("bwa_mem2_{}", s.name),
                     vec![
                         format!("trimmed/{}_R1.fq.gz", s.name),
@@ -400,8 +420,8 @@ impl VenusPipelineBuilder {
                     &format!(
                         "bwa-mem2 mem -t {{threads}} {ref_path} {{input[0]}} {{input[1]}} | samtools sort -@ {{threads}} -o {{output[0]}}"
                     ),
-                    16,
-                    "32G",
+                    1.0,
+                    32,
                     "envs/bwa_mem2.yaml",
                 )
             })
@@ -413,7 +433,7 @@ impl VenusPipelineBuilder {
             .all_samples()
             .into_iter()
             .map(|s| {
-                make_rule(
+                self.make_rule(
                     &format!("mark_duplicates_{}", s.name),
                     vec![format!("aligned/{}.sorted.bam", s.name)],
                     vec![
@@ -421,8 +441,8 @@ impl VenusPipelineBuilder {
                         format!("dedup/{}.metrics.txt", s.name),
                     ],
                     "gatk MarkDuplicates -I {input[0]} -O {output[0]} -M {output[1]}",
-                    4,
-                    "16G",
+                    0.25,
+                    16,
                     "envs/gatk.yaml",
                 )
             })
@@ -442,7 +462,7 @@ impl VenusPipelineBuilder {
             .into_iter()
             .map(|s| {
                 let name = &s.name;
-                make_rule(
+                self.make_rule(
                     &format!("bqsr_{name}"),
                     vec![format!("dedup/{name}.dedup.bam")],
                     vec![format!("recal/{name}.recal.bam")],
@@ -450,8 +470,8 @@ impl VenusPipelineBuilder {
                         "gatk BaseRecalibrator -I {{input[0]}} -R {ref_path}{known_sites_flag} -O recal/{name}.recal.table && \
                          gatk ApplyBQSR -I {{input[0]}} -R {ref_path} --bqsr-recal-file recal/{name}.recal.table -O {{output[0]}}"
                     ),
-                    4,
-                    "16G",
+                    0.25,
+                    16,
                     "envs/gatk.yaml",
                 )
             })
@@ -464,15 +484,15 @@ impl VenusPipelineBuilder {
             .normal_samples
             .iter()
             .map(|s| {
-                make_rule(
+                self.make_rule(
                     &format!("haplotype_caller_{}", s.name),
                     vec![format!("recal/{}.recal.bam", s.name)],
                     vec![format!("variants/{}.g.vcf.gz", s.name)],
                     &format!(
                         "gatk HaplotypeCaller -I {{input[0]}} -R {ref_path} -O {{output[0]}} -ERC GVCF"
                     ),
-                    4,
-                    "16G",
+                    0.25,
+                    16,
                     "envs/gatk.yaml",
                 )
             })
@@ -504,13 +524,13 @@ impl VenusPipelineBuilder {
                         ),
                     )
                 };
-                make_rule(
+                self.make_rule(
                     &format!("mutect2_{}", s.name),
                     input,
                     vec![format!("variants/{}.mutect2.vcf.gz", s.name)],
                     &shell,
-                    4,
-                    "16G",
+                    0.25,
+                    16,
                     "envs/gatk.yaml",
                 )
             })
@@ -523,15 +543,15 @@ impl VenusPipelineBuilder {
             .tumor_samples
             .iter()
             .map(|s| {
-                make_rule(
+                self.make_rule(
                     &format!("filter_mutect_calls_{}", s.name),
                     vec![format!("variants/{}.mutect2.vcf.gz", s.name)],
                     vec![format!("variants/{}.mutect2.filtered.vcf.gz", s.name)],
                     &format!(
                         "gatk FilterMutectCalls -V {{input[0]}} -R {ref_path} -O {{output[0]}}"
                     ),
-                    4,
-                    "8G",
+                    0.25,
+                    8,
                     "envs/gatk.yaml",
                 )
             })
@@ -551,7 +571,7 @@ impl VenusPipelineBuilder {
             .tumor_samples
             .iter()
             .map(|s| {
-                make_rule(
+                self.make_rule(
                     &format!("strelka2_{}", s.name),
                     vec![
                         format!("recal/{}.recal.bam", s.name),
@@ -564,8 +584,8 @@ impl VenusPipelineBuilder {
                          cp strelka2_{tumor}/results/variants/somatic.snvs.vcf.gz {{output[0]}}",
                         tumor = s.name
                     ),
-                    8,
-                    "16G",
+                    0.5,
+                    16,
                     "envs/strelka2.yaml",
                 )
             })
@@ -586,7 +606,7 @@ impl VenusPipelineBuilder {
                 if let Some(ref nb) = normal_bam {
                     input.push(nb.clone());
                 }
-                make_rule(
+                self.make_rule(
                     &format!("cnvkit_{}", s.name),
                     input,
                     vec![format!("cnv/{}.cnr", s.name), format!("cnv/{}.cns", s.name)],
@@ -597,8 +617,8 @@ impl VenusPipelineBuilder {
                             .map(|n| format!("--normal {n}"))
                             .unwrap_or_default()
                     ),
-                    4,
-                    "16G",
+                    0.25,
+                    16,
                     "envs/cnvkit.yaml",
                 )
             })
@@ -611,7 +631,7 @@ impl VenusPipelineBuilder {
             .iter()
             .filter_map(|s| {
                 let normal = self.config.normal_samples.first()?;
-                Some(make_rule(
+                Some(self.make_rule(
                     &format!("msi_sensor_{}", s.name),
                     vec![
                         format!("recal/{}.recal.bam", s.name),
@@ -619,8 +639,8 @@ impl VenusPipelineBuilder {
                     ],
                     vec![format!("msi/{}.msi.txt", s.name)],
                     "msisensor2 msi -t {input[0]} -n {input[1]} -o {output[0]}",
-                    4,
-                    "8G",
+                    0.25,
+                    8,
                     "envs/msi.yaml",
                 ))
             })
@@ -636,13 +656,13 @@ impl VenusPipelineBuilder {
                 } else {
                     vcf_path
                 };
-                make_rule(
+                self.make_rule(
                     &format!("tmb_{}", sample.name),
                     vec![input],
                     vec![format!("tmb/{}.tmb.txt", sample.name)],
                     "python scripts/calc_tmb.py --input {input[0]} --output {output[0]}",
-                    1,
-                    "4G",
+                    0.125,
+                    4,
                     "envs/report.yaml",
                 )
             })
@@ -653,13 +673,13 @@ impl VenusPipelineBuilder {
         self.called_samples()
             .into_iter()
             .map(|(sample, vcf_path)| {
-                make_rule(
+                self.make_rule(
                     &format!("annotate_{}", sample.name),
                     vec![vcf_path],
                     vec![format!("annotated/{}.annotated.vcf.gz", sample.name)],
                     "vep --input_file {input[0]} --output_file {output[0]} --format vcf --vcf --offline --cache",
-                    4,
-                    "8G",
+                    0.25,
+                    8,
                     "envs/vep.yaml",
                 )
             })
@@ -676,15 +696,15 @@ impl VenusPipelineBuilder {
                     vcf_path
                 };
                 let name = &sample.name;
-                make_rule(
+                self.make_rule(
                     &format!("report_{name}"),
                     vec![input],
                     vec![format!("reports/{name}_clinical_report.html")],
                     &format!(
                         "python scripts/generate_report.py --input {{input[0]}} --output {{output[0]}} --sample {name}"
                     ),
-                    1,
-                    "4G",
+                    0.125,
+                    4,
                     "envs/report.yaml",
                 )
             })
@@ -1054,9 +1074,9 @@ mod tests {
 
         // Strelka2 should use recal BAMs as input
         let strelka_rule = rules.iter().find(|r| r.name == "strelka2_T1").unwrap();
-        assert_eq!(strelka_rule.input[0], "recal/T1.recal.bam");
-        assert_eq!(strelka_rule.input[1], "recal/N1.recal.bam");
-        assert_eq!(strelka_rule.output[0], "variants/T1.strelka2.vcf.gz");
+        assert_eq!(strelka_rule.input[0], "output/recal/T1.recal.bam");
+        assert_eq!(strelka_rule.input[1], "output/recal/N1.recal.bam");
+        assert_eq!(strelka_rule.output[0], "output/variants/T1.strelka2.vcf.gz");
     }
 
     #[test]
@@ -1097,7 +1117,7 @@ mod tests {
         let annotate_rule = rules.iter().find(|r| r.name == "annotate_T1").unwrap();
         assert_eq!(
             annotate_rule.input[0],
-            "variants/T1.mutect2.filtered.vcf.gz"
+            "output/variants/T1.mutect2.filtered.vcf.gz"
         );
     }
 

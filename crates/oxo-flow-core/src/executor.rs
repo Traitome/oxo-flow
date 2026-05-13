@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! Task execution engine for oxo-flow.
 //!
 //! Executes workflow rules as local processes, handling concurrency,

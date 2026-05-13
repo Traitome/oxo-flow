@@ -15,9 +15,8 @@ use axum::{
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 use tower_http::cors::{Any, CorsLayer};
 
 // ---------------------------------------------------------------------------
@@ -425,7 +424,7 @@ impl Default for RateLimiterConfig {
 pub struct RateLimiter {
     config: RateLimiterConfig,
     /// Maps a client key to a list of request timestamps within the current window.
-    entries: Arc<Mutex<HashMap<String, Vec<std::time::Instant>>>>,
+    entries: Arc<dashmap::DashMap<String, Vec<std::time::Instant>>>,
 }
 
 impl RateLimiter {
@@ -433,7 +432,7 @@ impl RateLimiter {
     pub fn new(config: RateLimiterConfig) -> Self {
         Self {
             config,
-            entries: Arc::new(Mutex::new(HashMap::new())),
+            entries: Arc::new(dashmap::DashMap::new()),
         }
     }
 
@@ -446,8 +445,7 @@ impl RateLimiter {
         let now = std::time::Instant::now();
         let window_start = now - self.config.window;
 
-        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        let timestamps = entries.entry(key.to_owned()).or_default();
+        let mut timestamps = self.entries.entry(key.to_owned()).or_default();
 
         // Evict timestamps outside the sliding window.
         timestamps.retain(|t| *t > window_start);

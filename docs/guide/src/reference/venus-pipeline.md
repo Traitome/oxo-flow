@@ -43,6 +43,26 @@ graph TD
 
 ---
 
+## Software Bill of Materials (BOM)
+
+To ensure **Clinical-grade rigor** and exact reproducibility, Venus locks all dependencies. Below is the reference Bill of Materials used by the `envs/*.yaml` specifications:
+
+| Component | Version | Package Manager | Environment Spec |
+|-----------|---------|-----------------|-------------------|
+| fastp     | 0.23.4  | bioconda        | `envs/fastp.yaml` |
+| bwa-mem2  | 2.2.1   | bioconda        | `envs/bwa_mem2.yaml` |
+| samtools  | 1.17    | bioconda        | `envs/bwa_mem2.yaml` |
+| gatk4     | 4.4.0.0 | bioconda        | `envs/gatk.yaml`  |
+| strelka   | 2.9.10  | bioconda        | `envs/strelka2.yaml` |
+| cnvkit    | 0.9.10  | bioconda        | `envs/cnvkit.yaml` |
+| msisensor2| 0.1     | bioconda        | `envs/msi.yaml`   |
+| ensembl-vep| 110.1  | bioconda        | `envs/vep.yaml`   |
+| python    | 3.10.12 | conda-forge     | `envs/report.yaml`|
+
+*Note: For production clinical deployment, it is strongly recommended to use the generated Docker or Singularity container images which encapsulate these exact versions alongside the base OS libraries.*
+
+---
+
 ## Project Structure
 
 ```

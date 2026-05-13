@@ -221,11 +221,39 @@ All endpoints return standard HTTP status codes:
 | `404` | Resource not found |
 | `500` | Internal server error |
 
-Error responses include a JSON body with an `error` field:
+Error responses include a JSON body with an `error` field and an optional `detail` field:
 
 ```json
 {
-  "error": "description of what went wrong"
+  "error": "description of what went wrong",
+  "detail": "more specific context or internal error message"
+}
+```
+
+---
+
+## Metrics
+
+### Runtime Metrics
+
+```
+GET /api/metrics
+```
+
+Returns current system usage, request counts, and execution metrics.
+
+**Response:**
+
+```json
+{
+  "uptime_secs": 86400.5,
+  "version": "0.1.0",
+  "pid": 1234,
+  "os": "linux",
+  "arch": "x86_64",
+  "cpu_count": 16,
+  "total_requests": 1542,
+  "active_workflows": 3
 }
 ```
 
