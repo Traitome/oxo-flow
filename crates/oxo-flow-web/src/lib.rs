@@ -16,8 +16,16 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tower_http::cors::{Any, CorsLayer};
+
+// ---------------------------------------------------------------------------
+// Global metrics counters
+// ---------------------------------------------------------------------------
+
+static TOTAL_REQUESTS: AtomicU64 = AtomicU64::new(0);
+static ACTIVE_WORKFLOWS: AtomicI64 = AtomicI64::new(0);
 
 // ---------------------------------------------------------------------------
 // License configuration (oxo-dual-licenser integration)
@@ -201,6 +209,7 @@ th { color: var(--text-secondary); font-weight: 500; font-size: 0.75rem; text-tr
 <script>
 var BASE = '';
 var authToken = null;
+var systemRefreshInterval = null;
 
 function authHeaders() {
   var h = {'Content-Type': 'application/json'};
@@ -209,11 +218,15 @@ function authHeaders() {
 }
 
 function showView(name, btn) {
+  if (systemRefreshInterval) { clearInterval(systemRefreshInterval); systemRefreshInterval = null; }
   document.querySelectorAll('[id^="view-"]').forEach(function(el) { el.classList.add('hidden'); });
   document.getElementById('view-' + name).classList.remove('hidden');
   document.querySelectorAll('nav button').forEach(function(b) { b.classList.remove('active'); });
   if (btn) btn.classList.add('active');
-  if (name === 'system') loadSystemInfo();
+  if (name === 'system') {
+    loadSystemInfo();
+    systemRefreshInterval = setInterval(loadSystemInfo, 5000);
+  }
   if (name === 'dashboard') loadDashboard();
 }
 
@@ -265,6 +278,7 @@ async function doLogin() {
 function doLogout() {
   authToken = null;
   document.getElementById('user-info').innerHTML = '';
+  if (systemRefreshInterval) { clearInterval(systemRefreshInterval); systemRefreshInterval = null; }
   setStatus('Logged out');
 }
 
@@ -358,8 +372,8 @@ function disconnectSSE() {
 
 async function loadSystemInfo() {
   try {
-    var sys = await apiGet('/api/system');
-    document.getElementById('system-info').innerHTML = '<pre>' + JSON.stringify(sys, null, 2) + '</pre>';
+    var metrics = await apiGet('/api/metrics');
+    document.getElementById('system-info').innerHTML = '<pre>' + JSON.stringify(metrics, null, 2) + '</pre>';
     var lic = await apiGet('/api/license');
     var licHtml = '<table><tr><th>Valid</th><td>' + (lic.valid ? '<span class="badge badge-ok">Yes</span>' : '<span class="badge badge-err">No</span>') + '</td></tr>';
     licHtml += '<tr><th>Type</th><td>' + (lic.license_type || 'N/A') + '</td></tr>';
@@ -961,6 +975,10 @@ pub struct RuntimeMetrics {
     pub arch: String,
     /// Number of available CPU cores.
     pub cpu_count: usize,
+    /// Total number of requests processed.
+    pub total_requests: u64,
+    /// Current number of active/running workflows.
+    pub active_workflows: i64,
 }
 
 /// Request body for comparing two workflows.
@@ -1315,6 +1333,8 @@ async fn run_workflow(Json(req): Json<DryRunRequest>) -> Result<impl IntoRespons
         ApiError::unprocessable("Cannot determine execution order", Some(e.to_string()))
     })?;
 
+    ACTIVE_WORKFLOWS.fetch_add(1, Ordering::Relaxed);
+
     Ok(Json(RunResponse {
         run_id: uuid::Uuid::new_v4().to_string(),
         status: "started".to_string(),
@@ -1357,6 +1377,7 @@ async fn add_request_id(
     request: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
+    TOTAL_REQUESTS.fetch_add(1, Ordering::Relaxed);
     let request_id = uuid::Uuid::new_v4().to_string();
     let mut response = next.run(request).await;
     response.headers_mut().insert(
@@ -1604,6 +1625,8 @@ async fn runtime_metrics() -> Json<RuntimeMetrics> {
         cpu_count: std::thread::available_parallelism()
             .map(|p| p.get())
             .unwrap_or(1),
+        total_requests: TOTAL_REQUESTS.load(Ordering::Relaxed),
+        active_workflows: ACTIVE_WORKFLOWS.load(Ordering::Relaxed),
     })
 }
 
