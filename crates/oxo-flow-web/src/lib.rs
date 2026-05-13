@@ -581,18 +581,42 @@ pub struct LicenseStatus {
     pub message: String,
 }
 
-/// Simple password check.  In production this should use hashed passwords
-/// and a persistent user store backed by environment variables or a config file.
-/// The default accounts (`admin/admin`, `user/user`, `viewer/viewer`) are
-/// intentionally simple for initial setup and development; they should be
-/// changed immediately in any deployment.
 fn check_credentials(username: &str, password: &str) -> Option<UserRole> {
-    // Default accounts — override via a real user store in production.
-    match (username, password) {
-        ("admin", "admin") => Some(UserRole::Admin),
-        ("user", "user") => Some(UserRole::User),
-        ("viewer", "viewer") => Some(UserRole::Viewer),
-        _ => None,
+    // In test builds default credentials are always accepted so tests can run
+    // without any environment configuration.  In non-test builds, accounts are
+    // disabled unless the corresponding `OXO_FLOW_*_PASSWORD` environment
+    // variable is set, or `OXO_FLOW_DEV_MODE=1` is exported (for local
+    // development only — never use in production).
+    #[cfg(test)]
+    let dev_mode = true;
+    #[cfg(not(test))]
+    let dev_mode = std::env::var("OXO_FLOW_DEV_MODE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    let (env_var, default_pass, role) = match username {
+        "admin" => ("OXO_FLOW_ADMIN_PASSWORD", "admin", UserRole::Admin),
+        "user" => ("OXO_FLOW_USER_PASSWORD", "user", UserRole::User),
+        "viewer" => ("OXO_FLOW_VIEWER_PASSWORD", "viewer", UserRole::Viewer),
+        _ => return None,
+    };
+
+    let expected = match std::env::var(env_var) {
+        Ok(p) => p,
+        Err(_) => {
+            if dev_mode {
+                default_pass.to_string()
+            } else {
+                // Account disabled — no env var set and not in dev mode.
+                return None;
+            }
+        }
+    };
+
+    if password == expected {
+        Some(role)
+    } else {
+        None
     }
 }
 

@@ -97,3 +97,20 @@ curl -X POST http://127.0.0.1:8080/api/workflows/validate \
 - CORS is enabled by default, allowing requests from any origin
 - The server is intended for development and internal use — for production deployments, place it behind a reverse proxy (nginx, Caddy)
 - See the [Web API reference](../reference/web-api.md) for complete endpoint documentation
+
+## ⚠️ Security: Configuring Authentication
+
+By default, all user accounts are **disabled**.  You must set at least one of the
+following environment variables before starting the server, otherwise no logins
+will be accepted:
+
+```bash
+export OXO_FLOW_ADMIN_PASSWORD="<strong-password>"
+export OXO_FLOW_USER_PASSWORD="<strong-password>"
+export OXO_FLOW_VIEWER_PASSWORD="<strong-password>"
+oxo-flow serve
+```
+
+**Development mode** (local testing only): set `OXO_FLOW_DEV_MODE=1` to re-enable
+the default weak passwords (`admin/admin`, `user/user`, `viewer/viewer`).  **Never
+use `OXO_FLOW_DEV_MODE=1` in a production or multi-user environment.**

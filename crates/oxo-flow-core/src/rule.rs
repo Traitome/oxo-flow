@@ -483,18 +483,14 @@ impl Rule {
     ///
     /// For example, `"{sample}_R{read}.fastq.gz"` yields `["sample", "read"]`.
     pub fn wildcard_names(&self) -> Vec<String> {
-        let mut names = Vec::new();
-        let re = regex::Regex::new(r"\{(\w+)\}").expect("valid regex");
-
-        for pattern in self.input.iter().chain(self.output.iter()) {
-            for cap in re.captures_iter(pattern) {
-                let name = cap[1].to_string();
-                if !names.contains(&name) {
-                    names.push(name);
-                }
-            }
-        }
-        names
+        crate::wildcard::extract_wildcards_from_patterns(
+            &self
+                .input
+                .iter()
+                .chain(self.output.iter())
+                .cloned()
+                .collect::<Vec<_>>(),
+        )
     }
 }
 

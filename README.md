@@ -35,21 +35,21 @@ oxo-flow is a high-performance, modular bioinformatics pipeline engine built fro
 
 ## Why oxo-flow?
 
-| Feature | oxo-flow |
-|---------|----------|
-| **Language** | Rust (compiled, type-safe, `#![forbid(unsafe_code)]`) |
-| **Performance** | Native binary with async concurrency — no interpreter overhead |
-| **Workflow format** | TOML (`.oxoflow`) — declarative, composable, human-readable |
-| **Environment support** | conda, pixi, docker, singularity, venv — per-rule isolation |
-| **Web interface** | REST API with rate limiting, RBAC, security headers, graceful shutdown |
-| **Clinical reporting** | ACMG/AMP variant classification, biomarker tracking, compliance events |
-| **Container packaging** | Multi-stage builds, rootless containers, HEALTHCHECK support |
-| **Cluster backends** | SLURM, PBS, SGE, LSF — resource-aware scheduling |
-| **Type safety** | Type-state lifecycle (`Parsed→Validated→Ready`), `RuleBuilder`, newtypes |
-| **Security** | Shell sanitization, path traversal prevention, secret scanning, rate limiting |
-| **Startup time** | Instant — native binary, no runtime loading |
-| **Reproducibility** | Config checksums, execution provenance, deterministic DAG scheduling |
-| **Testing** | 475 tests including 1000-rule stress test |
+| Feature | **oxo-flow** | Snakemake | Nextflow |
+|---------|------------|-----------|----------|
+| **Language** | Rust — compiled, type-safe, `#![forbid(unsafe_code)]` | Python | Groovy/JVM |
+| **Performance** | Native binary, zero interpreter overhead | Python startup overhead | JVM startup overhead |
+| **Workflow format** | TOML (`.oxoflow`) — declarative, composable | Python DSL | Groovy DSL |
+| **Environment support** | conda, pixi, docker, singularity, venv — per-rule | conda, singularity, docker | conda, docker, singularity, modules |
+| **Web interface** | Built-in REST API with RBAC and rate limiting | External Snakemake-UI | Nextflow Tower (commercial) |
+| **Clinical reporting** | ACMG/AMP variant classification, compliance events | Not built-in | Not built-in |
+| **Container packaging** | Multi-stage builds, rootless containers | Singularity/Docker | Docker/Singularity |
+| **Cluster backends** | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF, k8s |
+| **Type safety** | Type-state lifecycle, `RuleBuilder`, newtypes | Dynamic Python | Dynamic Groovy |
+| **Security** | Shell sanitization, path traversal prevention, rate limiting | Limited | Limited |
+| **Startup time** | Instant — native binary | Seconds (Python import) | Seconds (JVM boot) |
+| **Reproducibility** | Config checksums, execution provenance, deterministic DAG | Checksums, provenance | Checksums, provenance |
+| **Testing** | Comprehensive unit and integration test suite | pytest-based | Varied |
 
 ## Design Principles
 

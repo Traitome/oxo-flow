@@ -191,8 +191,8 @@ impl SchedulerState {
                 JobStatus::Failed => summary.failed += 1,
                 JobStatus::Skipped => summary.skipped += 1,
                 JobStatus::Queued => summary.pending += 1,
-                JobStatus::Cancelled => summary.failed += 1,
-                JobStatus::TimedOut => summary.failed += 1,
+                JobStatus::Cancelled => summary.cancelled += 1,
+                JobStatus::TimedOut => summary.timed_out += 1,
             }
         }
         summary.total = self.statuses.len();
@@ -209,14 +209,25 @@ pub struct SchedulerSummary {
     pub success: usize,
     pub failed: usize,
     pub skipped: usize,
+    /// Jobs that were explicitly cancelled before completion.
+    pub cancelled: usize,
+    /// Jobs that exceeded their time limit.
+    pub timed_out: usize,
 }
 
 impl std::fmt::Display for SchedulerSummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "total: {}, success: {}, failed: {}, running: {}, pending: {}, skipped: {}",
-            self.total, self.success, self.failed, self.running, self.pending, self.skipped
+            "total: {}, success: {}, failed: {}, cancelled: {}, timed_out: {}, running: {}, pending: {}, skipped: {}",
+            self.total,
+            self.success,
+            self.failed,
+            self.cancelled,
+            self.timed_out,
+            self.running,
+            self.pending,
+            self.skipped
         )
     }
 }
@@ -250,7 +261,14 @@ pub fn parse_memory_mb(memory: &str) -> Option<u64> {
         _ => return None,
     };
 
-    Some(mb as u64)
+    let mb_int = mb as u64;
+    // Sub-megabyte values (e.g. "512K") are likely a mistake; return None rather
+    // than silently truncating to 0, which would cause the resource constraint
+    // to be ignored by the scheduler.
+    if mb_int == 0 && num > 0.0 {
+        return None;
+    }
+    Some(mb_int)
 }
 
 /// Resource pool tracking available system resources.
@@ -413,7 +431,8 @@ mod tests {
         assert_eq!(parse_memory_mb("8G"), Some(8192));
         assert_eq!(parse_memory_mb("16384M"), Some(16384));
         assert_eq!(parse_memory_mb("1T"), Some(1048576));
-        assert_eq!(parse_memory_mb("512K"), Some(0)); // rounds down
+        // Sub-megabyte values round to 0 MB, which is meaningless — return None.
+        assert!(parse_memory_mb("512K").is_none());
         assert!(parse_memory_mb("").is_none());
         assert!(parse_memory_mb("abc").is_none());
     }

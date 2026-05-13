@@ -4,7 +4,7 @@
 //! managers (conda, pixi, docker, singularity, venv) and a resolver that
 //! selects the appropriate backend for each rule.
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 use crate::error::{OxoFlowError, Result};
 use crate::rule::EnvironmentSpec;
@@ -52,10 +52,13 @@ impl EnvironmentBackend for CondaBackend {
     }
 
     fn wrap_command(&self, command: &str, spec: &str) -> Result<String> {
-        // spec is the conda environment YAML file or environment name
-        Ok(format!(
-            "conda run --no-banner -n $(conda env list --json | python3 -c \"import sys,json; print(next((e.split('/')[-1] for e in json.load(sys.stdin)['envs'] if '{spec}' in e), '{spec}'))\") {command}"
-        ))
+        // Derive the environment name from the YAML file stem
+        // (e.g., "envs/bwa_mem2.yaml" → "bwa_mem2", "my_env" → "my_env").
+        let env_name = std::path::Path::new(spec)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(spec);
+        Ok(format!("conda run --no-banner -n {env_name} {command}"))
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
@@ -74,6 +77,14 @@ impl EnvironmentBackend for CondaBackend {
     fn cache_key(&self, spec: &str) -> String {
         format!("conda:{spec}")
     }
+}
+
+/// Escape a string for safe embedding inside a `sh -c '...'` invocation.
+///
+/// Replaces every `'` with `'\''` (close quote, escaped literal quote, reopen quote)
+/// so the value is safe regardless of what shell interprets the outer wrapper.
+fn escape_for_sh_single_quote(s: &str) -> String {
+    s.replace('\'', "'\\''")
 }
 
 /// Docker environment backend.
@@ -97,8 +108,9 @@ impl EnvironmentBackend for DockerBackend {
             .unwrap_or_default()
             .display()
             .to_string();
+        let escaped_cmd = escape_for_sh_single_quote(command);
         Ok(format!(
-            "docker run --rm -v {workdir}:{workdir} -w {workdir} {spec} sh -c '{command}'"
+            "docker run --rm -v {workdir}:{workdir} -w {workdir} {spec} sh -c '{escaped_cmd}'"
         ))
     }
 
@@ -140,8 +152,9 @@ impl EnvironmentBackend for SingularityBackend {
             .unwrap_or_default()
             .display()
             .to_string();
+        let escaped_cmd = escape_for_sh_single_quote(command);
         Ok(format!(
-            "singularity exec --bind {workdir}:{workdir} {spec} sh -c '{command}'"
+            "singularity exec --bind {workdir}:{workdir} {spec} sh -c '{escaped_cmd}'"
         ))
     }
 
@@ -268,7 +281,7 @@ impl EnvironmentBackend for SystemBackend {
 /// setup work can be avoided across rules sharing the same environment.
 #[derive(Debug, Default)]
 pub struct EnvironmentCache {
-    ready: HashMap<String, bool>,
+    ready: HashSet<String>,
 }
 
 impl EnvironmentCache {
@@ -279,12 +292,12 @@ impl EnvironmentCache {
 
     /// Returns `true` if the environment identified by `key` has been set up.
     pub fn is_ready(&self, key: &str) -> bool {
-        self.ready.get(key).copied().unwrap_or(false)
+        self.ready.contains(key)
     }
 
     /// Mark the environment identified by `key` as ready.
     pub fn mark_ready(&mut self, key: &str) {
-        self.ready.insert(key.to_string(), true);
+        self.ready.insert(key.to_string());
     }
 }
 
