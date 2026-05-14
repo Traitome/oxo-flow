@@ -172,6 +172,28 @@ pub fn status_command(backend: &ClusterBackend) -> &'static str {
 // Private helpers for each backend
 // ---------------------------------------------------------------------------
 
+/// Convert duration string ("24h", "30m", "2d") to scheduler format ("DD-HH:MM:SS" or "HH:MM:SS")
+fn format_walltime_for_scheduler(time_str: &str) -> String {
+    let time_str = time_str.trim();
+    // If already in scheduler format, return as-is
+    if time_str.contains(':') {
+        return time_str.to_string();
+    }
+
+    // Parse duration like "24h", "30m", "2d"
+    let total_secs = crate::rule::parse_duration_secs(time_str).unwrap_or(3600);
+    let days = total_secs / 86400;
+    let hours = (total_secs % 86400) / 3600;
+    let mins = (total_secs % 3600) / 60;
+    let secs = total_secs % 60;
+
+    if days > 0 {
+        format!("{}-{:02}:{:02}:{:02}", days, hours, mins, secs)
+    } else {
+        format!("{:02}:{:02}:{:02}", hours, mins, secs)
+    }
+}
+
 fn generate_slurm_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) -> String {
     let mut lines = vec!["#!/bin/bash".to_string()];
     lines.push(format!("#SBATCH --job-name={}", rule.name));
@@ -183,9 +205,30 @@ fn generate_slurm_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig
     if let Some(mem) = rule.effective_memory() {
         lines.push(format!("#SBATCH --mem={mem}"));
     }
-    if let Some(ref wt) = config.walltime {
-        lines.push(format!("#SBATCH --time={wt}"));
+
+    // GPU handling - translate from resources.gpu or gpu_spec
+    if let Some(gpu_count) = rule.resources.gpu {
+        lines.push(format!("#SBATCH --gres=gpu:{}", gpu_count));
     }
+    if let Some(ref spec) = rule.resources.gpu_spec {
+        let gpu_str = match &spec.model {
+            Some(model) => format!("gpu:{}:{}", model, spec.count),
+            None => format!("gpu:{}", spec.count),
+        };
+        lines.push(format!("#SBATCH --gres={}", gpu_str));
+    }
+
+    // Per-rule walltime (override config walltime)
+    let walltime = rule
+        .resources
+        .time_limit
+        .as_ref()
+        .or(config.walltime.as_ref());
+    if let Some(wt) = walltime {
+        let formatted = format_walltime_for_scheduler(wt);
+        lines.push(format!("#SBATCH --time={formatted}"));
+    }
+
     if let Some(ref queue) = config.queue {
         lines.push(format!("#SBATCH --partition={queue}"));
     }
@@ -200,6 +243,18 @@ fn generate_slurm_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig
     }
 
     lines.push(String::new());
+
+    // Create logs directory before execution
+    lines.push("mkdir -p logs".to_string());
+
+    // Module loading for HPC environments
+    if !rule.environment.modules.is_empty() {
+        lines.push("module purge".to_string());
+        for module in &rule.environment.modules {
+            lines.push(format!("module load {}", module));
+        }
+    }
+
     lines.push(shell_cmd.to_string());
     lines.join("\n")
 }
@@ -213,8 +268,21 @@ fn generate_pbs_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
     if let Some(mem) = rule.effective_memory() {
         resource_parts.push(format!("mem={mem}"));
     }
-    if let Some(ref wt) = config.walltime {
-        resource_parts.push(format!("walltime={wt}"));
+
+    // GPU for PBS
+    if let Some(gpu_count) = rule.resources.gpu {
+        resource_parts.push(format!("gpu={}", gpu_count));
+    }
+
+    // Per-rule walltime (override config walltime)
+    let walltime = rule
+        .resources
+        .time_limit
+        .as_ref()
+        .or(config.walltime.as_ref());
+    if let Some(wt) = walltime {
+        let formatted = format_walltime_for_scheduler(wt);
+        resource_parts.push(format!("walltime={formatted}"));
     }
     lines.push(format!("#PBS -l {}", resource_parts.join(",")));
 
@@ -232,6 +300,18 @@ fn generate_pbs_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
     }
 
     lines.push(String::new());
+
+    // Create logs directory before execution
+    lines.push("mkdir -p logs".to_string());
+
+    // Module loading for HPC environments
+    if !rule.environment.modules.is_empty() {
+        lines.push("module purge".to_string());
+        for module in &rule.environment.modules {
+            lines.push(format!("module load {}", module));
+        }
+    }
+
     lines.push(shell_cmd.to_string());
     lines.join("\n")
 }
@@ -241,12 +321,33 @@ fn generate_sge_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
     lines.push(format!("#$ -N {}", rule.name));
     lines.push(format!("#$ -pe smp {}", rule.effective_threads()));
 
+    let mut resource_parts = vec![];
     if let Some(mem) = rule.effective_memory() {
-        lines.push(format!("#$ -l h_vmem={mem}"));
+        resource_parts.push(format!("h_vmem={mem}"));
     }
-    if let Some(ref wt) = config.walltime {
-        lines.push(format!("#$ -l h_rt={wt}"));
+
+    // GPU handling for SGE
+    if let Some(gpu_count) = rule.resources.gpu {
+        resource_parts.push(format!("gpu={}", gpu_count));
     }
+
+    // Per-rule walltime (override config walltime)
+    let walltime = rule
+        .resources
+        .time_limit
+        .as_ref()
+        .or(config.walltime.as_ref());
+    if let Some(wt) = walltime {
+        let formatted = format_walltime_for_scheduler(wt);
+        resource_parts.push(format!("h_rt={formatted}"));
+    }
+
+    if !resource_parts.is_empty() {
+        for part in resource_parts {
+            lines.push(format!("#$ -l {}", part));
+        }
+    }
+
     if let Some(ref queue) = config.queue {
         lines.push(format!("#$ -q {queue}"));
     }
@@ -258,6 +359,18 @@ fn generate_sge_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
     }
 
     lines.push(String::new());
+
+    // Create logs directory before execution
+    lines.push("mkdir -p logs".to_string());
+
+    // Module loading for HPC environments
+    if !rule.environment.modules.is_empty() {
+        lines.push("module purge".to_string());
+        for module in &rule.environment.modules {
+            lines.push(format!("module load {}", module));
+        }
+    }
+
     lines.push(shell_cmd.to_string());
     lines.join("\n")
 }
@@ -270,9 +383,24 @@ fn generate_lsf_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
     if let Some(mem) = rule.effective_memory() {
         lines.push(format!("#BSUB -M {mem}"));
     }
-    if let Some(ref wt) = config.walltime {
-        lines.push(format!("#BSUB -W {wt}"));
+
+    // GPU handling for LSF
+    if let Some(gpu_count) = rule.resources.gpu {
+        lines.push(format!("#BSUB -gpu {}", gpu_count));
     }
+
+    // Per-rule walltime (override config walltime)
+    let walltime = rule
+        .resources
+        .time_limit
+        .as_ref()
+        .or(config.walltime.as_ref());
+    if let Some(wt) = walltime {
+        let formatted = format_walltime_for_scheduler(wt);
+        // LSF uses minutes format or HH:MM
+        lines.push(format!("#BSUB -W {}", formatted));
+    }
+
     if let Some(ref queue) = config.queue {
         lines.push(format!("#BSUB -q {queue}"));
     }
@@ -284,6 +412,18 @@ fn generate_lsf_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
     }
 
     lines.push(String::new());
+
+    // Create logs directory before execution
+    lines.push("mkdir -p logs".to_string());
+
+    // Module loading for HPC environments
+    if !rule.environment.modules.is_empty() {
+        lines.push("module purge".to_string());
+        for module in &rule.environment.modules {
+            lines.push(format!("module load {}", module));
+        }
+    }
+
     lines.push(shell_cmd.to_string());
     lines.join("\n")
 }
@@ -512,5 +652,446 @@ mod tests {
         };
         assert_eq!(job.job_id, "12345");
         assert_eq!(job.status, ClusterJobStatus::Running);
+    }
+
+    // -- GPU directive tests ------------------------------------------------
+
+    #[test]
+    fn slurm_gpu_directive() {
+        let rule = Rule {
+            name: "gpu_job".to_string(),
+            input: vec![],
+            output: vec![],
+            shell: Some("python train.py".to_string()),
+            script: None,
+            threads: Some(4),
+            memory: Some("16G".to_string()),
+            resources: Resources {
+                gpu: Some(2),
+                gpu_spec: None,
+                ..Resources::default()
+            },
+            environment: EnvironmentSpec::default(),
+            log: None,
+            benchmark: None,
+            params: HashMap::new(),
+            priority: 0,
+            target: false,
+            group: None,
+            description: None,
+            ..Default::default()
+        };
+        let config = make_config();
+        let script =
+            generate_submit_script(&ClusterBackend::Slurm, &rule, "python train.py", &config);
+
+        assert!(script.contains("#SBATCH --gres=gpu:2"));
+    }
+
+    #[test]
+    fn slurm_gpu_spec_directive() {
+        let rule = Rule {
+            name: "gpu_v100".to_string(),
+            input: vec![],
+            output: vec![],
+            shell: Some("python train.py".to_string()),
+            script: None,
+            threads: Some(4),
+            memory: Some("32G".to_string()),
+            resources: Resources {
+                gpu: None,
+                gpu_spec: Some(crate::rule::GpuSpec {
+                    count: 4,
+                    model: Some("v100".to_string()),
+                    memory_gb: None,
+                    compute_capability: None,
+                }),
+                ..Resources::default()
+            },
+            environment: EnvironmentSpec::default(),
+            log: None,
+            benchmark: None,
+            params: HashMap::new(),
+            priority: 0,
+            target: false,
+            group: None,
+            description: None,
+            ..Default::default()
+        };
+        let config = make_config();
+        let script =
+            generate_submit_script(&ClusterBackend::Slurm, &rule, "python train.py", &config);
+
+        assert!(script.contains("#SBATCH --gres=gpu:v100:4"));
+    }
+
+    #[test]
+    fn pbs_gpu_directive() {
+        let rule = Rule {
+            name: "gpu_job".to_string(),
+            input: vec![],
+            output: vec![],
+            shell: Some("python train.py".to_string()),
+            script: None,
+            threads: Some(4),
+            memory: Some("16G".to_string()),
+            resources: Resources {
+                gpu: Some(2),
+                ..Resources::default()
+            },
+            environment: EnvironmentSpec::default(),
+            log: None,
+            benchmark: None,
+            params: HashMap::new(),
+            priority: 0,
+            target: false,
+            group: None,
+            description: None,
+            ..Default::default()
+        };
+        let config = ClusterJobConfig {
+            backend: ClusterBackend::Pbs,
+            queue: Some("gpu".to_string()),
+            account: None,
+            walltime: None,
+            extra_args: vec![],
+        };
+        let script =
+            generate_submit_script(&ClusterBackend::Pbs, &rule, "python train.py", &config);
+
+        assert!(script.contains("gpu=2"));
+    }
+
+    #[test]
+    fn sge_gpu_directive() {
+        let rule = Rule {
+            name: "gpu_job".to_string(),
+            input: vec![],
+            output: vec![],
+            shell: Some("python train.py".to_string()),
+            script: None,
+            threads: Some(4),
+            memory: Some("16G".to_string()),
+            resources: Resources {
+                gpu: Some(2),
+                ..Resources::default()
+            },
+            environment: EnvironmentSpec::default(),
+            log: None,
+            benchmark: None,
+            params: HashMap::new(),
+            priority: 0,
+            target: false,
+            group: None,
+            description: None,
+            ..Default::default()
+        };
+        let config = ClusterJobConfig {
+            backend: ClusterBackend::Sge,
+            queue: Some("gpu.q".to_string()),
+            account: None,
+            walltime: None,
+            extra_args: vec![],
+        };
+        let script =
+            generate_submit_script(&ClusterBackend::Sge, &rule, "python train.py", &config);
+
+        assert!(script.contains("#$ -l gpu=2"));
+    }
+
+    #[test]
+    fn lsf_gpu_directive() {
+        let rule = Rule {
+            name: "gpu_job".to_string(),
+            input: vec![],
+            output: vec![],
+            shell: Some("python train.py".to_string()),
+            script: None,
+            threads: Some(4),
+            memory: Some("16G".to_string()),
+            resources: Resources {
+                gpu: Some(2),
+                ..Resources::default()
+            },
+            environment: EnvironmentSpec::default(),
+            log: None,
+            benchmark: None,
+            params: HashMap::new(),
+            priority: 0,
+            target: false,
+            group: None,
+            description: None,
+            ..Default::default()
+        };
+        let config = ClusterJobConfig {
+            backend: ClusterBackend::Lsf,
+            queue: Some("gpu".to_string()),
+            account: None,
+            walltime: None,
+            extra_args: vec![],
+        };
+        let script =
+            generate_submit_script(&ClusterBackend::Lsf, &rule, "python train.py", &config);
+
+        assert!(script.contains("#BSUB -gpu 2"));
+    }
+
+    // -- Per-rule walltime tests --------------------------------------------
+
+    #[test]
+    fn per_rule_walltime_slurm() {
+        let rule = Rule {
+            name: "long_job".to_string(),
+            input: vec![],
+            output: vec![],
+            shell: Some("sleep 100".to_string()),
+            script: None,
+            threads: Some(1),
+            memory: None,
+            resources: Resources {
+                time_limit: Some("48h".to_string()),
+                ..Resources::default()
+            },
+            environment: EnvironmentSpec::default(),
+            log: None,
+            benchmark: None,
+            params: HashMap::new(),
+            priority: 0,
+            target: false,
+            group: None,
+            description: None,
+            ..Default::default()
+        };
+        let config = ClusterJobConfig {
+            backend: ClusterBackend::Slurm,
+            queue: None,
+            account: None,
+            walltime: Some("24:00:00".to_string()),
+            extra_args: vec![],
+        };
+        let script = generate_submit_script(&ClusterBackend::Slurm, &rule, "sleep 100", &config);
+
+        // Per-rule walltime should override config walltime
+        assert!(script.contains("#SBATCH --time=48:00:00"));
+        assert!(!script.contains("#SBATCH --time=24:00:00"));
+    }
+
+    #[test]
+    fn per_rule_walltime_pbs() {
+        let rule = Rule {
+            name: "long_job".to_string(),
+            input: vec![],
+            output: vec![],
+            shell: Some("sleep 100".to_string()),
+            script: None,
+            threads: Some(1),
+            memory: None,
+            resources: Resources {
+                time_limit: Some("72h".to_string()),
+                ..Resources::default()
+            },
+            environment: EnvironmentSpec::default(),
+            log: None,
+            benchmark: None,
+            params: HashMap::new(),
+            priority: 0,
+            target: false,
+            group: None,
+            description: None,
+            ..Default::default()
+        };
+        let config = ClusterJobConfig {
+            backend: ClusterBackend::Pbs,
+            queue: None,
+            account: None,
+            walltime: Some("48:00:00".to_string()),
+            extra_args: vec![],
+        };
+        let script = generate_submit_script(&ClusterBackend::Pbs, &rule, "sleep 100", &config);
+
+        assert!(script.contains("walltime=72:00:00"));
+    }
+
+    #[test]
+    fn per_rule_walltime_sge() {
+        let rule = Rule {
+            name: "medium_job".to_string(),
+            input: vec![],
+            output: vec![],
+            shell: Some("analysis.sh".to_string()),
+            script: None,
+            threads: Some(2),
+            memory: Some("4G".to_string()),
+            resources: Resources {
+                time_limit: Some("6h".to_string()),
+                ..Resources::default()
+            },
+            environment: EnvironmentSpec::default(),
+            log: None,
+            benchmark: None,
+            params: HashMap::new(),
+            priority: 0,
+            target: false,
+            group: None,
+            description: None,
+            ..Default::default()
+        };
+        let config = ClusterJobConfig {
+            backend: ClusterBackend::Sge,
+            queue: None,
+            account: None,
+            walltime: Some("12:00:00".to_string()),
+            extra_args: vec![],
+        };
+        let script = generate_submit_script(&ClusterBackend::Sge, &rule, "analysis.sh", &config);
+
+        assert!(script.contains("#$ -l h_rt=06:00:00"));
+    }
+
+    #[test]
+    fn walltime_format_conversion() {
+        // Test the format_walltime_for_scheduler helper
+        assert_eq!(format_walltime_for_scheduler("24h"), "24:00:00");
+        assert_eq!(format_walltime_for_scheduler("30m"), "00:30:00");
+        assert_eq!(format_walltime_for_scheduler("2d"), "2-00:00:00");
+        assert_eq!(format_walltime_for_scheduler("48h"), "48:00:00");
+        assert_eq!(format_walltime_for_scheduler("1:30:00"), "1:30:00"); // Already formatted
+    }
+
+    // -- Module loading tests ------------------------------------------------
+
+    #[test]
+    fn slurm_module_loading() {
+        let rule = Rule {
+            name: "gatk_job".to_string(),
+            input: vec![],
+            output: vec![],
+            shell: Some("gatk HaplotypeCaller".to_string()),
+            script: None,
+            threads: Some(4),
+            memory: Some("8G".to_string()),
+            resources: Resources::default(),
+            environment: EnvironmentSpec {
+                modules: vec!["java/11".to_string(), "gatk/4.2".to_string()],
+                ..EnvironmentSpec::default()
+            },
+            log: None,
+            benchmark: None,
+            params: HashMap::new(),
+            priority: 0,
+            target: false,
+            group: None,
+            description: None,
+            ..Default::default()
+        };
+        let config = make_config();
+        let script = generate_submit_script(
+            &ClusterBackend::Slurm,
+            &rule,
+            "gatk HaplotypeCaller",
+            &config,
+        );
+
+        assert!(script.contains("module purge"));
+        assert!(script.contains("module load java/11"));
+        assert!(script.contains("module load gatk/4.2"));
+    }
+
+    #[test]
+    fn pbs_module_loading() {
+        let rule = Rule {
+            name: "bwa_job".to_string(),
+            input: vec![],
+            output: vec![],
+            shell: Some("bwa mem ref.fa reads.fq".to_string()),
+            script: None,
+            threads: Some(8),
+            memory: Some("16G".to_string()),
+            resources: Resources::default(),
+            environment: EnvironmentSpec {
+                modules: vec!["bwa/0.7.17".to_string()],
+                ..EnvironmentSpec::default()
+            },
+            log: None,
+            benchmark: None,
+            params: HashMap::new(),
+            priority: 0,
+            target: false,
+            group: None,
+            description: None,
+            ..Default::default()
+        };
+        let config = ClusterJobConfig {
+            backend: ClusterBackend::Pbs,
+            queue: Some("batch".to_string()),
+            account: None,
+            walltime: None,
+            extra_args: vec![],
+        };
+        let script = generate_submit_script(
+            &ClusterBackend::Pbs,
+            &rule,
+            "bwa mem ref.fa reads.fq",
+            &config,
+        );
+
+        assert!(script.contains("module purge"));
+        assert!(script.contains("module load bwa/0.7.17"));
+    }
+
+    // -- Logs directory tests ------------------------------------------------
+
+    #[test]
+    fn slurm_creates_logs_dir() {
+        let rule = make_rule("test", 1, None);
+        let config = make_config();
+        let script = generate_submit_script(&ClusterBackend::Slurm, &rule, "echo test", &config);
+
+        assert!(script.contains("mkdir -p logs"));
+    }
+
+    #[test]
+    fn pbs_creates_logs_dir() {
+        let rule = make_rule("test", 1, None);
+        let config = ClusterJobConfig {
+            backend: ClusterBackend::Pbs,
+            queue: None,
+            account: None,
+            walltime: None,
+            extra_args: vec![],
+        };
+        let script = generate_submit_script(&ClusterBackend::Pbs, &rule, "echo test", &config);
+
+        assert!(script.contains("mkdir -p logs"));
+    }
+
+    #[test]
+    fn sge_creates_logs_dir() {
+        let rule = make_rule("test", 1, None);
+        let config = ClusterJobConfig {
+            backend: ClusterBackend::Sge,
+            queue: None,
+            account: None,
+            walltime: None,
+            extra_args: vec![],
+        };
+        let script = generate_submit_script(&ClusterBackend::Sge, &rule, "echo test", &config);
+
+        assert!(script.contains("mkdir -p logs"));
+    }
+
+    #[test]
+    fn lsf_creates_logs_dir() {
+        let rule = make_rule("test", 1, None);
+        let config = ClusterJobConfig {
+            backend: ClusterBackend::Lsf,
+            queue: None,
+            account: None,
+            walltime: None,
+            extra_args: vec![],
+        };
+        let script = generate_submit_script(&ClusterBackend::Lsf, &rule, "echo test", &config);
+
+        assert!(script.contains("mkdir -p logs"));
     }
 }
