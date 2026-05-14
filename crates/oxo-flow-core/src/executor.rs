@@ -850,36 +850,261 @@ pub fn file_is_newer(source: &Path, target: &Path) -> bool {
     source_modified > target_modified
 }
 
-/// Evaluate a simple `when` condition string against workflow config values.
+/// Evaluate a `when` condition string against workflow config values.
 ///
-/// Supports:
-///  - `"config.<key>"` → true if key exists and is truthy
-///  - `"true"` / `"false"` literal
-///  - `"!<expr>"` → negation
+/// # Supported syntax
+///
+/// | Syntax | Description |
+/// |--------|-------------|
+/// | `true` / `false` | Literal boolean values |
+/// | `config.<key>` | Truthy check — true when key is present and non-empty/non-zero |
+/// | `config.<key> == "<value>"` | String equality |
+/// | `config.<key> != "<value>"` | String inequality |
+/// | `config.<key> == true\|false` | Boolean equality |
+/// | `config.<key> > N` | Numeric comparison (`>`, `>=`, `<`, `<=`) |
+/// | `file_exists("<path>")` | True when the file exists on the filesystem |
+/// | `!<expr>` | Logical negation |
+/// | `<expr> && <expr>` | Logical AND (short-circuit) |
+/// | `<expr> \|\| <expr>` | Logical OR (short-circuit) |
+/// | `(<expr>)` | Parenthesised grouping |
+///
+/// Unknown or syntactically invalid expressions default to `true`.
 pub fn evaluate_condition(
     condition: &str,
     config_values: &std::collections::HashMap<String, toml::Value>,
 ) -> bool {
-    let condition = condition.trim();
-    if condition.is_empty() || condition == "true" {
+    evaluate_condition_inner(condition.trim(), config_values)
+}
+
+/// Internal recursive evaluator for `when` expressions.
+fn evaluate_condition_inner(
+    s: &str,
+    config_values: &std::collections::HashMap<String, toml::Value>,
+) -> bool {
+    let s = s.trim();
+    if s.is_empty() || s == "true" {
         return true;
     }
-    if condition == "false" {
+    if s == "false" {
         return false;
     }
-    if let Some(rest) = condition.strip_prefix('!') {
-        return !evaluate_condition(rest, config_values);
+
+    // ------------------------------------------------------------------
+    // Parentheses grouping
+    // ------------------------------------------------------------------
+    if s.starts_with('(') && s.ends_with(')') {
+        // Unwrap only if the outer parens form a balanced pair
+        if balanced_parens(s) {
+            return evaluate_condition_inner(&s[1..s.len() - 1], config_values);
+        }
     }
-    if let Some(key) = condition.strip_prefix("config.") {
+
+    // ------------------------------------------------------------------
+    // Logical OR  (lowest precedence — split on outermost `||`)
+    // ------------------------------------------------------------------
+    if let Some(idx) = find_top_level_op(s, "||") {
+        let left = &s[..idx];
+        let right = &s[idx + 2..];
+        return evaluate_condition_inner(left, config_values)
+            || evaluate_condition_inner(right, config_values);
+    }
+
+    // ------------------------------------------------------------------
+    // Logical AND  (split on outermost `&&`)
+    // ------------------------------------------------------------------
+    if let Some(idx) = find_top_level_op(s, "&&") {
+        let left = &s[..idx];
+        let right = &s[idx + 2..];
+        return evaluate_condition_inner(left, config_values)
+            && evaluate_condition_inner(right, config_values);
+    }
+
+    // ------------------------------------------------------------------
+    // Logical NOT
+    // ------------------------------------------------------------------
+    if let Some(rest) = s.strip_prefix('!') {
+        return !evaluate_condition_inner(rest.trim(), config_values);
+    }
+
+    // ------------------------------------------------------------------
+    // file_exists("<path>")
+    // ------------------------------------------------------------------
+    if let Some(inner) = s
+        .strip_prefix("file_exists(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        let path = inner.trim().trim_matches('"').trim_matches('\'');
+        return std::path::Path::new(path).exists();
+    }
+
+    // ------------------------------------------------------------------
+    // Comparison operators: config.<key> op <rhs>
+    // Try operators from longest to shortest to avoid ambiguous prefix matches.
+    // ------------------------------------------------------------------
+    for op in &["==", "!=", ">=", "<=", ">", "<"] {
+        if let Some(idx) = find_top_level_op(s, op) {
+            let lhs = s[..idx].trim();
+            let rhs = s[idx + op.len()..].trim();
+            if let Some(key) = lhs.strip_prefix("config.") {
+                let val = config_values.get(key);
+                return compare_config_value(val, op, rhs);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // config.<key>  — truthy check
+    // ------------------------------------------------------------------
+    if let Some(key) = s.strip_prefix("config.") {
         return match config_values.get(key) {
             Some(toml::Value::Boolean(b)) => *b,
-            Some(toml::Value::String(s)) => !s.is_empty(),
+            Some(toml::Value::String(sv)) => !sv.is_empty() && sv != "false" && sv != "0",
+            Some(toml::Value::Integer(i)) => *i != 0,
+            Some(toml::Value::Float(f)) => *f != 0.0,
             Some(_) => true,
             None => false,
         };
     }
-    // Default: treat as truthy
+
+    // Default: treat unknown expressions as truthy
     true
+}
+
+/// Returns the byte index of `op` in `s` that sits at the top level
+/// (i.e., not inside any parentheses or string literal).
+/// Returns `None` if `op` is not found at the top level.
+fn find_top_level_op(s: &str, op: &str) -> Option<usize> {
+    let op_bytes = op.as_bytes();
+    let op_len = op_bytes.len();
+    let bytes = s.as_bytes();
+    let mut depth: i32 = 0;
+    let mut in_double = false;
+    let mut in_single = false;
+    let n = bytes.len();
+
+    let mut i = 0usize;
+    while i < n {
+        let b = bytes[i];
+        match b {
+            b'"' if !in_single => in_double = !in_double,
+            b'\'' if !in_double => in_single = !in_single,
+            b'(' if !in_double && !in_single => depth += 1,
+            b')' if !in_double && !in_single => depth -= 1,
+            _ => {}
+        }
+        if !in_double
+            && !in_single
+            && depth == 0
+            && i + op_len <= n
+            && &bytes[i..i + op_len] == op_bytes
+        {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Returns `true` if the outer `(…)` in `s` form a balanced pair
+/// (i.e., the closing `)` is the very last character).
+fn balanced_parens(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.first() != Some(&b'(') || bytes.last() != Some(&b')') {
+        return false;
+    }
+    let mut depth = 0i32;
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'(' {
+            depth += 1;
+        } else if b == b')' {
+            depth -= 1;
+        }
+        // If depth drops to 0 before the last char, the parens are not outer
+        if depth == 0 && i < bytes.len() - 1 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Compare a config value against `rhs` using the given comparison operator.
+fn compare_config_value(val: Option<&toml::Value>, op: &str, rhs: &str) -> bool {
+    match val {
+        Some(toml::Value::Boolean(b)) => {
+            let rhs_bool = match rhs {
+                "true" => true,
+                "false" => false,
+                _ => return false,
+            };
+            match op {
+                "==" => *b == rhs_bool,
+                "!=" => *b != rhs_bool,
+                _ => false,
+            }
+        }
+        Some(toml::Value::Integer(i)) => {
+            if let Ok(rhs_num) = rhs.parse::<i64>() {
+                match op {
+                    "==" => *i == rhs_num,
+                    "!=" => *i != rhs_num,
+                    ">=" => *i >= rhs_num,
+                    "<=" => *i <= rhs_num,
+                    ">" => *i > rhs_num,
+                    "<" => *i < rhs_num,
+                    _ => false,
+                }
+            } else {
+                false
+            }
+        }
+        Some(toml::Value::Float(f)) => {
+            if let Ok(rhs_num) = rhs.parse::<f64>() {
+                match op {
+                    // Use a relative tolerance scaled to the larger magnitude so
+                    // that both small and large floating-point values are handled
+                    // correctly (f64::EPSILON only covers values near 1.0).
+                    "==" => {
+                        let tol = (f.abs().max(rhs_num.abs())) * 1e-9;
+                        (*f - rhs_num).abs() <= tol.max(f64::MIN_POSITIVE)
+                    }
+                    "!=" => {
+                        let tol = (f.abs().max(rhs_num.abs())) * 1e-9;
+                        (*f - rhs_num).abs() > tol.max(f64::MIN_POSITIVE)
+                    }
+                    ">=" => *f >= rhs_num,
+                    "<=" => *f <= rhs_num,
+                    ">" => *f > rhs_num,
+                    "<" => *f < rhs_num,
+                    _ => false,
+                }
+            } else {
+                false
+            }
+        }
+        Some(toml::Value::String(sv)) => {
+            let rhs_str = rhs.trim_matches('"').trim_matches('\'');
+            match op {
+                "==" => sv.as_str() == rhs_str,
+                "!=" => sv.as_str() != rhs_str,
+                _ => false,
+            }
+        }
+        None => {
+            // Key not present — treat as empty / false
+            match op {
+                "==" => {
+                    let rhs_str = rhs.trim_matches('"').trim_matches('\'');
+                    rhs_str.is_empty() || rhs_str == "false"
+                }
+                "!=" => {
+                    let rhs_str = rhs.trim_matches('"').trim_matches('\'');
+                    !rhs_str.is_empty() && rhs_str != "false"
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
 }
 
 /// Clean up temporary output files produced by a rule.
@@ -2501,5 +2726,136 @@ mod tests {
     fn cleanup_cache_nonexistent_dir() {
         let count = cleanup_cache(Path::new("/nonexistent-oxo-flow-test-dir"), 7);
         assert_eq!(count, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // WF-01: Enhanced evaluate_condition tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn evaluate_condition_string_equality() {
+        let mut config = HashMap::new();
+        config.insert(
+            "mode".to_string(),
+            toml::Value::String("tumor_normal".to_string()),
+        );
+        assert!(evaluate_condition(
+            r#"config.mode == "tumor_normal""#,
+            &config
+        ));
+        assert!(!evaluate_condition(r#"config.mode == "germline""#, &config));
+        assert!(evaluate_condition(r#"config.mode != "germline""#, &config));
+    }
+
+    #[test]
+    fn evaluate_condition_boolean_equality() {
+        let mut config = HashMap::new();
+        config.insert("annotate".to_string(), toml::Value::Boolean(true));
+        assert!(evaluate_condition("config.annotate == true", &config));
+        assert!(!evaluate_condition("config.annotate == false", &config));
+        assert!(evaluate_condition("config.annotate != false", &config));
+    }
+
+    #[test]
+    fn evaluate_condition_integer_comparisons() {
+        let mut config = HashMap::new();
+        config.insert("min_coverage".to_string(), toml::Value::Integer(30));
+        assert!(evaluate_condition("config.min_coverage > 20", &config));
+        assert!(evaluate_condition("config.min_coverage >= 30", &config));
+        assert!(!evaluate_condition("config.min_coverage > 30", &config));
+        assert!(evaluate_condition("config.min_coverage < 50", &config));
+        assert!(evaluate_condition("config.min_coverage <= 30", &config));
+        assert!(!evaluate_condition("config.min_coverage < 30", &config));
+        assert!(evaluate_condition("config.min_coverage == 30", &config));
+        assert!(evaluate_condition("config.min_coverage != 10", &config));
+    }
+
+    #[test]
+    fn evaluate_condition_logical_and() {
+        let mut config = HashMap::new();
+        config.insert("run_qc".to_string(), toml::Value::Boolean(true));
+        config.insert("run_align".to_string(), toml::Value::Boolean(true));
+        config.insert("skip".to_string(), toml::Value::Boolean(false));
+
+        assert!(evaluate_condition(
+            "config.run_qc && config.run_align",
+            &config
+        ));
+        assert!(!evaluate_condition("config.run_qc && config.skip", &config));
+        assert!(!evaluate_condition("config.skip && config.run_qc", &config));
+    }
+
+    #[test]
+    fn evaluate_condition_logical_or() {
+        let mut config = HashMap::new();
+        config.insert("run_qc".to_string(), toml::Value::Boolean(true));
+        config.insert("skip".to_string(), toml::Value::Boolean(false));
+
+        assert!(evaluate_condition("config.run_qc || config.skip", &config));
+        assert!(evaluate_condition("config.skip || config.run_qc", &config));
+        assert!(!evaluate_condition("config.skip || false", &config));
+    }
+
+    #[test]
+    fn evaluate_condition_parentheses() {
+        let mut config = HashMap::new();
+        config.insert("a".to_string(), toml::Value::Boolean(true));
+        config.insert("b".to_string(), toml::Value::Boolean(false));
+        config.insert("c".to_string(), toml::Value::Boolean(true));
+
+        // Without parens: a || (b && c) = true || false = true
+        assert!(evaluate_condition(
+            "config.a || config.b && config.c",
+            &config
+        ));
+        // Parenthesised: (a || b) && c = true && true = true
+        assert!(evaluate_condition(
+            "(config.a || config.b) && config.c",
+            &config
+        ));
+    }
+
+    #[test]
+    fn evaluate_condition_file_exists_nonexistent() {
+        let config = HashMap::new();
+        assert!(!evaluate_condition(
+            r#"file_exists("/nonexistent-path-oxo-flow-test")"#,
+            &config
+        ));
+    }
+
+    #[test]
+    fn evaluate_condition_file_exists_real_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("sentinel.txt");
+        std::fs::write(&file, "exists").unwrap();
+        let condition = format!(r#"file_exists("{}")"#, file.display());
+        let config = HashMap::new();
+        assert!(evaluate_condition(&condition, &config));
+    }
+
+    #[test]
+    fn evaluate_condition_negated_comparison() {
+        let mut config = HashMap::new();
+        config.insert("mode".to_string(), toml::Value::String("wgs".to_string()));
+        assert!(evaluate_condition(r#"!(config.mode == "wes")"#, &config));
+        assert!(!evaluate_condition(r#"!(config.mode == "wgs")"#, &config));
+    }
+
+    #[test]
+    fn evaluate_condition_complex_expression() {
+        let mut config = HashMap::new();
+        config.insert("run_qc".to_string(), toml::Value::Boolean(true));
+        config.insert("threads".to_string(), toml::Value::Integer(8));
+        config.insert(
+            "mode".to_string(),
+            toml::Value::String("tumor_normal".to_string()),
+        );
+
+        // run_qc == true && threads >= 4 && mode == "tumor_normal"
+        assert!(evaluate_condition(
+            r#"config.run_qc == true && config.threads >= 4 && config.mode == "tumor_normal""#,
+            &config
+        ));
     }
 }

@@ -1260,21 +1260,20 @@ async fn list_workflows(
 
     let mut workflows = Vec::new();
 
-    if user_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(user_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|s| s.to_str()) == Some("oxoflow") {
-                    if let Ok(content) = std::fs::read_to_string(&path) {
-                        if let Ok(config) = oxo_flow_core::WorkflowConfig::parse(&content) {
-                            workflows.push(WorkflowSummary {
-                                name: config.workflow.name.clone(),
-                                version: config.workflow.version.clone(),
-                                rules_count: config.rules.len(),
-                            });
-                        }
-                    }
-                }
+    if user_dir.exists()
+        && let Ok(entries) = std::fs::read_dir(user_dir)
+    {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("oxoflow")
+                && let Ok(content) = std::fs::read_to_string(&path)
+                && let Ok(config) = oxo_flow_core::WorkflowConfig::parse(&content)
+            {
+                workflows.push(WorkflowSummary {
+                    name: config.workflow.name.clone(),
+                    version: config.workflow.version.clone(),
+                    rules_count: config.rules.len(),
+                });
             }
         }
     }
@@ -2214,9 +2213,15 @@ threads = 8
 docker = "biocontainers/bwa:0.7.17"
 "#;
 
-    /// Helper: initialize in-memory SQLite for tests that need DB.
+    /// Helper: initialize SQLite for tests that need DB.
+    ///
+    /// Uses a per-process temp file so that all parallel test threads within
+    /// one binary run share the same schema and seed data, while different
+    /// test binary invocations start fresh.
     async fn init_test_db() {
-        let _ = db::init_db("sqlite::memory:").await;
+        let db_path = std::env::temp_dir().join(format!("oxo-flow-test-{}.db", std::process::id()));
+        let url = format!("sqlite:{}", db_path.display());
+        let _ = db::init_db(&url).await;
     }
 
     /// Helper: send a POST request with a JSON body and return the response.

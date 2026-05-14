@@ -784,6 +784,8 @@ pub fn generate_oxoflow(config: &VenusConfig) -> anyhow::Result<String> {
         cluster: None,
         resource_budget: None,
         reference_databases: Vec::new(),
+        pairs: Vec::new(),
+        sample_groups: Vec::new(),
     };
 
     let toml_str = toml::to_string_pretty(&wf)?;

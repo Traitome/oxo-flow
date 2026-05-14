@@ -405,3 +405,345 @@ fn gallery_08_multiomics_integration() {
     assert!(groups.len() >= 3); // At least 3 levels of depth
     assert!(groups[0].len() >= 3); // 3 independent alignment steps at the root
 }
+
+// ============================================================================
+// WC-01: Tumor-Normal Pairing Tests
+// ============================================================================
+
+/// Test that [[pairs]] are parsed correctly and expand_wildcards produces
+/// concrete rule instances.
+#[test]
+fn wc01_pairs_expand_to_concrete_rules() {
+    let toml = r#"
+        [workflow]
+        name = "wc01-test"
+
+        [[pairs]]
+        pair_id = "CASE_001"
+        tumor   = "TUMOR_01"
+        normal  = "NORMAL_01"
+
+        [[pairs]]
+        pair_id = "CASE_002"
+        tumor   = "TUMOR_02"
+        normal  = "NORMAL_02"
+
+        [[rules]]
+        name   = "align_tumor"
+        input  = ["raw/{tumor}_R1.fq.gz"]
+        output = ["aligned/{tumor}.bam"]
+        shell  = "bwa mem ref.fa {input[0]} > {output[0]}"
+
+        [[rules]]
+        name   = "align_normal"
+        input  = ["raw/{normal}_R1.fq.gz"]
+        output = ["aligned/{normal}.bam"]
+        shell  = "bwa mem ref.fa {input[0]} > {output[0]}"
+
+        [[rules]]
+        name   = "mutect2"
+        input  = ["aligned/{tumor}.bam", "aligned/{normal}.bam"]
+        output = ["variants/{pair_id}.vcf.gz"]
+        shell  = "gatk Mutect2 -I {input[0]} -I {input[1]} -normal {normal} -O {output[0]}"
+    "#;
+
+    let mut config = WorkflowConfig::parse(toml).unwrap();
+    assert_eq!(config.pairs.len(), 2);
+    assert_eq!(config.rules.len(), 3);
+
+    // Before expansion, rule names are template names
+    assert!(config.rules.iter().any(|r| r.name == "align_tumor"));
+    assert!(config.rules.iter().any(|r| r.name == "mutect2"));
+
+    config.expand_wildcards().unwrap();
+
+    // After expansion: 3 rules × 2 pairs = 6 rules
+    assert_eq!(config.rules.len(), 6);
+
+    // Check expanded names
+    assert!(
+        config
+            .rules
+            .iter()
+            .any(|r| r.name == "align_tumor_CASE_001")
+    );
+    assert!(
+        config
+            .rules
+            .iter()
+            .any(|r| r.name == "align_tumor_CASE_002")
+    );
+    assert!(
+        config
+            .rules
+            .iter()
+            .any(|r| r.name == "align_normal_CASE_001")
+    );
+    assert!(
+        config
+            .rules
+            .iter()
+            .any(|r| r.name == "align_normal_CASE_002")
+    );
+    assert!(config.rules.iter().any(|r| r.name == "mutect2_CASE_001"));
+    assert!(config.rules.iter().any(|r| r.name == "mutect2_CASE_002"));
+
+    // Check wildcard substitution in file paths
+    let align_t1 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "align_tumor_CASE_001")
+        .unwrap();
+    assert_eq!(align_t1.input[0], "raw/TUMOR_01_R1.fq.gz");
+    assert_eq!(align_t1.output[0], "aligned/TUMOR_01.bam");
+
+    let mutect2_c2 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "mutect2_CASE_002")
+        .unwrap();
+    assert_eq!(mutect2_c2.output[0], "variants/CASE_002.vcf.gz");
+
+    // DAG should be buildable and valid
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+    dag.validate().unwrap();
+
+    let order = dag.execution_order().unwrap();
+    assert_eq!(order.len(), 6);
+}
+
+/// Test that the multi-case tumor-normal example file parses and expands correctly.
+#[test]
+fn wc01_example_paired_tumor_normal_pairs() {
+    let toml = std::fs::read_to_string("examples/paired_tumor_normal_pairs.oxoflow").unwrap();
+    let mut config = WorkflowConfig::parse(&toml).unwrap();
+
+    assert_eq!(config.workflow.name, "multi-case-tumor-normal");
+    assert_eq!(config.pairs.len(), 2);
+
+    // Before expansion the template rules use {tumor}/{normal} placeholders
+    let template_rule_count = config.rules.len();
+    assert!(template_rule_count > 0);
+
+    config.expand_wildcards().unwrap();
+
+    // Every template rule should expand into 2 instances (one per pair)
+    assert_eq!(config.rules.len(), template_rule_count * 2);
+
+    // DAG construction must succeed
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+    dag.validate().unwrap();
+
+    let order = dag.execution_order().unwrap();
+    assert!(!order.is_empty());
+
+    // Both pairs should have a clinical_report step
+    assert!(order.iter().any(|n| n == "clinical_report_CASE_001"));
+    assert!(order.iter().any(|n| n == "clinical_report_CASE_002"));
+}
+
+/// Test that rules without {tumor}/{normal} wildcards are unaffected by expansion.
+#[test]
+fn wc01_non_wildcard_rules_unchanged() {
+    let toml = r#"
+        [workflow]
+        name = "wc01-no-wildcard"
+
+        [[pairs]]
+        pair_id = "P1"
+        tumor   = "T1"
+        normal  = "N1"
+
+        [[rules]]
+        name   = "setup"
+        output = ["setup.done"]
+        shell  = "mkdir -p results && touch setup.done"
+
+        [[rules]]
+        name   = "align_tumor"
+        input  = ["raw/{tumor}.fq"]
+        output = ["aligned/{tumor}.bam"]
+        shell  = "bwa mem ref.fa {input[0]} > {output[0]}"
+    "#;
+
+    let mut config = WorkflowConfig::parse(toml).unwrap();
+    config.expand_wildcards().unwrap();
+
+    // setup rule should remain as-is
+    assert_eq!(config.rules.iter().filter(|r| r.name == "setup").count(), 1);
+    // align_tumor should be expanded
+    assert!(config.rules.iter().any(|r| r.name == "align_tumor_P1"));
+}
+
+// ============================================================================
+// WC-02: Multi-Sample Group Tests
+// ============================================================================
+
+/// Test that [[sample_groups]] parse correctly and expand_wildcards produces
+/// one rule instance per (group, sample) combination.
+#[test]
+fn wc02_sample_groups_expand_correctly() {
+    let toml = r#"
+        [workflow]
+        name = "wc02-test"
+
+        [[sample_groups]]
+        name    = "control"
+        samples = ["CTRL_001", "CTRL_002"]
+
+        [[sample_groups]]
+        name    = "case"
+        samples = ["CASE_001"]
+
+        [[rules]]
+        name   = "qc"
+        input  = ["raw/{sample}_R1.fq.gz"]
+        output = ["qc/{sample}_fastqc.html"]
+        shell  = "fastqc {input[0]} -o qc/"
+
+        [[rules]]
+        name   = "align"
+        input  = ["raw/{sample}_R1.fq.gz"]
+        output = ["aligned/{sample}.bam"]
+        shell  = "bwa mem ref.fa {input[0]} > {output[0]}"
+    "#;
+
+    let mut config = WorkflowConfig::parse(toml).unwrap();
+    assert_eq!(config.sample_groups.len(), 2);
+    assert_eq!(config.rules.len(), 2);
+
+    config.expand_wildcards().unwrap();
+
+    // 2 rules × 3 total samples (2 control + 1 case) = 6 rules
+    assert_eq!(config.rules.len(), 6);
+
+    assert!(config.rules.iter().any(|r| r.name == "qc_control_CTRL_001"));
+    assert!(config.rules.iter().any(|r| r.name == "qc_control_CTRL_002"));
+    assert!(config.rules.iter().any(|r| r.name == "qc_case_CASE_001"));
+    assert!(
+        config
+            .rules
+            .iter()
+            .any(|r| r.name == "align_control_CTRL_001")
+    );
+    assert!(config.rules.iter().any(|r| r.name == "align_case_CASE_001"));
+
+    // File patterns should be resolved
+    let qc_c001 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "qc_control_CTRL_001")
+        .unwrap();
+    assert_eq!(qc_c001.input[0], "raw/CTRL_001_R1.fq.gz");
+    assert_eq!(qc_c001.output[0], "qc/CTRL_001_fastqc.html");
+
+    // DAG must be valid
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+    dag.validate().unwrap();
+}
+
+/// Test the cohort analysis example file.
+#[test]
+fn wc02_example_cohort_analysis() {
+    let toml = std::fs::read_to_string("examples/cohort_analysis.oxoflow").unwrap();
+    let mut config = WorkflowConfig::parse(&toml).unwrap();
+
+    assert_eq!(config.workflow.name, "cohort-analysis");
+    assert_eq!(config.sample_groups.len(), 2);
+
+    // Count rules before expansion (4 wildcard + 1 non-wildcard)
+    let wildcard_rule_count: usize = config
+        .rules
+        .iter()
+        .filter(|r| {
+            r.input.iter().any(|p| p.contains("{sample}"))
+                || r.output.iter().any(|p| p.contains("{sample}"))
+        })
+        .count();
+    let non_wildcard_rule_count = config.rules.len() - wildcard_rule_count;
+
+    config.expand_wildcards().unwrap();
+
+    // Total samples: 3 control + 2 case = 5
+    let total_samples = 5_usize;
+
+    // After expansion:
+    //   wildcard rules expanded per sample + non-wildcard rules run once
+    let expected = wildcard_rule_count * total_samples + non_wildcard_rule_count;
+    assert_eq!(config.rules.len(), expected);
+
+    // DAG should be valid
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+    dag.validate().unwrap();
+}
+
+// ============================================================================
+// WF-01: `when` Conditional Execution Tests
+// ============================================================================
+
+/// Test that the conditional workflow example parses correctly.
+#[test]
+fn wf01_example_conditional_workflow() {
+    let toml = std::fs::read_to_string("examples/conditional_workflow.oxoflow").unwrap();
+    let config = WorkflowConfig::parse(&toml).unwrap();
+
+    assert_eq!(config.workflow.name, "conditional-workflow");
+    assert!(!config.rules.is_empty());
+
+    // Rules with `when` fields should be present
+    let conditional_rules: Vec<_> = config.rules.iter().filter(|r| r.when.is_some()).collect();
+    assert!(
+        !conditional_rules.is_empty(),
+        "expected some conditional rules"
+    );
+
+    // DAG builds fine even with conditional rules
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+    dag.validate().unwrap();
+}
+
+/// Test evaluate_condition with various expressions through the executor.
+#[test]
+fn wf01_evaluate_condition_integration() {
+    use oxo_flow_core::executor::evaluate_condition;
+
+    let mut config = std::collections::HashMap::new();
+    config.insert("run_qc".to_string(), toml::Value::Boolean(true));
+    config.insert("skip_annotation".to_string(), toml::Value::Boolean(false));
+    config.insert("min_coverage".to_string(), toml::Value::Integer(30));
+    config.insert("mode".to_string(), toml::Value::String("WGS".to_string()));
+
+    // Simple truthy checks
+    assert!(evaluate_condition("config.run_qc", &config));
+    assert!(!evaluate_condition("config.skip_annotation", &config));
+
+    // Comparisons
+    assert!(evaluate_condition("config.min_coverage >= 30", &config));
+    assert!(!evaluate_condition("config.min_coverage > 30", &config));
+    assert!(evaluate_condition(r#"config.mode == "WGS""#, &config));
+    assert!(!evaluate_condition(r#"config.mode == "WES""#, &config));
+
+    // Logical operators
+    assert!(evaluate_condition(
+        "config.run_qc && config.min_coverage >= 20",
+        &config
+    ));
+    assert!(evaluate_condition(
+        "config.skip_annotation || config.run_qc",
+        &config
+    ));
+    assert!(!evaluate_condition(
+        "config.skip_annotation && config.run_qc",
+        &config
+    ));
+
+    // Negation
+    assert!(!evaluate_condition("!config.run_qc", &config));
+    assert!(evaluate_condition("!config.skip_annotation", &config));
+
+    // Complex
+    assert!(evaluate_condition(
+        r#"config.run_qc && config.mode == "WGS" && config.min_coverage >= 20"#,
+        &config
+    ));
+}

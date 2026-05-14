@@ -24,18 +24,18 @@ oxo-flow v0.3.1 has been comprehensively reviewed from 20 different expert persp
 | Cluster Wrapping | Critical | ✅ DONE | `generate_submit_script_with_env()` wraps through EnvironmentResolver |
 | CLI Options | High | ✅ DONE | Added `--max-threads`, `--max-memory`, `--skip-env-setup`, `--cache-dir` |
 | Documentation | High | ✅ DONE | Updated run.md, cluster.md, environment-system.md, architecture.md |
+| **WC-01** | Critical | ✅ DONE | `[[pairs]]` section + automatic `{tumor}`/`{normal}`/`{pair_id}` expansion |
+| **WC-02** | Critical | ✅ DONE | `[[sample_groups]]` section + automatic `{group}`/`{sample}` expansion |
+| **WF-01** | High | ✅ DONE | `when` expression field on rules with full comparison/logical operator support |
 
 ---
 
-## Critical Gaps (Must Fix for Production)
+## Remaining Gaps (Must Fix for Production)
 
 ### Bioinformatics Workflow Gaps
 
 | ID | Severity | Issue | Impact | Effort |
 |----|----------|-------|--------|--------|
-| **WC-01** | CRITICAL | No tumor-normal paired sample linking | Cannot run clinical somatic variant pipelines | Medium |
-| **WC-02** | CRITICAL | No multi-batch/group processing | Cannot run cohort studies or time-series experiments | Medium |
-| **WF-01** | HIGH | No conditional execution (when/if) | Must maintain separate workflow files for pipeline modes | Medium |
 | **RES-01** | HIGH | Container memory not enforced | Docker/Singularity lack --memory limits | Low |
 | **ENV-01** | HIGH | No HPC module system support | Lmod/environment modules not supported | Medium |
 | **GAL-05** | CRITICAL | paired_tumor_normal.oxoflow hardcoded | Example workflow not production-ready | Medium |

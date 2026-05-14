@@ -485,8 +485,15 @@ async fn main() -> Result<()> {
             cache_dir,
         } => {
             print_banner();
-            let config = WorkflowConfig::from_file(&workflow)
+            let mut config = WorkflowConfig::from_file(&workflow)
                 .with_context(|| format!("failed to parse {}", workflow.display()))?;
+
+            // Expand rules that reference tumor/normal pair or sample-group wildcards.
+            // Must be done before building the DAG so that concrete rule names and
+            // file paths are available for dependency inference.
+            config
+                .expand_wildcards()
+                .context("failed to expand wildcard rules")?;
 
             let dag =
                 WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;
@@ -572,8 +579,12 @@ async fn main() -> Result<()> {
 
         Commands::DryRun { workflow } => {
             print_banner();
-            let config = WorkflowConfig::from_file(&workflow)
+            let mut config = WorkflowConfig::from_file(&workflow)
                 .with_context(|| format!("failed to parse {}", workflow.display()))?;
+
+            config
+                .expand_wildcards()
+                .context("failed to expand wildcard rules")?;
 
             let dag =
                 WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;

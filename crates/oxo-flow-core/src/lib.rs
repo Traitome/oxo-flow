@@ -56,8 +56,9 @@ pub mod wildcard;
 pub use config::WorkflowConfig;
 pub use config::{
     ActionabilityAnnotation, BiomarkerResult, ClinicalReportSection, ComplianceEvent, FilterChain,
-    GenePanel, Parsed, QcThreshold, Ready, ReferenceDatabase, RuleName, TumorSampleMeta, Validated,
-    VariantClassification, WildcardPattern, WorkflowState,
+    GenePanel, Parsed, QcThreshold, Ready, ReferenceDatabase, RuleName, SampleGroup,
+    TumorNormalPair, TumorSampleMeta, Validated, VariantClassification, WildcardPattern,
+    WorkflowState,
 };
 pub use dag::WorkflowDag;
 pub use error::{OxoFlowError, Result};
@@ -66,3 +67,4 @@ pub use executor::{
 };
 pub use rule::Rule;
 pub use rule::{EnvironmentSpec, GpuSpec, ResourceHint, Resources, RuleBuilder};
+pub use wildcard::{wildcard_combinations_from_groups, wildcard_combinations_from_pairs};

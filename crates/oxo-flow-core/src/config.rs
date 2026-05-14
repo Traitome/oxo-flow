@@ -257,6 +257,76 @@ impl std::fmt::Display for ReferenceDatabase {
     }
 }
 
+/// A tumor-normal sample pair for somatic analysis workflows.
+///
+/// Each pair defines `{pair_id}`, `{tumor}`, and `{normal}` wildcard values.
+/// Rules containing any of these wildcards in their `input`, `output`, or
+/// `shell` fields are expanded once per pair.
+///
+/// # Example `.oxoflow` usage
+///
+/// ```toml
+/// [[pairs]]
+/// pair_id = "CASE_001"
+/// tumor   = "TUMOR_01"
+/// normal  = "NORMAL_01"
+/// tumor_type = "lung_adenocarcinoma"
+///
+/// [[pairs]]
+/// pair_id = "CASE_002"
+/// tumor   = "TUMOR_02"
+/// normal  = "NORMAL_02"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TumorNormalPair {
+    /// Unique identifier for this pair (available as `{pair_id}`).
+    pub pair_id: String,
+
+    /// Tumor sample identifier (available as `{tumor}`).
+    pub tumor: String,
+
+    /// Normal/germline sample identifier (available as `{normal}`).
+    pub normal: String,
+
+    /// Optional tumor histology / tissue type (available as `{tumor_type}`).
+    #[serde(default)]
+    pub tumor_type: Option<String>,
+
+    /// Arbitrary key-value metadata; each key is available as a wildcard.
+    #[serde(default)]
+    pub metadata: HashMap<String, String>,
+}
+
+/// A named group of samples for cohort-level analysis.
+///
+/// Rules containing `{group}` or `{sample}` wildcards are expanded for every
+/// (group, sample) combination across all defined groups.
+///
+/// # Example `.oxoflow` usage
+///
+/// ```toml
+/// [[sample_groups]]
+/// name    = "control"
+/// samples = ["S001", "S002"]
+///
+/// [[sample_groups]]
+/// name    = "case"
+/// samples = ["S003", "S004"]
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SampleGroup {
+    /// Group name (available as `{group}`).
+    pub name: String,
+
+    /// Sample identifiers belonging to this group (each available as `{sample}`).
+    #[serde(default)]
+    pub samples: Vec<String>,
+
+    /// Arbitrary key-value metadata for the group; each key is a wildcard.
+    #[serde(default)]
+    pub metadata: HashMap<String, String>,
+}
+
 /// Complete workflow configuration parsed from an `.oxoflow` file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowConfig {
@@ -302,6 +372,20 @@ pub struct WorkflowConfig {
     /// Reference database versions used by this workflow.
     #[serde(default, rename = "reference_db")]
     pub reference_databases: Vec<ReferenceDatabase>,
+
+    /// Tumor-normal sample pairs for somatic variant calling workflows.
+    ///
+    /// Rules containing `{tumor}`, `{normal}`, or `{pair_id}` wildcards are
+    /// expanded once per pair by [`WorkflowConfig::expand_wildcards`].
+    #[serde(default, rename = "pairs")]
+    pub pairs: Vec<TumorNormalPair>,
+
+    /// Sample groups for cohort-level analysis.
+    ///
+    /// Rules containing `{group}` or `{sample}` wildcards are expanded for
+    /// every (group, sample) combination by [`WorkflowConfig::expand_wildcards`].
+    #[serde(default, rename = "sample_groups")]
+    pub sample_groups: Vec<SampleGroup>,
 }
 
 // ---------------------------------------------------------------------------
@@ -747,6 +831,177 @@ impl WorkflowConfig {
                 rule.environment = env.clone();
             }
         }
+    }
+
+    /// Expand rules that contain pair or group wildcards into concrete instances.
+    ///
+    /// Scans each rule for wildcard placeholders:
+    /// - Rules containing `{tumor}`, `{normal}`, or `{pair_id}` are expanded
+    ///   once per entry in `self.pairs`.
+    /// - Rules containing `{group}` or `{sample}` are expanded once per
+    ///   (group, sample) combination in `self.sample_groups`.
+    /// - Rules without any of these wildcards are kept unchanged.
+    ///
+    /// The expanded rule names follow the pattern `{original_name}_{suffix}`,
+    /// where the suffix is the `pair_id` for pair rules or `{group}_{sample}`
+    /// for group rules.
+    ///
+    /// After calling this method, `self.rules` contains only concrete rules
+    /// (no pair/group wildcards) and the DAG can be built normally.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if duplicate rule names would be produced (e.g., two
+    /// pairs with the same `pair_id`), or if a pair/group is defined but no
+    /// rules reference its wildcards (this is not an error—those pairs are
+    /// simply ignored).
+    pub fn expand_wildcards(&mut self) -> Result<()> {
+        use crate::wildcard::{
+            expand_pattern, has_wildcards, wildcard_combinations_from_groups,
+            wildcard_combinations_from_pairs,
+        };
+
+        let pair_combos = wildcard_combinations_from_pairs(&self.pairs);
+        let group_combos = wildcard_combinations_from_groups(&self.sample_groups);
+
+        // Wildcards that trigger pair expansion
+        const PAIR_WILDCARDS: &[&str] = &["tumor", "normal", "pair_id"];
+        // Wildcards that trigger group expansion
+        const GROUP_WILDCARDS: &[&str] = &["group", "sample"];
+
+        let mut expanded_rules: Vec<Rule> = Vec::new();
+        let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for rule in &self.rules {
+            // Collect all text fields that might contain wildcards
+            let all_text: Vec<&str> = rule
+                .input
+                .iter()
+                .chain(rule.output.iter())
+                .chain(rule.shell.iter())
+                .map(String::as_str)
+                .collect();
+
+            let uses_pair_wildcard = !pair_combos.is_empty()
+                && all_text.iter().any(|t| {
+                    PAIR_WILDCARDS
+                        .iter()
+                        .any(|w| t.contains(&format!("{{{w}}}")))
+                });
+
+            let uses_group_wildcard = !group_combos.is_empty()
+                && all_text.iter().any(|t| {
+                    GROUP_WILDCARDS
+                        .iter()
+                        .any(|w| t.contains(&format!("{{{w}}}")))
+                });
+
+            if uses_pair_wildcard {
+                // Expand for each pair
+                for combo in &pair_combos {
+                    let suffix = combo
+                        .get("pair_id")
+                        .cloned()
+                        .unwrap_or_else(|| combo.values().cloned().collect::<Vec<_>>().join("_"));
+                    let new_name = format!("{}_{}", rule.name, suffix);
+
+                    if !seen_names.insert(new_name.clone()) {
+                        return Err(OxoFlowError::DuplicateRule { name: new_name });
+                    }
+
+                    let mut expanded = rule.clone();
+                    expanded.name = new_name;
+
+                    // Expand input/output/shell patterns
+                    expanded.input = rule
+                        .input
+                        .iter()
+                        .map(|p| {
+                            if has_wildcards(p) {
+                                expand_pattern(p, combo).unwrap_or_else(|_| p.clone())
+                            } else {
+                                p.clone()
+                            }
+                        })
+                        .collect();
+                    expanded.output = rule
+                        .output
+                        .iter()
+                        .map(|p| {
+                            if has_wildcards(p) {
+                                expand_pattern(p, combo).unwrap_or_else(|_| p.clone())
+                            } else {
+                                p.clone()
+                            }
+                        })
+                        .collect();
+                    if let Some(ref shell) = rule.shell
+                        && has_wildcards(shell)
+                    {
+                        expanded.shell =
+                            Some(expand_pattern(shell, combo).unwrap_or_else(|_| shell.clone()));
+                    }
+
+                    expanded_rules.push(expanded);
+                }
+            } else if uses_group_wildcard {
+                // Expand for each (group, sample) combination
+                for combo in &group_combos {
+                    let group = combo.get("group").map(String::as_str).unwrap_or("group");
+                    let sample = combo.get("sample").map(String::as_str).unwrap_or("sample");
+                    let new_name = format!("{}_{}_{}", rule.name, group, sample);
+
+                    if !seen_names.insert(new_name.clone()) {
+                        return Err(OxoFlowError::DuplicateRule { name: new_name });
+                    }
+
+                    let mut expanded = rule.clone();
+                    expanded.name = new_name;
+
+                    expanded.input = rule
+                        .input
+                        .iter()
+                        .map(|p| {
+                            if has_wildcards(p) {
+                                expand_pattern(p, combo).unwrap_or_else(|_| p.clone())
+                            } else {
+                                p.clone()
+                            }
+                        })
+                        .collect();
+                    expanded.output = rule
+                        .output
+                        .iter()
+                        .map(|p| {
+                            if has_wildcards(p) {
+                                expand_pattern(p, combo).unwrap_or_else(|_| p.clone())
+                            } else {
+                                p.clone()
+                            }
+                        })
+                        .collect();
+                    if let Some(ref shell) = rule.shell
+                        && has_wildcards(shell)
+                    {
+                        expanded.shell =
+                            Some(expand_pattern(shell, combo).unwrap_or_else(|_| shell.clone()));
+                    }
+
+                    expanded_rules.push(expanded);
+                }
+            } else {
+                // No expansion needed — keep rule as-is
+                if !seen_names.insert(rule.name.clone()) {
+                    return Err(OxoFlowError::DuplicateRule {
+                        name: rule.name.clone(),
+                    });
+                }
+                expanded_rules.push(rule.clone());
+            }
+        }
+
+        self.rules = expanded_rules;
+        Ok(())
     }
 
     /// Compute a SHA-256 checksum of the workflow configuration for reproducibility.

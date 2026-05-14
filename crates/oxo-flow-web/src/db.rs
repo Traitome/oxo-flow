@@ -9,8 +9,18 @@ use uuid::Uuid;
 /// Global SQLite connection pool.
 static DB_POOL: OnceLock<SqlitePool> = OnceLock::new();
 
-/// Initialize the database and run migrations.
+/// Initialize the database, run migrations, and seed the default admin user.
+///
+/// When called a second time (e.g., from a later `#[tokio::test]`) this
+/// function is a no-op: the existing pool is reused.  For in-memory SQLite
+/// the pool is configured with a single persistent connection so all
+/// concurrent queries share the same schema and data.
 pub async fn init_db(database_url: &str) -> Result<()> {
+    // Pool already initialized — no-op.
+    if DB_POOL.get().is_some() {
+        return Ok(());
+    }
+
     if !sqlx::Sqlite::database_exists(database_url)
         .await
         .unwrap_or(false)
@@ -18,10 +28,20 @@ pub async fn init_db(database_url: &str) -> Result<()> {
         sqlx::Sqlite::create_database(database_url).await?;
     }
 
-    let pool = SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect(database_url)
-        .await?;
+    // In-memory SQLite databases are per-connection: use a single persistent
+    // connection so all queries share the same schema and data.
+    let is_memory = database_url.contains(":memory:");
+    let mut opts = SqlitePoolOptions::new();
+    if is_memory {
+        opts = opts
+            .max_connections(1)
+            .min_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None);
+    } else {
+        opts = opts.max_connections(5);
+    }
+    let pool = opts.connect(database_url).await?;
 
     sqlx::query(
         r#"
@@ -78,19 +98,24 @@ pub async fn init_db(database_url: &str) -> Result<()> {
         .await?;
     }
 
-    DB_POOL
-        .set(pool)
-        .map_err(|_| anyhow::anyhow!("DB pool already initialized"))?;
+    // `set` will fail if another thread beat us here; that is fine since we
+    // already checked `is_some()` above and both pools point to the same DB.
+    let _ = DB_POOL.set(pool);
     Ok(())
 }
 
+/// Obtain a reference to the global pool.
+///
+/// # Panics
+/// Panics if `init_db` has not been called yet.
 pub fn pool() -> &'static SqlitePool {
-    DB_POOL.get().expect("Database pool not initialized")
+    DB_POOL
+        .get()
+        .expect("Database pool not initialized — call init_db() first")
 }
 
-/// Recovers runs that were left in the 'running' state after a server crash.
+/// Recover runs left in the 'running' state after a server crash.
 pub async fn recover_orphaned_runs() -> Result<()> {
-    // We mark any run that was 'running' as 'failed' (interrupted by server restart)
     let now = Utc::now();
     let result =
         sqlx::query("UPDATE runs SET status = 'failed', finished_at = ? WHERE status = 'running'")

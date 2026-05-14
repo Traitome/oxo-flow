@@ -31,7 +31,7 @@ oxo-flow demonstrates strong architectural foundations for a Rust-native bioinfo
 
 | ID | Severity | Issue | Recommendation |
 |----|----------|-------|----------------|
-| WF-01 | **HIGH** | No conditional execution (if/else) | Add `when = "{config.mode} == 'tumor'"` syntax for conditional rules |
+| WF-01 | ~~**HIGH**~~ ✅ **DONE** | No conditional execution (if/else) | ~~Add `when = "{config.mode} == 'tumor'"` syntax for conditional rules~~ **Implemented**: `when` field with full expression support |
 | WF-02 | **HIGH** | No parameter sweep support | Add `params = [{quality: 20}, {quality: 30}]` for parameter optimization workflows |
 | WF-03 | **MEDIUM** | No subworkflow imports | Add `import = "modules/qc.oxoflow"` for modular pipeline composition |
 | WF-04 | **MEDIUM** | No workflow inheritance | Consider `[workflow.extends = "base-pipeline.oxoflow"]` for pipeline templates |
@@ -78,8 +78,8 @@ when = "{sample.type} == 'tumor' or {sample.type} == 'normal'"
 
 | ID | Severity | Issue | Recommendation |
 |----|----------|-------|----------------|
-| WC-01 | **CRITICAL** | No tumor-normal paired sample linking | Cannot express `{tumor}`/`{normal}` relationships from sample sheet |
-| WC-02 | **CRITICAL** | No multi-batch/time-series grouping | No support for `{batch}` or `{timepoint}` with cross-batch aggregation |
+| WC-01 | ~~**CRITICAL**~~ ✅ **DONE** | No tumor-normal paired sample linking | ~~Cannot express `{tumor}`/`{normal}` relationships from sample sheet~~ **Implemented**: `[[pairs]]` section with auto-expansion |
+| WC-02 | ~~**CRITICAL**~~ ✅ **DONE** | No multi-batch/time-series grouping | ~~No support for `{batch}` or `{timepoint}` with cross-batch aggregation~~ **Implemented**: `[[sample_groups]]` with `{group}`/`{sample}` expansion |
 | WC-03 | **HIGH** | Wildcard constraints not exposed in TOML | `WildcardConstraints` exists in Rust but not in workflow syntax |
 | WC-04 | **HIGH** | No wildcard functions | Cannot do `{sample|upper}` or `{chr|replace("chr","")}` transformations |
 | WC-05 | **MEDIUM** | No ordered wildcard expansion | Cannot guarantee sample processing order (important for time-series) |
