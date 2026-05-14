@@ -93,6 +93,10 @@ pub struct Resources {
     #[serde(default)]
     pub time_limit: Option<String>,
 
+    /// Partition or queue name to submit this job to.
+    #[serde(default)]
+    pub partition: Option<String>,
+
     /// Resource group consumption (e.g., {"db_connection": 1}).
     #[serde(default)]
     pub groups: HashMap<String, u32>,
@@ -111,6 +115,7 @@ impl Default for Resources {
             gpu_spec: None,
             disk: None,
             time_limit: None,
+            partition: None,
             groups: HashMap::new(),
         }
     }

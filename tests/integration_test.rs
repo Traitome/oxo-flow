@@ -322,16 +322,17 @@ fn gallery_03_parallel_samples() {
 fn gallery_04_scatter_gather() {
     let toml = std::fs::read_to_string("examples/gallery/04_scatter_gather.oxoflow").unwrap();
     let config = WorkflowConfig::parse(&toml).unwrap();
-    assert_eq!(config.workflow.name, "scatter-gather");
-    assert_eq!(config.rules.len(), 4);
+    assert_eq!(config.workflow.name, "scatter-gather-chromosomes");
+    assert_eq!(config.rules.len(), 2);
 
     let dag = WorkflowDag::from_rules(&config.rules).unwrap();
     dag.validate().unwrap();
 
     let order = dag.execution_order().unwrap();
-    assert_eq!(order.len(), 4);
-    assert_eq!(order[0], "prepare_input");
-    assert_eq!(order[3], "gather");
+    assert_eq!(order.len(), 2);
+    // Both rules at Level 0 with no file dependencies, sorted alphabetically
+    assert_eq!(order[0], "gather_gvcf");
+    assert_eq!(order[1], "haplotype_caller");
 }
 
 #[test]
@@ -374,15 +375,17 @@ fn gallery_07_wgs_germline() {
     let toml = std::fs::read_to_string("examples/gallery/07_wgs_germline.oxoflow").unwrap();
     let config = WorkflowConfig::parse(&toml).unwrap();
     assert_eq!(config.workflow.name, "wgs-germline-calling");
-    assert_eq!(config.rules.len(), 8);
+    assert_eq!(config.rules.len(), 10);
 
     let dag = WorkflowDag::from_rules(&config.rules).unwrap();
     dag.validate().unwrap();
 
     let order = dag.execution_order().unwrap();
-    assert_eq!(order.len(), 8);
-    assert_eq!(order[0], "fastp_qc");
-    assert_eq!(order.last().unwrap(), "annotate_variants");
+    assert_eq!(order.len(), 10);
+    // Level 0: combine_gvcfs, fastp_qc (alphabetically sorted)
+    assert!(order.contains(&"fastp_qc".to_string()));
+    // Level 4: annotate_variants, haplotype_caller - last alphabetically is haplotype_caller
+    assert_eq!(order.last().unwrap(), "haplotype_caller");
 }
 
 #[test]
