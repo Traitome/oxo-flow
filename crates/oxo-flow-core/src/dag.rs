@@ -534,34 +534,43 @@ impl WorkflowDag {
 
         let mut output = String::new();
 
-        // Header with metrics
+        // ANSI color codes for terminal output
+        let cyan = "\x1b[36m";
+        let green = "\x1b[32m";
+        let yellow = "\x1b[33m";
+        let bold = "\x1b[1m";
+        let reset = "\x1b[0m";
+
+        // Calculate content widths for proper alignment
+        let line1 = format!("Workflow DAG: {} rules, {} dependencies", self.node_count(), self.edge_count());
+        let line2 = format!("Depth: {}, Width: {}, Critical path: {} steps", metrics.max_depth, metrics.max_width, metrics.critical_path_length);
+        let max_content_width = std::cmp::max(line1.len(), line2.len());
+        let box_width = max_content_width + 4; // 2 spaces on each side
+
+        // Header with metrics (properly aligned)
+        output.push_str(&format!("{}\n", "┌".to_string() + &"─".repeat(box_width) + "┐"));
         output.push_str(&format!(
-            "┌─────────────────────────────────────────────────────────────┐\n"
+            "│  {}{}{}{}{}  │\n",
+            bold, cyan, line1, reset,
+            " ".repeat(box_width - line1.len() - 4)
         ));
         output.push_str(&format!(
-            "│  Workflow DAG: {} rules, {} dependencies              │\n",
-            self.node_count(),
-            self.edge_count()
+            "│  {}{}{}{}{}  │\n",
+            bold, yellow, line2, reset,
+            " ".repeat(box_width - line2.len() - 4)
         ));
-        output.push_str(&format!(
-            "│  Depth: {}, Width: {}, Critical path: {} steps           │\n",
-            metrics.max_depth,
-            metrics.max_width,
-            metrics.critical_path_length
-        ));
-        output.push_str(&format!(
-            "└─────────────────────────────────────────────────────────────┘\n\n"
-        ));
+        output.push_str(&format!("{}\n\n", "└".to_string() + &"─".repeat(box_width) + "┘"));
 
         // Draw execution levels
         for (level, rules) in groups.iter().enumerate() {
-            output.push_str(&format!("Level {} ", level));
+            // Level header with color
+            output.push_str(&format!("{}Level {}{} ", bold, level, reset));
 
             // Indicate parallelism
             if rules.len() > 1 {
-                output.push_str(&format!("(parallel: {} rules)\n", rules.len()));
+                output.push_str(&format!("{}(parallel: {} rules){}\n", green, rules.len(), reset));
             } else {
-                output.push_str("(sequential)\n");
+                output.push_str(&format!("{}(sequential){}\n", yellow, reset));
             }
 
             // Draw rules in this level
@@ -579,16 +588,16 @@ impl WorkflowDag {
                 // Get dependencies for this rule
                 let deps = self.dependencies(rule)?;
                 if deps.is_empty() {
-                    output.push_str(&format!("{}\n", rule));
+                    output.push_str(&format!("{}{}{}\n", cyan, rule, reset));
                 } else {
-                    output.push_str(&format!("{} [depends: {}]\n", rule, deps.join(", ")));
+                    output.push_str(&format!("{}{}{} {}[depends: {}]\n", cyan, rule, reset, yellow, deps.join(", ")));
                 }
             }
 
             // Add arrow to next level if exists
             if level < groups.len() - 1 {
                 output.push_str("     │\n");
-                output.push_str("     ▼\n");
+                output.push_str(&format!("     {}▼{}\n", green, reset));
             }
         }
 
@@ -596,8 +605,8 @@ impl WorkflowDag {
         let critical = self.critical_path()?;
         if critical.len() > 1 {
             output.push_str(&format!(
-                "\nCritical path: {}\n",
-                critical.join(" → ")
+                "\n{}Critical path:{} {}{}{}\n",
+                bold, reset, cyan, critical.join(&format!(" {}→{} ", green, reset)), reset
             ));
         }
 
