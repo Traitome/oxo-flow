@@ -268,7 +268,7 @@ pub fn parse_memory_mb(memory: &str) -> Option<u64> {
     Some(mb_int)
 }
 
-/// Resource pool tracking available system resources.
+/// Resource pool tracking available system resources and custom resource groups.
 #[derive(Debug, Clone)]
 pub struct ResourcePool {
     /// Available CPU threads.
@@ -276,12 +276,24 @@ pub struct ResourcePool {
 
     /// Available memory in MB.
     pub memory_mb: u64,
+
+    /// Available capacity for each resource group.
+    pub groups: HashMap<String, u32>,
 }
 
 impl ResourcePool {
-    /// Create a new resource pool with the given limits.
+    /// Create a new resource pool with the given limits and group capacities.
     pub fn new(threads: u32, memory_mb: u64) -> Self {
-        Self { threads, memory_mb }
+        Self {
+            threads,
+            memory_mb,
+            groups: HashMap::new(),
+        }
+    }
+
+    /// Set initial capacities for resource groups.
+    pub fn set_groups(&mut self, groups: HashMap<String, u32>) {
+        self.groups = groups;
     }
 
     /// Check if a rule's resource requirements can be satisfied.
@@ -292,7 +304,19 @@ impl ResourcePool {
             .and_then(parse_memory_mb)
             .unwrap_or(0);
 
-        self.threads >= required_threads && self.memory_mb >= required_memory
+        if self.threads < required_threads || self.memory_mb < required_memory {
+            return false;
+        }
+
+        // Check resource groups
+        for (group_name, &required_amount) in &rule.resources.groups {
+            match self.groups.get(group_name) {
+                Some(&available) if available >= required_amount => {}
+                _ => return false,
+            }
+        }
+
+        true
     }
 
     /// Reserve resources for a rule.
@@ -303,16 +327,37 @@ impl ResourcePool {
             .and_then(parse_memory_mb)
             .unwrap_or(0);
         self.memory_mb = self.memory_mb.saturating_sub(mem);
+
+        // Reserve group resources
+        for (group_name, &amount) in &rule.resources.groups {
+            if let Some(available) = self.groups.get_mut(group_name) {
+                *available = available.saturating_sub(amount);
+            }
+        }
     }
 
     /// Release resources after a rule completes.
-    pub fn release(&mut self, rule: &Rule, max_threads: u32, max_memory_mb: u64) {
+    pub fn release(
+        &mut self,
+        rule: &Rule,
+        max_threads: u32,
+        max_memory_mb: u64,
+        max_groups: &HashMap<String, u32>,
+    ) {
         self.threads = (self.threads + rule.effective_threads()).min(max_threads);
         let mem = rule
             .effective_memory()
             .and_then(parse_memory_mb)
             .unwrap_or(0);
         self.memory_mb = (self.memory_mb + mem).min(max_memory_mb);
+
+        // Release group resources
+        for (group_name, &amount) in &rule.resources.groups {
+            if let Some(available) = self.groups.get_mut(group_name) {
+                let max = max_groups.get(group_name).copied().unwrap_or(u32::MAX);
+                *available = (*available + amount).min(max);
+            }
+        }
     }
 }
 

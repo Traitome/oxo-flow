@@ -985,6 +985,7 @@ mod tests {
             gpu_spec: None,
             disk: None,
             time_limit: None,
+            groups: std::collections::HashMap::new(),
         };
         let cmd = generate_docker_run_command("my-image:latest", &resources, "/data/project");
         assert_eq!(
@@ -1002,6 +1003,7 @@ mod tests {
             gpu_spec: None,
             disk: None,
             time_limit: None,
+            groups: std::collections::HashMap::new(),
         };
         let cmd = generate_docker_run_command("img:1.0", &resources, "/work");
         assert_eq!(

@@ -219,6 +219,9 @@ pub struct ExecutorConfig {
     /// If set, jobs requiring more memory than available will be blocked.
     pub max_memory_mb: Option<u64>,
 
+    /// Resource group capacities.
+    pub resource_groups: HashMap<String, u32>,
+
     /// Skip environment setup (assume environments are already ready).
     pub skip_env_setup: bool,
 
@@ -237,6 +240,7 @@ impl Default for ExecutorConfig {
             timeout: None,
             max_threads: None,
             max_memory_mb: None,
+            resource_groups: HashMap::new(),
             skip_env_setup: false,
             cache_dir: None,
         }
@@ -265,7 +269,9 @@ impl LocalExecutor {
 
         // Initialize resource pool with system limits or configured limits
         let (max_threads, max_memory_mb) = Self::detect_system_resources(&config);
-        let resource_pool = Arc::new(Mutex::new(ResourcePool::new(max_threads, max_memory_mb)));
+        let mut resource_pool = ResourcePool::new(max_threads, max_memory_mb);
+        resource_pool.set_groups(config.resource_groups.clone());
+        let resource_pool = Arc::new(Mutex::new(resource_pool));
 
         Self {
             config,
@@ -428,7 +434,12 @@ impl LocalExecutor {
     async fn release_resources(&self, rule: &Rule) {
         let (max_threads, max_memory_mb) = Self::detect_system_resources(&self.config);
         let mut pool = self.resource_pool.lock().await;
-        pool.release(rule, max_threads, max_memory_mb);
+        pool.release(
+            rule,
+            max_threads,
+            max_memory_mb,
+            &self.config.resource_groups,
+        );
         tracing::debug!(
             rule = %rule.name,
             threads_available = %pool.threads,

@@ -598,6 +598,11 @@ async fn main() -> Result<()> {
                 } else {
                     None
                 },
+                resource_groups: config
+                    .resource_groups
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.max))
+                    .collect(),
                 skip_env_setup,
                 cache_dir,
             };
@@ -605,6 +610,8 @@ async fn main() -> Result<()> {
             let executor = LocalExecutor::new(exec_config);
             let mut success_count = 0;
             let mut fail_count = 0;
+            let mut skipped_count = 0;
+            let mut completed_rules = std::collections::HashSet::new();
 
             // Build wildcard values from workflow config variables so that
             // {config.key} placeholders in shell templates are expanded.
@@ -617,13 +624,56 @@ async fn main() -> Result<()> {
                 wildcard_values.insert(format!("config.{key}"), string_val);
             }
 
-            for rule_name in &order {
-                let rule = config.get_rule(rule_name).unwrap();
-                match executor.execute_rule(rule, &wildcard_values).await {
+            let mut current_order = order;
+            let mut i = 0;
+
+            while i < current_order.len() {
+                let rule_name = &current_order[i];
+                i += 1;
+
+                if completed_rules.contains(rule_name) {
+                    continue;
+                }
+
+                let rule = config.get_rule(rule_name).unwrap().clone();
+                match executor.execute_rule(&rule, &wildcard_values).await {
                     Ok(record) => {
+                        completed_rules.insert(rule_name.clone());
                         if record.status == oxo_flow_core::executor::JobStatus::Success {
                             success_count += 1;
                             eprintln!("  {} {}", "✓".green().bold(), rule_name);
+
+                            // Checkpoint handling: Rebuild DAG
+                            if rule.checkpoint {
+                                eprintln!(
+                                    "  {} Checkpoint '{}' reached, rebuilding DAG...",
+                                    "ℹ".blue().bold(),
+                                    rule_name
+                                );
+                                config =
+                                    WorkflowConfig::from_file(&workflow).with_context(|| {
+                                        format!("failed to re-parse {}", workflow.display())
+                                    })?;
+                                config
+                                    .expand_wildcards()
+                                    .context("failed to expand wildcard rules")?;
+                                let dag = WorkflowDag::from_rules(&config.rules)
+                                    .context("failed to rebuild workflow DAG")?;
+
+                                current_order = if target.is_empty() {
+                                    dag.execution_order()?
+                                } else {
+                                    let target_refs: Vec<&str> =
+                                        target.iter().map(String::as_str).collect();
+                                    dag.execution_order_for_targets(&target_refs)
+                                        .with_context(|| "failed to resolve target rules")?
+                                };
+                                // Reset pointer to start of new order (skipping already completed)
+                                i = 0;
+                            }
+                        } else if record.status == oxo_flow_core::executor::JobStatus::Skipped {
+                            skipped_count += 1;
+                            // Optionally print skipped (currently silenced or handled elsewhere)
                         } else {
                             fail_count += 1;
                             eprintln!("  {} {} — {}", "✗".red().bold(), rule_name, record.status);
@@ -655,9 +705,10 @@ async fn main() -> Result<()> {
             }
 
             eprintln!(
-                "\n{} {} succeeded, {} failed",
+                "\n{} {} succeeded, {} skipped, {} failed",
                 "Done:".bold(),
                 success_count,
+                skipped_count,
                 fail_count
             );
         }

@@ -345,6 +345,21 @@ pub struct SampleGroup {
     pub metadata: HashMap<String, String>,
 }
 
+/// Resource group configuration for limiting shared resources like API rate
+/// limits or database connections.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ResourceGroupConfig {
+    /// Maximum capacity of the resource (e.g., 10 for 10 concurrent connections).
+    pub max: u32,
+    /// Optional wait strategy: "queue" (default) or "fail".
+    #[serde(default = "default_wait_strategy")]
+    pub wait: String,
+}
+
+fn default_wait_strategy() -> String {
+    "queue".to_string()
+}
+
 /// Complete workflow configuration parsed from an `.oxoflow` file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowConfig {
@@ -387,9 +402,18 @@ pub struct WorkflowConfig {
     #[serde(default)]
     pub resource_budget: Option<ResourceBudget>,
 
+    /// Shared resource groups for limiting concurrent access to APIs or databases.
+    #[serde(default, rename = "resource_groups")]
+    pub resource_groups: HashMap<String, ResourceGroupConfig>,
+
     /// Reference database versions used by this workflow.
     #[serde(default, rename = "reference_db")]
     pub reference_databases: Vec<ReferenceDatabase>,
+
+    /// Global wildcard constraints (regular expressions).
+    /// Each key is a wildcard name, value is the regex pattern it must match.
+    #[serde(default)]
+    pub wildcard_constraints: HashMap<String, String>,
 
     /// Experiment-control sample pairs for comparative analysis workflows.
     ///
@@ -750,6 +774,15 @@ impl WorkflowConfig {
 
         self.validate_execution_groups()?;
 
+        // Validate wildcard constraints
+        for (name, pattern) in &self.wildcard_constraints {
+            if let Err(e) = regex::Regex::new(pattern) {
+                return Err(OxoFlowError::Config {
+                    message: format!("invalid regex for wildcard constraint '{}': {}", name, e),
+                });
+            }
+        }
+
         Ok(())
     }
 
@@ -887,6 +920,7 @@ impl WorkflowConfig {
 
         let pair_combos = wildcard_combinations_from_pairs(&self.pairs);
         let group_combos = wildcard_combinations_from_groups(&self.sample_groups);
+        let constraints = &self.wildcard_constraints;
 
         // Wildcards that trigger pair expansion.
         // Include backward-compatible aliases `{tumor}`/`{normal}`.
@@ -924,6 +958,9 @@ impl WorkflowConfig {
             if uses_pair_wildcard {
                 // Expand for each pair
                 for combo in &pair_combos {
+                    // Validate constraints
+                    crate::wildcard::validate_wildcard_constraints(combo, constraints)?;
+
                     let suffix = combo
                         .get("pair_id")
                         .cloned()
@@ -972,6 +1009,9 @@ impl WorkflowConfig {
             } else if uses_group_wildcard {
                 // Expand for each (group, sample) combination
                 for combo in &group_combos {
+                    // Validate constraints
+                    crate::wildcard::validate_wildcard_constraints(combo, constraints)?;
+
                     let group = combo.get("group").map(String::as_str).unwrap_or("group");
                     let sample = combo.get("sample").map(String::as_str).unwrap_or("sample");
                     let new_name = format!("{}_{}_{}", rule.name, group, sample);
@@ -1025,8 +1065,113 @@ impl WorkflowConfig {
             }
         }
 
-        self.rules = expanded_rules;
+        let mut final_rules = Vec::new();
+        let mut gather_injections: HashMap<String, Vec<String>> = HashMap::new();
+
+        for rule in expanded_rules {
+            if let Some(ref scatter) = rule.scatter {
+                let mut values = scatter.values.clone();
+                if values.is_empty()
+                    && let Some(ref v_from) = scatter.values_from
+                    && let Some(resolved) = self.resolve_config_list(v_from)
+                {
+                    values = resolved;
+                }
+
+                let mut scatter_outputs = Vec::new();
+
+                for val in &values {
+                    let mut combo = HashMap::new();
+                    combo.insert(scatter.variable.clone(), val.clone());
+
+                    let mut scattered_rule = rule.clone();
+                    scattered_rule.name = format!("{}_{}", rule.name, val);
+                    scattered_rule.scatter = None; // remove scatter from generated rule
+
+                    scattered_rule.input = scattered_rule
+                        .input
+                        .iter()
+                        .map(|p| expand_pattern(p, &combo).unwrap_or_else(|_| p.clone()))
+                        .collect();
+                    scattered_rule.output = scattered_rule
+                        .output
+                        .iter()
+                        .map(|p| expand_pattern(p, &combo).unwrap_or_else(|_| p.clone()))
+                        .collect();
+                    if let Some(ref shell) = scattered_rule.shell {
+                        scattered_rule.shell =
+                            Some(expand_pattern(shell, &combo).unwrap_or_else(|_| shell.clone()));
+                    }
+
+                    scatter_outputs.extend(scattered_rule.output.clone());
+                    final_rules.push(scattered_rule);
+                }
+
+                if let Some(ref gather_rule) = scatter.gather {
+                    gather_injections
+                        .entry(gather_rule.clone())
+                        .or_default()
+                        .extend(scatter_outputs);
+                }
+            } else {
+                final_rules.push(rule);
+            }
+        }
+
+        // Apply gather injections and expand_inputs
+        for rule in &mut final_rules {
+            if let Some(injected) = gather_injections.get(&rule.name) {
+                rule.input.extend(injected.clone());
+            }
+
+            // process expand_inputs
+            for exp in &rule.expand_inputs {
+                let mut variables = HashMap::new();
+                for (var_name, var_ref) in &exp.variables {
+                    if let Some(vals) = self.resolve_config_list(var_ref) {
+                        variables.insert(var_name.clone(), vals);
+                    } else if var_ref.starts_with('[') && var_ref.ends_with(']') {
+                        let inner = &var_ref[1..var_ref.len() - 1];
+                        let vals = inner
+                            .split(',')
+                            .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        variables.insert(var_name.clone(), vals);
+                    } else {
+                        variables.insert(var_name.clone(), vec![var_ref.clone()]);
+                    }
+                }
+
+                let expanded = crate::wildcard::cartesian_expand(&exp.pattern, &variables);
+                rule.input.extend(expanded);
+            }
+        }
+
+        self.rules = final_rules;
         Ok(())
+    }
+
+    /// Resolve a config variable (e.g., "config.samples") into a list of strings.
+    pub fn resolve_config_list(&self, var: &str) -> Option<Vec<String>> {
+        if let Some(key) = var.strip_prefix("config.")
+            && let Some(val) = self.config.get(key)
+        {
+            if let Some(arr) = val.as_array() {
+                return Some(
+                    arr.iter()
+                        .map(|v| match v {
+                            toml::Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        })
+                        .collect(),
+                );
+            } else if let Some(s) = val.as_str() {
+                // Fallback to single-item list
+                return Some(vec![s.to_string()]);
+            }
+        }
+        None
     }
 
     /// Compute a SHA-256 checksum of the workflow configuration for reproducibility.

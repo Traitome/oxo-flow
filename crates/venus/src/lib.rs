@@ -785,7 +785,9 @@ pub fn generate_oxoflow(config: &VenusConfig) -> anyhow::Result<String> {
         citation: None,
         cluster: None,
         resource_budget: None,
+        resource_groups: std::collections::HashMap::new(),
         reference_databases: Vec::new(),
+        wildcard_constraints: std::collections::HashMap::new(),
         pairs: Vec::new(),
         sample_groups: Vec::new(),
     };

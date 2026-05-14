@@ -115,7 +115,58 @@ pub fn pattern_to_regex(pattern: &str) -> Result<Regex> {
     })
 }
 
-/// Discover files matching a wildcard pattern in a directory.
+/// Expands a pattern into a list of strings by taking the Cartesian product
+/// of provided variable values.
+///
+/// This is similar to Snakemake's `expand()` function.
+///
+/// # Examples
+///
+/// ```
+/// use oxo_flow_core::wildcard::cartesian_expand;
+/// use std::collections::HashMap;
+///
+/// let mut variables = HashMap::new();
+/// variables.insert("sample".to_string(), vec!["S1".to_string(), "S2".to_string()]);
+/// variables.insert("read".to_string(), vec!["1".to_string(), "2".to_string()]);
+///
+/// let results = cartesian_expand("{sample}_R{read}.fastq.gz", &variables);
+/// assert_eq!(results.len(), 4);
+/// assert!(results.contains(&"S1_R1.fastq.gz".to_string()));
+/// assert!(results.contains(&"S2_R2.fastq.gz".to_string()));
+/// ```
+pub fn cartesian_expand(pattern: &str, variables: &HashMap<String, Vec<String>>) -> Vec<String> {
+    let mut results = vec![pattern.to_string()];
+
+    // Identify which wildcards in the pattern have provided values
+    let wildcards = extract_wildcards(pattern);
+    let mut active_vars = Vec::new();
+    for name in wildcards {
+        if let Some(vals) = variables.get(&name) {
+            active_vars.push((name, vals));
+        }
+    }
+
+    if active_vars.is_empty() {
+        return results;
+    }
+
+    // Iteratively expand each variable
+    for (name, vals) in active_vars {
+        let mut new_results = Vec::new();
+        let placeholder = format!("{{{name}}}");
+        for r in results {
+            for v in vals {
+                new_results.push(r.replace(&placeholder, v));
+            }
+        }
+        results = new_results;
+    }
+
+    results
+}
+
+/// Discovers files matching a wildcard pattern in a directory.
 ///
 /// Returns a list of wildcard value maps, one per matching file found.
 pub fn discover_wildcards_from_pattern(

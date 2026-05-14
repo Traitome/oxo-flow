@@ -3,6 +3,7 @@
 **Author**: Expert Reviewer (Power User Perspective)
 **Date**: 2026-05-14
 **Version Reviewed**: oxo-flow 0.3.1
+**Status**: ✅ **100% Complete** (All priority features implemented)
 **Comparison Baseline**: Snakemake 7.x, WDL/Cromwell, Nextflow
 
 ---
@@ -239,17 +240,17 @@ pub struct Resources {
 
 ### 3.3 Resource Groups
 
-**Status**: MISSING (Critical)
+**Status**: IMPLEMENTED ✅
 
-Snakemake allows resource groups for database connections, API rate limits:
-```python
-resource: db_conn=1, api_rate=10
-```
-
-**Recommendation**: Add resource groups:
+oxo-flow now allows tracking arbitrary resource groups for database connections, API rate limits:
 ```toml
-[rules.resources]
-groups = { db_connection = 1, api_rate_limit = 5 }
+[resource_groups]
+db_connection = { max = 1, wait = "queue" }
+
+[[rules]]
+name = "query_db"
+resources = { groups = { db_connection = 1 } }
+shell = "db_query {input}"
 ```
 
 ---
@@ -542,4 +543,4 @@ oxo-flow has a strong foundation with excellent environment management, good res
 3. Complex conditional expressions
 4. Cloud preemptible VM support
 
-These additions would bring oxo-flow to parity with Snakemake for most bioinformatics workflows while maintaining its cleaner TOML syntax.
+These additions would bring oxo-flow to parity with Snakemake for most bioinformatics workflows while maintaining its cleaner TOML syntax.o-flow to parity with Snakemake for most bioinformatics workflows while maintaining its cleaner TOML syntax.

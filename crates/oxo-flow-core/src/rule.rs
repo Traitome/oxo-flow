@@ -92,6 +92,10 @@ pub struct Resources {
     /// Wall-time limit (e.g., "24h", "30m").
     #[serde(default)]
     pub time_limit: Option<String>,
+
+    /// Resource group consumption (e.g., {"db_connection": 1}).
+    #[serde(default)]
+    pub groups: HashMap<String, u32>,
 }
 
 fn default_threads() -> u32 {
@@ -107,6 +111,7 @@ impl Default for Resources {
             gpu_spec: None,
             disk: None,
             time_limit: None,
+            groups: HashMap::new(),
         }
     }
 }
@@ -186,9 +191,25 @@ pub struct ScatterConfig {
     #[serde(default)]
     pub values: Vec<String>,
 
+    /// Reference to a config variable for values (e.g., "config.samples").
+    #[serde(default)]
+    pub values_from: Option<String>,
+
     /// Optional gather rule name that collects scattered outputs.
     #[serde(default)]
     pub gather: Option<String>,
+}
+
+/// Configuration for expanding input file patterns via a Cartesian product.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExpandConfig {
+    /// The pattern to expand (e.g., "raw/{sample}.fastq").
+    pub pattern: String,
+
+    /// Map of variable names to config references or literal lists.
+    /// E.g., "sample" => "config.samples"
+    #[serde(default)]
+    pub variables: HashMap<String, String>,
 }
 
 /// A single rule (step) in a workflow.
@@ -200,6 +221,10 @@ pub struct Rule {
     /// Input file patterns (may contain wildcards like `{sample}`).
     #[serde(default)]
     pub input: Vec<String>,
+
+    /// Expanded input file patterns via Cartesian product.
+    #[serde(default)]
+    pub expand_inputs: Vec<ExpandConfig>,
 
     /// Output file patterns (may contain wildcards).
     #[serde(default)]
