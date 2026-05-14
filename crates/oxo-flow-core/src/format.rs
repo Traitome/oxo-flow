@@ -153,9 +153,18 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
         }
 
         // E003: Wildcard consistency - output wildcards must appear in inputs
+        // Exception: scatter rules use scatter variables, not input wildcards
         let input_wildcards = crate::wildcard::extract_wildcards_from_patterns(&rule.input);
         let output_wildcards = crate::wildcard::extract_wildcards_from_patterns(&rule.output);
+
+        // Get scatter variable if present - scatter variables are exempt from E003
+        let scatter_var = rule.scatter.as_ref().map(|s| s.variable.as_str());
+
         for wc in &output_wildcards {
+            // Skip validation for scatter variable wildcards
+            if scatter_var == Some(wc.as_str()) {
+                continue;
+            }
             if !input_wildcards.contains(wc) && !rule.input.is_empty() {
                 diagnostics.push(Diagnostic {
                     severity: Severity::Error,
@@ -234,6 +243,89 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                 code: "E008".to_string(),
                 suggestion: Some(format!("ensure rule '{}' is defined in the workflow", base)),
             });
+        }
+    }
+
+    // E009: Path safety validation - detect dangerous paths in inputs/outputs
+    for rule in &config.rules {
+        // Check for path traversal (..) in inputs
+        for input in &rule.input {
+            if input.contains("..") {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "input path '{}' contains '..' which may escape the working directory",
+                        input
+                    ),
+                    rule: Some(rule.name.clone()),
+                    code: "E009".to_string(),
+                    suggestion: Some("avoid using '..' in input paths".to_string()),
+                });
+            }
+            // Check for absolute paths
+            if input.starts_with('/') {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    message: format!("input path '{}' is an absolute path", input),
+                    rule: Some(rule.name.clone()),
+                    code: "W017".to_string(),
+                    suggestion: Some(
+                        "use relative paths within the workflow directory".to_string(),
+                    ),
+                });
+            }
+            // Check for home directory references
+            if input.starts_with('~') {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    message: format!("input path '{}' references home directory", input),
+                    rule: Some(rule.name.clone()),
+                    code: "W018".to_string(),
+                    suggestion: Some(
+                        "use relative paths within the workflow directory".to_string(),
+                    ),
+                });
+            }
+        }
+
+        // Check for path traversal (..) in outputs
+        for output in &rule.output {
+            if output.contains("..") {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "output path '{}' contains '..' which may escape the working directory",
+                        output
+                    ),
+                    rule: Some(rule.name.clone()),
+                    code: "E009".to_string(),
+                    suggestion: Some("avoid using '..' in output paths".to_string()),
+                });
+            }
+            // Check for absolute paths
+            if output.starts_with('/') {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    message: format!("output path '{}' is an absolute path", output),
+                    rule: Some(rule.name.clone()),
+                    code: "W017".to_string(),
+                    suggestion: Some(
+                        "use relative paths within the workflow directory".to_string(),
+                    ),
+                });
+            }
+            // Check for home directory references
+            if output.starts_with('~') {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    message: format!("output path '{}' references home directory", output),
+                    rule: Some(rule.name.clone()),
+                    code: "W018".to_string(),
+                    suggestion: Some(
+                        "use relative paths within the workflow directory".to_string(),
+                    ),
+                });
+            }
         }
     }
 
@@ -2326,5 +2418,195 @@ mod tests {
         let config = WorkflowConfig::parse(toml).unwrap();
         let formatted = format_workflow(&config);
         assert!(formatted.contains("on_failure = \"notify admin\""));
+    }
+
+    // ---- E009: Path traversal detection ----------------------------------------
+
+    #[test]
+    fn validate_e009_path_traversal_in_output() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            output = ["../../../etc/passwd"]
+            shell = "echo hello"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(!result.valid);
+        assert!(result.errors().iter().any(|d| d.code == "E009"));
+    }
+
+    #[test]
+    fn validate_e009_path_traversal_in_input() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            input = ["../../../data/secret.txt"]
+            output = ["out.txt"]
+            shell = "cat {input} > out.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(!result.valid);
+        assert!(result.errors().iter().any(|d| d.code == "E009"));
+    }
+
+    #[test]
+    fn validate_e009_no_error_for_safe_paths() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            input = ["data/input.txt"]
+            output = ["results/output.txt"]
+            shell = "cat {input} > {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(!result.errors().iter().any(|d| d.code == "E009"));
+    }
+
+    // ---- W017: Absolute path warning -------------------------------------------
+
+    #[test]
+    fn validate_w017_absolute_path_in_output() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            output = ["/etc/output.txt"]
+            shell = "echo hello"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(result.diagnostics.iter().any(|d| d.code == "W017"));
+    }
+
+    #[test]
+    fn validate_w017_absolute_path_in_input() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            input = ["/data/reference.fa"]
+            output = ["out.txt"]
+            shell = "cat {input} > out.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(result.diagnostics.iter().any(|d| d.code == "W017"));
+    }
+
+    #[test]
+    fn validate_w017_no_warning_for_relative_paths() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            input = ["data/input.txt"]
+            output = ["results/output.txt"]
+            shell = "cat {input} > out.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(!result.diagnostics.iter().any(|d| d.code == "W017"));
+    }
+
+    // ---- W018: Home directory warning ------------------------------------------
+
+    #[test]
+    fn validate_w018_home_directory_in_output() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            output = ["~/output.txt"]
+            shell = "echo hello"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(result.diagnostics.iter().any(|d| d.code == "W018"));
+    }
+
+    #[test]
+    fn validate_w018_home_directory_in_input() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            input = ["~/.ssh/id_rsa"]
+            output = ["out.txt"]
+            shell = "cat {input} > out.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(result.diagnostics.iter().any(|d| d.code == "W018"));
+    }
+
+    #[test]
+    fn validate_w018_no_warning_for_relative_paths() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            input = ["data/input.txt"]
+            output = ["results/output.txt"]
+            shell = "cat {input} > out.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(!result.diagnostics.iter().any(|d| d.code == "W018"));
+    }
+
+    // ---- Secret scanning patterns ----------------------------------------------
+
+    #[test]
+    fn secret_scanning_detects_stripe_key() {
+        let diags = scan_for_secrets("api_key = sk-test123456789");
+        assert!(diags.iter().any(|d| d.message.contains("Stripe")));
+    }
+
+    #[test]
+    fn secret_scanning_detects_github_token() {
+        let diags = scan_for_secrets("token = ghp_1234567890abcdef");
+        assert!(diags.iter().any(|d| d.message.contains("GitHub")));
+    }
+
+    #[test]
+    fn secret_scanning_detects_gitlab_token() {
+        let diags = scan_for_secrets("token = glpat-1234567890abcdef");
+        assert!(diags.iter().any(|d| d.message.contains("GitLab")));
+    }
+
+    #[test]
+    fn secret_scanning_detects_password_pattern() {
+        let diags = scan_for_secrets("password = my_secret_password");
+        assert!(diags.iter().any(|d| d.message.contains("password")));
+    }
+
+    #[test]
+    fn secret_scanning_detects_api_key_pattern() {
+        let diags = scan_for_secrets("api_key = AKIAIOSFODNN7EXAMPLE");
+        assert!(diags.iter().any(|d| d.message.contains("API key")));
     }
 }

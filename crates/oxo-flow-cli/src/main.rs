@@ -767,6 +767,23 @@ async fn main() -> Result<()> {
                         return Ok(());
                     }
 
+                    // Run semantic validation (E001-E008)
+                    let validation = oxo_flow_core::format::validate_format(&cfg);
+                    let mut error_count = 0usize;
+
+                    for d in &validation.diagnostics {
+                        if d.severity == oxo_flow_core::format::Severity::Error {
+                            error_count += 1;
+                            eprintln!("  {} [{}]: {}", "error".red().bold(), d.code, d.message);
+                            if let Some(ref rule) = d.rule {
+                                eprintln!("    rule: {}", rule);
+                            }
+                            if let Some(ref suggestion) = d.suggestion {
+                                eprintln!("    hint: {}", suggestion);
+                            }
+                        }
+                    }
+
                     // Check for missing input files
                     let mut missing_inputs = Vec::new();
                     for rule in &cfg.rules {
@@ -789,13 +806,22 @@ async fn main() -> Result<()> {
                     // Also validate DAG construction
                     match WorkflowDag::from_rules(&cfg.rules) {
                         Ok(dag) => {
-                            eprintln!(
-                                "{} {} — {} rules, {} dependencies",
-                                "✓".green().bold(),
-                                workflow.display(),
-                                dag.node_count(),
-                                dag.edge_count()
-                            );
+                            if error_count == 0 {
+                                eprintln!(
+                                    "{} {} — {} rules, {} dependencies",
+                                    "✓".green().bold(),
+                                    workflow.display(),
+                                    dag.node_count(),
+                                    dag.edge_count()
+                                );
+                            } else {
+                                eprintln!(
+                                    "{} {} — {} validation error(s)",
+                                    "✗".red().bold(),
+                                    workflow.display(),
+                                    error_count
+                                );
+                            }
 
                             if !missing_inputs.is_empty() {
                                 eprintln!(
@@ -816,6 +842,11 @@ async fn main() -> Result<()> {
                             );
                             std::process::exit(1);
                         }
+                    }
+
+                    // Exit with error if validation failed
+                    if error_count > 0 {
+                        std::process::exit(1);
                     }
                 }
                 Err(e) => {
@@ -1409,11 +1440,24 @@ Thumbs.db
             let validation = oxo_flow_core::format::validate_format(&config);
             let lint_diags = oxo_flow_core::format::lint_format(&config);
 
+            // Read the raw file content for secret scanning
+            let raw_content = std::fs::read_to_string(&workflow).ok();
+            let secret_diags = if let Some(content) = raw_content {
+                oxo_flow_core::format::scan_for_secrets(&content)
+            } else {
+                Vec::new()
+            };
+
             let mut error_count = 0usize;
             let mut warning_count = 0usize;
             let mut info_count = 0usize;
 
-            for d in validation.diagnostics.iter().chain(lint_diags.iter()) {
+            for d in validation
+                .diagnostics
+                .iter()
+                .chain(lint_diags.iter())
+                .chain(secret_diags.iter())
+            {
                 let prefix = match d.severity {
                     oxo_flow_core::format::Severity::Error => {
                         error_count += 1;
