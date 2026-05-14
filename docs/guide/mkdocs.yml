@@ -125,7 +125,7 @@ nav:
       - Use Environments: how-to/use-environments.md
       - Run on a Cluster: how-to/run-on-cluster.md
       - Generate Reports: how-to/generate-reports.md
-      - Tumor-Normal Pairing: how-to/tumor-normal-pairing.md
+      - Experiment-Control Pairing: how-to/experiment-control-pairing.md
       - Cohort Sample Groups: how-to/cohort-sample-groups.md
       - Conditional Rules: how-to/conditional-rules.md
       - Troubleshooting: how-to/troubleshooting.md

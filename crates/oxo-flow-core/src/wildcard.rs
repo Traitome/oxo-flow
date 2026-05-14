@@ -311,54 +311,60 @@ pub fn discover_paired_files(dir: &std::path::Path, sample: &str) -> Vec<(String
 }
 
 // ---------------------------------------------------------------------------
-// WC-01: Tumor-normal pairing wildcard helpers
+// WC-01: Experiment-control pairing wildcard helpers
 // ---------------------------------------------------------------------------
 
-/// Build wildcard value combinations from a list of tumor-normal pairs.
+/// Build wildcard value combinations from a list of experiment-control pairs.
 ///
 /// Each pair produces a [`WildcardValues`] map containing:
 /// - `pair_id`    → the pair's unique identifier
-/// - `tumor`      → tumor sample identifier
-/// - `normal`     → normal/germline sample identifier
-/// - `tumor_type` → histology / tissue type (when present)
+/// - `experiment` → experiment sample identifier
+/// - `control`    → control sample identifier
+/// - `experiment_type` → experiment/condition type (when present)
+/// - backward-compatible aliases: `tumor`, `normal`, `tumor_type`
 /// - any additional metadata keys defined on the pair
 ///
 /// These combinations are used by [`crate::config::WorkflowConfig::expand_wildcards`]
-/// to expand rules containing `{tumor}`, `{normal}`, or `{pair_id}` placeholders.
+/// to expand rules containing `{experiment}`, `{control}`, or `{pair_id}`
+/// placeholders.
 ///
 /// # Example
 ///
 /// ```
-/// use oxo_flow_core::config::TumorNormalPair;
+/// use oxo_flow_core::config::ExperimentControlPair;
 /// use oxo_flow_core::wildcard::wildcard_combinations_from_pairs;
 ///
 /// let pairs = vec![
-///     TumorNormalPair {
+///     ExperimentControlPair {
 ///         pair_id: "CASE_001".to_string(),
-///         tumor: "TUMOR_01".to_string(),
-///         normal: "NORMAL_01".to_string(),
-///         tumor_type: Some("lung".to_string()),
+///         experiment: "EXP_01".to_string(),
+///         control: "CTRL_01".to_string(),
+///         experiment_type: Some("lung".to_string()),
 ///         metadata: Default::default(),
 ///     },
 /// ];
 /// let combos = wildcard_combinations_from_pairs(&pairs);
 /// assert_eq!(combos.len(), 1);
-/// assert_eq!(combos[0]["tumor"], "TUMOR_01");
-/// assert_eq!(combos[0]["normal"], "NORMAL_01");
+/// assert_eq!(combos[0]["experiment"], "EXP_01");
+/// assert_eq!(combos[0]["control"], "CTRL_01");
 /// assert_eq!(combos[0]["pair_id"], "CASE_001");
-/// assert_eq!(combos[0]["tumor_type"], "lung");
+/// assert_eq!(combos[0]["experiment_type"], "lung");
 /// ```
 pub fn wildcard_combinations_from_pairs(
-    pairs: &[crate::config::TumorNormalPair],
+    pairs: &[crate::config::ExperimentControlPair],
 ) -> WildcardCombinations {
     pairs
         .iter()
         .map(|pair| {
             let mut values = WildcardValues::new();
             values.insert("pair_id".to_string(), pair.pair_id.clone());
-            values.insert("tumor".to_string(), pair.tumor.clone());
-            values.insert("normal".to_string(), pair.normal.clone());
-            if let Some(ref t) = pair.tumor_type {
+            values.insert("experiment".to_string(), pair.experiment.clone());
+            values.insert("control".to_string(), pair.control.clone());
+            // Backward-compatible aliases
+            values.insert("tumor".to_string(), pair.experiment.clone());
+            values.insert("normal".to_string(), pair.control.clone());
+            if let Some(ref t) = pair.experiment_type {
+                values.insert("experiment_type".to_string(), t.clone());
                 values.insert("tumor_type".to_string(), t.clone());
             }
             for (k, v) in &pair.metadata {
@@ -574,25 +580,25 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // WC-01: Tumor-normal pair wildcard tests
+    // WC-01: Experiment-control pair wildcard tests
     // -----------------------------------------------------------------------
 
     #[test]
     fn wildcard_combinations_from_pairs_basic() {
-        use crate::config::TumorNormalPair;
+        use crate::config::ExperimentControlPair;
         let pairs = vec![
-            TumorNormalPair {
+            ExperimentControlPair {
                 pair_id: "CASE_001".to_string(),
-                tumor: "TUMOR_01".to_string(),
-                normal: "NORMAL_01".to_string(),
-                tumor_type: Some("lung".to_string()),
+                experiment: "EXP_01".to_string(),
+                control: "CTRL_01".to_string(),
+                experiment_type: Some("lung".to_string()),
                 metadata: Default::default(),
             },
-            TumorNormalPair {
+            ExperimentControlPair {
                 pair_id: "CASE_002".to_string(),
-                tumor: "TUMOR_02".to_string(),
-                normal: "NORMAL_02".to_string(),
-                tumor_type: None,
+                experiment: "EXP_02".to_string(),
+                control: "CTRL_02".to_string(),
+                experiment_type: None,
                 metadata: Default::default(),
             },
         ];
@@ -600,25 +606,30 @@ mod tests {
         assert_eq!(combos.len(), 2);
 
         assert_eq!(combos[0]["pair_id"], "CASE_001");
-        assert_eq!(combos[0]["tumor"], "TUMOR_01");
-        assert_eq!(combos[0]["normal"], "NORMAL_01");
+        assert_eq!(combos[0]["experiment"], "EXP_01");
+        assert_eq!(combos[0]["control"], "CTRL_01");
+        assert_eq!(combos[0]["experiment_type"], "lung");
+        // backward-compatible aliases
+        assert_eq!(combos[0]["tumor"], "EXP_01");
+        assert_eq!(combos[0]["normal"], "CTRL_01");
         assert_eq!(combos[0]["tumor_type"], "lung");
 
         assert_eq!(combos[1]["pair_id"], "CASE_002");
-        assert_eq!(combos[1]["tumor"], "TUMOR_02");
-        assert!(!combos[1].contains_key("tumor_type")); // not set
+        assert_eq!(combos[1]["experiment"], "EXP_02");
+        assert_eq!(combos[1]["control"], "CTRL_02");
+        assert!(!combos[1].contains_key("experiment_type")); // not set
     }
 
     #[test]
     fn wildcard_combinations_from_pairs_metadata() {
-        use crate::config::TumorNormalPair;
+        use crate::config::ExperimentControlPair;
         let mut meta = HashMap::new();
         meta.insert("patient_id".to_string(), "PT-001".to_string());
-        let pairs = vec![TumorNormalPair {
+        let pairs = vec![ExperimentControlPair {
             pair_id: "P1".to_string(),
-            tumor: "T1".to_string(),
-            normal: "N1".to_string(),
-            tumor_type: None,
+            experiment: "E1".to_string(),
+            control: "C1".to_string(),
+            experiment_type: None,
             metadata: meta,
         }];
         let combos = wildcard_combinations_from_pairs(&pairs);
@@ -627,8 +638,8 @@ mod tests {
 
     #[test]
     fn wildcard_combinations_from_pairs_empty() {
-        use crate::config::TumorNormalPair;
-        let combos = wildcard_combinations_from_pairs(&[] as &[TumorNormalPair]);
+        use crate::config::ExperimentControlPair;
+        let combos = wildcard_combinations_from_pairs(&[] as &[ExperimentControlPair]);
         assert!(combos.is_empty());
     }
 

@@ -538,7 +538,7 @@ async fn main() -> Result<()> {
             let mut config = WorkflowConfig::from_file(&workflow)
                 .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
-            // Expand rules that reference tumor/normal pair or sample-group wildcards.
+            // Expand rules that reference experiment/control pairs or sample groups.
             // Must be done before building the DAG so that concrete rule names and
             // file paths are available for dependency inference.
             config

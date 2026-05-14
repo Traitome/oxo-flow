@@ -407,7 +407,7 @@ fn gallery_08_multiomics_integration() {
 }
 
 // ============================================================================
-// WC-01: Tumor-Normal Pairing Tests
+// WC-01: Experiment-Control Pairing Tests
 // ============================================================================
 
 /// Test that [[pairs]] are parsed correctly and expand_wildcards produces
@@ -420,31 +420,31 @@ fn wc01_pairs_expand_to_concrete_rules() {
 
         [[pairs]]
         pair_id = "CASE_001"
-        tumor   = "TUMOR_01"
-        normal  = "NORMAL_01"
+        experiment = "EXP_01"
+        control    = "CTRL_01"
 
         [[pairs]]
         pair_id = "CASE_002"
-        tumor   = "TUMOR_02"
-        normal  = "NORMAL_02"
+        experiment = "EXP_02"
+        control    = "CTRL_02"
 
         [[rules]]
-        name   = "align_tumor"
-        input  = ["raw/{tumor}_R1.fq.gz"]
-        output = ["aligned/{tumor}.bam"]
+        name   = "align_experiment"
+        input  = ["raw/{experiment}_R1.fq.gz"]
+        output = ["aligned/{experiment}.bam"]
         shell  = "bwa mem ref.fa {input[0]} > {output[0]}"
 
         [[rules]]
-        name   = "align_normal"
-        input  = ["raw/{normal}_R1.fq.gz"]
-        output = ["aligned/{normal}.bam"]
+        name   = "align_control"
+        input  = ["raw/{control}_R1.fq.gz"]
+        output = ["aligned/{control}.bam"]
         shell  = "bwa mem ref.fa {input[0]} > {output[0]}"
 
         [[rules]]
         name   = "mutect2"
-        input  = ["aligned/{tumor}.bam", "aligned/{normal}.bam"]
+        input  = ["aligned/{experiment}.bam", "aligned/{control}.bam"]
         output = ["variants/{pair_id}.vcf.gz"]
-        shell  = "gatk Mutect2 -I {input[0]} -I {input[1]} -normal {normal} -O {output[0]}"
+        shell  = "gatk Mutect2 -I {input[0]} -I {input[1]} -normal {control} -O {output[0]}"
     "#;
 
     let mut config = WorkflowConfig::parse(toml).unwrap();
@@ -452,7 +452,7 @@ fn wc01_pairs_expand_to_concrete_rules() {
     assert_eq!(config.rules.len(), 3);
 
     // Before expansion, rule names are template names
-    assert!(config.rules.iter().any(|r| r.name == "align_tumor"));
+    assert!(config.rules.iter().any(|r| r.name == "align_experiment"));
     assert!(config.rules.iter().any(|r| r.name == "mutect2"));
 
     config.expand_wildcards().unwrap();
@@ -465,25 +465,25 @@ fn wc01_pairs_expand_to_concrete_rules() {
         config
             .rules
             .iter()
-            .any(|r| r.name == "align_tumor_CASE_001")
+            .any(|r| r.name == "align_experiment_CASE_001")
     );
     assert!(
         config
             .rules
             .iter()
-            .any(|r| r.name == "align_tumor_CASE_002")
+            .any(|r| r.name == "align_experiment_CASE_002")
     );
     assert!(
         config
             .rules
             .iter()
-            .any(|r| r.name == "align_normal_CASE_001")
+            .any(|r| r.name == "align_control_CASE_001")
     );
     assert!(
         config
             .rules
             .iter()
-            .any(|r| r.name == "align_normal_CASE_002")
+            .any(|r| r.name == "align_control_CASE_002")
     );
     assert!(config.rules.iter().any(|r| r.name == "mutect2_CASE_001"));
     assert!(config.rules.iter().any(|r| r.name == "mutect2_CASE_002"));
@@ -492,10 +492,10 @@ fn wc01_pairs_expand_to_concrete_rules() {
     let align_t1 = config
         .rules
         .iter()
-        .find(|r| r.name == "align_tumor_CASE_001")
+        .find(|r| r.name == "align_experiment_CASE_001")
         .unwrap();
-    assert_eq!(align_t1.input[0], "raw/TUMOR_01_R1.fq.gz");
-    assert_eq!(align_t1.output[0], "aligned/TUMOR_01.bam");
+    assert_eq!(align_t1.input[0], "raw/EXP_01_R1.fq.gz");
+    assert_eq!(align_t1.output[0], "aligned/EXP_01.bam");
 
     let mutect2_c2 = config
         .rules
@@ -512,16 +512,16 @@ fn wc01_pairs_expand_to_concrete_rules() {
     assert_eq!(order.len(), 6);
 }
 
-/// Test that the multi-case tumor-normal example file parses and expands correctly.
+/// Test that the multi-case experiment-control example file parses and expands correctly.
 #[test]
-fn wc01_example_paired_tumor_normal_pairs() {
-    let toml = std::fs::read_to_string("examples/paired_tumor_normal_pairs.oxoflow").unwrap();
+fn wc01_example_paired_experiment_control_pairs() {
+    let toml = std::fs::read_to_string("examples/paired_experiment_control_pairs.oxoflow").unwrap();
     let mut config = WorkflowConfig::parse(&toml).unwrap();
 
-    assert_eq!(config.workflow.name, "multi-case-tumor-normal");
+    assert_eq!(config.workflow.name, "multi-case-experiment-control");
     assert_eq!(config.pairs.len(), 2);
 
-    // Before expansion the template rules use {tumor}/{normal} placeholders
+    // Before expansion the template rules use {experiment}/{control} placeholders
     let template_rule_count = config.rules.len();
     assert!(template_rule_count > 0);
 
@@ -542,7 +542,7 @@ fn wc01_example_paired_tumor_normal_pairs() {
     assert!(order.iter().any(|n| n == "clinical_report_CASE_002"));
 }
 
-/// Test that rules without {tumor}/{normal} wildcards are unaffected by expansion.
+/// Test that rules without {experiment}/{control} wildcards are unaffected by expansion.
 #[test]
 fn wc01_non_wildcard_rules_unchanged() {
     let toml = r#"
@@ -551,8 +551,8 @@ fn wc01_non_wildcard_rules_unchanged() {
 
         [[pairs]]
         pair_id = "P1"
-        tumor   = "T1"
-        normal  = "N1"
+        experiment = "E1"
+        control    = "C1"
 
         [[rules]]
         name   = "setup"
@@ -560,9 +560,9 @@ fn wc01_non_wildcard_rules_unchanged() {
         shell  = "mkdir -p results && touch setup.done"
 
         [[rules]]
-        name   = "align_tumor"
-        input  = ["raw/{tumor}.fq"]
-        output = ["aligned/{tumor}.bam"]
+        name   = "align_experiment"
+        input  = ["raw/{experiment}.fq"]
+        output = ["aligned/{experiment}.bam"]
         shell  = "bwa mem ref.fa {input[0]} > {output[0]}"
     "#;
 
@@ -571,8 +571,8 @@ fn wc01_non_wildcard_rules_unchanged() {
 
     // setup rule should remain as-is
     assert_eq!(config.rules.iter().filter(|r| r.name == "setup").count(), 1);
-    // align_tumor should be expanded
-    assert!(config.rules.iter().any(|r| r.name == "align_tumor_P1"));
+    // align_experiment should be expanded
+    assert!(config.rules.iter().any(|r| r.name == "align_experiment_P1"));
 }
 
 // ============================================================================

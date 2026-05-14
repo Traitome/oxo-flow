@@ -257,9 +257,14 @@ impl std::fmt::Display for ReferenceDatabase {
     }
 }
 
-/// A tumor-normal sample pair for somatic analysis workflows.
+/// An experiment-control sample pair for comparative analysis workflows.
 ///
-/// Each pair defines `{pair_id}`, `{tumor}`, and `{normal}` wildcard values.
+/// Each pair defines `{pair_id}`, `{experiment}`, and `{control}` wildcard
+/// values.
+///
+/// Backward compatibility:
+/// - `{tumor}` aliases `{experiment}`
+/// - `{normal}` aliases `{control}`
 /// Rules containing any of these wildcards in their `input`, `output`, or
 /// `shell` fields are expanded once per pair.
 ///
@@ -268,34 +273,46 @@ impl std::fmt::Display for ReferenceDatabase {
 /// ```toml
 /// [[pairs]]
 /// pair_id = "CASE_001"
-/// tumor   = "TUMOR_01"
-/// normal  = "NORMAL_01"
-/// tumor_type = "lung_adenocarcinoma"
+/// experiment = "SAMPLE_EXP_01"
+/// control    = "SAMPLE_CTRL_01"
+/// experiment_type = "condition_a"
 ///
 /// [[pairs]]
 /// pair_id = "CASE_002"
-/// tumor   = "TUMOR_02"
-/// normal  = "NORMAL_02"
+/// experiment = "SAMPLE_EXP_02"
+/// control    = "SAMPLE_CTRL_02"
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct TumorNormalPair {
+pub struct ExperimentControlPair {
     /// Unique identifier for this pair (available as `{pair_id}`).
     pub pair_id: String,
 
-    /// Tumor sample identifier (available as `{tumor}`).
-    pub tumor: String,
+    /// Experiment sample identifier (available as `{experiment}`).
+    ///
+    /// Backward-compatible TOML alias: `tumor`.
+    #[serde(alias = "tumor")]
+    pub experiment: String,
 
-    /// Normal/germline sample identifier (available as `{normal}`).
-    pub normal: String,
+    /// Control sample identifier (available as `{control}`).
+    ///
+    /// Backward-compatible TOML alias: `normal`.
+    #[serde(alias = "normal")]
+    pub control: String,
 
-    /// Optional tumor histology / tissue type (available as `{tumor_type}`).
+    /// Optional experiment type / cohort label (available as `{experiment_type}`).
+    ///
+    /// Backward-compatible TOML alias: `tumor_type`.
     #[serde(default)]
-    pub tumor_type: Option<String>,
+    #[serde(alias = "tumor_type")]
+    pub experiment_type: Option<String>,
 
     /// Arbitrary key-value metadata; each key is available as a wildcard.
     #[serde(default)]
     pub metadata: HashMap<String, String>,
 }
+
+/// Backward-compatible alias; prefer [`ExperimentControlPair`].
+pub type TumorNormalPair = ExperimentControlPair;
 
 /// A named group of samples for cohort-level analysis.
 ///
@@ -373,12 +390,16 @@ pub struct WorkflowConfig {
     #[serde(default, rename = "reference_db")]
     pub reference_databases: Vec<ReferenceDatabase>,
 
-    /// Tumor-normal sample pairs for somatic variant calling workflows.
+    /// Experiment-control sample pairs for comparative analysis workflows.
     ///
-    /// Rules containing `{tumor}`, `{normal}`, or `{pair_id}` wildcards are
-    /// expanded once per pair by [`WorkflowConfig::expand_wildcards`].
+    /// Rules containing `{experiment}`, `{control}`, or `{pair_id}` wildcards
+    /// are expanded once per pair by [`WorkflowConfig::expand_wildcards`].
+    ///
+    /// Backward compatibility:
+    /// - `{tumor}` aliases `{experiment}`
+    /// - `{normal}` aliases `{control}`
     #[serde(default, rename = "pairs")]
-    pub pairs: Vec<TumorNormalPair>,
+    pub pairs: Vec<ExperimentControlPair>,
 
     /// Sample groups for cohort-level analysis.
     ///
@@ -465,7 +486,7 @@ pub struct TumorSampleMeta {
     pub ploidy: Option<f64>,
     /// Sample type (tumor, normal, etc.).
     pub sample_type: Option<String>,
-    /// Match ID for tumor-normal pairing.
+    /// Match ID for experiment-control pairing.
     pub match_id: Option<String>,
 }
 
@@ -836,8 +857,10 @@ impl WorkflowConfig {
     /// Expand rules that contain pair or group wildcards into concrete instances.
     ///
     /// Scans each rule for wildcard placeholders:
-    /// - Rules containing `{tumor}`, `{normal}`, or `{pair_id}` are expanded
-    ///   once per entry in `self.pairs`.
+    /// - Rules containing `{experiment}`, `{control}`, or `{pair_id}` are
+    ///   expanded once per entry in `self.pairs`.
+    /// - Backward-compatible aliases `{tumor}` and `{normal}` are also
+    ///   recognized.
     /// - Rules containing `{group}` or `{sample}` are expanded once per
     ///   (group, sample) combination in `self.sample_groups`.
     /// - Rules without any of these wildcards are kept unchanged.
@@ -864,8 +887,9 @@ impl WorkflowConfig {
         let pair_combos = wildcard_combinations_from_pairs(&self.pairs);
         let group_combos = wildcard_combinations_from_groups(&self.sample_groups);
 
-        // Wildcards that trigger pair expansion
-        const PAIR_WILDCARDS: &[&str] = &["tumor", "normal", "pair_id"];
+        // Wildcards that trigger pair expansion.
+        // Include backward-compatible aliases `{tumor}`/`{normal}`.
+        const PAIR_WILDCARDS: &[&str] = &["experiment", "control", "tumor", "normal", "pair_id"];
         // Wildcards that trigger group expansion
         const GROUP_WILDCARDS: &[&str] = &["group", "sample"];
 

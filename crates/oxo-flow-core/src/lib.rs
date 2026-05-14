@@ -55,10 +55,10 @@ pub mod wildcard;
 // Re-export key types at the crate root for convenience.
 pub use config::WorkflowConfig;
 pub use config::{
-    ActionabilityAnnotation, BiomarkerResult, ClinicalReportSection, ComplianceEvent, FilterChain,
-    GenePanel, Parsed, QcThreshold, Ready, ReferenceDatabase, RuleName, SampleGroup,
-    TumorNormalPair, TumorSampleMeta, Validated, VariantClassification, WildcardPattern,
-    WorkflowState,
+    ActionabilityAnnotation, BiomarkerResult, ClinicalReportSection, ComplianceEvent,
+    ExperimentControlPair, FilterChain, GenePanel, Parsed, QcThreshold, Ready, ReferenceDatabase,
+    RuleName, SampleGroup, TumorNormalPair, TumorSampleMeta, Validated, VariantClassification,
+    WildcardPattern, WorkflowState,
 };
 pub use dag::WorkflowDag;
 pub use error::{OxoFlowError, Result};

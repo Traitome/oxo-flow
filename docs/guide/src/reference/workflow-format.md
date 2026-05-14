@@ -195,29 +195,29 @@ Any `{name}` pattern not matching a built-in placeholder is treated as a wildcar
 
 ---
 
-## `[[pairs]]` — Tumor-Normal Pairing (WC-01)
+## `[[pairs]]` — Experiment-Control Pairing (WC-01)
 
-`[[pairs]]` defines matched tumor-normal sample pairs for somatic variant calling and other comparative analyses.
+`[[pairs]]` defines experiment-control sample pairs for somatic variant calling and other comparative analyses.
 
 ```toml
 [[pairs]]
 pair_id = "CASE_001"
-tumor   = "TUMOR_01"
-normal  = "NORMAL_01"
+experiment = "EXP_01"
+control    = "CTRL_01"
 
 [[pairs]]
 pair_id = "CASE_002"
-tumor   = "TUMOR_02"
-normal  = "NORMAL_02"
+experiment = "EXP_02"
+control    = "CTRL_02"
 ```
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `pair_id` | String | **Yes** | Unique identifier for this pair |
-| `tumor` | String | **Yes** | Tumor sample name |
-| `normal` | String | **Yes** | Matched-normal sample name |
+| `experiment` | String | **Yes** | Experiment sample name |
+| `control` | String | **Yes** | Matched control sample name |
 
-Any rule that references `{tumor}`, `{normal}`, or `{pair_id}` in its `input`, `output`, or `shell` fields is **automatically expanded** into one concrete rule instance per pair.  Rules that do not reference any pair wildcard are kept as-is.
+Any rule that references `{experiment}`, `{control}`, or `{pair_id}` in its `input`, `output`, or `shell` fields is **automatically expanded** into one concrete rule instance per pair.  Rules that do not reference any pair wildcard are kept as-is.
 
 **Expanded rule naming:** `{rule_name}_{pair_id}` (e.g., `mutect2_CASE_001`).
 
@@ -226,19 +226,19 @@ Any rule that references `{tumor}`, `{normal}`, or `{pair_id}` in its `input`, `
 ```toml
 [[pairs]]
 pair_id = "CASE_001"
-tumor   = "TUMOR_01"
-normal  = "NORMAL_01"
+experiment = "EXP_01"
+control    = "CTRL_01"
 
 [[rules]]
 name   = "mutect2"
-input  = ["aligned/{tumor}.bam", "aligned/{normal}.bam"]
+input  = ["aligned/{experiment}.bam", "aligned/{control}.bam"]
 output = ["variants/{pair_id}.vcf.gz"]
-shell  = "gatk Mutect2 -I {input[0]} -I {input[1]} -normal {normal} -O {output[0]}"
+shell  = "gatk Mutect2 -I {input[0]} -I {input[1]} -normal {control} -O {output[0]}"
 ```
 
 Produces rule `mutect2_CASE_001` with concrete file paths.
 
-See [`examples/paired_tumor_normal_pairs.oxoflow`](../../../examples/paired_tumor_normal_pairs.oxoflow) for a full clinical somatic calling pipeline.
+See [`examples/paired_experiment_control_pairs.oxoflow`](../../../examples/paired_experiment_control_pairs.oxoflow) for a full clinical somatic calling pipeline.
 
 ---
 
