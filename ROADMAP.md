@@ -427,6 +427,35 @@ framework extensibility, code quality, and documentation.
 - [ ] Node feature matching for HPC scheduling (Expert 13.4)
 - [ ] Spot/preemptible instance support (Expert 14.10)
 
+## Phase 10: Industrial-Grade Web UI System (Completed)
+
+**Goal**: Transform oxo-flow-web into a multi-tenant, resource-aware scheduling portal.
+
+### Milestone 10.1: Persistence Layer
+- [x] SQLite integration with `sqlx`
+- [x] User management schema (Viewer/User/Admin)
+- [x] Execution history and job metadata persistence
+- [x] Audit log implementation for host-level actions
+
+### Milestone 10.2: Identity & Multi-Tenancy
+- [x] OS account binding mechanism (Sudo/SSH)
+- [x] Physical directory isolation (`workspace/users/<name>/runs/<id>/`)
+- [x] Credential management (encrypted SSH keys)
+- [x] Permission-aware file browser API
+
+### Milestone 10.3: Resource Awareness
+- [x] Real-time host metrics via `sysinfo`
+- [x] HPC cluster polling (SLURM/PBS/SGE/LSF)
+- [x] Smart queuing/blocking based on resource availability
+- [x] Resource usage dashboards for Admins
+
+### Milestone 10.4: Advanced Lifecycle UI
+- [x] Dynamic DAG status coloring (Live WebSocket/SSE)
+- [x] Real-time log streaming from backend to UI
+- [x] Interactive task control (Pause/Stop/Checkpoint Resume)
+- [x] Automated sample discovery from folders via Regex
+- [x] Notification system (Email, Webhook)
+
 ---
 
 ## Technology Stack

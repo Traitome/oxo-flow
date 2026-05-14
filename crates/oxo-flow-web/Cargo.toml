@@ -28,3 +28,8 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 tokio-stream = { workspace = true }
 dashmap = "6.1.0"
+sqlx = { version = "0.8.3", features = ["sqlite", "runtime-tokio", "uuid", "chrono"] }
+sysinfo = "0.33.0"
+futures = "0.3.31"
+lazy_static = "1.5.0"
+regex.workspace = true

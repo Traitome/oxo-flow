@@ -14,6 +14,8 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    oxo_flow_web::db::init_db("sqlite://oxo-flow.db").await?;
+
     let host = std::env::var("OXO_FLOW_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
     let port: u16 = std::env::var("OXO_FLOW_PORT")
         .ok()

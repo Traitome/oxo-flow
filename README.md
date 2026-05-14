@@ -31,7 +31,9 @@ oxo-flow is a high-performance, modular bioinformatics pipeline engine built fro
 - 📦 **Environment management** — First-class support for conda, pixi, docker, singularity, and venv
 - 🧬 **Bioinformatics-first** — Purpose-built for genomics workflows and clinical-grade pipelines
 - 📊 **Clinical-grade reporting** — Modular HTML/PDF/JSON report generation with ACMG/AMP variant classification, biomarker tracking, and compliance audit trails
-- 🌐 **CLI + Web interface** — 21+ CLI subcommands and a full REST API with rate limiting and graceful shutdown
+- 🌐 **Command Center** — Multi-tenant Web UI with real-time resource sensing, physical workspace isolation, and live log streaming
+- 🗄️ **Persistent State** — SQLite-backed execution history and audit logs; automatic recovery of orphaned runs after server restart
+- 🔒 **OS Identity Binding** — Secure task execution via Sudo or SSH, leveraging host POSIX permissions for data isolation
 - 🐳 **Container packaging** — Multi-stage Docker builds, rootless containers, and HEALTHCHECK support
 - ⚡ **Rust performance** — Fearless concurrency, zero-cost abstractions, `#![forbid(unsafe_code)]` across all crates
 - 🔧 **Resource-aware scheduling** — Jobs declare CPU, memory, GPU, and disk; the scheduler respects constraints across local and cluster backends (SLURM, PBS, SGE, LSF)

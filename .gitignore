@@ -33,3 +33,11 @@ lcov.info
 *~
 *.swp
 *.swo
+
+# Web server database (development)
+*.db
+*.db-shm
+*.db-wal
+
+# Workspace directory (created by web server)
+workspace/
