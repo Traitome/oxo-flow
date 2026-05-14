@@ -56,6 +56,9 @@ regex = "1"
 tempfile = "3"
 num_cpus = "1"
 
+# Crypto
+sha2 = "0.10"
+
 # Web
 axum = "0.8"
 tower = "0.5"

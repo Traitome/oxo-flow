@@ -22,6 +22,7 @@ globset = { workspace = true }
 regex = { workspace = true }
 tera = { workspace = true }
 num_cpus = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -1182,25 +1182,23 @@ pub fn validate_outputs(rule: &Rule, workdir: &Path) -> Vec<String> {
 
 /// Compute a checksum of a file for integrity and non-determinism detection.
 ///
-/// Uses FNV-1a 64-bit hashing — a stable, deterministic algorithm whose
-/// output is consistent across Rust versions and process restarts, making
-/// it suitable for persisted checksums (e.g., in checkpoint files).
+/// Uses SHA-256 for clinical-grade integrity verification.
 ///
-/// Returns the hex-encoded hash string, or an error if the file cannot be read.
+/// Returns the hex-encoded SHA-256 hash string prefixed with "sha256:",
+/// or an error if the file cannot be read.
 pub fn compute_file_checksum(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+
     let content = std::fs::read(path).map_err(|e| OxoFlowError::Execution {
         rule: String::new(),
         message: format!("failed to read {} for checksum: {e}", path.display()),
     })?;
-    // FNV-1a 64-bit parameters
-    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash: u64 = FNV_OFFSET;
-    for byte in &content {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    Ok(format!("{:016x}", hash))
+
+    // SHA-256 for clinical-grade integrity verification (CLIA/CAP requirement)
+    let mut hasher = Sha256::new();
+    hasher.update(&content);
+    let hash = hasher.finalize();
+    Ok(format!("sha256:{:x}", hash))
 }
 
 /// Verify output file checksums match previously recorded values.
@@ -1381,6 +1379,30 @@ impl ExecutionProvenance {
     /// Mark the execution as complete.
     pub fn finish(&mut self) {
         self.finished_at = Some(Utc::now());
+    }
+
+    /// Persist provenance to `.oxo-flow/provenance.json` for clinical compliance.
+    ///
+    /// This is required for CLIA/CAP audit trail documentation.
+    pub fn persist(&self, workdir: &Path) -> Result<()> {
+        let provenance_dir = workdir.join(".oxo-flow");
+        std::fs::create_dir_all(&provenance_dir).map_err(|e| OxoFlowError::Execution {
+            rule: String::new(),
+            message: format!("failed to create provenance directory: {e}"),
+        })?;
+
+        let provenance_file = provenance_dir.join("provenance.json");
+        let json = serde_json::to_string_pretty(self).map_err(|e| OxoFlowError::Execution {
+            rule: String::new(),
+            message: format!("failed to serialize provenance: {e}"),
+        })?;
+
+        std::fs::write(&provenance_file, json).map_err(|e| OxoFlowError::Execution {
+            rule: String::new(),
+            message: format!("failed to write provenance file: {e}"),
+        })?;
+
+        Ok(())
     }
 }
 
@@ -2556,10 +2578,47 @@ mod tests {
         assert_eq!(checksum1, checksum2); // Same content = same checksum
         assert!(!checksum1.is_empty());
 
+        // SHA-256 format verification for clinical compliance
+        assert!(checksum1.starts_with("sha256:"));
+        assert_eq!(checksum1.len(), 71); // "sha256:" (7 chars) + 64 hex chars
+
         // Different content = different checksum
         std::fs::write(&file, "different content").unwrap();
         let checksum3 = compute_file_checksum(&file).unwrap();
         assert_ne!(checksum1, checksum3);
+    }
+
+    #[test]
+    fn sha256_checksum_known_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "hello world").unwrap();
+
+        let checksum = compute_file_checksum(&file).unwrap();
+        // SHA-256 of "hello world" is known: b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9
+        assert!(
+            checksum.contains("b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9")
+        );
+    }
+
+    #[test]
+    fn provenance_persist() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut prov = ExecutionProvenance::new("abc123", dir.path());
+        prov.finish();
+
+        // Persist provenance
+        prov.persist(dir.path()).unwrap();
+
+        // Verify file was created
+        let provenance_file = dir.path().join(".oxo-flow/provenance.json");
+        assert!(provenance_file.exists());
+
+        // Verify content is valid JSON
+        let content = std::fs::read_to_string(&provenance_file).unwrap();
+        let parsed: ExecutionProvenance = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed.config_checksum, "abc123");
+        assert!(parsed.finished_at.is_some());
     }
 
     #[test]
