@@ -7,7 +7,7 @@ Simulate execution without running any commands. Shows the execution plan, rule 
 ## Usage
 
 ```
-oxo-flow dry-run <WORKFLOW>
+oxo-flow dry-run [OPTIONS] <WORKFLOW>
 ```
 
 ---
@@ -24,6 +24,7 @@ oxo-flow dry-run <WORKFLOW>
 
 | Option | Short | Description |
 |---|---|---|
+| `--target` | `-t` | Preview only specific target rules and their dependencies (repeatable) |
 | `--verbose` | `-v` | Enable debug-level logging |
 
 ---
@@ -34,6 +35,18 @@ oxo-flow dry-run <WORKFLOW>
 
 ```bash
 oxo-flow dry-run pipeline.oxoflow
+```
+
+### Preview a specific target rule and its dependencies
+
+```bash
+oxo-flow dry-run pipeline.oxoflow -t align
+```
+
+### Preview multiple target rules
+
+```bash
+oxo-flow dry-run pipeline.oxoflow -t align -t sort_bam
 ```
 
 ### With verbose output
@@ -66,3 +79,5 @@ Dry-run: 3 rules would execute:
 - The environment type (conda, docker, etc.) is shown for each rule
 - Thread and resource settings are displayed per rule
 - Use dry-run to verify your workflow before committing compute resources
+- When `--target` is specified, only the named rules and all rules they depend on
+  (transitively) are shown — downstream rules are excluded
