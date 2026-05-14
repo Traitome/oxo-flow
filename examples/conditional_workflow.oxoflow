@@ -1,0 +1,114 @@
+# Conditional Workflow Example
+# Demonstrates WF-01: `when` conditional execution syntax
+#
+# The `when` field accepts expressions that are evaluated against the [config]
+# section.  A rule is skipped entirely when its `when` expression is false.
+#
+# Supported syntax:
+#   config.<key>                 — truthy check (exists and non-empty/non-zero)
+#   config.<key> == "value"      — string equality
+#   config.<key> != "value"      — string inequality
+#   config.<key> == true|false   — boolean equality
+#   config.<key> > N             — numeric comparison (>, >=, <, <=)
+#   file_exists("path")          — file existence check
+#   !<expr>                      — logical NOT
+#   <expr> && <expr>             — logical AND
+#   <expr> || <expr>             — logical OR
+#   (<expr>)                     — grouping
+
+[workflow]
+name = "conditional-workflow"
+version = "1.0.0"
+description = "Illustrates when-conditional rule execution"
+author = "oxo-flow examples"
+
+# ── Configuration knobs ───────────────────────────────────────────────────────
+[config]
+run_qc        = true
+run_annotation = true
+min_coverage  = 30
+sequencing_mode = "WGS"
+target_bed    = ""
+
+[defaults]
+threads = 4
+memory  = "8G"
+
+# ── Always runs ───────────────────────────────────────────────────────────────
+
+[[rules]]
+name   = "align"
+input  = ["raw/sample_R1.fq.gz", "raw/sample_R2.fq.gz"]
+output = ["aligned/sample.sorted.bam"]
+shell  = "bwa mem -t {threads} /ref/hg38.fa {input[0]} {input[1]} | samtools sort -o {output[0]}"
+threads = 8
+[rules.environment]
+conda = "envs/bwa.yaml"
+
+# ── Conditional: run only when run_qc is true ─────────────────────────────────
+
+[[rules]]
+name  = "fastqc"
+when  = "config.run_qc"
+input = ["raw/sample_R1.fq.gz", "raw/sample_R2.fq.gz"]
+output = ["qc/sample_R1_fastqc.html", "qc/sample_R2_fastqc.html"]
+shell = "fastqc {input[0]} {input[1]} -o qc/"
+[rules.environment]
+conda = "envs/fastqc.yaml"
+
+# ── Conditional: run only in WGS mode ────────────────────────────────────────
+
+[[rules]]
+name   = "wgs_coverage"
+when   = 'config.sequencing_mode == "WGS"'
+input  = ["aligned/sample.sorted.bam"]
+output = ["qc/sample_wgs_coverage.txt"]
+shell  = "mosdepth --quantize 0:1:10:50: qc/sample aligned/sample.sorted.bam"
+[rules.environment]
+conda = "envs/mosdepth.yaml"
+
+# ── Conditional: run only in WES mode ────────────────────────────────────────
+
+[[rules]]
+name   = "wes_coverage"
+when   = 'config.sequencing_mode == "WES" && config.target_bed != ""'
+input  = ["aligned/sample.sorted.bam"]
+output = ["qc/sample_wes_coverage.txt"]
+shell  = "mosdepth --by {config.target_bed} qc/sample aligned/sample.sorted.bam"
+[rules.environment]
+conda = "envs/mosdepth.yaml"
+
+# ── Variant Calling ──────────────────────────────────────────────────────────
+
+[[rules]]
+name   = "haplotype_caller"
+input  = ["aligned/sample.sorted.bam"]
+output = ["variants/sample.g.vcf.gz"]
+shell  = "gatk HaplotypeCaller -I {input[0]} -R /ref/hg38.fa -O {output[0]} -ERC GVCF"
+threads = 4
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+# ── Conditional: annotate only when run_annotation is true AND coverage is adequate
+
+[[rules]]
+name   = "vep_annotate"
+when   = "config.run_annotation && config.min_coverage >= 20"
+input  = ["variants/sample.g.vcf.gz"]
+output = ["annotated/sample.annotated.vcf.gz"]
+shell  = "vep --input_file {input[0]} --output_file {output[0]} --format vcf --vcf --offline --cache"
+threads = 4
+[rules.environment]
+conda = "envs/vep.yaml"
+
+# ── Conditional: generate report only when annotation is complete ─────────────
+
+[[rules]]
+name   = "report"
+when   = "config.run_annotation && config.run_qc"
+input  = ["annotated/sample.annotated.vcf.gz", "qc/"]
+output = ["reports/sample_report.html"]
+shell  = "python scripts/report.py --vcf {input[0]} --qc qc/ --out {output[0]}"
+threads = 1
+[rules.environment]
+conda = "envs/report.yaml"

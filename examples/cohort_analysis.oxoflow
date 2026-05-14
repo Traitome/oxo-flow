@@ -1,0 +1,100 @@
+# Cohort Analysis Pipeline
+# Demonstrates WC-02: multi-sample group processing via [[sample_groups]]
+# Rules that reference {group} or {sample} are expanded for every
+# (group, sample) combination defined in the [[sample_groups]] table.
+
+[workflow]
+name = "cohort-analysis"
+version = "1.0.0"
+description = "Population-scale cohort study with per-sample and per-group aggregation"
+author = "oxo-flow examples"
+
+[config]
+reference_fasta = "/data/references/GRCh38/genome.fa"
+known_sites     = "/data/references/GRCh38/dbsnp_146.hg38.vcf.gz"
+genome_build    = "GRCh38"
+
+[defaults]
+threads = 4
+memory  = "8G"
+
+# ── Sample groups ─────────────────────────────────────────────────────────────
+# Each entry defines a named group with a list of sample IDs.
+# Rules referencing {group} or {sample} are expanded for every
+# (group, sample) pair across all groups.
+
+[[sample_groups]]
+name    = "control"
+samples = ["CTRL_001", "CTRL_002", "CTRL_003"]
+[sample_groups.metadata]
+tissue = "blood"
+
+[[sample_groups]]
+name    = "case"
+samples = ["CASE_001", "CASE_002"]
+[sample_groups.metadata]
+tissue = "tumor"
+
+# ── Quality Control ───────────────────────────────────────────────────────────
+# Expanded into: qc_control_CTRL_001, qc_control_CTRL_002, …, qc_case_CASE_001, …
+
+[[rules]]
+name   = "fastp"
+input  = ["raw/{sample}_R1.fq.gz", "raw/{sample}_R2.fq.gz"]
+output = ["trimmed/{sample}_R1.fq.gz", "trimmed/{sample}_R2.fq.gz", "qc/{sample}_fastp.json"]
+shell  = "fastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]} --json {output[2]} --thread {threads}"
+threads = 4
+[rules.environment]
+conda = "envs/fastp.yaml"
+
+# ── Alignment ─────────────────────────────────────────────────────────────────
+
+[[rules]]
+name    = "bwa_mem2"
+input   = ["trimmed/{sample}_R1.fq.gz", "trimmed/{sample}_R2.fq.gz"]
+output  = ["aligned/{sample}.sorted.bam"]
+shell   = "bwa-mem2 mem -t {threads} {config.reference_fasta} {input[0]} {input[1]} | samtools sort -@ {threads} -o {output[0]}"
+threads = 8
+memory  = "16G"
+[rules.environment]
+conda = "envs/bwa_mem2.yaml"
+
+# ── Deduplication ─────────────────────────────────────────────────────────────
+
+[[rules]]
+name   = "markdup"
+input  = ["aligned/{sample}.sorted.bam"]
+output = ["dedup/{sample}.dedup.bam", "qc/{sample}.markdup_metrics.txt"]
+shell  = "gatk MarkDuplicates -I {input[0]} -O {output[0]} -M {output[1]}"
+threads = 4
+memory  = "16G"
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+# ── Germline Variant Calling ──────────────────────────────────────────────────
+
+[[rules]]
+name   = "haplotype_caller"
+input  = ["dedup/{sample}.dedup.bam"]
+output = ["gvcf/{sample}.g.vcf.gz"]
+shell  = "gatk HaplotypeCaller -I {input[0]} -R {config.reference_fasta} -O {output[0]} -ERC GVCF"
+threads = 4
+memory  = "16G"
+description = "Per-sample GVCF generation for joint genotyping"
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+# ── QC Summary ────────────────────────────────────────────────────────────────
+# This rule does NOT use {group} or {sample} wildcards — it runs once,
+# aggregating QC metrics across all samples.
+
+[[rules]]
+name   = "multiqc"
+input  = ["qc/"]
+output = ["reports/multiqc_report.html"]
+shell  = "multiqc qc/ -o reports/"
+threads = 1
+memory  = "4G"
+description = "Aggregate QC metrics for the entire cohort"
+[rules.environment]
+conda = "envs/multiqc.yaml"

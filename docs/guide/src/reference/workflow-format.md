@@ -121,6 +121,7 @@ shell = "bwa mem -t {threads} {config.reference} {input} | samtools sort -o {out
 | `threads` | Integer | No | CPU threads (overrides defaults) |
 | `memory` | String | No | Memory allocation (overrides defaults) |
 | `environment` | Table | No | Environment specification |
+| `when` | String | No | Conditional expression — skip rule when `false` |
 
 ### Environment specification
 
@@ -191,6 +192,148 @@ output = ["aligned/{sample}.bam"]
 ### Custom wildcards
 
 Any `{name}` pattern not matching a built-in placeholder is treated as a wildcard. oxo-flow expands wildcards by matching against available files or explicit sample lists.
+
+---
+
+## `[[pairs]]` — Experiment-Control Pairing (WC-01)
+
+`[[pairs]]` defines experiment-control sample pairs for somatic variant calling and other comparative analyses.
+
+```toml
+[[pairs]]
+pair_id = "CASE_001"
+experiment = "EXP_01"
+control    = "CTRL_01"
+
+[[pairs]]
+pair_id = "CASE_002"
+experiment = "EXP_02"
+control    = "CTRL_02"
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `pair_id` | String | **Yes** | Unique identifier for this pair |
+| `experiment` | String | **Yes** | Experiment sample name |
+| `control` | String | **Yes** | Matched control sample name |
+
+Any rule that references `{experiment}`, `{control}`, or `{pair_id}` in its `input`, `output`, or `shell` fields is **automatically expanded** into one concrete rule instance per pair.  Rules that do not reference any pair wildcard are kept as-is.
+
+**Expanded rule naming:** `{rule_name}_{pair_id}` (e.g., `mutect2_CASE_001`).
+
+### Example
+
+```toml
+[[pairs]]
+pair_id = "CASE_001"
+experiment = "EXP_01"
+control    = "CTRL_01"
+
+[[rules]]
+name   = "mutect2"
+input  = ["aligned/{experiment}.bam", "aligned/{control}.bam"]
+output = ["variants/{pair_id}.vcf.gz"]
+shell  = "gatk Mutect2 -I {input[0]} -I {input[1]} -normal {control} -O {output[0]}"
+```
+
+Produces rule `mutect2_CASE_001` with concrete file paths.
+
+See [`examples/paired_experiment_control_pairs.oxoflow`](../../../examples/paired_experiment_control_pairs.oxoflow) for a full clinical somatic calling pipeline.
+
+---
+
+## `[[sample_groups]]` — Multi-Sample Cohorts (WC-02)
+
+`[[sample_groups]]` organises samples into named groups (e.g., case vs. control) for cohort studies.
+
+```toml
+[[sample_groups]]
+name    = "control"
+samples = ["CTRL_001", "CTRL_002", "CTRL_003"]
+
+[[sample_groups]]
+name    = "case"
+samples = ["CASE_001", "CASE_002"]
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | String | **Yes** | Group name |
+| `samples` | Array of strings | **Yes** | Sample identifiers in this group |
+| `metadata` | Table | No | Arbitrary group-level metadata |
+
+Any rule that references `{sample}` or `{group}` is expanded once per `(group, sample)` pair across all groups.
+
+**Expanded rule naming:** `{rule_name}_{group}_{sample}` (e.g., `align_control_CTRL_001`).
+
+### Example
+
+```toml
+[[sample_groups]]
+name    = "treatment"
+samples = ["S001", "S002"]
+
+[[rules]]
+name   = "align"
+input  = ["raw/{sample}_R1.fq.gz"]
+output = ["aligned/{sample}.bam"]
+shell  = "bwa mem ref.fa {input[0]} > {output[0]}"
+```
+
+Produces `align_treatment_S001` and `align_treatment_S002`.
+
+See [`examples/cohort_analysis.oxoflow`](../../../examples/cohort_analysis.oxoflow) for a complete cohort study pipeline.
+
+---
+
+## `when` — Conditional Rule Execution (WF-01)
+
+The optional `when` field on a rule contains an expression evaluated against `[config]` values.  When the expression evaluates to **false** the rule is skipped entirely and removed from the DAG.
+
+```toml
+[[rules]]
+name  = "fastqc"
+when  = "config.run_qc"
+input = ["raw/sample_R1.fq.gz"]
+output = ["qc/sample_fastqc.html"]
+shell = "fastqc {input[0]} -o qc/"
+```
+
+### Expression syntax
+
+| Form | Example | Description |
+|---|---|---|
+| `config.<key>` | `config.run_qc` | Truthy check (true, non-zero, non-empty string) |
+| `config.<key> == "value"` | `config.mode == "WGS"` | String equality |
+| `config.<key> != "value"` | `config.mode != "WES"` | String inequality |
+| `config.<key> == true\|false` | `config.skip == false` | Boolean equality |
+| `config.<key> > N` | `config.min_cov >= 20` | Numeric comparison (`>`, `>=`, `<`, `<=`) |
+| `file_exists("path")` | `file_exists("panel.bed")` | File existence test |
+| `!<expr>` | `!config.skip` | Logical NOT |
+| `<expr> && <expr>` | `config.run_qc && config.min_cov >= 20` | Logical AND |
+| `<expr> \|\| <expr>` | `config.wgs \|\| config.wes` | Logical OR |
+| `(<expr>)` | `(config.a && config.b) \|\| config.c` | Grouping |
+
+### Example
+
+```toml
+[config]
+run_annotation = true
+min_coverage   = 30
+mode           = "WGS"
+
+[[rules]]
+name = "vep_annotate"
+when = 'config.run_annotation && config.min_coverage >= 20'
+# ...
+
+[[rules]]
+name = "wgs_coverage"
+when = 'config.mode == "WGS"'
+# ...
+```
+
+See [`examples/conditional_workflow.oxoflow`](../../../examples/conditional_workflow.oxoflow) for a full example.
 
 ---
 

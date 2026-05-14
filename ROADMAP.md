@@ -101,9 +101,9 @@ The `.oxoflow` format is TOML-based, designed for readability and composability:
 
 ```toml
 [workflow]
-name = "tumor-variant-calling"
+name = "experiment-variant-calling"
 version = "1.0.0"
-description = "End-to-end tumor variant calling pipeline"
+description = "End-to-end variant calling pipeline"
 author = "Traitome"
 
 [config]
@@ -315,7 +315,7 @@ sections = ["summary", "variants", "coverage", "qc_metrics"]
 - [x] Duplicate marking (GATK MarkDuplicates / sambamba)
 - [x] Base quality recalibration (GATK BQSR)
 - [x] Germline SNV/indel calling (GATK HaplotypeCaller, DeepVariant)
-- [x] Somatic SNV/indel calling (Mutect2, Strelka2, VarDict)
+- [x] Somatic/experimental SNV/indel calling (Mutect2, Strelka2, VarDict)
 - [x] Consensus variant merging
 
 ### Milestone 7.2: Copy Number and Structural Variants

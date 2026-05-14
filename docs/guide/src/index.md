@@ -38,7 +38,7 @@ oxo-flow is a high-performance workflow engine built from the ground up in Rust 
 | **Container packaging** | Package entire workflows into Docker or Singularity images for portable, reproducible execution |
 | **Cluster backends** | Submit jobs to SLURM, PBS, SGE, and LSF clusters with resource-aware scheduling |
 | **Wildcard expansion** | `{sample}`, `{chr}` patterns that expand automatically from inputs or config |
-| **Venus pipeline** | Built-in clinical tumor variant calling pipeline ready for somatic analysis |
+| **Venus pipeline** | Built-in clinical experiment variant calling pipeline ready for somatic analysis |
 
 ---
 

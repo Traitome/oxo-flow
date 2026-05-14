@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-oxo-flow demonstrates strong architectural foundations for a Rust-native bioinformatics pipeline engine. The TOML-based workflow format is intuitive, environment management is comprehensive, and the DAG engine is well-designed. However, several critical gaps exist for production bioinformatics use, particularly around wildcard handling for complex sample relationships (tumor-normal pairs, multi-batch experiments) and lack of single-cell workflow support.
+oxo-flow demonstrates strong architectural foundations for a Rust-native bioinformatics pipeline engine. The TOML-based workflow format is intuitive, environment management is comprehensive, and the DAG engine is well-designed. However, several critical gaps exist for production bioinformatics use, particularly around wildcard handling for complex sample relationships (experiment-control pairs, multi-batch experiments) and lack of single-cell workflow support.
 
 **Overall Assessment**: Ready for basic WGS/RNA-seq pipelines, but needs enhancements for production-grade clinical and multi-modal workflows.
 
@@ -31,7 +31,7 @@ oxo-flow demonstrates strong architectural foundations for a Rust-native bioinfo
 
 | ID | Severity | Issue | Recommendation |
 |----|----------|-------|----------------|
-| WF-01 | **HIGH** | No conditional execution (if/else) | Add `when = "{config.mode} == 'tumor'"` syntax for conditional rules |
+| WF-01 | ~~**HIGH**~~ ✅ **DONE** | No conditional execution (if/else) | ~~Add `when = "{config.mode} == 'experiment'"` syntax for conditional rules~~ **Implemented**: `when` field with full expression support |
 | WF-02 | **HIGH** | No parameter sweep support | Add `params = [{quality: 20}, {quality: 30}]` for parameter optimization workflows |
 | WF-03 | **MEDIUM** | No subworkflow imports | Add `import = "modules/qc.oxoflow"` for modular pipeline composition |
 | WF-04 | **MEDIUM** | No workflow inheritance | Consider `[workflow.extends = "base-pipeline.oxoflow"]` for pipeline templates |
@@ -44,20 +44,20 @@ Current format cannot express conditional execution common in bioinformatics:
 ```toml
 # Current: Must define separate rules for each mode
 [[rules]]
-name = "fastp_tumor"
-input = ["raw/TUMOR_01_R1.fq.gz", "raw/TUMOR_01_R2.fq.gz"]
+name = "fastp_experiment"
+input = ["raw/EXP_01_R1.fq.gz", "raw/EXP_01_R2.fq.gz"]
 ...
 
 [[rules]]
-name = "fastp_normal"
-input = ["raw/NORMAL_01_R1.fq.gz", "raw/NORMAL_01_R2.fq.gz"]
+name = "fastp_control"
+input = ["raw/CTRL_01_R1.fq.gz", "raw/CTRL_01_R2.fq.gz"]
 ...
 
 # Desired: Conditional rule with sample type filtering
 [[rules]]
 name = "fastp"
 input = ["raw/{sample}_R{read}.fq.gz"]
-when = "{sample.type} == 'tumor' or {sample.type} == 'normal'"
+when = "{sample.type} == 'experiment' or {sample.type} == 'control'"
 ...
 ```
 
@@ -78,28 +78,28 @@ when = "{sample.type} == 'tumor' or {sample.type} == 'normal'"
 
 | ID | Severity | Issue | Recommendation |
 |----|----------|-------|----------------|
-| WC-01 | **CRITICAL** | No tumor-normal paired sample linking | Cannot express `{tumor}`/`{normal}` relationships from sample sheet |
-| WC-02 | **CRITICAL** | No multi-batch/time-series grouping | No support for `{batch}` or `{timepoint}` with cross-batch aggregation |
+| WC-01 | ~~**CRITICAL**~~ ✅ **DONE** | No experiment-control paired sample linking | ~~Cannot express `{experiment}`/`{control}` relationships from sample sheet~~ **Implemented**: `[[pairs]]` section with auto-expansion |
+| WC-02 | ~~**CRITICAL**~~ ✅ **DONE** | No multi-batch/time-series grouping | ~~No support for `{batch}` or `{timepoint}` with cross-batch aggregation~~ **Implemented**: `[[sample_groups]]` with `{group}`/`{sample}` expansion |
 | WC-03 | **HIGH** | Wildcard constraints not exposed in TOML | `WildcardConstraints` exists in Rust but not in workflow syntax |
 | WC-04 | **HIGH** | No wildcard functions | Cannot do `{sample|upper}` or `{chr|replace("chr","")}` transformations |
 | WC-05 | **MEDIUM** | No ordered wildcard expansion | Cannot guarantee sample processing order (important for time-series) |
 | WC-06 | **MEDIUM** | Paired-end file discovery limited | `paired_end_pattern()` only checks common suffixes, misses `_R{read}_001` |
 
-#### Critical Example: Tumor-Normal Pairing
+#### Critical Example: Experiment-Control Pairing
 
-The `paired_tumor_normal.oxoflow` example demonstrates the problem:
+The `paired_experiment_control.oxoflow` example demonstrates the problem:
 
 ```toml
 # Current approach: Hardcoded sample names
 [[rules]]
 name = "mutect2"
-input = ["recal/TUMOR_01.recal.bam", "recal/NORMAL_01.recal.bam"]
-output = ["variants/TUMOR_01.mutect2.vcf.gz"]
-shell = "gatk Mutect2 -I {input[0]} -I {input[1]} -normal NORMAL_01 ..."
+input = ["recal/EXP_01.recal.bam", "recal/CTRL_01.recal.bam"]
+output = ["variants/EXP_01.mutect2.vcf.gz"]
+shell = "gatk Mutect2 -I {input[0]} -I {input[1]} -control CTRL_01 ..."
 ```
 
 This requires:
-- Separate rules for each tumor-normal pair
+- Separate rules for each experiment-control pair
 - Manual duplication of sample names
 - No sample sheet-driven expansion
 
@@ -108,15 +108,15 @@ This requires:
 ```toml
 [config.samples]
 pairs = [
-  { tumor: "TUMOR_01", normal: "NORMAL_01" },
-  { tumor: "TUMOR_02", normal: "NORMAL_02" }
+  { experiment: "EXP_01", control: "CTRL_01" },
+  { experiment: "EXP_02", control: "CTRL_02" }
 ]
 
 [[rules]]
 name = "mutect2"
-input = ["recal/{tumor}.recal.bam", "recal/{normal}.recal.bam"]
-output = ["variants/{tumor}.mutect2.vcf.gz"]
-shell = "gatk Mutect2 -I {input[0]} -I {input[1]} -normal {normal} ..."
+input = ["recal/{experiment}.recal.bam", "recal/{control}.recal.bam"]
+output = ["variants/{experiment}.mutect2.vcf.gz"]
+shell = "gatk Mutect2 -I {input[0]} -I {input[1]} -control {control} ..."
 ```
 
 #### Critical Example: Per-Chromosome Scatter
@@ -222,14 +222,14 @@ modules = ["bioinfo/bwa-mem2/2.2.1", "bioinfo/samtools/1.20"]
 | 06_rnaseq_quantification | HIGH | Partial | No - missing differential expression |
 | 07_wgs_germline | HIGH | Partial | No - missing joint genotyping |
 | 08_multiomics_integration | MEDIUM | Partial | No - placeholder shell commands |
-| paired_tumor_normal | HIGH | Partial | No - hardcoded sample names |
+| paired_experiment_control | HIGH | Partial | No - hardcoded sample names |
 
 #### Missing Gallery Workflows
 
 | Priority | Workflow Type | Use Case |
 |----------|--------------|----------|
 | **CRITICAL** | Single-cell RNA-seq | Cellranger/Seurat pipelines (ubiquitous in research) |
-| **CRITICAL** | Tumor-normal somatic | Mutect2 with sample sheet (clinical standard) |
+| **CRITICAL** | Experiment-control somatic | Mutect2 with sample sheet (clinical standard) |
 | **HIGH** | ChIP-seq | Peak calling with MACS2 |
 | **HIGH** | ATAC-seq | Chromatin accessibility analysis |
 | **HIGH** | 16S microbiome | QIIME2/dada2 pipelines |
@@ -246,7 +246,7 @@ modules = ["bioinfo/bwa-mem2/2.2.1", "bioinfo/samtools/1.20"]
 | GAL-02 | wgs_germline | **HIGH** | No joint genotyping (GenotypeGVCFs needs multiple samples) |
 | GAL-03 | wgs_germline | **HIGH** | No VQSR - only hard filters (not clinical-grade) |
 | GAL-04 | multiomics | **MEDIUM** | Shell commands are placeholders, not real integration |
-| GAL-05 | paired_tumor_normal | **CRITICAL** | Hardcoded sample names, not production-useful |
+| GAL-05 | paired_experiment_control | **CRITICAL** | Hardcoded sample names, not production-useful |
 | GAL-06 | scatter_gather | **MEDIUM** | Uses synthetic data, not chromosome-based splitting |
 
 ---
@@ -255,8 +255,8 @@ modules = ["bioinfo/bwa-mem2/2.2.1", "bioinfo/samtools/1.20"]
 
 ### Must Fix Before Clinical Use (CRITICAL)
 
-1. **WC-01: Tumor-Normal Sample Pairing**
-   - Clinical pipelines require sample sheet-driven tumor-normal matching
+1. **WC-01: Experiment-Control Sample Pairing**
+   - Clinical pipelines require sample sheet-driven experiment-control matching
    - Current approach requires manual rule duplication per patient
    - **Impact**: Cannot scale to cohort studies (>10 patients)
 
@@ -272,7 +272,7 @@ modules = ["bioinfo/bwa-mem2/2.2.1", "bioinfo/samtools/1.20"]
 ### Should Fix Soon (HIGH)
 
 4. **WF-01: Conditional Execution**
-   - Essential for pipeline modes (tumor-only, paired, germline)
+   - Essential for pipeline modes (experiment-only, paired, germline)
    - Current: Must maintain separate workflow files
 
 5. **RES-01: Container Memory Limits**
@@ -301,7 +301,7 @@ modules = ["bioinfo/bwa-mem2/2.2.1", "bioinfo/samtools/1.20"]
 | Feature | oxo-flow | Snakemake | Nextflow | WDL |
 |---------|----------|-----------|----------|-----|
 | Syntax simplicity | **Better** (TOML) | Good (Python) | Medium (DSL2) | Medium (custom) |
-| Tumor-normal support | **Missing** | Excellent | Excellent | Excellent |
+| Experiment-control support | **Missing** | Excellent | Excellent | Excellent |
 | Single-cell examples | **Missing** | Good | Excellent | Good |
 | Environment isolation | **Excellent** | Good | Excellent | Good |
 | HPC module support | **Missing** | Good | Excellent | Medium |
@@ -319,7 +319,7 @@ modules = ["bioinfo/bwa-mem2/2.2.1", "bioinfo/samtools/1.20"]
 
 | Priority | Item | Effort | Impact |
 |----------|------|--------|--------|
-| P0 | Tumor-normal sample sheet parsing | Medium | Enables clinical pipelines |
+| P0 | Experiment-control sample sheet parsing | Medium | Enables clinical pipelines |
 | P0 | Sample group/tuple wildcards | Medium | Enables cohort studies |
 | P1 | Container memory enforcement | Low | Prevents crashes |
 | P1 | Conditional rule execution | Medium | Reduces workflow duplication |
@@ -349,14 +349,14 @@ modules = ["bioinfo/bwa-mem2/2.2.1", "bioinfo/samtools/1.20"]
 ### Proposed Format for Complex Sample Relationships
 
 ```csv
-# samples.csv - Tumor-Normal Paired Study
+# samples.csv - Experiment-Control Paired Study
 sample_id,type,pair_id,batch,platform
-TUMOR_01,tumor,PAIR_01,BATCH_A,Illumina
-NORMAL_01,normal,PAIR_01,BATCH_A,Illumina
-TUMOR_02,tumor,PAIR_02,BATCH_A,Illumina
-NORMAL_02,normal,PAIR_02,BATCH_A,Illumina
-TUMOR_03,tumor,PAIR_03,BATCH_B,Illumina
-NORMAL_03,normal,PAIR_03,BATCH_B,Illumina
+EXP_01,experiment,PAIR_01,BATCH_A,Illumina
+CTRL_01,control,PAIR_01,BATCH_A,Illumina
+EXP_02,experiment,PAIR_02,BATCH_A,Illumina
+CTRL_02,control,PAIR_02,BATCH_A,Illumina
+EXP_03,experiment,PAIR_03,BATCH_B,Illumina
+CTRL_03,control,PAIR_03,BATCH_B,Illumina
 ```
 
 ```toml
@@ -365,7 +365,7 @@ samples = "samples.csv"
 
 # oxo-flow should parse and create wildcard groups:
 # {sample} expands to all samples
-# {tumor}/{normal} expands to paired tumor-normal
+# {experiment}/{control} expands to paired experiment-control
 # {batch} expands to batch groups
 # {sample.type} provides conditional filtering
 ```
@@ -374,9 +374,9 @@ samples = "samples.csv"
 
 ## Conclusion
 
-oxo-flow has excellent foundations for a Rust-native pipeline engine. The TOML format is cleaner than Snakemake's Python or Nextflow's DSL2. Environment management is comprehensive. However, critical gaps in sample relationship handling prevent clinical-scale tumor-normal workflows. Adding sample sheet parsing with paired/group wildcards would immediately unlock production use cases.
+oxo-flow has excellent foundations for a Rust-native pipeline engine. The TOML format is cleaner than Snakemake's Python or Nextflow's DSL2. Environment management is comprehensive. However, critical gaps in sample relationship handling prevent clinical-scale experiment-control workflows. Adding sample sheet parsing with paired/group wildcards would immediately unlock production use cases.
 
-**Recommendation**: Focus P0 items (tumor-normal pairing, sample groups) before promoting for production bioinformatics use. The architecture supports these additions cleanly via the existing wildcard engine.
+**Recommendation**: Focus P0 items (experiment-control pairing, sample groups) before promoting for production bioinformatics use. The architecture supports these additions cleanly via the existing wildcard engine.
 
 ---
 

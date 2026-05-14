@@ -28,20 +28,20 @@ use serde::{Deserialize, Serialize};
 /// Analysis mode for the Venus pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AnalysisMode {
-    /// Tumor sample only (no matched normal).
-    TumorOnly,
-    /// Normal/germline sample only.
-    NormalOnly,
-    /// Paired tumor-normal analysis.
-    TumorNormal,
+    /// Experimental sample only (no matched control).
+    ExperimentOnly,
+    /// Control/germline sample only.
+    ControlOnly,
+    /// Paired experiment-control analysis.
+    ExperimentControl,
 }
 
 impl std::fmt::Display for AnalysisMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::TumorOnly => write!(f, "tumor-only"),
-            Self::NormalOnly => write!(f, "normal-only"),
-            Self::TumorNormal => write!(f, "tumor-normal"),
+            Self::ExperimentOnly => write!(f, "experiment-only"),
+            Self::ControlOnly => write!(f, "control-only"),
+            Self::ExperimentControl => write!(f, "experiment-control"),
         }
     }
 }
@@ -95,8 +95,8 @@ pub struct Sample {
     /// Path to R2 FASTQ file (optional for single-end).
     pub r2_fastq: Option<String>,
 
-    /// Whether this is a tumor sample.
-    pub is_tumor: bool,
+    /// Whether this is an experimental sample.
+    pub is_experiment: bool,
 }
 
 /// Venus pipeline configuration.
@@ -114,13 +114,13 @@ pub struct VenusConfig {
     /// Path to reference genome FASTA.
     pub reference_fasta: String,
 
-    /// Tumor samples.
+    /// Experimental samples.
     #[serde(default)]
-    pub tumor_samples: Vec<Sample>,
+    pub experiment_samples: Vec<Sample>,
 
-    /// Normal samples.
+    /// Control samples.
     #[serde(default)]
-    pub normal_samples: Vec<Sample>,
+    pub control_samples: Vec<Sample>,
 
     /// Known variants file (e.g., dbSNP) for BQSR.
     pub known_sites: Option<String>,
@@ -165,19 +165,19 @@ impl VenusConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         // Validate analysis mode vs sample availability
         match self.mode {
-            AnalysisMode::TumorOnly => {
-                if self.tumor_samples.is_empty() {
-                    anyhow::bail!("tumor-only mode requires at least one tumor sample");
+            AnalysisMode::ExperimentOnly => {
+                if self.experiment_samples.is_empty() {
+                    anyhow::bail!("experiment-only mode requires at least one experimental sample");
                 }
             }
-            AnalysisMode::NormalOnly => {
-                if self.normal_samples.is_empty() {
-                    anyhow::bail!("normal-only mode requires at least one normal sample");
+            AnalysisMode::ControlOnly => {
+                if self.control_samples.is_empty() {
+                    anyhow::bail!("control-only mode requires at least one control sample");
                 }
             }
-            AnalysisMode::TumorNormal => {
-                if self.tumor_samples.is_empty() || self.normal_samples.is_empty() {
-                    anyhow::bail!("tumor-normal mode requires both tumor and normal samples");
+            AnalysisMode::ExperimentControl => {
+                if self.experiment_samples.is_empty() || self.control_samples.is_empty() {
+                    anyhow::bail!("experiment-control mode requires both experimental and control samples");
                 }
             }
         }
@@ -190,11 +190,11 @@ impl VenusConfig {
         Ok(())
     }
 
-    /// Returns all samples (tumor + normal).
+    /// Returns all samples (experiment + control).
     pub fn all_samples(&self) -> Vec<&Sample> {
-        self.tumor_samples
+        self.experiment_samples
             .iter()
-            .chain(self.normal_samples.iter())
+            .chain(self.control_samples.iter())
             .collect()
     }
 }
@@ -337,14 +337,14 @@ impl VenusPipelineBuilder {
 
         // Mode-specific variant calling
         match self.config.mode {
-            AnalysisMode::TumorOnly => {
+            AnalysisMode::ExperimentOnly => {
                 rules.extend(self.mutect2_rules());
                 rules.extend(self.filter_mutect_calls_rules());
             }
-            AnalysisMode::NormalOnly => {
+            AnalysisMode::ControlOnly => {
                 rules.extend(self.haplotype_caller_rules());
             }
-            AnalysisMode::TumorNormal => {
+            AnalysisMode::ExperimentControl => {
                 rules.extend(self.haplotype_caller_rules());
                 rules.extend(self.mutect2_rules());
                 rules.extend(self.filter_mutect_calls_rules());
@@ -352,16 +352,16 @@ impl VenusPipelineBuilder {
             }
         }
 
-        // CNV calling for tumor samples
+        // CNV calling for experimental samples
         if matches!(
             self.config.mode,
-            AnalysisMode::TumorOnly | AnalysisMode::TumorNormal
+            AnalysisMode::ExperimentOnly | AnalysisMode::ExperimentControl
         ) {
             rules.extend(self.cnvkit_rules());
         }
 
-        // MSI detection for paired tumor-normal
-        if self.config.mode == AnalysisMode::TumorNormal {
+        // MSI detection for paired experiment-control
+        if self.config.mode == AnalysisMode::ExperimentControl {
             rules.extend(self.msi_rules());
         }
 
@@ -481,7 +481,7 @@ impl VenusPipelineBuilder {
     fn haplotype_caller_rules(&self) -> Vec<Rule> {
         let ref_path = &self.config.reference_fasta;
         self.config
-            .normal_samples
+            .control_samples
             .iter()
             .map(|s| {
                 self.make_rule(
@@ -501,19 +501,19 @@ impl VenusPipelineBuilder {
 
     fn mutect2_rules(&self) -> Vec<Rule> {
         let ref_path = &self.config.reference_fasta;
-        let normal_name = self.config.normal_samples.first().map(|s| s.name.as_str());
+        let control_name = self.config.control_samples.first().map(|s| s.name.as_str());
         self.config
-            .tumor_samples
+            .experiment_samples
             .iter()
             .map(|s| {
-                let (input, shell) = if let Some(normal) = normal_name {
+                let (input, shell) = if let Some(control) = control_name {
                     (
                         vec![
                             format!("recal/{}.recal.bam", s.name),
-                            format!("recal/{normal}.recal.bam"),
+                            format!("recal/{control}.recal.bam"),
                         ],
                         format!(
-                            "gatk Mutect2 -I {{input[0]}} -I {{input[1]}} -normal {normal} -R {ref_path} -O {{output[0]}}"
+                            "gatk Mutect2 -I {{input[0]}} -I {{input[1]}} -normal {control} -R {ref_path} -O {{output[0]}}"
                         ),
                     )
                 } else {
@@ -540,7 +540,7 @@ impl VenusPipelineBuilder {
     fn filter_mutect_calls_rules(&self) -> Vec<Rule> {
         let ref_path = &self.config.reference_fasta;
         self.config
-            .tumor_samples
+            .experiment_samples
             .iter()
             .map(|s| {
                 self.make_rule(
@@ -559,30 +559,30 @@ impl VenusPipelineBuilder {
     }
 
     fn strelka2_rules(&self) -> Vec<Rule> {
-        if self.config.mode != AnalysisMode::TumorNormal {
+        if self.config.mode != AnalysisMode::ExperimentControl {
             return Vec::new();
         }
-        let normal_name = match self.config.normal_samples.first() {
+        let control_name = match self.config.control_samples.first() {
             Some(s) => &s.name,
             None => return Vec::new(),
         };
         let ref_path = &self.config.reference_fasta;
         self.config
-            .tumor_samples
+            .experiment_samples
             .iter()
             .map(|s| {
                 self.make_rule(
                     &format!("strelka2_{}", s.name),
                     vec![
                         format!("recal/{}.recal.bam", s.name),
-                        format!("recal/{normal_name}.recal.bam"),
+                        format!("recal/{control_name}.recal.bam"),
                     ],
                     vec![format!("variants/{}.strelka2.vcf.gz", s.name)],
                     &format!(
-                        "configureStrelkaSomaticWorkflow.py --tumorBam {{input[0]}} --normalBam {{input[1]}} --referenceFasta {ref_path} --runDir strelka2_{tumor} && \
-                         strelka2_{tumor}/runWorkflow.py -m local -j {{threads}} && \
-                         cp strelka2_{tumor}/results/variants/somatic.snvs.vcf.gz {{output[0]}}",
-                        tumor = s.name
+                        "configureStrelkaSomaticWorkflow.py --tumorBam {{input[0]}} --normalBam {{input[1]}} --referenceFasta {ref_path} --runDir strelka2_{exp} && \
+                         strelka2_{exp}/runWorkflow.py -m local -j {{threads}} && \
+                         cp strelka2_{exp}/results/variants/somatic.snvs.vcf.gz {{output[0]}}",
+                        exp = s.name
                     ),
                     0.5,
                     16,
@@ -594,16 +594,16 @@ impl VenusPipelineBuilder {
 
     fn cnvkit_rules(&self) -> Vec<Rule> {
         self.config
-            .tumor_samples
+            .experiment_samples
             .iter()
             .map(|s| {
-                let normal_bam = self
+                let control_bam = self
                     .config
-                    .normal_samples
+                    .control_samples
                     .first()
                     .map(|n| format!("recal/{}.recal.bam", n.name));
                 let mut input = vec![format!("recal/{}.recal.bam", s.name)];
-                if let Some(ref nb) = normal_bam {
+                if let Some(ref nb) = control_bam {
                     input.push(nb.clone());
                 }
                 self.make_rule(
@@ -612,7 +612,7 @@ impl VenusPipelineBuilder {
                     vec![format!("cnv/{}.cnr", s.name), format!("cnv/{}.cns", s.name)],
                     &format!(
                         "cnvkit.py batch {{input[0]}} {} -d cnv/",
-                        normal_bam
+                        control_bam
                             .as_ref()
                             .map(|n| format!("--normal {n}"))
                             .unwrap_or_default()
@@ -627,15 +627,15 @@ impl VenusPipelineBuilder {
 
     fn msi_rules(&self) -> Vec<Rule> {
         self.config
-            .tumor_samples
+            .experiment_samples
             .iter()
             .filter_map(|s| {
-                let normal = self.config.normal_samples.first()?;
+                let control = self.config.control_samples.first()?;
                 Some(self.make_rule(
                     &format!("msi_sensor_{}", s.name),
                     vec![
                         format!("recal/{}.recal.bam", s.name),
-                        format!("recal/{}.recal.bam", normal.name),
+                        format!("recal/{}.recal.bam", control.name),
                     ],
                     vec![format!("msi/{}.msi.txt", s.name)],
                     "msisensor2 msi -t {input[0]} -n {input[1]} -o {output[0]}",
@@ -715,21 +715,21 @@ impl VenusPipelineBuilder {
     fn called_samples(&self) -> Vec<(&Sample, String)> {
         let mut result = Vec::new();
         match self.config.mode {
-            AnalysisMode::TumorOnly => {
-                for s in &self.config.tumor_samples {
+            AnalysisMode::ExperimentOnly => {
+                for s in &self.config.experiment_samples {
                     result.push((s, format!("variants/{}.mutect2.filtered.vcf.gz", s.name)));
                 }
             }
-            AnalysisMode::NormalOnly => {
-                for s in &self.config.normal_samples {
+            AnalysisMode::ControlOnly => {
+                for s in &self.config.control_samples {
                     result.push((s, format!("variants/{}.g.vcf.gz", s.name)));
                 }
             }
-            AnalysisMode::TumorNormal => {
-                for s in &self.config.tumor_samples {
+            AnalysisMode::ExperimentControl => {
+                for s in &self.config.experiment_samples {
                     result.push((s, format!("variants/{}.mutect2.filtered.vcf.gz", s.name)));
                 }
-                for s in &self.config.normal_samples {
+                for s in &self.config.control_samples {
                     result.push((s, format!("variants/{}.g.vcf.gz", s.name)));
                 }
             }
@@ -784,6 +784,8 @@ pub fn generate_oxoflow(config: &VenusConfig) -> anyhow::Result<String> {
         cluster: None,
         resource_budget: None,
         reference_databases: Vec::new(),
+        pairs: Vec::new(),
+        sample_groups: Vec::new(),
     };
 
     let toml_str = toml::to_string_pretty(&wf)?;
@@ -796,9 +798,9 @@ mod tests {
 
     #[test]
     fn analysis_mode_display() {
-        assert_eq!(AnalysisMode::TumorOnly.to_string(), "tumor-only");
-        assert_eq!(AnalysisMode::NormalOnly.to_string(), "normal-only");
-        assert_eq!(AnalysisMode::TumorNormal.to_string(), "tumor-normal");
+        assert_eq!(AnalysisMode::ExperimentOnly.to_string(), "experiment-only");
+        assert_eq!(AnalysisMode::ControlOnly.to_string(), "control-only");
+        assert_eq!(AnalysisMode::ExperimentControl.to_string(), "experiment-control");
     }
 
     #[test]
@@ -822,19 +824,19 @@ mod tests {
     }
 
     #[test]
-    fn validate_tumor_only() {
+    fn validate_experiment_only() {
         let config = VenusConfig {
-            mode: AnalysisMode::TumorOnly,
+            mode: AnalysisMode::ExperimentOnly,
             seq_type: SeqType::WGS,
             genome_build: GenomeBuild::GRCh38,
             reference_fasta: "/ref/hg38.fa".to_string(),
-            tumor_samples: vec![Sample {
-                name: "TUMOR_01".to_string(),
-                r1_fastq: "tumor_R1.fq.gz".to_string(),
-                r2_fastq: Some("tumor_R2.fq.gz".to_string()),
-                is_tumor: true,
+            experiment_samples: vec![Sample {
+                name: "EXP_01".to_string(),
+                r1_fastq: "exp_R1.fq.gz".to_string(),
+                r2_fastq: Some("exp_R2.fq.gz".to_string()),
+                is_experiment: true,
             }],
-            normal_samples: vec![],
+            control_samples: vec![],
             known_sites: None,
             target_bed: None,
             threads: 8,
@@ -848,14 +850,14 @@ mod tests {
     }
 
     #[test]
-    fn validate_tumor_only_no_samples() {
+    fn validate_experiment_only_no_samples() {
         let config = VenusConfig {
-            mode: AnalysisMode::TumorOnly,
+            mode: AnalysisMode::ExperimentOnly,
             seq_type: SeqType::WGS,
             genome_build: GenomeBuild::GRCh38,
             reference_fasta: "/ref/hg38.fa".to_string(),
-            tumor_samples: vec![],
-            normal_samples: vec![],
+            experiment_samples: vec![],
+            control_samples: vec![],
             known_sites: None,
             target_bed: None,
             threads: 8,
@@ -871,17 +873,17 @@ mod tests {
     #[test]
     fn validate_wes_needs_bed() {
         let config = VenusConfig {
-            mode: AnalysisMode::TumorOnly,
+            mode: AnalysisMode::ExperimentOnly,
             seq_type: SeqType::WES,
             genome_build: GenomeBuild::GRCh38,
             reference_fasta: "/ref/hg38.fa".to_string(),
-            tumor_samples: vec![Sample {
-                name: "T".to_string(),
-                r1_fastq: "t_R1.fq.gz".to_string(),
+            experiment_samples: vec![Sample {
+                name: "EXP".to_string(),
+                r1_fastq: "exp_R1.fq.gz".to_string(),
                 r2_fastq: None,
-                is_tumor: true,
+                is_experiment: true,
             }],
-            normal_samples: vec![],
+            control_samples: vec![],
             known_sites: None,
             target_bed: None,
             threads: 8,
@@ -897,21 +899,21 @@ mod tests {
     #[test]
     fn all_samples() {
         let config = VenusConfig {
-            mode: AnalysisMode::TumorNormal,
+            mode: AnalysisMode::ExperimentControl,
             seq_type: SeqType::WGS,
             genome_build: GenomeBuild::GRCh38,
             reference_fasta: "/ref/hg38.fa".to_string(),
-            tumor_samples: vec![Sample {
-                name: "T".to_string(),
-                r1_fastq: "t.fq.gz".to_string(),
+            experiment_samples: vec![Sample {
+                name: "EXP".to_string(),
+                r1_fastq: "exp.fq.gz".to_string(),
                 r2_fastq: None,
-                is_tumor: true,
+                is_experiment: true,
             }],
-            normal_samples: vec![Sample {
-                name: "N".to_string(),
-                r1_fastq: "n.fq.gz".to_string(),
+            control_samples: vec![Sample {
+                name: "CTRL".to_string(),
+                r1_fastq: "ctrl.fq.gz".to_string(),
                 r2_fastq: None,
-                is_tumor: false,
+                is_experiment: false,
             }],
             known_sites: None,
             target_bed: None,
@@ -925,21 +927,21 @@ mod tests {
         assert_eq!(config.all_samples().len(), 2);
     }
 
-    fn tumor_sample(name: &str) -> Sample {
+    fn experiment_sample(name: &str) -> Sample {
         Sample {
             name: name.to_string(),
             r1_fastq: format!("raw/{name}_R1.fq.gz"),
             r2_fastq: Some(format!("raw/{name}_R2.fq.gz")),
-            is_tumor: true,
+            is_experiment: true,
         }
     }
 
-    fn normal_sample(name: &str) -> Sample {
+    fn control_sample(name: &str) -> Sample {
         Sample {
             name: name.to_string(),
             r1_fastq: format!("raw/{name}_R1.fq.gz"),
             r2_fastq: Some(format!("raw/{name}_R2.fq.gz")),
-            is_tumor: false,
+            is_experiment: false,
         }
     }
 
@@ -949,8 +951,8 @@ mod tests {
             seq_type: SeqType::WGS,
             genome_build: GenomeBuild::GRCh38,
             reference_fasta: "/ref/hg38.fa".to_string(),
-            tumor_samples: vec![],
-            normal_samples: vec![],
+            experiment_samples: vec![],
+            control_samples: vec![],
             known_sites: None,
             target_bed: None,
             threads: 8,
@@ -962,9 +964,9 @@ mod tests {
     }
 
     #[test]
-    fn build_tumor_only_pipeline() {
-        let mut config = base_config(AnalysisMode::TumorOnly);
-        config.tumor_samples = vec![tumor_sample("T1")];
+    fn build_experiment_only_pipeline() {
+        let mut config = base_config(AnalysisMode::ExperimentOnly);
+        config.experiment_samples = vec![experiment_sample("EXP1")];
         config.annotate = true;
         config.report = true;
 
@@ -974,21 +976,21 @@ mod tests {
         // fastp + bwa_mem2 + mark_dup + bqsr + mutect2 + filter_mutect_calls + cnvkit + tmb + annotate + report = 10
         assert_eq!(rules.len(), 10);
         let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
-        assert!(names.contains(&"fastp_T1"));
-        assert!(names.contains(&"bwa_mem2_T1"));
-        assert!(names.contains(&"mark_duplicates_T1"));
-        assert!(names.contains(&"bqsr_T1"));
-        assert!(names.contains(&"mutect2_T1"));
-        assert!(names.contains(&"filter_mutect_calls_T1"));
-        assert!(names.contains(&"annotate_T1"));
-        assert!(names.contains(&"report_T1"));
+        assert!(names.contains(&"fastp_EXP1"));
+        assert!(names.contains(&"bwa_mem2_EXP1"));
+        assert!(names.contains(&"mark_duplicates_EXP1"));
+        assert!(names.contains(&"bqsr_EXP1"));
+        assert!(names.contains(&"mutect2_EXP1"));
+        assert!(names.contains(&"filter_mutect_calls_EXP1"));
+        assert!(names.contains(&"annotate_EXP1"));
+        assert!(names.contains(&"report_EXP1"));
         assert!(!names.iter().any(|n| n.starts_with("haplotype_caller")));
     }
 
     #[test]
-    fn build_normal_only_pipeline() {
-        let mut config = base_config(AnalysisMode::NormalOnly);
-        config.normal_samples = vec![normal_sample("N1")];
+    fn build_control_only_pipeline() {
+        let mut config = base_config(AnalysisMode::ControlOnly);
+        config.control_samples = vec![control_sample("CTRL1")];
 
         let builder = VenusPipelineBuilder::new(config);
         let rules = builder.build().unwrap();
@@ -996,15 +998,15 @@ mod tests {
         // fastp + bwa_mem2 + mark_dup + bqsr + haplotype_caller + tmb = 6
         assert_eq!(rules.len(), 6);
         let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
-        assert!(names.contains(&"haplotype_caller_N1"));
+        assert!(names.contains(&"haplotype_caller_CTRL1"));
         assert!(!names.iter().any(|n| n.starts_with("mutect2")));
     }
 
     #[test]
-    fn build_tumor_normal_pipeline() {
-        let mut config = base_config(AnalysisMode::TumorNormal);
-        config.tumor_samples = vec![tumor_sample("T1")];
-        config.normal_samples = vec![normal_sample("N1")];
+    fn build_experiment_control_pipeline() {
+        let mut config = base_config(AnalysisMode::ExperimentControl);
+        config.experiment_samples = vec![experiment_sample("EXP1")];
+        config.control_samples = vec![control_sample("CTRL1")];
 
         let builder = VenusPipelineBuilder::new(config);
         let rules = builder.build().unwrap();
@@ -1012,16 +1014,16 @@ mod tests {
         // 2*(fastp + bwa_mem2 + mark_dup + bqsr) + haplotype_caller + mutect2 + filter_mutect_calls + strelka2 + cnvkit + msi + 2*tmb = 16
         assert_eq!(rules.len(), 16);
         let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
-        assert!(names.contains(&"mutect2_T1"));
-        assert!(names.contains(&"filter_mutect_calls_T1"));
-        assert!(names.contains(&"strelka2_T1"));
-        assert!(names.contains(&"haplotype_caller_N1"));
+        assert!(names.contains(&"mutect2_EXP1"));
+        assert!(names.contains(&"filter_mutect_calls_EXP1"));
+        assert!(names.contains(&"strelka2_EXP1"));
+        assert!(names.contains(&"haplotype_caller_CTRL1"));
     }
 
     #[test]
     fn generate_oxoflow_valid() {
-        let mut config = base_config(AnalysisMode::TumorOnly);
-        config.tumor_samples = vec![tumor_sample("T1")];
+        let mut config = base_config(AnalysisMode::ExperimentOnly);
+        config.experiment_samples = vec![experiment_sample("EXP1")];
 
         let toml_str = generate_oxoflow(&config).unwrap();
         let wf = oxo_flow_core::config::WorkflowConfig::parse(&toml_str).unwrap();
@@ -1031,8 +1033,8 @@ mod tests {
 
     #[test]
     fn pipeline_rule_dependencies() {
-        let mut config = base_config(AnalysisMode::TumorOnly);
-        config.tumor_samples = vec![tumor_sample("T1")];
+        let mut config = base_config(AnalysisMode::ExperimentOnly);
+        config.experiment_samples = vec![experiment_sample("EXP1")];
 
         let builder = VenusPipelineBuilder::new(config);
         let rules = builder.build().unwrap();
@@ -1040,17 +1042,17 @@ mod tests {
         let dag = oxo_flow_core::WorkflowDag::from_rules(&rules).unwrap();
 
         let order = dag.execution_order().unwrap();
-        let fastp_pos = order.iter().position(|n| n == "fastp_T1").unwrap();
-        let bwa_pos = order.iter().position(|n| n == "bwa_mem2_T1").unwrap();
+        let fastp_pos = order.iter().position(|n| n == "fastp_EXP1").unwrap();
+        let bwa_pos = order.iter().position(|n| n == "bwa_mem2_EXP1").unwrap();
         let markdup_pos = order
             .iter()
-            .position(|n| n == "mark_duplicates_T1")
+            .position(|n| n == "mark_duplicates_EXP1")
             .unwrap();
-        let bqsr_pos = order.iter().position(|n| n == "bqsr_T1").unwrap();
-        let mutect2_pos = order.iter().position(|n| n == "mutect2_T1").unwrap();
+        let bqsr_pos = order.iter().position(|n| n == "bqsr_EXP1").unwrap();
+        let mutect2_pos = order.iter().position(|n| n == "mutect2_EXP1").unwrap();
         let filter_pos = order
             .iter()
-            .position(|n| n == "filter_mutect_calls_T1")
+            .position(|n| n == "filter_mutect_calls_EXP1")
             .unwrap();
 
         assert!(fastp_pos < bwa_pos);
@@ -1061,28 +1063,28 @@ mod tests {
     }
 
     #[test]
-    fn build_tumor_normal_strelka2() {
-        let mut config = base_config(AnalysisMode::TumorNormal);
-        config.tumor_samples = vec![tumor_sample("T1")];
-        config.normal_samples = vec![normal_sample("N1")];
+    fn build_experiment_control_strelka2() {
+        let mut config = base_config(AnalysisMode::ExperimentControl);
+        config.experiment_samples = vec![experiment_sample("EXP1")];
+        config.control_samples = vec![control_sample("CTRL1")];
 
         let builder = VenusPipelineBuilder::new(config);
         let rules = builder.build().unwrap();
 
         let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
-        assert!(names.contains(&"strelka2_T1"));
+        assert!(names.contains(&"strelka2_EXP1"));
 
         // Strelka2 should use recal BAMs as input
-        let strelka_rule = rules.iter().find(|r| r.name == "strelka2_T1").unwrap();
-        assert_eq!(strelka_rule.input[0], "output/recal/T1.recal.bam");
-        assert_eq!(strelka_rule.input[1], "output/recal/N1.recal.bam");
-        assert_eq!(strelka_rule.output[0], "output/variants/T1.strelka2.vcf.gz");
+        let strelka_rule = rules.iter().find(|r| r.name == "strelka2_EXP1").unwrap();
+        assert_eq!(strelka_rule.input[0], "output/recal/EXP1.recal.bam");
+        assert_eq!(strelka_rule.input[1], "output/recal/CTRL1.recal.bam");
+        assert_eq!(strelka_rule.output[0], "output/variants/EXP1.strelka2.vcf.gz");
     }
 
     #[test]
-    fn strelka2_not_in_tumor_only() {
-        let mut config = base_config(AnalysisMode::TumorOnly);
-        config.tumor_samples = vec![tumor_sample("T1")];
+    fn strelka2_not_in_experiment_only() {
+        let mut config = base_config(AnalysisMode::ExperimentOnly);
+        config.experiment_samples = vec![experiment_sample("EXP1")];
 
         let builder = VenusPipelineBuilder::new(config);
         let rules = builder.build().unwrap();
@@ -1093,39 +1095,39 @@ mod tests {
 
     #[test]
     fn known_sites_in_bqsr() {
-        let mut config = base_config(AnalysisMode::TumorOnly);
-        config.tumor_samples = vec![tumor_sample("T1")];
+        let mut config = base_config(AnalysisMode::ExperimentOnly);
+        config.experiment_samples = vec![experiment_sample("EXP1")];
         config.known_sites = Some("/ref/dbsnp.vcf.gz".to_string());
 
         let builder = VenusPipelineBuilder::new(config);
         let rules = builder.build().unwrap();
 
-        let bqsr_rule = rules.iter().find(|r| r.name == "bqsr_T1").unwrap();
+        let bqsr_rule = rules.iter().find(|r| r.name == "bqsr_EXP1").unwrap();
         let shell = bqsr_rule.shell.as_ref().unwrap();
         assert!(shell.contains("--known-sites /ref/dbsnp.vcf.gz"));
     }
 
     #[test]
     fn filter_mutect_calls_uses_filtered_vcf_in_annotation() {
-        let mut config = base_config(AnalysisMode::TumorOnly);
-        config.tumor_samples = vec![tumor_sample("T1")];
+        let mut config = base_config(AnalysisMode::ExperimentOnly);
+        config.experiment_samples = vec![experiment_sample("EXP1")];
         config.annotate = true;
 
         let builder = VenusPipelineBuilder::new(config);
         let rules = builder.build().unwrap();
 
-        let annotate_rule = rules.iter().find(|r| r.name == "annotate_T1").unwrap();
+        let annotate_rule = rules.iter().find(|r| r.name == "annotate_EXP1").unwrap();
         assert_eq!(
             annotate_rule.input[0],
-            "output/variants/T1.mutect2.filtered.vcf.gz"
+            "output/variants/EXP1.mutect2.filtered.vcf.gz"
         );
     }
 
     #[test]
-    fn validate_tumor_normal_needs_both_samples() {
-        let mut config = base_config(AnalysisMode::TumorNormal);
-        config.tumor_samples = vec![tumor_sample("T1")];
-        // normal_samples left empty — TumorNormal requires both
+    fn validate_experiment_control_needs_both_samples() {
+        let mut config = base_config(AnalysisMode::ExperimentControl);
+        config.experiment_samples = vec![experiment_sample("EXP1")];
+        // control_samples left empty — ExperimentControl requires both
         assert!(config.validate().is_err());
         let err = config.validate().unwrap_err().to_string();
         assert!(
@@ -1136,8 +1138,8 @@ mod tests {
 
     #[test]
     fn pipeline_rule_environments() {
-        let mut config = base_config(AnalysisMode::TumorOnly);
-        config.tumor_samples = vec![tumor_sample("T1")];
+        let mut config = base_config(AnalysisMode::ExperimentOnly);
+        config.experiment_samples = vec![experiment_sample("EXP1")];
 
         let builder = VenusPipelineBuilder::new(config);
         let rules = builder.build().unwrap();
@@ -1159,8 +1161,8 @@ mod tests {
 
     #[test]
     fn generate_oxoflow_round_trip() {
-        let mut config = base_config(AnalysisMode::TumorOnly);
-        config.tumor_samples = vec![tumor_sample("T1")];
+        let mut config = base_config(AnalysisMode::ExperimentOnly);
+        config.experiment_samples = vec![experiment_sample("EXP1")];
         config.annotate = true;
         config.report = true;
 
@@ -1182,12 +1184,12 @@ mod tests {
     #[test]
     fn panel_sequencing_with_bed() {
         let config = VenusConfig {
-            mode: AnalysisMode::TumorOnly,
+            mode: AnalysisMode::ExperimentOnly,
             seq_type: SeqType::Panel,
             genome_build: GenomeBuild::GRCh38,
             reference_fasta: "/ref/hg38.fa".to_string(),
-            tumor_samples: vec![tumor_sample("T1")],
-            normal_samples: vec![],
+            experiment_samples: vec![experiment_sample("EXP1")],
+            control_samples: vec![],
             known_sites: None,
             target_bed: Some("targets/panel.bed".to_string()),
             threads: 8,
@@ -1208,25 +1210,25 @@ mod tests {
     }
 
     #[test]
-    fn build_tumor_normal_has_msi() {
-        let mut config = base_config(AnalysisMode::TumorNormal);
-        config.tumor_samples = vec![tumor_sample("T1")];
-        config.normal_samples = vec![normal_sample("N1")];
+    fn build_experiment_control_has_msi() {
+        let mut config = base_config(AnalysisMode::ExperimentControl);
+        config.experiment_samples = vec![experiment_sample("EXP1")];
+        config.control_samples = vec![control_sample("CTRL1")];
 
         let builder = VenusPipelineBuilder::new(config);
         let rules = builder.build().unwrap();
 
         let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
         assert!(
-            names.contains(&"msi_sensor_T1"),
-            "TumorNormal pipeline should include MSI rules"
+            names.contains(&"msi_sensor_EXP1"),
+            "ExperimentControl pipeline should include MSI rules"
         );
     }
 
     #[test]
-    fn build_tumor_only_no_msi() {
-        let mut config = base_config(AnalysisMode::TumorOnly);
-        config.tumor_samples = vec![tumor_sample("T1")];
+    fn build_experiment_only_no_msi() {
+        let mut config = base_config(AnalysisMode::ExperimentOnly);
+        config.experiment_samples = vec![experiment_sample("EXP1")];
 
         let builder = VenusPipelineBuilder::new(config);
         let rules = builder.build().unwrap();
@@ -1234,7 +1236,7 @@ mod tests {
         let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
         assert!(
             !names.iter().any(|n| n.starts_with("msi_sensor")),
-            "TumorOnly pipeline should NOT include MSI rules"
+            "ExperimentOnly pipeline should NOT include MSI rules"
         );
     }
 }

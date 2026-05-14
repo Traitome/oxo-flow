@@ -25,4 +25,4 @@ abstract: >-
   principles for performance, reproducibility, and clinical-grade rigor. It provides DAG-based workflow execution, multi-environment
   support (conda, pixi, docker, singularity, venv), resource-aware scheduling,
   clinical-grade reporting, and a REST API web interface. The Venus pipeline
-  demonstrates clinical tumor variant detection built on the engine.
+  demonstrates clinical variant detection built on the engine.

@@ -2213,9 +2213,15 @@ threads = 8
 docker = "biocontainers/bwa:0.7.17"
 "#;
 
-    /// Helper: initialize in-memory SQLite for tests that need DB.
+    /// Helper: initialize SQLite for tests that need DB.
+    ///
+    /// Uses a per-process temp file so that all parallel test threads within
+    /// one binary run share the same schema and seed data, while different
+    /// test binary invocations start fresh.
     async fn init_test_db() {
-        let _ = db::init_db("sqlite::memory:").await;
+        let db_path = std::env::temp_dir().join(format!("oxo-flow-test-{}.db", std::process::id()));
+        let url = format!("sqlite:{}", db_path.display());
+        let _ = db::init_db(&url).await;
     }
 
     /// Helper: send a POST request with a JSON body and return the response.

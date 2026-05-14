@@ -310,6 +310,123 @@ pub fn discover_paired_files(dir: &std::path::Path, sample: &str) -> Vec<(String
     pairs
 }
 
+// ---------------------------------------------------------------------------
+// WC-01: Experiment-control pairing wildcard helpers
+// ---------------------------------------------------------------------------
+
+/// Build wildcard value combinations from a list of experiment-control pairs.
+///
+/// Each pair produces a [`WildcardValues`] map containing:
+/// - `pair_id`    → the pair's unique identifier
+/// - `experiment` → experiment sample identifier
+/// - `control`    → control sample identifier
+/// - `experiment_type` → experiment/condition type (when present)
+/// - backward-compatible aliases: `tumor`, `normal`, `tumor_type`
+/// - any additional metadata keys defined on the pair
+///
+/// These combinations are used by [`crate::config::WorkflowConfig::expand_wildcards`]
+/// to expand rules containing `{experiment}`, `{control}`, or `{pair_id}`
+/// placeholders.
+///
+/// # Example
+///
+/// ```
+/// use oxo_flow_core::config::ExperimentControlPair;
+/// use oxo_flow_core::wildcard::wildcard_combinations_from_pairs;
+///
+/// let pairs = vec![
+///     ExperimentControlPair {
+///         pair_id: "CASE_001".to_string(),
+///         experiment: "EXP_01".to_string(),
+///         control: "CTRL_01".to_string(),
+///         experiment_type: Some("lung".to_string()),
+///         metadata: Default::default(),
+///     },
+/// ];
+/// let combos = wildcard_combinations_from_pairs(&pairs);
+/// assert_eq!(combos.len(), 1);
+/// assert_eq!(combos[0]["experiment"], "EXP_01");
+/// assert_eq!(combos[0]["control"], "CTRL_01");
+/// assert_eq!(combos[0]["pair_id"], "CASE_001");
+/// assert_eq!(combos[0]["experiment_type"], "lung");
+/// ```
+pub fn wildcard_combinations_from_pairs(
+    pairs: &[crate::config::ExperimentControlPair],
+) -> WildcardCombinations {
+    pairs
+        .iter()
+        .map(|pair| {
+            let mut values = WildcardValues::new();
+            values.insert("pair_id".to_string(), pair.pair_id.clone());
+            values.insert("experiment".to_string(), pair.experiment.clone());
+            values.insert("control".to_string(), pair.control.clone());
+            // Backward-compatible aliases
+            values.insert("tumor".to_string(), pair.experiment.clone());
+            values.insert("normal".to_string(), pair.control.clone());
+            if let Some(ref t) = pair.experiment_type {
+                values.insert("experiment_type".to_string(), t.clone());
+                values.insert("tumor_type".to_string(), t.clone());
+            }
+            for (k, v) in &pair.metadata {
+                values.insert(k.clone(), v.clone());
+            }
+            values
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// WC-02: Multi-sample group wildcard helpers
+// ---------------------------------------------------------------------------
+
+/// Build wildcard value combinations from sample groups.
+///
+/// Creates one [`WildcardValues`] entry per (group, sample) combination,
+/// providing:
+/// - `group`  → the group name
+/// - `sample` → the sample identifier within that group
+/// - any additional metadata keys defined on the group
+///
+/// These combinations are used by [`crate::config::WorkflowConfig::expand_wildcards`]
+/// to expand rules containing `{group}` or `{sample}` placeholders.
+///
+/// # Example
+///
+/// ```
+/// use oxo_flow_core::config::SampleGroup;
+/// use oxo_flow_core::wildcard::wildcard_combinations_from_groups;
+///
+/// let groups = vec![
+///     SampleGroup {
+///         name: "control".to_string(),
+///         samples: vec!["S001".to_string(), "S002".to_string()],
+///         metadata: Default::default(),
+///     },
+/// ];
+/// let combos = wildcard_combinations_from_groups(&groups);
+/// assert_eq!(combos.len(), 2);
+/// assert_eq!(combos[0]["group"], "control");
+/// assert_eq!(combos[0]["sample"], "S001");
+/// assert_eq!(combos[1]["sample"], "S002");
+/// ```
+pub fn wildcard_combinations_from_groups(
+    groups: &[crate::config::SampleGroup],
+) -> WildcardCombinations {
+    let mut combinations = Vec::new();
+    for group in groups {
+        for sample in &group.samples {
+            let mut values = WildcardValues::new();
+            values.insert("group".to_string(), group.name.clone());
+            values.insert("sample".to_string(), sample.clone());
+            for (k, v) in &group.metadata {
+                values.insert(k.clone(), v.clone());
+            }
+            combinations.push(values);
+        }
+    }
+    combinations
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -460,5 +577,120 @@ mod tests {
         let results =
             discover_wildcards_from_pattern(dir.path(), "{sample}_R{read}.fastq.gz").unwrap();
         assert!(results.len() >= 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // WC-01: Experiment-control pair wildcard tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn wildcard_combinations_from_pairs_basic() {
+        use crate::config::ExperimentControlPair;
+        let pairs = vec![
+            ExperimentControlPair {
+                pair_id: "CASE_001".to_string(),
+                experiment: "EXP_01".to_string(),
+                control: "CTRL_01".to_string(),
+                experiment_type: Some("lung".to_string()),
+                metadata: Default::default(),
+            },
+            ExperimentControlPair {
+                pair_id: "CASE_002".to_string(),
+                experiment: "EXP_02".to_string(),
+                control: "CTRL_02".to_string(),
+                experiment_type: None,
+                metadata: Default::default(),
+            },
+        ];
+        let combos = wildcard_combinations_from_pairs(&pairs);
+        assert_eq!(combos.len(), 2);
+
+        assert_eq!(combos[0]["pair_id"], "CASE_001");
+        assert_eq!(combos[0]["experiment"], "EXP_01");
+        assert_eq!(combos[0]["control"], "CTRL_01");
+        assert_eq!(combos[0]["experiment_type"], "lung");
+        // backward-compatible aliases
+        assert_eq!(combos[0]["tumor"], "EXP_01");
+        assert_eq!(combos[0]["normal"], "CTRL_01");
+        assert_eq!(combos[0]["tumor_type"], "lung");
+
+        assert_eq!(combos[1]["pair_id"], "CASE_002");
+        assert_eq!(combos[1]["experiment"], "EXP_02");
+        assert_eq!(combos[1]["control"], "CTRL_02");
+        assert!(!combos[1].contains_key("experiment_type")); // not set
+    }
+
+    #[test]
+    fn wildcard_combinations_from_pairs_metadata() {
+        use crate::config::ExperimentControlPair;
+        let mut meta = HashMap::new();
+        meta.insert("patient_id".to_string(), "PT-001".to_string());
+        let pairs = vec![ExperimentControlPair {
+            pair_id: "P1".to_string(),
+            experiment: "E1".to_string(),
+            control: "C1".to_string(),
+            experiment_type: None,
+            metadata: meta,
+        }];
+        let combos = wildcard_combinations_from_pairs(&pairs);
+        assert_eq!(combos[0]["patient_id"], "PT-001");
+    }
+
+    #[test]
+    fn wildcard_combinations_from_pairs_empty() {
+        use crate::config::ExperimentControlPair;
+        let combos = wildcard_combinations_from_pairs(&[] as &[ExperimentControlPair]);
+        assert!(combos.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // WC-02: Sample group wildcard tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn wildcard_combinations_from_groups_basic() {
+        use crate::config::SampleGroup;
+        let groups = vec![
+            SampleGroup {
+                name: "control".to_string(),
+                samples: vec!["S001".to_string(), "S002".to_string()],
+                metadata: Default::default(),
+            },
+            SampleGroup {
+                name: "case".to_string(),
+                samples: vec!["S003".to_string()],
+                metadata: Default::default(),
+            },
+        ];
+        let combos = wildcard_combinations_from_groups(&groups);
+        assert_eq!(combos.len(), 3); // 2 control + 1 case
+
+        assert_eq!(combos[0]["group"], "control");
+        assert_eq!(combos[0]["sample"], "S001");
+        assert_eq!(combos[1]["group"], "control");
+        assert_eq!(combos[1]["sample"], "S002");
+        assert_eq!(combos[2]["group"], "case");
+        assert_eq!(combos[2]["sample"], "S003");
+    }
+
+    #[test]
+    fn wildcard_combinations_from_groups_metadata() {
+        use crate::config::SampleGroup;
+        let mut meta = HashMap::new();
+        meta.insert("tissue".to_string(), "blood".to_string());
+        let groups = vec![SampleGroup {
+            name: "grp".to_string(),
+            samples: vec!["S1".to_string()],
+            metadata: meta,
+        }];
+        let combos = wildcard_combinations_from_groups(&groups);
+        assert_eq!(combos[0]["tissue"], "blood");
+    }
+
+    #[test]
+    fn wildcard_combinations_from_groups_empty() {
+        use crate::config::SampleGroup;
+        let combos = wildcard_combinations_from_groups(&[] as &[SampleGroup]);
+        assert!(combos.is_empty());
     }
 }

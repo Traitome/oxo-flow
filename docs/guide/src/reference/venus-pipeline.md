@@ -100,8 +100,8 @@ Venus expects a configuration file with sample and reference information:
 [config]
 reference = "/data/references/hg38/hg38.fa"
 known_sites = "/data/references/hg38/known_sites.vcf.gz"
-tumor_sample = "TUMOR_001"
-normal_sample = "NORMAL_001"
+experiment_sample = "EXP_001"
+control_sample = "CTRL_001"
 results = "results/venus"
 ```
 

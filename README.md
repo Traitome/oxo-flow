@@ -254,9 +254,9 @@ FASTQ → fastp → bwa-mem2 → MarkDuplicates → BQSR → Mutect2 → FilterM
 
 | Mode | Callers | Use case |
 |------|---------|----------|
-| **Tumor-only** | Mutect2 + FilterMutectCalls | Somatic variant calling + annotation + clinical report |
-| **Normal-only** | HaplotypeCaller | Germline variant calling + annotation |
-| **Tumor-Normal** | Mutect2 + Strelka2 + HaplotypeCaller | Full paired analysis + annotation + clinical report |
+| **Experiment-only** | Mutect2 + FilterMutectCalls | Somatic/experimental variant calling + annotation + clinical report |
+| **Control-only** | HaplotypeCaller | Germline/control variant calling + annotation |
+| **Experiment-Control** | Mutect2 + Strelka2 + HaplotypeCaller | Full paired analysis + annotation + clinical report |
 
 See [`pipelines/venus/`](pipelines/venus/) for pipeline configuration, environment specs, and report templates.
 
@@ -271,7 +271,7 @@ oxo-flow/
 │   │                      # config parsing, scheduler, wildcard expansion, reporting
 │   ├── oxo-flow-cli/      # CLI binary ("oxo-flow") — Clap-based, 13 subcommands
 │   ├── oxo-flow-web/      # Web server ("oxo-flow-web") — axum REST API + frontend
-│   └── venus/             # Venus pipeline ("oxo-flow-venus") — tumor variant detection
+│   └── venus/             # Venus pipeline ("oxo-flow-venus") — clinical variant detection
 ├── pipelines/
 │   └── venus/             # Venus .oxoflow files, envs, schemas, report templates
 ├── examples/              # Example .oxoflow workflows
@@ -395,5 +395,8 @@ make ci
 <div align="center">
 
 **Built with 🧬 by [Traitome](https://github.com/Traitome)**
+
+</div>
+ithub.com/Traitome)**
 
 </div>

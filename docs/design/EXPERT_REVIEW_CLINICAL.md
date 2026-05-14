@@ -136,7 +136,7 @@ oxo-flow demonstrates solid foundations for clinical-grade pipeline execution bu
    - Store audit logs in separate database/file
    - Implement audit log archival process
 
-4. **No electronic signature support**: CLIA requires documented signatures for result release.
+4. **No electronic signature support**: CLIA require documented signatures for result release.
 
    **Recommendation**: Implement signature capture:
    - Username/password authentication
@@ -217,15 +217,15 @@ oxo-flow demonstrates solid foundations for clinical-grade pipeline execution bu
 | Feature | Status | Evidence |
 |---------|--------|----------|
 | SampleInfo type | Implemented | `report.rs::SampleInfo` with sample_id, patient_id, sample_type, collection_date |
-| Sample struct (Venus) | Implemented | `venus/lib.rs::Sample` with name, fastq paths, is_tumor flag |
-| TumorSampleMeta | Implemented | `config.rs::TumorSampleMeta` with tumor_purity, ploidy, match_id |
+| Sample struct (Venus) | Implemented | `venus/lib.rs::Sample` with name, fastq paths, is_experiment flag |
+| ExperimentSampleMeta | Implemented | `config.rs::ExperimentSampleMeta` with experiment_purity, ploidy, match_id |
 | Sample sheet validation | Implemented | `config.rs::validate_sample_sheet()` checks duplicates, format |
 | GenePanel type | Implemented | `config.rs::GenePanel` for targeted analysis tracking |
 
 ### Strengths
 
 1. **Sample metadata capture**: Comprehensive sample information fields
-2. **Tumor-normal pairing**: `match_id` field supports paired analysis tracking
+2. **Experiment-control pairing**: `match_id` field supports paired analysis tracking
 3. **Sample sheet validation**: Detects duplicate sample IDs, validates format
 4. **Panel tracking**: Gene panel definition for targeted assays
 
@@ -273,7 +273,7 @@ oxo-flow demonstrates solid foundations for clinical-grade pipeline execution bu
 | Feature | Status | Evidence |
 |---------|--------|----------|
 | Pipeline steps | Implemented | Full somatic workflow: QC -> Align -> Dedup -> BQSR -> Call -> Filter -> Annotate -> Report |
-| Analysis modes | Implemented | TumorOnly, NormalOnly, TumorNormal |
+| Analysis modes | Implemented | ExperimentOnly, ControlOnly, ExperimentControl |
 | Environment specs | Defined | Conda YAML specs for each tool |
 | Clinical report rule | Implemented | `clinical_report` rule with HTML output |
 | Software BOM | Documented | `venus-pipeline.md` lists versions |
@@ -293,7 +293,7 @@ oxo-flow demonstrates solid foundations for clinical-grade pipeline execution bu
 
    **Recommendation**: Implement validation workflow:
    - NA12878/Genome in a Bottle for germline
-   - Synthetic tumor datasets for somatic
+   - Synthetic experiment datasets for somatic
    - Sensitivity/specificity metrics
    - Annual validation refresh
 
