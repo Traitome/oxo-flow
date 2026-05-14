@@ -1,0 +1,28 @@
+[workflow]
+name = "single-cell-rnaseq"
+version = "1.0.0"
+description = "Single-cell RNA-seq processing using Cellranger"
+author = "Traitome"
+
+[config]
+reference = "/data/references/refdata-gex-GRCh38-2020-A"
+samples = ["sc_sample1", "sc_sample2"]
+
+[defaults]
+threads = 16
+memory = "64G"
+
+[[rules]]
+name = "cellranger_count"
+input = [
+    "fastq/{sample}_S1_L001_R1_001.fastq.gz",
+    "fastq/{sample}_S1_L001_R2_001.fastq.gz"
+]
+output = [
+    "results/{sample}/outs/filtered_feature_bc_matrix.h5",
+    "results/{sample}/outs/web_summary.html"
+]
+expand_inputs = [
+    { pattern = "fastq/{sample}_S1_L001_R1_001.fastq.gz", variables = { sample = "config.samples" } }
+]
+shell = "cellranger count --id={sample} --transcriptome={config.reference} --fastqs=fastq --sample={sample} --localcores={threads} --localmem=64"

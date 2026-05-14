@@ -382,7 +382,10 @@ impl LocalExecutor {
     /// Wrap a command through the environment resolver, falling back to the
     /// original command on error and emitting a warning.
     fn resolve_command(&self, command: &str, rule: &Rule) -> String {
-        match self.env_resolver.wrap_command(command, &rule.environment) {
+        match self
+            .env_resolver
+            .wrap_command(command, &rule.environment, Some(&rule.resources))
+        {
             Ok(wrapped) => wrapped,
             Err(e) => {
                 tracing::warn!(

@@ -137,7 +137,7 @@ pub fn generate_submit_script_with_env(
 ) -> Result<String, String> {
     // Wrap command through environment resolver
     let wrapped_cmd = env_resolver
-        .wrap_command(shell_cmd, &rule.environment)
+        .wrap_command(shell_cmd, &rule.environment, Some(&rule.resources))
         .map_err(|e| e.to_string())?;
 
     Ok(generate_submit_script(

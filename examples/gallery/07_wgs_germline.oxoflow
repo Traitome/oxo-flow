@@ -119,12 +119,32 @@ gatk HaplotypeCaller \
 singularity = "docker://broadinstitute/gatk:4.5.0.0"
 
 [[rules]]
-name = "genotype_gvcfs"
-input = ["variants/{sample}.g.vcf.gz"]
-output = ["variants/{sample}.genotyped.vcf.gz"]
+name = "combine_gvcfs"
+input = []
+expand_inputs = [
+    { pattern = "variants/{sample}.g.vcf.gz", variables = { sample = "config.samples" } }
+]
+output = ["variants/cohort.g.vcf.gz"]
 threads = 4
 memory = "16G"
-description = "Genotype GVCFs to produce final variant calls"
+description = "Combine per-sample GVCFs into a multi-sample GVCF"
+shell = """
+gatk CombineGVCFs \
+    -R {config.reference} \
+    $(for f in {input}; do echo "-V $f "; done) \
+    -O {output[0]}
+"""
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "genotype_gvcfs"
+input = ["variants/cohort.g.vcf.gz"]
+output = ["variants/cohort.genotyped.vcf.gz"]
+threads = 4
+memory = "16G"
+description = "Joint genotyping across the cohort"
 shell = """
 gatk GenotypeGVCFs \
     -R {config.reference} \
@@ -136,21 +156,49 @@ gatk GenotypeGVCFs \
 singularity = "docker://broadinstitute/gatk:4.5.0.0"
 
 [[rules]]
-name = "variant_filtration"
-input = ["variants/{sample}.genotyped.vcf.gz"]
-output = ["variants/{sample}.filtered.vcf.gz"]
-threads = 2
-memory = "8G"
-description = "Hard-filter variants with GATK recommended thresholds"
+name = "vqsr_snps"
+input = ["variants/cohort.genotyped.vcf.gz"]
+output = [
+    "variants/cohort.snps.recal",
+    "variants/cohort.snps.tranches"
+]
+threads = 4
+memory = "16G"
+description = "Variant Quality Score Recalibration (VQSR) for SNPs"
 shell = """
-gatk VariantFiltration \
+gatk VariantRecalibrator \
+    -R {config.reference} \
+    -V {input[0]} \
+    -resource:hapmap,known=false,training=true,truth=true,prior=15.0 {config.known_sites} \
+    -an QD -an MQ -an MQRankSum -an ReadPosRankSum -an FS -an SOR \
+    -mode SNP \
+    -O {output[0]} \
+    --tranches-file {output[1]}
+"""
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "apply_vqsr_snps"
+input = [
+    "variants/cohort.genotyped.vcf.gz",
+    "variants/cohort.snps.recal",
+    "variants/cohort.snps.tranches"
+]
+output = ["variants/cohort.filtered.vcf.gz"]
+threads = 4
+memory = "8G"
+description = "Apply VQSR model to filter SNPs"
+shell = """
+gatk ApplyVQSR \
     -R {config.reference} \
     -V {input[0]} \
     -O {output[0]} \
-    --filter-expression 'QD < 2.0' --filter-name 'LowQD' \
-    --filter-expression 'MQ < 40.0' --filter-name 'LowMQ' \
-    --filter-expression 'FS > 60.0' --filter-name 'HighFS' \
-    --filter-expression 'SOR > 3.0' --filter-name 'HighSOR'
+    --truth-sensitivity-filter-level 99.0 \
+    --tranches-file {input[2]} \
+    --recal-file {input[1]} \
+    -mode SNP
 """
 
 [rules.environment]
@@ -158,8 +206,8 @@ singularity = "docker://broadinstitute/gatk:4.5.0.0"
 
 [[rules]]
 name = "annotate_variants"
-input = ["variants/{sample}.filtered.vcf.gz"]
-output = ["annotation/{sample}.annotated.vcf.gz"]
+input = ["variants/cohort.filtered.vcf.gz"]
+output = ["annotation/cohort.annotated.vcf.gz"]
 threads = 4
 memory = "16G"
 description = "Functional variant annotation with VEP"

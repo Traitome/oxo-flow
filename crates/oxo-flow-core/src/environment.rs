@@ -24,7 +24,12 @@ pub trait EnvironmentBackend: Send + Sync {
     fn is_available(&self) -> bool;
 
     /// Wrap a shell command to run inside this environment.
-    fn wrap_command(&self, command: &str, spec: &str) -> Result<String>;
+    fn wrap_command(
+        &self,
+        command: &str,
+        spec: &str,
+        _resources: Option<&crate::rule::Resources>,
+    ) -> Result<String>;
 
     /// Return the shell command to set up / create this environment.
     fn setup_command(&self, spec: &str) -> Result<String>;
@@ -54,7 +59,12 @@ impl EnvironmentBackend for CondaBackend {
             .is_ok_and(|o| o.status.success())
     }
 
-    fn wrap_command(&self, command: &str, spec: &str) -> Result<String> {
+    fn wrap_command(
+        &self,
+        command: &str,
+        spec: &str,
+        _resources: Option<&crate::rule::Resources>,
+    ) -> Result<String> {
         // Derive the environment name from the YAML file stem
         // (e.g., "envs/bwa_mem2.yaml" → "bwa_mem2", "my_env" → "my_env").
         let env_name = std::path::Path::new(spec)
@@ -106,14 +116,27 @@ impl EnvironmentBackend for DockerBackend {
             .is_ok_and(|o| o.status.success())
     }
 
-    fn wrap_command(&self, command: &str, spec: &str) -> Result<String> {
+    fn wrap_command(
+        &self,
+        command: &str,
+        spec: &str,
+        resources: Option<&crate::rule::Resources>,
+    ) -> Result<String> {
         let workdir = std::env::current_dir()
             .unwrap_or_default()
             .display()
             .to_string();
         let escaped_cmd = escape_for_sh_single_quote(command);
+
+        let mut mem_arg = String::new();
+        if let Some(res) = resources
+            && let Some(mem) = &res.memory
+        {
+            mem_arg = format!(" --memory {mem}");
+        }
+
         Ok(format!(
-            "docker run --rm -v {workdir}:{workdir} -w {workdir} {spec} sh -c '{escaped_cmd}'"
+            "docker run --rm{mem_arg} -v {workdir}:{workdir} -w {workdir} {spec} sh -c '{escaped_cmd}'"
         ))
     }
 
@@ -150,14 +173,27 @@ impl EnvironmentBackend for SingularityBackend {
                 .is_ok_and(|o| o.status.success())
     }
 
-    fn wrap_command(&self, command: &str, spec: &str) -> Result<String> {
+    fn wrap_command(
+        &self,
+        command: &str,
+        spec: &str,
+        resources: Option<&crate::rule::Resources>,
+    ) -> Result<String> {
         let workdir = std::env::current_dir()
             .unwrap_or_default()
             .display()
             .to_string();
         let escaped_cmd = escape_for_sh_single_quote(command);
+
+        let mut mem_arg = String::new();
+        if let Some(res) = resources
+            && let Some(mem) = &res.memory
+        {
+            mem_arg = format!(" --memory {mem}");
+        }
+
         Ok(format!(
-            "singularity exec --bind {workdir}:{workdir} {spec} sh -c '{escaped_cmd}'"
+            "singularity exec{mem_arg} --bind {workdir}:{workdir} {spec} sh -c '{escaped_cmd}'"
         ))
     }
 
@@ -190,7 +226,12 @@ impl EnvironmentBackend for VenvBackend {
             .is_ok_and(|o| o.status.success())
     }
 
-    fn wrap_command(&self, command: &str, spec: &str) -> Result<String> {
+    fn wrap_command(
+        &self,
+        command: &str,
+        spec: &str,
+        _resources: Option<&crate::rule::Resources>,
+    ) -> Result<String> {
         Ok(format!("source {spec}/bin/activate && {command}"))
     }
 
@@ -232,7 +273,12 @@ impl EnvironmentBackend for PixiBackend {
             .is_ok_and(|o| o.status.success())
     }
 
-    fn wrap_command(&self, command: &str, spec: &str) -> Result<String> {
+    fn wrap_command(
+        &self,
+        command: &str,
+        spec: &str,
+        _resources: Option<&crate::rule::Resources>,
+    ) -> Result<String> {
         Ok(format!("pixi run -e {spec} {command}"))
     }
 
@@ -262,7 +308,12 @@ impl EnvironmentBackend for SystemBackend {
         true
     }
 
-    fn wrap_command(&self, command: &str, _spec: &str) -> Result<String> {
+    fn wrap_command(
+        &self,
+        command: &str,
+        _spec: &str,
+        _resources: Option<&crate::rule::Resources>,
+    ) -> Result<String> {
         Ok(command.to_string())
     }
 
@@ -277,6 +328,49 @@ impl EnvironmentBackend for SystemBackend {
 
     fn cache_key(&self, _spec: &str) -> String {
         "system".to_string()
+    }
+}
+
+/// HPC Modules environment backend.
+#[derive(Debug, Default)]
+pub struct ModulesBackend;
+
+impl EnvironmentBackend for ModulesBackend {
+    fn name(&self) -> &str {
+        "modules"
+    }
+
+    fn is_available(&self) -> bool {
+        std::process::Command::new("modulecmd")
+            .arg("--version")
+            .output()
+            .is_ok()
+            || std::process::Command::new("module")
+                .arg("--version")
+                .output()
+                .is_ok()
+    }
+
+    fn wrap_command(
+        &self,
+        command: &str,
+        spec: &str,
+        _resources: Option<&crate::rule::Resources>,
+    ) -> Result<String> {
+        let modules = spec.replace(',', " ");
+        Ok(format!("module load {modules} && {command}"))
+    }
+
+    fn setup_command(&self, _spec: &str) -> Result<String> {
+        Ok("true".to_string())
+    }
+
+    fn teardown_command(&self, _spec: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn cache_key(&self, spec: &str) -> String {
+        format!("modules:{spec}")
     }
 }
 
@@ -383,6 +477,7 @@ pub struct EnvironmentResolver {
     singularity: SingularityBackend,
     venv: VenvBackend,
     pixi: PixiBackend,
+    modules: ModulesBackend,
     system: SystemBackend,
     cache: Arc<Mutex<EnvironmentCache>>,
 }
@@ -402,6 +497,7 @@ impl EnvironmentResolver {
             singularity: SingularityBackend,
             venv: VenvBackend,
             pixi: PixiBackend,
+            modules: ModulesBackend,
             system: SystemBackend,
             cache: Arc::new(Mutex::new(EnvironmentCache::new())),
         }
@@ -415,6 +511,7 @@ impl EnvironmentResolver {
             singularity: SingularityBackend,
             venv: VenvBackend,
             pixi: PixiBackend,
+            modules: ModulesBackend,
             system: SystemBackend,
             cache: Arc::new(Mutex::new(EnvironmentCache::with_cache_dir(cache_dir))),
         }
@@ -433,23 +530,34 @@ impl EnvironmentResolver {
     }
 
     /// Wrap a command using the appropriate environment backend.
-    pub fn wrap_command(&self, command: &str, env_spec: &EnvironmentSpec) -> Result<String> {
+    pub fn wrap_command(
+        &self,
+        command: &str,
+        env_spec: &EnvironmentSpec,
+        resources: Option<&crate::rule::Resources>,
+    ) -> Result<String> {
         if let Some(ref conda) = env_spec.conda {
-            return self.conda.wrap_command(command, conda);
+            return self.conda.wrap_command(command, conda, resources);
         }
         if let Some(ref pixi) = env_spec.pixi {
-            return self.pixi.wrap_command(command, pixi);
+            return self.pixi.wrap_command(command, pixi, resources);
         }
         if let Some(ref docker) = env_spec.docker {
-            return self.docker.wrap_command(command, docker);
+            return self.docker.wrap_command(command, docker, resources);
         }
         if let Some(ref singularity) = env_spec.singularity {
-            return self.singularity.wrap_command(command, singularity);
+            return self
+                .singularity
+                .wrap_command(command, singularity, resources);
         }
         if let Some(ref venv) = env_spec.venv {
-            return self.venv.wrap_command(command, venv);
+            return self.venv.wrap_command(command, venv, resources);
         }
-        self.system.wrap_command(command, "")
+        if !env_spec.modules.is_empty() {
+            let spec = env_spec.modules.join(",");
+            return self.modules.wrap_command(command, &spec, resources);
+        }
+        self.system.wrap_command(command, "", resources)
     }
 
     /// Get the cache key for an environment specification.
@@ -469,6 +577,9 @@ impl EnvironmentResolver {
         }
         if let Some(ref venv) = env_spec.venv {
             return self.venv.cache_key(venv);
+        }
+        if !env_spec.modules.is_empty() {
+            return self.modules.cache_key(&env_spec.modules.join(","));
         }
         self.system.cache_key("")
     }
@@ -491,6 +602,9 @@ impl EnvironmentResolver {
         if let Some(ref venv) = env_spec.venv {
             return self.venv.setup_command(venv);
         }
+        if !env_spec.modules.is_empty() {
+            return self.modules.setup_command(&env_spec.modules.join(","));
+        }
         self.system.setup_command("")
     }
 
@@ -512,6 +626,9 @@ impl EnvironmentResolver {
         if self.venv.is_available() {
             available.push("venv");
         }
+        if self.modules.is_available() {
+            available.push("modules");
+        }
         available
     }
 
@@ -521,7 +638,7 @@ impl EnvironmentResolver {
     /// Use this as the authoritative list when iterating over backends, so that
     /// user-facing code stays in sync with the resolver implementation.
     pub fn all_known_backends() -> &'static [&'static str] {
-        &["conda", "pixi", "docker", "singularity", "venv"]
+        &["conda", "pixi", "docker", "singularity", "venv", "modules"]
     }
 
     /// Validate that the required environment backend is available for a spec.
@@ -542,6 +659,13 @@ impl EnvironmentResolver {
             return Err(OxoFlowError::Environment {
                 kind: "docker".to_string(),
                 message: "docker is not installed or not in PATH".to_string(),
+            });
+        }
+        if !env_spec.modules.is_empty() && !self.modules.is_available() {
+            return Err(OxoFlowError::Environment {
+                kind: "modules".to_string(),
+                message: "environment modules (modulecmd) is not installed or not in PATH"
+                    .to_string(),
             });
         }
         if env_spec.singularity.is_some() && !self.singularity.is_available() {
@@ -570,7 +694,7 @@ mod tests {
     #[test]
     fn system_backend_passthrough() {
         let backend = SystemBackend;
-        let result = backend.wrap_command("echo hello", "").unwrap();
+        let result = backend.wrap_command("echo hello", "", None).unwrap();
         assert_eq!(result, "echo hello");
     }
 
@@ -627,7 +751,7 @@ mod tests {
     fn docker_wrap_command() {
         let backend = DockerBackend;
         let result = backend
-            .wrap_command("bwa mem ref.fa reads.fq", "biocontainers/bwa:0.7.17")
+            .wrap_command("bwa mem ref.fa reads.fq", "biocontainers/bwa:0.7.17", None)
             .unwrap();
         assert!(result.contains("docker run"));
         assert!(result.contains("biocontainers/bwa:0.7.17"));
@@ -666,7 +790,7 @@ mod tests {
     fn singularity_wrap_command() {
         let backend = SingularityBackend;
         let result = backend
-            .wrap_command("samtools sort input.bam", "image.sif")
+            .wrap_command("samtools sort input.bam", "image.sif", None)
             .unwrap();
         assert!(result.contains("singularity exec"));
         assert!(result.contains("image.sif"));
@@ -789,7 +913,7 @@ mod tests {
     fn resolver_empty_spec_uses_system() {
         let resolver = EnvironmentResolver::new();
         let spec = EnvironmentSpec::default();
-        let result = resolver.wrap_command("echo test", &spec).unwrap();
+        let result = resolver.wrap_command("echo test", &spec, None).unwrap();
         assert_eq!(result, "echo test");
     }
 
@@ -800,7 +924,7 @@ mod tests {
             docker: Some("ubuntu:22.04".to_string()),
             ..Default::default()
         };
-        let result = resolver.wrap_command("echo test", &spec).unwrap();
+        let result = resolver.wrap_command("echo test", &spec, None).unwrap();
         assert!(result.contains("docker run"));
         assert!(result.contains("ubuntu:22.04"));
     }
@@ -827,7 +951,7 @@ mod tests {
     fn conda_wrap_command() {
         let backend = CondaBackend;
         let result = backend
-            .wrap_command("fastqc reads.fq", "envs/qc.yaml")
+            .wrap_command("fastqc reads.fq", "envs/qc.yaml", None)
             .unwrap();
         assert!(
             result.contains("conda run"),
@@ -839,7 +963,7 @@ mod tests {
     #[test]
     fn venv_wrap_command() {
         let backend = VenvBackend;
-        let result = backend.wrap_command("pip list", ".venv").unwrap();
+        let result = backend.wrap_command("pip list", ".venv", None).unwrap();
         assert!(result.contains("source .venv/bin/activate"));
         assert!(result.contains("pip list"));
     }
@@ -847,7 +971,9 @@ mod tests {
     #[test]
     fn pixi_wrap_command() {
         let backend = PixiBackend;
-        let result = backend.wrap_command("python main.py", "default").unwrap();
+        let result = backend
+            .wrap_command("python main.py", "default", None)
+            .unwrap();
         assert_eq!(result, "pixi run -e default python main.py");
     }
 
@@ -858,7 +984,9 @@ mod tests {
             conda: Some("envs/qc.yaml".to_string()),
             ..Default::default()
         };
-        let result = resolver.wrap_command("fastqc reads.fq", &spec).unwrap();
+        let result = resolver
+            .wrap_command("fastqc reads.fq", &spec, None)
+            .unwrap();
         assert!(
             result.contains("conda run"),
             "expected conda wrapping, got: {result}"
@@ -873,7 +1001,7 @@ mod tests {
             ..Default::default()
         };
         let result = resolver
-            .wrap_command("bwa mem ref.fa reads.fq", &spec)
+            .wrap_command("bwa mem ref.fa reads.fq", &spec, None)
             .unwrap();
         assert!(result.contains("docker run"));
         assert!(result.contains("biocontainers/bwa:0.7.17"));
