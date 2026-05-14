@@ -62,7 +62,7 @@ pub async fn init_db(database_url: &str) -> Result<()> {
             pid INTEGER,
             started_at DATETIME,
             finished_at DATETIME,
-            FOREIGN KEY(user_id) REFERENCES users(id)
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS audit_logs (
@@ -71,7 +71,30 @@ pub async fn init_db(database_url: &str) -> Result<()> {
             action TEXT NOT NULL,
             target TEXT NOT NULL,
             timestamp DATETIME NOT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id)
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_runs_user_id ON runs(user_id);
+        CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
+        CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at DESC);
+
+        CREATE TABLE IF NOT EXISTS workflows (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            version TEXT NOT NULL,
+            toml_content TEXT NOT NULL,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS sessions (
+            token TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            created_at DATETIME NOT NULL,
+            expires_at DATETIME NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
         );
         "#,
     )
@@ -166,6 +189,14 @@ pub struct AuditLog {
     pub timestamp: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct Session {
+    pub token: String,
+    pub user_id: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
 // ---------------------------------------------------------------------------
 // Repository Functions
 // ---------------------------------------------------------------------------
@@ -176,6 +207,45 @@ pub async fn get_user_by_username(username: &str) -> Result<Option<User>> {
         .fetch_optional(pool())
         .await?;
     Ok(user)
+}
+
+pub async fn get_user_by_id(id: &str) -> Result<Option<User>> {
+    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool())
+        .await?;
+    Ok(user)
+}
+
+pub async fn create_session(session: &Session) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+    )
+    .bind(&session.token)
+    .bind(&session.user_id)
+    .bind(session.created_at)
+    .bind(session.expires_at)
+    .execute(pool())
+    .await?;
+    Ok(())
+}
+
+pub async fn get_session(token: &str) -> Result<Option<Session>> {
+    let session =
+        sqlx::query_as::<_, Session>("SELECT * FROM sessions WHERE token = ? AND expires_at > ?")
+            .bind(token)
+            .bind(Utc::now())
+            .fetch_optional(pool())
+            .await?;
+    Ok(session)
+}
+
+pub async fn delete_session(token: &str) -> Result<()> {
+    sqlx::query("DELETE FROM sessions WHERE token = ?")
+        .bind(token)
+        .execute(pool())
+        .await?;
+    Ok(())
 }
 
 pub async fn insert_run(run: &Run) -> Result<()> {

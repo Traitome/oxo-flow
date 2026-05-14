@@ -17,7 +17,7 @@ use axum::{
     http::StatusCode,
     middleware,
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -712,44 +712,6 @@ async fn rate_limit_middleware(
 // Authentication & authorization
 // ---------------------------------------------------------------------------
 
-/// User roles with increasing privileges.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum UserRole {
-    /// Read-only access (dashboards, system info).
-    Viewer,
-    /// Can run and manage workflows.
-    User,
-    /// Full access including user management.
-    Admin,
-}
-
-impl std::fmt::Display for UserRole {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            UserRole::Viewer => write!(f, "viewer"),
-            UserRole::User => write!(f, "user"),
-            UserRole::Admin => write!(f, "admin"),
-        }
-    }
-}
-
-/// In-memory session store.  Each entry maps a base64-encoded random token
-/// to the associated user name and role.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Session {
-    username: String,
-    role: UserRole,
-    created_at: String,
-}
-
-/// Global session store — `HashMap<token, Session>`.
-static SESSIONS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Session>>> =
-    std::sync::OnceLock::new();
-
-fn sessions() -> &'static std::sync::Mutex<std::collections::HashMap<String, Session>> {
-    SESSIONS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
-}
-
 /// Login request body.
 #[derive(Serialize, Deserialize)]
 pub struct LoginRequest {
@@ -830,11 +792,10 @@ fn generate_session_token() -> String {
 }
 
 /// Extract a session from the `Authorization: Bearer <token>` header.
-fn extract_session(headers: &axum::http::HeaderMap) -> Option<Session> {
+async fn extract_session(headers: &axum::http::HeaderMap) -> Option<db::Session> {
     let value = headers.get("authorization")?.to_str().ok()?;
     let token = value.strip_prefix("Bearer ")?;
-    let store = sessions().lock().ok()?;
-    store.get(token).cloned()
+    db::get_session(token).await.ok().flatten()
 }
 
 /// Check the oxo-flow license status.
@@ -855,6 +816,32 @@ fn check_license() -> LicenseStatus {
             message: format!("No valid license: {e}"),
         },
     }
+}
+
+use std::sync::OnceLock;
+use tokio::sync::broadcast;
+
+/// Broadcast channel for Server-Sent Events (SSE).
+static EVENT_TX: OnceLock<broadcast::Sender<String>> = OnceLock::new();
+
+fn event_tx() -> broadcast::Sender<String> {
+    EVENT_TX
+        .get_or_init(|| {
+            let (tx, _rx) = broadcast::channel(100);
+            tx
+        })
+        .clone()
+}
+
+/// Send an SSE event.
+pub fn broadcast_event(event_type: &str, data: &serde_json::Value) {
+    let msg = format!(
+        r#"{{"type":"{}","time":"{}","data":{}}}"#,
+        event_type,
+        chrono::Utc::now().to_rfc3339(),
+        serde_json::to_string(data).unwrap_or_else(|_| "{}".to_string())
+    );
+    let _ = event_tx().send(msg);
 }
 
 // ---------------------------------------------------------------------------
@@ -1245,7 +1232,7 @@ async fn health() -> Json<HealthResponse> {
 async fn list_workflows(
     headers: axum::http::HeaderMap,
 ) -> Result<Json<WorkflowListResponse>, ApiError> {
-    let session = extract_session(&headers).ok_or_else(|| ApiError {
+    let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
             error: "Authentication required".to_string(),
@@ -1253,9 +1240,15 @@ async fn list_workflows(
         },
     })?;
 
+    let user = db::get_user_by_id(&session.user_id)
+        .await
+        .ok()
+        .flatten()
+        .unwrap();
+
     let user_dir = std::path::Path::new("workspace")
         .join("users")
-        .join(&session.username)
+        .join(&user.username)
         .join("templates");
 
     let mut workflows = Vec::new();
@@ -1546,7 +1539,7 @@ async fn run_workflow(
     headers: axum::http::HeaderMap,
     Json(req): Json<DryRunRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = extract_session(&headers).ok_or_else(|| ApiError {
+    let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
             error: "Authentication required".to_string(),
@@ -1555,7 +1548,7 @@ async fn run_workflow(
     })?;
 
     // Fetch full user details for auth_type and os_user
-    let user = db::get_user_by_username(&session.username)
+    let user = db::get_user_by_id(&session.user_id)
         .await
         .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
         .ok_or_else(|| ApiError::bad_request("User not found in DB", None))?;
@@ -1905,7 +1898,28 @@ async fn sse_events() -> impl IntoResponse {
     use axum::response::sse::{Event, Sse};
     use tokio_stream::StreamExt as _;
 
-    let stream = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(
+    let mut rx = event_tx().subscribe();
+
+    // Stream that yields events from the broadcast channel
+    let event_stream = async_stream::stream! {
+        loop {
+            match rx.recv().await {
+                Ok(msg) => {
+                    yield Ok::<_, std::convert::Infallible>(Event::default().data(msg));
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    // Skip lagged messages
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    break;
+                }
+            }
+        }
+    };
+
+    // Heartbeat stream every 5 seconds
+    let heartbeat_stream = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(
         std::time::Duration::from_secs(5),
     ))
     .map(|_| {
@@ -1915,6 +1929,9 @@ async fn sse_events() -> impl IntoResponse {
         );
         Ok::<_, std::convert::Infallible>(Event::default().data(msg))
     });
+
+    // Merge the streams
+    let stream = tokio_stream::StreamExt::merge(event_stream, heartbeat_stream);
 
     Sse::new(stream).keep_alive(
         axum::response::sse::KeepAlive::new()
@@ -1939,38 +1956,52 @@ async fn login(Json(req): Json<LoginRequest>) -> Result<Json<LoginResponse>, Api
             },
         })?;
 
-    let role = match user.role.as_str() {
-        "admin" => UserRole::Admin,
-        "user" => UserRole::User,
-        _ => UserRole::Viewer,
-    };
-
+    let role = user.role.clone();
     let token = generate_session_token();
-    let session = Session {
-        username: user.username.clone(),
-        role,
-        created_at: chrono::Utc::now().to_rfc3339(),
+
+    // Set expiration to 24 hours from now
+    let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
+
+    let session = db::Session {
+        token: token.clone(),
+        user_id: user.id.clone(),
+        created_at: chrono::Utc::now(),
+        expires_at,
     };
 
-    if let Ok(mut store) = sessions().lock() {
-        store.insert(token.clone(), session);
-    }
+    db::create_session(&session).await.map_err(|e| ApiError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        body: ErrorResponse {
+            error: "Failed to create session".to_string(),
+            detail: Some(e.to_string()),
+        },
+    })?;
 
     Ok(Json(LoginResponse {
         token,
         username: user.username,
-        role: user.role,
+        role,
     }))
 }
 
 /// `GET /api/auth/me` — Return the identity of the current session.
 async fn auth_me(headers: axum::http::HeaderMap) -> Json<AuthMeResponse> {
-    match extract_session(&headers) {
-        Some(session) => Json(AuthMeResponse {
-            authenticated: true,
-            username: Some(session.username),
-            role: Some(session.role.to_string()),
-        }),
+    match extract_session(&headers).await {
+        Some(session) => {
+            if let Ok(Some(user)) = db::get_user_by_id(&session.user_id).await {
+                Json(AuthMeResponse {
+                    authenticated: true,
+                    username: Some(user.username),
+                    role: Some(user.role),
+                })
+            } else {
+                Json(AuthMeResponse {
+                    authenticated: false,
+                    username: None,
+                    role: None,
+                })
+            }
+        }
         None => Json(AuthMeResponse {
             authenticated: false,
             username: None,
@@ -1999,7 +2030,7 @@ pub fn build_router_with_rate_limiter(limiter: RateLimiter) -> Router {
 }
 
 async fn list_runs(headers: axum::http::HeaderMap) -> Result<Json<Vec<db::Run>>, ApiError> {
-    let session = extract_session(&headers).ok_or_else(|| ApiError {
+    let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
             error: "Authentication required".to_string(),
@@ -2007,7 +2038,7 @@ async fn list_runs(headers: axum::http::HeaderMap) -> Result<Json<Vec<db::Run>>,
         },
     })?;
 
-    let user = db::get_user_by_username(&session.username)
+    let user = db::get_user_by_id(&session.user_id)
         .await
         .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
         .ok_or_else(|| ApiError::bad_request("User not found", None))?;
@@ -2027,7 +2058,7 @@ async fn get_run_logs(
     headers: axum::http::HeaderMap,
     axum::extract::Path(run_id): axum::extract::Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = extract_session(&headers).ok_or_else(|| ApiError {
+    let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
             error: "Authentication required".to_string(),
@@ -2035,7 +2066,27 @@ async fn get_run_logs(
         },
     })?;
 
-    let run_dir = workspace::get_run_directory(&session.username, &run_id);
+    let user = db::get_user_by_id(&session.user_id)
+        .await
+        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
+        .ok_or_else(|| ApiError::bad_request("User not found", None))?;
+
+    // Verify ownership
+    let _run = sqlx::query_as::<_, db::Run>("SELECT * FROM runs WHERE id = ? AND user_id = ?")
+        .bind(&run_id)
+        .bind(&user.id)
+        .fetch_optional(db::pool())
+        .await
+        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
+        .ok_or_else(|| ApiError {
+            status: StatusCode::NOT_FOUND,
+            body: ErrorResponse {
+                error: "Run not found".to_string(),
+                detail: None,
+            },
+        })?;
+
+    let run_dir = workspace::get_run_directory(&user.username, &run_id);
     let log_path = run_dir.join("execution.log");
 
     if !log_path.exists() {
@@ -2048,15 +2099,101 @@ async fn get_run_logs(
     Ok(content)
 }
 
+async fn cancel_run(
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(run_id): axum::extract::Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = extract_session(&headers).await.ok_or_else(|| ApiError {
+        status: StatusCode::UNAUTHORIZED,
+        body: ErrorResponse {
+            error: "Authentication required".to_string(),
+            detail: None,
+        },
+    })?;
+
+    let user = db::get_user_by_id(&session.user_id)
+        .await
+        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
+        .ok_or_else(|| ApiError::bad_request("User not found", None))?;
+
+    // Verify ownership
+    let run = sqlx::query_as::<_, db::Run>("SELECT * FROM runs WHERE id = ? AND user_id = ?")
+        .bind(&run_id)
+        .bind(&user.id)
+        .fetch_optional(db::pool())
+        .await
+        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
+        .ok_or_else(|| ApiError {
+            status: StatusCode::NOT_FOUND,
+            body: ErrorResponse {
+                error: "Run not found".to_string(),
+                detail: None,
+            },
+        })?;
+
+    if run.status != "running" && run.status != "pending" {
+        return Err(ApiError::bad_request(
+            "Run is not in a cancellable state",
+            Some(run.status),
+        ));
+    }
+
+    // Cancel the run (kill the process if it exists)
+    if let Some(pid) = run.pid {
+        use sysinfo::System;
+        let mut sys = System::new();
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+        if let Some(process) = sys.process(sysinfo::Pid::from_u32(pid as u32)) {
+            process.kill();
+        }
+    }
+
+    sqlx::query("UPDATE runs SET status = 'cancelled', finished_at = ? WHERE id = ?")
+        .bind(chrono::Utc::now())
+        .bind(&run_id)
+        .execute(db::pool())
+        .await
+        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?;
+
+    let _ = db::log_action(&user.id, "cancel_run", &run_id).await;
+
+    // Broadcast cancellation event
+    broadcast_event(
+        "run_cancelled",
+        &serde_json::json!({
+            "run_id": run_id,
+            "status": "cancelled"
+        }),
+    );
+
+    Ok((
+        axum::http::StatusCode::OK,
+        Json(serde_json::json!({ "status": "cancelled" })),
+    ))
+}
+
 /// Build the web application router_inner function with new endpoints.
 fn build_router_inner(limiter: Option<RateLimiter>) -> Router {
     // Initialize start time
     get_start_time();
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    // Check for custom CORS origins
+    let origins: Vec<axum::http::HeaderValue> = std::env::var("OXO_FLOW_ALLOWED_ORIGINS")
+        .map(|s| s.split(',').filter_map(|v| v.trim().parse().ok()).collect())
+        .unwrap_or_default();
+
+    let cors = if origins.is_empty() {
+        CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any)
+    } else {
+        CorsLayer::new()
+            .allow_origin(origins)
+            .allow_methods(Any)
+            .allow_headers(Any)
+            .allow_credentials(true)
+    };
 
     let mut router = Router::new()
         // Frontend
@@ -2086,6 +2223,7 @@ fn build_router_inner(limiter: Option<RateLimiter>) -> Router {
         .route("/api/reports/generate", post(generate_report))
         .route("/api/events", get(sse_events))
         .route("/api/runs", get(list_runs))
+        .route("/api/runs/{id}", delete(cancel_run))
         .route("/api/runs/{id}/logs", get(get_run_logs))
         // Authentication & license
         .route("/api/auth/login", post(login))
