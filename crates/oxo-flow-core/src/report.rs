@@ -1058,7 +1058,10 @@ mod tests {
         assert_eq!(section.id, "sample-info");
         if let ReportContent::KeyValue { pairs } = &section.content {
             assert_eq!(pairs[0], ("Sample ID".to_string(), "S001".to_string()));
-            assert_eq!(pairs[1], ("Sample Type".to_string(), "Experiment".to_string()));
+            assert_eq!(
+                pairs[1],
+                ("Sample Type".to_string(), "Experiment".to_string())
+            );
             assert!(pairs.iter().any(|(k, v)| k == "Patient ID" && v == "P001"));
             assert!(
                 pairs

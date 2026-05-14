@@ -2,6 +2,17 @@
 
 Common issues and their solutions when using oxo-flow.
 
+## Beginner Common Issues
+
+If your workflow isn't running as expected, check these common items first:
+
+1.  **Input files exist?** Ensure your starting data (e.g., FASTQ files) is in the correct directory.
+2.  **Tools installed?** If not using a managed environment (Conda/Docker), ensure tools like `bwa` or `samtools` are installed on your system.
+3.  **Dry-run first?** Run `oxo-flow dry-run workflow.oxoflow` to see what oxo-flow *intends* to do without actually running commands.
+4.  **Working directory?** Make sure you are running commands from the project root directory (the one containing your `.oxoflow` file).
+
+---
+
 ## Workflow Parsing Errors
 
 ### TOML syntax error

@@ -17,13 +17,27 @@ This guide covers all the ways to install the `oxo-flow` binary on your system.
 
 ## Option 1 — Install with Cargo (recommended)
 
-If you have the Rust toolchain installed:
+=== "Install Rust Toolchain First"
 
-```bash
-cargo install oxo-flow
-```
+    If you don't have Rust installed, use the official installer:
 
-This builds the latest published release and places the `oxo-flow` binary in `~/.cargo/bin/`.
+    ```bash
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    source "$HOME/.cargo/env"
+    ```
+
+=== "Install oxo-flow"
+
+    ```bash
+    cargo install oxo-flow
+    ```
+
+    This builds the latest published release and places the `oxo-flow` binary in `~/.cargo/bin/`.
+
+    **Verify PATH**: Ensure `~/.cargo/bin/` is in your `$PATH`. You can check with:
+    ```bash
+    echo $PATH | grep -q ".cargo/bin" || echo 'Add to PATH: export PATH="$HOME/.cargo/bin:$PATH"'
+    ```
 
 Verify the installation:
 
@@ -68,13 +82,23 @@ cargo build
 
 Pre-built binaries are available from the [GitHub Releases](https://github.com/Traitome/oxo-flow/releases) page.
 
-```bash
-# Example for Linux x86_64
-curl -LO https://github.com/Traitome/oxo-flow/releases/latest/download/oxo-flow-linux-x86_64.tar.gz
-tar xzf oxo-flow-linux-x86_64.tar.gz
-chmod +x oxo-flow
-mv oxo-flow ~/.local/bin/
-```
+=== "Linux (x86_64)"
+
+    ```bash
+    curl -LO https://github.com/Traitome/oxo-flow/releases/latest/download/oxo-flow-linux-x86_64.tar.gz
+    tar xzf oxo-flow-linux-x86_64.tar.gz
+    chmod +x oxo-flow
+    mv oxo-flow ~/.local/bin/
+    ```
+
+=== "macOS (Apple Silicon)"
+
+    ```bash
+    curl -LO https://github.com/Traitome/oxo-flow/releases/latest/download/oxo-flow-macos-aarch64.tar.gz
+    tar xzf oxo-flow-macos-aarch64.tar.gz
+    chmod +x oxo-flow
+    mv oxo-flow /usr/local/bin/  # Or another folder in your PATH
+    ```
 
 ---
 

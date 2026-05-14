@@ -152,6 +152,25 @@ oxo-flow graph align.oxoflow | dot -Tpng -o dag.png
 
 ---
 
+## Key Concepts
+
+If you are new to pipeline engines, here are the three core concepts used in oxo-flow:
+
+### Workflow
+A **Workflow** is the entire pipeline definition (usually a `.oxoflow` file). It contains a collection of rules, configuration settings, and software requirements.
+
+### Rule
+A **Rule** is a single processing step. It defines:
+- **Input**: The files needed to run (e.g., raw reads).
+- **Output**: The files produced by the step (e.g., aligned BAM).
+- **Command**: The actual shell command to execute (e.g., `bwa mem`).
+- **Environment**: The software tools needed (e.g., a specific Conda environment).
+
+### DAG (Directed Acyclic Graph)
+A **DAG** is a mathematical representation of your workflow. It is a "map" that shows how rules are connected by their inputs and outputs. oxo-flow builds this map automatically to determine which rules can run in parallel and which must wait for others to finish.
+
+---
+
 ## Project Status
 
 oxo-flow is under active development. The current release (`v0.3.0`) includes the complete core engine, CLI, web API, and Venus pipeline. See the [Changelog](./development/changelog.md) for release history and the [Contributing guide](./development/contributing.md) if you want to get involved.

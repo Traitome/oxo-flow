@@ -158,7 +158,7 @@ conda = "envs/vep.yaml"
 
 # ── Report ─────────────────────────────────────────────
 [[rules]]
-name = "report"
+name = "clinical_report"
 input = ["annotated/EXP_01.annotated.vcf.gz"]
 output = ["reports/EXP_01_report.html"]
 shell = "python scripts/generate_report.py --input {input[0]} --output {output[0]} --sample EXP_01"

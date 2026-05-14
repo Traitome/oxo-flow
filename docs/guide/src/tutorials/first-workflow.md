@@ -8,7 +8,8 @@ This tutorial walks you through building a realistic bioinformatics workflow fro
 
 - [oxo-flow installed](./installation.md)
 - Paired-end FASTQ files (or the willingness to create test files)
-- conda or docker available for environment management
+- **conda** or **mamba** available for environment management. 
+    - *If you don't have either, we recommend [Miniforge](https://github.com/conda-forge/miniforge#miniforge3) or [Mambaforge](https://github.com/conda-forge/miniforge#mambaforge).*
 
 ---
 
@@ -53,6 +54,9 @@ author = "Your Name"
 [config]
 samples_dir = "raw_data"
 results_dir = "results"
+
+!!! tip "Configuration Syntax"
+    `{config.samples_dir}` refers to the `samples_dir` variable defined in the `[config]` section. This allows you to centralize paths and settings.
 
 [defaults]
 threads = 4
@@ -155,7 +159,22 @@ graph TD
 
 ---
 
-## 5. Validate and preview
+## 5. Prepare Test Data
+
+For this tutorial, create minimal test files so oxo-flow has something to process:
+
+```bash
+mkdir -p raw_data
+# Create dummy compressed fastq files
+echo "@test1" | gzip > raw_data/sample1_R1.fastq.gz
+echo "@test1" | gzip > raw_data/sample1_R2.fastq.gz
+echo "@test2" | gzip > raw_data/sample2_R1.fastq.gz
+echo "@test2" | gzip > raw_data/sample2_R2.fastq.gz
+```
+
+---
+
+## 6. Validate and preview
 
 ```bash
 oxo-flow validate qc-pipeline.oxoflow
@@ -166,7 +185,7 @@ oxo-flow dry-run qc-pipeline.oxoflow
 
 ---
 
-## 6. Visualize the DAG
+## 7. Visualize the DAG
 
 ```bash
 oxo-flow graph qc-pipeline.oxoflow
@@ -174,7 +193,7 @@ oxo-flow graph qc-pipeline.oxoflow
 
 ---
 
-## 7. Run with parallel execution
+## 8. Run with parallel execution
 
 ```bash
 oxo-flow run qc-pipeline.oxoflow -j 4

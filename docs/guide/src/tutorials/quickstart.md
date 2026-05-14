@@ -84,7 +84,7 @@ Dry-run: 2 rules would execute:
   1. create_data [threads=2, env=none]
      $ mkdir -p data && echo 'Hello from oxo-flow!' > data/greeting.txt
   2. transform [threads=2, env=none]
-     $ mkdir -p results && tr '[:lower:]' '[:upper:]' < data/greeting.txt > resu
+     $ mkdir -p results && tr '[:lower:]' '[:upper:]' < data/greeting.txt > results/uppercase.txt
 ```
 
 ---
@@ -110,7 +110,10 @@ Done: 2 succeeded, 0 failed
 
 ## 6. Check the results
 
+Ensure you are in the `my-pipeline` directory:
+
 ```bash
+cd my-pipeline
 cat results/uppercase.txt
 # HELLO FROM OXO-FLOW!
 ```

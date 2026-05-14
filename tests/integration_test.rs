@@ -45,11 +45,11 @@ fn full_lifecycle_simple_workflow() {
 
 /// Test full lifecycle with the paired tumor-normal example.
 #[test]
-fn full_lifecycle_paired_tumor_normal() {
-    let toml = std::fs::read_to_string("examples/paired_tumor_normal.oxoflow").unwrap();
+fn full_lifecycle_paired_experiment_control() {
+    let toml = std::fs::read_to_string("examples/paired_experiment_control.oxoflow").unwrap();
     let config = WorkflowConfig::parse(&toml).unwrap();
 
-    assert_eq!(config.workflow.name, "paired-tumor-normal");
+    assert_eq!(config.workflow.name, "paired-experiment-control");
     assert!(!config.rules.is_empty());
 
     let dag = WorkflowDag::from_rules(&config.rules).unwrap();
@@ -122,21 +122,21 @@ fn apply_defaults_in_lifecycle() {
 #[test]
 fn venus_generate_and_validate() {
     let config = oxo_flow_venus::VenusConfig {
-        mode: oxo_flow_venus::AnalysisMode::TumorNormal,
+        mode: oxo_flow_venus::AnalysisMode::ExperimentControl,
         seq_type: oxo_flow_venus::SeqType::WGS,
         genome_build: oxo_flow_venus::GenomeBuild::GRCh38,
         reference_fasta: "/ref/hg38.fa".to_string(),
-        tumor_samples: vec![oxo_flow_venus::Sample {
-            name: "TUMOR_01".to_string(),
-            r1_fastq: "raw/TUMOR_01_R1.fq.gz".to_string(),
-            r2_fastq: Some("raw/TUMOR_01_R2.fq.gz".to_string()),
-            is_tumor: true,
+        experiment_samples: vec![oxo_flow_venus::Sample {
+            name: "EXP_01".to_string(),
+            r1_fastq: "raw/EXP_01_R1.fq.gz".to_string(),
+            r2_fastq: Some("raw/EXP_01_R2.fq.gz".to_string()),
+            is_experiment: true,
         }],
-        normal_samples: vec![oxo_flow_venus::Sample {
-            name: "NORMAL_01".to_string(),
-            r1_fastq: "raw/NORMAL_01_R1.fq.gz".to_string(),
-            r2_fastq: Some("raw/NORMAL_01_R2.fq.gz".to_string()),
-            is_tumor: false,
+        control_samples: vec![oxo_flow_venus::Sample {
+            name: "CTRL_01".to_string(),
+            r1_fastq: "raw/CTRL_01_R1.fq.gz".to_string(),
+            r2_fastq: Some("raw/CTRL_01_R2.fq.gz".to_string()),
+            is_experiment: false,
         }],
         known_sites: Some("/ref/dbsnp.vcf.gz".to_string()),
         target_bed: None,

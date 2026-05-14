@@ -177,7 +177,9 @@ impl VenusConfig {
             }
             AnalysisMode::ExperimentControl => {
                 if self.experiment_samples.is_empty() || self.control_samples.is_empty() {
-                    anyhow::bail!("experiment-control mode requires both experimental and control samples");
+                    anyhow::bail!(
+                        "experiment-control mode requires both experimental and control samples"
+                    );
                 }
             }
         }
@@ -800,7 +802,10 @@ mod tests {
     fn analysis_mode_display() {
         assert_eq!(AnalysisMode::ExperimentOnly.to_string(), "experiment-only");
         assert_eq!(AnalysisMode::ControlOnly.to_string(), "control-only");
-        assert_eq!(AnalysisMode::ExperimentControl.to_string(), "experiment-control");
+        assert_eq!(
+            AnalysisMode::ExperimentControl.to_string(),
+            "experiment-control"
+        );
     }
 
     #[test]
@@ -1078,7 +1083,10 @@ mod tests {
         let strelka_rule = rules.iter().find(|r| r.name == "strelka2_EXP1").unwrap();
         assert_eq!(strelka_rule.input[0], "output/recal/EXP1.recal.bam");
         assert_eq!(strelka_rule.input[1], "output/recal/CTRL1.recal.bam");
-        assert_eq!(strelka_rule.output[0], "output/variants/EXP1.strelka2.vcf.gz");
+        assert_eq!(
+            strelka_rule.output[0],
+            "output/variants/EXP1.strelka2.vcf.gz"
+        );
     }
 
     #[test]

@@ -265,6 +265,7 @@ impl std::fmt::Display for ReferenceDatabase {
 /// Backward compatibility:
 /// - `{tumor}` aliases `{experiment}`
 /// - `{normal}` aliases `{control}`
+///
 /// Rules containing any of these wildcards in their `input`, `output`, or
 /// `shell` fields are expanded once per pair.
 ///

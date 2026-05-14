@@ -54,6 +54,9 @@ dependencies:
   - samtools=1.19
 ```
 
+!!! note "Why Bioconda?"
+    The `bioconda` channel is a community-maintained repository for bioinformatics software. It provides thousands of pre-compiled binaries for tools like `bwa`, `samtools`, and `GATK`, which can otherwise be difficult to install from source.
+
 oxo-flow activates the conda environment before running the rule's shell command and deactivates it afterward.
 
 ---

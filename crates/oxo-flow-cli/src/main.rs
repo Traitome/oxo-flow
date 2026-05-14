@@ -90,6 +90,11 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// Execute a workflow.
+    ///
+    /// Examples:
+    ///   oxo-flow run workflow.oxoflow              # Basic execution
+    ///   oxo-flow run workflow.oxoflow -j 4         # 4 parallel jobs
+    ///   oxo-flow run workflow.oxoflow -k           # Keep going on failure
     Run {
         /// Path to the .oxoflow workflow file (optional - auto-detects if omitted).
         #[arg(value_name = "WORKFLOW")]
@@ -136,7 +141,11 @@ enum Commands {
         cache_dir: Option<PathBuf>,
     },
 
-    /// Simulate execution without running any commands.
+    /// Preview execution without running any commands.
+    ///
+    /// Examples:
+    ///   oxo-flow dry-run workflow.oxoflow
+    ///   oxo-flow dry-run workflow.oxoflow -t bwa_mem2
     DryRun {
         /// Path to the .oxoflow workflow file (optional - auto-detects if omitted).
         #[arg(value_name = "WORKFLOW")]
@@ -148,13 +157,35 @@ enum Commands {
     },
 
     /// Validate a .oxoflow workflow file.
+    ///
+    /// Examples:
+    ///   oxo-flow validate workflow.oxoflow
     Validate {
         /// Path to the .oxoflow workflow file.
         #[arg(value_name = "WORKFLOW")]
         workflow: PathBuf,
     },
 
+    /// Initialize a new workflow project.
+    ///
+    /// Examples:
+    ///   oxo-flow init my-pipeline
+    ///   oxo-flow init my-pipeline -d ./pipelines/
+    Init {
+        /// Project name.
+        #[arg(value_name = "NAME")]
+        name: String,
+
+        /// Output directory.
+        #[arg(short = 'd', long)]
+        dir: Option<PathBuf>,
+    },
+
     /// Output the workflow DAG for visualization.
+    ///
+    /// Examples:
+    ///   oxo-flow graph workflow.oxoflow -f ascii
+    ///   oxo-flow graph workflow.oxoflow -f dot -o graph.dot
     Graph {
         /// Path to the .oxoflow workflow file.
         #[arg(value_name = "WORKFLOW")]
@@ -169,76 +200,39 @@ enum Commands {
         output: Option<PathBuf>,
     },
 
-    /// Generate reports from workflow execution.
-    Report {
-        /// Path to the .oxoflow workflow file.
-        #[arg(value_name = "WORKFLOW")]
-        workflow: PathBuf,
-
-        /// Output format (html, json).
-        #[arg(short = 'f', long, default_value = "html")]
-        format: String,
-
-        /// Output file path.
-        #[arg(short = 'o', long)]
-        output: Option<PathBuf>,
-    },
-
-    /// Manage software environments.
-    Env {
-        #[command(subcommand)]
-        action: EnvAction,
-    },
-
-    /// Package a workflow into a container image.
-    Package {
-        /// Path to the .oxoflow workflow file.
-        #[arg(value_name = "WORKFLOW")]
-        workflow: PathBuf,
-
-        /// Container format (docker, singularity).
-        #[arg(short = 'f', long, default_value = "docker")]
-        format: String,
-
-        /// Output file path.
-        #[arg(short = 'o', long)]
-        output: Option<PathBuf>,
-    },
-
-    /// Start the web interface server.
-    Serve {
-        /// Host address to bind to.
-        #[arg(long, default_value = "127.0.0.1")]
-        host: String,
-
-        /// Port to listen on.
-        #[arg(short = 'p', long, default_value = "8080")]
-        port: u16,
-
-        /// Base path for mounting under a sub-path (e.g., "/oxo-flow").
-        ///
-        /// When deploying behind a reverse proxy, set this to the
-        /// prefix path where the application is mounted.
-        #[arg(long, default_value = "/")]
-        base_path: String,
-    },
-
-    /// Initialize a new workflow project.
-    Init {
-        /// Project name.
-        #[arg(value_name = "NAME")]
-        name: String,
-
-        /// Output directory.
-        #[arg(short = 'd', long)]
-        dir: Option<PathBuf>,
-    },
-
     /// Show execution status from a checkpoint file.
     Status {
         /// Path to checkpoint JSON file.
         #[arg(value_name = "CHECKPOINT")]
         checkpoint: PathBuf,
+    },
+
+    /// Inspect and manage workflow configuration.
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+
+    /// Compare two .oxoflow workflow files and show differences.
+    Diff {
+        /// First workflow file.
+        #[arg(value_name = "WORKFLOW_A")]
+        workflow_a: PathBuf,
+
+        /// Second workflow file.
+        #[arg(value_name = "WORKFLOW_B")]
+        workflow_b: PathBuf,
+    },
+
+    /// Debug a workflow: show expanded commands after variable substitution.
+    Debug {
+        /// Path to the .oxoflow workflow file.
+        #[arg(value_name = "WORKFLOW")]
+        workflow: PathBuf,
+
+        /// Show only a specific rule.
+        #[arg(short = 'r', long = "rule")]
+        rule_name: Option<String>,
     },
 
     /// Clean workflow outputs and temporary files.
@@ -256,17 +250,10 @@ enum Commands {
         force: bool,
     },
 
-    /// Inspect and manage workflow configuration.
-    Config {
+    /// Manage software environments.
+    Env {
         #[command(subcommand)]
-        action: ConfigAction,
-    },
-
-    /// Generate shell completions for oxo-flow.
-    Completions {
-        /// Shell to generate completions for.
-        #[arg(value_enum)]
-        shell: clap_complete::Shell,
+        action: EnvAction,
     },
 
     /// Reformat a .oxoflow file into canonical TOML form.
@@ -295,6 +282,69 @@ enum Commands {
         strict: bool,
     },
 
+    /// Mark workflow outputs as up-to-date without re-executing rules.
+    Touch {
+        /// Path to the .oxoflow workflow file.
+        #[arg(value_name = "WORKFLOW")]
+        workflow: PathBuf,
+
+        /// Specific rule(s) whose outputs to touch. If omitted, all outputs are touched.
+        #[arg(short = 'r', long = "rule")]
+        rules: Vec<String>,
+    },
+
+    /// Generate reports from workflow execution.
+    Report {
+        /// Path to the .oxoflow workflow file.
+        #[arg(value_name = "WORKFLOW")]
+        workflow: PathBuf,
+
+        /// Output format (html, json).
+        #[arg(short = 'f', long, default_value = "html")]
+        format: String,
+
+        /// Output file path.
+        #[arg(short = 'o', long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Package a workflow into a container image.
+    Package {
+        /// Path to the .oxoflow workflow file.
+        #[arg(value_name = "WORKFLOW")]
+        workflow: PathBuf,
+
+        /// Container format (docker, singularity).
+        #[arg(short = 'f', long, default_value = "docker")]
+        format: String,
+
+        /// Output file path.
+        #[arg(short = 'o', long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Start the web interface server.
+    Serve {
+        /// Host address to bind to.
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+
+        /// Port to listen on.
+        #[arg(short = 'p', long, default_value = "8080")]
+        port: u16,
+
+        /// Base path for mounting under a sub-path (e.g., "/oxo-flow").
+        #[arg(long, default_value = "/")]
+        base_path: String,
+    },
+
+    /// Generate shell completions for oxo-flow.
+    Completions {
+        /// Shell to generate completions for.
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
+
     /// Manage execution profiles (local, SLURM, PBS, SGE, LSF).
     Profile {
         #[command(subcommand)]
@@ -320,43 +370,6 @@ enum Commands {
     Cluster {
         #[command(subcommand)]
         action: ClusterAction,
-    },
-
-    /// Compare two .oxoflow workflow files and show differences.
-    Diff {
-        /// First workflow file.
-        #[arg(value_name = "WORKFLOW_A")]
-        workflow_a: PathBuf,
-
-        /// Second workflow file.
-        #[arg(value_name = "WORKFLOW_B")]
-        workflow_b: PathBuf,
-    },
-
-    /// Debug a workflow: show expanded commands after variable substitution.
-    ///
-    /// Displays each rule with its fully resolved shell command, resolved
-    /// environment, resource requirements, and wildcard patterns. Useful for
-    /// verifying that template variables are substituted correctly.
-    Debug {
-        /// Path to the .oxoflow workflow file.
-        #[arg(value_name = "WORKFLOW")]
-        workflow: PathBuf,
-
-        /// Show only a specific rule.
-        #[arg(short = 'r', long = "rule")]
-        rule_name: Option<String>,
-    },
-
-    /// Mark workflow outputs as up-to-date without re-executing rules.
-    Touch {
-        /// Path to the .oxoflow workflow file.
-        #[arg(value_name = "WORKFLOW")]
-        workflow: PathBuf,
-
-        /// Specific rule(s) whose outputs to touch. If omitted, all outputs are touched.
-        #[arg(short = 'r', long = "rule")]
-        rules: Vec<String>,
     },
 }
 
@@ -612,7 +625,23 @@ async fn main() -> Result<()> {
                             success_count += 1;
                             eprintln!("  {} {}", "✓".green().bold(), rule_name);
                         } else {
-                            eprintln!("  {} {} ({})", "⊘".yellow(), rule_name, record.status);
+                            fail_count += 1;
+                            eprintln!("  {} {} — {}", "✗".red().bold(), rule_name, record.status);
+                            if let Some(ref cmd) = record.command {
+                                eprintln!("\n  {} {}", "Command executed:".bold(), cmd.dimmed());
+                            }
+                            if let Some(ref stderr) = record.stderr
+                                && !stderr.is_empty()
+                            {
+                                eprintln!(
+                                    "\n  {} \n{}",
+                                    "Error output (stderr):".bold().red(),
+                                    stderr.red()
+                                );
+                            }
+                            if !keep_going {
+                                std::process::exit(1);
+                            }
                         }
                     }
                     Err(e) => {
@@ -675,9 +704,37 @@ async fn main() -> Result<()> {
         }
 
         Commands::Validate { workflow } => {
-            let config = WorkflowConfig::from_file(&workflow);
-            match config {
+            let config_res = WorkflowConfig::from_file(&workflow);
+            match config_res {
                 Ok(cfg) => {
+                    if cfg.rules.is_empty() {
+                        eprintln!("{} {} — 0 rules", "✓".green().bold(), workflow.display());
+                        eprintln!(
+                            "  {} Workflow has no rules. Add [[rules]] sections to define pipeline steps.",
+                            "⚠ Warning:".yellow().bold()
+                        );
+                        return Ok(());
+                    }
+
+                    // Check for missing input files
+                    let mut missing_inputs = Vec::new();
+                    for rule in &cfg.rules {
+                        for input in &rule.input {
+                            // Only check if it's not a wildcard path and doesn't exist
+                            if !input.contains('{')
+                                && !input.contains('}')
+                                && !Path::new(input).exists()
+                            {
+                                // Also check if it's an output of another rule
+                                let is_intermediate =
+                                    cfg.rules.iter().any(|r| r.output.contains(input));
+                                if !is_intermediate {
+                                    missing_inputs.push(input);
+                                }
+                            }
+                        }
+                    }
+
                     // Also validate DAG construction
                     match WorkflowDag::from_rules(&cfg.rules) {
                         Ok(dag) => {
@@ -688,6 +745,16 @@ async fn main() -> Result<()> {
                                 dag.node_count(),
                                 dag.edge_count()
                             );
+
+                            if !missing_inputs.is_empty() {
+                                eprintln!(
+                                    "\n  {} The following input files do not exist:",
+                                    "⚠ Warning:".yellow().bold()
+                                );
+                                for input in missing_inputs {
+                                    eprintln!("    - {}", input);
+                                }
+                            }
                         }
                         Err(e) => {
                             eprintln!(
@@ -928,7 +995,8 @@ version = "0.1.0"
 description = "A new oxo-flow pipeline"
 
 [config]
-greeting = "Hello from oxo-flow!"
+# Variables defined here can be used in shell commands as {{config.key}}
+sample_name = "example"
 
 [defaults]
 threads = 1
@@ -937,8 +1005,9 @@ memory = "1G"
 [[rules]]
 name = "hello_world"
 input = ["data/input.txt"]
-output = ["results/output.txt"]
-shell = "echo '{{config.greeting}}' > {{output[0]}} && cat {{input[0]}} >> {{output[0]}}"
+output = ["results/{{config.sample_name}}_output.txt"]
+# Double braces are used to reference wildcards or config variables
+shell = "cat {{input[0]}} > {{output[0]}} && echo 'Hello from oxo-flow!' >> {{output[0]}}"
 "#
             );
 
@@ -960,6 +1029,28 @@ shell = "echo '{{config.greeting}}' > {{output[0]}} && cat {{input[0]}} >> {{out
                 data_dir.join("input.txt"),
                 "This is your starting input data.\n",
             )?;
+
+            // Create starter environment file
+            let env_content = "\
+# Example Conda environment specification
+name: example-env
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies:
+  - fastp=0.23.4
+  - samtools=1.18
+";
+            std::fs::write(envs_dir.join("example.yaml"), env_content)?;
+
+            // Create starter script
+            let script_content = "\
+#!/bin/bash
+# Example helper script
+echo \"Running helper script for $1\"
+";
+            std::fs::write(scripts_dir.join("example.sh"), script_content)?;
 
             // Create a .gitignore with common bioinformatics patterns
             let gitignore_content = "\
@@ -1001,12 +1092,17 @@ Thumbs.db
                 project_dir.display()
             );
             eprintln!("  {}", workflow_path.display());
-            eprintln!("  {}/", envs_dir.display());
-            eprintln!("  {}/", scripts_dir.display());
+            eprintln!("  {}/example.yaml", envs_dir.display());
+            eprintln!("  {}/example.sh", scripts_dir.display());
             eprintln!("  {}", gitignore_path.display());
             eprintln!(
-                "\n  Edit {} to define your pipeline.",
-                workflow_path.display()
+                "\n  {} To run your first workflow:",
+                "Next steps:".bold().cyan()
+            );
+            eprintln!("    cd {}", project_dir.display());
+            eprintln!(
+                "    oxo-flow run {}",
+                workflow_path.file_name().unwrap().to_str().unwrap()
             );
         }
 

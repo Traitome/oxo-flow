@@ -101,9 +101,9 @@ fn cli_validate_valid_workflow() {
 }
 
 #[test]
-fn cli_validate_paired_tumor_normal() {
+fn cli_validate_paired_experiment_control() {
     oxo_flow_cmd()
-        .args(["validate", "examples/paired_tumor_normal.oxoflow"])
+        .args(["validate", "examples/paired_experiment_control.oxoflow"])
         .assert()
         .success();
 }
@@ -141,7 +141,7 @@ fn cli_dry_run_simple() {
 #[test]
 fn cli_dry_run_paired() {
     oxo_flow_cmd()
-        .args(["dry-run", "examples/paired_tumor_normal.oxoflow"])
+        .args(["dry-run", "examples/paired_experiment_control.oxoflow"])
         .assert()
         .success();
 }
@@ -390,7 +390,7 @@ fn venus_generate_and_validate() {
     let output_path = dir.path().join("pipeline.oxoflow");
 
     let config = r#"
-mode = "TumorOnly"
+mode = "ExperimentOnly"
 seq_type = "WGS"
 genome_build = "GRCh38"
 reference_fasta = "/ref/hg38.fa"
@@ -399,11 +399,11 @@ output_dir = "output"
 annotate = true
 report = true
 
-[[tumor_samples]]
-name = "TUMOR_01"
-r1_fastq = "raw/TUMOR_01_R1.fq.gz"
-r2_fastq = "raw/TUMOR_01_R2.fq.gz"
-is_tumor = true
+[[experiment_samples]]
+name = "EXP_01"
+r1_fastq = "raw/EXP_01_R1.fq.gz"
+r2_fastq = "raw/EXP_01_R2.fq.gz"
+is_experiment = true
 "#;
 
     fs::write(&config_path, config).unwrap();
