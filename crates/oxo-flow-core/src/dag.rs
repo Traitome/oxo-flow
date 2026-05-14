@@ -518,6 +518,124 @@ impl WorkflowDag {
         path.reverse();
         Ok(path)
     }
+
+    /// Generate an ASCII/terminal visualization of the DAG.
+    ///
+    /// Produces a simple, readable graph showing:
+    /// - Execution levels (parallel groups)
+    /// - Dependency arrows between rules
+    /// - Summary statistics
+    ///
+    /// This output is suitable for terminal display without requiring Graphviz.
+    #[must_use = "generating ASCII graph returns a Result that must be used"]
+    pub fn to_ascii(&self) -> Result<String> {
+        let groups = self.parallel_groups()?;
+        let metrics = self.metrics()?;
+
+        let mut output = String::new();
+
+        // Header with metrics
+        output.push_str(&format!(
+            "┌─────────────────────────────────────────────────────────────┐\n"
+        ));
+        output.push_str(&format!(
+            "│  Workflow DAG: {} rules, {} dependencies              │\n",
+            self.node_count(),
+            self.edge_count()
+        ));
+        output.push_str(&format!(
+            "│  Depth: {}, Width: {}, Critical path: {} steps           │\n",
+            metrics.max_depth,
+            metrics.max_width,
+            metrics.critical_path_length
+        ));
+        output.push_str(&format!(
+            "└─────────────────────────────────────────────────────────────┘\n\n"
+        ));
+
+        // Draw execution levels
+        for (level, rules) in groups.iter().enumerate() {
+            output.push_str(&format!("Level {} ", level));
+
+            // Indicate parallelism
+            if rules.len() > 1 {
+                output.push_str(&format!("(parallel: {} rules)\n", rules.len()));
+            } else {
+                output.push_str("(sequential)\n");
+            }
+
+            // Draw rules in this level
+            for (i, rule) in rules.iter().enumerate() {
+                if rules.len() > 1 && i == 0 {
+                    output.push_str("┌─── ");
+                } else if rules.len() > 1 && i == rules.len() - 1 {
+                    output.push_str("└─── ");
+                } else if rules.len() > 1 {
+                    output.push_str("│─── ");
+                } else {
+                    output.push_str("     ");
+                }
+
+                // Get dependencies for this rule
+                let deps = self.dependencies(rule)?;
+                if deps.is_empty() {
+                    output.push_str(&format!("{}\n", rule));
+                } else {
+                    output.push_str(&format!("{} [depends: {}]\n", rule, deps.join(", ")));
+                }
+            }
+
+            // Add arrow to next level if exists
+            if level < groups.len() - 1 {
+                output.push_str("     │\n");
+                output.push_str("     ▼\n");
+            }
+        }
+
+        // Footer with critical path
+        let critical = self.critical_path()?;
+        if critical.len() > 1 {
+            output.push_str(&format!(
+                "\nCritical path: {}\n",
+                critical.join(" → ")
+            ));
+        }
+
+        Ok(output)
+    }
+
+    /// Generate a compact ASCII graph showing the dependency tree.
+    ///
+    /// This produces a tree-like visualization focused on the dependency
+    /// structure, suitable for quick inspection in the terminal.
+    #[must_use = "generating compact ASCII graph returns a Result that must be used"]
+    pub fn to_ascii_tree(&self) -> Result<String> {
+        let order = self.execution_order()?;
+        let mut output = String::new();
+
+        output.push_str("Workflow Graph (terminal output)\n");
+        output.push_str(&format!("{} rules, {} edges\n\n", self.node_count(), self.edge_count()));
+
+        for (i, rule_name) in order.iter().enumerate() {
+            let deps = self.dependencies(rule_name)?;
+            let dep_str = if deps.is_empty() {
+                " ──●".to_string()
+            } else {
+                format!(" ──● [{}]", deps.join(", "))
+            };
+
+            // Draw position indicator
+            output.push_str(&format!("{:3}. {}{}\n", i + 1, rule_name, dep_str));
+
+            // Show downstream if exists
+            let downstream = self.dependents(rule_name)?;
+            if !downstream.is_empty() {
+                output.push_str(&format!("      ↓ {}\n", downstream.join(", ")));
+            }
+        }
+
+        Ok(output)
+    }
 }
 
 #[cfg(test)]
@@ -993,5 +1111,53 @@ mod tests {
             "error should mention multiple cycle nodes: {}",
             err_msg
         );
+    }
+
+    // ---- ASCII output tests --------------------------------------------------
+
+    #[test]
+    fn ascii_output_basic() {
+        let rules = vec![
+            make_rule("a", vec!["in.txt"], vec!["mid.txt"]),
+            make_rule("b", vec!["mid.txt"], vec!["out.txt"]),
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let ascii = dag.to_ascii().unwrap();
+        assert!(ascii.contains("Workflow DAG"));
+        assert!(ascii.contains("Level 0"));
+        assert!(ascii.contains("a"));
+        assert!(ascii.contains("b"));
+        assert!(ascii.contains("Critical path"));
+    }
+
+    #[test]
+    fn ascii_output_parallel() {
+        let rules = vec![
+            make_rule("source", vec!["raw.txt"], vec!["a.txt", "b.txt"]),
+            make_rule("left", vec!["a.txt"], vec!["left.txt"]),
+            make_rule("right", vec!["b.txt"], vec!["right.txt"]),
+            make_rule("merge", vec!["left.txt", "right.txt"], vec!["final.txt"]),
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let ascii = dag.to_ascii().unwrap();
+        assert!(ascii.contains("parallel"));
+        assert!(ascii.contains("left"));
+        assert!(ascii.contains("right"));
+        assert!(ascii.contains("merge"));
+    }
+
+    #[test]
+    fn ascii_tree_output() {
+        let rules = vec![
+            make_rule("a", vec!["in.txt"], vec!["mid.txt"]),
+            make_rule("b", vec!["mid.txt"], vec!["out.txt"]),
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let tree = dag.to_ascii_tree().unwrap();
+        assert!(tree.contains("Workflow Graph"));
+        assert!(tree.contains("1."));
+        assert!(tree.contains("2."));
+        assert!(tree.contains("a"));
+        assert!(tree.contains("b"));
     }
 }

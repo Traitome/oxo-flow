@@ -89,15 +89,19 @@ enum Commands {
         workflow: PathBuf,
     },
 
-    /// Output the workflow DAG in DOT format.
+    /// Output the workflow DAG for visualization.
     Graph {
         /// Path to the .oxoflow workflow file.
         #[arg(value_name = "WORKFLOW")]
         workflow: PathBuf,
 
-        /// Use enhanced DOT output with parallel group clustering.
-        #[arg(long)]
-        clustered: bool,
+        /// Output format: ascii (terminal), dot (Graphviz), dot-clustered (enhanced).
+        #[arg(short = 'f', long, default_value = "ascii")]
+        format: String,
+
+        /// Save output to a file (useful for dot/svg generation).
+        #[arg(short = 'o', long)]
+        output: Option<PathBuf>,
     },
 
     /// Generate reports from workflow execution.
@@ -599,7 +603,8 @@ async fn main() -> Result<()> {
 
         Commands::Graph {
             workflow,
-            clustered,
+            format,
+            output,
         } => {
             let config = WorkflowConfig::from_file(&workflow)
                 .with_context(|| format!("failed to parse {}", workflow.display()))?;
@@ -607,13 +612,37 @@ async fn main() -> Result<()> {
             let dag =
                 WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;
 
-            if clustered {
-                let dot = dag
+            let content = match format.as_str() {
+                "ascii" => dag.to_ascii().context("failed to generate ASCII graph")?,
+                "tree" => dag.to_ascii_tree().context("failed to generate ASCII tree")?,
+                "dot-clustered" => dag
                     .to_dot_clustered()
-                    .context("failed to generate clustered DOT")?;
-                println!("{}", dot);
-            } else {
-                println!("{}", dag.to_dot());
+                    .context("failed to generate clustered DOT")?,
+                _ => dag.to_dot(),
+            };
+
+            match output {
+                Some(path) => {
+                    std::fs::write(&path, &content)?;
+                    eprintln!(
+                        "{} Graph written to {} (format: {})",
+                        "✓".green().bold(),
+                        path.display(),
+                        format
+                    );
+                    // Hint for dot format
+                    if format.starts_with("dot") {
+                        eprintln!(
+                            "  {} Generate image: dot -Tpng {} > {}.png",
+                            "Tip:".dimmed(),
+                            path.display(),
+                            path.display()
+                        );
+                    }
+                }
+                None => {
+                    println!("{}", content);
+                }
             }
         }
 
@@ -1671,7 +1700,35 @@ mod tests {
     #[test]
     fn cli_parse_graph() {
         let cli = Cli::try_parse_from(["oxo-flow", "graph", "test.oxoflow"]).unwrap();
-        matches!(cli.command, Commands::Graph { .. });
+        match cli.command {
+            Commands::Graph { workflow, format, .. } => {
+                assert_eq!(workflow, PathBuf::from("test.oxoflow"));
+                assert_eq!(format, "ascii"); // default
+            }
+            _ => panic!("expected Graph command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_graph_dot() {
+        let cli = Cli::try_parse_from(["oxo-flow", "graph", "test.oxoflow", "-f", "dot"]).unwrap();
+        match cli.command {
+            Commands::Graph { format, .. } => {
+                assert_eq!(format, "dot");
+            }
+            _ => panic!("expected Graph command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_graph_with_output() {
+        let cli = Cli::try_parse_from(["oxo-flow", "graph", "test.oxoflow", "-o", "graph.dot"]).unwrap();
+        match cli.command {
+            Commands::Graph { output, .. } => {
+                assert_eq!(output, Some(PathBuf::from("graph.dot")));
+            }
+            _ => panic!("expected Graph command"),
+        }
     }
 
     #[test]
