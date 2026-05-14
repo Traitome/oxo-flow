@@ -7,7 +7,7 @@ Simulate execution without running any commands. Shows the execution plan, rule 
 ## Usage
 
 ```
-oxo-flow dry-run <WORKFLOW>
+oxo-flow dry-run [OPTIONS] [WORKFLOW]
 ```
 
 ---
@@ -16,7 +16,7 @@ oxo-flow dry-run <WORKFLOW>
 
 | Argument | Description |
 |---|---|
-| `<WORKFLOW>` | Path to the `.oxoflow` workflow file |
+| `[WORKFLOW]` | Path to the `.oxoflow` workflow file. **Optional** — if not specified, auto-discovery searches for: (1) `main.oxoflow` in current directory, (2) alphabetically first `*.oxoflow` file in current directory. |
 
 ---
 
@@ -24,16 +24,36 @@ oxo-flow dry-run <WORKFLOW>
 
 | Option | Short | Description |
 |---|---|---|
+| `--target` | `-t` | Preview only specific target rules and their dependencies (repeatable) |
 | `--verbose` | `-v` | Enable debug-level logging |
 
 ---
 
 ## Examples
 
-### Preview a workflow
+### Preview with auto-discovery
+
+```bash
+# Auto-discover workflow in current directory
+oxo-flow dry-run
+```
+
+### Preview a specific workflow
 
 ```bash
 oxo-flow dry-run pipeline.oxoflow
+```
+
+### Preview a specific target rule and its dependencies
+
+```bash
+oxo-flow dry-run pipeline.oxoflow -t align
+```
+
+### Preview multiple target rules
+
+```bash
+oxo-flow dry-run pipeline.oxoflow -t align -t sort_bam
 ```
 
 ### With verbose output
@@ -61,8 +81,12 @@ Dry-run: 3 rules would execute:
 
 ## Notes
 
+- The workflow file is optional; if not specified, auto-discovery searches for `main.oxoflow` first, then any `*.oxoflow` file alphabetically
+- If no `.oxoflow` file is found, an error message suggests running `oxo-flow init` to create one
 - No shell commands are executed — the dry-run is read-only
 - Shell command previews are truncated to 80 characters
 - The environment type (conda, docker, etc.) is shown for each rule
 - Thread and resource settings are displayed per rule
 - Use dry-run to verify your workflow before committing compute resources
+- When `--target` is specified, only the named rules and all rules they depend on
+  (transitively) are shown — downstream rules are excluded
