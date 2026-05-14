@@ -96,6 +96,10 @@ enum Commands {
         /// Path to the .oxoflow workflow file.
         #[arg(value_name = "WORKFLOW")]
         workflow: PathBuf,
+
+        /// Run specific target rules only (and their dependencies).
+        #[arg(short = 't', long)]
+        target: Vec<String>,
     },
 
     /// Validate a .oxoflow workflow file.
@@ -476,7 +480,7 @@ async fn main() -> Result<()> {
             jobs,
             keep_going,
             workdir,
-            target: _,
+            target,
             retry,
             timeout,
             max_threads,
@@ -491,7 +495,13 @@ async fn main() -> Result<()> {
             let dag =
                 WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;
 
-            let order = dag.execution_order()?;
+            let order = if target.is_empty() {
+                dag.execution_order()?
+            } else {
+                let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
+                dag.execution_order_for_targets(&target_refs)
+                    .with_context(|| "failed to resolve target rules")?
+            };
             eprintln!(
                 "{} {} rules in execution order",
                 "DAG:".bold().green(),
@@ -570,7 +580,7 @@ async fn main() -> Result<()> {
             );
         }
 
-        Commands::DryRun { workflow } => {
+        Commands::DryRun { workflow, target } => {
             print_banner();
             let config = WorkflowConfig::from_file(&workflow)
                 .with_context(|| format!("failed to parse {}", workflow.display()))?;
@@ -578,7 +588,13 @@ async fn main() -> Result<()> {
             let dag =
                 WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;
 
-            let order = dag.execution_order()?;
+            let order = if target.is_empty() {
+                dag.execution_order()?
+            } else {
+                let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
+                dag.execution_order_for_targets(&target_refs)
+                    .with_context(|| "failed to resolve target rules")?
+            };
             eprintln!(
                 "{} {} rules would execute:",
                 "Dry-run:".bold().yellow(),
@@ -2249,5 +2265,49 @@ mod tests {
         // Restore (no-op since we didn't change dir)
         drop(original);
         drop(dir);
+    }
+
+    #[test]
+    fn cli_parse_dry_run_with_target() {
+        let cli =
+            Cli::try_parse_from(["oxo-flow", "dry-run", "test.oxoflow", "-t", "align"]).unwrap();
+        match cli.command {
+            Commands::DryRun { workflow, target } => {
+                assert_eq!(workflow, PathBuf::from("test.oxoflow"));
+                assert_eq!(target, vec!["align"]);
+            }
+            _ => panic!("expected DryRun command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_dry_run_with_multiple_targets() {
+        let cli = Cli::try_parse_from([
+            "oxo-flow",
+            "dry-run",
+            "test.oxoflow",
+            "-t",
+            "align",
+            "-t",
+            "sort_bam",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::DryRun { target, .. } => {
+                assert_eq!(target, vec!["align", "sort_bam"]);
+            }
+            _ => panic!("expected DryRun command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_run_with_target() {
+        let cli = Cli::try_parse_from(["oxo-flow", "run", "test.oxoflow", "-t", "align"]).unwrap();
+        match cli.command {
+            Commands::Run { target, .. } => {
+                assert_eq!(target, vec!["align"]);
+            }
+            _ => panic!("expected Run command"),
+        }
     }
 }

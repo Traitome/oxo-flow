@@ -199,6 +199,63 @@ impl WorkflowDag {
             .collect())
     }
 
+    /// Returns rule names in topological order for a subset of target rules and
+    /// all of their transitive dependencies.
+    ///
+    /// This enables running only part of a workflow — similar to `make <target>`
+    /// or `just <recipe>`. The returned list always includes the specified
+    /// targets **and every upstream rule they transitively depend on**, in a
+    /// valid execution order.
+    ///
+    /// If `targets` is empty the full execution order is returned (same as
+    /// [`execution_order`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OxoFlowError::RuleNotFound`] if any target name does not exist
+    /// in the DAG.
+    #[must_use = "execution ordering returns a Result that must be used"]
+    pub fn execution_order_for_targets(&self, targets: &[&str]) -> Result<Vec<String>> {
+        if targets.is_empty() {
+            return self.execution_order();
+        }
+
+        // Validate all target names first so we give a clear error message.
+        for &target in targets {
+            if !self.name_to_node.contains_key(target) {
+                return Err(OxoFlowError::RuleNotFound {
+                    name: target.to_string(),
+                });
+            }
+        }
+
+        // Collect the set of nodes to include: each target plus all transitive
+        // upstream dependencies (follow incoming edges backwards).
+        let mut included: HashSet<NodeIndex> = HashSet::new();
+        let mut stack: Vec<NodeIndex> = targets.iter().map(|&t| self.name_to_node[t]).collect();
+
+        while let Some(node) = stack.pop() {
+            if included.insert(node) {
+                for dep in self
+                    .graph
+                    .neighbors_directed(node, petgraph::Direction::Incoming)
+                {
+                    if !included.contains(&dep) {
+                        stack.push(dep);
+                    }
+                }
+            }
+        }
+
+        // Filter the full topological order down to the included subset.
+        Ok(self
+            .topological_order()?
+            .into_iter()
+            .filter(|n| included.contains(&self.name_to_node[&n.name]))
+            .map(|n| n.name.clone())
+            .collect())
+    }
+
     /// Returns the direct dependencies (upstream rules) for a given rule.
     #[must_use = "querying dependencies returns a Result that must be used"]
     pub fn dependencies(&self, rule_name: &str) -> Result<Vec<String>> {
@@ -795,6 +852,80 @@ mod tests {
         assert_eq!(dag.dependents("a").unwrap(), vec!["b"]);
         assert!(dag.dependencies("a").unwrap().is_empty());
         assert!(dag.dependents("b").unwrap().is_empty());
+    }
+
+    #[test]
+    fn execution_order_for_targets_leaf_only() {
+        // a -> b -> c; targeting "c" should return all three.
+        let rules = vec![
+            make_rule("a", vec!["in.txt"], vec!["mid1.txt"]),
+            make_rule("b", vec!["mid1.txt"], vec!["mid2.txt"]),
+            make_rule("c", vec!["mid2.txt"], vec!["out.txt"]),
+        ];
+
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let order = dag.execution_order_for_targets(&["c"]).unwrap();
+        assert_eq!(order, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn execution_order_for_targets_mid_rule() {
+        // a -> b -> c; targeting "b" should return only ["a", "b"].
+        let rules = vec![
+            make_rule("a", vec!["in.txt"], vec!["mid1.txt"]),
+            make_rule("b", vec!["mid1.txt"], vec!["mid2.txt"]),
+            make_rule("c", vec!["mid2.txt"], vec!["out.txt"]),
+        ];
+
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let order = dag.execution_order_for_targets(&["b"]).unwrap();
+        assert_eq!(order, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn execution_order_for_targets_multiple() {
+        // Diamond: source -> left, source -> right -> merge
+        // Targeting ["left", "right"] should include source + left + right (not merge).
+        let rules = vec![
+            make_rule("source", vec!["raw.txt"], vec!["a.txt", "b.txt"]),
+            make_rule("left", vec!["a.txt"], vec!["left.txt"]),
+            make_rule("right", vec!["b.txt"], vec!["right.txt"]),
+            make_rule("merge", vec!["left.txt", "right.txt"], vec!["final.txt"]),
+        ];
+
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let order = dag.execution_order_for_targets(&["left", "right"]).unwrap();
+        assert!(order.contains(&"source".to_string()));
+        assert!(order.contains(&"left".to_string()));
+        assert!(order.contains(&"right".to_string()));
+        assert!(!order.contains(&"merge".to_string()));
+        // source must come before left and right
+        let source_pos = order.iter().position(|s| s == "source").unwrap();
+        let left_pos = order.iter().position(|s| s == "left").unwrap();
+        let right_pos = order.iter().position(|s| s == "right").unwrap();
+        assert!(source_pos < left_pos);
+        assert!(source_pos < right_pos);
+    }
+
+    #[test]
+    fn execution_order_for_targets_empty_returns_all() {
+        let rules = vec![
+            make_rule("a", vec!["in.txt"], vec!["mid.txt"]),
+            make_rule("b", vec!["mid.txt"], vec!["out.txt"]),
+        ];
+
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let full = dag.execution_order().unwrap();
+        let targeted = dag.execution_order_for_targets(&[]).unwrap();
+        assert_eq!(full, targeted);
+    }
+
+    #[test]
+    fn execution_order_for_targets_unknown_target() {
+        let rules = vec![make_rule("a", vec![], vec!["out.txt"])];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let result = dag.execution_order_for_targets(&["nonexistent"]);
+        assert!(result.is_err());
     }
 
     #[test]

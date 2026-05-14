@@ -1260,21 +1260,20 @@ async fn list_workflows(
 
     let mut workflows = Vec::new();
 
-    if user_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(user_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|s| s.to_str()) == Some("oxoflow") {
-                    if let Ok(content) = std::fs::read_to_string(&path) {
-                        if let Ok(config) = oxo_flow_core::WorkflowConfig::parse(&content) {
-                            workflows.push(WorkflowSummary {
-                                name: config.workflow.name.clone(),
-                                version: config.workflow.version.clone(),
-                                rules_count: config.rules.len(),
-                            });
-                        }
-                    }
-                }
+    if user_dir.exists()
+        && let Ok(entries) = std::fs::read_dir(user_dir)
+    {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("oxoflow")
+                && let Ok(content) = std::fs::read_to_string(&path)
+                && let Ok(config) = oxo_flow_core::WorkflowConfig::parse(&content)
+            {
+                workflows.push(WorkflowSummary {
+                    name: config.workflow.name.clone(),
+                    version: config.workflow.version.clone(),
+                    rules_count: config.rules.len(),
+                });
             }
         }
     }
