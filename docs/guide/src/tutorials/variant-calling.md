@@ -6,7 +6,7 @@ This tutorial builds a complete somatic variant calling pipeline using oxo-flow 
 
 ## Overview
 
-The pipeline follows a standard tumor–normal variant calling workflow:
+The pipeline follows a standard experiment-control variant calling workflow:
 
 ```mermaid
 graph TD
@@ -75,7 +75,7 @@ dependencies:
 [workflow]
 name = "variant-calling"
 version = "1.0.0"
-description = "Somatic variant calling pipeline (tumor-normal)"
+description = "Somatic variant calling pipeline (experiment-control)"
 author = "Genomics Core"
 
 [config]

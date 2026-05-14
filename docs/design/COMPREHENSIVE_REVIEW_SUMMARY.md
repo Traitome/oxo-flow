@@ -10,7 +10,7 @@
 
 oxo-flow v0.3.1 has been comprehensively reviewed from 20 different expert perspectives. The core engine is robust with excellent TOML workflow format, comprehensive environment management, and DAG-based execution. Recent fixes have resolved critical implementation gaps for resource enforcement and environment setup.
 
-**Overall Assessment**: Production-ready for basic WGS/RNA-seq workflows with some caveats. Major gaps remain for tumor-normal paired workflows, single-cell pipelines, and advanced production features.
+**Overall Assessment**: Production-ready for basic WGS/RNA-seq workflows with some caveats. Major gaps remain for experiment-control paired workflows, single-cell pipelines, and advanced production features.
 
 ---
 
@@ -24,7 +24,7 @@ oxo-flow v0.3.1 has been comprehensively reviewed from 20 different expert persp
 | Cluster Wrapping | Critical | ✅ DONE | `generate_submit_script_with_env()` wraps through EnvironmentResolver |
 | CLI Options | High | ✅ DONE | Added `--max-threads`, `--max-memory`, `--skip-env-setup`, `--cache-dir` |
 | Documentation | High | ✅ DONE | Updated run.md, cluster.md, environment-system.md, architecture.md |
-| **WC-01** | Critical | ✅ DONE | `[[pairs]]` section + automatic `{tumor}`/`{normal}`/`{pair_id}` expansion |
+| **WC-01** | Critical | ✅ DONE | `[[pairs]]` section + automatic `{experiment}`/`{control}`/`{pair_id}` expansion |
 | **WC-02** | Critical | ✅ DONE | `[[sample_groups]]` section + automatic `{group}`/`{sample}` expansion |
 | **WF-01** | High | ✅ DONE | `when` expression field on rules with full comparison/logical operator support |
 
@@ -38,7 +38,7 @@ oxo-flow v0.3.1 has been comprehensively reviewed from 20 different expert persp
 |----|----------|-------|--------|--------|
 | **RES-01** | HIGH | Container memory not enforced | Docker/Singularity lack --memory limits | Low |
 | **ENV-01** | HIGH | No HPC module system support | Lmod/environment modules not supported | Medium |
-| **GAL-05** | CRITICAL | paired_tumor_normal.oxoflow hardcoded | Example workflow not production-ready | Medium |
+| **GAL-05** | CRITICAL | paired_experiment_control.oxoflow hardcoded | Example workflow not production-ready | Medium |
 
 ### Web/API Gaps
 
@@ -66,7 +66,7 @@ oxo-flow v0.3.1 has been comprehensively reviewed from 20 different expert persp
 | Task | Files | Priority |
 |------|-------|----------|
 | Implement sample sheet CSV/TSV parsing | `config.rs`, `wildcard.rs` | P0 |
-| Add paired sample groups (tumor-normal) | `wildcard.rs`, `executor.rs` | P0 |
+| Add paired sample groups (experiment-control) | `wildcard.rs`, `executor.rs` | P0 |
 | Container memory limits enforcement | `environment.rs` (docker_wrap, singularity_wrap) | P0 |
 | Add `when` conditional execution | `rule.rs`, `executor.rs` | P1 |
 
@@ -95,7 +95,7 @@ oxo-flow v0.3.1 has been comprehensively reviewed from 20 different expert persp
 | Priority | Workflow | Use Case | Current Gap |
 |----------|----------|----------|-------------|
 | P0 | Single-cell RNA-seq (Cellranger) | Ubiquitous in research | Missing entirely |
-| P0 | Tumor-normal somatic (Mutect2) | Clinical standard | Hardcoded samples |
+| P0 | Experiment-control somatic (Mutect2) | Clinical standard | Hardcoded samples |
 | P1 | ChIP-seq (MACS2) | Epigenetics core | Missing |
 | P1 | ATAC-seq | Chromatin accessibility | Missing |
 | P1 | 16S microbiome (QIIME2) | Microbiology core | Missing |
@@ -109,7 +109,7 @@ oxo-flow v0.3.1 has been comprehensively reviewed from 20 different expert persp
 | Feature | oxo-flow | Snakemake | Nextflow | WDL |
 |---------|----------|-----------|----------|-----|
 | TOML format | ✅ Excellent | Python DSL | DSL2 | Custom |
-| Tumor-normal pairing | ❌ Missing | ✅ Excellent | ✅ Excellent | ✅ Excellent |
+| Experiment-control pairing | ❌ Missing | ✅ Excellent | ✅ Excellent | ✅ Excellent |
 | Conditional execution | ❌ Missing | ✅ Excellent | ✅ Excellent | ✅ Excellent |
 | Sample sheet parsing | ❌ Missing | ✅ Good | ✅ Excellent | ✅ Good |
 | Environment isolation | ✅ Excellent | ✅ Good | ✅ Excellent | ✅ Good |
@@ -122,7 +122,7 @@ oxo-flow v0.3.1 has been comprehensively reviewed from 20 different expert persp
 ## Persona-Specific Priority Matrix
 
 ### Bioinformatics Expert (生信专家)
-- **Must**: Tumor-normal pairing, per-chromosome scatter
+- **Must**: Experiment-control pairing, per-chromosome scatter
 - **Should**: Conditional execution, subworkflow imports
 - **Nice**: Resource scaling by input size
 
@@ -160,7 +160,7 @@ oxo-flow v0.3.1 has been comprehensively reviewed from 20 different expert persp
 
 **Missing test categories**:
 - GPU workflow tests
-- Tumor-normal workflow tests
+- Experiment-control workflow tests
 - Sample sheet parsing tests
 - Web authentication tests
 - Registry integration tests
@@ -186,7 +186,7 @@ oxo-flow v0.3.1 has been comprehensively reviewed from 20 different expert persp
 ## Next Implementation Priorities
 
 ### Week 1: Critical Workflow Features
-1. Sample sheet CSV parsing with tumor-normal groups
+1. Sample sheet CSV parsing with experiment-control groups
 2. Container memory limits in wrap_command()
 3. Conditional execution syntax
 
@@ -202,19 +202,19 @@ oxo-flow v0.3.1 has been comprehensively reviewed from 20 different expert persp
 
 ### Week 4: Gallery Workflows
 1. Single-cell RNA-seq example
-2. Tumor-normal somatic variant calling
+2. Experiment-control somatic variant calling
 3. Update existing workflows for new features
 
 ---
 
 ## Conclusion
 
-oxo-flow has excellent architectural foundations and recent fixes have resolved critical implementation gaps. The TOML workflow format is cleaner than existing frameworks. However, **tumor-normal paired sample support is the single most critical missing feature** for production bioinformatics use.
+oxo-flow has excellent architectural foundations and recent fixes have resolved critical implementation gaps. The TOML workflow format is cleaner than existing frameworks. However, **experiment-control paired sample support is the single most critical missing feature** for production bioinformatics use.
 
 **Recommended path to production readiness**:
 1. ✅ Resource enforcement (DONE)
 2. ✅ Environment setup (DONE)
-3. 🔄 Sample sheet + tumor-normal pairing (IN PROGRESS - highest priority)
+3. 🔄 Sample sheet + experiment-control pairing (IN PROGRESS - highest priority)
 4. ⏳ Container registry integration
 5. ⏳ Web API production features
 

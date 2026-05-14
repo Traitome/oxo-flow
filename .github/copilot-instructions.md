@@ -56,7 +56,7 @@ oxo-flow/                         # Cargo workspace root
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       └── lib.rs            # Web server with REST API
-│   └── venus/                    # Tumor variant calling pipeline built on oxo-flow
+│   └── venus/                    # Clinical variant calling pipeline built on oxo-flow
 │       ├── Cargo.toml
 │       └── src/
 │           └── lib.rs            # Venus pipeline definitions

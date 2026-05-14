@@ -47,7 +47,7 @@ when = "config.dry_run == false"
 ### File existence
 
 ```toml
-when = 'file_exists("panel_of_normals.vcf.gz")'
+when = 'file_exists("panel_of_controls.vcf.gz")'
 ```
 
 ### Logical operators

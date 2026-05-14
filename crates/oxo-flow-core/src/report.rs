@@ -598,7 +598,7 @@ pub struct SampleInfo {
     pub sample_id: String,
     /// Patient identifier (anonymized).
     pub patient_id: Option<String>,
-    /// Sample type (e.g., "Tumor", "Normal", "Blood").
+    /// Sample type (e.g., "Experiment", "Control", "Tumor", "Normal", "Blood").
     pub sample_type: String,
     /// Collection date.
     pub collection_date: Option<String>,
@@ -1048,7 +1048,7 @@ mod tests {
         let info = SampleInfo {
             sample_id: "S001".to_string(),
             patient_id: Some("P001".to_string()),
-            sample_type: "Tumor".to_string(),
+            sample_type: "Experiment".to_string(),
             collection_date: Some("2024-01-15".to_string()),
             platform: Some("Illumina NovaSeq 6000".to_string()),
             seq_type: Some("WGS".to_string()),
@@ -1058,7 +1058,7 @@ mod tests {
         assert_eq!(section.id, "sample-info");
         if let ReportContent::KeyValue { pairs } = &section.content {
             assert_eq!(pairs[0], ("Sample ID".to_string(), "S001".to_string()));
-            assert_eq!(pairs[1], ("Sample Type".to_string(), "Tumor".to_string()));
+            assert_eq!(pairs[1], ("Sample Type".to_string(), "Experiment".to_string()));
             assert!(pairs.iter().any(|(k, v)| k == "Patient ID" && v == "P001"));
             assert!(
                 pairs
@@ -1076,14 +1076,14 @@ mod tests {
         let info = SampleInfo {
             sample_id: "S001".to_string(),
             patient_id: Some("P001".to_string()),
-            sample_type: "Tumor".to_string(),
+            sample_type: "Experiment".to_string(),
             collection_date: None,
             platform: None,
             seq_type: None,
         };
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains("\"sample_id\":\"S001\""));
-        assert!(json.contains("\"sample_type\":\"Tumor\""));
+        assert!(json.contains("\"sample_type\":\"Experiment\""));
         let deser: SampleInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(deser.sample_id, "S001");
         assert_eq!(deser.patient_id.as_deref(), Some("P001"));

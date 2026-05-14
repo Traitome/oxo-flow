@@ -40,7 +40,7 @@ oxo-flow/
 │   ├── oxo-flow-core/   # Core library: DAG, executor, environments, reporting
 │   ├── oxo-flow-cli/    # CLI binary (oxo-flow command)
 │   ├── oxo-flow-web/    # Web REST API (axum-based)
-│   └── venus/           # Venus tumor variant calling pipeline
+│   └── venus/           # Venus clinical variant calling pipeline
 ├── pipelines/           # Pipeline definitions (.oxoflow files)
 ├── examples/            # Example workflows
 ├── tests/               # Integration tests

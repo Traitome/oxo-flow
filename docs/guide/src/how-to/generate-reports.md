@@ -110,7 +110,7 @@ Example output structure:
 
 ## Clinical Reports
 
-The Venus pipeline uses the reporting system to generate clinical-grade reports for tumor variant calling results. See the [Venus Pipeline](../reference/venus-pipeline.md) reference for details.
+The Venus pipeline uses the reporting system to generate clinical-grade reports for experiment variant calling results. See the [Venus Pipeline](../reference/venus-pipeline.md) reference for details.
 
 ---
 
