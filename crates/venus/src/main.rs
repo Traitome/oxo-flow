@@ -100,7 +100,7 @@ fn cmd_validate(args: &[String]) -> Result<()> {
     let config: oxo_flow_venus::VenusConfig =
         toml::from_str(&content).context("Failed to parse Venus configuration")?;
 
-    let total_samples = config.tumor_samples.len() + config.normal_samples.len();
+    let total_samples = config.experiment_samples.len() + config.control_samples.len();
 
     match config.validate() {
         Ok(()) => {

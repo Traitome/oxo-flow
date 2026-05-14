@@ -873,17 +873,17 @@ mod tests {
     #[test]
     fn validate_wes_needs_bed() {
         let config = VenusConfig {
-            mode: AnalysisMode::TumorOnly,
+            mode: AnalysisMode::ExperimentOnly,
             seq_type: SeqType::WES,
             genome_build: GenomeBuild::GRCh38,
             reference_fasta: "/ref/hg38.fa".to_string(),
-            tumor_samples: vec![Sample {
-                name: "T".to_string(),
-                r1_fastq: "t_R1.fq.gz".to_string(),
+            experiment_samples: vec![Sample {
+                name: "EXP".to_string(),
+                r1_fastq: "exp_R1.fq.gz".to_string(),
                 r2_fastq: None,
-                is_tumor: true,
+                is_experiment: true,
             }],
-            normal_samples: vec![],
+            control_samples: vec![],
             known_sites: None,
             target_bed: None,
             threads: 8,
@@ -899,21 +899,21 @@ mod tests {
     #[test]
     fn all_samples() {
         let config = VenusConfig {
-            mode: AnalysisMode::TumorNormal,
+            mode: AnalysisMode::ExperimentControl,
             seq_type: SeqType::WGS,
             genome_build: GenomeBuild::GRCh38,
             reference_fasta: "/ref/hg38.fa".to_string(),
-            tumor_samples: vec![Sample {
-                name: "T".to_string(),
-                r1_fastq: "t.fq.gz".to_string(),
+            experiment_samples: vec![Sample {
+                name: "EXP".to_string(),
+                r1_fastq: "exp.fq.gz".to_string(),
                 r2_fastq: None,
-                is_tumor: true,
+                is_experiment: true,
             }],
-            normal_samples: vec![Sample {
-                name: "N".to_string(),
-                r1_fastq: "n.fq.gz".to_string(),
+            control_samples: vec![Sample {
+                name: "CTRL".to_string(),
+                r1_fastq: "ctrl.fq.gz".to_string(),
                 r2_fastq: None,
-                is_tumor: false,
+                is_experiment: false,
             }],
             known_sites: None,
             target_bed: None,
