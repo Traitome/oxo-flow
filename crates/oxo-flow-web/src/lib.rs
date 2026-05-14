@@ -89,7 +89,7 @@ textarea:focus { border-color: var(--accent); }
 .btn-primary { background: var(--accent); color: white; }
 .btn-danger { background: var(--error); color: white; }
 .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
-.actions { display: flex; gap: 0.5rem; margin-top: 1rem; }
+.actions { display: flex; gap: 0.5rem; margin-top: 1rem; flex-wrap: wrap; }
 .output { background: var(--bg); border: 1px solid var(--border); border-radius: 0.375rem; padding: 0.75rem; margin-top: 1rem; font-family: monospace; font-size: 0.8rem; white-space: pre-wrap; max-height: 500px; overflow-y: auto; }
 .badge { padding: 0.2rem 0.5rem; border-radius: 0.25rem; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; }
 .status-running { background: var(--warning); color: #000; }
@@ -100,13 +100,23 @@ table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
 th, td { text-align: left; padding: 0.75rem; border-bottom: 1px solid var(--border); }
 th { color: var(--text-secondary); font-size: 0.75rem; text-transform: uppercase; font-weight: 600; }
 tr:hover { background: rgba(0,0,0,0.02); }
-.hidden { display: none; }
 #status-bar { padding: 0.4rem 1.5rem; font-size: 0.75rem; color: var(--text-secondary); border-top: 1px solid var(--border); background: var(--surface); display: flex; justify-content: space-between; }
-.log-container { font-family: 'SF Mono', monospace; font-size: 0.8rem; background: #1e293b; color: #e2e8f0; padding: 1rem; border-radius: 0.375rem; overflow-y: auto; height: 500px; line-height: 1.5; }
-.modal { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 100; }
-.modal-content { background: var(--surface); border: 1px solid var(--border); width: 90%; max-width: 1000px; border-radius: 0.5rem; display: flex; flex-direction: column; max-height: 90vh; }
+.log-container { font-family: 'SF Mono', monospace; font-size: 0.8rem; background: #1e293b; color: #e2e8f0; padding: 1rem; border-radius: 0.375rem; overflow-y: auto; height: 400px; line-height: 1.5; white-space: pre-wrap; }
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,0.5); align-items: center; justify-content: center; z-index: 100; }
+.modal.hidden { display: none !important; }
+.modal:not(.hidden) { display: flex; }
+.modal-content { background: var(--surface); border: 1px solid var(--border); width: 90%; max-width: 1000px; border-radius: 0.5rem; display: flex; flex-direction: column; max-height: 90vh; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25); }
 .modal-header { padding: 1rem; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+.modal-header h3 { font-size: 1rem; font-weight: 600; }
 .modal-body { padding: 1rem; overflow-y: auto; }
+.toast { position: fixed; bottom: 80px; right: 20px; padding: 1rem 1.5rem; border-radius: 0.5rem; color: white; font-size: 0.875rem; z-index: 200; animation: slideIn 0.3s ease; }
+.toast-success { background: var(--success); }
+.toast-error { background: var(--error); }
+.toast-warning { background: var(--warning); color: #000; }
+@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+.loading { opacity: 0.6; pointer-events: none; }
+.spinner { display: inline-block; width: 1rem; height: 1rem; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -146,12 +156,12 @@ tr:hover { background: rgba(0,0,0,0.02); }
         <div class="value" id="sys-status-val" style="color:var(--success)">Healthy</div>
       </div>
     </div>
-    
+
     <div class="card">
       <h2>Recent Executions</h2>
       <table id="recent-runs-table">
         <thead><tr><th>Run ID</th><th>Workflow</th><th>Status</th><th>Started</th><th>Actions</th></tr></thead>
-        <tbody><tr><td colspan="5" style="text-align:center">Loading history...</td></tr></tbody>
+        <tbody><tr><td colspan="5" style="text-align:center;color:var(--text-secondary)">Loading...</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -162,15 +172,20 @@ tr:hover { background: rgba(0,0,0,0.02); }
       <div style="display:flex; justify-content: space-between; align-items:center; margin-bottom:1rem">
         <h2>Workflow Composer</h2>
         <div id="editor-actions">
-           <button class="btn btn-outline" onclick="loadTemplates()">Load Templates</button>
+           <button class="btn btn-outline" onclick="loadTemplates()">📋 Templates</button>
         </div>
       </div>
-      <textarea id="editor-toml" spellcheck="false" placeholder="# Define your .oxoflow here..."></textarea>
+      <textarea id="editor-toml" spellcheck="false" placeholder="[workflow]
+name = \"my-pipeline\" version = \"1.0.0\" [[rules]]
+name = \"step1\" input = [\"data/input.txt\"]
+output = [\"data/output.txt\"]
+shell = \"cat {input} > {output}\" threads = 4"></textarea>
       <div class="actions">
-        <button class="btn btn-primary" onclick="runWorkflow()">🚀 Launch Run</button>
-        <button class="btn btn-outline" onclick="validateEditor()">Validate</button>
-        <button class="btn btn-outline" onclick="formatEditor()">Format</button>
-        <button class="btn btn-outline" onclick="lintEditor()">Lint</button>
+        <button class="btn btn-primary" onclick="runWorkflow()">🚀 Launch</button>
+        <button class="btn btn-outline" onclick="validateEditor()">✓ Validate</button>
+        <button class="btn btn-outline" onclick="formatEditor()">↺ Format</button>
+        <button class="btn btn-outline" onclick="lintEditor()">🔍 Lint</button>
+        <button class="btn btn-outline" onclick="showDag()">📊 DAG</button>
       </div>
       <div id="editor-output" class="output hidden"></div>
     </div>
@@ -181,8 +196,8 @@ tr:hover { background: rgba(0,0,0,0.02); }
     <div class="card">
       <h2>All Executions</h2>
       <table id="all-runs-table">
-        <thead><tr><th>ID</th><th>Workflow</th><th>Status</th><th>Duration</th><th>Started</th><th>Logs</th></tr></thead>
-        <tbody></tbody>
+        <thead><tr><th>ID</th><th>Workflow</th><th>Status</th><th>Started</th><th>Finished</th><th>Logs</th></tr></thead>
+        <tbody><tr><td colspan="6" style="text-align:center;color:var(--text-secondary)">Loading...</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -190,8 +205,29 @@ tr:hover { background: rgba(0,0,0,0.02); }
   <!-- System -->
   <div id="view-system" class="hidden">
     <div class="card">
-      <h2>System Metadata</h2>
-      <div id="sys-meta-json" class="output"></div>
+      <h2>System Information</h2>
+      <div id="sys-meta-json" class="output">Loading...</div>
+    </div>
+    <div class="card">
+      <h2>API Endpoints</h2>
+      <table>
+        <thead><tr><th>Endpoint</th><th>Method</th><th>Description</th></tr></thead>
+        <tbody>
+        <tr><td>/api/health</td><td>GET</td><td>Health check</td></tr>
+        <tr><td>/api/version</td><td>GET</td><td>Version info</td></tr>
+        <tr><td>/api/metrics</td><td>GET</td><td>Runtime metrics</td></tr>
+        <tr><td>/api/system</td><td>GET</td><td>System metadata</td></tr>
+        <tr><td>/api/workflows/validate</td><td>POST</td><td>Validate workflow TOML</td></tr>
+        <tr><td>/api/workflows/parse</td><td>POST</td><td>Parse workflow details</td></tr>
+        <tr><td>/api/workflows/dag</td><td>POST</td><td>Generate DAG visualization</td></tr>
+        <tr><td>/api/workflows/dry-run</td><td>POST</td><td>Simulate execution</td></tr>
+        <tr><td>/api/workflows/run</td><td>POST</td><td>Execute workflow</td></tr>
+        <tr><td>/api/workflows/format</td><td>POST</td><td>Format TOML</td></tr>
+        <tr><td>/api/workflows/lint</td><td>POST</td><td>Lint workflow</td></tr>
+        <tr><td>/api/runs</td><td>GET</td><td>List all runs</td></tr>
+        <tr><td>/api/auth/login</td><td>POST</td><td>User login</td></tr>
+        </tbody>
+      </table>
     </div>
   </div>
 </div>
@@ -201,16 +237,19 @@ tr:hover { background: rgba(0,0,0,0.02); }
   <div class="modal-content">
     <div class="modal-header">
       <h3 id="log-title">Execution Logs</h3>
-      <button class="btn btn-danger" style="padding:0.2rem 0.5rem" onclick="closeLogs()">Close</button>
+      <button class="btn btn-danger" style="padding:0.25rem 0.75rem" onclick="closeLogs()">✕ Close</button>
     </div>
     <div class="modal-body">
-      <div id="log-output" class="log-container"></div>
+      <div id="log-output" class="log-container">No logs available</div>
     </div>
   </div>
 </div>
 
+<!-- Toast Container -->
+<div id="toast-container"></div>
+
 <div id="status-bar">
-  <div id="conn-status">Connected to oxo-flow engine</div>
+  <div id="conn-status">● Connected</div>
   <div id="uptime-display">Uptime: 0s</div>
 </div>
 
@@ -218,20 +257,39 @@ tr:hover { background: rgba(0,0,0,0.02); }
 let authToken = null;
 let metricsTimer = null;
 let currentRunId = null;
+let isConnected = true;
 
-async function api(path, method='GET', body=null) {
+// Toast notification system
+function showToast(message, type='success') {
+    const container = document.getElementById('toast-container');
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+    container.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
+}
+
+// API helper with error handling
+async function api(path, method='GET', body=null, showError=true) {
     const headers = {'Content-Type': 'application/json'};
     if(authToken) headers['Authorization'] = `Bearer ${authToken}`;
     const options = { method, headers };
     if(body) options.body = JSON.stringify(body);
-    const res = await fetch(path, options);
-    if(!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Request failed');
+    try {
+        const res = await fetch(path, options);
+        if(!res.ok) {
+            const err = await res.json().catch(() => ({error: 'Request failed'}));
+            if(showError && res.status !== 401) showToast(err.error || 'Request failed', 'error');
+            throw new Error(err.error || 'Request failed');
+        }
+        return res.json();
+    } catch(e) {
+        if(showError) showToast(e.message, 'error');
+        throw e;
     }
-    return res.json();
 }
 
+// View switching
 function showView(name, btn) {
     document.querySelectorAll('[id^="view-"]').forEach(el => el.classList.add('hidden'));
     document.getElementById(`view-${name}`).classList.remove('hidden');
@@ -241,91 +299,276 @@ function showView(name, btn) {
     if(name === 'system') refreshSystem();
 }
 
+// Metrics refresh
 async function refreshMetrics() {
     try {
-        const data = await api('/api/metrics');
+        const data = await api('/api/metrics', 'GET', null, false);
         document.getElementById('cpu-val').textContent = `${data.host.cpu_usage_percent.toFixed(1)}%`;
-        document.getElementById('cpu-bar').style.width = `${data.host.cpu_usage_percent}%`;
+        document.getElementById('cpu-bar').style.width = `${Math.min(data.host.cpu_usage_percent, 100)}%`;
         document.getElementById('mem-val').textContent = `${data.host.used_memory_mb} / ${data.host.total_memory_mb} MB`;
-        const memPer = (data.host.used_memory_mb / data.host.total_memory_mb) * 100;
+        const memPer = Math.min((data.host.used_memory_mb / data.host.total_memory_mb) * 100, 100);
         document.getElementById('mem-bar').style.width = `${memPer}%`;
-        document.getElementById('active-runs-val').textContent = data.active_workflows;
+        document.getElementById('active-runs-val').textContent = data.active_workflows || 0;
         document.getElementById('uptime-display').textContent = `Uptime: ${Math.floor(data.uptime_secs)}s`;
-    } catch(e) { console.error(e); }
+        isConnected = true;
+        document.getElementById('conn-status').innerHTML = '● Connected';
+        document.getElementById('conn-status').style.color = 'var(--success)';
+    } catch(e) {
+        isConnected = false;
+        document.getElementById('conn-status').innerHTML = '● Disconnected';
+        document.getElementById('conn-status').style.color = 'var(--error)';
+    }
 }
 
+// Runs list refresh
 async function refreshRuns() {
+    const tbody1 = document.getElementById('recent-runs-table').querySelector('tbody');
+    const tbody2 = document.getElementById('all-runs-table').querySelector('tbody');
     try {
-        const runs = await api('/api/runs');
-        const updateTable = (id) => {
-            const table = document.getElementById(id).getElementsByTagName('tbody')[0];
-            table.innerHTML = runs.length ? '' : '<tr><td colspan="5" style="text-align:center">No runs found</td></tr>';
-            runs.forEach(r => {
-                const row = table.insertRow();
+        const runs = await api('/api/runs', 'GET', null, false);
+        const renderTable = (tbody, max=null) => {
+            tbody.innerHTML = '';
+            const displayRuns = max ? runs.slice(0, max) : runs;
+            if(displayRuns.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-secondary)">No executions yet</td></tr>';
+                return;
+            }
+            displayRuns.forEach(r => {
+                const row = tbody.insertRow();
+                const started = r.started_at ? new Date(r.started_at).toLocaleString() : '-';
+                const finished = r.finished_at ? new Date(r.finished_at).toLocaleString() : '-';
                 row.innerHTML = `
-                    <td><code>${r.id.substring(0,8)}</code></td>
-                    <td>${r.workflow_name}</td>
+                    <td><code style="font-size:0.8rem">${r.id.substring(0,8)}...</code></td>
+                    <td>${r.workflow_name || '-'}</td>
                     <td><span class="badge status-${r.status}">${r.status}</span></td>
-                    <td>${r.started_at ? new Date(r.started_at).toLocaleString() : '-'}</td>
-                    <td><button class="btn btn-outline" style="padding:0.2rem 0.5rem; font-size:0.7rem" onclick="viewLogs('${r.id}')">View Logs</button></td>
+                    <td style="font-size:0.8rem">${started}</td>
+                    <td style="font-size:0.8rem">${finished}</td>
+                    <td><button class="btn btn-outline" style="padding:0.2rem 0.5rem;font-size:0.7rem" onclick="viewLogs('${r.id}')">Logs</button></td>
                 `;
             });
         };
-        updateTable('recent-runs-table');
-        updateTable('all-runs-table');
-    } catch(e) { console.error(e); }
+        renderTable(tbody1, 5);
+        renderTable(tbody2);
+    } catch(e) {
+        tbody1.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-secondary)">Login required to view runs</td></tr>';
+        tbody2.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-secondary)">Login required to view runs</td></tr>';
+    }
 }
 
+// Log viewer
 async function viewLogs(id) {
     currentRunId = id;
-    document.getElementById('log-title').textContent = `Logs for Run ${id.substring(0,8)}`;
+    document.getElementById('log-title').textContent = `Logs: ${id.substring(0,8)}`;
     document.getElementById('log-modal').classList.remove('hidden');
-    document.getElementById('log-output').textContent = 'Fetching logs...';
+    document.getElementById('log-output').textContent = 'Loading...';
     try {
-        const res = await fetch(`/api/runs/${id}/logs`);
+        const res = await fetch(`/api/runs/${id}/logs`, {
+            headers: authToken ? {'Authorization': `Bearer ${authToken}`} : {}
+        });
+        if(!res.ok) throw new Error('Not authorized');
         const text = await res.text();
-        document.getElementById('log-output').textContent = text;
-    } catch(e) { document.getElementById('log-output').textContent = `Error: ${e.message}`; }
+        document.getElementById('log-output').textContent = text || 'No log content available';
+    } catch(e) {
+        document.getElementById('log-output').textContent = `Error: ${e.message}`;
+    }
 }
 
-function closeLogs() { document.getElementById('log-modal').classList.add('hidden'); }
+function closeLogs() {
+    document.getElementById('log-modal').classList.add('hidden');
+}
 
+// Close modal on backdrop click
+document.getElementById('log-modal').addEventListener('click', (e) => {
+    if(e.target.id === 'log-modal') closeLogs();
+});
+
+// Close modal on Escape key
+document.addEventListener('keydown', (e) => {
+    if(e.key === 'Escape') closeLogs();
+});
+
+// Workflow execution
 async function runWorkflow() {
-    const toml = document.getElementById('editor-toml').value;
-    if(!toml) return alert('Workflow is empty');
+    const toml = document.getElementById('editor-toml').value.trim();
+    if(!toml) {
+        showToast('Please enter a workflow definition', 'warning');
+        return;
+    }
     try {
         const res = await api('/api/workflows/run', 'POST', { toml_content: toml });
-        alert(`Run launched! ID: ${res.run_id}`);
+        showToast(`Run started: ${res.run_id.substring(0,8)}`, 'success');
         showView('runs', document.querySelectorAll('nav button')[2]);
-    } catch(e) { alert(e.message); }
+    } catch(e) {}
 }
 
+// Validation
 async function validateEditor() {
-    const toml = document.getElementById('editor-toml').value;
-    const res = await api('/api/workflows/validate', 'POST', { toml_content: toml });
-    const out = document.getElementById('editor-output');
-    out.classList.remove('hidden');
-    out.textContent = JSON.stringify(res, null, 2);
+    const toml = document.getElementById('editor-toml').value.trim();
+    if(!toml) {
+        showToast('Please enter a workflow', 'warning');
+        return;
+    }
+    try {
+        const res = await api('/api/workflows/validate', 'POST', { toml_content: toml });
+        const out = document.getElementById('editor-output');
+        out.classList.remove('hidden');
+        if(res.valid) {
+            out.innerHTML = `<span style="color:var(--success)">✓ Valid workflow</span>\n\nRules: ${res.rules_count || 0}\nEdges: ${res.edges_count || 0}`;
+            showToast('Workflow is valid', 'success');
+        } else {
+            out.innerHTML = `<span style="color:var(--error)">✗ Invalid</span>\n\n${res.errors.join('\n')}`;
+        }
+    } catch(e) {}
 }
 
-// ... Additional helper functions (format, lint, etc)
+// Format
+async function formatEditor() {
+    const toml = document.getElementById('editor-toml').value.trim();
+    if(!toml) {
+        showToast('Please enter a workflow', 'warning');
+        return;
+    }
+    try {
+        const res = await api('/api/workflows/format', 'POST', { toml_content: toml });
+        document.getElementById('editor-toml').value = res.formatted;
+        showToast('Workflow formatted', 'success');
+    } catch(e) {}
+}
 
+// Lint
+async function lintEditor() {
+    const toml = document.getElementById('editor-toml').value.trim();
+    if(!toml) {
+        showToast('Please enter a workflow', 'warning');
+        return;
+    }
+    try {
+        const res = await api('/api/workflows/lint', 'POST', { toml_content: toml });
+        const out = document.getElementById('editor-output');
+        out.classList.remove('hidden');
+        if(res.error_count === 0 && res.warning_count === 0) {
+            out.innerHTML = `<span style="color:var(--success)">✓ No issues found</span>`;
+            showToast('No lint issues', 'success');
+        } else {
+            out.innerHTML = `<span style="color:var(--warning)">Issues: ${res.error_count} errors, ${res.warning_count} warnings</span>\n\n` +
+                res.diagnostics.map(d => `[${d.severity}] ${d.rule || 'general'}: ${d.message}`).join('\n');
+        }
+    } catch(e) {}
+}
+
+// DAG visualization
+async function showDag() {
+    const toml = document.getElementById('editor-toml').value.trim();
+    if(!toml) {
+        showToast('Please enter a workflow', 'warning');
+        return;
+    }
+    try {
+        const res = await api('/api/workflows/dag', 'POST', { toml_content: toml });
+        const out = document.getElementById('editor-output');
+        out.classList.remove('hidden');
+        out.textContent = `DAG: ${res.nodes} nodes, ${res.edges} edges\n\n${res.dot}`;
+        showToast('DAG generated', 'success');
+    } catch(e) {}
+}
+
+// Template loader
+function loadTemplates() {
+    const templates = {
+        'Basic Pipeline': `[workflow]
+name = "basic-pipeline"
+version = "1.0.0"
+
+[[rules]]
+name = "process"
+input = ["data/input.txt"]
+output = ["data/output.txt"]
+shell = "cat {input} > {output}"
+threads = 4`,
+
+        ' paired Analysis': `[workflow]
+name = "paired-analysis"
+version = "1.0.0"
+
+[[rules]]
+name = "step1_process"
+input = ["raw/{sample}_R1.fastq", "raw/{sample}_R2.fastq"]
+output = ["processed/{sample}.bam"]
+shell = "process {input[0]} {input[1]} > {output}"
+threads = 8
+
+[[rules]]
+name = "step2_analyze"
+input = ["processed/{sample}.bam"]
+output = ["results/{sample}.vcf"]
+shell = "analyze {input} > {output}"
+threads = 4`,
+
+        'Docker Environment': `[workflow]
+name = "docker-workflow"
+version = "1.0.0"
+
+[[rules]]
+name = "docker_step"
+input = ["input.txt"]
+output = ["output.txt"]
+shell = "docker-run {input} > {output}"
+threads = 4
+[rules.environment]
+docker = "biocontainers/samtools:1.15"`
+    };
+
+    const keys = Object.keys(templates);
+    const choice = prompt('Select template:\n' + keys.map((k, i) => `${i+1}. ${k}`).join('\n'));
+    const idx = parseInt(choice) - 1;
+    if(idx >= 0 && idx < keys.length) {
+        document.getElementById('editor-toml').value = templates[keys[idx]];
+        showToast(`Loaded: ${keys[idx]}`, 'success');
+    }
+}
+
+// System info refresh
 async function refreshSystem() {
-    const data = await api('/api/system');
-    document.getElementById('sys-meta-json').textContent = JSON.stringify(data, null, 2);
+    try {
+        const data = await api('/api/system', 'GET', null, false);
+        document.getElementById('sys-meta-json').textContent = JSON.stringify(data, null, 2);
+    } catch(e) {
+        document.getElementById('sys-meta-json').textContent = 'Error loading system info';
+    }
 }
 
-// Check identity
+// Auth check
 async function checkAuth() {
     try {
         const data = await fetch('/api/auth/me').then(r => r.json());
         if(data.authenticated) {
+            authToken = data.token || localStorage.getItem('oxo_token');
             document.getElementById('user-badge-el').textContent = `${data.username} (${data.role})`;
-        } else {
-            // In a real app, redirect to login. For now, we use default admin if available.
+            document.getElementById('user-badge-el').style.background = 'var(--accent)';
+            document.getElementById('user-badge-el').style.color = 'white';
         }
     } catch(e) {}
 }
+
+// Login helper (for dev mode)
+async function quickLogin() {
+    const user = prompt('Username:');
+    const pass = prompt('Password:');
+    if(!user || !pass) return;
+    try {
+        const res = await api('/api/auth/login', 'POST', { username: user, password: pass });
+        authToken = res.token;
+        localStorage.setItem('oxo_token', res.token);
+        document.getElementById('user-badge-el').textContent = `${res.username} (${res.role})`;
+        document.getElementById('user-badge-el').style.background = 'var(--accent)';
+        document.getElementById('user-badge-el').style.color = 'white';
+        showToast('Logged in successfully', 'success');
+        refreshRuns();
+    } catch(e) {}
+}
+
+// Double-click user badge to login
+document.getElementById('user-badge-el').addEventListener('dblclick', quickLogin);
 
 // Init
 metricsTimer = setInterval(refreshMetrics, 3000);
