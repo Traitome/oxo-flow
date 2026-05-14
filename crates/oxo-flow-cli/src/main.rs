@@ -12,6 +12,51 @@ use oxo_flow_core::executor::{ExecutorConfig, LocalExecutor};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// Auto-discover workflow file in current directory.
+/// Priority: main.oxoflow > *.oxoflow (alphabetically first)
+fn discover_workflow_file() -> Result<PathBuf> {
+    let cwd = std::env::current_dir().context("cannot determine current directory")?;
+
+    // Priority 1: main.oxoflow
+    let main_workflow = cwd.join("main.oxoflow");
+    if main_workflow.exists() {
+        return Ok(main_workflow);
+    }
+
+    // Priority 2: any *.oxoflow file (alphabetically first)
+    let mut oxoflow_files: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(&cwd)
+        .with_context(|| format!("cannot read directory {}", cwd.display()))?
+    {
+        let entry = entry.context("cannot read directory entry")?;
+        let path = entry.path();
+        if let Some(ext) = path.extension()
+            && ext == "oxoflow"
+        {
+            oxoflow_files.push(path);
+        }
+    }
+
+    if oxoflow_files.is_empty() {
+        return Err(anyhow::anyhow!(
+            "no .oxoflow file found in current directory.\n\
+            Specify a workflow file or run 'oxo-flow init' to create one."
+        ));
+    }
+
+    // Sort alphabetically and pick first
+    oxoflow_files.sort();
+    Ok(oxoflow_files.into_iter().next().unwrap())
+}
+
+/// Resolve workflow path: use provided path or auto-discover.
+fn resolve_workflow(provided: Option<PathBuf>) -> Result<PathBuf> {
+    match provided {
+        Some(path) => Ok(path),
+        None => discover_workflow_file(),
+    }
+}
+
 /// oxo-flow — A Rust-native bioinformatics pipeline engine.
 ///
 /// Build, validate, and execute reproducible bioinformatics workflows
@@ -46,9 +91,9 @@ struct Cli {
 enum Commands {
     /// Execute a workflow.
     Run {
-        /// Path to the .oxoflow workflow file.
+        /// Path to the .oxoflow workflow file (optional - auto-detects if omitted).
         #[arg(value_name = "WORKFLOW")]
-        workflow: PathBuf,
+        workflow: Option<PathBuf>,
 
         /// Maximum number of concurrent jobs.
         #[arg(short = 'j', long, default_value = "1")]
@@ -93,9 +138,9 @@ enum Commands {
 
     /// Simulate execution without running any commands.
     DryRun {
-        /// Path to the .oxoflow workflow file.
+        /// Path to the .oxoflow workflow file (optional - auto-detects if omitted).
         #[arg(value_name = "WORKFLOW")]
-        workflow: PathBuf,
+        workflow: Option<PathBuf>,
 
         /// Run specific target rules only (and their dependencies).
         #[arg(short = 't', long)]
@@ -489,6 +534,7 @@ async fn main() -> Result<()> {
             cache_dir,
         } => {
             print_banner();
+            let workflow = resolve_workflow(workflow)?;
             let config = WorkflowConfig::from_file(&workflow)
                 .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
@@ -582,6 +628,7 @@ async fn main() -> Result<()> {
 
         Commands::DryRun { workflow, target } => {
             print_banner();
+            let workflow = resolve_workflow(workflow)?;
             let config = WorkflowConfig::from_file(&workflow)
                 .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
@@ -1788,7 +1835,7 @@ mod tests {
         let cli = Cli::try_parse_from(["oxo-flow", "run", "test.oxoflow"]).unwrap();
         match cli.command {
             Commands::Run { workflow, jobs, .. } => {
-                assert_eq!(workflow, PathBuf::from("test.oxoflow"));
+                assert_eq!(workflow, Some(PathBuf::from("test.oxoflow")));
                 assert_eq!(jobs, 1);
             }
             _ => panic!("expected Run command"),
@@ -2273,7 +2320,7 @@ mod tests {
             Cli::try_parse_from(["oxo-flow", "dry-run", "test.oxoflow", "-t", "align"]).unwrap();
         match cli.command {
             Commands::DryRun { workflow, target } => {
-                assert_eq!(workflow, PathBuf::from("test.oxoflow"));
+                assert_eq!(workflow, Some(PathBuf::from("test.oxoflow")));
                 assert_eq!(target, vec!["align"]);
             }
             _ => panic!("expected DryRun command"),

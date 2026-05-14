@@ -7,7 +7,7 @@ Execute a workflow.
 ## Usage
 
 ```
-oxo-flow run [OPTIONS] <WORKFLOW>
+oxo-flow run [OPTIONS] [WORKFLOW]
 ```
 
 ---
@@ -16,7 +16,7 @@ oxo-flow run [OPTIONS] <WORKFLOW>
 
 | Argument | Description |
 |---|---|
-| `<WORKFLOW>` | Path to the `.oxoflow` workflow file |
+| `[WORKFLOW]` | Path to the `.oxoflow` workflow file. **Optional** — if not specified, auto-discovery searches for: (1) `main.oxoflow` in current directory, (2) alphabetically first `*.oxoflow` file in current directory. |
 
 ---
 
@@ -40,7 +40,21 @@ oxo-flow run [OPTIONS] <WORKFLOW>
 
 ## Examples
 
-### Run with default settings
+### Run with auto-discovery (when only one .oxoflow file exists)
+
+```bash
+# No need to specify the workflow file
+oxo-flow run
+```
+
+### Run with main.oxoflow (priority discovery)
+
+```bash
+# If main.oxoflow exists, it's automatically used
+oxo-flow run
+```
+
+### Run with explicit workflow
 
 ```bash
 oxo-flow run pipeline.oxoflow
@@ -121,6 +135,8 @@ Done: 5 succeeded, 0 failed
 
 ## Notes
 
+- The workflow file is optional; if not specified, auto-discovery searches for `main.oxoflow` first, then any `*.oxoflow` file alphabetically
+- If no `.oxoflow` file is found, an error message suggests running `oxo-flow init` to create one
 - The DAG is built and validated before any rules execute
 - Rules are executed in topological order; independent rules may run in parallel up to the `-j` limit
 - If `--keep-going` is not set, execution stops at the first failure
