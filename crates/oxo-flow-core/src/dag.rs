@@ -542,24 +542,43 @@ impl WorkflowDag {
         let reset = "\x1b[0m";
 
         // Calculate content widths for proper alignment
-        let line1 = format!("Workflow DAG: {} rules, {} dependencies", self.node_count(), self.edge_count());
-        let line2 = format!("Depth: {}, Width: {}, Critical path: {} steps", metrics.max_depth, metrics.max_width, metrics.critical_path_length);
+        let line1 = format!(
+            "Workflow DAG: {} rules, {} dependencies",
+            self.node_count(),
+            self.edge_count()
+        );
+        let line2 = format!(
+            "Depth: {}, Width: {}, Critical path: {} steps",
+            metrics.max_depth, metrics.max_width, metrics.critical_path_length
+        );
         let max_content_width = std::cmp::max(line1.len(), line2.len());
         let box_width = max_content_width + 4; // 2 spaces on each side
 
         // Header with metrics (properly aligned)
-        output.push_str(&format!("{}\n", "┌".to_string() + &"─".repeat(box_width) + "┐"));
+        output.push_str(&format!(
+            "{}\n",
+            "┌".to_string() + &"─".repeat(box_width) + "┐"
+        ));
         output.push_str(&format!(
             "│  {}{}{}{}{}  │\n",
-            bold, cyan, line1, reset,
+            bold,
+            cyan,
+            line1,
+            reset,
             " ".repeat(box_width - line1.len() - 4)
         ));
         output.push_str(&format!(
             "│  {}{}{}{}{}  │\n",
-            bold, yellow, line2, reset,
+            bold,
+            yellow,
+            line2,
+            reset,
             " ".repeat(box_width - line2.len() - 4)
         ));
-        output.push_str(&format!("{}\n\n", "└".to_string() + &"─".repeat(box_width) + "┘"));
+        output.push_str(&format!(
+            "{}\n\n",
+            "└".to_string() + &"─".repeat(box_width) + "┘"
+        ));
 
         // Draw execution levels
         for (level, rules) in groups.iter().enumerate() {
@@ -568,7 +587,12 @@ impl WorkflowDag {
 
             // Indicate parallelism
             if rules.len() > 1 {
-                output.push_str(&format!("{}(parallel: {} rules){}\n", green, rules.len(), reset));
+                output.push_str(&format!(
+                    "{}(parallel: {} rules){}\n",
+                    green,
+                    rules.len(),
+                    reset
+                ));
             } else {
                 output.push_str(&format!("{}(sequential){}\n", yellow, reset));
             }
@@ -590,7 +614,14 @@ impl WorkflowDag {
                 if deps.is_empty() {
                     output.push_str(&format!("{}{}{}\n", cyan, rule, reset));
                 } else {
-                    output.push_str(&format!("{}{}{} {}[depends: {}]\n", cyan, rule, reset, yellow, deps.join(", ")));
+                    output.push_str(&format!(
+                        "{}{}{} {}[depends: {}]\n",
+                        cyan,
+                        rule,
+                        reset,
+                        yellow,
+                        deps.join(", ")
+                    ));
                 }
             }
 
@@ -606,7 +637,11 @@ impl WorkflowDag {
         if critical.len() > 1 {
             output.push_str(&format!(
                 "\n{}Critical path:{} {}{}{}\n",
-                bold, reset, cyan, critical.join(&format!(" {}→{} ", green, reset)), reset
+                bold,
+                reset,
+                cyan,
+                critical.join(&format!(" {}→{} ", green, reset)),
+                reset
             ));
         }
 
@@ -623,7 +658,11 @@ impl WorkflowDag {
         let mut output = String::new();
 
         output.push_str("Workflow Graph (terminal output)\n");
-        output.push_str(&format!("{} rules, {} edges\n\n", self.node_count(), self.edge_count()));
+        output.push_str(&format!(
+            "{} rules, {} edges\n\n",
+            self.node_count(),
+            self.edge_count()
+        ));
 
         for (i, rule_name) in order.iter().enumerate() {
             let deps = self.dependencies(rule_name)?;

@@ -106,6 +106,18 @@ pub enum OxoFlowError {
         /// Files that failed verification.
         failed_files: Vec<String>,
     },
+
+    /// Resource exhaustion - rule requires more resources than available.
+    #[error(
+        "resource exhausted: rule '{rule}' requires {required_threads} threads (available: {available_threads}) and {required_memory_mb}MB memory (available: {available_memory_mb}MB)"
+    )]
+    ResourceExhausted {
+        rule: String,
+        required_threads: u32,
+        available_threads: u32,
+        required_memory_mb: u64,
+        available_memory_mb: u64,
+    },
 }
 
 impl OxoFlowError {

@@ -26,6 +26,8 @@ graph TD
     Resolver --> Docker["DockerBackend"]
     Resolver --> Singularity["SingularityBackend"]
     Resolver --> Venv["VenvBackend"]
+    Resolver --> Cache["EnvironmentCache"]
+    Cache --> File["Cache File (JSON)"]
 ```
 
 ### EnvironmentResolver
@@ -35,11 +37,55 @@ The central coordinator that:
 - Detects available backends on the system
 - Validates environment specifications
 - Dispatches to the appropriate backend
+- Tracks environment setup state via EnvironmentCache
 
 ```rust
 let resolver = EnvironmentResolver::new();
 let available = resolver.available_backends(); // ["conda", "docker", "venv"]
 resolver.validate_spec(&rule.environment)?;
+```
+
+### EnvironmentCache
+
+Tracks which environments have been successfully set up:
+
+- **In-memory cache**: Tracks ready environments during execution
+- **Persistent cache**: Optionally saves state to a JSON file for reuse across runs
+
+```rust
+// Create resolver with persistent cache
+let resolver = EnvironmentResolver::with_cache_dir(Path::new(".oxo-flow/cache"));
+```
+
+When using `--cache-dir`, oxo-flow saves environment setup state after each run. Subsequent runs skip setup for already-ready environments, reducing startup time.
+
+---
+
+## Environment Setup Process
+
+Before executing a rule with an environment specification:
+
+1. **Check cache**: If the environment is already marked as ready, skip setup
+2. **Run setup command**: Execute the backend's setup command (e.g., `conda env create -f env.yaml`)
+3. **Mark ready**: Cache the environment as successfully set up
+
+### Setup Commands by Backend
+
+| Backend | Setup Command |
+|---|---|
+| Conda | `conda env create -f <yaml_file>` |
+| Pixi | `pixi install` (if pixi.toml exists) |
+| Docker | `docker pull <image>` |
+| Singularity | `singularity pull <image>` |
+| Venv | `python -m venv <path> && pip install -r <requirements>` |
+
+### Skipping Setup
+
+Use `--skip-env-setup` when environments are pre-built:
+
+```bash
+# Environments already exist on the system
+oxo-flow run pipeline.oxoflow --skip-env-setup
 ```
 
 ---
@@ -146,3 +192,4 @@ The `env check` command verifies:
 - [Environment Management tutorial](../tutorials/environment-management.md) — getting started
 - [Use Environments how-to](../how-to/use-environments.md) — practical recipes
 - [`env` command](../commands/env.md) — CLI reference
+- [`run` command](../commands/run.md) — `--skip-env-setup` and `--cache-dir` options

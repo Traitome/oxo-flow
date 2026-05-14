@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use std::fs;
+use std::path::{Path, PathBuf};
 
 /// Base workspace directory for the Web UI.
 const BASE_WORKSPACE: &str = "workspace";
@@ -25,10 +25,10 @@ pub fn setup_run_directory(username: &str, run_id: &str) -> Result<PathBuf> {
 pub fn initialize_sandbox(username: &str, run_id: &str, toml_content: &str) -> Result<PathBuf> {
     let run_dir = setup_run_directory(username, run_id)?;
     let workflow_file = run_dir.join("workflow.oxoflow");
-    
+
     fs::write(&workflow_file, toml_content)
         .with_context(|| format!("Failed to write workflow file to {:?}", workflow_file))?;
-        
+
     Ok(run_dir)
 }
 

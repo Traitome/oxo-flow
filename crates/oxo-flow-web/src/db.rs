@@ -1,17 +1,20 @@
-use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
-use sqlx::migrate::MigrateDatabase;
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sqlx::migrate::MigrateDatabase;
+use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
 use std::sync::OnceLock;
 use uuid::Uuid;
-use anyhow::Result;
 
 /// Global SQLite connection pool.
 static DB_POOL: OnceLock<SqlitePool> = OnceLock::new();
 
 /// Initialize the database and run migrations.
 pub async fn init_db(database_url: &str) -> Result<()> {
-    if !sqlx::Sqlite::database_exists(database_url).await.unwrap_or(false) {
+    if !sqlx::Sqlite::database_exists(database_url)
+        .await
+        .unwrap_or(false)
+    {
         sqlx::Sqlite::create_database(database_url).await?;
     }
 
@@ -50,7 +53,7 @@ pub async fn init_db(database_url: &str) -> Result<()> {
             timestamp DATETIME NOT NULL,
             FOREIGN KEY(user_id) REFERENCES users(id)
         );
-        "#
+        "#,
     )
     .execute(&pool)
     .await?;
@@ -58,7 +61,7 @@ pub async fn init_db(database_url: &str) -> Result<()> {
     let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
         .fetch_one(&pool)
         .await?;
-        
+
     if count.0 == 0 {
         let admin_id = Uuid::new_v4().to_string();
         let now = Utc::now();
@@ -75,7 +78,9 @@ pub async fn init_db(database_url: &str) -> Result<()> {
         .await?;
     }
 
-    DB_POOL.set(pool).map_err(|_| anyhow::anyhow!("DB pool already initialized"))?;
+    DB_POOL
+        .set(pool)
+        .map_err(|_| anyhow::anyhow!("DB pool already initialized"))?;
     Ok(())
 }
 
@@ -87,13 +92,17 @@ pub fn pool() -> &'static SqlitePool {
 pub async fn recover_orphaned_runs() -> Result<()> {
     // We mark any run that was 'running' as 'failed' (interrupted by server restart)
     let now = Utc::now();
-    let result = sqlx::query("UPDATE runs SET status = 'failed', finished_at = ? WHERE status = 'running'")
-        .bind(now)
-        .execute(pool())
-        .await?;
-    
+    let result =
+        sqlx::query("UPDATE runs SET status = 'failed', finished_at = ? WHERE status = 'running'")
+            .bind(now)
+            .execute(pool())
+            .await?;
+
     if result.rows_affected() > 0 {
-        tracing::warn!("Recovered {} orphaned runs and marked them as failed.", result.rows_affected());
+        tracing::warn!(
+            "Recovered {} orphaned runs and marked them as failed.",
+            result.rows_affected()
+        );
     }
     Ok(())
 }
@@ -164,7 +173,7 @@ pub async fn log_action(user_id: &str, action: &str, target: &str) -> Result<()>
     let id = Uuid::new_v4().to_string();
     let now = Utc::now();
     sqlx::query(
-        "INSERT INTO audit_logs (id, user_id, action, target, timestamp) VALUES (?, ?, ?, ?, ?)"
+        "INSERT INTO audit_logs (id, user_id, action, target, timestamp) VALUES (?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(user_id)

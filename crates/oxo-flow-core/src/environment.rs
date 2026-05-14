@@ -5,6 +5,9 @@
 //! selects the appropriate backend for each rule.
 
 use std::collections::HashSet;
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
 
 use crate::error::{OxoFlowError, Result};
 use crate::rule::EnvironmentSpec;
@@ -282,12 +285,30 @@ impl EnvironmentBackend for SystemBackend {
 #[derive(Debug, Default)]
 pub struct EnvironmentCache {
     ready: HashSet<String>,
+    /// Path to the cache file for persistence (optional).
+    cache_file: Option<std::path::PathBuf>,
 }
 
 impl EnvironmentCache {
     /// Create a new, empty cache.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a cache with file persistence.
+    pub fn with_cache_dir(cache_dir: &std::path::Path) -> Self {
+        let cache_file = cache_dir.join("environment_cache.json");
+        let mut cache = Self {
+            ready: HashSet::new(),
+            cache_file: Some(cache_file.clone()),
+        };
+
+        // Try to load existing cache
+        if let Err(e) = cache.load() {
+            tracing::debug!("could not load environment cache: {}", e);
+        }
+
+        cache
     }
 
     /// Returns `true` if the environment identified by `key` has been set up.
@@ -298,6 +319,60 @@ impl EnvironmentCache {
     /// Mark the environment identified by `key` as ready.
     pub fn mark_ready(&mut self, key: &str) {
         self.ready.insert(key.to_string());
+        // Persist to file if configured
+        if let Err(e) = self.save() {
+            tracing::warn!("could not save environment cache: {}", e);
+        }
+    }
+
+    /// Load cache from file.
+    fn load(&mut self) -> Result<()> {
+        if let Some(ref path) = self.cache_file
+            && path.exists()
+        {
+            let content = std::fs::read_to_string(path).map_err(|e| OxoFlowError::Config {
+                message: format!("failed to read cache file: {}", e),
+            })?;
+            let entries: Vec<String> =
+                serde_json::from_str(&content).map_err(|e| OxoFlowError::Config {
+                    message: format!("failed to parse cache file: {}", e),
+                })?;
+            self.ready = entries.into_iter().collect();
+            tracing::debug!(
+                "loaded {} cached environments from {}",
+                self.ready.len(),
+                path.display()
+            );
+        }
+        Ok(())
+    }
+
+    /// Save cache to file.
+    fn save(&self) -> Result<()> {
+        if let Some(ref path) = self.cache_file {
+            // Ensure parent directory exists
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| OxoFlowError::Config {
+                    message: format!("failed to create cache directory: {}", e),
+                })?;
+            }
+
+            let entries: Vec<String> = self.ready.iter().cloned().collect();
+            let content = serde_json::to_string(&entries).map_err(|e| OxoFlowError::Config {
+                message: format!("failed to serialize cache: {}", e),
+            })?;
+
+            std::fs::write(path, content).map_err(|e| OxoFlowError::Config {
+                message: format!("failed to write cache file: {}", e),
+            })?;
+
+            tracing::trace!(
+                "saved {} cached environments to {}",
+                self.ready.len(),
+                path.display()
+            );
+        }
+        Ok(())
     }
 }
 
@@ -309,7 +384,7 @@ pub struct EnvironmentResolver {
     venv: VenvBackend,
     pixi: PixiBackend,
     system: SystemBackend,
-    cache: EnvironmentCache,
+    cache: Arc<Mutex<EnvironmentCache>>,
 }
 
 impl Default for EnvironmentResolver {
@@ -328,18 +403,33 @@ impl EnvironmentResolver {
             venv: VenvBackend,
             pixi: PixiBackend,
             system: SystemBackend,
-            cache: EnvironmentCache::new(),
+            cache: Arc::new(Mutex::new(EnvironmentCache::new())),
         }
     }
 
-    /// Return a reference to the environment cache.
-    pub fn cache(&self) -> &EnvironmentCache {
-        &self.cache
+    /// Create a new environment resolver with persistent cache directory.
+    pub fn with_cache_dir(cache_dir: &std::path::Path) -> Self {
+        Self {
+            conda: CondaBackend,
+            docker: DockerBackend,
+            singularity: SingularityBackend,
+            venv: VenvBackend,
+            pixi: PixiBackend,
+            system: SystemBackend,
+            cache: Arc::new(Mutex::new(EnvironmentCache::with_cache_dir(cache_dir))),
+        }
     }
 
-    /// Return a mutable reference to the environment cache.
-    pub fn cache_mut(&mut self) -> &mut EnvironmentCache {
-        &mut self.cache
+    /// Return a reference to the environment cache (async).
+    pub async fn cache_is_ready(&self, key: &str) -> bool {
+        let cache = self.cache.lock().await;
+        cache.is_ready(key)
+    }
+
+    /// Mark an environment as ready in the cache (async).
+    pub async fn cache_mark_ready(&self, key: &str) {
+        let mut cache = self.cache.lock().await;
+        cache.mark_ready(key);
     }
 
     /// Wrap a command using the appropriate environment backend.
@@ -360,6 +450,48 @@ impl EnvironmentResolver {
             return self.venv.wrap_command(command, venv);
         }
         self.system.wrap_command(command, "")
+    }
+
+    /// Get the cache key for an environment specification.
+    /// Used to track whether an environment has already been set up.
+    pub fn cache_key(&self, env_spec: &EnvironmentSpec) -> String {
+        if let Some(ref conda) = env_spec.conda {
+            return self.conda.cache_key(conda);
+        }
+        if let Some(ref pixi) = env_spec.pixi {
+            return self.pixi.cache_key(pixi);
+        }
+        if let Some(ref docker) = env_spec.docker {
+            return self.docker.cache_key(docker);
+        }
+        if let Some(ref singularity) = env_spec.singularity {
+            return self.singularity.cache_key(singularity);
+        }
+        if let Some(ref venv) = env_spec.venv {
+            return self.venv.cache_key(venv);
+        }
+        self.system.cache_key("")
+    }
+
+    /// Get the setup command for an environment specification.
+    /// This command creates/pulls the environment before first use.
+    pub fn setup_command(&self, env_spec: &EnvironmentSpec) -> Result<String> {
+        if let Some(ref conda) = env_spec.conda {
+            return self.conda.setup_command(conda);
+        }
+        if let Some(ref pixi) = env_spec.pixi {
+            return self.pixi.setup_command(pixi);
+        }
+        if let Some(ref docker) = env_spec.docker {
+            return self.docker.setup_command(docker);
+        }
+        if let Some(ref singularity) = env_spec.singularity {
+            return self.singularity.setup_command(singularity);
+        }
+        if let Some(ref venv) = env_spec.venv {
+            return self.venv.setup_command(venv);
+        }
+        self.system.setup_command("")
     }
 
     /// Check which environment backends are available on the system.
@@ -680,13 +812,13 @@ mod tests {
         assert!(available.contains(&"system"));
     }
 
-    #[test]
-    fn resolver_cache_integration() {
-        let mut resolver = EnvironmentResolver::new();
+    #[tokio::test]
+    async fn resolver_cache_integration() {
+        let resolver = EnvironmentResolver::new();
         let key = CondaBackend.cache_key("envs/qc.yaml");
-        assert!(!resolver.cache().is_ready(&key));
-        resolver.cache_mut().mark_ready(&key);
-        assert!(resolver.cache().is_ready(&key));
+        assert!(!resolver.cache_is_ready(&key).await);
+        resolver.cache_mark_ready(&key).await;
+        assert!(resolver.cache_is_ready(&key).await);
     }
 
     // ── Additional wrap_command tests ──────────────────────────────

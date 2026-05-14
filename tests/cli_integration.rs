@@ -159,7 +159,7 @@ fn cli_dry_run_nonexistent() {
 #[test]
 fn cli_graph_outputs_dot() {
     oxo_flow_cmd()
-        .args(["graph", "examples/simple_variant_calling.oxoflow"])
+        .args(["graph", "-f", "dot", "examples/simple_variant_calling.oxoflow"])
         .assert()
         .success()
         .stdout(predicate::str::contains("digraph"));
@@ -482,7 +482,7 @@ fn cli_dryrun_gallery_file_pipeline() {
 #[test]
 fn cli_graph_gallery_rnaseq() {
     oxo_flow_cmd()
-        .args(["graph", "examples/gallery/06_rnaseq_quantification.oxoflow"])
+        .args(["graph", "-f", "dot", "examples/gallery/06_rnaseq_quantification.oxoflow"])
         .assert()
         .success()
         .stdout(predicate::str::contains("digraph"))

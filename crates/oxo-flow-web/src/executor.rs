@@ -1,19 +1,14 @@
 use chrono::Utc;
+use regex::Regex;
 use std::process::Stdio;
 use tokio::process::Command;
 use tracing::{error, info};
-use regex::Regex;
 
 use crate::db;
 use crate::workspace::get_run_directory;
 
 /// Spawns a background task to execute the workflow sandbox.
-pub fn spawn_background_run(
-    run_id: String,
-    username: String,
-    auth_type: String,
-    os_user: String,
-) {
+pub fn spawn_background_run(run_id: String, username: String, auth_type: String, os_user: String) {
     tokio::spawn(async move {
         info!("Starting background run {} for user {}", run_id, username);
 
@@ -70,15 +65,18 @@ pub fn spawn_background_run(
             Err(e) => {
                 error!("Failed to create log file: {}", e);
                 let end = Utc::now();
-                let _ = sqlx::query("UPDATE runs SET status = 'failed', finished_at = ? WHERE id = ?")
-                    .bind(end)
-                    .bind(&run_id)
-                    .execute(db::pool())
-                    .await;
+                let _ =
+                    sqlx::query("UPDATE runs SET status = 'failed', finished_at = ? WHERE id = ?")
+                        .bind(end)
+                        .bind(&run_id)
+                        .execute(db::pool())
+                        .await;
                 return;
             }
         };
-        let err_file = log_file.try_clone().expect("Failed to clone log file handle");
+        let err_file = log_file
+            .try_clone()
+            .expect("Failed to clone log file handle");
 
         cmd.stdout(Stdio::from(log_file));
         cmd.stderr(Stdio::from(err_file));
@@ -97,35 +95,43 @@ pub fn spawn_background_run(
                 // Wait for completion
                 match child.wait().await {
                     Ok(status) => {
-                        let final_state = if status.success() { "success" } else { "failed" };
+                        let final_state = if status.success() {
+                            "success"
+                        } else {
+                            "failed"
+                        };
                         let end = Utc::now();
-                        let _ = sqlx::query("UPDATE runs SET status = ?, finished_at = ? WHERE id = ?")
-                            .bind(final_state)
-                            .bind(end)
-                            .bind(&run_id)
-                            .execute(db::pool())
-                            .await;
+                        let _ =
+                            sqlx::query("UPDATE runs SET status = ?, finished_at = ? WHERE id = ?")
+                                .bind(final_state)
+                                .bind(end)
+                                .bind(&run_id)
+                                .execute(db::pool())
+                                .await;
                         info!("Run {} finished with status: {}", run_id, final_state);
                     }
                     Err(e) => {
                         error!("Failed to wait on child process for run {}: {}", run_id, e);
                         let end = Utc::now();
-                        let _ = sqlx::query("UPDATE runs SET status = 'failed', finished_at = ? WHERE id = ?")
-                            .bind(end)
-                            .bind(&run_id)
-                            .execute(db::pool())
-                            .await;
+                        let _ = sqlx::query(
+                            "UPDATE runs SET status = 'failed', finished_at = ? WHERE id = ?",
+                        )
+                        .bind(end)
+                        .bind(&run_id)
+                        .execute(db::pool())
+                        .await;
                     }
                 }
             }
             Err(e) => {
                 error!("Failed to spawn child process for run {}: {}", run_id, e);
                 let end = Utc::now();
-                let _ = sqlx::query("UPDATE runs SET status = 'failed', finished_at = ? WHERE id = ?")
-                    .bind(end)
-                    .bind(&run_id)
-                    .execute(db::pool())
-                    .await;
+                let _ =
+                    sqlx::query("UPDATE runs SET status = 'failed', finished_at = ? WHERE id = ?")
+                        .bind(end)
+                        .bind(&run_id)
+                        .execute(db::pool())
+                        .await;
             }
         }
     });

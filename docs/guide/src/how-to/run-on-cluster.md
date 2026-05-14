@@ -8,6 +8,8 @@ This guide explains how to execute oxo-flow workflows on HPC clusters using SLUR
 
 oxo-flow's cluster module translates each rule into a cluster job submission. Resource requirements declared in the `.oxoflow` file (`threads`, `memory`, `gpu`, `disk`, `time_limit`) are mapped to the appropriate scheduler directives.
 
+**Environment wrapping is applied automatically** — conda, docker, singularity, pixi, and venv environments are properly wrapped in the generated scripts.
+
 ---
 
 ## Supported Schedulers
@@ -67,7 +69,7 @@ oxo-flow generates SLURM job scripts automatically. For the `align` rule above, 
 #SBATCH --output=logs/align_%j.out
 #SBATCH --error=logs/align_%j.err
 
-# Environment activation
+# Environment wrapping (automatically applied)
 singularity exec docker://biocontainers/bwa:0.7.17 \
   bwa mem -t 16 ref.fa sample1_R1.fastq.gz | samtools sort -o aligned/sample1.bam
 ```
@@ -86,7 +88,10 @@ singularity exec docker://biocontainers/bwa:0.7.17 \
 #PBS -e logs/align.err
 
 cd $PBS_O_WORKDIR
-bwa mem -t 16 ref.fa sample1_R1.fastq.gz | samtools sort -o aligned/sample1.bam
+
+# Environment wrapping (automatically applied)
+singularity exec docker://biocontainers/bwa:0.7.17 \
+  bwa mem -t 16 ref.fa sample1_R1.fastq.gz | samtools sort -o aligned/sample1.bam
 ```
 
 ---
@@ -103,8 +108,48 @@ bwa mem -t 16 ref.fa sample1_R1.fastq.gz | samtools sort -o aligned/sample1.bam
 #$ -e logs/align.err
 #$ -cwd
 
-bwa mem -t 16 ref.fa sample1_R1.fastq.gz | samtools sort -o aligned/sample1.bam
+# Environment wrapping (automatically applied)
+singularity exec docker://biocontainers/bwa:0.7.17 \
+  bwa mem -t 16 ref.fa sample1_R1.fastq.gz | samtools sort -o aligned/sample1.bam
 ```
+
+---
+
+## Environment Wrapping
+
+When generating cluster scripts, oxo-flow automatically wraps commands through the environment resolver:
+
+| Backend | Wrapping |
+|---|---|---|
+| Conda | `conda activate <env>; <command>` |
+| Docker | `docker run --rm -v ... <image> <command>` |
+| Singularity | `singularity exec <image> <command>` |
+| Pixi | `pixi run <command>` |
+| Venv | `source <venv>/bin/activate; <command>` |
+
+!!! tip "Pre-build environments on cluster nodes"
+    Ensure your conda environments, docker images, or singularity containers are available on all cluster nodes before submitting jobs. Use `--skip-env-setup` when environments are pre-built.
+
+---
+
+## Resource Enforcement
+
+### Local Execution
+
+When running locally (`oxo-flow run`), resource constraints are enforced:
+
+- **Check**: Before execution, verify resources are available
+- **Reserve**: Reserve resources before starting the job
+- **Release**: Release resources after completion (or on failure/timeout)
+
+```bash
+# Limit to 16 threads and 32GB memory for local execution
+oxo-flow run pipeline.oxoflow --max-threads 16 --max-memory 32768
+```
+
+### Cluster Execution
+
+On clusters, the scheduler enforces resources based on the generated directives. oxo-flow does not manage resources during cluster execution — the scheduler handles that.
 
 ---
 
@@ -121,6 +166,9 @@ bwa mem -t 16 ref.fa sample1_R1.fastq.gz | samtools sort -o aligned/sample1.bam
 
 !!! tip "Check resource availability"
     Use `sinfo` (SLURM), `pbsnodes` (PBS), or `qhost` (SGE) to verify available resources before submitting.
+
+!!! tip "Cache environment setup"
+    Use `--cache-dir` to persist environment setup state across runs for faster startup.
 
 ---
 
@@ -154,3 +202,5 @@ oxo-flow status .oxo-flow/checkpoint.json
 
 - [Architecture: Cluster backends](../reference/architecture.md) — internal cluster module design
 - [Environment System](../reference/environment-system.md) — Singularity and Docker on HPC
+- [`run` command](../commands/run.md) — `--max-threads`, `--max-memory`, `--skip-env-setup`, `--cache-dir`
+- [`cluster` command](../commands/cluster.md) — cluster submission reference

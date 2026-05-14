@@ -7,9 +7,9 @@
 //! [`oxo_license`].
 
 pub mod db;
-pub mod workspace;
 pub mod executor;
 pub mod sys;
+pub mod workspace;
 
 use axum::{
     Router,
@@ -580,7 +580,6 @@ checkAuth();
 </body>
 </html>"###;
 
-
 // Store server start time for uptime calculation.
 static START_TIME: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
@@ -786,7 +785,7 @@ pub struct LicenseStatus {
 
 async fn check_credentials_db(username: &str, password: &str) -> Option<db::User> {
     let user = db::get_user_by_username(username).await.ok()??;
-    
+
     #[cfg(test)]
     let dev_mode = true;
     #[cfg(not(test))]
@@ -1243,7 +1242,9 @@ async fn health() -> Json<HealthResponse> {
     })
 }
 
-async fn list_workflows(headers: axum::http::HeaderMap) -> Result<Json<WorkflowListResponse>, ApiError> {
+async fn list_workflows(
+    headers: axum::http::HeaderMap,
+) -> Result<Json<WorkflowListResponse>, ApiError> {
     let session = extract_session(&headers).ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
@@ -2012,11 +2013,13 @@ async fn list_runs(headers: axum::http::HeaderMap) -> Result<Json<Vec<db::Run>>,
         .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
         .ok_or_else(|| ApiError::bad_request("User not found", None))?;
 
-    let runs = sqlx::query_as::<_, db::Run>("SELECT * FROM runs WHERE user_id = ? ORDER BY started_at DESC")
-        .bind(&user.id)
-        .fetch_all(db::pool())
-        .await
-        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?;
+    let runs = sqlx::query_as::<_, db::Run>(
+        "SELECT * FROM runs WHERE user_id = ? ORDER BY started_at DESC",
+    )
+    .bind(&user.id)
+    .fetch_all(db::pool())
+    .await
+    .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?;
 
     Ok(Json(runs))
 }
@@ -2232,7 +2235,11 @@ docker = "biocontainers/bwa:0.7.17"
     }
 
     /// Helper: send a POST request with auth header.
-    async fn post_json_auth(uri: &str, body: impl Serialize, token: &str) -> axum::http::Response<Body> {
+    async fn post_json_auth(
+        uri: &str,
+        body: impl Serialize,
+        token: &str,
+    ) -> axum::http::Response<Body> {
         let app = build_router();
         app.oneshot(
             Request::builder()

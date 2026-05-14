@@ -3,6 +3,7 @@
 //!
 //! Supports SLURM, PBS/Torque, SGE, and LSF job schedulers.
 
+use crate::environment::EnvironmentResolver;
 use crate::rule::Rule;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -120,6 +121,31 @@ pub fn generate_submit_script(
         ClusterBackend::Sge => generate_sge_script(rule, shell_cmd, cluster_config),
         ClusterBackend::Lsf => generate_lsf_script(rule, shell_cmd, cluster_config),
     }
+}
+
+/// Generate a scheduler submit script with environment wrapping.
+///
+/// This is the recommended way to generate cluster scripts as it properly
+/// wraps the shell command through the environment resolver (conda, docker,
+/// singularity, pixi, venv) before generating the submit script.
+pub fn generate_submit_script_with_env(
+    backend: &ClusterBackend,
+    rule: &Rule,
+    shell_cmd: &str,
+    cluster_config: &ClusterJobConfig,
+    env_resolver: &EnvironmentResolver,
+) -> Result<String, String> {
+    // Wrap command through environment resolver
+    let wrapped_cmd = env_resolver
+        .wrap_command(shell_cmd, &rule.environment)
+        .map_err(|e| e.to_string())?;
+
+    Ok(generate_submit_script(
+        backend,
+        rule,
+        &wrapped_cmd,
+        cluster_config,
+    ))
 }
 
 /// Returns the shell command used to submit a job to the given backend.

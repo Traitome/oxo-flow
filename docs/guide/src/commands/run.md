@@ -30,6 +30,10 @@ oxo-flow run [OPTIONS] <WORKFLOW>
 | `--target` | `-t` | All rules | Run only specific target rules |
 | `--retry` | `-r` | `0` | Number of times to retry failed jobs |
 | `--timeout` | — | `0` (disabled) | Timeout per job in seconds |
+| `--max-threads` | — | `0` (auto-detect) | Maximum CPU threads available for execution |
+| `--max-memory` | — | `0` (auto-detect) | Maximum memory in MB available for execution |
+| `--skip-env-setup` | — | — | Skip environment setup (assume environments are ready) |
+| `--cache-dir` | — | — | Directory for caching environment setup state |
 | `--verbose` | `-v` | — | Enable debug-level logging |
 
 ---
@@ -72,6 +76,26 @@ oxo-flow run pipeline.oxoflow -t align -t sort
 oxo-flow run pipeline.oxoflow --timeout 3600
 ```
 
+### Limit resource usage
+
+```bash
+# Use only 16 threads and 32GB memory
+oxo-flow run pipeline.oxoflow --max-threads 16 --max-memory 32768
+```
+
+### Cache environment setup
+
+```bash
+# Cache environment setup state for faster subsequent runs
+oxo-flow run pipeline.oxoflow --cache-dir .oxo-flow/cache
+```
+
+### Skip environment setup (when environments are pre-built)
+
+```bash
+oxo-flow run pipeline.oxoflow --skip-env-setup
+```
+
 ---
 
 ## Output
@@ -102,3 +126,8 @@ Done: 5 succeeded, 0 failed
 - If `--keep-going` is not set, execution stops at the first failure
 - The `--retry` flag re-runs failed jobs up to N times before marking them as failed
 - A timeout of `0` means no timeout
+- Resource constraints (`threads`, `memory`) in rules are checked against available resources before execution
+- Setting `--max-threads 0` or `--max-memory 0` auto-detects system resources
+- Environment setup is performed automatically before first use of each environment (conda, pixi, docker, singularity, venv)
+- Use `--skip-env-setup` when environments are pre-built to avoid redundant setup
+- Use `--cache-dir` to persist environment setup state across runs for faster startup

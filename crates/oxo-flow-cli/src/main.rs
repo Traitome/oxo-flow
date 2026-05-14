@@ -73,6 +73,22 @@ enum Commands {
         /// Timeout per job in seconds (0 = no timeout).
         #[arg(long, default_value = "0")]
         timeout: u64,
+
+        /// Maximum threads available for execution (0 = auto-detect).
+        #[arg(long, default_value = "0")]
+        max_threads: u32,
+
+        /// Maximum memory in MB available for execution (0 = auto-detect).
+        #[arg(long, default_value = "0")]
+        max_memory: u64,
+
+        /// Skip environment setup (assume environments are already ready).
+        #[arg(long)]
+        skip_env_setup: bool,
+
+        /// Directory for caching environment setup state.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
     },
 
     /// Simulate execution without running any commands.
@@ -463,6 +479,10 @@ async fn main() -> Result<()> {
             target: _,
             retry,
             timeout,
+            max_threads,
+            max_memory,
+            skip_env_setup,
+            cache_dir,
         } => {
             print_banner();
             let config = WorkflowConfig::from_file(&workflow)
@@ -492,6 +512,18 @@ async fn main() -> Result<()> {
                 } else {
                     None
                 },
+                max_threads: if max_threads > 0 {
+                    Some(max_threads)
+                } else {
+                    None
+                },
+                max_memory_mb: if max_memory > 0 {
+                    Some(max_memory)
+                } else {
+                    None
+                },
+                skip_env_setup,
+                cache_dir,
             };
 
             let executor = LocalExecutor::new(exec_config);
@@ -614,7 +646,9 @@ async fn main() -> Result<()> {
 
             let content = match format.as_str() {
                 "ascii" => dag.to_ascii().context("failed to generate ASCII graph")?,
-                "tree" => dag.to_ascii_tree().context("failed to generate ASCII tree")?,
+                "tree" => dag
+                    .to_ascii_tree()
+                    .context("failed to generate ASCII tree")?,
                 "dot-clustered" => dag
                     .to_dot_clustered()
                     .context("failed to generate clustered DOT")?,
@@ -820,18 +854,17 @@ version = "0.1.0"
 description = "A new oxo-flow pipeline"
 
 [config]
-# Add your configuration variables here
+greeting = "Hello from oxo-flow!"
 
 [defaults]
-threads = 4
-memory = "8G"
+threads = 1
+memory = "1G"
 
-# Define your pipeline rules below:
-# [[rules]]
-# name = "step1"
-# input = ["input.txt"]
-# output = ["output.txt"]
-# shell = "cat input.txt > output.txt"
+[[rules]]
+name = "hello_world"
+input = ["data/input.txt"]
+output = ["results/output.txt"]
+shell = "echo '{{config.greeting}}' > {{output[0]}} && cat {{input[0]}} >> {{output[0]}}"
 "#
             );
 
@@ -841,8 +874,18 @@ memory = "8G"
             // Create additional directories
             let envs_dir = project_dir.join("envs");
             let scripts_dir = project_dir.join("scripts");
+            let data_dir = project_dir.join("data");
+            let results_dir = project_dir.join("results");
             std::fs::create_dir_all(&envs_dir)?;
             std::fs::create_dir_all(&scripts_dir)?;
+            std::fs::create_dir_all(&data_dir)?;
+            std::fs::create_dir_all(&results_dir)?;
+
+            // Create initial input file
+            std::fs::write(
+                data_dir.join("input.txt"),
+                "This is your starting input data.\n",
+            )?;
 
             // Create a .gitignore with common bioinformatics patterns
             let gitignore_content = "\
@@ -953,11 +996,18 @@ Thumbs.db
                 let mut deletable: Vec<&String> = Vec::new();
                 let mut skipped_wildcard = 0usize;
                 let mut not_found = 0usize;
+                let mut rejected = 0usize;
 
                 for output in &outputs {
                     let has_wildcard = output.contains('{') && output.contains('}');
                     if has_wildcard {
                         skipped_wildcard += 1;
+                    } else if output.contains("..")
+                        || output.starts_with('/')
+                        || output.starts_with('~')
+                    {
+                        eprintln!("  {} {} (rejected: unsafe path)", "✗".red().bold(), output);
+                        rejected += 1;
                     } else if Path::new(output).exists() {
                         deletable.push(output);
                     } else {
@@ -967,10 +1017,11 @@ Thumbs.db
 
                 if deletable.is_empty() {
                     eprintln!(
-                        "{} Nothing to delete ({} not found, {} wildcard patterns skipped)",
+                        "{} Nothing to delete ({} not found, {} wildcard skipped, {} rejected)",
                         "Clean:".bold(),
                         not_found,
-                        skipped_wildcard
+                        skipped_wildcard,
+                        rejected
                     );
                 } else {
                     // Prompt for confirmation unless --force is given
@@ -1005,12 +1056,13 @@ Thumbs.db
                     }
 
                     eprintln!(
-                        "\n{} {} deleted, {} failed, {} not found, {} wildcard skipped",
+                        "\n{} {} deleted, {} failed, {} not found, {} wildcard skipped, {} rejected",
                         "Done:".bold(),
                         deleted,
                         failed,
                         not_found,
-                        skipped_wildcard
+                        skipped_wildcard,
+                        rejected
                     );
                 }
             }
@@ -1312,6 +1364,9 @@ Thumbs.db
                         order.len()
                     );
 
+                    // Create environment resolver for command wrapping
+                    let env_resolver = oxo_flow_core::environment::EnvironmentResolver::new();
+
                     for rule_name in &order {
                         let rule = config.get_rule(rule_name).unwrap();
                         let shell_cmd = match rule.shell.as_deref() {
@@ -1325,12 +1380,17 @@ Thumbs.db
                                 continue;
                             }
                         };
-                        let script = oxo_flow_core::cluster::generate_submit_script(
+
+                        // Generate script with environment wrapping
+                        let script = oxo_flow_core::cluster::generate_submit_script_with_env(
                             &cluster_backend,
                             rule,
                             shell_cmd,
                             &cluster_config,
-                        );
+                            &env_resolver,
+                        )
+                        .map_err(|e| anyhow::anyhow!("environment wrapping failed: {}", e))?;
+
                         let script_path = output_dir.join(format!("{rule_name}.sh"));
                         std::fs::write(&script_path, &script)?;
                         eprintln!("  {} {}", "✓".green(), script_path.display());
@@ -1357,11 +1417,28 @@ Thumbs.db
                         _ => oxo_flow_core::cluster::ClusterBackend::Slurm,
                     };
 
-                    eprintln!(
-                        "{} Use '{}' to check job status",
-                        "Cluster:".bold().cyan(),
-                        oxo_flow_core::cluster::status_command(&cluster_backend)
-                    );
+                    let status_cmd = oxo_flow_core::cluster::status_command(&cluster_backend);
+                    eprintln!("{} Executing '{}'...", "Cluster:".bold().cyan(), status_cmd);
+
+                    let mut parts = status_cmd.split_whitespace();
+                    let program = parts.next().unwrap_or(status_cmd);
+                    let args: Vec<&str> = parts.collect();
+
+                    match std::process::Command::new(program).args(&args).status() {
+                        Ok(status) => {
+                            if !status.success() {
+                                eprintln!(
+                                    "{} Command failed with exit code: {}",
+                                    "✗".red(),
+                                    status.code().unwrap_or(-1)
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("{} Failed to execute status command: {}", "✗".red(), e);
+                            eprintln!("  Is {} installed on this system?", program);
+                        }
+                    }
                 }
 
                 ClusterAction::Cancel { backend, job_ids } => {
@@ -1378,15 +1455,32 @@ Thumbs.db
                             "Warning:".bold().yellow()
                         );
                     } else {
-                        for id in &job_ids {
-                            eprintln!("  {} {} {}", cancel_cmd, id, "(would cancel)".dimmed());
-                        }
                         eprintln!(
-                            "\n{} Run manually: {} {}",
-                            "Hint:".bold(),
-                            cancel_cmd,
-                            job_ids.join(" ")
+                            "{} Canceling {} job(s)...",
+                            "Cluster:".bold().cyan(),
+                            job_ids.len()
                         );
+
+                        match std::process::Command::new(cancel_cmd)
+                            .args(&job_ids)
+                            .status()
+                        {
+                            Ok(status) => {
+                                if status.success() {
+                                    eprintln!("{} Successfully canceled jobs.", "✓".green());
+                                } else {
+                                    eprintln!(
+                                        "{} Command failed with exit code: {}",
+                                        "✗".red(),
+                                        status.code().unwrap_or(-1)
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("{} Failed to execute cancel command: {}", "✗".red(), e);
+                                eprintln!("  Is {} installed on this system?", cancel_cmd);
+                            }
+                        }
                     }
                 }
             }
@@ -1701,7 +1795,9 @@ mod tests {
     fn cli_parse_graph() {
         let cli = Cli::try_parse_from(["oxo-flow", "graph", "test.oxoflow"]).unwrap();
         match cli.command {
-            Commands::Graph { workflow, format, .. } => {
+            Commands::Graph {
+                workflow, format, ..
+            } => {
                 assert_eq!(workflow, PathBuf::from("test.oxoflow"));
                 assert_eq!(format, "ascii"); // default
             }
@@ -1722,7 +1818,8 @@ mod tests {
 
     #[test]
     fn cli_parse_graph_with_output() {
-        let cli = Cli::try_parse_from(["oxo-flow", "graph", "test.oxoflow", "-o", "graph.dot"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["oxo-flow", "graph", "test.oxoflow", "-o", "graph.dot"]).unwrap();
         match cli.command {
             Commands::Graph { output, .. } => {
                 assert_eq!(output, Some(PathBuf::from("graph.dot")));

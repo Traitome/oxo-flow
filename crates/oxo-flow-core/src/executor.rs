@@ -7,6 +7,7 @@
 use crate::environment::EnvironmentResolver;
 use crate::error::{OxoFlowError, Result};
 use crate::rule::Rule;
+use crate::scheduler::ResourcePool;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -14,7 +15,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::process::Command;
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex, Semaphore};
 
 /// Status of a job in the execution pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -207,8 +208,22 @@ pub struct ExecutorConfig {
     /// Number of times to retry a failed job before giving up.
     pub retry_count: u32,
 
-    /// Optional timeout per job.
+    /// Optional timeout per job (global default).
     pub timeout: Option<std::time::Duration>,
+
+    /// Maximum total CPU threads across all running jobs.
+    /// If set, jobs requiring more threads than available will be blocked.
+    pub max_threads: Option<u32>,
+
+    /// Maximum total memory in MB across all running jobs.
+    /// If set, jobs requiring more memory than available will be blocked.
+    pub max_memory_mb: Option<u64>,
+
+    /// Skip environment setup (assume environments are already ready).
+    pub skip_env_setup: bool,
+
+    /// Cache directory for environments (default: ~/.cache/oxo-flow/).
+    pub cache_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for ExecutorConfig {
@@ -220,6 +235,10 @@ impl Default for ExecutorConfig {
             keep_going: false,
             retry_count: 0,
             timeout: None,
+            max_threads: None,
+            max_memory_mb: None,
+            skip_env_setup: false,
+            cache_dir: None,
         }
     }
 }
@@ -229,17 +248,128 @@ pub struct LocalExecutor {
     config: ExecutorConfig,
     semaphore: Arc<Semaphore>,
     env_resolver: EnvironmentResolver,
+    /// Resource pool for tracking available CPU/memory.
+    resource_pool: Arc<Mutex<ResourcePool>>,
 }
 
 impl LocalExecutor {
     /// Create a new local executor with the given configuration.
     pub fn new(config: ExecutorConfig) -> Self {
         let semaphore = Arc::new(Semaphore::new(config.max_jobs));
-        let env_resolver = EnvironmentResolver::new();
+
+        // Create environment resolver with optional cache directory
+        let env_resolver = match &config.cache_dir {
+            Some(cache_dir) => EnvironmentResolver::with_cache_dir(cache_dir),
+            None => EnvironmentResolver::new(),
+        };
+
+        // Initialize resource pool with system limits or configured limits
+        let (max_threads, max_memory_mb) = Self::detect_system_resources(&config);
+        let resource_pool = Arc::new(Mutex::new(ResourcePool::new(max_threads, max_memory_mb)));
+
         Self {
             config,
             semaphore,
             env_resolver,
+            resource_pool,
+        }
+    }
+
+    /// Detect system resources or use configured limits.
+    fn detect_system_resources(config: &ExecutorConfig) -> (u32, u64) {
+        let max_threads = config.max_threads.unwrap_or_else(|| {
+            // Use num_cpus as default
+            num_cpus::get() as u32
+        });
+
+        let max_memory_mb = config.max_memory_mb.unwrap_or({
+            // Estimate total system memory (simple heuristic)
+            // On most systems, use total memory if available, otherwise default to 8GB
+            #[cfg(target_os = "linux")]
+            {
+                std::fs::read_to_string("/proc/meminfo")
+                    .ok()
+                    .and_then(|s| {
+                        s.lines()
+                            .find(|l| l.starts_with("MemTotal:"))
+                            .and_then(|l| {
+                                l.split_whitespace()
+                                    .nth(1)
+                                    .and_then(|v| v.parse::<u64>().ok())
+                                    .map(|kb| kb / 1024) // Convert KB to MB
+                            })
+                    })
+                    .unwrap_or(8192)
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                8192 // Default to 8GB on non-Linux systems
+            }
+        });
+
+        tracing::debug!(
+            max_threads = %max_threads,
+            max_memory_mb = %max_memory_mb,
+            "initialized resource pool"
+        );
+
+        (max_threads, max_memory_mb)
+    }
+
+    /// Ensure the environment for a rule is ready before execution.
+    /// Creates/pulls environments as needed unless skip_env_setup is set.
+    async fn ensure_environment_ready(&self, rule: &Rule) -> Result<()> {
+        if self.config.skip_env_setup {
+            tracing::debug!(rule = %rule.name, "skipping environment setup");
+            return Ok(());
+        }
+
+        let env_spec = &rule.environment;
+        if env_spec.is_empty() {
+            return Ok(()); // System environment, no setup needed
+        }
+
+        // Get cache key for this environment
+        let key = self.env_resolver.cache_key(env_spec);
+
+        // Check if already ready
+        if self.env_resolver.cache_is_ready(&key).await {
+            tracing::debug!(rule = %rule.name, env_key = %key, "environment already ready");
+            return Ok(());
+        }
+
+        // Run setup command
+        let setup_cmd = self.env_resolver.setup_command(env_spec)?;
+        tracing::info!(rule = %rule.name, setup_cmd = %setup_cmd, "setting up environment");
+
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(&setup_cmd)
+            .current_dir(&self.config.workdir)
+            .output()
+            .await;
+
+        match output {
+            Ok(o) if o.status.success() => {
+                self.env_resolver.cache_mark_ready(&key).await;
+                tracing::info!(rule = %rule.name, env_key = %key, "environment ready");
+                Ok(())
+            }
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr).to_string();
+                tracing::error!(rule = %rule.name, stderr = %stderr, "environment setup failed");
+                Err(OxoFlowError::Environment {
+                    kind: env_spec.kind().to_string(),
+                    message: format!("setup failed: {}", stderr),
+                })
+            }
+            Err(e) => {
+                tracing::error!(rule = %rule.name, error = %e, "environment setup command failed");
+                Err(OxoFlowError::Environment {
+                    kind: env_spec.kind().to_string(),
+                    message: format!("setup command failed: {}", e),
+                })
+            }
         }
     }
 
@@ -259,6 +389,65 @@ impl LocalExecutor {
         }
     }
 
+    /// Check if resources are available for this rule.
+    async fn check_resources(&self, rule: &Rule) -> Result<()> {
+        let pool = self.resource_pool.lock().await;
+
+        if !pool.can_accommodate(rule) {
+            let required_threads = rule.effective_threads();
+            let required_memory = rule
+                .effective_memory()
+                .and_then(crate::scheduler::parse_memory_mb)
+                .unwrap_or(0);
+
+            return Err(OxoFlowError::ResourceExhausted {
+                rule: rule.name.clone(),
+                required_threads,
+                available_threads: pool.threads,
+                required_memory_mb: required_memory,
+                available_memory_mb: pool.memory_mb,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Reserve resources for a rule before execution.
+    async fn reserve_resources(&self, rule: &Rule) {
+        let mut pool = self.resource_pool.lock().await;
+        pool.reserve(rule);
+        tracing::debug!(
+            rule = %rule.name,
+            threads_remaining = %pool.threads,
+            memory_remaining_mb = %pool.memory_mb,
+            "reserved resources"
+        );
+    }
+
+    /// Release resources after rule completion.
+    async fn release_resources(&self, rule: &Rule) {
+        let (max_threads, max_memory_mb) = Self::detect_system_resources(&self.config);
+        let mut pool = self.resource_pool.lock().await;
+        pool.release(rule, max_threads, max_memory_mb);
+        tracing::debug!(
+            rule = %rule.name,
+            threads_available = %pool.threads,
+            memory_available_mb = %pool.memory_mb,
+            "released resources"
+        );
+    }
+
+    /// Get effective timeout for a rule (rule-specific overrides global default).
+    fn get_timeout(&self, rule: &Rule) -> Option<std::time::Duration> {
+        // Rule-specific time_limit overrides global timeout
+        if let Some(ref time_limit) = rule.resources.time_limit
+            && let Some(secs) = crate::rule::parse_duration_secs(time_limit)
+        {
+            return Some(std::time::Duration::from_secs(secs));
+        }
+        self.config.timeout
+    }
+
     /// Execute a single rule as a local process.
     #[must_use = "executing a rule returns a Result that must be used"]
     pub async fn execute_rule(
@@ -266,6 +455,9 @@ impl LocalExecutor {
         rule: &Rule,
         wildcard_values: &HashMap<String, String>,
     ) -> Result<JobRecord> {
+        // Get per-rule timeout (rule-specific overrides global default)
+        let timeout = self.get_timeout(rule);
+
         let mut record = JobRecord {
             rule: rule.name.clone(),
             status: JobStatus::Running,
@@ -276,7 +468,7 @@ impl LocalExecutor {
             stderr: None,
             command: None,
             retries: 0,
-            timeout: self.config.timeout,
+            timeout,
         };
 
         let shell_cmd = match &rule.shell {
@@ -323,6 +515,12 @@ impl LocalExecutor {
             return Ok(record);
         }
 
+        // Ensure environment is ready before execution
+        self.ensure_environment_ready(rule).await?;
+
+        // Check resources before execution
+        self.check_resources(rule).await?;
+
         // Acquire concurrency permit
         let _permit = self
             .semaphore
@@ -332,6 +530,9 @@ impl LocalExecutor {
                 rule: rule.name.clone(),
                 message: format!("semaphore error: {e}"),
             })?;
+
+        // NEW: Reserve resources before execution
+        self.reserve_resources(rule).await;
 
         tracing::info!(rule = %rule.name, threads = %rule.effective_threads(), "executing");
 
@@ -355,7 +556,8 @@ impl LocalExecutor {
                 .stderr(Stdio::piped())
                 .output();
 
-            let cmd_result = if let Some(duration) = self.config.timeout {
+            // Use per-rule timeout
+            let cmd_result = if let Some(duration) = timeout {
                 match tokio::time::timeout(duration, cmd_future).await {
                     Ok(inner) => inner,
                     Err(_) => {
@@ -370,6 +572,8 @@ impl LocalExecutor {
                             timeout = ?duration,
                             "command timed out"
                         );
+                        // NEW: Release resources even on timeout
+                        self.release_resources(rule).await;
                         if !self.config.keep_going {
                             return Err(OxoFlowError::Execution {
                                 rule: rule.name.clone(),
@@ -397,6 +601,9 @@ impl LocalExecutor {
                 record.status = JobStatus::Success;
                 tracing::info!(rule = %rule.name, "completed successfully");
 
+                // NEW: Release resources after success
+                self.release_resources(rule).await;
+
                 if !self.config.dry_run {
                     let missing = validate_outputs(rule, &self.config.workdir);
                     for path in &missing {
@@ -423,6 +630,8 @@ impl LocalExecutor {
                 );
             } else {
                 record.status = JobStatus::Failed;
+                // NEW: Release resources after final failure
+                self.release_resources(rule).await;
                 tracing::error!(rule = %rule.name, code = %code, "failed");
                 if !self.config.keep_going {
                     return Err(OxoFlowError::TaskFailed {
@@ -433,6 +642,8 @@ impl LocalExecutor {
             }
         }
 
+        // Ensure resources are released if we exit the loop without success
+        self.release_resources(rule).await;
         Ok(record)
     }
 
@@ -464,7 +675,7 @@ impl LocalExecutor {
                     stderr: None,
                     command: wrapped.or(command),
                     retries: 0,
-                    timeout: self.config.timeout,
+                    timeout: self.get_timeout(rule),
                 }
             })
             .collect()
@@ -1239,6 +1450,7 @@ mod tests {
             keep_going: false,
             retry_count: 0,
             timeout: None,
+            ..Default::default()
         };
         let executor = LocalExecutor::new(config);
         let rule = make_rule("echo_test", "echo hello_oxoflow");
@@ -1257,6 +1469,7 @@ mod tests {
             keep_going: false,
             retry_count: 0,
             timeout: None,
+            ..Default::default()
         };
         let executor = LocalExecutor::new(config);
         let rule = make_rule("dry_test", "echo should_not_run");
@@ -1274,6 +1487,7 @@ mod tests {
             keep_going: true,
             retry_count: 0,
             timeout: None,
+            ..Default::default()
         };
         let executor = LocalExecutor::new(config);
         let rule = make_rule("fail_test", "exit 42");
@@ -1292,6 +1506,7 @@ mod tests {
             keep_going: false,
             retry_count: 0,
             timeout: None,
+            ..Default::default()
         };
         let executor = LocalExecutor::new(config);
         let rule = make_rule("wildcard_test", "echo {sample}");
@@ -1371,6 +1586,7 @@ mod tests {
             keep_going: false,
             retry_count: 0,
             timeout: None,
+            ..Default::default()
         };
         let executor = LocalExecutor::new(config);
         let rule = Rule {
@@ -1558,6 +1774,7 @@ mod tests {
             keep_going: true,
             retry_count: 0,
             timeout: Some(std::time::Duration::from_millis(100)),
+            ..Default::default()
         };
         let executor = LocalExecutor::new(config);
         let rule = make_rule("timeout_test", "sleep 30");

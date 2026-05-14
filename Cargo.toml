@@ -54,6 +54,7 @@ petgraph = "0.7"
 globset = "0.4"
 regex = "1"
 tempfile = "3"
+num_cpus = "1"
 
 # Web
 axum = "0.8"

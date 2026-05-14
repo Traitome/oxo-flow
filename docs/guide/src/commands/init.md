@@ -69,23 +69,26 @@ version = "0.1.0"
 description = "A new oxo-flow pipeline"
 
 [config]
-# Add your configuration variables here
+greeting = "Hello from oxo-flow!"
 
 [defaults]
-threads = 4
-memory = "8G"
+threads = 1
+memory = "1G"
 
-# Define your pipeline rules below:
-# [[rules]]
-# name = "step1"
-# input = ["input.txt"]
-# output = ["output.txt"]
-# shell = "cat input.txt > output.txt"
+[[rules]]
+name = "hello_world"
+input = ["data/input.txt"]
+output = ["results/output.txt"]
+shell = "echo '{config.greeting}' > {output[0]} && cat {input[0]} >> {output[0]}"
 ```
 
 **`envs/`** — Directory for conda YAML / Docker / Pixi environment specs.
 
 **`scripts/`** — Directory for helper scripts.
+
+**`data/`** — Pre-populated with an `input.txt` sample to allow immediate execution.
+
+**`results/`** — Empty directory created for workflow outputs.
 
 **`.gitignore`** — Pre-configured with bioinformatics patterns (BAM, VCF, index files, workflow outputs).
 

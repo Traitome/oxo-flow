@@ -70,13 +70,13 @@ Total: 4 output patterns
 ### Clean output
 
 ```
-oxo-flow 0.3.0 — Bioinformatics Pipeline Engine
+oxo-flow 0.3.1 — Bioinformatics Pipeline Engine
 Clean: 2 file(s) will be deleted. Continue? [y/N]
 y
   ✓ results/trimmed/sample1_R1.fastq.gz
   ✓ results/trimmed/sample1_R2.fastq.gz
 
-Done: 2 deleted, 0 failed, 1 not found, 1 wildcard skipped
+Done: 2 deleted, 0 failed, 1 not found, 1 wildcard skipped, 0 rejected
 ```
 
 ---
@@ -84,6 +84,7 @@ Done: 2 deleted, 0 failed, 1 not found, 1 wildcard skipped
 ## Notes
 
 - **Wildcard patterns** (containing `{` and `}`) are skipped because they cannot be resolved to specific files without runtime context
+- **Path Traversal Protection** strictly rejects paths that begin with `/`, `~`, or contain `..`, marking them as `rejected` and preventing arbitrary file deletion
 - **Non-existent files** are silently skipped (not counted as errors)
 - Without `--force`, a confirmation prompt is shown before deleting any files
 - Use `--dry-run` to preview the list of files that would be affected before committing to a clean

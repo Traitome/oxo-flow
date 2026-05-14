@@ -50,6 +50,14 @@ oxo-flow cluster <ACTION> [OPTIONS] [WORKFLOW/JOB_IDS]
 oxo-flow cluster submit pipeline.oxoflow -b slurm -q work
 ```
 
+### Submit with environment support
+
+```bash
+# If your workflow uses conda environments, the generated scripts
+# will automatically include conda activation commands
+oxo-flow cluster submit pipeline.oxoflow -b slurm -q compute
+```
+
 ### Check job status
 
 ```bash
@@ -81,8 +89,32 @@ Done: 5 scripts written to .oxo-flow/cluster
 
 ---
 
+## Generated Script Example
+
+For a workflow rule with conda environment:
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=bwa_align
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=32G
+#SBATCH --time=24:00:00
+#SBATCH --partition=compute
+#SBATCH --output=logs/bwa_align.out
+#SBATCH --error=logs/bwa_align.err
+
+# Environment wrapping (automatically added)
+conda activate bwa_env
+
+bwa mem -t 16 ref.fa reads.fq > aligned.sam
+```
+
+---
+
 ## Notes
 
 - `submit` generates shell scripts tailored for the specified cluster backend
 - Resource requirements (threads, memory) from the workflow are automatically translated to cluster directives
-- `status` and `cancel` provide convenient wrappers around native cluster commands
+- **Environment wrapping is applied automatically** — conda, docker, singularity, pixi, and venv environments are properly wrapped in the generated scripts
+- `status` and `cancel` actively execute native cluster commands (like `squeue`, `scancel`) and print their outputs directly
+- Ensure the required environments (conda envs, docker images, etc.) are available on cluster nodes before submitting
