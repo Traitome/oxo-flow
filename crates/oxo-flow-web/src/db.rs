@@ -4,10 +4,14 @@ use serde::{Deserialize, Serialize};
 use sqlx::migrate::MigrateDatabase;
 use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
 use std::sync::OnceLock;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 /// Global SQLite connection pool.
 static DB_POOL: OnceLock<SqlitePool> = OnceLock::new();
+
+/// Guard to ensure initialization happens atomically across threads.
+static INIT_GUARD: Mutex<()> = Mutex::const_new(());
 
 /// Initialize the database, run migrations, and seed the default admin user.
 ///
@@ -17,6 +21,14 @@ static DB_POOL: OnceLock<SqlitePool> = OnceLock::new();
 /// concurrent queries share the same schema and data.
 pub async fn init_db(database_url: &str) -> Result<()> {
     // Pool already initialized — no-op.
+    if DB_POOL.get().is_some() {
+        return Ok(());
+    }
+
+    // Acquire lock to ensure only one thread initializes at a time.
+    let _guard = INIT_GUARD.lock().await;
+
+    // Double-check after acquiring lock (another thread may have initialized).
     if DB_POOL.get().is_some() {
         return Ok(());
     }
