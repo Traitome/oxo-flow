@@ -448,6 +448,7 @@ mod tests {
             command: None,
             retries: 0,
             timeout: None,
+            skip_reason: None,
         });
 
         assert_eq!(state.status("a"), Some(JobStatus::Success));
@@ -613,6 +614,7 @@ mod tests {
             command: None,
             retries: 0,
             timeout: None,
+            skip_reason: None,
         });
 
         // Both "left" and "right" should be ready

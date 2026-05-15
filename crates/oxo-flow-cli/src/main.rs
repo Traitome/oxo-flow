@@ -673,11 +673,12 @@ async fn main() -> Result<()> {
                             }
                         } else if record.status == oxo_flow_core::executor::JobStatus::Skipped {
                             skipped_count += 1;
+                            let reason = record.skip_reason.as_deref().unwrap_or("unknown reason");
                             eprintln!(
                                 "  {} {} {}",
                                 "~".cyan().bold(),
                                 rule_name,
-                                "(skipped, outputs up-to-date)".dimmed()
+                                format!("(skipped, {})", reason).dimmed()
                             );
                         } else {
                             fail_count += 1;

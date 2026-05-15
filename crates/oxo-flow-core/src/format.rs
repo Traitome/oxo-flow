@@ -176,13 +176,27 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
             }
         }
 
-        // E004: Memory format validation
+        // E004: Memory format validation (check both rule.memory and rule.resources.memory)
         if let Some(ref mem) = rule.memory
             && crate::scheduler::parse_memory_mb(mem).is_none()
         {
             diagnostics.push(Diagnostic {
                 severity: Severity::Error,
                 message: format!("invalid memory specification: '{}'", mem),
+                rule: Some(rule.name.clone()),
+                code: "E004".to_string(),
+                suggestion: Some(
+                    "use a valid format like \"8G\", \"16384M\", or \"1T\"".to_string(),
+                ),
+            });
+        }
+        // Also check resources.memory
+        if let Some(ref mem) = rule.resources.memory
+            && crate::scheduler::parse_memory_mb(mem).is_none()
+        {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                message: format!("invalid memory specification in resources: '{}'", mem),
                 rule: Some(rule.name.clone()),
                 code: "E004".to_string(),
                 suggestion: Some(
@@ -200,6 +214,44 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                         severity: Severity::Error,
                         message: format!(
                             "shell command references undefined config variable '{}'",
+                            key
+                        ),
+                        rule: Some(rule.name.clone()),
+                        code: "E005".to_string(),
+                        suggestion: Some(format!("define '{}' in the [config] section", key)),
+                    });
+                }
+            }
+        }
+
+        // E005: Check output paths for undefined config variables
+        for output in &rule.output {
+            for cap in config_ref_re.captures_iter(output) {
+                let key = &cap[1];
+                if config.get_config_value(key).is_none() {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        message: format!(
+                            "output path references undefined config variable '{}'",
+                            key
+                        ),
+                        rule: Some(rule.name.clone()),
+                        code: "E005".to_string(),
+                        suggestion: Some(format!("define '{}' in the [config] section", key)),
+                    });
+                }
+            }
+        }
+
+        // E005: Check input paths for undefined config variables
+        for input in &rule.input {
+            for cap in config_ref_re.captures_iter(input) {
+                let key = &cap[1];
+                if config.get_config_value(key).is_none() {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        message: format!(
+                            "input path references undefined config variable '{}'",
                             key
                         ),
                         rule: Some(rule.name.clone()),

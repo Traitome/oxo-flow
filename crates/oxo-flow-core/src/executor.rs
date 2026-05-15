@@ -188,6 +188,10 @@ pub struct JobRecord {
     /// Timeout configured for this job (not serializable; lives only in memory).
     #[serde(skip)]
     pub timeout: Option<std::time::Duration>,
+
+    /// Reason for skipping (if status is Skipped).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skip_reason: Option<String>,
 }
 
 /// Configuration for the executor.
@@ -483,6 +487,7 @@ impl LocalExecutor {
             command: None,
             retries: 0,
             timeout,
+            skip_reason: None,
         };
 
         let shell_cmd = match &rule.shell {
@@ -505,8 +510,9 @@ impl LocalExecutor {
                 })
                 .collect();
             if !evaluate_condition(condition, &config_values) {
-                tracing::debug!(rule = %rule.name, condition = %condition, "skipping rule: condition evaluated to false");
+                tracing::info!(rule = %rule.name, condition = %condition, "skipping rule: condition evaluated to false");
                 record.status = JobStatus::Skipped;
+                record.skip_reason = Some("condition evaluated to false".to_string());
                 record.finished_at = Some(Utc::now());
                 return Ok(record);
             }
@@ -516,6 +522,7 @@ impl LocalExecutor {
         if should_skip_rule(rule, &self.config.workdir, wildcard_values) {
             tracing::info!(rule = %rule.name, "outputs up-to-date, skipping");
             record.status = JobStatus::Skipped;
+            record.skip_reason = Some("outputs up-to-date".to_string());
             record.finished_at = Some(Utc::now());
             return Ok(record);
         }
@@ -698,6 +705,7 @@ impl LocalExecutor {
                     command: wrapped.or(command),
                     retries: 0,
                     timeout: self.get_timeout(rule),
+                    skip_reason: None,
                 }
             })
             .collect()
@@ -1108,6 +1116,32 @@ fn compare_config_value(val: Option<&toml::Value>, op: &str, rhs: &str) -> bool 
             match op {
                 "==" => sv.as_str() == rhs_str,
                 "!=" => sv.as_str() != rhs_str,
+                // For numeric comparison operators, try to parse string as number
+                ">=" | "<=" | ">" | "<" => {
+                    // Try integer comparison first
+                    if let (Ok(sv_num), Ok(rhs_num)) = (sv.parse::<i64>(), rhs_str.parse::<i64>()) {
+                        match op {
+                            ">=" => sv_num >= rhs_num,
+                            "<=" => sv_num <= rhs_num,
+                            ">" => sv_num > rhs_num,
+                            "<" => sv_num < rhs_num,
+                            _ => false,
+                        }
+                    } else if let (Ok(sv_num), Ok(rhs_num)) =
+                        (sv.parse::<f64>(), rhs_str.parse::<f64>())
+                    {
+                        // Fall back to float comparison
+                        match op {
+                            ">=" => sv_num >= rhs_num,
+                            "<=" => sv_num <= rhs_num,
+                            ">" => sv_num > rhs_num,
+                            "<" => sv_num < rhs_num,
+                            _ => false,
+                        }
+                    } else {
+                        false
+                    }
+                }
                 _ => false,
             }
         }
@@ -2881,6 +2915,7 @@ mod tests {
                 command: None,
                 retries: 0,
                 timeout: None,
+                skip_reason: None,
             },
         );
         records.insert(
@@ -2896,6 +2931,7 @@ mod tests {
                 command: None,
                 retries: 0,
                 timeout: None,
+                skip_reason: None,
             },
         );
         records.insert(
@@ -2911,6 +2947,7 @@ mod tests {
                 command: None,
                 retries: 0,
                 timeout: None,
+                skip_reason: None,
             },
         );
 

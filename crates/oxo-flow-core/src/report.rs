@@ -809,6 +809,7 @@ mod tests {
                 command: Some("echo hello".to_string()),
                 retries: 0,
                 timeout: None,
+                skip_reason: None,
             },
         );
 
@@ -1165,6 +1166,7 @@ mod tests {
                 command: None,
                 retries: 0,
                 timeout: None,
+                skip_reason: None,
             },
         );
         let section = execution_time_chart(&records);
