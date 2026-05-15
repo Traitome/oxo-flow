@@ -1814,7 +1814,7 @@ fn wildcard_cartesian_product() {
 fn report_empty_workflow_report() {
     use oxo_flow_core::report::Report;
 
-    let mut report = Report::new("Empty Pipeline Report", "empty-pipeline", "0.1.0");
+    let report = Report::new("Empty Pipeline Report", "empty-pipeline", "0.1.0");
     // Don't add any sections
 
     let html = report.to_html();

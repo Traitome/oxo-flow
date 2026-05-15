@@ -507,24 +507,6 @@ fn print_banner() {
     );
 }
 
-/// Convert a TOML config value to a plain string for use in shell command expansion.
-fn toml_value_to_string(value: &toml::Value) -> String {
-    match value {
-        toml::Value::String(s) => s.clone(),
-        other => other.to_string(),
-    }
-}
-
-/// Build a wildcard-values map from the `[config]` section of a workflow,
-/// using the `config.<key>` prefix expected by `render_shell_command`.
-fn config_wildcard_values(config: &WorkflowConfig) -> HashMap<String, String> {
-    config
-        .config
-        .iter()
-        .map(|(k, v)| (format!("config.{k}"), toml_value_to_string(v)))
-        .collect()
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
