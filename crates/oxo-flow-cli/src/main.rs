@@ -507,6 +507,24 @@ fn print_banner() {
     );
 }
 
+/// Convert a TOML config value to a plain string for use in shell command expansion.
+fn toml_value_to_string(value: &toml::Value) -> String {
+    match value {
+        toml::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// Build a wildcard-values map from the `[config]` section of a workflow,
+/// using the `config.<key>` prefix expected by `render_shell_command`.
+fn config_wildcard_values(config: &WorkflowConfig) -> HashMap<String, String> {
+    config
+        .config
+        .iter()
+        .map(|(k, v)| (format!("config.{k}"), toml_value_to_string(v)))
+        .collect()
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -673,7 +691,12 @@ async fn main() -> Result<()> {
                             }
                         } else if record.status == oxo_flow_core::executor::JobStatus::Skipped {
                             skipped_count += 1;
-                            // Optionally print skipped (currently silenced or handled elsewhere)
+                            eprintln!(
+                                "  {} {} {}",
+                                "~".cyan().bold(),
+                                rule_name,
+                                "(skipped, outputs up-to-date)".dimmed()
+                            );
                         } else {
                             fail_count += 1;
                             eprintln!("  {} {} — {}", "✗".red().bold(), rule_name, record.status);
@@ -739,6 +762,16 @@ async fn main() -> Result<()> {
                 order.len()
             );
 
+            // Build config variable map for placeholder expansion in command preview
+            let mut wildcard_values: HashMap<String, String> = HashMap::new();
+            for (key, value) in &config.config {
+                let string_val = match value {
+                    toml::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                wildcard_values.insert(format!("config.{key}"), string_val);
+            }
+
             for (i, rule_name) in order.iter().enumerate() {
                 let rule = config.get_rule(rule_name).unwrap();
                 eprintln!(
@@ -749,7 +782,9 @@ async fn main() -> Result<()> {
                     rule.environment.kind()
                 );
                 if let Some(ref cmd) = rule.shell {
-                    eprintln!("     $ {}", cmd.dimmed());
+                    let expanded =
+                        oxo_flow_core::executor::render_shell_command(cmd, rule, &wildcard_values);
+                    eprintln!("     $ {}", expanded.dimmed());
                 }
             }
         }
@@ -1221,11 +1256,24 @@ Thumbs.db
             let config = WorkflowConfig::from_file(&workflow)
                 .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
+            // Build config variable map so {config.key} paths can be expanded
+            let mut wildcard_values: HashMap<String, String> = HashMap::new();
+            for (key, value) in &config.config {
+                let string_val = match value {
+                    toml::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                wildcard_values.insert(format!("config.{key}"), string_val);
+            }
+
+            // Collect unique output paths, expanding config variable placeholders
             let mut outputs: Vec<String> = Vec::new();
             for rule in &config.rules {
                 for output in &rule.output {
-                    if !outputs.contains(output) {
-                        outputs.push(output.clone());
+                    let expanded =
+                        oxo_flow_core::executor::expand_config_in_path(output, &wildcard_values);
+                    if !outputs.contains(&expanded) {
+                        outputs.push(expanded);
                     }
                 }
             }
@@ -1233,6 +1281,7 @@ Thumbs.db
             if dry_run {
                 eprintln!("{}", "Would clean (dry-run):".bold().yellow());
                 for output in &outputs {
+                    // After config expansion, only true wildcard patterns (e.g. {sample}) remain
                     let has_wildcard = output.contains('{') && output.contains('}');
                     if has_wildcard {
                         eprintln!("  {} (wildcard, skipped)", output.dimmed());
@@ -1245,12 +1294,13 @@ Thumbs.db
                 eprintln!("\n{} {} output patterns", "Total:".bold(), outputs.len());
             } else {
                 // Determine which files are deletable
-                let mut deletable: Vec<&String> = Vec::new();
+                let mut deletable: Vec<String> = Vec::new();
                 let mut skipped_wildcard = 0usize;
                 let mut not_found = 0usize;
                 let mut rejected = 0usize;
 
                 for output in &outputs {
+                    // After config expansion, only true wildcard patterns (e.g. {sample}) remain
                     let has_wildcard = output.contains('{') && output.contains('}');
                     if has_wildcard {
                         skipped_wildcard += 1;
@@ -1261,7 +1311,7 @@ Thumbs.db
                         eprintln!("  {} {} (rejected: unsafe path)", "✗".red().bold(), output);
                         rejected += 1;
                     } else if Path::new(output).exists() {
-                        deletable.push(output);
+                        deletable.push(output.clone());
                     } else {
                         not_found += 1;
                     }
@@ -1802,6 +1852,16 @@ Thumbs.db
                 config.rules.iter().collect()
             };
 
+            // Build config variable map for placeholder expansion in command preview
+            let mut wildcard_values: HashMap<String, String> = HashMap::new();
+            for (key, value) in &config.config {
+                let string_val = match value {
+                    toml::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                wildcard_values.insert(format!("config.{key}"), string_val);
+            }
+
             eprintln!(
                 "{} Debugging {} rules from {}",
                 "Debug:".bold().yellow(),
@@ -1827,15 +1887,32 @@ Thumbs.db
                     eprintln!("  {} {:?}", "Inputs:".dimmed(), rule.input);
                 }
                 if !rule.output.is_empty() {
-                    eprintln!("  {} {:?}", "Outputs:".dimmed(), rule.output);
+                    // Show outputs with config vars expanded
+                    let expanded_outputs: Vec<String> = rule
+                        .output
+                        .iter()
+                        .map(|o| {
+                            oxo_flow_core::executor::expand_config_in_path(o, &wildcard_values)
+                        })
+                        .collect();
+                    if expanded_outputs != rule.output {
+                        eprintln!("  {} {:?}", "Outputs (template):".dimmed(), rule.output);
+                        eprintln!(
+                            "  {} {:?}",
+                            "Outputs (expanded):".dimmed(),
+                            expanded_outputs
+                        );
+                    } else {
+                        eprintln!("  {} {:?}", "Outputs:".dimmed(), rule.output);
+                    }
                 }
 
                 // Shell command (raw template)
                 if let Some(ref cmd) = rule.shell {
                     eprintln!("  {} {}", "Shell (template):".dimmed(), cmd);
-                    // Show expanded version with placeholder substitution
+                    // Show expanded version with placeholder substitution (including config vars)
                     let expanded =
-                        oxo_flow_core::executor::render_shell_command(cmd, rule, &HashMap::new());
+                        oxo_flow_core::executor::render_shell_command(cmd, rule, &wildcard_values);
                     if expanded != *cmd {
                         eprintln!("  {} {}", "Shell (expanded):".dimmed(), expanded);
                     }

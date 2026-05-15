@@ -1723,3 +1723,190 @@ is_experiment = false
 
     assert!(output_path.exists());
 }
+
+// ─── Bug-fix regression tests ─────────────────────────────────────────────────
+
+/// Bug: {config.xxx} in output paths was not expanded when validating that outputs
+/// exist after execution → false "expected output file not found" warnings.
+/// After fix: no WARN emitted when the file is actually created at the expanded path.
+#[test]
+fn run_config_var_in_output_no_false_warn() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("wf.oxoflow");
+    fs::write(
+        &wf,
+        r#"
+[workflow]
+name = "config-var-output"
+[config]
+sample = "SAMPLE001"
+[[rules]]
+name = "gen"
+output = ["results/{config.sample}.txt"]
+shell = "mkdir -p results && echo done > results/{config.sample}.txt"
+"#,
+    )
+    .unwrap();
+
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    assert!(out.status.success(), "run should succeed");
+    // The file should have been created at the expanded path
+    assert!(
+        dir.path().join("results/SAMPLE001.txt").exists(),
+        "output file must exist at expanded path"
+    );
+    // No false "expected output file not found" warning
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("expected output file not found"),
+        "no false output-missing warning expected, got: {stderr}"
+    );
+}
+
+/// Bug: second run with config var outputs always re-ran (should_skip_rule not integrated).
+/// After fix: second run skips rules whose expanded outputs are already up-to-date.
+#[test]
+fn run_config_var_output_skipped_on_second_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("wf.oxoflow");
+    fs::write(
+        &wf,
+        r#"
+[workflow]
+name = "skip-test"
+[config]
+sample = "S001"
+[[rules]]
+name = "produce"
+output = ["out_{config.sample}.txt"]
+shell = "echo data > out_{config.sample}.txt"
+"#,
+    )
+    .unwrap();
+
+    // First run – should execute
+    oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+    assert!(dir.path().join("out_S001.txt").exists());
+
+    // Second run – outputs exist and are up-to-date; rule should be skipped
+    let out2 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out2.status.success());
+    let stderr2 = String::from_utf8_lossy(&out2.stderr);
+    assert!(
+        stderr2.contains("skipped"),
+        "second run should report rule as skipped, got: {stderr2}"
+    );
+}
+
+/// Bug: dry-run showed raw {config.xxx} template instead of expanded commands.
+/// After fix: dry-run output must show the expanded command.
+#[test]
+fn dry_run_expands_config_vars_in_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("wf.oxoflow");
+    fs::write(
+        &wf,
+        r#"
+[workflow]
+name = "dryrun-config"
+[config]
+sample = "PATIENT_007"
+threads = 8
+[[rules]]
+name = "align"
+output = ["aligned/{config.sample}.bam"]
+shell = "bwa mem -t {config.threads} ref.fa raw/{config.sample}.fq > aligned/{config.sample}.bam"
+"#,
+    )
+    .unwrap();
+
+    oxo_flow_cmd()
+        .args(["dry-run", wf.to_str().unwrap()])
+        .assert()
+        .success()
+        // Expanded values must appear in the printed command
+        .stderr(predicate::str::contains("PATIENT_007"))
+        .stderr(predicate::str::contains("bwa mem -t 8"));
+}
+
+/// Bug: debug command showed raw {config.xxx} template instead of expanded shell command.
+/// After fix: debug must show the expanded "Shell (expanded):" line.
+#[test]
+fn debug_expands_config_vars_in_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("wf.oxoflow");
+    fs::write(
+        &wf,
+        r#"
+[workflow]
+name = "debug-config"
+[config]
+sample = "PATIENT_042"
+threads = 16
+[[rules]]
+name = "align"
+output = ["aligned/{config.sample}.bam"]
+shell = "bwa mem -t {config.threads} ref.fa raw/{config.sample}.fq > aligned/{config.sample}.bam"
+"#,
+    )
+    .unwrap();
+
+    oxo_flow_cmd()
+        .args(["debug", wf.to_str().unwrap()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("PATIENT_042"))
+        .stderr(predicate::str::contains("16"));
+}
+
+/// Bug: clean skipped output paths containing {config.xxx} as "wildcards"
+/// and could not delete files produced with config-variable paths.
+/// After fix: clean should expand config vars and successfully delete the files.
+#[test]
+fn clean_handles_config_var_output_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("wf.oxoflow");
+    fs::write(
+        &wf,
+        r#"
+[workflow]
+name = "clean-config"
+[config]
+sample = "CLEAN_SAMPLE"
+[[rules]]
+name = "gen"
+output = ["out_{config.sample}.txt"]
+shell = "echo data > out_{config.sample}.txt"
+"#,
+    )
+    .unwrap();
+
+    // Produce the output file manually
+    fs::write(dir.path().join("out_CLEAN_SAMPLE.txt"), "data").unwrap();
+    assert!(dir.path().join("out_CLEAN_SAMPLE.txt").exists());
+
+    // clean --force should delete the expanded path
+    oxo_flow_cmd()
+        .args(["clean", wf.to_str().unwrap(), "--force"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    assert!(
+        !dir.path().join("out_CLEAN_SAMPLE.txt").exists(),
+        "file should have been deleted by clean"
+    );
+}
