@@ -3,8 +3,6 @@
 
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
-use serde_json;
-use tempfile;
 
 /// Test full workflow parse → DAG → validate → execution_order cycle.
 #[test]
@@ -1208,7 +1206,9 @@ fn checkpoint_state_json_roundtrip() {
         restored.benchmarks.contains_key("align_sample"),
         "benchmark should be preserved"
     );
-    assert!((restored.benchmarks["align_sample"].wall_time_secs - 42.5).abs() < 0.001);
+    assert!(
+        (restored.benchmarks["align_sample"].wall_time_secs - 42.5).abs() < f64::EPSILON * 1000.0
+    );
 }
 
 /// Test CheckpointState file save and load.
@@ -1869,6 +1869,7 @@ fn report_variant_summary_section() {
 // ============================================================================
 
 /// Test executing a scatter-gather variant calling pipeline using Unix tools.
+#[cfg(unix)]
 #[tokio::test]
 async fn execute_scatter_gather_unix_pipeline() {
     use oxo_flow_core::executor::{ExecutorConfig, LocalExecutor};
@@ -1952,6 +1953,7 @@ async fn execute_scatter_gather_unix_pipeline() {
 }
 
 /// Test executing a QC → trim → align simulation pipeline.
+#[cfg(unix)]
 #[tokio::test]
 async fn execute_qc_trim_align_simulation() {
     use oxo_flow_core::executor::{ExecutorConfig, LocalExecutor};
