@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Parse a duration string like "5s", "30s", "2m", "1h" into seconds.
+/// Parse a duration string like "5s", "30s", "2m", "1h", "1d" into seconds.
 ///
 /// Returns `None` if the format is invalid or would overflow.
 #[must_use]
@@ -25,6 +25,9 @@ pub fn parse_duration_secs(s: &str) -> Option<u64> {
     }
     if let Some(num) = s.strip_suffix('h').or_else(|| s.strip_suffix('H')) {
         return num.parse::<u64>().ok().and_then(|v| v.checked_mul(3600));
+    }
+    if let Some(num) = s.strip_suffix('d').or_else(|| s.strip_suffix('D')) {
+        return num.parse::<u64>().ok().and_then(|v| v.checked_mul(86400));
     }
     None
 }
@@ -1441,6 +1444,13 @@ mod tests {
     fn parse_duration_secs_hours() {
         assert_eq!(parse_duration_secs("1h"), Some(3600));
         assert_eq!(parse_duration_secs("2H"), Some(7200));
+    }
+
+    #[test]
+    fn parse_duration_secs_days() {
+        assert_eq!(parse_duration_secs("1d"), Some(86400));
+        assert_eq!(parse_duration_secs("2D"), Some(172800));
+        assert_eq!(parse_duration_secs("7d"), Some(604800));
     }
 
     #[test]

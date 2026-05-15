@@ -871,8 +871,8 @@ mod tests {
         };
         let script = generate_submit_script(&ClusterBackend::Slurm, &rule, "sleep 100", &config);
 
-        // Per-rule walltime should override config walltime
-        assert!(script.contains("#SBATCH --time=48:00:00"));
+        // Per-rule walltime should override config walltime (DD-HH:MM:SS format)
+        assert!(script.contains("#SBATCH --time=2-00:00:00"));
         assert!(!script.contains("#SBATCH --time=24:00:00"));
     }
 
@@ -909,7 +909,7 @@ mod tests {
         };
         let script = generate_submit_script(&ClusterBackend::Pbs, &rule, "sleep 100", &config);
 
-        assert!(script.contains("walltime=72:00:00"));
+        assert!(script.contains("walltime=3-00:00:00"));
     }
 
     #[test]
@@ -951,11 +951,13 @@ mod tests {
     #[test]
     fn walltime_format_conversion() {
         // Test the format_walltime_for_scheduler helper
-        assert_eq!(format_walltime_for_scheduler("24h"), "24:00:00");
+        // SLURM uses DD-HH:MM:SS format for durations >= 24 hours
+        assert_eq!(format_walltime_for_scheduler("24h"), "1-00:00:00");
         assert_eq!(format_walltime_for_scheduler("30m"), "00:30:00");
         assert_eq!(format_walltime_for_scheduler("2d"), "2-00:00:00");
-        assert_eq!(format_walltime_for_scheduler("48h"), "48:00:00");
+        assert_eq!(format_walltime_for_scheduler("48h"), "2-00:00:00");
         assert_eq!(format_walltime_for_scheduler("1:30:00"), "1:30:00"); // Already formatted
+        assert_eq!(format_walltime_for_scheduler("12h"), "12:00:00"); // Less than 24h
     }
 
     // -- Module loading tests ------------------------------------------------
