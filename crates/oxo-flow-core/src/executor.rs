@@ -512,6 +512,14 @@ impl LocalExecutor {
             }
         }
 
+        // Skip rule if outputs are already up-to-date (all outputs newer than all inputs).
+        if should_skip_rule(rule, &self.config.workdir, wildcard_values) {
+            tracing::info!(rule = %rule.name, "outputs up-to-date, skipping");
+            record.status = JobStatus::Skipped;
+            record.finished_at = Some(Utc::now());
+            return Ok(record);
+        }
+
         // Wrap the command through the environment resolver
         let shell_cmd = self.resolve_command(&shell_cmd, rule);
 
@@ -619,7 +627,7 @@ impl LocalExecutor {
                 self.release_resources(rule).await;
 
                 if !self.config.dry_run {
-                    let missing = validate_outputs(rule, &self.config.workdir);
+                    let missing = validate_outputs(rule, &self.config.workdir, wildcard_values);
                     for path in &missing {
                         tracing::warn!(
                             rule = %rule.name,
@@ -1138,45 +1146,86 @@ pub fn cleanup_temp_outputs(rule: &Rule, workdir: &Path) {
 /// Check if a rule should be skipped based on output freshness.
 ///
 /// Returns true if all outputs exist and are newer than all inputs.
-pub fn should_skip_rule(rule: &Rule, workdir: &Path) -> bool {
+/// Config variable placeholders (e.g. `{config.sample}`) are expanded using
+/// `wildcard_values` before the path existence check.
+pub fn should_skip_rule(
+    rule: &Rule,
+    workdir: &Path,
+    wildcard_values: &HashMap<String, String>,
+) -> bool {
     if rule.output.is_empty() {
         return false;
     }
-    // Skip check for wildcard patterns
-    if rule.output.iter().any(|o| o.contains('{')) || rule.input.iter().any(|i| i.contains('{')) {
+
+    // Expand config vars in output paths (e.g. {config.sample} → SAMPLE001)
+    let expanded_outputs: Vec<String> = rule
+        .output
+        .iter()
+        .map(|o| expand_config_in_path(o, wildcard_values))
+        .collect();
+
+    // Skip if any expanded output still contains a wildcard pattern ({sample} etc.)
+    if expanded_outputs.iter().any(|o| o.contains('{')) {
         return false;
     }
-    let all_outputs_exist = rule.output.iter().all(|o| workdir.join(o).exists());
+    // Expand config vars in inputs too (for freshness comparison)
+    let expanded_inputs: Vec<String> = rule
+        .input
+        .iter()
+        .map(|i| expand_config_in_path(i, wildcard_values))
+        .collect();
+    if expanded_inputs.iter().any(|i| i.contains('{')) {
+        return false;
+    }
+
+    let all_outputs_exist = expanded_outputs.iter().all(|o| workdir.join(o).exists());
     if !all_outputs_exist {
         return false;
     }
-    if rule.input.is_empty() {
+    if expanded_inputs.is_empty() {
         return true; // No inputs to check freshness against
     }
     // Check if all outputs are newer than all inputs
-    rule.input.iter().all(|input| {
+    expanded_inputs.iter().all(|input| {
         let input_path = workdir.join(input);
-        rule.output.iter().all(|output| {
+        expanded_outputs.iter().all(|output| {
             let output_path = workdir.join(output);
             file_is_newer(&output_path, &input_path)
         })
     })
 }
 
+/// Expand `{key}` placeholders in a path string using the provided values map.
+///
+/// Only performs simple key-value substitution (no `{input[N]}` / `{output[N]}` logic).
+/// Used for checking output file existence after expansion of config variables.
+pub fn expand_config_in_path(path: &str, wildcard_values: &HashMap<String, String>) -> String {
+    let mut result = path.to_string();
+    for (key, value) in wildcard_values {
+        result = result.replace(&format!("{{{key}}}"), value);
+    }
+    result
+}
+
 /// Validate that declared output files exist after execution.
-/// Returns a list of missing output file paths.
-pub fn validate_outputs(rule: &Rule, workdir: &Path) -> Vec<String> {
+/// Returns a list of missing output file paths (after expanding config variables).
+pub fn validate_outputs(
+    rule: &Rule,
+    workdir: &Path,
+    wildcard_values: &HashMap<String, String>,
+) -> Vec<String> {
     rule.output
         .iter()
-        .filter(|output| {
-            // Skip wildcard patterns — they can't be checked without expansion
-            if crate::wildcard::has_wildcards(output) {
-                return false;
+        .filter_map(|output| {
+            // Expand config variables (e.g. {config.sample}) before checking
+            let expanded = expand_config_in_path(output, wildcard_values);
+            // Skip paths that still contain wildcard patterns (e.g. {sample} from wildcard rules)
+            if crate::wildcard::has_wildcards(&expanded) {
+                return None;
             }
-            let path = workdir.join(output);
-            !path.exists()
+            let path = workdir.join(&expanded);
+            if path.exists() { None } else { Some(expanded) }
         })
-        .cloned()
         .collect()
 }
 
@@ -2071,7 +2120,7 @@ mod tests {
             ..Default::default()
         };
 
-        let missing = validate_outputs(&rule, dir.path());
+        let missing = validate_outputs(&rule, dir.path(), &HashMap::new());
         assert_eq!(missing.len(), 2);
         assert!(missing.contains(&"does_not_exist.txt".to_string()));
         assert!(missing.contains(&"also_missing.bam".to_string()));
@@ -2100,7 +2149,7 @@ mod tests {
             ..Default::default()
         };
 
-        let missing = validate_outputs(&rule, dir.path());
+        let missing = validate_outputs(&rule, dir.path(), &HashMap::new());
         // {sample}.bam should be skipped (wildcard), only fixed_output.txt reported
         assert_eq!(missing.len(), 1);
         assert_eq!(missing[0], "fixed_output.txt");
@@ -2259,7 +2308,7 @@ mod tests {
             shell: Some("echo hi".to_string()),
             ..Default::default()
         };
-        assert!(!should_skip_rule(&rule, dir.path()));
+        assert!(!should_skip_rule(&rule, dir.path(), &HashMap::new()));
     }
 
     #[test]
@@ -2272,7 +2321,7 @@ mod tests {
             shell: Some("echo hi".to_string()),
             ..Default::default()
         };
-        assert!(!should_skip_rule(&rule, dir.path()));
+        assert!(!should_skip_rule(&rule, dir.path(), &HashMap::new()));
     }
 
     #[test]
@@ -2285,7 +2334,7 @@ mod tests {
             shell: Some("echo hi".to_string()),
             ..Default::default()
         };
-        assert!(!should_skip_rule(&rule, dir.path()));
+        assert!(!should_skip_rule(&rule, dir.path(), &HashMap::new()));
     }
 
     #[test]
@@ -2308,7 +2357,7 @@ mod tests {
             shell: Some("echo hi".to_string()),
             ..Default::default()
         };
-        assert!(should_skip_rule(&rule, dir.path()));
+        assert!(should_skip_rule(&rule, dir.path(), &HashMap::new()));
     }
 
     #[test]
@@ -2331,7 +2380,7 @@ mod tests {
             shell: Some("echo hi".to_string()),
             ..Default::default()
         };
-        assert!(!should_skip_rule(&rule, dir.path()));
+        assert!(!should_skip_rule(&rule, dir.path(), &HashMap::new()));
     }
 
     #[test]
@@ -2346,7 +2395,86 @@ mod tests {
             shell: Some("echo hi".to_string()),
             ..Default::default()
         };
-        assert!(should_skip_rule(&rule, dir.path()));
+        assert!(should_skip_rule(&rule, dir.path(), &HashMap::new()));
+    }
+
+    #[test]
+    fn should_skip_rule_config_vars_expanded() {
+        // Outputs with {config.sample} should be expanded using wildcard_values
+        // before checking whether the files exist on disk.
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create the file under its expanded name
+        let output = dir.path().join("results_SAMPLE001.txt");
+        std::fs::write(&output, "done").unwrap();
+
+        let rule = Rule {
+            name: "test".to_string(),
+            output: vec!["results_{config.sample}.txt".to_string()],
+            shell: Some("echo done".to_string()),
+            ..Default::default()
+        };
+
+        let mut values = HashMap::new();
+        values.insert("config.sample".to_string(), "SAMPLE001".to_string());
+
+        // With config vars expanded, output exists → should skip
+        assert!(should_skip_rule(&rule, dir.path(), &values));
+        // Without config vars, treat path as literal → output not found → don't skip
+        assert!(!should_skip_rule(&rule, dir.path(), &HashMap::new()));
+    }
+
+    #[test]
+    fn validate_outputs_config_vars_expanded() {
+        // validate_outputs must expand {config.xxx} before checking file existence.
+        let dir = tempfile::tempdir().unwrap();
+
+        // The actual file is at the expanded path
+        let output = dir.path().join("aligned_NA12878.bam");
+        std::fs::write(&output, "bam_data").unwrap();
+
+        let rule = Rule {
+            name: "align".to_string(),
+            output: vec!["aligned_{config.sample}.bam".to_string()],
+            shell: Some("bwa mem ...".to_string()),
+            ..Default::default()
+        };
+
+        let mut values = HashMap::new();
+        values.insert("config.sample".to_string(), "NA12878".to_string());
+
+        // With config vars expanded the file is found → no missing outputs
+        let missing = validate_outputs(&rule, dir.path(), &values);
+        assert!(
+            missing.is_empty(),
+            "file should be found after config var expansion, but missing: {:?}",
+            missing
+        );
+
+        // Without config vars the literal path is not found → reported as missing
+        let missing_no_vals = validate_outputs(&rule, dir.path(), &HashMap::new());
+        assert_eq!(missing_no_vals.len(), 1);
+    }
+
+    #[test]
+    fn expand_config_in_path_substitutes_values() {
+        let mut values = HashMap::new();
+        values.insert("config.sample".to_string(), "NA12878".to_string());
+        values.insert("config.threads".to_string(), "8".to_string());
+
+        assert_eq!(
+            expand_config_in_path("aligned/{config.sample}.bam", &values),
+            "aligned/NA12878.bam"
+        );
+        assert_eq!(
+            expand_config_in_path("logs/{config.sample}_t{config.threads}.log", &values),
+            "logs/NA12878_t8.log"
+        );
+        // No substitution when keys are absent
+        assert_eq!(
+            expand_config_in_path("data/{config.missing}.txt", &HashMap::new()),
+            "data/{config.missing}.txt"
+        );
     }
 
     #[test]
