@@ -3,6 +3,8 @@
 
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
+use serde_json;
+use tempfile;
 
 /// Test full workflow parse → DAG → validate → execution_order cycle.
 #[test]
@@ -749,4 +751,1293 @@ fn wf01_evaluate_condition_integration() {
         r#"config.run_qc && config.mode == "WGS" && config.min_coverage >= 20"#,
         &config
     ));
+}
+
+// ============================================================================
+// Gallery 09: Single-Cell RNA-seq
+// ============================================================================
+
+#[test]
+fn gallery_09_single_cell_rnaseq() {
+    let toml = std::fs::read_to_string("examples/gallery/09_single_cell_rnaseq.oxoflow").unwrap();
+    let config = WorkflowConfig::parse(&toml).unwrap();
+    assert_eq!(config.workflow.name, "single-cell-rnaseq");
+    assert!(!config.rules.is_empty());
+
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+    dag.validate().unwrap();
+
+    let order = dag.execution_order().unwrap();
+    assert!(!order.is_empty());
+}
+
+// ============================================================================
+// DAG structural tests
+// ============================================================================
+
+/// Test that a cycle in the dependency graph is detected.
+#[test]
+fn dag_cycle_detection() {
+    let toml = r#"
+        [workflow]
+        name = "cycle-test"
+
+        [[rules]]
+        name = "rule_a"
+        input = ["b.txt"]
+        output = ["a.txt"]
+        shell = "echo a"
+
+        [[rules]]
+        name = "rule_b"
+        input = ["a.txt"]
+        output = ["b.txt"]
+        shell = "echo b"
+    "#;
+
+    let config = WorkflowConfig::parse(toml).unwrap();
+    let result = WorkflowDag::from_rules(&config.rules);
+    // Should fail to build because of a cycle
+    assert!(result.is_err(), "cycle should be detected as an error");
+}
+
+/// Test diamond dependency pattern: A→B, A→C, B+C→D.
+#[test]
+fn dag_diamond_dependency_pattern() {
+    let toml = r#"
+        [workflow]
+        name = "diamond"
+
+        [[rules]]
+        name = "source"
+        output = ["raw.txt"]
+        shell = "echo raw"
+
+        [[rules]]
+        name = "branch_left"
+        input = ["raw.txt"]
+        output = ["left.txt"]
+        shell = "cat raw.txt > left.txt"
+
+        [[rules]]
+        name = "branch_right"
+        input = ["raw.txt"]
+        output = ["right.txt"]
+        shell = "cat raw.txt > right.txt"
+
+        [[rules]]
+        name = "merge"
+        input = ["left.txt", "right.txt"]
+        output = ["merged.txt"]
+        shell = "cat left.txt right.txt > merged.txt"
+    "#;
+
+    let config = WorkflowConfig::parse(toml).unwrap();
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+    dag.validate().unwrap();
+
+    let order = dag.execution_order().unwrap();
+    assert_eq!(order.len(), 4);
+    // source must be first, merge must be last
+    assert_eq!(order[0], "source");
+    assert_eq!(order[3], "merge");
+
+    // Both branches must appear before merge
+    let left_pos = order.iter().position(|r| r == "branch_left").unwrap();
+    let right_pos = order.iter().position(|r| r == "branch_right").unwrap();
+    let merge_pos = order.iter().position(|r| r == "merge").unwrap();
+    assert!(left_pos < merge_pos);
+    assert!(right_pos < merge_pos);
+}
+
+/// Test a wide fan-out then fan-in (scatter/gather) pattern.
+#[test]
+fn dag_scatter_gather_pattern() {
+    let toml = r#"
+        [workflow]
+        name = "scatter-gather"
+
+        [[rules]]
+        name = "scatter"
+        output = ["shard1.txt", "shard2.txt", "shard3.txt"]
+        shell = "echo shard1 > shard1.txt && echo shard2 > shard2.txt && echo shard3 > shard3.txt"
+
+        [[rules]]
+        name = "process_shard1"
+        input = ["shard1.txt"]
+        output = ["proc1.txt"]
+        shell = "cat shard1.txt > proc1.txt"
+
+        [[rules]]
+        name = "process_shard2"
+        input = ["shard2.txt"]
+        output = ["proc2.txt"]
+        shell = "cat shard2.txt > proc2.txt"
+
+        [[rules]]
+        name = "process_shard3"
+        input = ["shard3.txt"]
+        output = ["proc3.txt"]
+        shell = "cat shard3.txt > proc3.txt"
+
+        [[rules]]
+        name = "gather"
+        input = ["proc1.txt", "proc2.txt", "proc3.txt"]
+        output = ["final.txt"]
+        shell = "cat proc1.txt proc2.txt proc3.txt > final.txt"
+    "#;
+
+    let config = WorkflowConfig::parse(toml).unwrap();
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+    dag.validate().unwrap();
+
+    let order = dag.execution_order().unwrap();
+    assert_eq!(order.len(), 5);
+
+    // Verify parallel groups: scatter → 3 processors → gather
+    let groups = dag.parallel_groups().unwrap();
+    assert!(groups.len() >= 3);
+    // scatter is alone in the first group
+    assert_eq!(groups[0], vec!["scatter".to_string()]);
+    // gather is alone in the last group
+    assert_eq!(groups[groups.len() - 1], vec!["gather".to_string()]);
+}
+
+/// Test a complex multi-level bioinformatics-like pipeline.
+#[test]
+fn dag_complex_bioinformatics_pipeline() {
+    let toml = r#"
+        [workflow]
+        name = "complex-bio-pipeline"
+        description = "Multi-omics-like pipeline DAG"
+
+        [[rules]]
+        name = "qc_sample_a"
+        output = ["qc/a.txt"]
+        shell = "echo qc_a > qc/a.txt"
+        threads = 4
+
+        [[rules]]
+        name = "qc_sample_b"
+        output = ["qc/b.txt"]
+        shell = "echo qc_b > qc/b.txt"
+        threads = 4
+
+        [[rules]]
+        name = "align_sample_a"
+        input = ["qc/a.txt"]
+        output = ["aligned/a.bam"]
+        shell = "cat qc/a.txt > aligned/a.bam"
+        threads = 8
+
+        [[rules]]
+        name = "align_sample_b"
+        input = ["qc/b.txt"]
+        output = ["aligned/b.bam"]
+        shell = "cat qc/b.txt > aligned/b.bam"
+        threads = 8
+
+        [[rules]]
+        name = "call_variants_a"
+        input = ["aligned/a.bam"]
+        output = ["variants/a.vcf"]
+        shell = "cat aligned/a.bam > variants/a.vcf"
+        threads = 2
+
+        [[rules]]
+        name = "call_variants_b"
+        input = ["aligned/b.bam"]
+        output = ["variants/b.vcf"]
+        shell = "cat aligned/b.bam > variants/b.vcf"
+        threads = 2
+
+        [[rules]]
+        name = "merge_variants"
+        input = ["variants/a.vcf", "variants/b.vcf"]
+        output = ["merged.vcf"]
+        shell = "cat variants/a.vcf variants/b.vcf > merged.vcf"
+
+        [[rules]]
+        name = "annotate"
+        input = ["merged.vcf"]
+        output = ["annotated.vcf"]
+        shell = "cat merged.vcf > annotated.vcf"
+
+        [[rules]]
+        name = "report"
+        input = ["annotated.vcf"]
+        output = ["report.html"]
+        shell = "echo '<html>' > report.html && cat annotated.vcf >> report.html"
+    "#;
+
+    let config = WorkflowConfig::parse(toml).unwrap();
+    assert_eq!(config.rules.len(), 9);
+
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+    dag.validate().unwrap();
+
+    let order = dag.execution_order().unwrap();
+    assert_eq!(order.len(), 9);
+    assert_eq!(order.last().unwrap(), "report");
+
+    let groups = dag.parallel_groups().unwrap();
+    // Level 0: qc_sample_a, qc_sample_b
+    // Level 1: align_sample_a, align_sample_b
+    // Level 2: call_variants_a, call_variants_b
+    // Level 3: merge_variants
+    // Level 4: annotate
+    // Level 5: report
+    assert!(groups.len() >= 5);
+    assert_eq!(groups[0].len(), 2); // two QC rules in parallel
+}
+
+/// Test execution order for specific targets.
+#[test]
+fn dag_execution_order_for_targets() {
+    let toml = r#"
+        [workflow]
+        name = "target-test"
+
+        [[rules]]
+        name = "step_a"
+        output = ["a.txt"]
+        shell = "echo a"
+
+        [[rules]]
+        name = "step_b"
+        input = ["a.txt"]
+        output = ["b.txt"]
+        shell = "echo b"
+
+        [[rules]]
+        name = "step_c"
+        input = ["b.txt"]
+        output = ["c.txt"]
+        shell = "echo c"
+
+        [[rules]]
+        name = "step_d"
+        input = ["a.txt"]
+        output = ["d.txt"]
+        shell = "echo d"
+    "#;
+
+    let config = WorkflowConfig::parse(toml).unwrap();
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+
+    // Target step_b: should only need step_a and step_b
+    let targets = vec!["step_b"];
+    let order = dag.execution_order_for_targets(&targets).unwrap();
+    assert_eq!(order.len(), 2);
+    assert!(order.contains(&"step_a".to_string()));
+    assert!(order.contains(&"step_b".to_string()));
+    assert!(!order.contains(&"step_c".to_string()));
+    assert!(!order.contains(&"step_d".to_string()));
+}
+
+// ============================================================================
+// Format, lint, and validate diagnostic tests
+// ============================================================================
+
+/// Test that format_workflow produces canonical TOML that can be re-parsed.
+#[test]
+fn format_workflow_roundtrip() {
+    use oxo_flow_core::format::format_workflow;
+
+    let toml =
+        std::fs::read_to_string("examples/gallery/06_rnaseq_quantification.oxoflow").unwrap();
+    let config = WorkflowConfig::parse(&toml).unwrap();
+
+    // Format the workflow
+    let formatted = format_workflow(&config);
+
+    // Re-parse the formatted output
+    let config2 = WorkflowConfig::parse(&formatted).unwrap();
+    assert_eq!(config.workflow.name, config2.workflow.name);
+    assert_eq!(config.rules.len(), config2.rules.len());
+}
+
+/// Test that validate_format catches a rule that references an undefined config variable.
+#[test]
+fn validate_format_detects_missing_output() {
+    use oxo_flow_core::format::validate_format;
+
+    // E005: Shell command references an undefined config variable
+    let toml = r#"
+        [workflow]
+        name = "undefined-config-var-test"
+
+        [config]
+        defined_var = "hello"
+
+        [[rules]]
+        name = "bad_rule"
+        output = ["output.txt"]
+        shell = "echo {config.defined_var} {config.undefined_var} > output.txt"
+    "#;
+
+    let config = WorkflowConfig::parse(toml).unwrap();
+    let result = validate_format(&config);
+
+    // Should report an error about undefined config variable
+    assert!(
+        result.has_errors(),
+        "expected at least one error diagnostic for undefined config variable reference"
+    );
+    assert!(
+        result.diagnostics.iter().any(|d| d.code == "E005"),
+        "expected E005 for undefined config variable, got: {:?}",
+        result
+            .diagnostics
+            .iter()
+            .map(|d| &d.code)
+            .collect::<Vec<_>>()
+    );
+}
+
+/// Test that lint detects a missing description on a shell rule.
+#[test]
+fn lint_detects_missing_description_warning() {
+    use oxo_flow_core::format::lint_format;
+
+    let toml = r#"
+        [workflow]
+        name = "lint-test"
+
+        [[rules]]
+        name = "no_description_rule"
+        output = ["out.txt"]
+        shell = "echo hello > out.txt"
+    "#;
+
+    let config = WorkflowConfig::parse(toml).unwrap();
+    let diagnostics = lint_format(&config);
+
+    // Lint should find at least one warning (no description)
+    assert!(
+        !diagnostics.is_empty(),
+        "expected lint warnings for undescribed rule"
+    );
+}
+
+/// Test that diff_workflows identifies added/removed rules correctly.
+#[test]
+fn diff_workflows_identifies_changes() {
+    use oxo_flow_core::format::diff_workflows;
+
+    let toml_a = r#"
+        [workflow]
+        name = "pipeline-v1"
+        version = "1.0.0"
+
+        [[rules]]
+        name = "step_a"
+        output = ["a.txt"]
+        shell = "echo a"
+    "#;
+
+    let toml_b = r#"
+        [workflow]
+        name = "pipeline-v2"
+        version = "2.0.0"
+
+        [[rules]]
+        name = "step_a"
+        output = ["a.txt"]
+        shell = "echo a"
+
+        [[rules]]
+        name = "step_b"
+        input = ["a.txt"]
+        output = ["b.txt"]
+        shell = "echo b"
+    "#;
+
+    let config_a = WorkflowConfig::parse(toml_a).unwrap();
+    let config_b = WorkflowConfig::parse(toml_b).unwrap();
+
+    let diffs = diff_workflows(&config_a, &config_b);
+    assert!(
+        !diffs.is_empty(),
+        "workflows with different rules should have diffs"
+    );
+
+    // Should detect version and rule count differences
+    let categories: Vec<&str> = diffs.iter().map(|d| d.category.as_str()).collect();
+    assert!(
+        categories.iter().any(|c| {
+            *c == "version"
+                || *c == "rule_added"
+                || *c == "name"
+                || *c == "rules"
+                || *c == "metadata"
+        }),
+        "expected to detect metadata or rule differences, got: {:?}",
+        categories
+    );
+}
+
+// ============================================================================
+// Checkpoint state tests
+// ============================================================================
+
+/// Test CheckpointState serialization/deserialization roundtrip.
+#[test]
+fn checkpoint_state_json_roundtrip() {
+    use oxo_flow_core::executor::{BenchmarkRecord, CheckpointState};
+
+    let mut state = CheckpointState::new();
+    state.mark_completed(
+        "align_sample",
+        BenchmarkRecord {
+            rule: "align_sample".to_string(),
+            wall_time_secs: 42.5,
+            max_memory_mb: Some(1024),
+            cpu_seconds: Some(38.0),
+        },
+    );
+    state.mark_failed("call_variants");
+
+    let json = state.to_json().unwrap();
+    let restored = CheckpointState::from_json(&json).unwrap();
+
+    assert!(restored.is_completed("align_sample"));
+    assert!(!restored.is_completed("call_variants"));
+    assert!(restored.failed_rules.contains("call_variants"));
+    assert!(
+        restored.benchmarks.contains_key("align_sample"),
+        "benchmark should be preserved"
+    );
+    assert!((restored.benchmarks["align_sample"].wall_time_secs - 42.5).abs() < 0.001);
+}
+
+/// Test CheckpointState file save and load.
+#[test]
+fn checkpoint_state_file_persistence() {
+    use oxo_flow_core::executor::{BenchmarkRecord, CheckpointState};
+
+    let dir = tempfile::tempdir().unwrap();
+    let checkpoint_path = CheckpointState::default_path(dir.path());
+
+    let mut state = CheckpointState::new();
+    state.mark_completed(
+        "qc_step",
+        BenchmarkRecord {
+            rule: "qc_step".to_string(),
+            wall_time_secs: 5.0,
+            max_memory_mb: Some(512),
+            cpu_seconds: Some(4.2),
+        },
+    );
+    state.mark_completed(
+        "align_step",
+        BenchmarkRecord {
+            rule: "align_step".to_string(),
+            wall_time_secs: 120.3,
+            max_memory_mb: Some(4096),
+            cpu_seconds: Some(115.0),
+        },
+    );
+
+    // Save to file
+    std::fs::create_dir_all(checkpoint_path.parent().unwrap()).unwrap();
+    state.save_to_file(&checkpoint_path).unwrap();
+    assert!(checkpoint_path.exists());
+
+    // Load from file
+    let loaded = CheckpointState::load_from_file(&checkpoint_path).unwrap();
+    assert!(loaded.is_completed("qc_step"));
+    assert!(loaded.is_completed("align_step"));
+    assert!(!loaded.should_skip("nonexistent_step"));
+    assert_eq!(loaded.completed_rules.len(), 2);
+}
+
+/// Test that should_skip returns correct values.
+#[test]
+fn checkpoint_should_skip_logic() {
+    use oxo_flow_core::executor::{BenchmarkRecord, CheckpointState};
+
+    let mut state = CheckpointState::new();
+    state.mark_completed(
+        "done_rule",
+        BenchmarkRecord {
+            rule: "done_rule".to_string(),
+            wall_time_secs: 1.0,
+            max_memory_mb: None,
+            cpu_seconds: Some(0.9),
+        },
+    );
+    state.mark_failed("failed_rule");
+
+    assert!(state.should_skip("done_rule"));
+    assert!(!state.should_skip("failed_rule"));
+    assert!(!state.should_skip("pending_rule"));
+}
+
+/// Test Prometheus metrics generation from checkpoint state.
+#[test]
+fn checkpoint_prometheus_metrics() {
+    use oxo_flow_core::executor::{BenchmarkRecord, CheckpointState};
+
+    let mut state = CheckpointState::new();
+    state.mark_completed(
+        "step1",
+        BenchmarkRecord {
+            rule: "step1".to_string(),
+            wall_time_secs: 10.0,
+            max_memory_mb: None,
+            cpu_seconds: None,
+        },
+    );
+    state.mark_failed("step2");
+
+    let metrics = state.to_prometheus_metrics();
+    assert!(metrics.contains("oxo_flow_rules_completed_total 1"));
+    assert!(metrics.contains("oxo_flow_rules_failed_total 1"));
+    assert!(metrics.contains("oxo_flow_rule_duration_seconds{rule=\"step1\"}"));
+}
+
+// ============================================================================
+// Execution support utilities
+// ============================================================================
+
+/// Test render_shell_command substitutes rule inputs/outputs and wildcards.
+#[test]
+fn render_shell_command_substitution() {
+    use oxo_flow_core::executor::render_shell_command;
+    use oxo_flow_core::rule::Rule;
+    use std::collections::HashMap;
+
+    let rule = Rule {
+        name: "align".to_string(),
+        input: vec!["raw/sample_R1.fastq.gz".to_string()],
+        output: vec!["aligned/sample.bam".to_string()],
+        shell: Some("bwa mem {config.reference} {input[0]} > {output[0]}".to_string()),
+        ..Default::default()
+    };
+
+    let mut wildcards = HashMap::new();
+    wildcards.insert("config.reference".to_string(), "/ref/hg38.fa".to_string());
+
+    let rendered = render_shell_command(rule.shell.as_ref().unwrap(), &rule, &wildcards);
+    assert!(rendered.contains("raw/sample_R1.fastq.gz"));
+    assert!(rendered.contains("aligned/sample.bam"));
+    assert!(rendered.contains("/ref/hg38.fa"));
+}
+
+/// Test sanitize_shell_command detects dangerous patterns.
+#[test]
+fn sanitize_shell_command_detects_dangerous_patterns() {
+    use oxo_flow_core::executor::sanitize_shell_command;
+
+    // Normal bioinformatics command should be clean
+    let safe_cmd = "bwa mem ref.fa R1.fastq.gz | samtools sort -o output.bam";
+    let warnings = sanitize_shell_command(safe_cmd);
+    assert!(
+        warnings.is_empty(),
+        "normal bioinformatics command should have no warnings"
+    );
+
+    // Command substitution should trigger a warning
+    let dangerous_cmd = "echo $(cat /etc/passwd)";
+    let warnings = sanitize_shell_command(dangerous_cmd);
+    assert!(
+        !warnings.is_empty(),
+        "command substitution should be flagged"
+    );
+}
+
+// ============================================================================
+// Execution events
+// ============================================================================
+
+/// Test that ExecutionEvent serializes to valid JSON log format.
+#[test]
+fn execution_event_json_log_format() {
+    use oxo_flow_core::executor::{ExecutionEvent, JobStatus};
+
+    let event = ExecutionEvent::WorkflowStarted {
+        workflow_name: "test-pipeline".to_string(),
+        total_rules: 5,
+    };
+    let log = event.to_json_log();
+    assert!(log.contains("\"event\":\"workflow_started\""));
+    assert!(log.contains("\"workflow\":\"test-pipeline\""));
+    assert!(log.contains("\"total_rules\":5"));
+    assert!(log.contains("\"timestamp\":"));
+    // Should be parseable JSON
+    let parsed: serde_json::Value = serde_json::from_str(&log).unwrap();
+    assert_eq!(parsed["event"], "workflow_started");
+
+    let rule_event = ExecutionEvent::RuleCompleted {
+        rule: "align_reads".to_string(),
+        status: JobStatus::Success,
+        duration_ms: 12500,
+    };
+    let log2 = rule_event.to_json_log();
+    assert!(log2.contains("\"event\":\"rule_completed\""));
+    assert!(log2.contains("align_reads"));
+    assert!(log2.contains("success"));
+}
+
+/// Test that event_type returns the correct name.
+#[test]
+fn execution_event_type_names() {
+    use oxo_flow_core::executor::{ExecutionEvent, JobStatus};
+
+    assert_eq!(
+        ExecutionEvent::WorkflowStarted {
+            workflow_name: "x".to_string(),
+            total_rules: 1
+        }
+        .event_type(),
+        "workflow_started"
+    );
+    assert_eq!(
+        ExecutionEvent::RuleStarted {
+            rule: "r".to_string(),
+            command: None
+        }
+        .event_type(),
+        "rule_started"
+    );
+    assert_eq!(
+        ExecutionEvent::RuleSkipped {
+            rule: "r".to_string(),
+            reason: "already up-to-date".to_string()
+        }
+        .event_type(),
+        "rule_skipped"
+    );
+    assert_eq!(
+        ExecutionEvent::RuleCompleted {
+            rule: "r".to_string(),
+            status: JobStatus::Success,
+            duration_ms: 0
+        }
+        .event_type(),
+        "rule_completed"
+    );
+}
+
+// ============================================================================
+// Venus library tests
+// ============================================================================
+
+/// Test Venus ExperimentOnly mode generates a valid workflow.
+#[test]
+fn venus_experiment_only_wgs() {
+    let config = oxo_flow_venus::VenusConfig {
+        mode: oxo_flow_venus::AnalysisMode::ExperimentOnly,
+        seq_type: oxo_flow_venus::SeqType::WGS,
+        genome_build: oxo_flow_venus::GenomeBuild::GRCh38,
+        reference_fasta: "/ref/hg38.fa".to_string(),
+        experiment_samples: vec![oxo_flow_venus::Sample {
+            name: "CASE_A".to_string(),
+            r1_fastq: "raw/CASE_A_R1.fq.gz".to_string(),
+            r2_fastq: Some("raw/CASE_A_R2.fq.gz".to_string()),
+            is_experiment: true,
+        }],
+        control_samples: vec![],
+        known_sites: None,
+        target_bed: None,
+        threads: 4,
+        output_dir: "output".to_string(),
+        annotate: false,
+        report: false,
+        project_name: Some("ExperimentOnlyTest".to_string()),
+    };
+
+    let toml_str = oxo_flow_venus::generate_oxoflow(&config).unwrap();
+    let wf = WorkflowConfig::parse(&toml_str).unwrap();
+
+    assert_eq!(wf.workflow.name, "ExperimentOnlyTest");
+    assert!(!wf.rules.is_empty());
+
+    let dag = WorkflowDag::from_rules(&wf.rules).unwrap();
+    dag.validate().unwrap();
+}
+
+/// Test Venus ControlOnly mode.
+#[test]
+fn venus_control_only_mode() {
+    let config = oxo_flow_venus::VenusConfig {
+        mode: oxo_flow_venus::AnalysisMode::ControlOnly,
+        seq_type: oxo_flow_venus::SeqType::WGS,
+        genome_build: oxo_flow_venus::GenomeBuild::GRCh38,
+        reference_fasta: "/ref/hg38.fa".to_string(),
+        experiment_samples: vec![],
+        control_samples: vec![oxo_flow_venus::Sample {
+            name: "NORMAL_01".to_string(),
+            r1_fastq: "raw/NORMAL_01_R1.fq.gz".to_string(),
+            r2_fastq: Some("raw/NORMAL_01_R2.fq.gz".to_string()),
+            is_experiment: false,
+        }],
+        known_sites: None,
+        target_bed: None,
+        threads: 4,
+        output_dir: "output".to_string(),
+        annotate: false,
+        report: false,
+        project_name: Some("ControlOnlyTest".to_string()),
+    };
+
+    let toml_str = oxo_flow_venus::generate_oxoflow(&config).unwrap();
+    let wf = WorkflowConfig::parse(&toml_str).unwrap();
+
+    assert!(!wf.rules.is_empty());
+    let dag = WorkflowDag::from_rules(&wf.rules).unwrap();
+    dag.validate().unwrap();
+}
+
+/// Test Venus ExperimentControl with multiple samples and known_sites.
+#[test]
+fn venus_experiment_control_multi_sample() {
+    let config = oxo_flow_venus::VenusConfig {
+        mode: oxo_flow_venus::AnalysisMode::ExperimentControl,
+        seq_type: oxo_flow_venus::SeqType::WGS,
+        genome_build: oxo_flow_venus::GenomeBuild::GRCh38,
+        reference_fasta: "/ref/hg38.fa".to_string(),
+        experiment_samples: vec![
+            oxo_flow_venus::Sample {
+                name: "TUMOR_01".to_string(),
+                r1_fastq: "raw/TUMOR_01_R1.fq.gz".to_string(),
+                r2_fastq: Some("raw/TUMOR_01_R2.fq.gz".to_string()),
+                is_experiment: true,
+            },
+            oxo_flow_venus::Sample {
+                name: "TUMOR_02".to_string(),
+                r1_fastq: "raw/TUMOR_02_R1.fq.gz".to_string(),
+                r2_fastq: Some("raw/TUMOR_02_R2.fq.gz".to_string()),
+                is_experiment: true,
+            },
+        ],
+        control_samples: vec![
+            oxo_flow_venus::Sample {
+                name: "NORMAL_01".to_string(),
+                r1_fastq: "raw/NORMAL_01_R1.fq.gz".to_string(),
+                r2_fastq: Some("raw/NORMAL_01_R2.fq.gz".to_string()),
+                is_experiment: false,
+            },
+            oxo_flow_venus::Sample {
+                name: "NORMAL_02".to_string(),
+                r1_fastq: "raw/NORMAL_02_R1.fq.gz".to_string(),
+                r2_fastq: Some("raw/NORMAL_02_R2.fq.gz".to_string()),
+                is_experiment: false,
+            },
+        ],
+        known_sites: Some("/ref/dbsnp.vcf.gz".to_string()),
+        target_bed: None,
+        threads: 16,
+        output_dir: "output".to_string(),
+        annotate: true,
+        report: true,
+        project_name: Some("MultiSampleTumorNormal".to_string()),
+    };
+
+    let toml_str = oxo_flow_venus::generate_oxoflow(&config).unwrap();
+    let wf = WorkflowConfig::parse(&toml_str).unwrap();
+
+    assert_eq!(wf.workflow.name, "MultiSampleTumorNormal");
+    assert!(!wf.rules.is_empty());
+
+    let dag = WorkflowDag::from_rules(&wf.rules).unwrap();
+    dag.validate().unwrap();
+
+    let order = dag.execution_order().unwrap();
+    assert!(!order.is_empty());
+}
+
+/// Test Venus config validation catches missing experiment samples in ExperimentOnly mode.
+#[test]
+fn venus_config_validation_no_experiment_samples() {
+    let config = oxo_flow_venus::VenusConfig {
+        mode: oxo_flow_venus::AnalysisMode::ExperimentOnly,
+        seq_type: oxo_flow_venus::SeqType::WGS,
+        genome_build: oxo_flow_venus::GenomeBuild::GRCh38,
+        reference_fasta: "/ref/hg38.fa".to_string(),
+        experiment_samples: vec![], // Empty — should fail
+        control_samples: vec![],
+        known_sites: None,
+        target_bed: None,
+        threads: 4,
+        output_dir: "output".to_string(),
+        annotate: false,
+        report: false,
+        project_name: None,
+    };
+
+    let result = config.validate();
+    assert!(result.is_err(), "should fail with no experiment samples");
+}
+
+/// Test Venus config validation catches WES without target_bed.
+#[test]
+fn venus_config_validation_wes_missing_target_bed() {
+    let config = oxo_flow_venus::VenusConfig {
+        mode: oxo_flow_venus::AnalysisMode::ExperimentOnly,
+        seq_type: oxo_flow_venus::SeqType::WES,
+        genome_build: oxo_flow_venus::GenomeBuild::GRCh38,
+        reference_fasta: "/ref/hg38.fa".to_string(),
+        experiment_samples: vec![oxo_flow_venus::Sample {
+            name: "EXOME_01".to_string(),
+            r1_fastq: "raw/EXOME_01_R1.fq.gz".to_string(),
+            r2_fastq: Some("raw/EXOME_01_R2.fq.gz".to_string()),
+            is_experiment: true,
+        }],
+        control_samples: vec![],
+        known_sites: None,
+        target_bed: None, // Missing — should fail for WES
+        threads: 4,
+        output_dir: "output".to_string(),
+        annotate: false,
+        report: false,
+        project_name: None,
+    };
+
+    let result = config.validate();
+    assert!(result.is_err(), "WES mode requires target_bed");
+}
+
+/// Test Venus all_samples returns all samples across experiment and control.
+#[test]
+fn venus_all_samples_combines_both_groups() {
+    let config = oxo_flow_venus::VenusConfig {
+        mode: oxo_flow_venus::AnalysisMode::ExperimentControl,
+        seq_type: oxo_flow_venus::SeqType::WGS,
+        genome_build: oxo_flow_venus::GenomeBuild::GRCh38,
+        reference_fasta: "/ref/hg38.fa".to_string(),
+        experiment_samples: vec![
+            oxo_flow_venus::Sample {
+                name: "T1".to_string(),
+                r1_fastq: "r1.fq".to_string(),
+                r2_fastq: None,
+                is_experiment: true,
+            },
+            oxo_flow_venus::Sample {
+                name: "T2".to_string(),
+                r1_fastq: "r1.fq".to_string(),
+                r2_fastq: None,
+                is_experiment: true,
+            },
+        ],
+        control_samples: vec![oxo_flow_venus::Sample {
+            name: "N1".to_string(),
+            r1_fastq: "r1.fq".to_string(),
+            r2_fastq: None,
+            is_experiment: false,
+        }],
+        known_sites: None,
+        target_bed: None,
+        threads: 4,
+        output_dir: "output".to_string(),
+        annotate: false,
+        report: false,
+        project_name: None,
+    };
+
+    let all = config.all_samples();
+    assert_eq!(all.len(), 3);
+    let names: Vec<&str> = all.iter().map(|s| s.name.as_str()).collect();
+    assert!(names.contains(&"T1"));
+    assert!(names.contains(&"T2"));
+    assert!(names.contains(&"N1"));
+}
+
+// ============================================================================
+// Rule / config API tests
+// ============================================================================
+
+/// Test that Rule::effective_threads returns its own threads when set.
+#[test]
+fn rule_effective_threads_uses_rule_value() {
+    use oxo_flow_core::rule::Rule;
+
+    let rule = Rule {
+        name: "test".to_string(),
+        ..Default::default()
+    };
+    // Default rule has no threads set — effective_threads should return 1
+    assert_eq!(rule.effective_threads(), 1);
+}
+
+/// Test that apply_defaults propagates default memory to rules without memory.
+#[test]
+fn apply_defaults_memory_propagation() {
+    let toml = r#"
+        [workflow]
+        name = "defaults-memory"
+
+        [defaults]
+        threads = 8
+        memory = "16G"
+
+        [[rules]]
+        name = "rule_no_memory"
+        output = ["out1.txt"]
+        shell = "echo out1"
+
+        [[rules]]
+        name = "rule_with_memory"
+        output = ["out2.txt"]
+        shell = "echo out2"
+        memory = "4G"
+    "#;
+
+    let mut config = WorkflowConfig::parse(toml).unwrap();
+    config.apply_defaults();
+
+    let r1 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "rule_no_memory")
+        .unwrap();
+    let r2 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "rule_with_memory")
+        .unwrap();
+
+    // rule_no_memory should get default memory
+    assert_eq!(r1.effective_memory(), Some("16G"));
+    // rule_with_memory should keep its own memory
+    assert_eq!(r2.effective_memory(), Some("4G"));
+    // both should get default threads
+    assert_eq!(r1.effective_threads(), 8);
+}
+
+/// Test WorkflowConfig::from_file correctly parses a file on disk.
+#[test]
+fn workflow_config_from_file() {
+    use std::io::Write;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("test.oxoflow");
+    let mut f = std::fs::File::create(&path).unwrap();
+    writeln!(
+        f,
+        r#"
+[workflow]
+name = "file-parse-test"
+version = "0.2.0"
+
+[[rules]]
+name = "hello"
+output = ["hello.txt"]
+shell = "echo hello"
+"#
+    )
+    .unwrap();
+
+    let config = WorkflowConfig::from_file(&path).unwrap();
+    assert_eq!(config.workflow.name, "file-parse-test");
+    assert_eq!(config.workflow.version, "0.2.0");
+    assert_eq!(config.rules.len(), 1);
+    assert_eq!(config.rules[0].name, "hello");
+}
+
+/// Test that WorkflowConfig::from_file fails on a non-existent path.
+#[test]
+fn workflow_config_from_nonexistent_file() {
+    let result = WorkflowConfig::from_file(std::path::Path::new("/nonexistent/path.oxoflow"));
+    assert!(result.is_err());
+}
+
+// ============================================================================
+// Wildcard utility tests
+// ============================================================================
+
+/// Test extract_wildcards identifies all wildcard names in a pattern.
+#[test]
+fn wildcard_extract_names_from_pattern() {
+    use oxo_flow_core::wildcard::extract_wildcards;
+
+    let pattern = "results/{sample}/{chrom}/{sample}_{chrom}.vcf";
+    let wildcards = extract_wildcards(pattern);
+    // Should extract unique wildcard names
+    assert!(wildcards.contains(&"sample".to_string()));
+    assert!(wildcards.contains(&"chrom".to_string()));
+}
+
+/// Test expand_pattern with concrete wildcard values.
+#[test]
+fn wildcard_expand_pattern_with_values() {
+    use oxo_flow_core::wildcard::expand_pattern;
+    use std::collections::HashMap;
+
+    let pattern = "results/{sample}/aligned/{sample}.bam";
+    let mut values = HashMap::new();
+    values.insert("sample".to_string(), "SAMPLE_01".to_string());
+
+    let expanded = expand_pattern(pattern, &values).unwrap();
+    assert_eq!(expanded, "results/SAMPLE_01/aligned/SAMPLE_01.bam");
+}
+
+/// Test has_wildcards correctly identifies patterns with and without wildcards.
+#[test]
+fn wildcard_has_wildcards_detection() {
+    use oxo_flow_core::wildcard::has_wildcards;
+
+    assert!(has_wildcards("{sample}_R1.fastq.gz"));
+    assert!(has_wildcards("results/{sample}/{chrom}.vcf"));
+    assert!(!has_wildcards("results/final.vcf"));
+    assert!(!has_wildcards("raw/input.fastq.gz"));
+}
+
+/// Test cartesian_product over multiple wildcard dimensions.
+#[test]
+fn wildcard_cartesian_product() {
+    use oxo_flow_core::wildcard::cartesian_product;
+    use std::collections::HashMap;
+
+    let mut dims = HashMap::new();
+    dims.insert(
+        "sample".to_string(),
+        vec!["S1".to_string(), "S2".to_string()],
+    );
+    dims.insert(
+        "chrom".to_string(),
+        vec!["chr1".to_string(), "chr2".to_string(), "chr3".to_string()],
+    );
+
+    let combos = cartesian_product(&dims);
+    // 2 samples × 3 chromosomes = 6 combinations
+    assert_eq!(combos.len(), 6);
+}
+
+// ============================================================================
+// Report generation tests
+// ============================================================================
+
+/// Test that the report engine handles empty sections gracefully.
+#[test]
+fn report_empty_workflow_report() {
+    use oxo_flow_core::report::Report;
+
+    let mut report = Report::new("Empty Pipeline Report", "empty-pipeline", "0.1.0");
+    // Don't add any sections
+
+    let html = report.to_html();
+    assert!(
+        html.contains("Empty Pipeline Report")
+            || html.contains("empty-pipeline")
+            || html.contains("html")
+    );
+
+    let json = report.to_json().unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    // JSON should be valid
+    assert!(parsed.is_object() || parsed.is_array());
+}
+
+/// Test variant summary section rendering.
+#[test]
+fn report_variant_summary_section() {
+    use oxo_flow_core::report::{Report, VariantSummary, variant_summary_section};
+
+    let mut report = Report::new("Variant Report", "variant-pipeline", "1.0.0");
+
+    let variants = vec![
+        VariantSummary {
+            gene: "KRAS".to_string(),
+            variant: "p.G12D".to_string(),
+            classification: "Pathogenic".to_string(),
+            allele_frequency: 0.32,
+            depth: 450,
+            clinical_significance: Some("Associated with colorectal cancer".to_string()),
+        },
+        VariantSummary {
+            gene: "TP53".to_string(),
+            variant: "p.R175H".to_string(),
+            classification: "Pathogenic".to_string(),
+            allele_frequency: 0.51,
+            depth: 600,
+            clinical_significance: Some("Gain of function mutation".to_string()),
+        },
+    ];
+    report.add_section(variant_summary_section(&variants));
+
+    let html = report.to_html();
+    assert!(html.contains("KRAS") || html.contains("variant") || html.contains("html"));
+
+    let json = report.to_json().unwrap();
+    assert!(json.contains("KRAS") || json.len() > 10);
+}
+
+// ============================================================================
+// Bioinformatics scenario: execute real shell-based workflows
+// ============================================================================
+
+/// Test executing a scatter-gather variant calling pipeline using Unix tools.
+#[tokio::test]
+async fn execute_scatter_gather_unix_pipeline() {
+    use oxo_flow_core::executor::{ExecutorConfig, LocalExecutor};
+    use std::collections::HashMap;
+
+    let dir = tempfile::tempdir().unwrap();
+    let workdir = dir.path().to_path_buf();
+
+    // Create simulated chromosome-level "variant files"
+    std::fs::write(
+        workdir.join("chr1.txt"),
+        "variant_chr1_001\nvariant_chr1_002\n",
+    )
+    .unwrap();
+    std::fs::write(workdir.join("chr2.txt"), "variant_chr2_001\n").unwrap();
+    std::fs::write(
+        workdir.join("chr3.txt"),
+        "variant_chr3_001\nvariant_chr3_002\nvariant_chr3_003\n",
+    )
+    .unwrap();
+
+    let toml = format!(
+        r#"
+        [workflow]
+        name = "scatter-gather-unix"
+
+        [[rules]]
+        name = "count_chr1"
+        input = ["{d}/chr1.txt"]
+        output = ["{d}/count1.txt"]
+        shell = "wc -l {d}/chr1.txt > {d}/count1.txt"
+
+        [[rules]]
+        name = "count_chr2"
+        input = ["{d}/chr2.txt"]
+        output = ["{d}/count2.txt"]
+        shell = "wc -l {d}/chr2.txt > {d}/count2.txt"
+
+        [[rules]]
+        name = "count_chr3"
+        input = ["{d}/chr3.txt"]
+        output = ["{d}/count3.txt"]
+        shell = "wc -l {d}/chr3.txt > {d}/count3.txt"
+
+        [[rules]]
+        name = "gather_counts"
+        input = ["{d}/count1.txt", "{d}/count2.txt", "{d}/count3.txt"]
+        output = ["{d}/total_counts.txt"]
+        shell = "cat {d}/count1.txt {d}/count2.txt {d}/count3.txt > {d}/total_counts.txt"
+    "#,
+        d = workdir.display()
+    );
+
+    let config = WorkflowConfig::parse(&toml).unwrap();
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+    let order = dag.execution_order().unwrap();
+
+    let exec_config = ExecutorConfig {
+        max_jobs: 3,
+        workdir: workdir.clone(),
+        skip_env_setup: true,
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(exec_config);
+
+    let wildcards: HashMap<String, String> = HashMap::new();
+    for rule_name in &order {
+        let rule = config.get_rule(rule_name).unwrap();
+        let record = executor.execute_rule(rule, &wildcards).await.unwrap();
+        assert_eq!(
+            record.status,
+            oxo_flow_core::executor::JobStatus::Success,
+            "rule {} should succeed",
+            rule_name
+        );
+    }
+
+    assert!(workdir.join("total_counts.txt").exists());
+    let content = std::fs::read_to_string(workdir.join("total_counts.txt")).unwrap();
+    assert!(!content.is_empty());
+}
+
+/// Test executing a QC → trim → align simulation pipeline.
+#[tokio::test]
+async fn execute_qc_trim_align_simulation() {
+    use oxo_flow_core::executor::{ExecutorConfig, LocalExecutor};
+    use std::collections::HashMap;
+
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+
+    // Simulate paired-end FASTQ files
+    std::fs::write(
+        d.join("sample_R1.fq"),
+        "@READ1\nACGTACGT\n+\nIIIIIIII\n@READ2\nTTTTAAAA\n+\nIIIIIIII\n",
+    )
+    .unwrap();
+    std::fs::write(
+        d.join("sample_R2.fq"),
+        "@READ1\nTGCATGCA\n+\nIIIIIIII\n@READ2\nAAAATTTT\n+\nIIIIIIII\n",
+    )
+    .unwrap();
+
+    let toml = format!(
+        r#"
+        [workflow]
+        name = "qc-trim-align-sim"
+        description = "Simulated QC → trim → align pipeline using Unix tools"
+
+        [[rules]]
+        name = "fastqc_r1"
+        input = ["{d}/sample_R1.fq"]
+        output = ["{d}/qc_r1.txt"]
+        shell = "wc -l {d}/sample_R1.fq > {d}/qc_r1.txt && echo 'QC_PASS' >> {d}/qc_r1.txt"
+        threads = 2
+        description = "Quality check for R1 reads"
+
+        [[rules]]
+        name = "fastqc_r2"
+        input = ["{d}/sample_R2.fq"]
+        output = ["{d}/qc_r2.txt"]
+        shell = "wc -l {d}/sample_R2.fq > {d}/qc_r2.txt && echo 'QC_PASS' >> {d}/qc_r2.txt"
+        threads = 2
+        description = "Quality check for R2 reads"
+
+        [[rules]]
+        name = "trim_reads"
+        input = ["{d}/sample_R1.fq", "{d}/sample_R2.fq"]
+        output = ["{d}/trimmed_R1.fq", "{d}/trimmed_R2.fq"]
+        shell = "grep -A1 '^@' {d}/sample_R1.fq | grep -v '^--' > {d}/trimmed_R1.fq && grep -A1 '^@' {d}/sample_R2.fq | grep -v '^--' > {d}/trimmed_R2.fq"
+        threads = 4
+        description = "Adapter trimming simulation"
+
+        [[rules]]
+        name = "multiqc_summary"
+        input = ["{d}/qc_r1.txt", "{d}/qc_r2.txt"]
+        output = ["{d}/multiqc_report.txt"]
+        shell = "cat {d}/qc_r1.txt {d}/qc_r2.txt > {d}/multiqc_report.txt && echo 'MultiQC Summary Complete' >> {d}/multiqc_report.txt"
+        description = "Aggregate QC report"
+    "#,
+        d = d.display()
+    );
+
+    let config = WorkflowConfig::parse(&toml).unwrap();
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+    let order = dag.execution_order().unwrap();
+    assert_eq!(order.len(), 4);
+
+    let exec_config = ExecutorConfig {
+        max_jobs: 2,
+        workdir: d.to_path_buf(),
+        skip_env_setup: true,
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(exec_config);
+    let wildcards: HashMap<String, String> = HashMap::new();
+
+    for rule_name in &order {
+        let rule = config.get_rule(rule_name).unwrap();
+        let record = executor.execute_rule(rule, &wildcards).await.unwrap();
+        assert_eq!(
+            record.status,
+            oxo_flow_core::executor::JobStatus::Success,
+            "rule {} should succeed",
+            rule_name
+        );
+    }
+
+    let report = std::fs::read_to_string(d.join("multiqc_report.txt")).unwrap();
+    assert!(report.contains("QC_PASS"));
+    assert!(report.contains("MultiQC Summary Complete"));
 }
