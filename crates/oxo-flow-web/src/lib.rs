@@ -2357,8 +2357,10 @@ docker = "biocontainers/bwa:0.7.17"
     /// one binary run share the same schema and seed data, while different
     /// test binary invocations start fresh.
     async fn init_test_db() {
+        // Use process-specific temp database - each test process gets its own DB
+        // This avoids locking issues when tests run in parallel within the same process
         let db_path = std::env::temp_dir().join(format!("oxo-flow-test-{}.db", std::process::id()));
-        let url = format!("sqlite:{}", db_path.display());
+        let url = format!("sqlite:{}?mode=rwc", db_path.display());
         db::init_db(&url)
             .await
             .expect("Failed to initialize test database");
