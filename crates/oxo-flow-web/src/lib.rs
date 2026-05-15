@@ -2359,7 +2359,9 @@ docker = "biocontainers/bwa:0.7.17"
     async fn init_test_db() {
         let db_path = std::env::temp_dir().join(format!("oxo-flow-test-{}.db", std::process::id()));
         let url = format!("sqlite:{}", db_path.display());
-        let _ = db::init_db(&url).await;
+        db::init_db(&url)
+            .await
+            .expect("Failed to initialize test database");
     }
 
     /// Helper: send a POST request with a JSON body and return the response.

@@ -109,7 +109,7 @@ pub async fn init_db(database_url: &str) -> Result<()> {
         let admin_id = Uuid::new_v4().to_string();
         let now = Utc::now();
         sqlx::query(
-            "INSERT INTO users (id, username, role, auth_type, os_user, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+            "INSERT OR IGNORE INTO users (id, username, role, auth_type, os_user, created_at) VALUES (?, ?, ?, ?, ?, ?)"
         )
         .bind(admin_id)
         .bind("admin")
