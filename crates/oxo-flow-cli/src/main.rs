@@ -1665,10 +1665,24 @@ Thumbs.db
                     // Create environment resolver for command wrapping
                     let env_resolver = oxo_flow_core::environment::EnvironmentResolver::new();
 
+                    // Build config variable map for placeholder expansion
+                    let mut wildcard_values: HashMap<String, String> = HashMap::new();
+                    for (key, value) in &config.config {
+                        let string_val = match value {
+                            toml::Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        };
+                        wildcard_values.insert(format!("config.{key}"), string_val);
+                    }
+
                     for rule_name in &order {
                         let rule = config.get_rule(rule_name).unwrap();
                         let shell_cmd = match rule.shell.as_deref() {
-                            Some(cmd) => cmd,
+                            Some(cmd) => oxo_flow_core::executor::render_shell_command(
+                                cmd,
+                                rule,
+                                &wildcard_values,
+                            ),
                             None => {
                                 eprintln!(
                                     "  {} {} — no shell command, skipping",
@@ -1683,7 +1697,7 @@ Thumbs.db
                         let script = oxo_flow_core::cluster::generate_submit_script_with_env(
                             &cluster_backend,
                             rule,
-                            shell_cmd,
+                            &shell_cmd,
                             &cluster_config,
                             &env_resolver,
                         )
