@@ -433,6 +433,15 @@ impl LocalExecutor {
                 .and_then(crate::scheduler::parse_memory_mb)
                 .unwrap_or(0);
 
+            tracing::warn!(
+                rule = %rule.name,
+                threads_required = required_threads,
+                threads_available = pool.threads,
+                memory_required_mb = required_memory,
+                memory_available_mb = pool.memory_mb,
+                "insufficient resources, job will wait"
+            );
+
             return Err(OxoFlowError::ResourceExhausted {
                 rule: rule.name.clone(),
                 required_threads,
@@ -442,6 +451,13 @@ impl LocalExecutor {
             });
         }
 
+        tracing::debug!(
+            rule = %rule.name,
+            threads_available = pool.threads,
+            memory_available_mb = pool.memory_mb,
+            "resources available"
+        );
+
         Ok(())
     }
 
@@ -449,10 +465,19 @@ impl LocalExecutor {
     async fn reserve_resources(&self, rule: &Rule) {
         let mut pool = self.resource_pool.lock().await;
         pool.reserve(rule);
-        tracing::debug!(
+
+        let req_threads = rule.effective_threads();
+        let req_memory_mb = rule
+            .effective_memory()
+            .and_then(crate::scheduler::parse_memory_mb)
+            .unwrap_or(0);
+
+        tracing::info!(
             rule = %rule.name,
-            threads_remaining = %pool.threads,
-            memory_remaining_mb = %pool.memory_mb,
+            threads_requested = req_threads,
+            threads_available = pool.threads,
+            memory_requested_mb = req_memory_mb,
+            memory_available_mb = pool.memory_mb,
             "reserved resources"
         );
     }
@@ -467,10 +492,19 @@ impl LocalExecutor {
             max_memory_mb,
             &self.config.resource_groups,
         );
-        tracing::debug!(
+
+        let req_threads = rule.effective_threads();
+        let req_memory_mb = rule
+            .effective_memory()
+            .and_then(crate::scheduler::parse_memory_mb)
+            .unwrap_or(0);
+
+        tracing::info!(
             rule = %rule.name,
-            threads_available = %pool.threads,
-            memory_available_mb = %pool.memory_mb,
+            threads_released = req_threads,
+            threads_available = pool.threads,
+            memory_released_mb = req_memory_mb,
+            memory_available_mb = pool.memory_mb,
             "released resources"
         );
     }
