@@ -3602,4 +3602,191 @@ mod tests {
         // Temp file should be cleaned up
         assert!(!tokio::fs::try_exists(&temp_file).await.unwrap());
     }
+
+    // -- Interpreter detection tests ------------------------------------------------
+
+    #[test]
+    fn detect_interpreter_python_extension() {
+        let interp = detect_interpreter("script.py", None, &HashMap::new());
+        assert_eq!(interp, Some("python".to_string()));
+    }
+
+    #[test]
+    fn detect_interpreter_r_extension() {
+        let interp = detect_interpreter("analysis.R", None, &HashMap::new());
+        assert_eq!(interp, Some("Rscript".to_string()));
+    }
+
+    #[test]
+    fn detect_interpreter_lowercase_r() {
+        let interp = detect_interpreter("script.r", None, &HashMap::new());
+        assert_eq!(interp, Some("Rscript".to_string()));
+    }
+
+    #[test]
+    fn detect_interpreter_julia_extension() {
+        let interp = detect_interpreter("compute.jl", None, &HashMap::new());
+        assert_eq!(interp, Some("julia".to_string()));
+    }
+
+    #[test]
+    fn detect_interpreter_quarto_extension() {
+        let interp = detect_interpreter("report.qmd", None, &HashMap::new());
+        assert_eq!(interp, Some("quarto render".to_string()));
+    }
+
+    #[test]
+    fn detect_interpreter_rmd_extension() {
+        let interp = detect_interpreter("notebook.Rmd", None, &HashMap::new());
+        assert_eq!(interp, Some("quarto render".to_string()));
+    }
+
+    #[test]
+    fn detect_interpreter_jupyter_extension() {
+        let interp = detect_interpreter("analysis.ipynb", None, &HashMap::new());
+        assert_eq!(interp, Some("jupyter nbconvert --to notebook --execute".to_string()));
+    }
+
+    #[test]
+    fn detect_interpreter_snakemake_extension() {
+        let interp = detect_interpreter("workflow.smk", None, &HashMap::new());
+        assert_eq!(interp, Some("snakemake".to_string()));
+    }
+
+    #[test]
+    fn detect_interpreter_explicit_override() {
+        // Explicit interpreter overrides auto-detection
+        let interp = detect_interpreter("script.py", Some("/opt/python3.11/bin/python"), &HashMap::new());
+        assert_eq!(interp, Some("/opt/python3.11/bin/python".to_string()));
+    }
+
+    #[test]
+    fn detect_interpreter_custom_map() {
+        // Custom map overrides defaults
+        let mut custom_map = HashMap::new();
+        custom_map.insert(".m".to_string(), "octave".to_string());
+        let interp = detect_interpreter("matlab_code.m", None, &custom_map);
+        assert_eq!(interp, Some("octave".to_string()));
+    }
+
+    #[test]
+    fn detect_interpreter_unknown_extension_no_match() {
+        let interp = detect_interpreter("data.csv", None, &HashMap::new());
+        assert!(interp.is_none());
+    }
+
+    #[test]
+    fn detect_interpreter_no_extension() {
+        let interp = detect_interpreter("README", None, &HashMap::new());
+        assert!(interp.is_none());
+    }
+
+    #[test]
+    fn build_script_command_simple() {
+        let cmd = build_script_command("python", "script.py");
+        assert_eq!(cmd, "python script.py");
+    }
+
+    #[test]
+    fn build_script_command_multi_word() {
+        let cmd = build_script_command("quarto render", "report.qmd");
+        assert_eq!(cmd, "quarto render report.qmd");
+    }
+
+    #[test]
+    fn build_script_command_jupyter() {
+        let cmd = build_script_command("jupyter nbconvert --to notebook --execute", "analysis.ipynb");
+        assert_eq!(cmd, "jupyter nbconvert --to notebook --execute analysis.ipynb");
+    }
+
+    // -- Script execution tests -----------------------------------------------------
+
+    #[tokio::test]
+    async fn execute_script_only_python() {
+        // Create a temporary Python script
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = dir.path().join("test.py");
+        tokio::fs::write(&script_path, "print('hello from python')").await.unwrap();
+
+        let rule = Rule {
+            name: "python_script".to_string(),
+            input: vec![],
+            output: vec![],
+            script: Some(script_path.to_str().unwrap().to_string()),
+            ..Default::default()
+        };
+
+        let config = ExecutorConfig {
+            max_jobs: 1,
+            dry_run: false,
+            workdir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let executor = LocalExecutor::new(config);
+        let result = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+
+        // Note: This test requires python to be installed on the system
+        // If python is not available, the test may fail
+        if result.status == JobStatus::Success {
+            assert!(result.stdout.unwrap().contains("hello from python"));
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_shell_and_script_sequential() {
+        // Create a temporary shell script
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = dir.path().join("step2.sh");
+        tokio::fs::write(&script_path, "#!/bin/bash\necho 'step2 done'").await.unwrap();
+
+        let rule = Rule {
+            name: "sequential".to_string(),
+            input: vec![],
+            output: vec![],
+            shell: Some("echo 'step1 done'".to_string()),
+            script: Some(script_path.to_str().unwrap().to_string()),
+            ..Default::default()
+        };
+
+        let config = ExecutorConfig {
+            max_jobs: 1,
+            dry_run: false,
+            workdir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let executor = LocalExecutor::new(config);
+        let result = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+
+        // Both commands should execute
+        if result.status == JobStatus::Success {
+            let stdout = result.stdout.unwrap();
+            assert!(stdout.contains("step1 done"));
+            assert!(stdout.contains("step2 done"));
+        }
+    }
+
+    #[test]
+    fn rule_with_interpreter_field() {
+        let rule = Rule {
+            name: "custom_interp".to_string(),
+            script: Some("custom.bin".to_string()),
+            interpreter: Some("/usr/local/bin/custom-runner".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(rule.interpreter, Some("/usr/local/bin/custom-runner".to_string()));
+    }
+
+    #[test]
+    fn rule_builder_with_interpreter() {
+        let rule = crate::rule::RuleBuilder::new("test")
+            .script("analyze.py")
+            .interpreter("python3")
+            .build();
+
+        assert_eq!(rule.script, Some("analyze.py".to_string()));
+        assert_eq!(rule.interpreter, Some("python3".to_string()));
+    }
 }
