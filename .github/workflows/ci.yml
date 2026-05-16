@@ -91,6 +91,23 @@ jobs:
             CHANGED=true
           fi
 
+          # Update docs version references (oxo-flow X.Y.Z and vX.Y.Z patterns)
+          if [ -d docs/guide/src ]; then
+            echo "Updating docs version references..."
+            # Match patterns like: oxo-flow 0.4.2 —, "version": "0.4.2", v0.4.2
+            find docs/guide/src -name "*.md" -exec sed -i -E \
+              -e "s/oxo-flow [0-9]+\.[0-9]+\.[0-9]+ —/oxo-flow $VERSION —/g" \
+              -e "s/\"version\": \"[0-9]+\.[0-9]+\.[0-9]+\"/\"version\": \"$VERSION\"/g" \
+              -e "s/v[0-9]+\.[0-9]+\.[0-9]+/v$VERSION/g" {} \;
+            # Also update README.md
+            if [ -f README.md ]; then
+              sed -i -E \
+                -e "s/oxo-flow [0-9]+\.[0-9]+\.[0-9]+ —/oxo-flow $VERSION —/g" \
+                -e "s/v[0-9]+\.[0-9]+\.[0-9]+/v$VERSION/g" README.md
+            fi
+            CHANGED=true
+          fi
+
           echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust (stable)
@@ -111,6 +128,8 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Cargo.toml Cargo.lock
           [ -f CITATION.cff ] && git add CITATION.cff
+          [ -f README.md ] && git add README.md
+          [ -d docs/guide/src ] && git add docs/guide/src/*.md docs/guide/src/**/*.md
           git commit -m "chore: bump version to ${{ steps.extract.outputs.version }} [skip ci]"
           git push origin "HEAD:${{ github.event.repository.default_branch }}"
           NEW_SHA=$(git rev-parse HEAD)
