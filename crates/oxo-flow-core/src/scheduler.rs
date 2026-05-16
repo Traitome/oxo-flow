@@ -315,10 +315,18 @@ pub fn validate_resources_against_system(
 
 /// Check available disk space in a directory.
 /// Returns available space in MB, or None if check fails.
+/// Only available on Unix platforms.
+#[cfg(unix)]
 pub fn check_available_disk_mb(path: &std::path::Path) -> Option<u64> {
     fs2::available_space(path)
         .ok()
         .map(|bytes| bytes / 1024 / 1024)
+}
+
+/// Stub for non-Unix platforms - always returns None.
+#[cfg(not(unix))]
+pub fn check_available_disk_mb(_path: &std::path::Path) -> Option<u64> {
+    None
 }
 
 /// Validate disk requirements for all rules against workdir capacity.

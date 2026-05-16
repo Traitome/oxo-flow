@@ -175,8 +175,7 @@ oxo-flow emits warnings when disk requirements exceed available space but cannot
 
 ### Timeout Killing Child Processes
 
-Unix: timeout uses process group SIGKILL (reliable)
-Windows: may leave orphan processes
+Timeout uses process group SIGKILL on Unix systems (reliable cleanup).
 
 Solution: Use wrapper script that manages its own cleanup:
 

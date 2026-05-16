@@ -375,7 +375,6 @@ oxo-flow tracks declared resources for scheduling but does not strictly enforce 
 |---|---|---|
 | Linux | `num_cpus` crate | `sysinfo` crate |
 | macOS | `num_cpus` crate | `sysinfo` crate |
-| Windows | `num_cpus` crate | `sysinfo` crate |
 
 ### Validation Warnings
 
@@ -406,8 +405,6 @@ On Unix systems (Linux, macOS), timeout kills the entire process group, ensuring
 [rules.resources]
 time_limit = "4h"  # SIGKILL sent to process group after 4 hours
 ```
-
-On Windows, standard timeout behavior applies (may leave child processes).
 
 ### GPU Specification
 

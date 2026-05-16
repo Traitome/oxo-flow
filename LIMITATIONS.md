@@ -32,8 +32,6 @@ helps contributors identify areas for improvement.
   mounts.
 - **No GUI workflow editor** — The web interface provides monitoring and
   management but does not include a visual drag-and-drop workflow editor.
-- **Limited Windows support** — oxo-flow is developed and tested primarily on
-  Linux. macOS is supported. Windows support is experimental and limited to WSL2.
 - **No Kubernetes operator** — Cloud-native orchestration via Kubernetes CRD/operator
   is not yet available. Users should use cluster backends (SLURM/PBS) or local execution.
 - **No native distributed consensus** — oxo-flow assumes a shared filesystem for

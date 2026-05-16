@@ -28,7 +28,6 @@ sysinfo = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true }
-
 fs2 = { workspace = true }
 
 [dev-dependencies]
