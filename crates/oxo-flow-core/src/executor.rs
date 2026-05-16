@@ -40,7 +40,10 @@ fn default_interpreter_map() -> HashMap<String, String> {
     map.insert(".Rmd".to_string(), "quarto render".to_string());
     map.insert(".rmd".to_string(), "quarto render".to_string());
     // Jupyter notebooks
-    map.insert(".ipynb".to_string(), "jupyter nbconvert --to notebook --execute".to_string());
+    map.insert(
+        ".ipynb".to_string(),
+        "jupyter nbconvert --to notebook --execute".to_string(),
+    );
     // Workflow languages (bioinformatics)
     map.insert(".smk".to_string(), "snakemake".to_string());
     map.insert(".nextflow".to_string(), "nextflow run".to_string());
@@ -86,15 +89,8 @@ pub fn detect_interpreter(
 }
 
 /// Build command from interpreter and script path.
-///
-/// Handles special cases like `quarto render` which needs the script as argument.
 pub fn build_script_command(interpreter: &str, script_path: &str) -> String {
-    // Multi-word interpreters (e.g., "quarto render", "jupyter nbconvert ...")
-    if interpreter.contains(' ') {
-        format!("{} {}", interpreter, script_path)
-    } else {
-        format!("{} {}", interpreter, script_path)
-    }
+    format!("{} {}", interpreter, script_path)
 }
 
 /// Status of a job in the execution pipeline.
@@ -674,13 +670,18 @@ impl LocalExecutor {
 
         // Build commands to execute: shell (if present) + script (if present)
         // Execution order: shell first, then script (sequential)
-        let shell_cmd = rule.shell.as_ref().map(|cmd| {
-            render_shell_command(cmd, rule, wildcard_values)
-        });
+        let shell_cmd = rule
+            .shell
+            .as_ref()
+            .map(|cmd| render_shell_command(cmd, rule, wildcard_values));
 
         let script_cmd = rule.script.as_ref().map(|script_path| {
             let expanded_script = render_shell_command(script_path, rule, wildcard_values);
-            match detect_interpreter(&expanded_script, rule.interpreter.as_deref(), &self.config.interpreter_map) {
+            match detect_interpreter(
+                &expanded_script,
+                rule.interpreter.as_deref(),
+                &self.config.interpreter_map,
+            ) {
                 Some(interp) => build_script_command(&interp, &expanded_script),
                 None => {
                     tracing::warn!(
@@ -736,7 +737,7 @@ impl LocalExecutor {
             }
             (Some(shell), None) => vec![shell.clone()],
             (None, Some(script)) => vec![script.clone()],
-            (None, None) => vec![],  // Already handled above
+            (None, None) => vec![], // Already handled above
         };
 
         // Resolve all commands through environment resolver
@@ -965,7 +966,7 @@ impl LocalExecutor {
 
             // Check if all commands succeeded
             if all_commands_succeeded {
-                break;  // Exit retry loop on success
+                break; // Exit retry loop on success
             }
 
             // All commands failed — retry if attempts remain
@@ -3644,7 +3645,10 @@ mod tests {
     #[test]
     fn detect_interpreter_jupyter_extension() {
         let interp = detect_interpreter("analysis.ipynb", None, &HashMap::new());
-        assert_eq!(interp, Some("jupyter nbconvert --to notebook --execute".to_string()));
+        assert_eq!(
+            interp,
+            Some("jupyter nbconvert --to notebook --execute".to_string())
+        );
     }
 
     #[test]
@@ -3656,7 +3660,11 @@ mod tests {
     #[test]
     fn detect_interpreter_explicit_override() {
         // Explicit interpreter overrides auto-detection
-        let interp = detect_interpreter("script.py", Some("/opt/python3.11/bin/python"), &HashMap::new());
+        let interp = detect_interpreter(
+            "script.py",
+            Some("/opt/python3.11/bin/python"),
+            &HashMap::new(),
+        );
         assert_eq!(interp, Some("/opt/python3.11/bin/python".to_string()));
     }
 
@@ -3695,8 +3703,14 @@ mod tests {
 
     #[test]
     fn build_script_command_jupyter() {
-        let cmd = build_script_command("jupyter nbconvert --to notebook --execute", "analysis.ipynb");
-        assert_eq!(cmd, "jupyter nbconvert --to notebook --execute analysis.ipynb");
+        let cmd = build_script_command(
+            "jupyter nbconvert --to notebook --execute",
+            "analysis.ipynb",
+        );
+        assert_eq!(
+            cmd,
+            "jupyter nbconvert --to notebook --execute analysis.ipynb"
+        );
     }
 
     // -- Script execution tests -----------------------------------------------------
@@ -3706,7 +3720,9 @@ mod tests {
         // Create a temporary Python script
         let dir = tempfile::tempdir().unwrap();
         let script_path = dir.path().join("test.py");
-        tokio::fs::write(&script_path, "print('hello from python')").await.unwrap();
+        tokio::fs::write(&script_path, "print('hello from python')")
+            .await
+            .unwrap();
 
         let rule = Rule {
             name: "python_script".to_string(),
@@ -3738,7 +3754,9 @@ mod tests {
         // Create a temporary shell script
         let dir = tempfile::tempdir().unwrap();
         let script_path = dir.path().join("step2.sh");
-        tokio::fs::write(&script_path, "#!/bin/bash\necho 'step2 done'").await.unwrap();
+        tokio::fs::write(&script_path, "#!/bin/bash\necho 'step2 done'")
+            .await
+            .unwrap();
 
         let rule = Rule {
             name: "sequential".to_string(),
@@ -3776,7 +3794,10 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(rule.interpreter, Some("/usr/local/bin/custom-runner".to_string()));
+        assert_eq!(
+            rule.interpreter,
+            Some("/usr/local/bin/custom-runner".to_string())
+        );
     }
 
     #[test]
