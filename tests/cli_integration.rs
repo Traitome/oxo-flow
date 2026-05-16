@@ -454,7 +454,7 @@ fn cli_validate_all_gallery_workflows() {
     let entries: Vec<_> = fs::read_dir(gallery_dir)
         .expect("gallery directory should exist")
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "oxoflow"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "oxoflow"))
         .collect();
 
     assert!(
@@ -653,7 +653,7 @@ fn cli_cluster_submit() {
     let scripts: Vec<_> = fs::read_dir(&output_dir)
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "sh"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "sh"))
         .collect();
     assert!(
         scripts.len() >= 3,
@@ -1530,7 +1530,7 @@ fn cli_lint_all_gallery_workflows() {
     let entries: Vec<_> = fs::read_dir(gallery_dir)
         .expect("gallery directory should exist")
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "oxoflow"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "oxoflow"))
         .collect();
 
     for entry in &entries {
