@@ -749,7 +749,15 @@ impl LocalExecutor {
         // Record primary command (shell if exists, otherwise script)
         record.command = resolved_commands.first().cloned();
 
-        // Warn about any dangerous patterns detected in the expanded commands.
+        // Validate shell safety - block execution of dangerous patterns
+        for cmd in &resolved_commands {
+            if let Err(e) = validate_shell_safety(cmd) {
+                tracing::error!(rule = %rule.name, error = %e, "blocked dangerous shell command");
+                return Err(e);
+            }
+        }
+
+        // Warn about any potentially risky patterns detected in the expanded commands.
         for cmd in &resolved_commands {
             for warning in sanitize_shell_command(cmd) {
                 tracing::warn!(rule = %rule.name, "{warning}");
@@ -1941,6 +1949,40 @@ pub fn sanitize_shell_command(cmd: &str) -> Vec<String> {
     warnings
 }
 
+/// Block dangerous shell patterns that could lead to command injection.
+/// Returns Ok(()) if safe, Err if dangerous patterns are detected.
+///
+/// This is a strict validation that prevents execution of commands with
+/// potentially dangerous constructs. For production pipelines requiring
+/// these patterns (e.g., pipes), use script files instead.
+#[must_use = "shell safety validation returns a Result that must be checked"]
+pub fn validate_shell_safety(cmd: &str) -> crate::Result<()> {
+    let block_patterns = [
+        ("$(", "command substitution"),
+        ("`", "backtick substitution"),
+        (";", "command chaining"),
+        ("&&", "conditional chaining"),
+        ("||", "conditional chaining"),
+        ("\n", "newline injection"),
+        ("rm -rf /", "dangerous deletion"),
+    ];
+    for (pattern, desc) in &block_patterns {
+        if cmd.contains(pattern) {
+            return Err(crate::OxoFlowError::Validation {
+                message: format!(
+                    "Shell command blocked: {} pattern detected in '{}'",
+                    desc, cmd
+                ),
+                rule: None,
+                suggestion: Some(
+                    "Remove dangerous shell constructs or use a script file instead".to_string(),
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Validate that a file path does not escape the working directory
 /// (path traversal prevention).
 ///
@@ -3067,6 +3109,51 @@ mod tests {
         let warnings = sanitize_shell_command("eval rm -rf /");
         assert!(warnings.iter().any(|w| w.contains("recursive deletion")));
         assert!(warnings.iter().any(|w| w.contains("eval")));
+    }
+
+    // -- validate_shell_safety tests -----------------------------------------
+
+    #[test]
+    fn validate_shell_safety_blocks_command_substitution() {
+        assert!(validate_shell_safety("echo $(whoami)").is_err());
+    }
+
+    #[test]
+    fn validate_shell_safety_blocks_backtick() {
+        assert!(validate_shell_safety("echo `whoami`").is_err());
+    }
+
+    #[test]
+    fn validate_shell_safety_blocks_semicolon_chaining() {
+        assert!(validate_shell_safety("ls; rm -rf /").is_err());
+    }
+
+    #[test]
+    fn validate_shell_safety_blocks_and_chaining() {
+        assert!(validate_shell_safety("mkdir tmp && rm -rf /").is_err());
+    }
+
+    #[test]
+    fn validate_shell_safety_blocks_or_chaining() {
+        assert!(validate_shell_safety("ls || rm -rf /").is_err());
+    }
+
+    #[test]
+    fn validate_shell_safety_blocks_newline() {
+        assert!(validate_shell_safety("echo hello\nrm -rf /").is_err());
+    }
+
+    #[test]
+    fn validate_shell_safety_allows_safe_commands() {
+        assert!(validate_shell_safety("bwa mem ref.fa reads.fq").is_ok());
+        assert!(validate_shell_safety("samtools sort input.bam -o output.bam").is_ok());
+        assert!(validate_shell_safety("fastqc sample.fastq.gz").is_ok());
+    }
+
+    #[test]
+    fn validate_shell_safety_blocks_dangerous_deletion() {
+        assert!(validate_shell_safety("rm -rf /").is_err());
+        assert!(validate_shell_safety("sudo rm -rf /").is_err());
     }
 
     #[test]
