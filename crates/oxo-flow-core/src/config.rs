@@ -155,6 +155,24 @@ pub struct WorkflowMeta {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sample_groups_file: Option<String>,
+
+    /// Wildcard pattern for auto-discovering experiment-control pairs.
+    ///
+    /// The pattern must contain `{pair_id}`, `{experiment}`, and `{control}` wildcards.
+    /// oxo-flow scans matching files and extracts pair definitions from paths.
+    ///
+    /// # Example
+    ///
+    /// ```toml
+    /// [workflow]
+    /// pairs_pattern = "aligned/{pair_id}/{experiment}_vs_{control}.bam"
+    /// ```
+    ///
+    /// For file `aligned/CASE_001/EXP_01_vs_CTRL_01.bam`, creates pair:
+    /// - pair_id = CASE_001, experiment = EXP_01, control = CTRL_01
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pairs_pattern: Option<String>,
 }
 
 fn default_version() -> String {
@@ -449,6 +467,119 @@ impl ExperimentControlPair {
                 message: format!("unsupported pairs file format: {}", extension),
             }),
         }
+    }
+
+    /// Discover pairs from a wildcard pattern by scanning the filesystem.
+    ///
+    /// The pattern must contain `{pair_id}`, `{experiment}`, and `{control}` wildcards.
+    /// oxo-flow scans matching files and extracts wildcard values from paths.
+    ///
+    /// # Example patterns
+    ///
+    /// - `aligned/{pair_id}/{experiment}_vs_{control}.bam`
+    /// - `results/{pair_id}/mutect2_{experiment}_{control}.vcf.gz`
+    ///
+    /// For file `aligned/CASE_001/EXP_01_vs_CTRL_01.bam`, extracts:
+    /// - pair_id = CASE_001
+    /// - experiment = EXP_01
+    /// - control = CTRL_01
+    pub fn discover_from_pattern(pattern: &str, base_dir: &Path) -> Result<Vec<Self>> {
+        use crate::wildcard::{extract_wildcards, pattern_to_regex};
+
+        // Validate pattern contains required wildcards
+        if !pattern.contains("{pair_id}")
+            || !pattern.contains("{experiment}")
+            || !pattern.contains("{control}")
+        {
+            return Err(OxoFlowError::Config {
+                message: format!(
+                    "pairs_pattern must contain {{pair_id}}, {{experiment}}, and {{control}}: {}",
+                    pattern
+                ),
+            });
+        }
+
+        // Get wildcard names from pattern
+        let wildcard_names = extract_wildcards(pattern);
+
+        // Build regex from pattern for matching
+        let re = pattern_to_regex(pattern)?;
+
+        // Convert pattern to glob pattern for filesystem scanning
+        let glob_pattern = pattern
+            .replace("{pair_id}", "*")
+            .replace("{experiment}", "*")
+            .replace("{control}", "*")
+            .replace("{experiment_type}", "*");
+
+        let full_glob = if glob_pattern.starts_with('/') {
+            glob_pattern
+        } else {
+            base_dir.join(&glob_pattern).to_string_lossy().to_string()
+        };
+
+        // Scan filesystem for matching files
+        let mut pairs: Vec<Self> = Vec::new();
+        let mut seen_pair_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for entry in glob::glob(&full_glob).map_err(|e| OxoFlowError::Config {
+            message: format!("invalid glob pattern '{}': {}", full_glob, e),
+        })? {
+            let path = entry.map_err(|e| OxoFlowError::Config {
+                message: format!("glob error: {}", e),
+            })?;
+
+            // Get relative path from base_dir for extraction
+            let rel_path = path.strip_prefix(base_dir).unwrap_or(&path);
+            let path_str = rel_path.to_string_lossy();
+
+            // Extract wildcard values from the path using regex
+            if let Some(captures) = re.captures(&path_str) {
+                let mut wildcards: HashMap<String, String> = HashMap::new();
+                for name in &wildcard_names {
+                    if let Some(m) = captures.name(name) {
+                        wildcards.insert(name.clone(), m.as_str().to_string());
+                    }
+                }
+
+                if let Some(pair_id) = wildcards.get("pair_id") {
+                    // Skip duplicates (same pair_id)
+                    if seen_pair_ids.contains(pair_id) {
+                        continue;
+                    }
+                    seen_pair_ids.insert(pair_id.clone());
+
+                    if let Some(experiment) = wildcards.get("experiment")
+                        && let Some(control) = wildcards.get("control")
+                    {
+                        let pair = Self {
+                            pair_id: pair_id.clone(),
+                            experiment: experiment.clone(),
+                            control: control.clone(),
+                            experiment_type: wildcards.get("experiment_type").cloned(),
+                            metadata: HashMap::new(),
+                        };
+                        pairs.push(pair);
+                    }
+                }
+            }
+        }
+
+        if pairs.is_empty() {
+            tracing::warn!(
+                "pairs_pattern '{}' matched no files in {}",
+                pattern,
+                base_dir.display()
+            );
+        } else {
+            tracing::info!(
+                "Discovered {} pairs from pattern '{}'",
+                pairs.len(),
+                pattern
+            );
+        }
+
+        Ok(pairs)
     }
 
     fn parse_json(content: &str, path: &Path) -> Result<Vec<Self>> {
@@ -1100,6 +1231,20 @@ impl WorkflowConfig {
                 // Merge with inline pairs
                 config.pairs.extend(file_pairs);
                 tracing::info!("Loaded {} pairs from {}", count, pairs_file);
+            }
+
+            // Discover pairs from pattern if specified
+            if let Some(ref pairs_pattern) = config.workflow.pairs_pattern {
+                let discovered_pairs =
+                    ExperimentControlPair::discover_from_pattern(pairs_pattern, parent)?;
+                let count = discovered_pairs.len();
+                // Merge with inline/file pairs
+                config.pairs.extend(discovered_pairs);
+                tracing::info!(
+                    "Discovered {} pairs from pattern '{}'",
+                    count,
+                    pairs_pattern
+                );
             }
 
             // Load sample_groups from external file if specified

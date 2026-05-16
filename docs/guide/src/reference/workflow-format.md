@@ -691,6 +691,34 @@ CASE_002,EXP_02,CTRL_02,colorectal
 
 Inline `[[pairs]]` and `pairs_file` can be used together; entries from both sources are merged.
 
+### Auto-discovery from file pattern
+
+For workflows with existing paired files, use `pairs_pattern` in `[workflow]` to auto-discover pairs by scanning the filesystem:
+
+```toml
+[workflow]
+name = "somatic-calling"
+pairs_pattern = "aligned/{pair_id}/{experiment}_vs_{control}.bam"
+```
+
+oxo-flow scans files matching this pattern and extracts wildcards from paths. For a file:
+
+```text
+aligned/CASE_001/EXP_01_vs_CTRL_01.bam
+```
+
+Creates pair:
+- `pair_id = CASE_001`
+- `experiment = EXP_01`
+- `control = CTRL_01`
+
+**Pattern requirements:**
+- Must contain `{pair_id}`, `{experiment}`, and `{control}` wildcards
+- Optional `{experiment_type}` wildcard also extracted
+- Pattern is converted to glob (`*`) for filesystem scan
+
+This eliminates the need for manual pair lists or external files when working with pre-organized directory structures.
+
 ### Example
 
 ```toml

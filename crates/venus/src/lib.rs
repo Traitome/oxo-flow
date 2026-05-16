@@ -771,6 +771,7 @@ pub fn generate_oxoflow(config: &VenusConfig) -> anyhow::Result<String> {
             interpreter_map: HashMap::new(),
             pairs_file: None,
             sample_groups_file: None,
+            pairs_pattern: None,
         },
         config: {
             let mut map = HashMap::new();
