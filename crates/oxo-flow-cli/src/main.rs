@@ -3482,4 +3482,212 @@ mod tests {
             _ => panic!("expected Run command"),
         }
     }
+
+    // Batch command tests
+    #[test]
+    fn cli_parse_batch_basic() {
+        let cli = Cli::try_parse_from([
+            "oxo-flow",
+            "batch",
+            "samtools flagstat {item}",
+            "s1.bam",
+            "s2.bam",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Batch {
+                template, items, ..
+            } => {
+                assert_eq!(template, "samtools flagstat {item}");
+                assert_eq!(items, vec!["s1.bam", "s2.bam"]);
+            }
+            _ => panic!("expected Batch command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_batch_with_options() {
+        let cli = Cli::try_parse_from([
+            "oxo-flow",
+            "batch",
+            "-j",
+            "8",
+            "-x",
+            "--json",
+            "fastqc {item}",
+            "*.fastq.gz",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Batch {
+                jobs,
+                stop_on_error,
+                json,
+                ..
+            } => {
+                assert_eq!(jobs, 8);
+                assert!(stop_on_error);
+                assert!(json);
+            }
+            _ => panic!("expected Batch command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_batch_from_file() {
+        let cli = Cli::try_parse_from([
+            "oxo-flow",
+            "batch",
+            "-f",
+            "samples.txt",
+            "bwa mem ref.fa {item}",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Batch { file, .. } => {
+                assert_eq!(file, Some(PathBuf::from("samples.txt")));
+            }
+            _ => panic!("expected Batch command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_batch_dry_run() {
+        let cli =
+            Cli::try_parse_from(["oxo-flow", "batch", "-n", "echo {item}", "a", "b"]).unwrap();
+        match cli.command {
+            Commands::Batch { dry_run, .. } => {
+                assert!(dry_run);
+            }
+            _ => panic!("expected Batch command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_batch_generate_workflow() {
+        let cli = Cli::try_parse_from([
+            "oxo-flow",
+            "batch",
+            "--generate-workflow",
+            "-o",
+            "pipeline.oxoflow",
+            "bwa mem ref.fa {item}",
+            "*.bam",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Batch {
+                generate_workflow,
+                output,
+                ..
+            } => {
+                assert!(generate_workflow);
+                assert_eq!(output, Some(PathBuf::from("pipeline.oxoflow")));
+            }
+            _ => panic!("expected Batch command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_batch_with_environment() {
+        let cli = Cli::try_parse_from([
+            "oxo-flow",
+            "batch",
+            "-e",
+            "conda: bwa_env",
+            "bwa mem ref.fa {item}",
+            "s1.bam",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Batch { environment, .. } => {
+                assert_eq!(environment, Some(String::from("conda: bwa_env")));
+            }
+            _ => panic!("expected Batch command"),
+        }
+    }
+
+    #[test]
+    fn test_expand_batch_template_item() {
+        let result = expand_batch_template("samtools flagstat {item}", "s1.bam", 1);
+        assert_eq!(result, "samtools flagstat s1.bam");
+    }
+
+    #[test]
+    fn test_expand_batch_template_stem() {
+        let result = expand_batch_template("output/{stem}.txt", "data/s1.bam", 2);
+        assert_eq!(result, "output/s1.txt");
+    }
+
+    #[test]
+    fn test_expand_batch_template_basename() {
+        let result = expand_batch_template("{nr}: {basename}", "path/to/file.ext", 3);
+        assert_eq!(result, "3: file.ext");
+    }
+
+    #[test]
+    fn test_expand_batch_template_shorthand() {
+        let result = expand_batch_template("echo {}", "test.bam", 1);
+        assert_eq!(result, "echo test.bam");
+    }
+
+    #[test]
+    fn test_expand_batch_template_all_placeholders() {
+        let result = expand_batch_template(
+            "{nr}: dir={dir} base={basename} stem={stem} ext={ext}",
+            "data/subdir/sample.fastq.gz",
+            5,
+        );
+        assert_eq!(
+            result,
+            "5: dir=data/subdir base=sample.fastq.gz stem=sample.fastq ext=gz"
+        );
+    }
+
+    #[test]
+    fn test_parse_item_lines_basic() {
+        let content = "item1\n# comment\nitem2\n\nitem3\n";
+        let items = parse_item_lines(content);
+        assert_eq!(items, vec!["item1", "item2", "item3"]);
+    }
+
+    #[test]
+    fn test_parse_item_lines_whitespace() {
+        let content = "  item1  \n  item2\t\n";
+        let items = parse_item_lines(content);
+        assert_eq!(items, vec!["item1", "item2"]);
+    }
+
+    #[test]
+    fn test_wrap_batch_command_conda() {
+        let result = wrap_batch_command("bwa mem ref.fa input.bam", "conda: env.yaml");
+        assert!(result.contains("conda run"));
+        assert!(result.contains("bwa mem"));
+    }
+
+    #[test]
+    fn test_wrap_batch_command_docker() {
+        let result = wrap_batch_command(
+            "bwa mem ref.fa input.bam",
+            "docker: biocontainers/bwa:latest",
+        );
+        assert!(result.contains("docker run"));
+        assert!(result.contains("bwa mem"));
+    }
+
+    #[test]
+    fn test_wrap_batch_command_singularity() {
+        let result = wrap_batch_command(
+            "bwa mem ref.fa input.bam",
+            "singularity: /path/to/image.sif",
+        );
+        assert!(result.contains("singularity exec"));
+        assert!(result.contains("bwa mem"));
+    }
+
+    #[test]
+    fn test_wrap_batch_command_simple_env() {
+        let result = wrap_batch_command("echo test", "myenv");
+        assert_eq!(result, "conda run --no-banner -n myenv echo test");
+    }
 }

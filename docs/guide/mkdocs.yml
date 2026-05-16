@@ -133,6 +133,7 @@ nav:
       - Conditional Rules: how-to/conditional-rules.md
       - Troubleshooting: how-to/troubleshooting.md
   - Command Reference:
+      - batch: commands/batch.md
       - clean: commands/clean.md
       - cluster: commands/cluster.md
       - completions: commands/completions.md
