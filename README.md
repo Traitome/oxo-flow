@@ -397,6 +397,3 @@ make ci
 **Built with 🧬 by [Traitome](https://github.com/Traitome)**
 
 </div>
-ithub.com/Traitome)**
-
-</div>
