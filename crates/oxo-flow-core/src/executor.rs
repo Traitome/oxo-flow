@@ -54,6 +54,7 @@ fn default_interpreter_map() -> HashMap<String, String> {
 /// Detect interpreter for a script file based on extension.
 ///
 /// Returns the interpreter command string, or None if no interpreter can be determined.
+#[must_use = "detect_interpreter returns an Option that should be checked"]
 pub fn detect_interpreter(
     script_path: &str,
     interpreter_override: Option<&str>,
@@ -89,6 +90,7 @@ pub fn detect_interpreter(
 }
 
 /// Build command from interpreter and script path.
+#[must_use = "build_script_command returns a String that should be used"]
 pub fn build_script_command(interpreter: &str, script_path: &str) -> String {
     format!("{} {}", interpreter, script_path)
 }
