@@ -318,6 +318,34 @@ impl LocalExecutor {
         (max_threads, max_memory_mb)
     }
 
+    /// Kill a process and all its children by terminating the process group.
+    /// Only available on Unix systems.
+    #[cfg(unix)]
+    fn kill_process_tree(pid: u32) -> std::io::Result<()> {
+        use nix::sys::signal::{kill, Signal};
+        use nix::unistd::{getpgid, Pid};
+
+        let nix_pid = Pid::from_raw(pid as i32);
+        let pgid = getpgid(Some(nix_pid)).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+        })?;
+
+        // Kill entire process group with SIGKILL
+        kill(pgid, Signal::SIGKILL).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+        })?;
+
+        tracing::debug!(pid = %pid, pgid = %pgid, "killed process group");
+        Ok(())
+    }
+
+    /// Stub for non-Unix systems (no process group support).
+    #[cfg(not(unix))]
+    fn kill_process_tree(_pid: u32) -> std::io::Result<()> {
+        // On non-Unix, we rely on the normal timeout behavior
+        Ok(())
+    }
+
     /// Ensure the environment for a rule is ready before execution.
     /// Creates/pulls environments as needed unless skip_env_setup is set.
     async fn ensure_environment_ready(&self, rule: &Rule) -> Result<()> {
@@ -447,6 +475,58 @@ impl LocalExecutor {
         );
     }
 
+    /// Clean up temporary output files when a rule fails.
+    async fn cleanup_temp_outputs(
+        &self,
+        rule: &Rule,
+        wildcard_values: &HashMap<String, String>,
+    ) {
+        if rule.temp_output.is_empty() {
+            return;
+        }
+
+        for temp_pattern in &rule.temp_output {
+            let expanded = render_shell_command(temp_pattern, rule, wildcard_values);
+            let temp_path = self.config.workdir.join(&expanded);
+
+            if tokio::fs::try_exists(&temp_path).await.ok() == Some(true) {
+                if let Err(e) = tokio::fs::remove_file(&temp_path).await {
+                    tracing::warn!(
+                        rule = %rule.name,
+                        path = %temp_path.display(),
+                        error = %e,
+                        "failed to cleanup temp output"
+                    );
+                } else {
+                    tracing::debug!(
+                        rule = %rule.name,
+                        path = %temp_path.display(),
+                        "cleaned up temp output"
+                    );
+                }
+            }
+        }
+
+        // Clean up transform chunk outputs if cleanup is enabled
+        if let Some(ref transform) = rule.transform {
+            if transform.cleanup {
+                // Chunk outputs are in .oxo-flow/chunks/{split_var}/
+                let split_var = &transform.split.by;
+                let chunk_dir = self.config.workdir.join(".oxo-flow/chunks").join(split_var);
+                if tokio::fs::try_exists(&chunk_dir).await.ok() == Some(true) {
+                    if let Err(e) = tokio::fs::remove_dir_all(&chunk_dir).await {
+                        tracing::warn!(
+                            rule = %rule.name,
+                            dir = %chunk_dir.display(),
+                            error = %e,
+                            "failed to cleanup transform chunk directory"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// Get effective timeout for a rule (rule-specific overrides global default).
     fn get_timeout(&self, rule: &Rule) -> Option<std::time::Duration> {
         // Rule-specific time_limit overrides global timeout
@@ -569,19 +649,58 @@ impl LocalExecutor {
                 record.retries = attempt;
             }
 
-            let cmd_future = Command::new("sh")
-                .arg("-c")
-                .arg(&shell_cmd)
-                .current_dir(&self.config.workdir)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output();
+            // Spawn the process to get access to the PID for process group killing
+            // Use process_group(0) to create a new process group where the shell
+            // is the leader, ensuring all child processes are in the same group.
+            #[cfg(unix)]
+            let child = {
+                Command::new("sh")
+                    .arg("-c")
+                    .arg(&shell_cmd)
+                    .current_dir(&self.config.workdir)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .process_group(0)
+                    .spawn()
+                    .map_err(|e| OxoFlowError::Execution {
+                        rule: rule.name.clone(),
+                        message: format!("failed to spawn command: {e}"),
+                    })?
+            };
+
+            #[cfg(not(unix))]
+            let child = {
+                Command::new("sh")
+                    .arg("-c")
+                    .arg(&shell_cmd)
+                    .current_dir(&self.config.workdir)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .map_err(|e| OxoFlowError::Execution {
+                        rule: rule.name.clone(),
+                        message: format!("failed to spawn command: {e}"),
+                    })?
+            };
+
+            let child_pid = child.id().unwrap_or(0);
 
             // Use per-rule timeout
             let cmd_result = if let Some(duration) = timeout {
-                match tokio::time::timeout(duration, cmd_future).await {
+                match tokio::time::timeout(duration, child.wait_with_output()).await {
                     Ok(inner) => inner,
                     Err(_) => {
+                        // Timeout occurred - kill the process group
+                        if child_pid > 0 {
+                            if let Err(e) = Self::kill_process_tree(child_pid) {
+                                tracing::warn!(
+                                    rule = %rule.name,
+                                    pid = %child_pid,
+                                    error = %e,
+                                    "failed to kill process group on timeout"
+                                );
+                            }
+                        }
                         record.finished_at = Some(Utc::now());
                         record.status = JobStatus::Failed;
                         record.stderr = Some(format!(
@@ -591,10 +710,13 @@ impl LocalExecutor {
                         tracing::error!(
                             rule = %rule.name,
                             timeout = ?duration,
+                            pid = %child_pid,
                             "command timed out"
                         );
                         // NEW: Release resources even on timeout
                         self.release_resources(rule).await;
+                        // Clean up temp outputs on failure
+                        self.cleanup_temp_outputs(rule, wildcard_values).await;
                         if !self.config.keep_going {
                             return Err(OxoFlowError::Execution {
                                 rule: rule.name.clone(),
@@ -605,7 +727,7 @@ impl LocalExecutor {
                     }
                 }
             } else {
-                cmd_future.await
+                child.wait_with_output().await
             };
 
             let output = cmd_result.map_err(|e| OxoFlowError::Execution {
@@ -676,6 +798,8 @@ impl LocalExecutor {
                 record.status = JobStatus::Failed;
                 // NEW: Release resources after final failure
                 self.release_resources(rule).await;
+                // Clean up temp outputs on failure
+                self.cleanup_temp_outputs(rule, wildcard_values).await;
                 tracing::error!(rule = %rule.name, code = %code, "failed");
 
                 // Execute on_failure hook if defined (after all retries exhausted)
@@ -3192,5 +3316,44 @@ mod tests {
         // Convert to MB should work
         let mb = total / 1024 / 1024;
         assert!(mb > 0, "memory in MB should be positive");
+    }
+
+    #[tokio::test]
+    async fn cleanup_temp_outputs_on_failure() {
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let temp_file = dir.path().join("temp_output.txt");
+        tokio::fs::write(&temp_file, "partial data").await.unwrap();
+
+        let rule = Rule {
+            name: "test_rule".to_string(),
+            input: vec!["input.txt".to_string()],
+            output: vec!["output.txt".to_string()],
+            shell: Some("exit 1".to_string()),
+            temp_output: vec![temp_file.to_str().unwrap().to_string()],
+            ..Default::default()
+        };
+
+        let config = ExecutorConfig {
+            max_jobs: 1,
+            dry_run: false,
+            workdir: dir.path().to_path_buf(),
+            keep_going: true,
+            retry_count: 0,
+            timeout: None,
+            max_threads: None,
+            max_memory_mb: None,
+            resource_groups: HashMap::new(),
+            skip_env_setup: true,
+            cache_dir: None,
+        };
+
+        let executor = LocalExecutor::new(config);
+        let result = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+
+        assert_eq!(result.status, JobStatus::Failed);
+        // Temp file should be cleaned up
+        assert!(!tokio::fs::try_exists(&temp_file).await.unwrap());
     }
 }
