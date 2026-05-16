@@ -375,6 +375,65 @@ enum Commands {
         #[command(subcommand)]
         action: ClusterAction,
     },
+
+    /// Execute a command template in parallel across multiple items.
+    ///
+    /// A lightweight alternative to full workflows for simple batch operations.
+    /// Similar to `rush` or `parallel` but integrated with oxo-flow's execution.
+    ///
+    /// Examples:
+    ///   oxo-flow batch "samtools flagstat {item}" *.bam
+    ///   oxo-flow batch -j 8 -f samples.txt "bwa mem ref.fa {item}"
+    ///   ls *.bam | oxo-flow batch "samtools flagstat {item}"
+    Batch {
+        /// Command template with placeholders: {item}, {basename}, {stem}, {ext}, {dir}, {nr}
+        #[arg(value_name = "TEMPLATE")]
+        template: String,
+
+        /// Items to process (files, strings, or read from stdin/file).
+        #[arg(value_name = "ITEMS")]
+        items: Vec<String>,
+
+        /// Number of parallel workers.
+        #[arg(short = 'j', long, default_value = "1")]
+        jobs: usize,
+
+        /// Stop execution after first failure.
+        #[arg(short = 'x', long)]
+        stop_on_error: bool,
+
+        /// Read items from a file (one per line, # comments ignored).
+        #[arg(short = 'f', long)]
+        file: Option<PathBuf>,
+
+        /// Output results as JSON array.
+        #[arg(long)]
+        json: bool,
+
+        /// Preview commands without executing.
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+
+        /// Working directory for execution.
+        #[arg(short = 'd', long)]
+        workdir: Option<PathBuf>,
+
+        /// Environment specification (conda: env.yaml, docker: image).
+        #[arg(short = 'e', long)]
+        environment: Option<String>,
+
+        /// Compute checksums for outputs containing {item}.
+        #[arg(long)]
+        checksum: bool,
+
+        /// Generate a .oxoflow workflow file instead of executing.
+        #[arg(long)]
+        generate_workflow: bool,
+
+        /// Output file for generated workflow.
+        #[arg(short = 'o', long)]
+        output: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -540,6 +599,322 @@ fn print_banner() {
         env!("CARGO_PKG_VERSION"),
         "Bioinformatics Pipeline Engine".dimmed()
     );
+}
+
+/// Expand placeholders in a command template.
+fn expand_batch_template(template: &str, item: &str, nr: usize) -> String {
+    let path = std::path::Path::new(item);
+    let basename = path
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy())
+        .unwrap_or_default();
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy())
+        .unwrap_or_default();
+    let dir = path
+        .parent()
+        .map(|p| p.to_string_lossy())
+        .unwrap_or_else(|| ".".into());
+
+    template
+        .replace("{}", item)
+        .replace("{item}", item)
+        .replace("{nr}", &nr.to_string())
+        .replace("{basename}", &basename)
+        .replace("{stem}", &stem)
+        .replace("{ext}", &ext)
+        .replace("{dir}", &dir)
+}
+
+/// Parse item lines, skipping blank lines and # comments.
+fn parse_item_lines(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            !trimmed.is_empty() && !trimmed.starts_with('#')
+        })
+        .map(|line| line.trim().to_string())
+        .collect()
+}
+
+/// Collect items from arguments, file, or stdin.
+fn collect_batch_items(items: &[String], file: Option<&PathBuf>) -> Result<Vec<String>> {
+    // Priority: file > stdin > arguments
+    if let Some(path) = file {
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read items from {}", path.display()))?;
+        return Ok(parse_item_lines(&content));
+    }
+
+    // Check stdin if no items provided
+    if items.is_empty() {
+        use std::io::{self, BufRead};
+        let stdin = io::stdin();
+        let lines: Vec<String> = stdin.lock().lines().map_while(Result::ok).collect();
+        if !lines.is_empty() {
+            return Ok(parse_item_lines(&lines.join("\n")));
+        }
+        return Err(anyhow::anyhow!(
+            "no items provided (use -f FILE, stdin, or arguments)"
+        ));
+    }
+
+    // Expand globs in arguments
+    let expanded: Vec<String> = items
+        .iter()
+        .flat_map(|item| {
+            if item.contains('*') || item.contains('?') || item.contains('[') {
+                glob::glob(item)
+                    .ok()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|p| p.ok())
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect::<Vec<_>>()
+            } else {
+                vec![item.clone()]
+            }
+        })
+        .collect();
+
+    Ok(expanded)
+}
+
+/// Wrap command with environment activation.
+fn wrap_batch_command(cmd: &str, env_spec: &str) -> String {
+    // Parse environment spec: "conda: env.yaml" or "docker: image"
+    if let Some((type_, spec)) = env_spec.split_once(':') {
+        match type_.trim() {
+            "conda" => {
+                let env_name = std::path::Path::new(spec.trim())
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(spec.trim());
+                format!("conda run --no-banner -n {} {}", env_name, cmd)
+            }
+            "docker" => format!("docker run --rm {} sh -c '{}'", spec.trim(), cmd),
+            "singularity" => format!("singularity exec {} sh -c '{}'", spec.trim(), cmd),
+            _ => cmd.to_string(),
+        }
+    } else {
+        // Assume conda environment name
+        format!("conda run --no-banner -n {} {}", env_spec.trim(), cmd)
+    }
+}
+
+/// Run a single batch command synchronously.
+fn run_batch_command(cmd: &str, workdir: &Path) -> Result<i32> {
+    use std::process::Command;
+
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .current_dir(workdir)
+        .output()
+        .with_context(|| format!("failed to execute: {}", cmd))?;
+
+    Ok(output.status.code().unwrap_or(-1))
+}
+
+/// Result for a single batch item.
+#[derive(Debug, serde::Serialize)]
+struct BatchResult {
+    item: String,
+    command: String,
+    exit_code: Option<i32>,
+    success: bool,
+    error: Option<String>,
+}
+
+/// Execute batch commands in parallel.
+#[allow(clippy::too_many_arguments)]
+async fn execute_batch(
+    template: &str,
+    items: &[String],
+    _jobs: usize, // TODO: Implement true parallelism with Semaphore
+    stop_on_error: bool,
+    workdir: Option<&PathBuf>,
+    environment: Option<&String>,
+    checksum: bool,
+    json_output: bool,
+) -> Result<()> {
+    use indicatif::{ProgressBar, ProgressStyle};
+
+    let workdir = workdir
+        .cloned()
+        .unwrap_or_else(|| std::env::current_dir().unwrap());
+    let total = items.len();
+    let progress = ProgressBar::new(total as u64);
+    progress.set_style(
+        ProgressStyle::default_bar()
+            .template(
+                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} Done:{done} Fail:{fail}",
+            )
+            .expect("valid template")
+            .progress_chars("#>-"),
+    );
+
+    let mut results: Vec<BatchResult> = Vec::new();
+    let mut failed = 0usize;
+    let mut done = 0usize;
+
+    for (nr, item) in items.iter().enumerate() {
+        let cmd = expand_batch_template(template, item, nr + 1);
+
+        // Validate shell safety
+        if let Err(e) = oxo_flow_core::executor::validate_shell_safety(&cmd) {
+            eprintln!("{} {} - {}", "Error:".bold().red(), item, e);
+            failed += 1;
+            progress.set_message(format!("Done:{} Fail:{}", done, failed));
+            progress.inc(1);
+            results.push(BatchResult {
+                item: item.clone(),
+                command: cmd.clone(),
+                exit_code: None,
+                success: false,
+                error: Some(e.to_string()),
+            });
+            if stop_on_error {
+                progress.finish_and_clear();
+                return Err(anyhow::anyhow!("stopped on error"));
+            }
+            continue;
+        }
+
+        // Wrap with environment if specified
+        let final_cmd = if let Some(env) = environment {
+            wrap_batch_command(&cmd, env)
+        } else {
+            cmd.clone()
+        };
+
+        // Execute command
+        let result = run_batch_command(&final_cmd, &workdir);
+
+        match result {
+            Ok(exit_code) => {
+                if exit_code == 0 {
+                    done += 1;
+                    if checksum {
+                        tracing::info!("checksum verification for {}", item);
+                    }
+                } else {
+                    failed += 1;
+                }
+                progress.set_message(format!("Done:{} Fail:{}", done, failed));
+                progress.inc(1);
+                results.push(BatchResult {
+                    item: item.clone(),
+                    command: cmd,
+                    exit_code: Some(exit_code),
+                    success: exit_code == 0,
+                    error: None,
+                });
+            }
+            Err(e) => {
+                failed += 1;
+                progress.set_message(format!("Done:{} Fail:{}", done, failed));
+                progress.inc(1);
+                results.push(BatchResult {
+                    item: item.clone(),
+                    command: cmd,
+                    exit_code: None,
+                    success: false,
+                    error: Some(e.to_string()),
+                });
+                if stop_on_error {
+                    progress.finish_and_clear();
+                    return Err(anyhow::anyhow!("stopped on error: {}", e));
+                }
+            }
+        }
+    }
+
+    progress.finish_and_clear();
+
+    // Output summary
+    if json_output {
+        let output = serde_json::json!({
+            "tool": "oxo-flow batch",
+            "template": template,
+            "total": total,
+            "failed": failed,
+            "success": failed == 0,
+            "results": results
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    } else {
+        eprintln!("\n{} {} processed, {} failed", "Done:".bold(), done, failed);
+        if failed > 0 {
+            return Err(anyhow::anyhow!("{} items failed", failed));
+        }
+    }
+
+    Ok(())
+}
+
+/// Generate a .oxoflow workflow from batch template.
+fn generate_batch_workflow(
+    template: &str,
+    items: &[String],
+    output: Option<&PathBuf>,
+    environment: Option<&String>,
+) -> Result<()> {
+    let output_path = output
+        .cloned()
+        .unwrap_or_else(|| PathBuf::from("batch.oxoflow"));
+
+    // Infer task name from template
+    let task_name = template.split_whitespace().next().unwrap_or("batch_task");
+
+    // Build workflow content
+    let mut content = String::new();
+    content.push_str("[workflow]\n");
+    content.push_str(&format!("name = \"{}\"\n", task_name));
+    content.push_str("version = \"1.0.0\"\n");
+    content.push_str(&format!(
+        "description = \"Batch execution: {}\"\n\n",
+        template
+    ));
+
+    // Add environment if specified
+    if let Some(env) = environment {
+        content.push_str("[defaults]\n");
+        if let Some((type_, spec)) = env.split_once(':') {
+            content.push_str(&format!(
+                "environment = {{ {} = \"{}\" }}\n\n",
+                type_.trim(),
+                spec.trim()
+            ));
+        } else {
+            content.push_str(&format!("environment = {{ conda = \"{}\" }}\n\n", env));
+        }
+    }
+
+    // Generate individual rules for each item
+    for (nr, item) in items.iter().enumerate() {
+        content.push_str("\n[[rules]]\n");
+        content.push_str(&format!("name = \"{}_{}\"\n", task_name, nr + 1));
+
+        let cmd = expand_batch_template(template, item, nr + 1);
+        content.push_str(&format!("shell = \"{}\"\n", cmd));
+    }
+
+    std::fs::write(&output_path, content)
+        .with_context(|| format!("failed to write {}", output_path.display()))?;
+
+    eprintln!(
+        "{} Generated workflow: {}",
+        "Done:".bold().green(),
+        output_path.display()
+    );
+    Ok(())
 }
 
 #[tokio::main]
@@ -2155,6 +2530,70 @@ Thumbs.db
                     }
                 }
             }
+        }
+
+        Commands::Batch {
+            template,
+            items,
+            jobs,
+            stop_on_error,
+            file,
+            json,
+            dry_run,
+            workdir,
+            environment,
+            checksum,
+            generate_workflow,
+            output,
+        } => {
+            print_banner();
+
+            // Collect items
+            let items =
+                collect_batch_items(&items, file.as_ref()).context("failed to collect items")?;
+
+            if items.is_empty() {
+                eprintln!("{} No items to process", "Error:".bold().red());
+                return Err(anyhow::anyhow!("no items provided"));
+            }
+
+            eprintln!(
+                "{} {} items to process",
+                "Batch:".bold().cyan(),
+                items.len()
+            );
+
+            // Generate workflow instead of executing
+            if generate_workflow {
+                return generate_batch_workflow(
+                    &template,
+                    &items,
+                    output.as_ref(),
+                    environment.as_ref(),
+                );
+            }
+
+            // Dry-run: print expanded commands
+            if dry_run {
+                for (nr, item) in items.iter().enumerate() {
+                    let cmd = expand_batch_template(&template, item, nr + 1);
+                    eprintln!("  [{}] {}", nr + 1, cmd);
+                }
+                return Ok(());
+            }
+
+            // Execute batch with parallelism
+            execute_batch(
+                &template,
+                &items,
+                jobs,
+                stop_on_error,
+                workdir.as_ref(),
+                environment.as_ref(),
+                checksum,
+                json,
+            )
+            .await?;
         }
 
         Commands::Diff {

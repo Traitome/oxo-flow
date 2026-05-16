@@ -10,6 +10,8 @@ site_dir: site
 
 theme:
   name: material
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
 
   font:
     text: Inter
