@@ -89,8 +89,6 @@ GPU syntax varies by site. Use `extra_args`:
 ```toml
 [rules.resources]
 gpu = 2
-
-[rules.resources]
 extra_args = ["-l ngpus=2:type=a100"]  # Site-specific
 ```
 
