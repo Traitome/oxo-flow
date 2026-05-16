@@ -2172,7 +2172,11 @@ mod tests {
 
         assert_eq!(config.rules.len(), 3);
         // Find trim_step rule and check its depends_on
-        let trim_rule = config.rules.iter().find(|r| r.name == "qc::trim_step").unwrap();
+        let trim_rule = config
+            .rules
+            .iter()
+            .find(|r| r.name == "qc::trim_step")
+            .unwrap();
         assert_eq!(trim_rule.depends_on, vec!["qc::qc_step"]);
     }
 
@@ -2245,7 +2249,11 @@ mod tests {
 
         assert_eq!(config.rules.len(), 2);
         // Find post_process rule and check its depends_on is NOT prefixed
-        let post_rule = config.rules.iter().find(|r| r.name == "post::post_process").unwrap();
+        let post_rule = config
+            .rules
+            .iter()
+            .find(|r| r.name == "post::post_process")
+            .unwrap();
         assert_eq!(post_rule.depends_on, vec!["align"]); // Not prefixed because "align" is external
     }
 
