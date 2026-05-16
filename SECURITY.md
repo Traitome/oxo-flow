@@ -10,6 +10,63 @@
 Only the latest release of oxo-flow receives security updates. We recommend
 always running the most recent version.
 
+## Known Security Limitations
+
+oxo-flow implements several security mechanisms, but has known limitations that users should understand:
+
+### Shell Command Sanitization
+
+**What's protected:**
+- Basic command substitution patterns (`$()`, backticks)
+- Dangerous commands (`rm -rf /`, `chmod 777`, `eval`)
+- Redirects to `/dev/`
+
+**Limitations:**
+- **Wildcard value injection**: Wildcard values (e.g., `{sample}`) are substituted *after* sanitization checks. A malicious wildcard value could bypass detection.
+- **Encoded commands**: Base64-encoded commands, `python -c`, `perl -e`, and similar patterns bypass detection.
+- **Remote execution**: SSH commands and `curl | sh` patterns are not flagged.
+
+**Recommendation:** Only use trusted workflow files from verified sources. Never accept wildcard values from untrusted input.
+
+### Path Traversal Protection
+
+**What's protected:**
+- Basic `..` traversal in output paths via `validate_path_safety()`
+- Canonical path resolution preventing escapes
+
+**Limitations:**
+- URL-encoded traversal (`%2e%2e%2f`) bypasses detection
+- Windows-style traversal (`..\..`) not handled on Unix systems
+- Include directive paths are not validated (potential malicious workflow loading)
+- Environment file paths (conda, docker, singularity) are not validated
+
+**Recommendation:** Review all `include` directives and environment paths in workflow files before execution.
+
+### Secret Detection
+
+**Current status:** oxo-flow does not detect secrets embedded in workflow files.
+
+**What's not detected:**
+- AWS access keys and secret keys
+- API keys (OpenAI, GitHub, etc.)
+- Database passwords
+- Private keys and certificates
+- JWT tokens
+
+**Recommendation:** Use external tools like `gitleaks` or `trufflehog` to scan workflow files before committing. Use environment variables or secret managers instead of embedding secrets.
+
+### Input Validation
+
+**What's validated:**
+- Rule names (alphanumeric, underscores, dashes)
+- Memory format (`8G`, `16384M`, etc.)
+- Circular dependencies in DAG
+- Duplicate rule names
+
+**Limitations:**
+- Input file paths not validated with same rigor as output paths
+- Shell command arguments not validated for injection patterns
+
 ## Reporting a Vulnerability
 
 **Please do not open a public GitHub issue for security vulnerabilities.**

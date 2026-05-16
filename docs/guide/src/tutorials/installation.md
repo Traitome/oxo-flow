@@ -29,7 +29,7 @@ This guide covers all the ways to install the `oxo-flow` binary on your system.
 === "Install oxo-flow"
 
     ```bash
-    cargo install oxo-flow
+    cargo install oxo-flow-cli
     ```
 
     This builds the latest published release and places the `oxo-flow` binary in `~/.cargo/bin/`.
@@ -47,7 +47,7 @@ oxo-flow --version
 ```
 
 !!! tip "Updating"
-    Run the same `cargo install oxo-flow` command to update to the latest version. Cargo will rebuild if a newer version is available.
+    Run the same `cargo install oxo-flow-cli` command to update to the latest version. Cargo will rebuild if a newer version is available.
 
 ---
 
