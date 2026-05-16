@@ -2,7 +2,6 @@
 # RSA vulnerability - not applicable (we use sqlite, not mysql)
 ignore = ["RUSTSEC-2023-0071"]
 
-[warnings]
 # number_prefix unmaintained - only used by indicatif for display
 # Not a security vulnerability, just maintenance status warning
-unmaintained = "warn"
+informational_warnings = ["unmaintained"]
