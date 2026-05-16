@@ -140,11 +140,22 @@ shell = "bwa mem -t {threads} {config.reference} {input} | samtools sort -o {out
 | `name` | String | **Yes** | Unique rule identifier |
 | `input` | Array of strings | **Yes** | Input file paths |
 | `output` | Array of strings | **Yes** | Output file paths |
-| `shell` | String | **Yes** | Shell command to execute |
+| `shell` | String | No | Shell command to execute |
+| `script` | String | No | Script file path (auto-detects interpreter) |
 | `threads` | Integer | No | CPU threads (overrides defaults) |
 | `memory` | String | No | Memory allocation (overrides defaults) |
 | `environment` | Table | No | Environment specification |
 | `when` | String | No | Conditional expression — skip rule when `false` |
+| `envvars` | Table | No | Dictionary of environment variables to inject |
+| `params` | Table | No | User-defined parameters for shell templates |
+| `pre_exec` | String | No | Command to run *before* the main shell command |
+| `on_success` | String | No | Command to run after rule succeeds |
+| `on_failure` | String | No | Command to run after rule fails (all retries exhausted) |
+| `retries` | Integer | No | Number of retry attempts on failure (default: 0) |
+| `interpreter` | String | No | Explicit interpreter for script execution |
+| `checkpoint` | Boolean | No | Rebuild DAG after this rule completes |
+
+**Note:** At least one of `shell` or `script` must be provided. If both are defined, they execute sequentially: shell first, then script.
 
 ### Environment specification
 
@@ -164,6 +175,55 @@ environment = { singularity = "docker://biocontainers/bwa:0.7.17" }
 # Python venv
 environment = { venv = "envs/requirements.txt" }
 ```
+
+### Environment Variables (`envvars`)
+
+Inject rule-specific environment variables directly into the execution context:
+
+```toml
+[[rules]]
+name = "deep_learning"
+shell = "python train.py"
+
+[rules.envvars]
+CUDA_VISIBLE_DEVICES = "0"
+PYTHONPATH = "./src"
+```
+
+Variables defined here are available to the main `shell` command as well as all lifecycle hooks (`pre_exec`, etc.).
+
+### Parameters (`params`)
+
+Define custom variables for use in shell templates. Unlike `[config]`, which is global, `params` are specific to a single rule and take precedence during interpolation:
+
+```toml
+[[rules]]
+name = "count_reads"
+shell = "samtools view -c -q {params.min_qual} {input} > {output}"
+
+[rules.params]
+min_qual = 20
+```
+
+### Lifecycle Hooks
+
+Hooks allow you to run auxiliary logic at different stages of a rule's life:
+
+```toml
+[[rules]]
+name = "process_data"
+shell = "python process.py"
+pre_exec = "mkdir -p tmp_workspace"
+on_success = "echo 'Success!' | slack-notify"
+on_failure = "rm -rf tmp_workspace && echo 'Cleanup done'"
+retries = 3
+```
+
+- **`pre_exec`**: Runs *before* the main command. If it fails, the rule is aborted.
+- **`on_success`**: Runs only after the main command completes with exit code 0.
+- **`on_failure`**: Runs if the main command fails, *after* all `retries` have been exhausted.
+
+---
 
 ### Resources (extended)
 
@@ -274,6 +334,169 @@ io_bound = true           # true = I/O bound, false = CPU bound
 ```
 
 Memory estimation formula: `estimated_mb = input_size_mb × memory_scale`
+
+---
+
+## Script Execution
+
+### Script Field
+
+Execute a script file instead of (or in addition to) a shell command:
+
+```toml
+[[rules]]
+name = "analysis"
+input = ["data.csv"]
+output = ["results.json"]
+script = "scripts/analyze.py"  # Auto-detects interpreter from extension
+```
+
+When both `shell` and `script` are defined, they execute sequentially: **shell first, then script**.
+
+```toml
+[[rules]]
+name = "qc_and_report"
+shell = "fastqc {input} -o qc/"
+script = "reports/qc_report.qmd"  # Runs after shell completes
+```
+
+### Interpreter Detection
+
+oxo-flow automatically detects the interpreter from script file extension:
+
+| Extension | Interpreter | Notes |
+|-----------|-------------|-------|
+| `.py` | `python` | Python script |
+| `.R` / `.r` | `Rscript` | R script |
+| `.jl` | `julia` | Julia script |
+| `.sh` / `.bash` | `bash` | Shell script |
+| `.pl` | `perl` | Perl script |
+| `.rb` | `ruby` | Ruby script |
+| `.qmd` | `quarto render` | Quarto document |
+| `.Rmd` / `.rmd` | `quarto render` | R Markdown |
+| `.ipynb` | `jupyter nbconvert --to notebook --execute` | Jupyter notebook |
+| `.smk` | `snakemake` | Snakemake workflow |
+| `.nextflow` | `nextflow run` | Nextflow script |
+| `.wdl` | `miniwdl run` | WDL workflow |
+
+### Explicit Interpreter Override
+
+Override auto-detection with `interpreter` field:
+
+```toml
+[[rules]]
+name = "custom_python"
+script = "analyze.py3"
+interpreter = "python3.11"  # Override default python
+```
+
+### Custom Interpreter Map
+
+Configure custom interpreter mappings at workflow level:
+
+```toml
+[workflow]
+name = "pipeline"
+
+[workflow.interpreter_map]
+".m" = "octave"        # MATLAB/Octave
+".sas" = "sas"         # SAS
+".do" = "stata-mp"     # Stata
+".stan" = "cmdstan"    # Stan
+```
+
+---
+
+## Additional Rule Fields
+
+### Output Management
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `temp_output` | Array | Temporary outputs cleaned after downstream rules complete |
+| `protected_output` | Array | Protected outputs never overwritten or deleted |
+
+```toml
+[[rules]]
+name = "align"
+output = ["aligned/{sample}.bam", "aligned/{sample}.bam.bai"]
+temp_output = ["aligned/{sample}.tmp.bam"]  # Cleaned after downstream use
+```
+
+### Execution Control
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `depends_on` | Array | — | Explicit rule dependencies (not inferred from files) |
+| `localrule` | Boolean | `false` | Always run locally, never submit to cluster |
+| `workdir` | String | — | Per-rule working directory override |
+| `shadow` | String | — | Atomic execution mode: `"minimal"`, `"shallow"`, `"full"` |
+| `checkpoint` | Boolean | `false` | Enable dynamic DAG modification |
+
+```toml
+[[rules]]
+name = "setup"
+shell = "mkdir -p results"
+depends_on = []  # Run first, before file-based dependencies
+
+[[rules]]
+name = "local_only"
+shell = "echo 'local task'"
+localrule = true  # Never submitted to HPC cluster
+```
+
+### Retry Configuration
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `retries` | Integer | 0 | Number of automatic retry attempts |
+| `retry_delay` | String | — | Delay between retries (`"5s"`, `"30s"`, `"2m"`) |
+
+```toml
+[[rules]]
+name = "network_task"
+shell = "curl https://api.example.com/data"
+retries = 3
+retry_delay = "30s"
+```
+
+### Input/Output Hints
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ancient` | Array | Inputs that never trigger re-execution (reference files) |
+| `format_hint` | Array | File format hints for I/O optimization (`"bam"`, `"vcf"`) |
+| `pipe` | Boolean | Enable FIFO streaming mode for inputs |
+| `checksum` | String | Output checksum algorithm (`"md5"`, `"sha256"`) |
+
+```toml
+[[rules]]
+name = "align"
+input = ["reads/{sample}.fastq.gz", "ref/hg38.fa"]
+ancient = ["ref/hg38.fa"]  # Reference never triggers rebuild
+format_hint = ["bam"]
+checksum = "sha256"
+```
+
+### Organization
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tags` | Array | Categorization tags (`["qc", "alignment"]`) |
+| `extends` | String | Base rule to inherit settings from |
+
+```toml
+[[rules]]
+name = "align_default"
+threads = 8
+memory = "32G"
+tags = ["alignment", "production"]
+
+[[rules]]
+name = "align_fast"
+extends = "align_default"  # Inherits threads, memory, tags
+threads = 16  # Override inherited value
+```
 
 ---
 
