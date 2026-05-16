@@ -154,15 +154,39 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
 
         // E003: Wildcard consistency - output wildcards must appear in inputs
         // Exception: scatter rules use scatter variables, not input wildcards
+        // Exception: pairs rules use {pair_id}, {experiment}, {control} wildcards
+        // Exception: sample_groups rules use {group}, {sample} wildcards
         let input_wildcards = crate::wildcard::extract_wildcards_from_patterns(&rule.input);
         let output_wildcards = crate::wildcard::extract_wildcards_from_patterns(&rule.output);
 
         // Get scatter variable if present - scatter variables are exempt from E003
         let scatter_var = rule.scatter.as_ref().map(|s| s.variable.as_str());
 
+        // Collect pair wildcards when pairs are defined
+        let pair_wildcards: Vec<&str> = if config.pairs.is_empty() {
+            Vec::new()
+        } else {
+            vec!["pair_id", "experiment", "control"]
+        };
+
+        // Collect sample group wildcards when sample_groups are defined
+        let group_wildcards: Vec<&str> = if config.sample_groups.is_empty() {
+            Vec::new()
+        } else {
+            vec!["group", "sample"]
+        };
+
         for wc in &output_wildcards {
             // Skip validation for scatter variable wildcards
             if scatter_var == Some(wc.as_str()) {
+                continue;
+            }
+            // Skip validation for pair wildcards when pairs are defined
+            if pair_wildcards.contains(&wc.as_str()) {
+                continue;
+            }
+            // Skip validation for sample group wildcards when sample_groups are defined
+            if group_wildcards.contains(&wc.as_str()) {
                 continue;
             }
             if !input_wildcards.contains(wc) && !rule.input.is_empty() {

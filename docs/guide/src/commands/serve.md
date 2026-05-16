@@ -41,7 +41,7 @@ oxo-flow serve --host 0.0.0.0 -p 3000
 ## Output
 
 ```
-oxo-flow 0.3.1 — Bioinformatics Pipeline Engine
+oxo-flow 0.4.1 — Bioinformatics Pipeline Engine
 Starting web server at 127.0.0.1:8080 ...
 ```
 
@@ -68,7 +68,7 @@ curl http://127.0.0.1:8080/api/health
 ```json
 {
   "status": "ok",
-  "version": "0.3.1"
+  "version": "0.4.1"
 }
 ```
 
