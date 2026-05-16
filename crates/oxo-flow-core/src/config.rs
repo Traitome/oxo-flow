@@ -827,6 +827,23 @@ impl WorkflowConfig {
 
         self.validate_execution_groups()?;
 
+        // Warn about rules exceeding system capacity (but don't block)
+        let system_threads = num_cpus::get() as u32;
+        let system_memory_mb = {
+            use sysinfo::System;
+            let mut sys = System::new_all();
+            sys.refresh_memory();
+            sys.total_memory() / 1024 / 1024
+        };
+
+        for rule in &self.rules {
+            for warning in crate::scheduler::validate_resources_against_system(
+                rule, system_threads, system_memory_mb
+            ) {
+                tracing::warn!("{}", warning);
+            }
+        }
+
         // Validate wildcard constraints
         for (name, pattern) in &self.wildcard_constraints {
             if let Err(e) = regex::Regex::new(pattern) {

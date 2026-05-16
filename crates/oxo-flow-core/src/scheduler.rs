@@ -268,6 +268,82 @@ pub fn parse_memory_mb(memory: &str) -> Option<u64> {
     Some(mb_int)
 }
 
+/// Validate that a rule's resource requirements don't exceed system capacity.
+/// Returns a list of warning messages (empty if all requirements are within limits).
+pub fn validate_resources_against_system(
+    rule: &Rule,
+    system_threads: u32,
+    system_memory_mb: u64,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let req_threads = rule.effective_threads();
+    let req_memory = rule
+        .effective_memory()
+        .and_then(parse_memory_mb)
+        .unwrap_or(0);
+
+    if req_threads > system_threads {
+        warnings.push(format!(
+            "rule '{}' requests {} threads but system has {} (will oversubscribe)",
+            rule.name, req_threads, system_threads
+        ));
+    }
+
+    if req_memory > system_memory_mb {
+        warnings.push(format!(
+            "rule '{}' requests {}MB but system has {}MB (may OOM)",
+            rule.name, req_memory, system_memory_mb
+        ));
+    }
+
+    // Check disk requirement against available space (warning only)
+    if let Some(ref disk) = rule.resources.disk {
+        if let Some(req_disk_mb) = parse_memory_mb(disk) {
+            // We don't have workdir here, so just note the requirement
+            if req_disk_mb > 100_000 { // > 100GB
+                warnings.push(format!(
+                    "rule '{}' requests large disk space ({}) - verify availability",
+                    rule.name, disk
+                ));
+            }
+        }
+    }
+
+    warnings
+}
+
+/// Check available disk space in a directory.
+/// Returns available space in MB, or None if check fails.
+pub fn check_available_disk_mb(path: &std::path::Path) -> Option<u64> {
+    fs2::available_space(path)
+        .ok()
+        .map(|bytes| bytes / 1024 / 1024)
+}
+
+/// Validate disk requirements for all rules against workdir capacity.
+pub fn validate_disk_requirements(
+    rules: &[Rule],
+    workdir: &std::path::Path,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let available_mb = check_available_disk_mb(workdir).unwrap_or(u64::MAX);
+
+    for rule in rules {
+        if let Some(ref disk) = rule.resources.disk {
+            if let Some(req_mb) = parse_memory_mb(disk) {
+                if req_mb > available_mb {
+                    warnings.push(format!(
+                        "rule '{}' may need {}MB disk but only {}MB available in {}",
+                        rule.name, req_mb, available_mb, workdir.display()
+                    ));
+                }
+            }
+        }
+    }
+
+    warnings
+}
+
 /// Resource pool tracking available system resources and custom resource groups.
 #[derive(Debug, Clone)]
 pub struct ResourcePool {
@@ -624,5 +700,54 @@ mod tests {
         // still return them in a deterministic order
         assert!(ready.contains(&"left".to_string()));
         assert!(ready.contains(&"right".to_string()));
+    }
+
+    #[test]
+    fn validate_resources_threads_warning() {
+        let rule = Rule {
+            name: "oversubscribe".to_string(),
+            threads: Some(256),
+            memory: Some("8G".to_string()),
+            ..Default::default()
+        };
+
+        let warnings = validate_resources_against_system(&rule, 64, 8192);
+        assert!(warnings.iter().any(|w| w.contains("threads") && w.contains("oversubscribe")));
+        // No memory warning since 8G == 8192MB
+        assert!(!warnings.iter().any(|w| w.contains("OOM")));
+    }
+
+    #[test]
+    fn validate_resources_memory_warning() {
+        let rule = Rule {
+            name: "big_mem".to_string(),
+            threads: Some(4),
+            memory: Some("128G".to_string()),
+            ..Default::default()
+        };
+
+        let warnings = validate_resources_against_system(&rule, 64, 8192);
+        assert!(warnings.iter().any(|w| w.contains("OOM") && w.contains("big_mem")));
+    }
+
+    #[test]
+    fn validate_resources_no_warning_within_limits() {
+        let rule = Rule {
+            name: "normal".to_string(),
+            threads: Some(4),
+            memory: Some("4G".to_string()),
+            ..Default::default()
+        };
+
+        let warnings = validate_resources_against_system(&rule, 64, 8192);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn check_available_disk_mb_returns_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let available = check_available_disk_mb(dir.path());
+        assert!(available.is_some());
+        assert!(available.unwrap() > 0);
     }
 }
