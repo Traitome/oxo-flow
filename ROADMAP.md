@@ -366,7 +366,7 @@ sections = ["summary", "variants", "coverage", "qc_metrics"]
 
 ---
 
-## Phase 9: Multi-Expert Evaluation Response (v0.3.0)
+## Phase 9: Multi-Expert Evaluation Response (v0.3.1)
 
 **Goal**: Address the 300-item expert evaluation report (Issue #29) to improve
 framework extensibility, code quality, and documentation.

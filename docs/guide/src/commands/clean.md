@@ -57,7 +57,7 @@ oxo-flow clean pipeline.oxoflow --force
 ### Dry-run output
 
 ```
-oxo-flow 0.3.0 — Bioinformatics Pipeline Engine
+oxo-flow 0.3.1 — Bioinformatics Pipeline Engine
 Would clean (dry-run):
   results/trimmed/sample1_R1.fastq.gz (exists)
   results/trimmed/sample1_R2.fastq.gz (exists)

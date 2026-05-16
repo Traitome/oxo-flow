@@ -18,6 +18,7 @@ Use this gallery to learn oxo-flow incrementally — each example builds on conc
 | 06 | [RNA-seq Quantification](rnaseq.md) | ⭐⭐⭐⭐ | Complete transcriptomics pipeline, STAR, featureCounts, MultiQC |
 | 07 | [WGS Germline Calling](wgs-germline.md) | ⭐⭐⭐⭐⭐ | GATK best practices, BQSR, HaplotypeCaller, VEP annotation |
 | 08 | [Multi-Omics Integration](multiomics.md) | ⭐⭐⭐⭐⭐ | WGS + RNA-seq + Methylation, branching DAG, cross-omics integration |
+| 09 | [Single-Cell RNA-seq](single-cell-rnaseq.md) | ⭐⭐⭐⭐⭐ | Droplet-based scRNA-seq, 10x Genomics, CellRanger, Seurat |
 
 ---
 
@@ -49,8 +50,8 @@ Learn the fundamental building blocks: rules, shell commands, inputs, outputs, a
 ### Intermediate (Workflows 03–05)
 Master wildcards for multi-sample processing, scatter-gather parallelism patterns, and per-rule environment isolation with conda, docker, and singularity.
 
-### Advanced (Workflows 06–08)
-Build production-grade bioinformatics pipelines covering RNA-seq, whole-genome sequencing, and multi-omics integration with clinical-grade reporting and complex DAG topologies.
+### Advanced (Workflows 06–09)
+Build production-grade bioinformatics pipelines covering RNA-seq, whole-genome sequencing, multi-omics integration, and single-cell analysis with clinical-grade reporting and complex DAG topologies.
 
 ---
 

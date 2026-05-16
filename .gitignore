@@ -41,3 +41,6 @@ lcov.info
 
 # Workspace directory (created by web server)
 workspace/
+
+# Metadata and checkpoints
+.oxo-flow/

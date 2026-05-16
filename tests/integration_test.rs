@@ -759,7 +759,7 @@ fn wf01_evaluate_condition_integration() {
 fn gallery_09_single_cell_rnaseq() {
     let toml = std::fs::read_to_string("examples/gallery/09_single_cell_rnaseq.oxoflow").unwrap();
     let config = WorkflowConfig::parse(&toml).unwrap();
-    assert_eq!(config.workflow.name, "single-cell-rnaseq");
+    assert_eq!(config.workflow.name, "sc-rnaseq-pipeline");
     assert!(!config.rules.is_empty());
 
     let dag = WorkflowDag::from_rules(&config.rules).unwrap();

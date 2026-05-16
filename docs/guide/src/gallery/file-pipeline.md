@@ -93,7 +93,7 @@ $ oxo-flow validate examples/gallery/02_file_pipeline.oxoflow
 
 ```bash
 $ oxo-flow dry-run examples/gallery/02_file_pipeline.oxoflow
-oxo-flow 0.3.0 — Bioinformatics Pipeline Engine
+oxo-flow 0.3.1 — Bioinformatics Pipeline Engine
 Dry-run: 3 rules would execute:
   1. generate_data [threads=1, env=system]
   2. transform [threads=1, env=system]

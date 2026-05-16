@@ -1,10 +1,8 @@
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use sysinfo::System;
 
-lazy_static::lazy_static! {
-    static ref SYS: Mutex<System> = Mutex::new(System::new_all());
-}
+static SYS: LazyLock<Mutex<System>> = LazyLock::new(|| Mutex::new(System::new_all()));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostResources {

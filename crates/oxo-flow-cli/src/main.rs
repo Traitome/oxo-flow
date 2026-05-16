@@ -621,11 +621,13 @@ async fn main() -> Result<()> {
                 .and_then(|s| s.to_str())
                 .unwrap_or("default");
             let checkpoint_filename = format!("checkpoint_{}.json", workflow_stem);
-            let checkpoint_path = workdir
-                .clone()
-                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
-                .join(".oxo-flow")
-                .join(checkpoint_filename);
+            let base_dir = workdir.clone().unwrap_or_else(|| {
+                workflow
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+            });
+            let checkpoint_path = base_dir.join(".oxo-flow").join(checkpoint_filename);
 
             let mut checkpoint =
                 CheckpointState::load_from_file(&checkpoint_path).unwrap_or_default();

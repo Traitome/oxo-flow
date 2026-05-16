@@ -1,28 +1,57 @@
+# 09 — Single-Cell RNA-seq
+# Demonstrates high-throughput droplet-based scRNA-seq processing.
+
 [workflow]
-name = "single-cell-rnaseq"
+name = "sc-rnaseq-pipeline"
 version = "1.0.0"
-description = "Single-cell RNA-seq processing using Cellranger"
+description = "Single-cell RNA-seq pipeline: CellRanger + Seurat"
 author = "Traitome"
 
 [config]
-reference = "/data/references/refdata-gex-GRCh38-2020-A"
-samples = ["sc_sample1", "sc_sample2"]
+reference = "/data/references/GRCh38/cellranger_index"
+samples = ["sample1", "sample2"]
 
 [defaults]
-threads = 16
-memory = "64G"
+threads = 8
+memory = "32G"
 
 [[rules]]
 name = "cellranger_count"
-input = [
-    "fastq/{sample}_S1_L001_R1_001.fastq.gz",
-    "fastq/{sample}_S1_L001_R2_001.fastq.gz"
-]
-output = [
-    "results/{sample}/outs/filtered_feature_bc_matrix.h5",
-    "results/{sample}/outs/web_summary.html"
-]
-expand_inputs = [
-    { pattern = "fastq/{sample}_S1_L001_R1_001.fastq.gz", variables = { sample = "config.samples" } }
-]
-shell = "cellranger count --id={sample} --transcriptome={config.reference} --fastqs=fastq --sample={sample} --localcores={threads} --localmem=64"
+input = ["raw/{sample}_R1.fastq.gz", "raw/{sample}_R2.fastq.gz"]
+output = ["counts/{sample}/outs/filtered_feature_bc_matrix.h5"]
+threads = 16
+memory = "64G"
+description = "scRNA-seq quantification with CellRanger"
+shell = """
+cellranger count --id={sample} \
+                 --fastqs=raw/ \
+                 --sample={sample} \
+                 --transcriptome={config.reference} \
+                 --localcores={threads} \
+                 --localmem=60
+"""
+
+[rules.environment]
+docker = "10xgenomics/cellranger:7.1.0"
+
+[[rules]]
+name = "clustering_analysis"
+input = ["counts/{sample}/outs/filtered_feature_bc_matrix.h5"]
+output = ["analysis/{sample}/seurat_object.rds", "analysis/{sample}/tsne_plot.png"]
+threads = 4
+memory = "16G"
+description = "Cell clustering and visualization with Seurat"
+shell = "Rscript scripts/seurat_analysis.R --input {input[0]} --output-dir analysis/{sample}/"
+
+[rules.environment]
+conda = "envs/seurat.yaml"
+
+[[rules]]
+name = "generate_sc_report"
+input = ["analysis/{sample}/seurat_object.rds", "analysis/{sample}/tsne_plot.png"]
+output = ["results/{sample}.sc_report.html"]
+description = "Generate single-cell analysis report"
+shell = "Rscript -e \"rmarkdown::render('templates/sc_report.Rmd', output_file='{output[0]}')\""
+
+[rules.environment]
+conda = "envs/rmarkdown.yaml"

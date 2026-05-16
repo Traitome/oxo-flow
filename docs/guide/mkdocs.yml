@@ -120,6 +120,7 @@ nav:
       - "06 — RNA-seq Quantification": gallery/rnaseq.md
       - "07 — WGS Germline Calling": gallery/wgs-germline.md
       - "08 — Multi-Omics Integration": gallery/multiomics.md
+      - "09 — Single-Cell RNA-seq": gallery/single-cell-rnaseq.md
   - How-to Guides:
       - Create a Workflow: how-to/create-workflow.md
       - Use Environments: how-to/use-environments.md

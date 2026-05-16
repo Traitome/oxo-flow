@@ -1572,7 +1572,6 @@ dependencies = [
  "chrono",
  "dashmap",
  "futures",
- "lazy_static",
  "oxo-flow-core",
  "oxo-license",
  "regex",
