@@ -95,6 +95,14 @@ pub struct WorkflowMeta {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub genome_build: Option<String>,
+
+    /// Custom interpreter mappings for script file extensions.
+    ///
+    /// Overrides default auto-detection for specified extensions.
+    /// Example: `interpreter_map = { ".m" = "octave", ".sas" = "sas" }`.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub interpreter_map: HashMap<String, String>,
 }
 
 fn default_version() -> String {

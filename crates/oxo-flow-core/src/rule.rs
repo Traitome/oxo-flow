@@ -617,6 +617,14 @@ pub struct Rule {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_key: Option<String>,
+
+    /// Explicit interpreter for script execution.
+    ///
+    /// When `script` is set, this field overrides auto-detection based on file extension.
+    /// Example: `interpreter = "/opt/python3.11/bin/python"` or `interpreter = "Rscript"`.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interpreter: Option<String>,
 }
 
 impl Rule {
@@ -944,6 +952,13 @@ impl RuleBuilder {
     #[must_use]
     pub fn cache_key(mut self, key: impl Into<String>) -> Self {
         self.rule.cache_key = Some(key.into());
+        self
+    }
+
+    /// Set explicit interpreter for script execution.
+    #[must_use]
+    pub fn interpreter(mut self, interpreter: impl Into<String>) -> Self {
+        self.rule.interpreter = Some(interpreter.into());
         self
     }
 
