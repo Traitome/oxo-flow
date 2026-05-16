@@ -92,4 +92,4 @@ oxo-flow dry-run somatic.oxoflow
 
 ## Full Example
 
-See [`examples/paired_experiment_control_pairs.oxoflow`](../../../examples/paired_experiment_control_pairs.oxoflow) for a complete clinical WGS somatic calling pipeline with alignment, deduplication, variant calling, filtering, and HTML report generation.
+See [`examples/paired_experiment_control_pairs.oxoflow`](https://github.com/Traitome/oxo-flow/blob/main/examples/paired_experiment_control_pairs.oxoflow) for a complete clinical WGS somatic calling pipeline with alignment, deduplication, variant calling, filtering, and HTML report generation.

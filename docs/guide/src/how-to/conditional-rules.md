@@ -123,4 +123,4 @@ Skipped rules are listed separately in the dry-run output.
 
 ## Full Example
 
-See [`examples/conditional_workflow.oxoflow`](../../../examples/conditional_workflow.oxoflow) for a complete WGS/WES adaptive pipeline that demonstrates all `when` expression types.
+See [`examples/conditional_workflow.oxoflow`](https://github.com/Traitome/oxo-flow/blob/main/examples/conditional_workflow.oxoflow) for a complete WGS/WES adaptive pipeline that demonstrates all `when` expression types.

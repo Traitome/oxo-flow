@@ -97,4 +97,4 @@ You can use both `[[sample_groups]]` and `[[pairs]]` in the same workflow.  They
 
 ## Full Example
 
-See [`examples/cohort_analysis.oxoflow`](../../../examples/cohort_analysis.oxoflow) for a complete population genomics pipeline including QC, alignment, deduplication, variant calling, and multi-QC aggregation.
+See [`examples/cohort_analysis.oxoflow`](https://github.com/Traitome/oxo-flow/blob/main/examples/cohort_analysis.oxoflow) for a complete population genomics pipeline including QC, alignment, deduplication, variant calling, and multi-QC aggregation.
