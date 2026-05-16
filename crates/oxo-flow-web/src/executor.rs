@@ -74,9 +74,19 @@ pub fn spawn_background_run(run_id: String, username: String, auth_type: String,
                 return;
             }
         };
-        let err_file = log_file
-            .try_clone()
-            .expect("Failed to clone log file handle");
+        let err_file = match log_file.try_clone() {
+            Ok(f) => f,
+            Err(e) => {
+                error!("Failed to clone log file handle: {}", e);
+                let end = Utc::now();
+                let _ = sqlx::query("UPDATE runs SET status = 'failed', finished_at = ? WHERE id = ?")
+                    .bind(end)
+                    .bind(&run_id)
+                    .execute(db::pool())
+                    .await;
+                return;
+            }
+        };
 
         cmd.stdout(Stdio::from(log_file));
         cmd.stderr(Stdio::from(err_file));
