@@ -1,10 +1,10 @@
 <div align="center">
 
-<img src="logo.svg" width="180" alt="oxo-flow logo">
+<img src="logo.svg" width="140" hspace="10" vspace="6" alt="oxo-flow logo">
 
-# oxo-flow
+<h1>oxo-flow</h1>
 
-**A Rust-native bioinformatics pipeline engine — built from first principles for performance, reproducibility, and clinical-grade rigor.**
+<p><strong>A Rust-native bioinformatics pipeline engine — built from first principles for performance, reproducibility, and clinical-grade rigor.</strong></p>
 
 [![CI](https://github.com/Traitome/oxo-flow/actions/workflows/ci.yml/badge.svg)](https://github.com/Traitome/oxo-flow/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/oxo-flow-core.svg)](https://crates.io/crates/oxo-flow-core)
