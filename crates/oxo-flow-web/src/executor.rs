@@ -24,7 +24,9 @@ pub fn spawn_background_run(run_id: String, username: String, auth_type: String,
         let workflow_file = run_dir.join("workflow.oxoflow");
 
         // Validate OS User to prevent injection in sudo
-        let os_user_regex = Regex::new(r"^[a-z_][a-z0-9_-]*[$]?$").unwrap();
+        // Static regex pattern that will never fail to compile
+        let os_user_regex = Regex::new(r"^[a-z_][a-z0-9_-]*[$]?$")
+            .expect("Static regex pattern should always compile");
         if auth_type == "sudo" && !os_user_regex.is_match(&os_user) {
             error!("Invalid OS username format: {}", os_user);
             let end = Utc::now();

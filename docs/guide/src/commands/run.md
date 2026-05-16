@@ -141,6 +141,7 @@ DAG: 5 rules in execution order
   3. bwa_align
   4. sort_bam
   5. call_variants
+⠋ [00:15] [████████████░░░░░░░░] 3/5 (Done: 3, Fail: 0, Skip: 0)
   ✓ fastqc
   ✓ trim_reads
   ✓ bwa_align
@@ -149,6 +150,11 @@ DAG: 5 rules in execution order
 
 Done: 5 succeeded, 0 failed
 ```
+
+A progress bar shows execution progress with:
+- Elapsed time
+- Current position / total rules
+- Success/Fail/Skip counts
 
 ---
 

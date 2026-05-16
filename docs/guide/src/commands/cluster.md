@@ -39,6 +39,7 @@ oxo-flow cluster <ACTION> [OPTIONS] [WORKFLOW/JOB_IDS]
 | `--queue` | `-q` | — | Partition / queue name |
 | `--account` | `-a` | — | Account / project name |
 | `--output-dir` | `-o` | `.oxo-flow/cluster` | Directory for generated scripts |
+| `--pending-timeout` | — | — | Maximum time to wait for pending jobs (e.g., "30m", "1h") |
 
 ---
 
@@ -48,6 +49,14 @@ oxo-flow cluster <ACTION> [OPTIONS] [WORKFLOW/JOB_IDS]
 
 ```bash
 oxo-flow cluster submit pipeline.oxoflow -b slurm -q work
+```
+
+### Submit with pending timeout
+
+```bash
+# Abort submission if jobs stay in PENDING state for more than 1 hour
+# Useful when cluster resources may be unavailable
+oxo-flow cluster submit pipeline.oxoflow -b slurm -q work --pending-timeout 1h
 ```
 
 ### Submit with environment support

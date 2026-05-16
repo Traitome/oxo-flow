@@ -493,7 +493,7 @@ impl WorkflowDag {
     /// Export the DAG in enhanced DOT format with parallel execution groups
     /// shown as ranked subgraph clusters.
     ///
-    /// This produces more visually informative output than [`to_dot()`], with:
+    /// This produces more visually informative output than [`Self::to_dot()`], with:
     /// - Nodes grouped by execution level (parallel groups)
     /// - Styled nodes with shape and color
     /// - Edge labels omitted for cleanliness

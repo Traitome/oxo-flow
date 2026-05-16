@@ -40,8 +40,70 @@ Workflow files must use the `.oxoflow` extension (e.g., `qc_pipeline.oxoflow`).
 [config]            # Optional: user variables
 [defaults]          # Optional: rule defaults
 [report]            # Optional: report configuration
+[[include]]         # Optional: include external workflow files
 [[rules]]           # Required: one or more rules
 ```
+
+---
+
+## `[[include]]` — Modular Workflow Composition
+
+Include external workflow files to enable modular, reusable workflow design:
+
+```toml
+[[include]]
+path = "common/qc.oxoflow"
+namespace = "qc"
+
+[[include]]
+path = "align.oxoflow"
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `path` | String | **Yes** | Path to the included `.oxoflow` file |
+| `namespace` | String | No | Optional namespace prefix for included rule names |
+
+### Namespace Behavior
+
+When a `namespace` is specified:
+
+1. All rule names from the included file are prefixed: `namespace::rule_name`
+2. Internal `depends_on` references within the included file are automatically prefixed
+3. External `depends_on` references (to rules outside the included file) remain unchanged
+
+**Example:**
+
+```toml
+# qc.oxoflow
+[[rules]]
+name = "fastqc"
+input = ["{sample}.fastq.gz"]
+output = ["qc/{sample}_fastqc.html"]
+shell = "fastqc {input}"
+
+[[rules]]
+name = "trim"
+input = ["{sample}.fastq.gz"]
+output = ["trimmed/{sample}.fastq.gz"]
+depends_on = ["fastqc"]  # Internal reference - will become "qc::fastqc"
+shell = "fastp {input} -o {output}"
+```
+
+```toml
+# main.oxoflow
+[[include]]
+path = "qc.oxoflow"
+namespace = "qc"
+
+[[rules]]
+name = "align"
+input = ["trimmed/{sample}.fastq.gz"]
+depends_on = ["qc::trim"]  # Reference to included rule with namespace
+shell = "bwa mem ref.fa {input} > aligned/{sample}.bam"
+```
+
+Resulting rules: `qc::fastqc`, `qc::trim`, `align`
 
 ---
 

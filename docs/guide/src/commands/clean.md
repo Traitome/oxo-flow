@@ -26,6 +26,7 @@ oxo-flow clean [OPTIONS] <WORKFLOW>
 |---|---|---|---|
 | `--dry-run` | `-n` | — | Show what would be cleaned without deleting |
 | `--force` | — | — | Skip the confirmation prompt |
+| `--orphans` | — | — | Clean orphaned temporary files (chunks from interrupted transforms) |
 | `--verbose` | `-v` | — | Enable debug-level logging |
 
 ---
@@ -48,6 +49,14 @@ oxo-flow clean pipeline.oxoflow
 
 ```bash
 oxo-flow clean pipeline.oxoflow --force
+```
+
+### Clean orphaned chunks from interrupted transforms
+
+```bash
+# When a transform operation is interrupted (Ctrl+C), chunk files
+# may remain in .oxo-flow/chunks/. Use --orphans to clean them.
+oxo-flow clean pipeline.oxoflow --orphans
 ```
 
 ---

@@ -14,8 +14,11 @@ pub struct HostResources {
 }
 
 /// Retrieve current host resource metrics.
+///
+/// # Panics
+/// Panics if the system lock is poisoned (which should never happen in normal operation).
 pub fn get_host_resources() -> HostResources {
-    let mut sys = SYS.lock().unwrap();
+    let mut sys = SYS.lock().expect("System lock should never be poisoned");
     sys.refresh_cpu_usage();
     sys.refresh_memory();
 
