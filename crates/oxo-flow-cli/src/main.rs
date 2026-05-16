@@ -786,6 +786,13 @@ async fn main() -> Result<()> {
             let mut config = WorkflowConfig::from_file(&workflow)
                 .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
+            // Apply defaults to all rules before expansion
+            config.apply_defaults();
+
+            // Resolve rule templates/inheritance
+            oxo_flow_core::config::resolve_rule_templates(&mut config.rules)
+                .context("failed to resolve rule templates")?;
+
             config
                 .expand_wildcards()
                 .context("failed to expand wildcard rules")?;
@@ -1890,8 +1897,15 @@ Thumbs.db
             rule_name,
         } => {
             print_banner();
-            let config = WorkflowConfig::from_file(&workflow)
+            let mut config = WorkflowConfig::from_file(&workflow)
                 .with_context(|| format!("failed to parse {}", workflow.display()))?;
+
+            // Apply defaults to all rules
+            config.apply_defaults();
+
+            // Resolve rule templates/inheritance
+            oxo_flow_core::config::resolve_rule_templates(&mut config.rules)
+                .context("failed to resolve rule templates")?;
 
             let dag =
                 WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;

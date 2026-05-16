@@ -59,8 +59,14 @@ The checkpoint file is JSON with the following structure:
 {
   "completed_rules": ["trim_reads", "align", "sort_bam"],
   "failed_rules": ["mark_duplicates"],
-  "started_at": "2026-04-05T10:00:00Z",
-  "updated_at": "2026-04-05T10:15:32Z"
+  "benchmarks": {
+    "trim_reads": {
+      "rule": "trim_reads",
+      "wall_time_secs": 42.5,
+      "max_memory_mb": 1024,
+      "cpu_seconds": 38.2
+    }
+  }
 }
 ```
 

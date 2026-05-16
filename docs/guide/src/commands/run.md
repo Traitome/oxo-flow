@@ -112,6 +112,25 @@ oxo-flow run pipeline.oxoflow --skip-env-setup
 
 ---
 
+## Checkpointing and Resuming
+
+oxo-flow automatically persists execution state to a **checkpoint file** after every rule completion. This enables:
+
+1.  **Resuming failed runs**: If a job fails or is interrupted, simply run `oxo-flow run` again. The engine will skip all rules already marked as `completed` and resume from the first pending task.
+2.  **State Inspection**: Use the [`oxo-flow status`](./status.md) command to view the progress of a run from its checkpoint file.
+
+### Metadata Directory
+
+By default, checkpoints are saved in a hidden `.oxo-flow/` directory located in the same folder as the workflow file.
+
+- **Filename**: `checkpoint_<workflow_name>.json`
+
+### Forcing Execution
+
+To bypass checkpoints and re-execute rules that have already completed, use the [`oxo-flow clean`](./clean.md) command to remove outputs and the checkpoint file before running.
+
+---
+
 ## Output
 
 ```

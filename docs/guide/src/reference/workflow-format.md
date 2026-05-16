@@ -1,12 +1,35 @@
 # Workflow Format
 
-The `.oxoflow` file format is oxo-flow's TOML-based workflow definition language. This page is the complete specification.
+The `.oxoflow` file format is oxo-flow's TOML-based workflow definition language. This page provides the complete specification, design philosophy, and syntax rules.
+
+---
+
+## Design Principles
+
+The `.oxoflow` format is built on four core principles:
+
+1.  **Declarative over Imperative** — Define *what* should happen (inputs, outputs, tools), not *how* to orchestrate it. The engine handles the execution logic.
+2.  **Explicit is better than Implicit** — Every dependency and environment should be clearly visible. No hidden global state.
+3.  **Composition over Inheritance** — Reuse logic through modular `include` directives and rule templates rather than complex inheritance hierarchies.
+4.  **Traceability by Default** — The format structure directly supports generating clinical-grade provenance and audit trails.
+
+---
+
+## TOML Primer
+
+oxo-flow uses the **TOML (Tom's Obvious, Minimal Language)** format. If you are new to TOML, here are the three essential concepts used in `.oxoflow` files:
+
+1.  **Key-Value Pairs**: `key = "value"`. Strings must be in quotes.
+2.  **Tables**: `[name]` defines a section (an object/map).
+3.  **Arrays of Tables**: `[[name]]` defines a list of sections. In oxo-flow, rules are defined using double brackets because a workflow contains multiple rules.
+
+For more details, see the [Official TOML Specification](https://toml.io/).
 
 ---
 
 ## File Extension
 
-Workflow files use the `.oxoflow` extension: `my-pipeline.oxoflow`.
+Workflow files must use the `.oxoflow` extension (e.g., `qc_pipeline.oxoflow`).
 
 ---
 
