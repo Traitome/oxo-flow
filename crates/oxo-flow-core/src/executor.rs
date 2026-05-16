@@ -2024,17 +2024,19 @@ pub fn sanitize_shell_command(cmd: &str) -> Vec<String> {
 /// Block dangerous shell patterns that could lead to command injection.
 /// Returns Ok(()) if safe, Err if dangerous patterns are detected.
 ///
-/// This is a strict validation that prevents execution of commands with
-/// potentially dangerous constructs. For production pipelines requiring
-/// these patterns (e.g., pipes), use script files instead.
+/// Blocks patterns that allow arbitrary code execution:
+/// - Command substitution ($() and backticks)
+/// - Unconditional chaining (; and newline)
+/// - Dangerous deletion (rm -rf /)
+///
+/// Note: &&, ||, and | are NOT blocked as they are common in
+/// bioinformatics pipelines for error handling and streaming.
 #[must_use = "shell safety validation returns a Result that must be checked"]
 pub fn validate_shell_safety(cmd: &str) -> crate::Result<()> {
     let block_patterns = [
         ("$(", "command substitution"),
         ("`", "backtick substitution"),
-        (";", "command chaining"),
-        ("&&", "conditional chaining"),
-        ("||", "conditional chaining"),
+        (";", "unconditional command chaining"),
         ("\n", "newline injection"),
         ("rm -rf /", "dangerous deletion"),
     ];
@@ -2068,9 +2070,7 @@ pub fn validate_path_safety(workdir: &std::path::Path, path: &str) -> crate::Res
             return Err(crate::OxoFlowError::Validation {
                 message: format!("Absolute path '{}' outside working directory", path),
                 rule: None,
-                suggestion: Some(
-                    "Use relative paths within the workflow directory".to_string(),
-                ),
+                suggestion: Some("Use relative paths within the workflow directory".to_string()),
             });
         }
     }
@@ -3215,13 +3215,16 @@ mod tests {
     }
 
     #[test]
-    fn validate_shell_safety_blocks_and_chaining() {
-        assert!(validate_shell_safety("mkdir tmp && rm -rf /").is_err());
+    fn validate_shell_safety_allows_and_chaining() {
+        // && is essential for error handling in bioinformatics pipelines
+        assert!(validate_shell_safety("mkdir tmp && ls").is_ok());
+        assert!(validate_shell_safety("cat input.txt > output.txt && echo done").is_ok());
     }
 
     #[test]
-    fn validate_shell_safety_blocks_or_chaining() {
-        assert!(validate_shell_safety("ls || rm -rf /").is_err());
+    fn validate_shell_safety_allows_or_chaining() {
+        // || is useful for fallback commands
+        assert!(validate_shell_safety("curl url || echo failed").is_ok());
     }
 
     #[test]
