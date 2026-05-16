@@ -179,11 +179,9 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-audit
-        continue-on-error: true
 
       - name: Security audit
         run: cargo audit
-        continue-on-error: true
 
   # ─── Build Linux binaries ──────────────────────────────────────────────────
   build-linux:
