@@ -424,6 +424,32 @@ enum ConfigAction {
         #[arg(value_name = "WORKFLOW")]
         workflow: PathBuf,
     },
+
+    /// Get a specific configuration variable.
+    Get {
+        /// Path to the .oxoflow workflow file.
+        #[arg(value_name = "WORKFLOW")]
+        workflow: PathBuf,
+
+        /// Config variable key to retrieve.
+        #[arg(value_name = "KEY")]
+        key: String,
+    },
+
+    /// Set a configuration variable (modifies the workflow file).
+    Set {
+        /// Path to the .oxoflow workflow file.
+        #[arg(value_name = "WORKFLOW")]
+        workflow: PathBuf,
+
+        /// Config variable key to set.
+        #[arg(value_name = "KEY")]
+        key: String,
+
+        /// Config variable value.
+        #[arg(value_name = "VALUE")]
+        value: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1486,6 +1512,67 @@ Thumbs.db
                         eprintln!("  Environments:       {:?}", stats.environments);
                     }
                 }
+                ConfigAction::Get { workflow, key } => {
+                    let config = WorkflowConfig::from_file(&workflow)
+                        .with_context(|| format!("failed to parse {}", workflow.display()))?;
+
+                    match config.config.get(&key) {
+                        Some(value) => println!("{}", value),
+                        None => {
+                            eprintln!("{} Config variable '{}' not found", "✗".red().bold(), key);
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                ConfigAction::Set {
+                    workflow,
+                    key,
+                    value,
+                } => {
+                    // Read the original TOML file
+                    let content = std::fs::read_to_string(&workflow)
+                        .with_context(|| format!("failed to read {}", workflow.display()))?;
+
+                    // Parse as TOML document to preserve structure
+                    let mut doc: toml::Value = toml::from_str(&content)
+                        .with_context(|| format!("failed to parse {}", workflow.display()))?;
+
+                    // Update the config section
+                    if let Some(table) = doc.as_table_mut() {
+                        let config_table = table
+                            .entry("config")
+                            .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+                        if let Some(config_map) = config_table.as_table_mut() {
+                            // Try to parse value as number/bool if possible, otherwise as string
+                            let parsed_value = if value == "true" {
+                                toml::Value::Boolean(true)
+                            } else if value == "false" {
+                                toml::Value::Boolean(false)
+                            } else if let Ok(n) = value.parse::<i64>() {
+                                toml::Value::Integer(n)
+                            } else if let Ok(n) = value.parse::<f64>() {
+                                toml::Value::Float(n)
+                            } else {
+                                toml::Value::String(value.clone())
+                            };
+                            config_map.insert(key.clone(), parsed_value);
+                        }
+                    }
+
+                    // Write back to file
+                    let new_content =
+                        toml::to_string_pretty(&doc).context("failed to serialize TOML")?;
+                    std::fs::write(&workflow, new_content)
+                        .with_context(|| format!("failed to write {}", workflow.display()))?;
+
+                    eprintln!(
+                        "{} Set {} = {} in {}",
+                        "✓".green().bold(),
+                        key,
+                        value,
+                        workflow.display()
+                    );
+                }
             }
         }
 
@@ -2443,6 +2530,37 @@ mod tests {
             Commands::Config {
                 action: ConfigAction::Stats { .. }
             }
+        );
+    }
+
+    #[test]
+    fn cli_parse_config_get() {
+        let cli = Cli::try_parse_from(["oxo-flow", "config", "get", "test.oxoflow", "reference"])
+            .unwrap();
+        matches!(
+            cli.command,
+            Commands::Config {
+                action: ConfigAction::Get { key, .. }
+            } if key == "reference"
+        );
+    }
+
+    #[test]
+    fn cli_parse_config_set() {
+        let cli = Cli::try_parse_from([
+            "oxo-flow",
+            "config",
+            "set",
+            "test.oxoflow",
+            "reference",
+            "/data/genome.fa",
+        ])
+        .unwrap();
+        matches!(
+            cli.command,
+            Commands::Config {
+                action: ConfigAction::Set { key, value, .. }
+            } if key == "reference" && value == "/data/genome.fa"
         );
     }
 

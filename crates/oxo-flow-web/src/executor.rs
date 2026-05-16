@@ -79,11 +79,12 @@ pub fn spawn_background_run(run_id: String, username: String, auth_type: String,
             Err(e) => {
                 error!("Failed to clone log file handle: {}", e);
                 let end = Utc::now();
-                let _ = sqlx::query("UPDATE runs SET status = 'failed', finished_at = ? WHERE id = ?")
-                    .bind(end)
-                    .bind(&run_id)
-                    .execute(db::pool())
-                    .await;
+                let _ =
+                    sqlx::query("UPDATE runs SET status = 'failed', finished_at = ? WHERE id = ?")
+                        .bind(end)
+                        .bind(&run_id)
+                        .execute(db::pool())
+                        .await;
                 return;
             }
         };
