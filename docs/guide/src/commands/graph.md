@@ -108,3 +108,16 @@ digraph workflow {
     - **Conda**: `conda install graphviz`
 - Nodes represent rules, edges represent dependencies
 - The graph direction is top-to-bottom (`rankdir = TB`)
+
+### Understanding Metrics
+
+The header shows key workflow metrics:
+
+| Metric | Meaning |
+|---|---|
+| **Rules** | Total workflow rules (DAG nodes) |
+| **Dependencies** | Total edges connecting rules |
+| **Depth** | Critical path length (longest chain) |
+| **Width** | Maximum parallelism (rules at same level) |
+
+**Dependencies count:** The total number of edges in the DAG. When a rule has multiple input files from different upstream rules, each creates a separate edge. For example, a merge rule combining outputs from 3 parallel branches contributes 3 dependencies.
