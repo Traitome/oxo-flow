@@ -2007,8 +2007,22 @@ pub fn validate_shell_safety(cmd: &str) -> crate::Result<()> {
 /// Returns `Ok(())` if the path is safe, or an error if traversal is detected.
 #[must_use = "path safety validation returns a Result that must be checked"]
 pub fn validate_path_safety(workdir: &std::path::Path, path: &str) -> crate::Result<()> {
+    // Block absolute paths outside workdir
+    if path.starts_with('/') {
+        let abs_path = std::path::Path::new(path);
+        if !abs_path.starts_with(workdir) {
+            return Err(crate::OxoFlowError::Validation {
+                message: format!("Absolute path '{}' outside working directory", path),
+                rule: None,
+                suggestion: Some(
+                    "Use relative paths within the workflow directory".to_string(),
+                ),
+            });
+        }
+    }
+
+    // Block path traversal via ".."
     let resolved = workdir.join(path);
-    // Normalize: just check the string doesn't contain ..
     if path.contains("..") {
         // Attempt canonicalization to see if it escapes
         if let Ok(canonical) = resolved.canonicalize() {
@@ -3184,6 +3198,20 @@ mod tests {
     fn validate_path_traversal() {
         let workdir = std::path::Path::new("/work");
         assert!(validate_path_safety(workdir, "../../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn validate_path_blocks_absolute_outside_workdir() {
+        let workdir = std::path::Path::new("/work");
+        assert!(validate_path_safety(workdir, "/etc/passwd").is_err());
+        assert!(validate_path_safety(workdir, "/var/log/file.txt").is_err());
+    }
+
+    #[test]
+    fn validate_path_allows_absolute_inside_workdir() {
+        let workdir = std::path::Path::new("/work");
+        assert!(validate_path_safety(workdir, "/work/output.txt").is_ok());
+        assert!(validate_path_safety(workdir, "/work/subdir/result.bam").is_ok());
     }
 
     #[test]
