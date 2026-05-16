@@ -1069,8 +1069,6 @@ impl LocalExecutor {
             });
         }
 
-        // Ensure resources are released if we exit the loop without success
-        self.release_resources(rule).await;
         Ok(record)
     }
 
