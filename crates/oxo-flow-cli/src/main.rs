@@ -612,6 +612,14 @@ async fn main() -> Result<()> {
                 eprintln!("  {}. {}", i + 1, rule_name);
             }
 
+            // Create progress bar for execution tracking
+            let total_rules = order.len() as u64;
+            let progress_bar = indicatif::ProgressBar::new(total_rules);
+            let progress_style = indicatif::ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} (Running: {running}, Done: {done}, Fail: {fail}, Skip: {skip})")
+                .expect("valid template");
+            progress_bar.set_style(progress_style);
+
             let exec_config = ExecutorConfig {
                 max_jobs: jobs,
                 dry_run: false,
@@ -694,6 +702,11 @@ async fn main() -> Result<()> {
                 if checkpoint.is_completed(rule_name) {
                     skipped_count += 1;
                     completed_rules.insert(rule_name.clone());
+                    progress_bar.inc(1);
+                    progress_bar.set_message(format!(
+                        "Skip: {}, Done: {}, Fail: {}",
+                        skipped_count, success_count, fail_count
+                    ));
                     eprintln!(
                         "  {} {} {}",
                         "~".cyan().bold(),
@@ -703,12 +716,18 @@ async fn main() -> Result<()> {
                     continue;
                 }
 
+                progress_bar.set_message(format!("Running {}...", rule_name));
                 let rule = config.get_rule(rule_name).unwrap().clone();
                 match executor.execute_rule(&rule, &wildcard_values).await {
                     Ok(record) => {
                         completed_rules.insert(rule_name.clone());
+                        progress_bar.inc(1);
                         if record.status == oxo_flow_core::executor::JobStatus::Success {
                             success_count += 1;
+                            progress_bar.set_message(format!(
+                                "Done: {}, Fail: {}, Skip: {}",
+                                success_count, fail_count, skipped_count
+                            ));
 
                             // Convert JobRecord to BenchmarkRecord for checkpointing
                             let duration = if let (Some(start), Some(finish)) =
@@ -764,6 +783,11 @@ async fn main() -> Result<()> {
                             }
                         } else if record.status == oxo_flow_core::executor::JobStatus::Skipped {
                             skipped_count += 1;
+                            progress_bar.inc(1);
+                            progress_bar.set_message(format!(
+                                "Done: {}, Fail: {}, Skip: {}",
+                                success_count, fail_count, skipped_count
+                            ));
                             let reason = record.skip_reason.as_deref().unwrap_or("unknown reason");
                             eprintln!(
                                 "  {} {} {}",
@@ -773,6 +797,11 @@ async fn main() -> Result<()> {
                             );
                         } else {
                             fail_count += 1;
+                            progress_bar.inc(1);
+                            progress_bar.set_message(format!(
+                                "Done: {}, Fail: {}, Skip: {}",
+                                success_count, fail_count, skipped_count
+                            ));
                             checkpoint.mark_failed(rule_name);
                             let _ = checkpoint.save_to_file(&checkpoint_path);
 
@@ -790,23 +819,31 @@ async fn main() -> Result<()> {
                                 );
                             }
                             if !keep_going {
+                                progress_bar.finish_and_clear();
                                 std::process::exit(1);
                             }
                         }
                     }
                     Err(e) => {
                         fail_count += 1;
+                        progress_bar.inc(1);
+                        progress_bar.set_message(format!(
+                            "Done: {}, Fail: {}, Skip: {}",
+                            success_count, fail_count, skipped_count
+                        ));
                         checkpoint.mark_failed(rule_name);
                         let _ = checkpoint.save_to_file(&checkpoint_path);
 
                         eprintln!("  {} {} — {}", "✗".red().bold(), rule_name, e);
                         if !keep_going {
+                            progress_bar.finish_and_clear();
                             return Err(e.into());
                         }
                     }
                 }
             }
 
+            progress_bar.finish_and_clear();
             eprintln!(
                 "\n{} {} succeeded, {} skipped, {} failed",
                 "Done:".bold(),
