@@ -1800,16 +1800,15 @@ Thumbs.db
                     match std::process::Command::new(program).args(&args).status() {
                         Ok(status) => {
                             if !status.success() {
-                                eprintln!(
-                                    "{} Command failed with exit code: {}",
-                                    "✗".red(),
+                                anyhow::bail!(
+                                    "Command failed with exit code: {}",
                                     status.code().unwrap_or(-1)
                                 );
                             }
                         }
                         Err(e) => {
-                            eprintln!("{} Failed to execute status command: {}", "✗".red(), e);
                             eprintln!("  Is {} installed on this system?", program);
+                            anyhow::bail!("Failed to execute status command: {}", e);
                         }
                     }
                 }
@@ -1842,16 +1841,15 @@ Thumbs.db
                                 if status.success() {
                                     eprintln!("{} Successfully canceled jobs.", "✓".green());
                                 } else {
-                                    eprintln!(
-                                        "{} Command failed with exit code: {}",
-                                        "✗".red(),
+                                    anyhow::bail!(
+                                        "Command failed with exit code: {}",
                                         status.code().unwrap_or(-1)
                                     );
                                 }
                             }
                             Err(e) => {
-                                eprintln!("{} Failed to execute cancel command: {}", "✗".red(), e);
                                 eprintln!("  Is {} installed on this system?", cancel_cmd);
+                                anyhow::bail!("Failed to execute cancel command: {}", e);
                             }
                         }
                     }

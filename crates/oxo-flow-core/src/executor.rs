@@ -855,7 +855,16 @@ impl CheckpointState {
         let json = std::fs::read_to_string(path).map_err(|e| OxoFlowError::Config {
             message: format!("failed to read checkpoint from {}: {e}", path.display()),
         })?;
-        Self::from_json(&json)
+        if json.trim().is_empty() {
+            return Ok(Self::default());
+        }
+        Self::from_json(&json).map_err(|e| OxoFlowError::Config {
+            message: format!(
+                "failed to deserialize checkpoint from {}: {}",
+                path.display(),
+                e
+            ),
+        })
     }
 
     /// Returns the default checkpoint file path for a workflow.

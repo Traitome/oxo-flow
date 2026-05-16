@@ -664,10 +664,11 @@ fn cli_cluster_submit() {
 
 #[test]
 fn cli_cluster_status() {
+    // This will fail on systems without SLURM, which is expected
     oxo_flow_cmd()
         .args(["cluster", "status", "-b", "slurm"])
         .assert()
-        .success()
+        .failure()
         .stderr(predicate::str::contains("squeue"));
 }
 
