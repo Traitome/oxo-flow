@@ -18,7 +18,10 @@ oxo-flow serve [OPTIONS]
 |---|---|---|---|
 | `--host` | — | `127.0.0.1` | Host address to bind to |
 | `--port` | `-p` | `8080` | Port to listen on |
+| `--base-path` | — | `/` | Base path for mounting under a sub-path (e.g., `/oxo-flow`) |
 | `--verbose` | `-v` | — | Enable debug-level logging |
+| `--quiet` | — | — | Suppress non-essential output (errors only) |
+| `--no-color` | — | — | Disable colored output |
 
 ---
 
@@ -34,6 +37,18 @@ oxo-flow serve
 
 ```bash
 oxo-flow serve --host 0.0.0.0 -p 3000
+```
+
+### Mount under a sub-path (for reverse proxy)
+
+```bash
+oxo-flow serve --base-path /oxo-flow
+```
+
+When using `--base-path`, all API endpoints will be prefixed:
+```
+GET /oxo-flow/api/health
+POST /oxo-flow/api/workflows/validate
 ```
 
 ---

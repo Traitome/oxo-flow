@@ -250,7 +250,7 @@ For production use, consider VQSR (Variant Quality Score Recalibration) instead 
 
 ```bash
 $ oxo-flow validate examples/gallery/07_wgs_germline.oxoflow
-✓ examples/gallery/07_wgs_germline.oxoflow — 8 rules, 8 dependencies
+✓ examples/gallery/07_wgs_germline.oxoflow — 10 rules, 11 dependencies
 ```
 
 ### Resource Summary
@@ -262,8 +262,10 @@ $ oxo-flow validate examples/gallery/07_wgs_germline.oxoflow
 | mark_duplicates | 4 | 16G | singularity |
 | base_recalibration | 4 | 16G | singularity |
 | haplotype_caller | 4 | 16G | singularity |
+| combine_gvcfs | 4 | 16G | singularity |
 | genotype_gvcfs | 4 | 16G | singularity |
-| variant_filtration | 2 | 8G | singularity |
+| vqsr_snps | 4 | 16G | singularity |
+| apply_vqsr_snps | 2 | 8G | singularity |
 | annotate_variants | 4 | 16G | conda |
 
 ## What's Next?

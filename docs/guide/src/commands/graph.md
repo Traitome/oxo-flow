@@ -1,13 +1,13 @@
 # `oxo-flow graph`
 
-Output the workflow DAG in DOT format for visualization.
+Output the workflow DAG for visualization.
 
 ---
 
 ## Usage
 
 ```
-oxo-flow graph <WORKFLOW>
+oxo-flow graph [OPTIONS] <WORKFLOW>
 ```
 
 ---
@@ -24,39 +24,67 @@ oxo-flow graph <WORKFLOW>
 
 | Option | Short | Description |
 |---|---|---|
+| `--format <FORMAT>` | `-f` | Output format: `ascii` (terminal), `dot` (Graphviz), `dot-clustered` (enhanced). Default: `ascii` |
+| `--output <FILE>` | `-o` | Save output to a file (useful for dot/svg generation) |
 | `--verbose` | `-v` | Enable debug-level logging |
+| `--quiet` | | Suppress non-essential output (errors only) |
+| `--no-color` | | Disable colored output |
 
 ---
 
 ## Examples
 
-### Print DOT to stdout
+### Print ASCII graph to terminal (default)
 
 ```bash
 oxo-flow graph pipeline.oxoflow
 ```
 
+### Print DOT format
+
+```bash
+oxo-flow graph pipeline.oxoflow -f dot
+```
+
 ### Render to PNG with Graphviz
 
 ```bash
-oxo-flow graph pipeline.oxoflow | dot -Tpng -o dag.png
+oxo-flow graph pipeline.oxoflow -f dot | dot -Tpng -o dag.png
 ```
 
-### Render to SVG
+### Save DOT to file
 
 ```bash
-oxo-flow graph pipeline.oxoflow | dot -Tsvg -o dag.svg
+oxo-flow graph pipeline.oxoflow -f dot -o graph.dot
 ```
 
-### Render to PDF
+### Render clustered view
 
 ```bash
-oxo-flow graph pipeline.oxoflow | dot -Tpdf -o dag.pdf
+oxo-flow graph pipeline.oxoflow -f dot-clustered -o clustered.dot
 ```
 
 ---
 
-## Output
+## Output Formats
+
+### ASCII (default)
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│ Workflow: wgs-germline-calling                                       │
+│ Rules: 10, Dependencies: 11                                          │
+└─────────────────────────────────────────────────────────────────────┘
+
+  fastp_qc ──► bwa_mem2_align ──► mark_duplicates ──► bqsr_apply
+       │                              │                    │
+       ▼                              ▼                    ▼
+  (parallel)                    (parallel)            (parallel)
+
+  bqsr_apply ──► gatk_haplotypecaller ──► gatk_vqsr ──► annotate_variants
+```
+
+### DOT
 
 ```dot
 digraph workflow {
@@ -73,8 +101,8 @@ digraph workflow {
 
 ## Notes
 
-- Output is in [Graphviz DOT](https://graphviz.org/doc/info/lang.html) format
-- Requires Graphviz (`dot` command) to render images. Install with your package manager:
+- Default output is ASCII for terminal viewing
+- DOT format requires Graphviz (`dot` command) to render images. Install with:
     - **macOS**: `brew install graphviz`
     - **Linux**: `apt install graphviz` or `yum install graphviz`
     - **Conda**: `conda install graphviz`
