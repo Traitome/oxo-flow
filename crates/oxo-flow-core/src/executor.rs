@@ -801,6 +801,12 @@ impl LocalExecutor {
 
         // Execute pre_exec hook if defined
         if let Some(ref pre_cmd) = rule.pre_exec {
+            // Validate hook command safety
+            if let Err(e) = validate_shell_safety(pre_cmd) {
+                tracing::error!(rule = %rule.name, hook = %pre_cmd, error = %e, "pre_exec blocked: dangerous pattern");
+                self.release_resources(rule).await;
+                return Err(e);
+            }
             tracing::info!(rule = %rule.name, hook = %pre_cmd, "executing pre_exec hook");
             let pre_result = Command::new("sh")
                 .arg("-c")
@@ -1005,23 +1011,29 @@ impl LocalExecutor {
 
             // Execute on_success hook if defined
             if let Some(ref hook_cmd) = rule.on_success {
-                tracing::info!(rule = %rule.name, hook = %hook_cmd, "executing on_success hook");
-                let hook_result = Command::new("sh")
-                    .arg("-c")
-                    .arg(hook_cmd)
-                    .current_dir(&self.config.workdir)
-                    .envs(&rule.envvars)
-                    .output()
-                    .await;
-                if let Ok(hook_output) = hook_result
-                    && !hook_output.status.success()
-                {
-                    tracing::warn!(
-                        rule = %rule.name,
-                        hook = %hook_cmd,
-                        code = %hook_output.status.code().unwrap_or(-1),
-                        "on_success hook failed"
-                    );
+                // Validate hook command safety
+                if let Err(e) = validate_shell_safety(hook_cmd) {
+                    tracing::error!(rule = %rule.name, hook = %hook_cmd, error = %e, "on_success blocked: dangerous pattern");
+                    // Log but don't fail - the rule already succeeded
+                } else {
+                    tracing::info!(rule = %rule.name, hook = %hook_cmd, "executing on_success hook");
+                    let hook_result = Command::new("sh")
+                        .arg("-c")
+                        .arg(hook_cmd)
+                        .current_dir(&self.config.workdir)
+                        .envs(&rule.envvars)
+                        .output()
+                        .await;
+                    if let Ok(hook_output) = hook_result
+                        && !hook_output.status.success()
+                    {
+                        tracing::warn!(
+                            rule = %rule.name,
+                            hook = %hook_cmd,
+                            code = %hook_output.status.code().unwrap_or(-1),
+                            "on_success hook failed"
+                        );
+                    }
                 }
             }
 
@@ -1050,23 +1062,29 @@ impl LocalExecutor {
 
         // Execute on_failure hook if defined (after all retries exhausted)
         if let Some(ref hook_cmd) = rule.on_failure {
-            tracing::info!(rule = %rule.name, hook = %hook_cmd, "executing on_failure hook");
-            let hook_result = Command::new("sh")
-                .arg("-c")
-                .arg(hook_cmd)
-                .current_dir(&self.config.workdir)
-                .envs(&rule.envvars)
-                .output()
-                .await;
-            if let Ok(hook_output) = hook_result
-                && !hook_output.status.success()
-            {
-                tracing::warn!(
-                    rule = %rule.name,
-                    hook = %hook_cmd,
-                    code = %hook_output.status.code().unwrap_or(-1),
-                    "on_failure hook failed"
-                );
+            // Validate hook command safety
+            if let Err(e) = validate_shell_safety(hook_cmd) {
+                tracing::error!(rule = %rule.name, hook = %hook_cmd, error = %e, "on_failure blocked: dangerous pattern");
+                // Log but don't fail - the rule already failed
+            } else {
+                tracing::info!(rule = %rule.name, hook = %hook_cmd, "executing on_failure hook");
+                let hook_result = Command::new("sh")
+                    .arg("-c")
+                    .arg(hook_cmd)
+                    .current_dir(&self.config.workdir)
+                    .envs(&rule.envvars)
+                    .output()
+                    .await;
+                if let Ok(hook_output) = hook_result
+                    && !hook_output.status.success()
+                {
+                    tracing::warn!(
+                        rule = %rule.name,
+                        hook = %hook_cmd,
+                        code = %hook_output.status.code().unwrap_or(-1),
+                        "on_failure hook failed"
+                    );
+                }
             }
         }
 
