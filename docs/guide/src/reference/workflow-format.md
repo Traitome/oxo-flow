@@ -647,6 +647,7 @@ control    = "CTRL_02"
 | `experiment` | String | **Yes** | Experiment sample name (alias: `tumor`) |
 | `control` | String | **Yes** | Matched control sample name (alias: `normal`) |
 | `experiment_type` | String | No | Optional cohort label (alias: `tumor_type`) |
+| `metadata` | Table | No | Arbitrary key-value pairs (each key becomes a wildcard) |
 
 Any rule that references `{experiment}`, `{control}`, or `{pair_id}` in its `input`, `output`, or `shell` fields is **automatically expanded** into one concrete rule instance per pair.  Rules that do not reference any pair wildcard are kept as-is.
 
