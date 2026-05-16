@@ -248,6 +248,10 @@ enum Commands {
         /// Skip the confirmation prompt.
         #[arg(long)]
         force: bool,
+
+        /// Clean orphaned temporary files (chunks from interrupted transforms).
+        #[arg(long)]
+        orphans: bool,
     },
 
     /// Manage software environments.
@@ -1372,8 +1376,99 @@ Thumbs.db
             workflow,
             dry_run,
             force,
+            orphans,
         } => {
             print_banner();
+
+            // Handle orphan cleanup mode
+            if orphans {
+                let workdir = workflow.parent().unwrap_or(Path::new(".")).to_path_buf();
+                let chunks_dir = workdir.join(".oxo-flow/chunks");
+
+                if !chunks_dir.exists() {
+                    eprintln!("{} No orphan chunks directory found", "Clean:".bold());
+                    return Ok(());
+                }
+
+                // Collect orphan chunk directories
+                let mut orphan_dirs: Vec<PathBuf> = Vec::new();
+                if let Ok(entries) = std::fs::read_dir(&chunks_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            orphan_dirs.push(path);
+                        }
+                    }
+                }
+
+                if orphan_dirs.is_empty() {
+                    eprintln!("{} No orphan chunks found", "Clean:".bold());
+                    return Ok(());
+                }
+
+                if dry_run {
+                    eprintln!("{}", "Would clean orphan chunks (dry-run):".bold().yellow());
+                    for dir in &orphan_dirs {
+                        eprintln!("  {} (directory)", dir.display());
+                    }
+                    eprintln!(
+                        "\n{} {} orphan chunk directories",
+                        "Total:".bold(),
+                        orphan_dirs.len()
+                    );
+                } else {
+                    // Prompt for confirmation unless --force is given
+                    if !force {
+                        eprintln!(
+                            "{} {} orphan chunk directory(s) will be deleted. Continue? [y/N]",
+                            "Clean:".bold().yellow(),
+                            orphan_dirs.len()
+                        );
+                        let mut answer = String::new();
+                        std::io::stdin().read_line(&mut answer)?;
+                        if answer.trim().to_lowercase() != "y" {
+                            eprintln!("Aborted.");
+                            return Ok(());
+                        }
+                    }
+
+                    let mut deleted = 0usize;
+                    let mut failed = 0usize;
+
+                    for dir in &orphan_dirs {
+                        match std::fs::remove_dir_all(dir) {
+                            Ok(()) => {
+                                deleted += 1;
+                                eprintln!("  {} {}", "✓".green(), dir.display());
+                            }
+                            Err(e) => {
+                                failed += 1;
+                                eprintln!("  {} {} — {}", "✗".red(), dir.display(), e);
+                            }
+                        }
+                    }
+
+                    // Also clean the parent chunks_dir if it's now empty
+                    if deleted == orphan_dirs.len()
+                        && chunks_dir.exists()
+                        && let Ok(entries) = std::fs::read_dir(&chunks_dir)
+                        && entries.count() == 0
+                    {
+                        std::fs::remove_dir(&chunks_dir).ok();
+                        eprintln!("  {} {}", "✓".green(), chunks_dir.display());
+                    }
+
+                    eprintln!(
+                        "\n{} {} orphan directories deleted, {} failed",
+                        "Done:".bold(),
+                        deleted,
+                        failed
+                    );
+                }
+                return Ok(());
+            }
+
+            // Normal clean mode - clean workflow outputs
             let config = WorkflowConfig::from_file(&workflow)
                 .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
@@ -2422,10 +2517,12 @@ mod tests {
                 workflow,
                 dry_run,
                 force,
+                orphans,
             } => {
                 assert_eq!(workflow, PathBuf::from("test.oxoflow"));
                 assert!(!dry_run);
                 assert!(!force);
+                assert!(!orphans);
             }
             _ => panic!("expected Clean command"),
         }
@@ -2448,6 +2545,17 @@ mod tests {
         match cli.command {
             Commands::Clean { force, .. } => {
                 assert!(force);
+            }
+            _ => panic!("expected Clean command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_clean_orphans() {
+        let cli = Cli::try_parse_from(["oxo-flow", "clean", "test.oxoflow", "--orphans"]).unwrap();
+        match cli.command {
+            Commands::Clean { orphans, .. } => {
+                assert!(orphans);
             }
             _ => panic!("expected Clean command"),
         }
