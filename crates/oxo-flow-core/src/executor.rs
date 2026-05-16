@@ -17,6 +17,86 @@ use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::{Mutex, Semaphore};
 
+/// Default interpreter mapping for script file extensions.
+fn default_interpreter_map() -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    // Python scripts
+    map.insert(".py".to_string(), "python".to_string());
+    map.insert(".py3".to_string(), "python3".to_string());
+    // R scripts
+    map.insert(".R".to_string(), "Rscript".to_string());
+    map.insert(".r".to_string(), "Rscript".to_string());
+    // Julia scripts
+    map.insert(".jl".to_string(), "julia".to_string());
+    // Shell scripts
+    map.insert(".sh".to_string(), "bash".to_string());
+    map.insert(".bash".to_string(), "bash".to_string());
+    // Perl scripts
+    map.insert(".pl".to_string(), "perl".to_string());
+    // Ruby scripts
+    map.insert(".rb".to_string(), "ruby".to_string());
+    // Quarto/R Markdown
+    map.insert(".qmd".to_string(), "quarto render".to_string());
+    map.insert(".Rmd".to_string(), "quarto render".to_string());
+    map.insert(".rmd".to_string(), "quarto render".to_string());
+    // Jupyter notebooks
+    map.insert(".ipynb".to_string(), "jupyter nbconvert --to notebook --execute".to_string());
+    // Workflow languages (bioinformatics)
+    map.insert(".smk".to_string(), "snakemake".to_string());
+    map.insert(".nextflow".to_string(), "nextflow run".to_string());
+    map.insert(".wdl".to_string(), "miniwdl run".to_string());
+    map
+}
+
+/// Detect interpreter for a script file based on extension.
+///
+/// Returns the interpreter command string, or None if no interpreter can be determined.
+pub fn detect_interpreter(
+    script_path: &str,
+    interpreter_override: Option<&str>,
+    custom_map: &HashMap<String, String>,
+) -> Option<String> {
+    // Priority 1: explicit interpreter override
+    if let Some(interp) = interpreter_override {
+        return Some(interp.to_string());
+    }
+
+    // Priority 2: custom interpreter map from workflow config
+    // Priority 3: default interpreter map
+    let defaults = default_interpreter_map();
+
+    // Extract file extension
+    let ext = Path::new(script_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| format!(".{}", e.to_lowercase()));
+
+    if let Some(ref extension) = ext {
+        // Check custom map first, then defaults
+        if let Some(interp) = custom_map.get(extension) {
+            return Some(interp.clone());
+        }
+        if let Some(interp) = defaults.get(extension) {
+            return Some(interp.clone());
+        }
+    }
+
+    // No interpreter found
+    None
+}
+
+/// Build command from interpreter and script path.
+///
+/// Handles special cases like `quarto render` which needs the script as argument.
+pub fn build_script_command(interpreter: &str, script_path: &str) -> String {
+    // Multi-word interpreters (e.g., "quarto render", "jupyter nbconvert ...")
+    if interpreter.contains(' ') {
+        format!("{} {}", interpreter, script_path)
+    } else {
+        format!("{} {}", interpreter, script_path)
+    }
+}
+
 /// Status of a job in the execution pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JobStatus {
@@ -231,6 +311,9 @@ pub struct ExecutorConfig {
 
     /// Cache directory for environments (default: ~/.cache/oxo-flow/).
     pub cache_dir: Option<std::path::PathBuf>,
+
+    /// Custom interpreter mappings for script file extensions.
+    pub interpreter_map: HashMap<String, String>,
 }
 
 impl Default for ExecutorConfig {
@@ -247,6 +330,7 @@ impl Default for ExecutorConfig {
             resource_groups: HashMap::new(),
             skip_env_setup: false,
             cache_dir: None,
+            interpreter_map: HashMap::new(),
         }
     }
 }
@@ -588,14 +672,34 @@ impl LocalExecutor {
             skip_reason: None,
         };
 
-        let shell_cmd = match &rule.shell {
-            Some(cmd) => render_shell_command(cmd, rule, wildcard_values),
-            None => {
-                record.status = JobStatus::Skipped;
-                record.finished_at = Some(Utc::now());
-                return Ok(record);
+        // Build commands to execute: shell (if present) + script (if present)
+        // Execution order: shell first, then script (sequential)
+        let shell_cmd = rule.shell.as_ref().map(|cmd| {
+            render_shell_command(cmd, rule, wildcard_values)
+        });
+
+        let script_cmd = rule.script.as_ref().map(|script_path| {
+            let expanded_script = render_shell_command(script_path, rule, wildcard_values);
+            match detect_interpreter(&expanded_script, rule.interpreter.as_deref(), &self.config.interpreter_map) {
+                Some(interp) => build_script_command(&interp, &expanded_script),
+                None => {
+                    tracing::warn!(
+                        rule = %rule.name,
+                        script = %expanded_script,
+                        "no interpreter detected for script, will execute as shell command"
+                    );
+                    expanded_script
+                }
             }
-        };
+        });
+
+        // Skip if neither shell nor script is defined
+        if shell_cmd.is_none() && script_cmd.is_none() {
+            record.status = JobStatus::Skipped;
+            record.finished_at = Some(Utc::now());
+            record.skip_reason = Some("no shell or script defined".to_string());
+            return Ok(record);
+        }
 
         // Evaluate the `when` condition — skip execution if it resolves to false.
         if let Some(ref condition) = rule.when {
@@ -625,18 +729,34 @@ impl LocalExecutor {
             return Ok(record);
         }
 
-        // Wrap the command through the environment resolver
-        let shell_cmd = self.resolve_command(&shell_cmd, rule);
+        // Build list of commands to execute (shell first, then script)
+        let commands_to_execute: Vec<String> = match (&shell_cmd, &script_cmd) {
+            (Some(shell), Some(script)) => {
+                vec![shell.clone(), script.clone()]
+            }
+            (Some(shell), None) => vec![shell.clone()],
+            (None, Some(script)) => vec![script.clone()],
+            (None, None) => vec![],  // Already handled above
+        };
 
-        record.command = Some(shell_cmd.clone());
+        // Resolve all commands through environment resolver
+        let resolved_commands: Vec<String> = commands_to_execute
+            .iter()
+            .map(|cmd| self.resolve_command(cmd, rule))
+            .collect();
 
-        // Warn about any dangerous patterns detected in the expanded command.
-        for warning in sanitize_shell_command(&shell_cmd) {
-            tracing::warn!(rule = %rule.name, "{warning}");
+        // Record primary command (shell if exists, otherwise script)
+        record.command = resolved_commands.first().cloned();
+
+        // Warn about any dangerous patterns detected in the expanded commands.
+        for cmd in &resolved_commands {
+            for warning in sanitize_shell_command(cmd) {
+                tracing::warn!(rule = %rule.name, "{warning}");
+            }
         }
 
         if self.config.dry_run {
-            tracing::info!(rule = %rule.name, command = %shell_cmd, "dry-run");
+            tracing::info!(rule = %rule.name, commands = ?resolved_commands, "dry-run");
             record.status = JobStatus::Skipped;
             record.finished_at = Some(Utc::now());
             return Ok(record);
@@ -708,202 +828,244 @@ impl LocalExecutor {
         tracing::info!(rule = %rule.name, threads = %rule.effective_threads(), "executing");
 
         let max_attempts = 1 + self.config.retry_count;
+        let mut all_commands_succeeded = false;
+        let mut combined_stdout = String::new();
+        let mut combined_stderr = String::new();
+        let mut last_exit_code: Option<i32> = None;
+
         for attempt in 0..max_attempts {
             if attempt > 0 {
                 tracing::warn!(
                     rule = %rule.name,
                     attempt = attempt + 1,
                     max_attempts = max_attempts,
-                    "retrying failed command"
+                    "retrying failed commands"
                 );
                 record.retries = attempt;
             }
 
-            // Spawn the process to get access to the PID for process group killing
-            // Use process_group(0) to create a new process group where the shell
-            // is the leader, ensuring all child processes are in the same group.
-            #[cfg(unix)]
-            let child = {
-                Command::new("sh")
-                    .arg("-c")
-                    .arg(&shell_cmd)
-                    .current_dir(&self.config.workdir)
-                    .envs(&rule.envvars)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .process_group(0)
-                    .spawn()
-                    .map_err(|e| OxoFlowError::Execution {
-                        rule: rule.name.clone(),
-                        message: format!("failed to spawn command: {e}"),
-                    })?
-            };
+            // Execute each command sequentially
+            all_commands_succeeded = true;
+            combined_stdout.clear();
+            combined_stderr.clear();
 
-            #[cfg(not(unix))]
-            let child = {
-                Command::new("sh")
-                    .arg("-c")
-                    .arg(&shell_cmd)
-                    .current_dir(&self.config.workdir)
-                    .envs(&rule.envvars)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .map_err(|e| OxoFlowError::Execution {
-                        rule: rule.name.clone(),
-                        message: format!("failed to spawn command: {e}"),
-                    })?
-            };
+            for (cmd_idx, cmd) in resolved_commands.iter().enumerate() {
+                tracing::info!(
+                    rule = %rule.name,
+                    command_index = cmd_idx + 1,
+                    total_commands = resolved_commands.len(),
+                    "executing command"
+                );
 
-            let child_pid = child.id().unwrap_or(0);
-
-            // Use per-rule timeout
-            let cmd_result = if let Some(duration) = timeout {
-                match tokio::time::timeout(duration, child.wait_with_output()).await {
-                    Ok(inner) => inner,
-                    Err(_) => {
-                        // Timeout occurred - kill the process group
-                        if child_pid > 0
-                            && let Err(e) = Self::kill_process_tree(child_pid)
-                        {
-                            tracing::warn!(
-                                rule = %rule.name,
-                                pid = %child_pid,
-                                error = %e,
-                                "failed to kill process group on timeout"
-                            );
-                        }
-                        record.finished_at = Some(Utc::now());
-                        record.status = JobStatus::Failed;
-                        record.stderr = Some(format!(
-                            "command timed out after {duration:?} for rule '{}'",
-                            rule.name
-                        ));
-                        tracing::error!(
-                            rule = %rule.name,
-                            timeout = ?duration,
-                            pid = %child_pid,
-                            "command timed out"
-                        );
-                        // NEW: Release resources even on timeout
-                        self.release_resources(rule).await;
-                        // Clean up temp outputs on failure
-                        self.cleanup_temp_outputs(rule, wildcard_values).await;
-                        if !self.config.keep_going {
-                            return Err(OxoFlowError::Execution {
-                                rule: rule.name.clone(),
-                                message: format!("command timed out after {duration:?}"),
-                            });
-                        }
-                        return Ok(record);
-                    }
-                }
-            } else {
-                child.wait_with_output().await
-            };
-
-            let output = cmd_result.map_err(|e| OxoFlowError::Execution {
-                rule: rule.name.clone(),
-                message: e.to_string(),
-            })?;
-
-            record.finished_at = Some(Utc::now());
-            record.exit_code = output.status.code();
-            record.stdout = Some(String::from_utf8_lossy(&output.stdout).to_string());
-            record.stderr = Some(String::from_utf8_lossy(&output.stderr).to_string());
-
-            if output.status.success() {
-                record.status = JobStatus::Success;
-                tracing::info!(rule = %rule.name, "completed successfully");
-
-                // NEW: Release resources after success
-                self.release_resources(rule).await;
-
-                // Execute on_success hook if defined
-                if let Some(ref hook_cmd) = rule.on_success {
-                    tracing::info!(rule = %rule.name, hook = %hook_cmd, "executing on_success hook");
-                    let hook_result = Command::new("sh")
+                // Spawn the process to get access to the PID for process group killing
+                #[cfg(unix)]
+                let child = {
+                    Command::new("sh")
                         .arg("-c")
-                        .arg(hook_cmd)
+                        .arg(cmd)
                         .current_dir(&self.config.workdir)
                         .envs(&rule.envvars)
-                        .output()
-                        .await;
-                    if let Ok(hook_output) = hook_result
-                        && !hook_output.status.success()
-                    {
-                        tracing::warn!(
-                            rule = %rule.name,
-                            hook = %hook_cmd,
-                            code = %hook_output.status.code().unwrap_or(-1),
-                            "on_success hook failed"
-                        );
-                    }
-                }
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped())
+                        .process_group(0)
+                        .spawn()
+                        .map_err(|e| OxoFlowError::Execution {
+                            rule: rule.name.clone(),
+                            message: format!("failed to spawn command: {e}"),
+                        })?
+                };
 
-                if !self.config.dry_run {
-                    let missing = validate_outputs(rule, &self.config.workdir, wildcard_values);
-                    for path in &missing {
-                        tracing::warn!(
-                            rule = %rule.name,
-                            path = %path,
-                            "expected output file not found after execution"
-                        );
-                    }
-                }
+                #[cfg(not(unix))]
+                let child = {
+                    Command::new("sh")
+                        .arg("-c")
+                        .arg(cmd)
+                        .current_dir(&self.config.workdir)
+                        .envs(&rule.envvars)
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped())
+                        .spawn()
+                        .map_err(|e| OxoFlowError::Execution {
+                            rule: rule.name.clone(),
+                            message: format!("failed to spawn command: {e}"),
+                        })?
+                };
 
-                return Ok(record);
+                let child_pid = child.id().unwrap_or(0);
+
+                // Use per-rule timeout
+                let cmd_result = if let Some(duration) = timeout {
+                    match tokio::time::timeout(duration, child.wait_with_output()).await {
+                        Ok(inner) => inner,
+                        Err(_) => {
+                            // Timeout occurred - kill the process group
+                            if child_pid > 0
+                                && let Err(e) = Self::kill_process_tree(child_pid)
+                            {
+                                tracing::warn!(
+                                    rule = %rule.name,
+                                    pid = %child_pid,
+                                    error = %e,
+                                    "failed to kill process group on timeout"
+                                );
+                            }
+                            record.finished_at = Some(Utc::now());
+                            record.status = JobStatus::Failed;
+                            record.stderr = Some(format!(
+                                "command timed out after {duration:?} for rule '{}'",
+                                rule.name
+                            ));
+                            tracing::error!(
+                                rule = %rule.name,
+                                timeout = ?duration,
+                                pid = %child_pid,
+                                command = %cmd,
+                                "command timed out"
+                            );
+                            // Release resources even on timeout
+                            self.release_resources(rule).await;
+                            // Clean up temp outputs on failure
+                            self.cleanup_temp_outputs(rule, wildcard_values).await;
+                            if !self.config.keep_going {
+                                return Err(OxoFlowError::Execution {
+                                    rule: rule.name.clone(),
+                                    message: format!("command timed out after {duration:?}"),
+                                });
+                            }
+                            return Ok(record);
+                        }
+                    }
+                } else {
+                    child.wait_with_output().await
+                };
+
+                let output = cmd_result.map_err(|e| OxoFlowError::Execution {
+                    rule: rule.name.clone(),
+                    message: e.to_string(),
+                })?;
+
+                // Accumulate stdout/stderr
+                combined_stdout.push_str(&String::from_utf8_lossy(&output.stdout));
+                combined_stderr.push_str(&String::from_utf8_lossy(&output.stderr));
+                last_exit_code = output.status.code();
+
+                if !output.status.success() {
+                    all_commands_succeeded = false;
+                    let code = output.status.code().unwrap_or(-1);
+                    tracing::warn!(
+                        rule = %rule.name,
+                        command_index = cmd_idx + 1,
+                        code = %code,
+                        "command failed"
+                    );
+                    // Break out of command loop on failure (don't execute remaining commands)
+                    break;
+                }
             }
 
-            // Command failed — retry if attempts remain
-            let code = output.status.code().unwrap_or(-1);
+            // Check if all commands succeeded
+            if all_commands_succeeded {
+                break;  // Exit retry loop on success
+            }
+
+            // All commands failed — retry if attempts remain
             if attempt + 1 < max_attempts {
                 tracing::warn!(
                     rule = %rule.name,
-                    code = %code,
+                    code = ?last_exit_code,
                     attempt = attempt + 1,
                     max_attempts = max_attempts,
-                    "command failed, will retry"
+                    "commands failed, will retry"
                 );
-                // Continue to next iteration to retry the command
+                // Continue to next iteration to retry all commands
                 continue;
-            } else {
-                record.status = JobStatus::Failed;
-                // NEW: Release resources after final failure
-                self.release_resources(rule).await;
-                // Clean up temp outputs on failure
-                self.cleanup_temp_outputs(rule, wildcard_values).await;
-                tracing::error!(rule = %rule.name, code = %code, "failed");
+            }
+        }
 
-                // Execute on_failure hook if defined (after all retries exhausted)
-                if let Some(ref hook_cmd) = rule.on_failure {
-                    tracing::info!(rule = %rule.name, hook = %hook_cmd, "executing on_failure hook");
-                    let hook_result = Command::new("sh")
-                        .arg("-c")
-                        .arg(hook_cmd)
-                        .current_dir(&self.config.workdir)
-                        .envs(&rule.envvars)
-                        .output()
-                        .await;
-                    if let Ok(hook_output) = hook_result
-                        && !hook_output.status.success()
-                    {
-                        tracing::warn!(
-                            rule = %rule.name,
-                            hook = %hook_cmd,
-                            code = %hook_output.status.code().unwrap_or(-1),
-                            "on_failure hook failed"
-                        );
-                    }
-                }
+        record.finished_at = Some(Utc::now());
+        record.exit_code = last_exit_code;
+        record.stdout = Some(combined_stdout);
+        record.stderr = Some(combined_stderr);
 
-                if !self.config.keep_going {
-                    return Err(OxoFlowError::TaskFailed {
-                        rule: rule.name.clone(),
-                        code,
-                    });
+        if all_commands_succeeded {
+            record.status = JobStatus::Success;
+            tracing::info!(rule = %rule.name, "completed successfully");
+
+            // Release resources after success
+            self.release_resources(rule).await;
+
+            // Execute on_success hook if defined
+            if let Some(ref hook_cmd) = rule.on_success {
+                tracing::info!(rule = %rule.name, hook = %hook_cmd, "executing on_success hook");
+                let hook_result = Command::new("sh")
+                    .arg("-c")
+                    .arg(hook_cmd)
+                    .current_dir(&self.config.workdir)
+                    .envs(&rule.envvars)
+                    .output()
+                    .await;
+                if let Ok(hook_output) = hook_result
+                    && !hook_output.status.success()
+                {
+                    tracing::warn!(
+                        rule = %rule.name,
+                        hook = %hook_cmd,
+                        code = %hook_output.status.code().unwrap_or(-1),
+                        "on_success hook failed"
+                    );
                 }
             }
+
+            if !self.config.dry_run {
+                let missing = validate_outputs(rule, &self.config.workdir, wildcard_values);
+                for path in &missing {
+                    tracing::warn!(
+                        rule = %rule.name,
+                        path = %path,
+                        "expected output file not found after execution"
+                    );
+                }
+            }
+
+            return Ok(record);
+        }
+
+        // Commands failed after all retries
+        let code = last_exit_code.unwrap_or(-1);
+        record.status = JobStatus::Failed;
+        // Release resources after final failure
+        self.release_resources(rule).await;
+        // Clean up temp outputs on failure
+        self.cleanup_temp_outputs(rule, wildcard_values).await;
+        tracing::error!(rule = %rule.name, code = %code, "failed");
+
+        // Execute on_failure hook if defined (after all retries exhausted)
+        if let Some(ref hook_cmd) = rule.on_failure {
+            tracing::info!(rule = %rule.name, hook = %hook_cmd, "executing on_failure hook");
+            let hook_result = Command::new("sh")
+                .arg("-c")
+                .arg(hook_cmd)
+                .current_dir(&self.config.workdir)
+                .envs(&rule.envvars)
+                .output()
+                .await;
+            if let Ok(hook_output) = hook_result
+                && !hook_output.status.success()
+            {
+                tracing::warn!(
+                    rule = %rule.name,
+                    hook = %hook_cmd,
+                    code = %hook_output.status.code().unwrap_or(-1),
+                    "on_failure hook failed"
+                );
+            }
+        }
+
+        if !self.config.keep_going {
+            return Err(OxoFlowError::TaskFailed {
+                rule: rule.name.clone(),
+                code,
+            });
         }
 
         // Ensure resources are released if we exit the loop without success
@@ -3430,6 +3592,7 @@ mod tests {
             resource_groups: HashMap::new(),
             skip_env_setup: true,
             cache_dir: None,
+            interpreter_map: HashMap::new(),
         };
 
         let executor = LocalExecutor::new(config);

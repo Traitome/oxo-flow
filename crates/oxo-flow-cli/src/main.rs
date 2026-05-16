@@ -633,6 +633,7 @@ async fn main() -> Result<()> {
                     .collect(),
                 skip_env_setup,
                 cache_dir,
+                interpreter_map: config.workflow.interpreter_map.clone(),
             };
 
             let executor = LocalExecutor::new(exec_config);
