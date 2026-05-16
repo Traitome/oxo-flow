@@ -103,6 +103,58 @@ pub struct WorkflowMeta {
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub interpreter_map: HashMap<String, String>,
+
+    /// Path to an external file containing experiment-control pairs.
+    ///
+    /// Supports TSV, CSV, and JSON formats. Useful for large cohort studies
+    /// with hundreds or thousands of sample pairs.
+    ///
+    /// # File format
+    ///
+    /// **TSV/CSV** (tab or comma separated):
+    /// ```text
+    /// pair_id    experiment    control    experiment_type
+    /// CASE_001    EXP_01    CTRL_01    lung_adenocarcinoma
+    /// CASE_002    EXP_02    CTRL_02    colorectal
+    /// ```
+    ///
+    /// **JSON**:
+    /// ```json
+    /// [
+    ///   {"pair_id": "CASE_001", "experiment": "EXP_01", "control": "CTRL_01"},
+    ///   {"pair_id": "CASE_002", "experiment": "EXP_02", "control": "CTRL_02"}
+    /// ]
+    /// ```
+    ///
+    /// Inline `[[pairs]]` and `pairs_file` can be used together; entries from
+    /// both sources are merged.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pairs_file: Option<String>,
+
+    /// Path to an external file containing sample groups.
+    ///
+    /// Supports TSV, CSV, and JSON formats.
+    ///
+    /// # File format
+    ///
+    /// **TSV/CSV**:
+    /// ```text
+    /// name    samples
+    /// control    CTRL_001,CTRL_002,CTRL_003
+    /// case    S001,S002,S003
+    /// ```
+    ///
+    /// **JSON**:
+    /// ```json
+    /// [
+    ///   {"name": "control", "samples": ["CTRL_001", "CTRL_002"]},
+    ///   {"name": "case", "samples": ["S001", "S002"]}
+    /// ]
+    /// ```
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_groups_file: Option<String>,
 }
 
 fn default_version() -> String {
@@ -355,6 +407,133 @@ pub struct ExperimentControlPair {
 /// Backward-compatible alias; prefer [`ExperimentControlPair`].
 pub type TumorNormalPair = ExperimentControlPair;
 
+impl ExperimentControlPair {
+    /// Load pairs from a TSV, CSV, or JSON file.
+    ///
+    /// # File format
+    ///
+    /// **TSV** (tab-separated, header required):
+    /// ```text
+    /// pair_id    experiment    control    experiment_type
+    /// CASE_001    EXP_01    CTRL_01    lung_adenocarcinoma
+    /// CASE_002    EXP_02    CTRL_02    colorectal
+    /// ```
+    ///
+    /// **CSV** (comma-separated):
+    /// ```text
+    /// pair_id,experiment,control,experiment_type
+    /// CASE_001,EXP_01,CTRL_01,lung_adenocarcinoma
+    /// ```
+    ///
+    /// **JSON**:
+    /// ```json
+    /// [
+    ///   {"pair_id": "CASE_001", "experiment": "EXP_01", "control": "CTRL_01"},
+    ///   {"pair_id": "CASE_002", "experiment": "EXP_02", "control": "CTRL_02"}
+    /// ]
+    /// ```
+    pub fn load_from_file(path: &Path) -> Result<Vec<Self>> {
+        let content = std::fs::read_to_string(path).map_err(|e| OxoFlowError::Parse {
+            path: path.to_path_buf(),
+            message: format!("failed to read pairs file: {}", e),
+        })?;
+
+        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+
+        match extension {
+            "json" => Self::parse_json(&content, path),
+            "csv" => Self::parse_csv(&content, path),
+            "tsv" | "txt" | "" => Self::parse_tsv(&content, path),
+            _ => Err(OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: format!("unsupported pairs file format: {}", extension),
+            }),
+        }
+    }
+
+    fn parse_json(content: &str, path: &Path) -> Result<Vec<Self>> {
+        serde_json::from_str(content).map_err(|e| OxoFlowError::Parse {
+            path: path.to_path_buf(),
+            message: format!("invalid JSON pairs file: {}", e),
+        })
+    }
+
+    fn parse_csv(content: &str, path: &Path) -> Result<Vec<Self>> {
+        Self::parse_delimited(content, ',', path)
+    }
+
+    fn parse_tsv(content: &str, path: &Path) -> Result<Vec<Self>> {
+        Self::parse_delimited(content, '\t', path)
+    }
+
+    fn parse_delimited(content: &str, delimiter: char, path: &Path) -> Result<Vec<Self>> {
+        let mut pairs = Vec::new();
+        let mut lines = content.lines();
+
+        // Parse header
+        let header_line = lines.next().ok_or_else(|| OxoFlowError::Parse {
+            path: path.to_path_buf(),
+            message: "pairs file is empty".to_string(),
+        })?;
+
+        let headers: Vec<&str> = header_line.split(delimiter).collect();
+        let col_index: HashMap<&str, usize> = headers
+            .iter()
+            .enumerate()
+            .map(|(i, h)| (h.trim(), i))
+            .collect();
+
+        // Required columns
+        let pair_id_col = col_index
+            .get("pair_id")
+            .ok_or_else(|| OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: "pairs file missing 'pair_id' column".to_string(),
+            })?;
+        let experiment_col = col_index
+            .get("experiment")
+            .ok_or_else(|| OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: "pairs file missing 'experiment' column (or 'tumor')".to_string(),
+            })?;
+        let control_col = col_index
+            .get("control")
+            .ok_or_else(|| OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: "pairs file missing 'control' column (or 'normal')".to_string(),
+            })?;
+
+        // Optional columns
+        let experiment_type_col = col_index
+            .get("experiment_type")
+            .or(col_index.get("tumor_type"));
+
+        // Parse data rows
+        for line in lines {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            let fields: Vec<&str> = line.split(delimiter).collect();
+            if fields.len() < headers.len() {
+                continue;
+            }
+
+            let pair = Self {
+                pair_id: fields[*pair_id_col].trim().to_string(),
+                experiment: fields[*experiment_col].trim().to_string(),
+                control: fields[*control_col].trim().to_string(),
+                experiment_type: experiment_type_col.map(|i| fields[*i].trim().to_string()),
+                metadata: HashMap::new(),
+            };
+            pairs.push(pair);
+        }
+
+        Ok(pairs)
+    }
+}
+
 /// A named group of samples for cohort-level analysis.
 ///
 /// Rules containing `{group}` or `{sample}` wildcards are expanded for every
@@ -383,6 +562,116 @@ pub struct SampleGroup {
     /// Arbitrary key-value metadata for the group; each key is a wildcard.
     #[serde(default)]
     pub metadata: HashMap<String, String>,
+}
+
+impl SampleGroup {
+    /// Load sample groups from a TSV, CSV, or JSON file.
+    ///
+    /// # File format
+    ///
+    /// **TSV**:
+    /// ```text
+    /// name    samples
+    /// control    CTRL_001,CTRL_002,CTRL_003
+    /// case    S001,S002,S003
+    /// ```
+    ///
+    /// **JSON**:
+    /// ```json
+    /// [
+    ///   {"name": "control", "samples": ["CTRL_001", "CTRL_002"]},
+    ///   {"name": "case", "samples": ["S001", "S002"]}
+    /// ]
+    /// ```
+    pub fn load_from_file(path: &Path) -> Result<Vec<Self>> {
+        let content = std::fs::read_to_string(path).map_err(|e| OxoFlowError::Parse {
+            path: path.to_path_buf(),
+            message: format!("failed to read sample_groups file: {}", e),
+        })?;
+
+        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+
+        match extension {
+            "json" => Self::parse_json(&content, path),
+            "csv" => Self::parse_csv(&content, path),
+            "tsv" | "txt" | "" => Self::parse_tsv(&content, path),
+            _ => Err(OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: format!("unsupported sample_groups file format: {}", extension),
+            }),
+        }
+    }
+
+    fn parse_json(content: &str, path: &Path) -> Result<Vec<Self>> {
+        serde_json::from_str(content).map_err(|e| OxoFlowError::Parse {
+            path: path.to_path_buf(),
+            message: format!("invalid JSON sample_groups file: {}", e),
+        })
+    }
+
+    fn parse_csv(content: &str, path: &Path) -> Result<Vec<Self>> {
+        Self::parse_delimited(content, ',', path)
+    }
+
+    fn parse_tsv(content: &str, path: &Path) -> Result<Vec<Self>> {
+        Self::parse_delimited(content, '\t', path)
+    }
+
+    fn parse_delimited(content: &str, delimiter: char, path: &Path) -> Result<Vec<Self>> {
+        let mut groups = Vec::new();
+        let mut lines = content.lines();
+
+        let header_line = lines.next().ok_or_else(|| OxoFlowError::Parse {
+            path: path.to_path_buf(),
+            message: "sample_groups file is empty".to_string(),
+        })?;
+
+        let headers: Vec<&str> = header_line.split(delimiter).collect();
+        let col_index: HashMap<&str, usize> = headers
+            .iter()
+            .enumerate()
+            .map(|(i, h)| (h.trim(), i))
+            .collect();
+
+        let name_col = col_index.get("name").ok_or_else(|| OxoFlowError::Parse {
+            path: path.to_path_buf(),
+            message: "sample_groups file missing 'name' column".to_string(),
+        })?;
+        let samples_col = col_index
+            .get("samples")
+            .ok_or_else(|| OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: "sample_groups file missing 'samples' column".to_string(),
+            })?;
+
+        for line in lines {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            let fields: Vec<&str> = line.split(delimiter).collect();
+            if fields.len() < headers.len() {
+                continue;
+            }
+
+            // Samples can be comma-separated within the field
+            let samples: Vec<String> = fields[*samples_col]
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            let group = Self {
+                name: fields[*name_col].trim().to_string(),
+                samples,
+                metadata: HashMap::new(),
+            };
+            groups.push(group);
+        }
+
+        Ok(groups)
+    }
 }
 
 /// Resource group configuration for limiting shared resources like API rate
@@ -802,6 +1091,26 @@ impl WorkflowConfig {
         // Resolve modular includes
         if let Some(parent) = path.parent() {
             config.resolve_includes(parent)?;
+
+            // Load pairs from external file if specified
+            if let Some(ref pairs_file) = config.workflow.pairs_file {
+                let pairs_path = parent.join(pairs_file);
+                let file_pairs = ExperimentControlPair::load_from_file(&pairs_path)?;
+                let count = file_pairs.len();
+                // Merge with inline pairs
+                config.pairs.extend(file_pairs);
+                tracing::info!("Loaded {} pairs from {}", count, pairs_file);
+            }
+
+            // Load sample_groups from external file if specified
+            if let Some(ref groups_file) = config.workflow.sample_groups_file {
+                let groups_path = parent.join(groups_file);
+                let file_groups = SampleGroup::load_from_file(&groups_path)?;
+                let count = file_groups.len();
+                // Merge with inline groups
+                config.sample_groups.extend(file_groups);
+                tracing::info!("Loaded {} sample groups from {}", count, groups_file);
+            }
         }
 
         config.validate()?;

@@ -644,12 +644,51 @@ control    = "CTRL_02"
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `pair_id` | String | **Yes** | Unique identifier for this pair |
-| `experiment` | String | **Yes** | Experiment sample name |
-| `control` | String | **Yes** | Matched control sample name |
+| `experiment` | String | **Yes** | Experiment sample name (alias: `tumor`) |
+| `control` | String | **Yes** | Matched control sample name (alias: `normal`) |
+| `experiment_type` | String | No | Optional cohort label (alias: `tumor_type`) |
 
 Any rule that references `{experiment}`, `{control}`, or `{pair_id}` in its `input`, `output`, or `shell` fields is **automatically expanded** into one concrete rule instance per pair.  Rules that do not reference any pair wildcard are kept as-is.
 
 **Expanded rule naming:** `{rule_name}_{pair_id}` (e.g., `mutect2_CASE_001`).
+
+### Loading pairs from external file
+
+For large cohort studies with hundreds or thousands of pairs, use `pairs_file` in `[workflow]`:
+
+```toml
+[workflow]
+name = "somatic-calling"
+pairs_file = "metadata/pairs.tsv"  # or .csv, .json
+```
+
+**TSV format** (tab-separated, header required):
+
+```text
+pair_id    experiment    control    experiment_type
+CASE_001   EXP_01        CTRL_01    lung_adenocarcinoma
+CASE_002   EXP_02        CTRL_02    colorectal
+CASE_003   EXP_03        CTRL_03    breast_cancer
+```
+
+**CSV format** (comma-separated):
+
+```text
+pair_id,experiment,control,experiment_type
+CASE_001,EXP_01,CTRL_01,lung_adenocarcinoma
+CASE_002,EXP_02,CTRL_02,colorectal
+```
+
+**JSON format**:
+
+```json
+[
+  {"pair_id": "CASE_001", "experiment": "EXP_01", "control": "CTRL_01"},
+  {"pair_id": "CASE_002", "experiment": "EXP_02", "control": "CTRL_02"}
+]
+```
+
+Inline `[[pairs]]` and `pairs_file` can be used together; entries from both sources are merged.
 
 ### Example
 
@@ -695,6 +734,34 @@ samples = ["CASE_001", "CASE_002"]
 Any rule that references `{sample}` or `{group}` is expanded once per `(group, sample)` pair across all groups.
 
 **Expanded rule naming:** `{rule_name}_{group}_{sample}` (e.g., `align_control_CTRL_001`).
+
+### Loading groups from external file
+
+For large cohorts, use `sample_groups_file` in `[workflow]`:
+
+```toml
+[workflow]
+name = "cohort-analysis"
+sample_groups_file = "metadata/groups.tsv"  # or .csv, .json
+```
+
+**TSV format** (samples can be comma-separated within the field):
+
+```text
+name       samples
+control    CTRL_001,CTRL_002,CTRL_003
+case       CASE_001,CASE_002,CASE_003
+treatment  TX_001,TX_002
+```
+
+**JSON format**:
+
+```json
+[
+  {"name": "control", "samples": ["CTRL_001", "CTRL_002"]},
+  {"name": "case", "samples": ["CASE_001", "CASE_002"]}
+]
+```
 
 ### Example
 
