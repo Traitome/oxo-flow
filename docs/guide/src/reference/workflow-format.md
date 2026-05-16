@@ -380,6 +380,127 @@ No explicit dependency declaration is needed.
 
 ---
 
+## `transform` — Unified Scatter-Gather Operator
+
+The `transform` operator unifies split → map → combine patterns into a single rule declaration, similar to dplyr's `group_by() %>% summarize()` or pandas' `groupby().apply()`.
+
+### Structure
+
+```toml
+[[rules]]
+name = "variant_calling"
+input = ["aligned/sample.bam"]
+output = ["variants/sample.vcf.gz"]
+
+[rules.transform.split]
+by = "chr"
+values_from = "config.chromosomes"
+
+[rules.transform]
+map = "gatk HaplotypeCaller -I {input} -L {chr} -O .oxo-flow/chunks/{chr}.g.vcf.gz"
+cleanup = true
+
+[rules.transform.combine]
+shell = "gatk GatherVcfs {chunks} -O {output}"
+```
+
+### Split Configuration
+
+| Field | Type | Description |
+|---|---|---|
+| `by` | String | **Required**. Variable name for splitting (e.g., `"chr"`, `"sample"`) |
+| `values` | Array | Direct list of split values |
+| `values_from` | String | Reference to config variable (e.g., `"config.chromosomes"`) |
+| `n` | String | Number of chunks (generates indices 0, 1, ..., n-1) |
+| `glob` | String | Glob pattern to find split values from files |
+
+Priority: `values` → `values_from` → `n` → `glob`
+
+### Combine Configuration
+
+| Field | Type | Description |
+|---|---|---|
+| `shell` | String | Shell command to combine chunks |
+| `aggregate` | Boolean | Enable automatic aggregation |
+| `method` | String | Aggregation method: `"concat"` or `"json_merge"` |
+| `header` | String | Header line for concat aggregation |
+
+### Built-in Variables
+
+| Variable | Expands to |
+|---|---|
+| `{split_var}` | Current split value (e.g., `{chr}` → `"chr1"`) |
+| `{chunks}` | Space-separated list of all chunk outputs |
+| `{input}` | Original rule input (in combine) |
+| `{output}` | Original rule output (in combine) |
+
+### Modes
+
+**Mode A: Split → Map → Combine**
+
+Classic scatter-gather with explicit combine command:
+
+```toml
+[rules.transform.split]
+by = "chr"
+values_from = "config.chromosomes"
+
+[rules.transform]
+map = "gatk HaplotypeCaller -I {input} -L {chr} -O .oxo-flow/chunks/{chr}.g.vcf.gz"
+
+[rules.transform.combine]
+shell = "gatk GatherVcfs {chunks} -O {output}"
+```
+
+**Mode B: Split → Map → Aggregate**
+
+Automatic aggregation (concat or json_merge):
+
+```toml
+[rules.transform.split]
+by = "chunk"
+n = "5"
+
+[rules.transform]
+map = "process {input} > .oxo-flow/chunks/{chunk}.txt"
+
+[rules.transform.combine]
+aggregate = true
+method = "concat"
+```
+
+**Mode C: Split → Map (No Combine)**
+
+Parallel processing without merging — each split produces independent output:
+
+```toml
+[rules.transform.split]
+by = "chr"
+values_from = "config.chromosomes"
+
+[rules.transform]
+map = "samtools flagstat {input} > qc/{chr}.flagstat.txt"
+# No combine section
+```
+
+### Cleanup
+
+When `cleanup = true`, chunk files are automatically cleaned up after combine succeeds:
+
+```toml
+[rules.transform]
+cleanup = true
+```
+
+### Expanded Rule Naming
+
+Transform rules expand into:
+
+- Map rules: `{rule_name}_{split_value}` (e.g., `variant_calling_chr1`)
+- Combine rule: `{rule_name}_combine` (e.g., `variant_calling_combine`)
+
+---
+
 ## Multi-line Strings
 
 Use triple quotes for multi-line shell commands:

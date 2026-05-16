@@ -1,0 +1,53 @@
+# 10 — Transform Operator Demo
+# Demonstrates the unified split → map → combine pattern in a single rule.
+# Similar to dplyr's group_by() %>% summarize() or pandas' groupby().apply()
+
+[workflow]
+name = "transform-demo"
+version = "1.0.0"
+description = "Demonstrates the transform operator for scatter-gather patterns"
+author = "oxo-flow examples"
+
+[config]
+chromosomes = ["chr1", "chr2", "chr3", "chr4", "chr5"]
+reference = "/data/references/GRCh38/genome.fa"
+
+[defaults]
+threads = 4
+memory = "8G"
+
+# ── Mode A: Split → Map → Combine ──────────────────────────────────────────────
+# Classic scatter-gather: split by chromosome, process each, merge results
+
+[[rules]]
+name = "variant_calling"
+input = ["aligned/sample.bam"]
+output = ["variants/sample.vcf.gz"]
+threads = 8
+
+[rules.transform.split]
+by = "chr"
+values_from = "config.chromosomes"
+
+[rules.transform]
+map = "gatk HaplotypeCaller -R {config.reference} -I {input} -L {chr} -O .oxo-flow/chunks/{chr}.g.vcf.gz -ERC GVCF"
+cleanup = true
+
+[rules.transform.combine]
+shell = "gatk GatherVcfs .oxo-flow/chunks/*.g.vcf.gz -O {output}"
+
+# ── Mode B: Split → Map (no combine) ────────────────────────────────────────────
+# Parallel processing without merging - each split produces independent output
+
+[[rules]]
+name = "parallel_qc"
+input = ["aligned/sample.bam"]
+threads = 4
+
+[rules.transform.split]
+by = "chr"
+values_from = "config.chromosomes"
+
+[rules.transform]
+map = "samtools flagstat {input} > qc/{chr}.flagstat.txt"
+# No combine - produces separate qc/chr1.flagstat.txt, qc/chr2.flagstat.txt, etc.

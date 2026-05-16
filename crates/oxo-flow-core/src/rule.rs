@@ -252,6 +252,80 @@ pub struct ScatterConfig {
     pub gather: Option<String>,
 }
 
+/// Transform operator: unified scatter-gather in a single rule.
+///
+/// Combines split → map → combine into one declarative unit,
+/// similar to dplyr's `group_by() %>% summarize()` or pandas' `groupby().apply()`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TransformConfig {
+    /// How to split/partition the data.
+    pub split: SplitConfig,
+
+    /// Processing command for each partition (map phase).
+    pub map: String,
+
+    /// How to combine/aggregate results (optional).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub combine: Option<CombineConfig>,
+
+    /// Delete temporary chunk files after combine (default: false).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "is_false")]
+    pub cleanup: bool,
+}
+
+/// Split configuration for partitioning data.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SplitConfig {
+    /// Partition variable name (e.g., "chr", "sample", "chunk").
+    pub by: String,
+
+    /// Direct list of values to split over.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub values: Vec<String>,
+
+    /// Reference to a config variable for values (e.g., "config.chromosomes").
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values_from: Option<String>,
+
+    /// Split into N chunks (numeric split).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub n: Option<String>,
+
+    /// Split by file glob pattern.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub glob: Option<String>,
+}
+
+/// Combine configuration for merging/aggregating results.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CombineConfig {
+    /// Shell command for combining (simple form).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shell: Option<String>,
+
+    /// Whether to aggregate results (e.g., concat, json_merge).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "is_false")]
+    pub aggregate: bool,
+
+    /// Aggregation method: "concat", "json_merge".
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+
+    /// Header line for aggregated output (e.g., "sample,coverage").
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+}
+
 /// Configuration for expanding input file patterns via a Cartesian product.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExpandConfig {
@@ -369,6 +443,14 @@ pub struct Rule {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scatter: Option<ScatterConfig>,
+
+    /// Transform operator: unified scatter-gather in a single rule.
+    ///
+    /// Combines split → map → combine phases, similar to dplyr's
+    /// `group_by() %>% summarize()` or pandas' `groupby().apply()`.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transform: Option<TransformConfig>,
 
     /// Temporary output files that should be cleaned up after downstream
     /// rules complete.
@@ -569,10 +651,10 @@ impl Rule {
                 suggestion: None,
             });
         }
-        if !self.output.is_empty() && self.shell.is_none() && self.script.is_none() {
+        if !self.output.is_empty() && self.shell.is_none() && self.script.is_none() && self.transform.is_none() {
             return Err(crate::error::OxoFlowError::Validation {
                 message: format!(
-                    "rule '{}' has outputs but no shell command or script",
+                    "rule '{}' has outputs but no shell command, script, or transform",
                     self.name
                 ),
                 rule: Some(self.name.clone()),
@@ -1097,8 +1179,9 @@ mod tests {
         rule.output = vec!["out.txt".to_string()];
         rule.shell = None;
         rule.script = None;
+        rule.transform = None;
         let err = rule.validate().unwrap_err().to_string();
-        assert!(err.contains("no shell command or script"));
+        assert!(err.contains("no shell command, script, or transform"));
     }
 
     #[test]

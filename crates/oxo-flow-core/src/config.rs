@@ -813,12 +813,12 @@ impl WorkflowConfig {
             }
         }
 
-        // Ensure each rule has either shell or script
+        // Ensure each rule has either shell, script, or transform
         for rule in &self.rules {
-            if rule.shell.is_none() && rule.script.is_none() && !rule.output.is_empty() {
+            if rule.shell.is_none() && rule.script.is_none() && rule.transform.is_none() && !rule.output.is_empty() {
                 return Err(OxoFlowError::Config {
                     message: format!(
-                        "rule '{}' has outputs but no shell command or script",
+                        "rule '{}' has outputs but no shell command, script, or transform",
                         rule.name
                     ),
                 });
@@ -1166,6 +1166,131 @@ impl WorkflowConfig {
                         .or_default()
                         .extend(scatter_outputs);
                 }
+            } else if let Some(ref transform) = rule.transform {
+                // Handle transform operator: split -> map -> combine
+                let split_values = self.resolve_split_values(&transform.split)?;
+
+                // Validate that split values are not empty
+                if split_values.is_empty() {
+                    return Err(OxoFlowError::Validation {
+                        message: format!(
+                            "transform rule '{}' has no split values",
+                            rule.name
+                        ),
+                        rule: Some(rule.name.clone()),
+                        suggestion: Some(
+                            "provide values, values_from, n, or glob in split config".to_string(),
+                        ),
+                    });
+                }
+
+                let split_var = &transform.split.by;
+                let mut all_chunk_outputs: Vec<String> = Vec::new();
+
+                // Generate map rules for each split value
+                for value in &split_values {
+                    // Determine chunk output path
+                    let chunk_output = if rule.output.is_empty() {
+                        format!(".oxo-flow/chunks/{split_var}/{value}.out")
+                    } else if rule.output[0].contains(&format!("{{{split_var}}}")) {
+                        // Replace only {split_var} in output
+                        rule.output[0].replace(&format!("{{{split_var}}}"), value)
+                    } else {
+                        let base = &rule.output[0];
+                        let ext = base.rsplit('.').next().unwrap_or("out");
+                        format!(".oxo-flow/chunks/{split_var}/{value}.{ext}")
+                    };
+
+                    all_chunk_outputs.push(chunk_output.clone());
+
+                    let map_rule_name = format!("{}_{}", rule.name, value);
+                    // Replace only {split_var} in map shell, keep other placeholders for execution
+                    let map_shell = transform.map.replace(&format!("{{{split_var}}}"), value);
+
+                    let mut map_rule = Rule {
+                        name: map_rule_name,
+                        input: rule.input.clone(),
+                        output: vec![chunk_output],
+                        shell: Some(map_shell),
+                        threads: rule.threads,
+                        memory: rule.memory.clone(),
+                        resources: rule.resources.clone(),
+                        environment: rule.environment.clone(),
+                        retries: rule.retries,
+                        ..Default::default()
+                    };
+
+                    #[allow(deprecated)]
+                    {
+                        map_rule.threads = rule.threads;
+                        map_rule.memory = rule.memory.clone();
+                    }
+
+                    final_rules.push(map_rule);
+                }
+
+                // Generate combine rule if specified
+                if let Some(ref combine) = transform.combine {
+                    let combine_rule_name = format!("{}_combine", rule.name);
+                    let combine_shell = if let Some(ref shell) = combine.shell {
+                        let chunks_str = all_chunk_outputs.join(" ");
+                        shell.replace("{chunks}", &chunks_str)
+                            .replace("{input}", &chunks_str)
+                            .replace("{output}", &rule.output.join(" "))
+                    } else if combine.aggregate {
+                        let method = combine.method.as_deref().unwrap_or("concat");
+                        let chunks_str = all_chunk_outputs.join(" ");
+                        let output_str = rule.output.join(" ");
+
+                        match method {
+                            "concat" => {
+                                let header = combine.header.as_deref()
+                                    .map(|h| format!("echo '{}' && ", h))
+                                    .unwrap_or_default();
+                                format!("{}cat {} > {}", header, chunks_str, output_str)
+                            }
+                            "json_merge" => {
+                                format!("jq -s 'add' {} > {}", chunks_str, output_str)
+                            }
+                            _ => {
+                                return Err(OxoFlowError::Validation {
+                                    message: format!("unknown aggregation method: {}", method),
+                                    rule: Some(rule.name.clone()),
+                                    suggestion: Some("use 'concat' or 'json_merge'".to_string()),
+                                });
+                            }
+                        }
+                    } else {
+                        return Err(OxoFlowError::Validation {
+                            message: format!(
+                                "transform rule '{}' has combine but no shell or aggregate method",
+                                rule.name
+                            ),
+                            rule: Some(rule.name.clone()),
+                            suggestion: Some("specify combine.shell or combine.aggregate".to_string()),
+                        });
+                    };
+
+                    let mut combine_rule = Rule {
+                        name: combine_rule_name,
+                        input: all_chunk_outputs.clone(),
+                        output: rule.output.clone(),
+                        shell: Some(combine_shell),
+                        threads: rule.threads,
+                        memory: rule.memory.clone(),
+                        resources: rule.resources.clone(),
+                        environment: rule.environment.clone(),
+                        ..Default::default()
+                    };
+
+                    #[allow(deprecated)]
+                    {
+                        combine_rule.threads = rule.threads;
+                        combine_rule.memory = rule.memory.clone();
+                    }
+
+                    final_rules.push(combine_rule);
+                }
             } else {
                 final_rules.push(rule);
             }
@@ -1203,6 +1328,238 @@ impl WorkflowConfig {
 
         self.rules = final_rules;
         Ok(())
+    }
+
+    /// Expand rules with `transform` field into map and combine rules.
+    ///
+    /// The transform operator creates:
+    /// - N map rules (one per split value) that run in parallel
+    /// - One combine rule (if combine is specified) that merges results
+    ///
+    /// This is called automatically during workflow expansion.
+    pub fn expand_transform(&mut self) -> Result<()> {
+        use crate::wildcard::expand_pattern;
+
+        let mut final_rules: Vec<Rule> = Vec::new();
+        let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for rule in &self.rules {
+            if let Some(ref transform) = rule.transform {
+                // Resolve split values
+                let split_values = self.resolve_split_values(&transform.split)?;
+
+                if split_values.is_empty() {
+                    return Err(OxoFlowError::Validation {
+                        message: format!(
+                            "transform rule '{}' has no split values",
+                            rule.name
+                        ),
+                        rule: Some(rule.name.clone()),
+                        suggestion: Some(
+                            "provide values, values_from, n, or glob in split config".to_string(),
+                        ),
+                    });
+                }
+
+                let split_var = &transform.split.by;
+                let mut all_chunk_outputs: Vec<String> = Vec::new();
+
+                // Generate map rules for each split value
+                for value in &split_values {
+                    let mut combo = HashMap::new();
+                    combo.insert(split_var.clone(), value.clone());
+
+                    // Chunk output path: .oxo-flow/chunks/{split_var}/{value}.ext
+                    // or use the pattern in the rule's output if it contains {split_var}
+                    let chunk_output = if rule.output.is_empty() {
+                        // Generate a temp chunk file
+                        format!(".oxo-flow/chunks/{split_var}/{value}.out")
+                    } else if rule.output[0].contains(&format!("{{{split_var}}}")) {
+                        expand_pattern(&rule.output[0], &combo)
+                            .unwrap_or_else(|_| rule.output[0].clone())
+                    } else {
+                        // Append split value to output
+                        let base = &rule.output[0];
+                        let ext = base.rsplit('.').next().unwrap_or("out");
+                        format!(".oxo-flow/chunks/{split_var}/{value}.{ext}")
+                    };
+
+                    all_chunk_outputs.push(chunk_output.clone());
+
+                    // Create the map rule
+                    let map_rule_name = format!("{}_{}", rule.name, value);
+                    if !seen_names.insert(map_rule_name.clone()) {
+                        return Err(OxoFlowError::DuplicateRule { name: map_rule_name });
+                    }
+
+                    let mut map_rule = Rule {
+                        name: map_rule_name,
+                        input: rule.input.clone(),
+                        output: vec![chunk_output],
+                        shell: Some(expand_pattern(&transform.map, &combo)
+                            .unwrap_or_else(|_| transform.map.clone())),
+                        threads: rule.threads,
+                        memory: rule.memory.clone(),
+                        resources: rule.resources.clone(),
+                        environment: rule.environment.clone(),
+                        retries: rule.retries,
+                        ..Default::default()
+                    };
+
+                    // Handle deprecated fields
+                    #[allow(deprecated)]
+                    {
+                        map_rule.threads = rule.threads;
+                        map_rule.memory = rule.memory.clone();
+                    }
+
+                    final_rules.push(map_rule);
+                }
+
+                // Generate combine rule if specified
+                if let Some(ref combine) = transform.combine {
+                    let combine_rule_name = format!("{}_combine", rule.name);
+                    if !seen_names.insert(combine_rule_name.clone()) {
+                        return Err(OxoFlowError::DuplicateRule {
+                            name: combine_rule_name,
+                        });
+                    }
+
+                    // Build combine shell command
+                    let combine_shell = if let Some(ref shell) = combine.shell {
+                        // Replace {chunks} with all chunk outputs
+                        let chunks_str = all_chunk_outputs.join(" ");
+                        shell.replace("{chunks}", &chunks_str)
+                            .replace("{input}", &chunks_str)
+                            .replace("{output}", &rule.output.join(" "))
+                    } else if combine.aggregate {
+                        // Use aggregation method
+                        let method = combine.method.as_deref().unwrap_or("concat");
+                        let chunks_str = all_chunk_outputs.join(" ");
+                        let output_str = rule.output.join(" ");
+
+                        match method {
+                            "concat" => {
+                                let header = combine.header.as_deref().map(|h| format!("echo '{}' && ", h)).unwrap_or_default();
+                                format!("{}cat {} > {}", header, chunks_str, output_str)
+                            }
+                            "json_merge" => {
+                                format!("jq -s 'add' {} > {}", chunks_str, output_str)
+                            }
+                            _ => {
+                                return Err(OxoFlowError::Validation {
+                                    message: format!("unknown aggregation method: {}", method),
+                                    rule: Some(rule.name.clone()),
+                                    suggestion: Some("use 'concat' or 'json_merge'".to_string()),
+                                });
+                            }
+                        }
+                    } else {
+                        // No combine shell specified
+                        return Err(OxoFlowError::Validation {
+                            message: format!(
+                                "transform rule '{}' has combine but no shell or aggregate method",
+                                rule.name
+                            ),
+                            rule: Some(rule.name.clone()),
+                            suggestion: Some("specify combine.shell or combine.aggregate".to_string()),
+                        });
+                    };
+
+                    let mut combine_rule = Rule {
+                        name: combine_rule_name,
+                        input: all_chunk_outputs.clone(),
+                        output: rule.output.clone(),
+                        shell: Some(combine_shell),
+                        threads: rule.threads,
+                        memory: rule.memory.clone(),
+                        resources: rule.resources.clone(),
+                        environment: rule.environment.clone(),
+                        ..Default::default()
+                    };
+
+                    #[allow(deprecated)]
+                    {
+                        combine_rule.threads = rule.threads;
+                        combine_rule.memory = rule.memory.clone();
+                    }
+
+                    final_rules.push(combine_rule);
+                } else if rule.output.is_empty() {
+                    // No combine, no output - each map rule produces its own output
+                    // Already handled above - chunk outputs are individual
+                } else {
+                    // No combine but rule has output - this means each map produces part of output
+                    // Use the rule's output pattern for each map (already set above)
+                }
+            } else {
+                // No transform - keep rule as-is
+                if !seen_names.insert(rule.name.clone()) {
+                    return Err(OxoFlowError::DuplicateRule {
+                        name: rule.name.clone(),
+                    });
+                }
+                final_rules.push(rule.clone());
+            }
+        }
+
+        self.rules = final_rules;
+        Ok(())
+    }
+
+    /// Resolve split values from SplitConfig.
+    fn resolve_split_values(&self, split: &crate::rule::SplitConfig) -> Result<Vec<String>> {
+        // Priority: values > values_from > n > glob
+        if !split.values.is_empty() {
+            return Ok(split.values.clone());
+        }
+
+        if let Some(ref values_from) = split.values_from {
+            if let Some(vals) = self.resolve_config_list(values_from) {
+                return Ok(vals);
+            }
+            return Err(OxoFlowError::Validation {
+                message: format!("cannot resolve split.values_from: {}", values_from),
+                rule: None,
+                suggestion: Some("ensure config variable exists and is an array".to_string()),
+            });
+        }
+
+        if let Some(ref n_str) = split.n {
+            // Resolve n from config or parse as number
+            let n = if n_str.starts_with("config.") {
+                self.resolve_config_list(n_str)
+                    .and_then(|v| v.first().and_then(|s| s.parse::<usize>().ok()))
+                    .unwrap_or(1)
+            } else {
+                n_str.parse::<usize>().unwrap_or(1)
+            };
+            // Generate chunk indices: 0, 1, 2, ..., n-1
+            return Ok((0..n).map(|i| i.to_string()).collect());
+        }
+
+        if let Some(ref glob) = split.glob {
+            // Glob expansion - find matching files
+            let matches: Vec<String> = glob::glob(glob)
+                .map_err(|e| OxoFlowError::Validation {
+                    message: format!("invalid glob pattern: {}", e),
+                    rule: None,
+                    suggestion: None,
+                })?
+                .filter_map(|p| p.ok())
+                .map(|p| p.to_string_lossy().to_string())
+                .collect();
+            if matches.is_empty() {
+                return Err(OxoFlowError::Validation {
+                    message: format!("glob pattern '{}' matched no files", glob),
+                    rule: None,
+                    suggestion: Some("check the glob path and ensure files exist".to_string()),
+                });
+            }
+            return Ok(matches);
+        }
+
+        Ok(Vec::new())
     }
 
     /// Resolve a config variable (e.g., "config.samples") into a list of strings.
@@ -2311,5 +2668,421 @@ mod tests {
         let result = resolve_rule_templates(&mut rules);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("circular"));
+    }
+
+    // ── Transform Operator Tests ───────────────────────────────────────────────
+
+    #[test]
+    fn parse_transform_with_split_by_values() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "parallel_qc"
+            input = ["sample.bam"]
+            threads = 4
+
+            [rules.transform.split]
+            by = "chr"
+            values = ["chr1", "chr2", "chr3"]
+
+            [rules.transform]
+            map = "samtools view -b {input} {chr} > qc/{chr}.bam"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let rule = &config.rules[0];
+        let transform = rule.transform.as_ref().unwrap();
+        assert_eq!(transform.split.by, "chr");
+        assert_eq!(
+            transform.split.values,
+            vec!["chr1".to_string(), "chr2".to_string(), "chr3".to_string()]
+        );
+        assert_eq!(transform.map, "samtools view -b {input} {chr} > qc/{chr}.bam");
+        assert!(transform.combine.is_none());
+    }
+
+    #[test]
+    fn parse_transform_with_values_from() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [config]
+            chromosomes = ["chr1", "chr2"]
+
+            [[rules]]
+            name = "variant_calling"
+            input = ["sample.bam"]
+            output = ["sample.vcf.gz"]
+
+            [rules.transform.split]
+            by = "chr"
+            values_from = "config.chromosomes"
+
+            [rules.transform]
+            map = "call {input} {chr}"
+
+            [rules.transform.combine]
+            shell = "merge {chunks} > {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let rule = &config.rules[0];
+        let transform = rule.transform.as_ref().unwrap();
+        assert_eq!(
+            transform.split.values_from,
+            Some("config.chromosomes".to_string())
+        );
+        let combine = transform.combine.as_ref().unwrap();
+        assert_eq!(combine.shell, Some("merge {chunks} > {output}".to_string()));
+    }
+
+    #[test]
+    fn parse_transform_with_aggregate_combine() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "collect_stats"
+            input = ["data.txt"]
+
+            [rules.transform.split]
+            by = "chunk"
+            n = "5"
+
+            [rules.transform]
+            map = "process {input} > .oxo-flow/chunks/{chunk}.txt"
+
+            [rules.transform.combine]
+            aggregate = true
+            method = "concat"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let rule = &config.rules[0];
+        let transform = rule.transform.as_ref().unwrap();
+        assert_eq!(transform.split.n, Some("5".to_string()));
+        let combine = transform.combine.as_ref().unwrap();
+        assert!(combine.aggregate);
+        assert_eq!(combine.method, Some("concat".to_string()));
+    }
+
+    #[test]
+    fn resolve_split_values_from_config() {
+        let config = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "test"
+
+            [config]
+            chromosomes = ["chr1", "chr2", "chr3"]
+
+            [[rules]]
+            name = "test_rule"
+            shell = "echo test"
+        "#,
+        )
+        .unwrap();
+
+        let split = crate::rule::SplitConfig {
+            by: "chr".to_string(),
+            values: vec![], // empty, use values_from
+            values_from: Some("config.chromosomes".to_string()),
+            n: None,
+            glob: None,
+        };
+
+        let values = config.resolve_split_values(&split).unwrap();
+        assert_eq!(
+            values,
+            vec!["chr1".to_string(), "chr2".to_string(), "chr3".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolve_split_values_direct() {
+        let config = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "test_rule"
+            shell = "echo test"
+        "#,
+        )
+        .unwrap();
+
+        let split = crate::rule::SplitConfig {
+            by: "chr".to_string(),
+            values: vec!["chr1".to_string(), "chr2".to_string()],
+            values_from: None,
+            n: None,
+            glob: None,
+        };
+
+        let values = config.resolve_split_values(&split).unwrap();
+        assert_eq!(values, vec!["chr1".to_string(), "chr2".to_string()]);
+    }
+
+    #[test]
+    fn expand_transform_split_map_combine() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [config]
+            chromosomes = ["chr1", "chr2"]
+
+            [[rules]]
+            name = "variant_calling"
+            input = ["sample.bam"]
+            output = ["sample.vcf.gz"]
+            threads = 8
+
+            [rules.transform.split]
+            by = "chr"
+            values_from = "config.chromosomes"
+
+            [rules.transform]
+            map = "gatk HaplotypeCaller -I {input} -L {chr} -O .oxo-flow/chunks/{chr}.g.vcf.gz"
+
+            [rules.transform.combine]
+            shell = "gatk GatherVcfs {chunks} -O {output}"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+
+        // Should have 2 map rules + 1 combine rule = 3 rules
+        assert_eq!(config.rules.len(), 3);
+
+        // Check map rules
+        let map1 = &config.rules[0];
+        assert!(map1.name.contains("chr1"));
+        assert!(map1.shell.as_ref().unwrap().contains("chr1"));
+
+        let map2 = &config.rules[1];
+        assert!(map2.name.contains("chr2"));
+        assert!(map2.shell.as_ref().unwrap().contains("chr2"));
+
+        // Check combine rule
+        let combine = &config.rules[2];
+        assert!(combine.name.contains("combine"));
+        assert!(combine.shell.as_ref().unwrap().contains("GatherVcfs"));
+    }
+
+    #[test]
+    fn expand_transform_split_map_no_combine() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [config]
+            chromosomes = ["chr1", "chr2", "chr3"]
+
+            [[rules]]
+            name = "parallel_qc"
+            input = ["sample.bam"]
+
+            [rules.transform.split]
+            by = "chr"
+            values_from = "config.chromosomes"
+
+            [rules.transform]
+            map = "samtools flagstat {input} > qc/{chr}.flagstat.txt"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+
+        // Should have 3 map rules (no combine)
+        assert_eq!(config.rules.len(), 3);
+
+        // Each rule should have its own output based on chr
+        for (i, rule) in config.rules.iter().enumerate() {
+            let expected_chr = ["chr1", "chr2", "chr3"][i];
+            assert!(rule.name.contains(expected_chr));
+        }
+    }
+
+    #[test]
+    fn transform_validation_missing_split_values() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "bad_transform"
+            input = ["sample.bam"]
+            output = ["result.txt"]
+
+            [rules.transform.split]
+            by = "chr"
+
+            [rules.transform]
+            map = "process {chr}"
+
+            [rules.transform.combine]
+            shell = "merge"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.apply_defaults();
+        let result = config.expand_wildcards();
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("no split values"));
+    }
+
+    #[test]
+    fn transform_validation_combine_without_shell_or_aggregate() {
+        let toml = r###"
+            [workflow]
+            name = "test"
+
+            [config]
+            chromosomes = ["chr1"]
+
+            [[rules]]
+            name = "bad_combine"
+            input = ["sample.bam"]
+            output = ["result.vcf"]
+
+            [rules.transform.split]
+            by = "chr"
+            values_from = "config.chromosomes"
+
+            [rules.transform]
+            map = "process {chr}"
+
+            [rules.transform.combine]
+            header = "# header without shell"
+        "###;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.apply_defaults();
+        let result = config.expand_wildcards();
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("no shell or aggregate method"));
+    }
+
+    #[test]
+    fn transform_inherits_threads_and_memory() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [defaults]
+            threads = 8
+            memory = "16G"
+
+            [config]
+            chromosomes = ["chr1", "chr2"]
+
+            [[rules]]
+            name = "inherited_transform"
+            input = ["sample.bam"]
+            output = ["result.vcf"]
+
+            [rules.transform.split]
+            by = "chr"
+            values_from = "config.chromosomes"
+
+            [rules.transform]
+            map = "process {chr}"
+
+            [rules.transform.combine]
+            shell = "merge"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+
+        // All expanded rules should inherit defaults
+        for rule in &config.rules {
+            assert_eq!(rule.threads, Some(8));
+            assert_eq!(rule.memory.as_deref(), Some("16G"));
+        }
+    }
+
+    #[test]
+    fn transform_with_aggregate_concat() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [config]
+            chunks = ["part1", "part2"]
+
+            [[rules]]
+            name = "aggregate_test"
+            input = ["data.txt"]
+            output = ["combined.txt"]
+
+            [rules.transform.split]
+            by = "part"
+            values_from = "config.chunks"
+
+            [rules.transform]
+            map = "process > .oxo-flow/chunks/{part}.txt"
+
+            [rules.transform.combine]
+            aggregate = true
+            method = "concat"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+
+        // Should have 2 map rules + 1 aggregate rule
+        assert_eq!(config.rules.len(), 3);
+
+        // Last rule should be aggregate
+        let aggregate_rule = &config.rules[2];
+        // Aggregate rule should use concat method
+        assert!(aggregate_rule.shell.as_ref().unwrap().contains("cat"));
+    }
+
+    #[test]
+    fn transform_with_aggregate_json_merge() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [config]
+            chunks = ["part1"]
+
+            [[rules]]
+            name = "json_test"
+            input = ["data.json"]
+            output = ["merged.json"]
+
+            [rules.transform.split]
+            by = "part"
+            values_from = "config.chunks"
+
+            [rules.transform]
+            map = "process > .oxo-flow/chunks/{part}.json"
+
+            [rules.transform.combine]
+            aggregate = true
+            method = "json_merge"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+
+        // Should have 1 map rule + 1 aggregate rule = 2 rules (only 1 chunk)
+        assert_eq!(config.rules.len(), 2);
+
+        // Aggregate rule should handle json
+        let aggregate_rule = &config.rules[1];
+        // For json_merge, the shell should use jq
+        assert!(aggregate_rule.shell.as_ref().unwrap().contains("jq"));
     }
 }
