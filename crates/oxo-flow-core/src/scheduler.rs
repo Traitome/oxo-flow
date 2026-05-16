@@ -344,6 +344,52 @@ pub fn validate_disk_requirements(
     warnings
 }
 
+/// Estimate memory requirement from ResourceHint when explicit memory not set.
+/// Returns estimated memory in MB.
+pub fn estimate_memory_from_hint(
+    hint: &crate::rule::ResourceHint,
+    fallback_mb: u64,
+) -> u64 {
+    // If memory_scale is set, use it to scale estimated input size
+    if let Some(scale) = hint.memory_scale {
+        let size_base_mb = match hint.input_size.as_deref() {
+            Some("small") => 1024,      // ~1GB input
+            Some("medium") => 10240,    // ~10GB input
+            Some("large") => 102400,    // ~100GB input
+            Some("xlarge") => 512000,   // ~500GB input
+            _ => fallback_mb,           // Unknown, use fallback
+        };
+
+        let estimated = (size_base_mb as f64 * scale) as u64;
+        tracing::debug!(
+            input_size = ?hint.input_size,
+            memory_scale = scale,
+            estimated_mb = estimated,
+            "estimated memory from resource_hint"
+        );
+        return estimated;
+    }
+
+    // No memory_scale, return fallback
+    fallback_mb
+}
+
+/// Get effective memory for a rule, considering ResourceHint as fallback.
+pub fn effective_memory_mb(rule: &Rule, fallback_mb: u64) -> u64 {
+    // First check explicit memory declaration
+    if let Some(mem_str) = rule.effective_memory() {
+        return parse_memory_mb(mem_str).unwrap_or(fallback_mb);
+    }
+
+    // Check ResourceHint if available
+    if let Some(ref hint) = rule.resource_hint {
+        return estimate_memory_from_hint(hint, fallback_mb);
+    }
+
+    // No memory specified, use fallback
+    fallback_mb
+}
+
 /// Resource pool tracking available system resources and custom resource groups.
 #[derive(Debug, Clone)]
 pub struct ResourcePool {
@@ -749,5 +795,80 @@ mod tests {
         let available = check_available_disk_mb(dir.path());
         assert!(available.is_some());
         assert!(available.unwrap() > 0);
+    }
+
+    #[test]
+    fn estimate_memory_from_hint_small() {
+        let hint = crate::rule::ResourceHint {
+            input_size: Some("small".to_string()),
+            memory_scale: Some(2.0),
+            runtime: None,
+            io_bound: None,
+        };
+        let est = estimate_memory_from_hint(&hint, 1024);
+        // small (1GB) * 2.0 = 2GB = 2048MB
+        assert_eq!(est, 2048);
+    }
+
+    #[test]
+    fn estimate_memory_from_hint_large() {
+        let hint = crate::rule::ResourceHint {
+            input_size: Some("large".to_string()),
+            memory_scale: Some(3.0),
+            runtime: None,
+            io_bound: None,
+        };
+        let est = estimate_memory_from_hint(&hint, 1024);
+        // large (100GB) * 3.0 = 300GB = 307200MB
+        assert_eq!(est, 307200);
+    }
+
+    #[test]
+    fn estimate_memory_from_hint_no_scale() {
+        let hint = crate::rule::ResourceHint {
+            input_size: Some("medium".to_string()),
+            memory_scale: None,
+            runtime: None,
+            io_bound: None,
+        };
+        let est = estimate_memory_from_hint(&hint, 4096);
+        // No scale, use fallback
+        assert_eq!(est, 4096);
+    }
+
+    #[test]
+    fn effective_memory_mb_with_hint() {
+        let rule = Rule {
+            name: "hint_rule".to_string(),
+            memory: None,
+            resource_hint: Some(crate::rule::ResourceHint {
+                input_size: Some("medium".to_string()),
+                memory_scale: Some(1.5),
+                runtime: None,
+                io_bound: None,
+            }),
+            ..Default::default()
+        };
+        let mem = effective_memory_mb(&rule, 2048);
+        // medium (10GB) * 1.5 = 15GB = 15360MB
+        assert_eq!(mem, 15360);
+    }
+
+    #[test]
+    fn effective_memory_mb_explicit_over_hint() {
+        let rule = Rule {
+            name: "explicit_rule".to_string(),
+            memory: Some("32G".to_string()),
+            resource_hint: Some(crate::rule::ResourceHint {
+                input_size: Some("large".to_string()),
+                memory_scale: Some(2.0),
+                runtime: None,
+                io_bound: None,
+            }),
+            ..Default::default()
+        };
+        let mem = effective_memory_mb(&rule, 2048);
+        // Explicit memory takes precedence: 32G = 32768MB
+        assert_eq!(mem, 32768);
     }
 }
