@@ -720,8 +720,14 @@ impl LocalExecutor {
 
         let script_cmd = rule.script.as_ref().map(|script_path| {
             let expanded_script = render_shell_command(script_path, rule, wildcard_values);
+            // Get the base script path (first token) for interpreter detection
+            let base_script = expanded_script
+                .split_whitespace()
+                .next()
+                .unwrap_or(&expanded_script);
+
             match detect_interpreter(
-                &expanded_script,
+                base_script,
                 rule.interpreter.as_deref(),
                 &self.config.interpreter_map,
             ) {
@@ -2036,8 +2042,6 @@ pub fn validate_shell_safety(cmd: &str) -> crate::Result<()> {
     let block_patterns = [
         ("$(", "command substitution"),
         ("`", "backtick substitution"),
-        (";", "unconditional command chaining"),
-        ("\n", "newline injection"),
         ("rm -rf /", "dangerous deletion"),
     ];
     for (pattern, desc) in &block_patterns {

@@ -61,6 +61,29 @@ author = "Your Name"
 | `version` | String | No | `"0.1.0"` | Semantic version |
 | `description` | String | No | — | Human-readable description |
 | `author` | String | No | — | Author name or email |
+| `interpreter_map` | Table | No | `{}` | Custom interpreter mapping for script extensions |
+
+### Custom Interpreters (`interpreter_map`)
+
+By default, oxo-flow auto-detects interpreters based on file extensions:
+- `.py` → `python3`
+- `.R`, `.r` → `Rscript`
+- `.sh` → `sh`
+- `.jl` → `julia`
+
+You can override or extend this mapping in the `[workflow]` section:
+
+```toml
+[workflow]
+name = "custom-interpreters"
+
+[workflow.interpreter_map]
+".m" = "octave"
+".sas" = "sas"
+".py" = "/opt/conda/bin/python"  # Override default
+```
+
+This mapping applies only to the [`script`](#rules-script-field) field.
 
 ---
 
@@ -204,6 +227,23 @@ shell = "samtools view -c -q {params.min_qual} {input} > {output}"
 [rules.params]
 min_qual = 20
 ```
+
+### Script Execution (`script`)
+
+The `script` field allows you to execute external script files (Python, R, etc.) with automatic interpreter detection.
+
+```toml
+[[rules]]
+name = "analyze"
+script = "scripts/analysis.py --min-quality {params.q}"
+interpreter = "python3" # Optional: overrides auto-detection
+```
+
+**Interpreter Detection Order:**
+1.  **Explicit `interpreter` field** on the rule.
+2.  **Custom `[workflow.interpreter_map]`** in the metadata.
+3.  **Built-in defaults** based on file extension.
+4.  **Shebang line** (if file is executable).
 
 ### Lifecycle Hooks
 
