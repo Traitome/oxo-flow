@@ -902,9 +902,19 @@ impl WorkflowConfig {
             if let Some(parent) = inc_path.parent() {
                 inc_config.resolve_includes_with_depth(parent, depth + 1)?;
             }
+            // Collect original rule names from included file for dependency resolution
+            let original_rule_names: std::collections::HashSet<String> =
+                inc_config.rules.iter().map(|r| r.name.clone()).collect();
             for mut rule in inc_config.rules {
                 if let Some(ref ns) = inc.namespace {
+                    // Prefix rule name with namespace
                     rule.name = format!("{}::{}", ns, rule.name);
+                    // Prefix depends_on references that point to rules in the same included file
+                    for dep in &mut rule.depends_on {
+                        if original_rule_names.contains(dep) {
+                            *dep = format!("{}::{}", ns, dep);
+                        }
+                    }
                 }
                 if !self.rules.iter().any(|r| r.name == rule.name) {
                     self.rules.push(rule);
@@ -2124,6 +2134,49 @@ mod tests {
     }
 
     #[test]
+    fn resolve_includes_with_namespace_and_depends_on() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Included file has rules with internal dependencies
+        let included_content = r#"
+            [workflow]
+            name = "included"
+
+            [[rules]]
+            name = "qc_step"
+            shell = "fastqc"
+
+            [[rules]]
+            name = "trim_step"
+            shell = "fastp"
+            depends_on = ["qc_step"]
+        "#;
+        let inc_path = dir.path().join("qc.oxoflow");
+        std::fs::write(&inc_path, included_content).unwrap();
+
+        let main_content = r#"
+            [workflow]
+            name = "main"
+
+            [[include]]
+            path = "qc.oxoflow"
+            namespace = "qc"
+
+            [[rules]]
+            name = "align"
+            shell = "bwa"
+        "#;
+
+        let mut config: WorkflowConfig = toml::from_str(main_content).unwrap();
+        config.resolve_includes(dir.path()).unwrap();
+
+        assert_eq!(config.rules.len(), 3);
+        // Find trim_step rule and check its depends_on
+        let trim_rule = config.rules.iter().find(|r| r.name == "qc::trim_step").unwrap();
+        assert_eq!(trim_rule.depends_on, vec!["qc::qc_step"]);
+    }
+
+    #[test]
     fn resolve_includes_without_namespace() {
         let dir = tempfile::tempdir().unwrap();
 
@@ -2155,6 +2208,45 @@ mod tests {
 
         assert_eq!(config.rules.len(), 2);
         assert_eq!(config.rules[1].name, "helper");
+    }
+
+    #[test]
+    fn resolve_includes_with_namespace_external_depends_on() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Included file has rule that depends on external (main workflow) rule
+        let included_content = r#"
+            [workflow]
+            name = "included"
+
+            [[rules]]
+            name = "post_process"
+            shell = "samtools stats"
+            depends_on = ["align"]  # External dependency - should NOT be prefixed
+        "#;
+        let inc_path = dir.path().join("post.oxoflow");
+        std::fs::write(&inc_path, included_content).unwrap();
+
+        let main_content = r#"
+            [workflow]
+            name = "main"
+
+            [[include]]
+            path = "post.oxoflow"
+            namespace = "post"
+
+            [[rules]]
+            name = "align"
+            shell = "bwa"
+        "#;
+
+        let mut config: WorkflowConfig = toml::from_str(main_content).unwrap();
+        config.resolve_includes(dir.path()).unwrap();
+
+        assert_eq!(config.rules.len(), 2);
+        // Find post_process rule and check its depends_on is NOT prefixed
+        let post_rule = config.rules.iter().find(|r| r.name == "post::post_process").unwrap();
+        assert_eq!(post_rule.depends_on, vec!["align"]); // Not prefixed because "align" is external
     }
 
     #[test]
