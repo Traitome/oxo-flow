@@ -122,8 +122,31 @@ cat results/uppercase.txt
 
 ## 7. Visualize the DAG
 
+oxo-flow provides multiple ways to visualize your workflow's structure.
+
+### Terminal View (Default)
+
+The default `graph` command prints a stylized ASCII or tree representation directly to your terminal:
+
 ```bash
 oxo-flow graph my-pipeline.oxoflow
+```
+
+```text
+┌─────────────────────────────────────────────────────────────────────┐
+│ Workflow: my-pipeline                                               │
+│ Rules: 2, Dependencies: 1                                           │
+└─────────────────────────────────────────────────────────────────────┘
+
+  create_data ──► transform
+```
+
+### Graphviz (DOT) Export
+
+For complex pipelines, you can export to Graphviz DOT format for high-resolution rendering:
+
+```bash
+oxo-flow graph my-pipeline.oxoflow --format dot
 ```
 
 ```dot
@@ -137,7 +160,7 @@ digraph workflow {
 If you have Graphviz installed, render it (macOS: `brew install graphviz`):
 
 ```bash
-oxo-flow graph my-pipeline.oxoflow | dot -Tpng -o dag.png
+oxo-flow graph my-pipeline.oxoflow -f dot | dot -Tpng -o dag.png
 ```
 
 ---
