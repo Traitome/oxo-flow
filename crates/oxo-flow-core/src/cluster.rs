@@ -291,7 +291,10 @@ fn pbs_gpu_directive(spec: &crate::rule::GpuSpec) -> Vec<String> {
     // Some PBS sites support model selection via separate flag
     if let Some(ref model) = spec.model {
         // This is site-specific; document that users may need --extra_args
-        directives.push(format!("# Model requested: {} (use extra_args for site-specific syntax)", model));
+        directives.push(format!(
+            "# Model requested: {} (use extra_args for site-specific syntax)",
+            model
+        ));
     }
 
     directives
@@ -1214,7 +1217,8 @@ mod tests {
             walltime: None,
             extra_args: vec![],
         };
-        let script = generate_submit_script(&ClusterBackend::Slurm, &rule, "python train.py", &config);
+        let script =
+            generate_submit_script(&ClusterBackend::Slurm, &rule, "python train.py", &config);
 
         assert!(script.contains("--gres=gpu:a100:2:40g"));
         assert!(script.contains("--mem-per-gpu=40G"));
@@ -1258,7 +1262,8 @@ mod tests {
             walltime: None,
             extra_args: vec![],
         };
-        let script = generate_submit_script(&ClusterBackend::Pbs, &rule, "python train.py", &config);
+        let script =
+            generate_submit_script(&ClusterBackend::Pbs, &rule, "python train.py", &config);
 
         assert!(script.contains("gpu=2"));
         // Model request is commented, not a directive
@@ -1303,7 +1308,8 @@ mod tests {
             walltime: None,
             extra_args: vec![],
         };
-        let script = generate_submit_script(&ClusterBackend::Sge, &rule, "python train.py", &config);
+        let script =
+            generate_submit_script(&ClusterBackend::Sge, &rule, "python train.py", &config);
 
         assert!(script.contains("#$ -l gpu=4"));
     }

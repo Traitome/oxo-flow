@@ -66,6 +66,6 @@ pub use executor::{
     CheckpointState, ExecutionEvent, ExecutionProvenance, ExecutionStats, JobStatus,
 };
 pub use rule::Rule;
+pub use rule::{CombineConfig, SplitConfig, TransformConfig};
 pub use rule::{EnvironmentSpec, GpuSpec, ResourceHint, Resources, RuleBuilder};
-pub use rule::{TransformConfig, SplitConfig, CombineConfig};
 pub use wildcard::{wildcard_combinations_from_groups, wildcard_combinations_from_pairs};

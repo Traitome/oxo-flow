@@ -297,15 +297,16 @@ pub fn validate_resources_against_system(
     }
 
     // Check disk requirement against available space (warning only)
-    if let Some(ref disk) = rule.resources.disk {
-        if let Some(req_disk_mb) = parse_memory_mb(disk) {
-            // We don't have workdir here, so just note the requirement
-            if req_disk_mb > 100_000 { // > 100GB
-                warnings.push(format!(
-                    "rule '{}' requests large disk space ({}) - verify availability",
-                    rule.name, disk
-                ));
-            }
+    if let Some(ref disk) = rule.resources.disk
+        && let Some(req_disk_mb) = parse_memory_mb(disk)
+    {
+        // We don't have workdir here, so just note the requirement
+        if req_disk_mb > 100_000 {
+            // > 100GB
+            warnings.push(format!(
+                "rule '{}' requests large disk space ({}) - verify availability",
+                rule.name, disk
+            ));
         }
     }
 
@@ -321,23 +322,22 @@ pub fn check_available_disk_mb(path: &std::path::Path) -> Option<u64> {
 }
 
 /// Validate disk requirements for all rules against workdir capacity.
-pub fn validate_disk_requirements(
-    rules: &[Rule],
-    workdir: &std::path::Path,
-) -> Vec<String> {
+pub fn validate_disk_requirements(rules: &[Rule], workdir: &std::path::Path) -> Vec<String> {
     let mut warnings = Vec::new();
     let available_mb = check_available_disk_mb(workdir).unwrap_or(u64::MAX);
 
     for rule in rules {
-        if let Some(ref disk) = rule.resources.disk {
-            if let Some(req_mb) = parse_memory_mb(disk) {
-                if req_mb > available_mb {
-                    warnings.push(format!(
-                        "rule '{}' may need {}MB disk but only {}MB available in {}",
-                        rule.name, req_mb, available_mb, workdir.display()
-                    ));
-                }
-            }
+        if let Some(ref disk) = rule.resources.disk
+            && let Some(req_mb) = parse_memory_mb(disk)
+            && req_mb > available_mb
+        {
+            warnings.push(format!(
+                "rule '{}' may need {}MB disk but only {}MB available in {}",
+                rule.name,
+                req_mb,
+                available_mb,
+                workdir.display()
+            ));
         }
     }
 
@@ -346,18 +346,15 @@ pub fn validate_disk_requirements(
 
 /// Estimate memory requirement from ResourceHint when explicit memory not set.
 /// Returns estimated memory in MB.
-pub fn estimate_memory_from_hint(
-    hint: &crate::rule::ResourceHint,
-    fallback_mb: u64,
-) -> u64 {
+pub fn estimate_memory_from_hint(hint: &crate::rule::ResourceHint, fallback_mb: u64) -> u64 {
     // If memory_scale is set, use it to scale estimated input size
     if let Some(scale) = hint.memory_scale {
         let size_base_mb = match hint.input_size.as_deref() {
-            Some("small") => 1024,      // ~1GB input
-            Some("medium") => 10240,    // ~10GB input
-            Some("large") => 102400,    // ~100GB input
-            Some("xlarge") => 512000,   // ~500GB input
-            _ => fallback_mb,           // Unknown, use fallback
+            Some("small") => 1024,    // ~1GB input
+            Some("medium") => 10240,  // ~10GB input
+            Some("large") => 102400,  // ~100GB input
+            Some("xlarge") => 512000, // ~500GB input
+            _ => fallback_mb,         // Unknown, use fallback
         };
 
         let estimated = (size_base_mb as f64 * scale) as u64;
@@ -758,7 +755,11 @@ mod tests {
         };
 
         let warnings = validate_resources_against_system(&rule, 64, 8192);
-        assert!(warnings.iter().any(|w| w.contains("threads") && w.contains("oversubscribe")));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("threads") && w.contains("oversubscribe"))
+        );
         // No memory warning since 8G == 8192MB
         assert!(!warnings.iter().any(|w| w.contains("OOM")));
     }
@@ -773,7 +774,11 @@ mod tests {
         };
 
         let warnings = validate_resources_against_system(&rule, 64, 8192);
-        assert!(warnings.iter().any(|w| w.contains("OOM") && w.contains("big_mem")));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("OOM") && w.contains("big_mem"))
+        );
     }
 
     #[test]

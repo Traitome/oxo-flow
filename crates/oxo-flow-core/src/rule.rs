@@ -551,6 +551,15 @@ pub struct Rule {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workdir: Option<String>,
 
+    /// Shell command to execute before the main command.
+    ///
+    /// Useful for environment initialization, directory setup, or
+    /// pre-flight checks. If this command fails, the rule execution
+    /// is aborted.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pre_exec: Option<String>,
+
     /// Shell command to execute on successful completion of this rule.
     ///
     /// Useful for notifications, cleanup, or triggering downstream processes.
@@ -651,7 +660,11 @@ impl Rule {
                 suggestion: None,
             });
         }
-        if !self.output.is_empty() && self.shell.is_none() && self.script.is_none() && self.transform.is_none() {
+        if !self.output.is_empty()
+            && self.shell.is_none()
+            && self.script.is_none()
+            && self.transform.is_none()
+        {
             return Err(crate::error::OxoFlowError::Validation {
                 message: format!(
                     "rule '{}' has outputs but no shell command, script, or transform",
@@ -868,6 +881,13 @@ impl RuleBuilder {
     #[must_use]
     pub fn workdir(mut self, workdir: impl Into<String>) -> Self {
         self.rule.workdir = Some(workdir.into());
+        self
+    }
+
+    /// Set the pre-exec hook command.
+    #[must_use]
+    pub fn pre_exec(mut self, cmd: impl Into<String>) -> Self {
+        self.rule.pre_exec = Some(cmd.into());
         self
     }
 

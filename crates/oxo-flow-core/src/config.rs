@@ -815,7 +815,11 @@ impl WorkflowConfig {
 
         // Ensure each rule has either shell, script, or transform
         for rule in &self.rules {
-            if rule.shell.is_none() && rule.script.is_none() && rule.transform.is_none() && !rule.output.is_empty() {
+            if rule.shell.is_none()
+                && rule.script.is_none()
+                && rule.transform.is_none()
+                && !rule.output.is_empty()
+            {
                 return Err(OxoFlowError::Config {
                     message: format!(
                         "rule '{}' has outputs but no shell command, script, or transform",
@@ -838,7 +842,9 @@ impl WorkflowConfig {
 
         for rule in &self.rules {
             for warning in crate::scheduler::validate_resources_against_system(
-                rule, system_threads, system_memory_mb
+                rule,
+                system_threads,
+                system_memory_mb,
             ) {
                 tracing::warn!("{}", warning);
             }
@@ -1190,10 +1196,7 @@ impl WorkflowConfig {
                 // Validate that split values are not empty
                 if split_values.is_empty() {
                     return Err(OxoFlowError::Validation {
-                        message: format!(
-                            "transform rule '{}' has no split values",
-                            rule.name
-                        ),
+                        message: format!("transform rule '{}' has no split values", rule.name),
                         rule: Some(rule.name.clone()),
                         suggestion: Some(
                             "provide values, values_from, n, or glob in split config".to_string(),
@@ -1251,7 +1254,8 @@ impl WorkflowConfig {
                     let combine_rule_name = format!("{}_combine", rule.name);
                     let combine_shell = if let Some(ref shell) = combine.shell {
                         let chunks_str = all_chunk_outputs.join(" ");
-                        shell.replace("{chunks}", &chunks_str)
+                        shell
+                            .replace("{chunks}", &chunks_str)
                             .replace("{input}", &chunks_str)
                             .replace("{output}", &rule.output.join(" "))
                     } else if combine.aggregate {
@@ -1261,7 +1265,9 @@ impl WorkflowConfig {
 
                         match method {
                             "concat" => {
-                                let header = combine.header.as_deref()
+                                let header = combine
+                                    .header
+                                    .as_deref()
                                     .map(|h| format!("echo '{}' && ", h))
                                     .unwrap_or_default();
                                 format!("{}cat {} > {}", header, chunks_str, output_str)
@@ -1284,7 +1290,9 @@ impl WorkflowConfig {
                                 rule.name
                             ),
                             rule: Some(rule.name.clone()),
-                            suggestion: Some("specify combine.shell or combine.aggregate".to_string()),
+                            suggestion: Some(
+                                "specify combine.shell or combine.aggregate".to_string(),
+                            ),
                         });
                     };
 
@@ -1367,10 +1375,7 @@ impl WorkflowConfig {
 
                 if split_values.is_empty() {
                     return Err(OxoFlowError::Validation {
-                        message: format!(
-                            "transform rule '{}' has no split values",
-                            rule.name
-                        ),
+                        message: format!("transform rule '{}' has no split values", rule.name),
                         rule: Some(rule.name.clone()),
                         suggestion: Some(
                             "provide values, values_from, n, or glob in split config".to_string(),
@@ -1406,15 +1411,19 @@ impl WorkflowConfig {
                     // Create the map rule
                     let map_rule_name = format!("{}_{}", rule.name, value);
                     if !seen_names.insert(map_rule_name.clone()) {
-                        return Err(OxoFlowError::DuplicateRule { name: map_rule_name });
+                        return Err(OxoFlowError::DuplicateRule {
+                            name: map_rule_name,
+                        });
                     }
 
                     let mut map_rule = Rule {
                         name: map_rule_name,
                         input: rule.input.clone(),
                         output: vec![chunk_output],
-                        shell: Some(expand_pattern(&transform.map, &combo)
-                            .unwrap_or_else(|_| transform.map.clone())),
+                        shell: Some(
+                            expand_pattern(&transform.map, &combo)
+                                .unwrap_or_else(|_| transform.map.clone()),
+                        ),
                         threads: rule.threads,
                         memory: rule.memory.clone(),
                         resources: rule.resources.clone(),
@@ -1446,7 +1455,8 @@ impl WorkflowConfig {
                     let combine_shell = if let Some(ref shell) = combine.shell {
                         // Replace {chunks} with all chunk outputs
                         let chunks_str = all_chunk_outputs.join(" ");
-                        shell.replace("{chunks}", &chunks_str)
+                        shell
+                            .replace("{chunks}", &chunks_str)
                             .replace("{input}", &chunks_str)
                             .replace("{output}", &rule.output.join(" "))
                     } else if combine.aggregate {
@@ -1457,7 +1467,11 @@ impl WorkflowConfig {
 
                         match method {
                             "concat" => {
-                                let header = combine.header.as_deref().map(|h| format!("echo '{}' && ", h)).unwrap_or_default();
+                                let header = combine
+                                    .header
+                                    .as_deref()
+                                    .map(|h| format!("echo '{}' && ", h))
+                                    .unwrap_or_default();
                                 format!("{}cat {} > {}", header, chunks_str, output_str)
                             }
                             "json_merge" => {
@@ -1479,7 +1493,9 @@ impl WorkflowConfig {
                                 rule.name
                             ),
                             rule: Some(rule.name.clone()),
-                            suggestion: Some("specify combine.shell or combine.aggregate".to_string()),
+                            suggestion: Some(
+                                "specify combine.shell or combine.aggregate".to_string(),
+                            ),
                         });
                     };
 
@@ -2716,7 +2732,10 @@ mod tests {
             transform.split.values,
             vec!["chr1".to_string(), "chr2".to_string(), "chr3".to_string()]
         );
-        assert_eq!(transform.map, "samtools view -b {input} {chr} > qc/{chr}.bam");
+        assert_eq!(
+            transform.map,
+            "samtools view -b {input} {chr} > qc/{chr}.bam"
+        );
         assert!(transform.combine.is_none());
     }
 

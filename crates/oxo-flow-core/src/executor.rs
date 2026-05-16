@@ -322,18 +322,14 @@ impl LocalExecutor {
     /// Only available on Unix systems.
     #[cfg(unix)]
     fn kill_process_tree(pid: u32) -> std::io::Result<()> {
-        use nix::sys::signal::{kill, Signal};
-        use nix::unistd::{getpgid, Pid};
+        use nix::sys::signal::{Signal, kill};
+        use nix::unistd::{Pid, getpgid};
 
         let nix_pid = Pid::from_raw(pid as i32);
-        let pgid = getpgid(Some(nix_pid)).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-        })?;
+        let pgid = getpgid(Some(nix_pid)).map_err(|e| std::io::Error::other(e.to_string()))?;
 
         // Kill entire process group with SIGKILL
-        kill(pgid, Signal::SIGKILL).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-        })?;
+        kill(pgid, Signal::SIGKILL).map_err(|e| std::io::Error::other(e.to_string()))?;
 
         tracing::debug!(pid = %pid, pgid = %pgid, "killed process group");
         Ok(())
@@ -510,11 +506,7 @@ impl LocalExecutor {
     }
 
     /// Clean up temporary output files when a rule fails.
-    async fn cleanup_temp_outputs(
-        &self,
-        rule: &Rule,
-        wildcard_values: &HashMap<String, String>,
-    ) {
+    async fn cleanup_temp_outputs(&self, rule: &Rule, wildcard_values: &HashMap<String, String>) {
         if rule.temp_output.is_empty() {
             return;
         }
@@ -542,21 +534,21 @@ impl LocalExecutor {
         }
 
         // Clean up transform chunk outputs if cleanup is enabled
-        if let Some(ref transform) = rule.transform {
-            if transform.cleanup {
-                // Chunk outputs are in .oxo-flow/chunks/{split_var}/
-                let split_var = &transform.split.by;
-                let chunk_dir = self.config.workdir.join(".oxo-flow/chunks").join(split_var);
-                if tokio::fs::try_exists(&chunk_dir).await.ok() == Some(true) {
-                    if let Err(e) = tokio::fs::remove_dir_all(&chunk_dir).await {
-                        tracing::warn!(
-                            rule = %rule.name,
-                            dir = %chunk_dir.display(),
-                            error = %e,
-                            "failed to cleanup transform chunk directory"
-                        );
-                    }
-                }
+        if let Some(ref transform) = rule.transform
+            && transform.cleanup
+        {
+            // Chunk outputs are in .oxo-flow/chunks/{split_var}/
+            let split_var = &transform.split.by;
+            let chunk_dir = self.config.workdir.join(".oxo-flow/chunks").join(split_var);
+            if tokio::fs::try_exists(&chunk_dir).await.ok() == Some(true)
+                && let Err(e) = tokio::fs::remove_dir_all(&chunk_dir).await
+            {
+                tracing::warn!(
+                    rule = %rule.name,
+                    dir = %chunk_dir.display(),
+                    error = %e,
+                    "failed to cleanup transform chunk directory"
+                );
             }
         }
     }
@@ -658,7 +650,7 @@ impl LocalExecutor {
 
         // Pre-flight disk space check (warning only)
         let disk_warnings = crate::scheduler::validate_disk_requirements(
-            &[rule.clone()],
+            std::slice::from_ref(rule),
             &self.config.workdir,
         );
         for warning in disk_warnings {
@@ -677,6 +669,41 @@ impl LocalExecutor {
 
         // NEW: Reserve resources before execution
         self.reserve_resources(rule).await;
+
+        // Execute pre_exec hook if defined
+        if let Some(ref pre_cmd) = rule.pre_exec {
+            tracing::info!(rule = %rule.name, hook = %pre_cmd, "executing pre_exec hook");
+            let pre_result = Command::new("sh")
+                .arg("-c")
+                .arg(pre_cmd)
+                .current_dir(&self.config.workdir)
+                .envs(&rule.envvars)
+                .output()
+                .await;
+            match pre_result {
+                Ok(output) => {
+                    if !output.status.success() {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        self.release_resources(rule).await;
+                        return Err(OxoFlowError::Execution {
+                            rule: rule.name.clone(),
+                            message: format!(
+                                "pre_exec hook failed with code {}: {}",
+                                output.status.code().unwrap_or(-1),
+                                stderr.trim()
+                            ),
+                        });
+                    }
+                }
+                Err(e) => {
+                    self.release_resources(rule).await;
+                    return Err(OxoFlowError::Execution {
+                        rule: rule.name.clone(),
+                        message: format!("failed to spawn pre_exec hook: {e}"),
+                    });
+                }
+            }
+        }
 
         tracing::info!(rule = %rule.name, threads = %rule.effective_threads(), "executing");
 
@@ -701,6 +728,7 @@ impl LocalExecutor {
                     .arg("-c")
                     .arg(&shell_cmd)
                     .current_dir(&self.config.workdir)
+                    .envs(&rule.envvars)
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
                     .process_group(0)
@@ -717,6 +745,7 @@ impl LocalExecutor {
                     .arg("-c")
                     .arg(&shell_cmd)
                     .current_dir(&self.config.workdir)
+                    .envs(&rule.envvars)
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
                     .spawn()
@@ -734,15 +763,15 @@ impl LocalExecutor {
                     Ok(inner) => inner,
                     Err(_) => {
                         // Timeout occurred - kill the process group
-                        if child_pid > 0 {
-                            if let Err(e) = Self::kill_process_tree(child_pid) {
-                                tracing::warn!(
-                                    rule = %rule.name,
-                                    pid = %child_pid,
-                                    error = %e,
-                                    "failed to kill process group on timeout"
-                                );
-                            }
+                        if child_pid > 0
+                            && let Err(e) = Self::kill_process_tree(child_pid)
+                        {
+                            tracing::warn!(
+                                rule = %rule.name,
+                                pid = %child_pid,
+                                error = %e,
+                                "failed to kill process group on timeout"
+                            );
                         }
                         record.finished_at = Some(Utc::now());
                         record.status = JobStatus::Failed;
@@ -797,6 +826,7 @@ impl LocalExecutor {
                         .arg("-c")
                         .arg(hook_cmd)
                         .current_dir(&self.config.workdir)
+                        .envs(&rule.envvars)
                         .output()
                         .await;
                     if let Ok(hook_output) = hook_result
@@ -852,6 +882,7 @@ impl LocalExecutor {
                         .arg("-c")
                         .arg(hook_cmd)
                         .current_dir(&self.config.workdir)
+                        .envs(&rule.envvars)
                         .output()
                         .await;
                     if let Ok(hook_output) = hook_result
@@ -1823,6 +1854,15 @@ pub fn render_shell_command(
 
     // Expand {threads}
     expanded = expanded.replace("{threads}", &rule.effective_threads().to_string());
+
+    // Expand {params.key}
+    for (key, value) in &rule.params {
+        let string_val = match value {
+            toml::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        expanded = expanded.replace(&format!("{{params.{key}}}"), &string_val);
+    }
 
     // Expand user wildcards and config values (e.g. {sample}, {config.reference})
     for (key, value) in wildcard_values {
