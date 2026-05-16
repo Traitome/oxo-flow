@@ -192,6 +192,91 @@ time_limit = "48h"
 
 ---
 
+## Resource Management
+
+### Declaration vs Enforcement
+
+oxo-flow tracks declared resources for scheduling but does not strictly enforce them in local execution. On HPC clusters, resources are enforced by the scheduler.
+
+**Local execution:**
+- Resources are tracked to prevent over-allocation
+- Warnings emitted when declaring resources exceeding system capacity
+- Jobs may oversubscribe if user intentionally requests more than available
+
+**HPC clusters:**
+- Resources translated to scheduler directives (SLURM, PBS, SGE, LSF)
+- Scheduler enforces limits - jobs requesting more than allocated will fail
+
+### Platform Detection
+
+| Platform | Thread Detection | Memory Detection |
+|---|---|---|
+| Linux | `num_cpus` crate | `sysinfo` crate |
+| macOS | `num_cpus` crate | `sysinfo` crate |
+| Windows | `num_cpus` crate | `sysinfo` crate |
+
+### Validation Warnings
+
+When a rule declares resources exceeding system capacity, oxo-flow emits warnings during validation but does not block execution:
+
+```
+⚠️  rule 'bwa_align' requests 128 threads but system has 64 (will oversubscribe)
+⚠️  rule 'big_sort' requests 128GB but system has 32GB (may OOM)
+```
+
+This allows intentional oversubscription for testing or when user knows better.
+
+### Cleanup Behavior
+
+oxo-flow automatically cleans up temporary outputs:
+
+| Scenario | Cleanup |
+|---|---|---|
+| Success + `temp_output` | Cleaned after successful completion |
+| Failure + `temp_output` | Cleaned to prevent stale partial files |
+| Transform with `cleanup=true` | Chunk files cleaned after combine succeeds |
+
+### Timeout Enforcement
+
+On Unix systems (Linux, macOS), timeout kills the entire process group, ensuring child processes don't survive:
+
+```toml
+[rules.resources]
+time_limit = "4h"  # SIGKILL sent to process group after 4 hours
+```
+
+On Windows, standard timeout behavior applies (may leave child processes).
+
+### GPU Specification
+
+For detailed GPU requirements:
+
+```toml
+[rules.resources.gpu_spec]
+count = 2
+model = "A100"           # SLURM: --gres=gpu:a100:2
+memory_gb = 40           # SLURM: --mem-per-gpu=40G
+compute_capability = "8.0"  # For filtering (not scheduler directive)
+```
+
+Note: PBS/SGE GPU syntax varies by site. Use `extra_args` for site-specific flags.
+
+### Resource Hints
+
+When exact requirements unknown, provide hints for estimation:
+
+```toml
+[rules.resource_hint]
+input_size = "medium"     # small (~1GB), medium (~10GB), large (~100GB), xlarge (~500GB)
+memory_scale = 2.0        # Estimated memory = input_size × scale
+runtime = "slow"          # fast (<10min), medium (10min-1h), slow (>1h)
+io_bound = true           # true = I/O bound, false = CPU bound
+```
+
+Memory estimation formula: `estimated_mb = input_size_mb × memory_scale`
+
+---
+
 ## Wildcards
 
 ### Pattern syntax
