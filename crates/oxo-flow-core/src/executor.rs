@@ -292,35 +292,27 @@ impl LocalExecutor {
             num_cpus::get() as u32
         });
 
-        let max_memory_mb = config.max_memory_mb.unwrap_or({
-            // Estimate total system memory (simple heuristic)
-            // On most systems, use total memory if available, otherwise default to 8GB
-            #[cfg(target_os = "linux")]
-            {
-                std::fs::read_to_string("/proc/meminfo")
-                    .ok()
-                    .and_then(|s| {
-                        s.lines()
-                            .find(|l| l.starts_with("MemTotal:"))
-                            .and_then(|l| {
-                                l.split_whitespace()
-                                    .nth(1)
-                                    .and_then(|v| v.parse::<u64>().ok())
-                                    .map(|kb| kb / 1024) // Convert KB to MB
-                            })
-                    })
-                    .unwrap_or(8192)
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                8192 // Default to 8GB on non-Linux systems
+        let max_memory_mb = config.max_memory_mb.unwrap_or_else(|| {
+            // Use sysinfo for cross-platform memory detection
+            use sysinfo::System;
+            let mut sys = System::new_all();
+            sys.refresh_memory();
+            let total_bytes = sys.total_memory();
+            let detected_mb = total_bytes / 1024 / 1024; // bytes -> KB -> MB
+
+            // Fallback to 8GB if detection fails (shouldn't happen on real systems)
+            if detected_mb > 0 {
+                detected_mb
+            } else {
+                tracing::warn!("sysinfo returned 0 memory, falling back to 8GB default");
+                8192
             }
         });
 
         tracing::debug!(
             max_threads = %max_threads,
             max_memory_mb = %max_memory_mb,
-            "initialized resource pool"
+            "initialized resource pool using sysinfo"
         );
 
         (max_threads, max_memory_mb)
@@ -3187,5 +3179,18 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(config.retry_count, 2);
+    }
+
+    #[test]
+    fn detect_system_memory_returns_valid_value() {
+        use sysinfo::System;
+        let mut sys = System::new_all();
+        sys.refresh_memory();
+        let total = sys.total_memory();
+        // Should return at least some memory (systems always have >0)
+        assert!(total > 0, "sysinfo should detect system memory");
+        // Convert to MB should work
+        let mb = total / 1024 / 1024;
+        assert!(mb > 0, "memory in MB should be positive");
     }
 }
