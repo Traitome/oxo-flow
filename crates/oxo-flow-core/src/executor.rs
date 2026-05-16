@@ -633,6 +633,27 @@ impl LocalExecutor {
                 // NEW: Release resources after success
                 self.release_resources(rule).await;
 
+                // Execute on_success hook if defined
+                if let Some(ref hook_cmd) = rule.on_success {
+                    tracing::info!(rule = %rule.name, hook = %hook_cmd, "executing on_success hook");
+                    let hook_result = Command::new("sh")
+                        .arg("-c")
+                        .arg(hook_cmd)
+                        .current_dir(&self.config.workdir)
+                        .output()
+                        .await;
+                    if let Ok(hook_output) = hook_result
+                        && !hook_output.status.success()
+                    {
+                        tracing::warn!(
+                            rule = %rule.name,
+                            hook = %hook_cmd,
+                            code = %hook_output.status.code().unwrap_or(-1),
+                            "on_success hook failed"
+                        );
+                    }
+                }
+
                 if !self.config.dry_run {
                     let missing = validate_outputs(rule, &self.config.workdir, wildcard_values);
                     for path in &missing {
@@ -657,11 +678,35 @@ impl LocalExecutor {
                     max_attempts = max_attempts,
                     "command failed, will retry"
                 );
+                // Continue to next iteration to retry the command
+                continue;
             } else {
                 record.status = JobStatus::Failed;
                 // NEW: Release resources after final failure
                 self.release_resources(rule).await;
                 tracing::error!(rule = %rule.name, code = %code, "failed");
+
+                // Execute on_failure hook if defined (after all retries exhausted)
+                if let Some(ref hook_cmd) = rule.on_failure {
+                    tracing::info!(rule = %rule.name, hook = %hook_cmd, "executing on_failure hook");
+                    let hook_result = Command::new("sh")
+                        .arg("-c")
+                        .arg(hook_cmd)
+                        .current_dir(&self.config.workdir)
+                        .output()
+                        .await;
+                    if let Ok(hook_output) = hook_result
+                        && !hook_output.status.success()
+                    {
+                        tracing::warn!(
+                            rule = %rule.name,
+                            hook = %hook_cmd,
+                            code = %hook_output.status.code().unwrap_or(-1),
+                            "on_failure hook failed"
+                        );
+                    }
+                }
+
                 if !self.config.keep_going {
                     return Err(OxoFlowError::TaskFailed {
                         rule: rule.name.clone(),
@@ -3100,5 +3145,38 @@ mod tests {
             r#"config.run_qc == true && config.threads >= 4 && config.mode == "tumor_normal""#,
             &config
         ));
+    }
+
+    // -- Retry and Hooks tests ------------------------------------------------
+
+    #[test]
+    fn rule_has_hooks_fields() {
+        let rule = Rule {
+            name: "test".to_string(),
+            on_success: Some("echo success".to_string()),
+            on_failure: Some("echo failure".to_string()),
+            ..Default::default()
+        };
+        assert!(rule.on_success.is_some());
+        assert!(rule.on_failure.is_some());
+    }
+
+    #[test]
+    fn rule_retries_field() {
+        let rule = Rule {
+            name: "retry_test".to_string(),
+            retries: 3,
+            ..Default::default()
+        };
+        assert_eq!(rule.retries, 3);
+    }
+
+    #[test]
+    fn executor_config_retry_count() {
+        let config = ExecutorConfig {
+            retry_count: 2,
+            ..Default::default()
+        };
+        assert_eq!(config.retry_count, 2);
     }
 }
