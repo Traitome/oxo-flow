@@ -26,6 +26,8 @@ indicatif = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 filetime = "0.2"
+sysinfo = { workspace = true }
+num_cpus = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

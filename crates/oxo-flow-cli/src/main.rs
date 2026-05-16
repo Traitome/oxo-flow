@@ -864,6 +864,35 @@ async fn main() -> Result<()> {
                     eprintln!("     $ {}", expanded.dimmed());
                 }
             }
+
+            // Show resource requirements summary in verbose mode
+            if cli.verbose {
+                let system_threads = num_cpus::get() as u32;
+                let system_memory_mb = {
+                    use sysinfo::System;
+                    let mut sys = System::new_all();
+                    sys.refresh_memory();
+                    sys.total_memory() / 1024 / 1024
+                };
+                eprintln!("\n{} System resources:", "📊");
+                eprintln!("  {} threads, {} MB memory", system_threads, system_memory_mb);
+
+                let total_threads: u32 = config.rules.iter().map(|r| r.effective_threads()).sum();
+                let total_memory_mb: u64 = config.rules.iter()
+                    .filter_map(|r| r.effective_memory())
+                    .filter_map(|m| oxo_flow_core::scheduler::parse_memory_mb(m))
+                    .sum();
+
+                eprintln!("{} Workflow requirements:", "📋");
+                eprintln!("  {} threads total, {} MB memory total", total_threads, total_memory_mb);
+
+                if total_threads > system_threads {
+                    eprintln!("  {} Will oversubscribe {} threads", "⚠️", total_threads - system_threads);
+                }
+                if total_memory_mb > system_memory_mb {
+                    eprintln!("  {} May exceed memory by {} MB", "⚠️", total_memory_mb - system_memory_mb);
+                }
+            }
         }
 
         Commands::Validate { workflow } => {

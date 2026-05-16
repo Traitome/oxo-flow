@@ -656,6 +656,15 @@ impl LocalExecutor {
         // Check resources before execution
         self.check_resources(rule).await?;
 
+        // Pre-flight disk space check (warning only)
+        let disk_warnings = crate::scheduler::validate_disk_requirements(
+            &[rule.clone()],
+            &self.config.workdir,
+        );
+        for warning in disk_warnings {
+            tracing::warn!("{}", warning);
+        }
+
         // Acquire concurrency permit
         let _permit = self
             .semaphore
