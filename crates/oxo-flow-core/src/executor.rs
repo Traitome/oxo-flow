@@ -114,6 +114,47 @@ pub enum JobStatus {
     TimedOut,
 }
 
+/// Validate that an interpreter path is safe to use.
+///
+/// Prevents use of interpreters from untrusted locations. Only allows:
+/// - Simple names (no path component): e.g., "python", "Rscript"
+/// - Absolute paths in standard system directories: /usr/bin, /usr/local/bin, /opt
+/// - Absolute paths in user directories: /home, /Users
+///
+/// Returns Ok(()) if safe, Err if potentially dangerous.
+#[must_use = "interpreter path validation returns a Result that must be checked"]
+pub fn validate_interpreter_path(interpreter: &str) -> crate::Result<()> {
+    // Simple names without path separators are always allowed
+    if !interpreter.contains('/') && !interpreter.contains('\\') {
+        return Ok(());
+    }
+
+    // Check for path traversal
+    if interpreter.contains("..") {
+        return Err(crate::OxoFlowError::Validation {
+            message: format!("Interpreter path '{}' contains path traversal", interpreter),
+            rule: None,
+            suggestion: Some("Avoid '..' in interpreter paths".to_string()),
+        });
+    }
+
+    // For absolute paths, verify they're in safe directories
+    if interpreter.starts_with('/') {
+        let safe_prefixes = ["/usr/bin", "/usr/local/bin", "/opt", "/home", "/Users"];
+        if !safe_prefixes.iter().any(|p| interpreter.starts_with(p)) {
+            return Err(crate::OxoFlowError::Validation {
+                message: format!("Interpreter path '{}' not in safe directories", interpreter),
+                rule: None,
+                suggestion: Some(
+                    "Use interpreters from standard paths (/usr/bin, /usr/local/bin, /opt, /home, /Users)".to_string(),
+                ),
+            });
+        }
+    }
+
+    Ok(())
+}
+
 impl std::fmt::Display for JobStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -682,7 +723,18 @@ impl LocalExecutor {
                 rule.interpreter.as_deref(),
                 &self.config.interpreter_map,
             ) {
-                Some(interp) => build_script_command(&interp, &expanded_script),
+                Some(interp) => {
+                    // Validate interpreter path for safety
+                    if let Err(e) = validate_interpreter_path(&interp) {
+                        tracing::warn!(
+                            rule = %rule.name,
+                            interpreter = %interp,
+                            error = %e,
+                            "interpreter path validation failed, using as-is"
+                        );
+                    }
+                    build_script_command(&interp, &expanded_script)
+                }
                 None => {
                     tracing::warn!(
                         rule = %rule.name,
@@ -3212,6 +3264,41 @@ mod tests {
         let workdir = std::path::Path::new("/work");
         assert!(validate_path_safety(workdir, "/work/output.txt").is_ok());
         assert!(validate_path_safety(workdir, "/work/subdir/result.bam").is_ok());
+    }
+
+    // -- validate_interpreter_path tests -------------------------------------
+
+    #[test]
+    fn validate_interpreter_allows_simple_names() {
+        assert!(validate_interpreter_path("python").is_ok());
+        assert!(validate_interpreter_path("Rscript").is_ok());
+        assert!(validate_interpreter_path("bash").is_ok());
+        assert!(validate_interpreter_path("perl").is_ok());
+    }
+
+    #[test]
+    fn validate_interpreter_allows_standard_paths() {
+        assert!(validate_interpreter_path("/usr/bin/python").is_ok());
+        assert!(validate_interpreter_path("/usr/local/bin/python3").is_ok());
+        assert!(validate_interpreter_path("/opt/miniconda/bin/python").is_ok());
+    }
+
+    #[test]
+    fn validate_interpreter_allows_user_paths() {
+        assert!(validate_interpreter_path("/home/user/bin/python").is_ok());
+        assert!(validate_interpreter_path("/Users/user/.local/bin/python").is_ok());
+    }
+
+    #[test]
+    fn validate_interpreter_blocks_path_traversal() {
+        assert!(validate_interpreter_path("/usr/bin/../etc/python").is_err());
+        assert!(validate_interpreter_path("../bin/python").is_err());
+    }
+
+    #[test]
+    fn validate_interpreter_blocks_unsafe_paths() {
+        assert!(validate_interpreter_path("/tmp/malicious_python").is_err());
+        assert!(validate_interpreter_path("/var/www/scripts/python").is_err());
     }
 
     #[test]
