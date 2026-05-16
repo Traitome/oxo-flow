@@ -479,6 +479,11 @@ enum ClusterAction {
         /// Output directory for generated job scripts.
         #[arg(short = 'o', long, default_value = ".oxo-flow/cluster")]
         output_dir: PathBuf,
+
+        /// Maximum time to wait for pending jobs before aborting (e.g., "30m", "1h").
+        /// Helps prevent infinite waiting when cluster resources are unavailable.
+        #[arg(long)]
+        pending_timeout: Option<String>,
     },
 
     /// Show the status of submitted cluster jobs.
@@ -1923,7 +1928,23 @@ Thumbs.db
                     queue,
                     account,
                     output_dir,
+                    pending_timeout,
                 } => {
+                    // Parse pending timeout if provided
+                    let pending_timeout_secs = pending_timeout
+                        .as_ref()
+                        .and_then(|t| oxo_flow_core::rule::parse_duration_secs(t));
+
+                    if let Some(ref timeout_str) = pending_timeout
+                        && pending_timeout_secs.is_none()
+                    {
+                        eprintln!(
+                            "{} Invalid pending_timeout format: '{}'. Use format like '30m' or '1h'",
+                            "Warning:".bold().yellow(),
+                            timeout_str
+                        );
+                    }
+
                     let config = WorkflowConfig::from_file(&workflow)
                         .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
@@ -1955,6 +1976,15 @@ Thumbs.db
                         backend,
                         order.len()
                     );
+
+                    // Show pending timeout info if set
+                    if let Some(secs) = pending_timeout_secs {
+                        eprintln!(
+                            "{} Pending job timeout: {} seconds",
+                            "Cluster:".bold().cyan(),
+                            secs
+                        );
+                    }
 
                     // Create environment resolver for command wrapping
                     let env_resolver = oxo_flow_core::environment::EnvironmentResolver::new();
