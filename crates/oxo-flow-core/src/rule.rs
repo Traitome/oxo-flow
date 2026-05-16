@@ -37,15 +37,19 @@ pub fn parse_duration_secs(s: &str) -> Option<u64> {
 pub struct GpuSpec {
     /// Number of GPUs required.
     #[serde(default)]
+    #[serde(skip_serializing_if = "is_zero")]
     pub count: u32,
     /// GPU model constraint (e.g., "A100", "V100", "RTX3090").
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Minimum GPU memory in GB (e.g., 40 for A100-40GB).
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_gb: Option<u32>,
     /// Minimum compute capability (e.g., "7.0" for V100).
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub compute_capability: Option<String>,
 }
 
@@ -57,15 +61,19 @@ pub struct GpuSpec {
 pub struct ResourceHint {
     /// Estimated input size category: "small" (<1GB), "medium" (1-100GB), "large" (>100GB).
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub input_size: Option<String>,
     /// Memory scaling factor relative to input size (e.g., 2.0 means 2x input size).
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_scale: Option<f64>,
     /// Estimated runtime category: "fast" (<10min), "medium" (10min-1h), "slow" (>1h).
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime: Option<String>,
     /// Whether this step is I/O bound (true) or CPU bound (false).
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub io_bound: Option<bool>,
 }
 
@@ -74,39 +82,66 @@ pub struct ResourceHint {
 pub struct Resources {
     /// Number of CPU threads.
     #[serde(default = "default_threads")]
+    #[serde(skip_serializing_if = "is_default_threads")]
     pub threads: u32,
 
     /// Memory requirement (e.g., "8G", "16G").
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub memory: Option<String>,
 
     /// GPU requirement (number of GPUs).
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu: Option<u32>,
 
     /// Detailed GPU specification (alternative to simple `gpu` count).
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu_spec: Option<GpuSpec>,
 
     /// Disk space requirement (e.g., "100G").
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub disk: Option<String>,
 
     /// Wall-time limit (e.g., "24h", "30m").
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub time_limit: Option<String>,
 
     /// Partition or queue name to submit this job to.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub partition: Option<String>,
 
     /// Resource group consumption (e.g., {"db_connection": 1}).
     #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub groups: HashMap<String, u32>,
 }
 
 fn default_threads() -> u32 {
     1
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+fn is_zero<T>(n: &T) -> bool
+where
+    T: Default + PartialEq,
+{
+    *n == T::default()
+}
+
+fn is_default_threads(n: &u32) -> bool {
+    *n == 1
+}
+
+fn is_resources_default(r: &Resources) -> bool {
+    *r == Resources::default()
 }
 
 impl Default for Resources {
@@ -132,26 +167,32 @@ impl Default for Resources {
 pub struct EnvironmentSpec {
     /// Conda environment YAML file path.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub conda: Option<String>,
 
     /// Pixi environment specification.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pixi: Option<String>,
 
     /// Docker image reference (e.g., "biocontainers/bwa:0.7.17").
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub docker: Option<String>,
 
     /// Singularity/Apptainer image reference.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub singularity: Option<String>,
 
     /// Python venv path or requirements file.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub venv: Option<String>,
 
     /// HPC software modules to load (e.g., ["gcc/11.2", "cuda/11.7"]).
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub modules: Vec<String>,
 }
 
@@ -197,14 +238,17 @@ pub struct ScatterConfig {
 
     /// The values to scatter across.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub values: Vec<String>,
 
     /// Reference to a config variable for values (e.g., "config.samples").
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub values_from: Option<String>,
 
     /// Optional gather rule name that collects scattered outputs.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub gather: Option<String>,
 }
 
@@ -217,6 +261,7 @@ pub struct ExpandConfig {
     /// Map of variable names to config references or literal lists.
     /// E.g., "sample" => "config.samples"
     #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub variables: HashMap<String, String>,
 }
 
@@ -228,68 +273,84 @@ pub struct Rule {
 
     /// Input file patterns (may contain wildcards like `{sample}`).
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub input: Vec<String>,
 
     /// Expanded input file patterns via Cartesian product.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub expand_inputs: Vec<ExpandConfig>,
 
     /// Output file patterns (may contain wildcards).
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub output: Vec<String>,
 
     /// Shell command template to execute.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub shell: Option<String>,
 
     /// Script file to execute instead of a shell command.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub script: Option<String>,
 
     /// Number of threads (shorthand for resources.threads).
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[deprecated(since = "0.4.0", note = "use resources.threads instead")]
     pub threads: Option<u32>,
 
     /// Memory requirement (shorthand for resources.memory).
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[deprecated(since = "0.4.0", note = "use resources.memory instead")]
     pub memory: Option<String>,
 
     /// Full resource specification.
     #[serde(default)]
+    #[serde(skip_serializing_if = "is_resources_default")]
     pub resources: Resources,
 
     /// Environment specification for this rule.
     #[serde(default)]
+    #[serde(skip_serializing_if = "EnvironmentSpec::is_empty")]
     pub environment: EnvironmentSpec,
 
     /// Log file path pattern.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub log: Option<String>,
 
     /// Benchmark file path pattern.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub benchmark: Option<String>,
 
     /// Rule parameters (arbitrary key-value pairs).
     #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub params: HashMap<String, toml::Value>,
 
     /// Priority (higher = run first). Default is 0.
     #[serde(default)]
+    #[serde(skip_serializing_if = "is_zero")]
     pub priority: i32,
 
     /// Whether this is a target rule (should be built by default).
     #[serde(default)]
+    #[serde(skip_serializing_if = "is_false")]
     pub target: bool,
 
     /// Group label for grouping jobs on cluster execution.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
 
     /// Optional description of what this rule does.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 
     /// Conditional execution expression.
@@ -298,6 +359,7 @@ pub struct Rule {
     /// Supports simple config-variable references (e.g., `config.enable_qc`)
     /// and file-existence checks.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub when: Option<String>,
 
     /// Scatter configuration for parallel execution across a variable.
@@ -305,15 +367,18 @@ pub struct Rule {
     /// Fans out this rule into multiple parallel instances, one per element
     /// of the scatter variable.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scatter: Option<ScatterConfig>,
 
     /// Temporary output files that should be cleaned up after downstream
     /// rules complete.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub temp_output: Vec<String>,
 
     /// Protected output files that should never be overwritten or deleted.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub protected_output: Vec<String>,
 
     /// Dynamic input function name for runtime input resolution.
@@ -321,41 +386,50 @@ pub struct Rule {
     /// When set, inputs are resolved at execution time by calling this
     /// function with the current wildcard values.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub input_function: Option<String>,
 
     /// Number of times to automatically retry this rule on failure.
     #[serde(default)]
+    #[serde(skip_serializing_if = "is_zero")]
     pub retries: u32,
 
     /// Tags for categorization and filtering (e.g., ["qc", "alignment", "variant-calling"]).
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
 
     /// Shadow directory mode for atomic rule execution.
     /// "minimal" copies only input files, "shallow" creates symlinks,
     /// "full" copies the entire working directory.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub shadow: Option<String>,
 
     /// Mark specific inputs as "ancient" - these inputs never trigger re-execution
     /// even if they are newer than outputs.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub ancient: Vec<String>,
 
     /// Whether this rule should always run locally (never submitted to cluster).
     #[serde(default)]
+    #[serde(skip_serializing_if = "is_false")]
     pub localrule: bool,
 
     /// Environment variables to inject before running this rule.
     #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub envvars: HashMap<String, String>,
 
     /// Whether this rule is a checkpoint that allows dynamic DAG modification.
     #[serde(default)]
+    #[serde(skip_serializing_if = "is_false")]
     pub checkpoint: bool,
 
     /// Whether this rule is required (pipeline fails if this rule fails).
     #[serde(default)]
+    #[serde(skip_serializing_if = "is_false")]
     pub required: bool,
 
     /// Explicit rule-level dependencies (rule names that must complete first).
@@ -365,6 +439,7 @@ pub struct Rule {
     /// This is useful for setup/teardown steps, database migrations, or
     /// environment initialization that other rules depend on logically.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
 
     /// Name of a base rule to inherit settings from.
@@ -374,6 +449,7 @@ pub struct Rule {
     /// `params` from the named rule. Fields explicitly set on this rule
     /// override the inherited values.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub extends: Option<String>,
 
     /// Delay between retry attempts (e.g., "5s", "30s", "2m").
@@ -381,6 +457,7 @@ pub struct Rule {
     /// When `retries > 0`, this specifies the wait time before each retry.
     /// Supports seconds ("10s"), minutes ("2m"), and hours ("1h").
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub retry_delay: Option<String>,
 
     /// Per-rule working directory override.
@@ -389,24 +466,28 @@ pub struct Rule {
     /// global working directory. Relative paths are resolved against the
     /// workflow working directory.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub workdir: Option<String>,
 
     /// Shell command to execute on successful completion of this rule.
     ///
     /// Useful for notifications, cleanup, or triggering downstream processes.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub on_success: Option<String>,
 
     /// Shell command to execute when this rule fails (after all retries).
     ///
     /// Useful for cleanup, alerting, or fallback actions.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub on_failure: Option<String>,
 
     /// File format hints for inputs/outputs (e.g., "bam", "vcf", "h5ad", "fastq.gz").
     ///
     /// Helps the engine optimize I/O and select appropriate validation.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub format_hint: Vec<String>,
 
     /// Enable streaming/FIFO mode for this rule's inputs.
@@ -414,6 +495,7 @@ pub struct Rule {
     /// When true, inputs may be provided via named pipes instead of regular files,
     /// enabling streaming data processing without intermediate disk I/O.
     #[serde(default)]
+    #[serde(skip_serializing_if = "is_false")]
     pub pipe: bool,
 
     /// Checksum algorithm for output integrity verification ("md5", "sha256").
@@ -421,10 +503,12 @@ pub struct Rule {
     /// When set, output file checksums are computed after execution and stored
     /// for later verification.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub checksum: Option<String>,
 
     /// Resource estimation hints for dynamic scheduling.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_hint: Option<ResourceHint>,
 
     /// Arbitrary domain-specific metadata (e.g., assay type, organism, data type).
@@ -432,6 +516,7 @@ pub struct Rule {
     /// This field allows workflow authors to attach structured metadata to rules
     /// for use by downstream tools, reports, or pipeline-specific logic.
     #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub rule_metadata: HashMap<String, toml::Value>,
 
     /// Content-based cache key override.
@@ -439,6 +524,7 @@ pub struct Rule {
     /// When set, the scheduler uses this key (along with input checksums) to
     /// determine if cached outputs can be reused, enabling content-addressed caching.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_key: Option<String>,
 }
 

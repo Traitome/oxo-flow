@@ -8,7 +8,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use colored::Colorize;
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
-use oxo_flow_core::executor::{ExecutorConfig, LocalExecutor};
+use oxo_flow_core::executor::{CheckpointState, ExecutorConfig, LocalExecutor};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -580,7 +580,9 @@ async fn main() -> Result<()> {
             let exec_config = ExecutorConfig {
                 max_jobs: jobs,
                 dry_run: false,
-                workdir: workdir.unwrap_or_else(|| std::env::current_dir().unwrap_or_default()),
+                workdir: workdir
+                    .clone()
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default()),
                 keep_going,
                 retry_count: retry,
                 timeout: if timeout > 0 {
@@ -613,6 +615,21 @@ async fn main() -> Result<()> {
             let mut skipped_count = 0;
             let mut completed_rules = std::collections::HashSet::new();
 
+            // Load persistent checkpoint state to resume from previous run
+            let workflow_stem = workflow
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("default");
+            let checkpoint_filename = format!("checkpoint_{}.json", workflow_stem);
+            let checkpoint_path = workdir
+                .clone()
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+                .join(".oxo-flow")
+                .join(checkpoint_filename);
+
+            let mut checkpoint =
+                CheckpointState::load_from_file(&checkpoint_path).unwrap_or_default();
+
             // Build wildcard values from workflow config variables so that
             // {config.key} placeholders in shell templates are expanded.
             let mut wildcard_values: HashMap<String, String> = HashMap::new();
@@ -635,12 +652,48 @@ async fn main() -> Result<()> {
                     continue;
                 }
 
+                // Skip if rule already completed in a previous run (persistent checkpoint)
+                if checkpoint.is_completed(rule_name) {
+                    skipped_count += 1;
+                    completed_rules.insert(rule_name.clone());
+                    eprintln!(
+                        "  {} {} {}",
+                        "~".cyan().bold(),
+                        rule_name,
+                        "(already completed)".dimmed()
+                    );
+                    continue;
+                }
+
                 let rule = config.get_rule(rule_name).unwrap().clone();
                 match executor.execute_rule(&rule, &wildcard_values).await {
                     Ok(record) => {
                         completed_rules.insert(rule_name.clone());
                         if record.status == oxo_flow_core::executor::JobStatus::Success {
                             success_count += 1;
+
+                            // Convert JobRecord to BenchmarkRecord for checkpointing
+                            let duration = if let (Some(start), Some(finish)) =
+                                (record.started_at, record.finished_at)
+                            {
+                                (finish - start)
+                                    .to_std()
+                                    .unwrap_or(std::time::Duration::from_secs(0))
+                                    .as_secs_f64()
+                            } else {
+                                0.0
+                            };
+                            let benchmark = oxo_flow_core::executor::BenchmarkRecord {
+                                rule: rule_name.clone(),
+                                wall_time_secs: duration,
+                                max_memory_mb: None,
+                                cpu_seconds: None,
+                            };
+                            checkpoint.mark_completed(rule_name, benchmark);
+                            if let Err(e) = checkpoint.save_to_file(&checkpoint_path) {
+                                tracing::warn!("failed to save checkpoint file: {}", e);
+                            }
+
                             eprintln!("  {} {}", "✓".green().bold(), rule_name);
 
                             // Checkpoint handling: Rebuild DAG
@@ -682,6 +735,9 @@ async fn main() -> Result<()> {
                             );
                         } else {
                             fail_count += 1;
+                            checkpoint.mark_failed(rule_name);
+                            let _ = checkpoint.save_to_file(&checkpoint_path);
+
                             eprintln!("  {} {} — {}", "✗".red().bold(), rule_name, record.status);
                             if let Some(ref cmd) = record.command {
                                 eprintln!("\n  {} {}", "Command executed:".bold(), cmd.dimmed());
@@ -702,6 +758,9 @@ async fn main() -> Result<()> {
                     }
                     Err(e) => {
                         fail_count += 1;
+                        checkpoint.mark_failed(rule_name);
+                        let _ = checkpoint.save_to_file(&checkpoint_path);
+
                         eprintln!("  {} {} — {}", "✗".red().bold(), rule_name, e);
                         if !keep_going {
                             return Err(e.into());

@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+fn is_defaults_empty(d: &Defaults) -> bool {
+    d.threads.is_none() && d.memory.is_none() && d.environment.is_none()
+}
+
 /// Maximum depth for nested include directives to prevent infinite recursion.
 const MAX_INCLUDE_DEPTH: usize = 16;
 
@@ -69,22 +73,27 @@ pub struct WorkflowMeta {
 
     /// Optional description.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 
     /// Author name or organization.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
 
     /// Format specification version (e.g., "1.0").
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub min_version: Option<String>,
 
     /// Format specification version for compatibility checking.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub format_version: Option<String>,
 
     /// Genome build (e.g., "GRCh38", "hg38", "GRCh37").
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub genome_build: Option<String>,
 }
 
@@ -97,14 +106,17 @@ fn default_version() -> String {
 pub struct Defaults {
     /// Default thread count.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub threads: Option<u32>,
 
     /// Default memory.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub memory: Option<String>,
 
     /// Default environment.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub environment: Option<EnvironmentSpec>,
 }
 
@@ -113,14 +125,17 @@ pub struct Defaults {
 pub struct ReportConfig {
     /// Report template name.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
 
     /// Output formats (html, pdf, json).
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub format: Vec<String>,
 
     /// Report sections to include.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sections: Vec<String>,
 }
 
@@ -135,6 +150,7 @@ pub struct IncludeDirective {
 
     /// Optional namespace prefix for included rule names.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
 }
 
@@ -169,6 +185,7 @@ pub struct ExecutionGroup {
 
     /// Rules in this group (by name).
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<String>,
 
     /// Execution mode.
@@ -181,15 +198,19 @@ pub struct ExecutionGroup {
 pub struct CitationInfo {
     /// DOI reference for this workflow.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub doi: Option<String>,
     /// URL to the workflow repository or publication.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// Authors of this workflow.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub authors: Vec<String>,
     /// Associated publication title.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 }
 
@@ -198,15 +219,19 @@ pub struct CitationInfo {
 pub struct ClusterProfile {
     /// Backend type (slurm, pbs, sge, lsf).
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub backend: Option<String>,
     /// Default partition/queue.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub partition: Option<String>,
     /// Default account for billing.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
     /// Additional arguments passed to the scheduler.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extra_args: Vec<String>,
 }
 
@@ -215,12 +240,15 @@ pub struct ClusterProfile {
 pub struct ResourceBudget {
     /// Maximum total CPU threads across all running jobs.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_threads: Option<u32>,
     /// Maximum total memory across all running jobs.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_memory: Option<String>,
     /// Maximum total running jobs.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_jobs: Option<usize>,
 }
 
@@ -235,15 +263,19 @@ pub struct ReferenceDatabase {
     pub name: String,
     /// Version string (e.g., "p14", "b156", "v99").
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// URL or path to the database.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     /// Checksum of the database file for integrity verification.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub checksum: Option<String>,
     /// Date when this database version was downloaded/accessed.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub accessed_date: Option<String>,
 }
 
@@ -368,51 +400,63 @@ pub struct WorkflowConfig {
 
     /// Configuration variables (user-defined key-value pairs).
     #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub config: HashMap<String, toml::Value>,
 
     /// Default settings for all rules.
     #[serde(default)]
+    #[serde(skip_serializing_if = "is_defaults_empty")]
     pub defaults: Defaults,
 
     /// Report configuration.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<ReportConfig>,
 
     /// List of rules (pipeline steps).
     #[serde(default, rename = "rules")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<Rule>,
 
     /// Include directives for importing rules from other workflow files.
     #[serde(default, rename = "include")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub includes: Vec<IncludeDirective>,
 
     /// Explicit execution groups for sequential/parallel rule ordering.
     #[serde(default, rename = "execution_group")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub execution_groups: Vec<ExecutionGroup>,
 
     /// Citation information for reproducibility.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub citation: Option<CitationInfo>,
 
     /// Cluster execution profile.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cluster: Option<ClusterProfile>,
 
     /// Resource budget for the workflow.
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_budget: Option<ResourceBudget>,
 
     /// Shared resource groups for limiting concurrent access to APIs or databases.
     #[serde(default, rename = "resource_groups")]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub resource_groups: HashMap<String, ResourceGroupConfig>,
 
     /// Reference database versions used by this workflow.
     #[serde(default, rename = "reference_db")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub reference_databases: Vec<ReferenceDatabase>,
 
     /// Global wildcard constraints (regular expressions).
     /// Each key is a wildcard name, value is the regex pattern it must match.
     #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub wildcard_constraints: HashMap<String, String>,
 
     /// Experiment-control sample pairs for comparative analysis workflows.
@@ -424,6 +468,7 @@ pub struct WorkflowConfig {
     /// - `{tumor}` aliases `{experiment}`
     /// - `{normal}` aliases `{control}`
     #[serde(default, rename = "pairs")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub pairs: Vec<ExperimentControlPair>,
 
     /// Sample groups for cohort-level analysis.
@@ -431,6 +476,7 @@ pub struct WorkflowConfig {
     /// Rules containing `{group}` or `{sample}` wildcards are expanded for
     /// every (group, sample) combination by [`WorkflowConfig::expand_wildcards`].
     #[serde(default, rename = "sample_groups")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sample_groups: Vec<SampleGroup>,
 }
 
@@ -739,10 +785,17 @@ impl WorkflowConfig {
             path: path.to_path_buf(),
             message: e.to_string(),
         })?;
-        let config: WorkflowConfig = toml::from_str(&content).map_err(|e| OxoFlowError::Parse {
-            path: path.to_path_buf(),
-            message: e.to_string(),
-        })?;
+        let mut config: WorkflowConfig =
+            toml::from_str(&content).map_err(|e| OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: e.to_string(),
+            })?;
+
+        // Resolve modular includes
+        if let Some(parent) = path.parent() {
+            config.resolve_includes(parent)?;
+        }
+
         config.validate()?;
         Ok(config)
     }

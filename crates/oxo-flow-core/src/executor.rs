@@ -794,6 +794,11 @@ impl CheckpointState {
 
     /// Save checkpoint state to a file.
     pub fn save_to_file(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| OxoFlowError::Config {
+                message: format!("failed to create checkpoint directory: {e}"),
+            })?;
+        }
         let json = self.to_json()?;
         std::fs::write(path, json).map_err(|e| OxoFlowError::Config {
             message: format!("failed to save checkpoint to {}: {e}", path.display()),

@@ -27,12 +27,16 @@ use serde::{Deserialize, Serialize};
 
 /// Analysis mode for the Venus pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum AnalysisMode {
     /// Experimental sample only (no matched control).
+    #[serde(alias = "ExperimentOnly")]
     ExperimentOnly,
     /// Control/germline sample only.
+    #[serde(alias = "ControlOnly")]
     ControlOnly,
     /// Paired experiment-control analysis.
+    #[serde(alias = "ExperimentControl")]
     ExperimentControl,
 }
 
@@ -48,12 +52,16 @@ impl std::fmt::Display for AnalysisMode {
 
 /// Sequencing type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
 pub enum SeqType {
     /// Whole genome sequencing.
+    #[serde(alias = "WGS")]
     WGS,
     /// Whole exome sequencing.
+    #[serde(alias = "WES")]
     WES,
     /// Targeted panel sequencing.
+    #[serde(alias = "Panel")]
     Panel,
 }
 
