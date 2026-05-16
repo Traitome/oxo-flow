@@ -47,7 +47,7 @@ oxo-flow lint pipeline.oxoflow --strict
 ## Output
 
 ```
-oxo-flow 0.4.1 — Bioinformatics Pipeline Engine
+oxo-flow 0.4.2 — Bioinformatics Pipeline Engine
   warning [W001]: rule 'bwa_align' missing resources block
   info [I002]: rule 'fastqc' could use more threads
 

@@ -28,7 +28,7 @@ Returns server status and version.
 ```json
 {
   "status": "ok",
-  "version": "0.4.1"
+  "version": "0.4.2"
 }
 ```
 
@@ -247,7 +247,7 @@ Returns current system usage, request counts, and execution metrics.
 ```json
 {
   "uptime_secs": 86400.5,
-  "version": "0.4.1",
+  "version": "0.4.2",
   "pid": 1234,
   "os": "linux",
   "arch": "x86_64",

@@ -11,7 +11,7 @@ oxo-flow run pipeline.oxoflow -j 8
 ```
 
 ```
-oxo-flow 0.4.1 — Bioinformatics Pipeline Engine
+oxo-flow 0.4.2 — Bioinformatics Pipeline Engine
 DAG: 5 rules in execution order
   1. fastqc
   2. trim_reads
@@ -173,7 +173,7 @@ A **DAG** is a mathematical representation of your workflow. It is a "map" that 
 
 ## Project Status
 
-oxo-flow is under active development. The current release (`v0.4.1`) includes the complete core engine, CLI, web API, and Venus pipeline. See the [Changelog](./development/changelog.md) for release history and the [Contributing guide](./development/contributing.md) if you want to get involved.
+oxo-flow is under active development. The current release (`v0.4.2`) includes the complete core engine, CLI, web API, and Venus pipeline. See the [Changelog](./development/changelog.md) for release history and the [Contributing guide](./development/contributing.md) if you want to get involved.
 
 ---
 

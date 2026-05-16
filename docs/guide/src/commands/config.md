@@ -66,7 +66,7 @@ oxo-flow config set pipeline.oxoflow reference /data/references/GRCh38/genome.fa
 ## Output
 
 ```
-oxo-flow 0.4.1 — Bioinformatics Pipeline Engine
+oxo-flow 0.4.2 — Bioinformatics Pipeline Engine
 Workflow Configuration:
   Name:    germline-wgs
   Version: 1.0.0
