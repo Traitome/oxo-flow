@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="logo.svg" width="180" alt="oxo-flow logo">
+
 # oxo-flow
 
 **A Rust-native bioinformatics pipeline engine — built from first principles for performance, reproducibility, and clinical-grade rigor.**
@@ -190,7 +192,7 @@ Wildcards like `{sample}` are expanded automatically based on input file discove
 
 ## CLI Commands
 
-The `oxo-flow` binary provides 21 subcommands for the complete workflow lifecycle:
+The `oxo-flow` binary provides 22 subcommands for the complete workflow lifecycle:
 
 | Command | Description |
 |---------|-------------|
@@ -199,6 +201,7 @@ The `oxo-flow` binary provides 21 subcommands for the complete workflow lifecycl
 | `oxo-flow validate` | Validate an `.oxoflow` file for syntax and semantic correctness |
 | `oxo-flow graph` | Export the workflow DAG in DOT format for visualization |
 | `oxo-flow report` | Generate execution reports (`-f html\|json`, `-o` output path) |
+| `oxo-flow batch` | Execute command templates in parallel across multiple items (lightweight alternative to full workflows) |
 | `oxo-flow env` | Manage software environments (list, check) |
 | `oxo-flow package` | Package workflow into a container image (`-f docker\|singularity`) |
 | `oxo-flow serve` | Start the web interface (`--host`, `-p` port, default: `127.0.0.1:8080`) |
@@ -271,7 +274,7 @@ oxo-flow/
 ├── crates/
 │   ├── oxo-flow-core/     # Core library: DAG engine, executor, environment mgmt,
 │   │                      # config parsing, scheduler, wildcard expansion, reporting
-│   ├── oxo-flow-cli/      # CLI binary ("oxo-flow") — Clap-based, 13 subcommands
+│   ├── oxo-flow-cli/      # CLI binary ("oxo-flow") — Clap-based, 22 subcommands
 │   ├── oxo-flow-web/      # Web server ("oxo-flow-web") — axum REST API + frontend
 │   └── venus/             # Venus pipeline ("oxo-flow-venus") — clinical variant detection
 ├── pipelines/

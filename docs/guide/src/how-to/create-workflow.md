@@ -182,6 +182,14 @@ samtools index {output}
 !!! tip "Validate early"
     Run `oxo-flow validate` before executing to catch syntax errors and circular dependencies.
 
+!!! tip "Use batch for simple tasks"
+    For quick parallel operations (e.g., running the same command on multiple files), use [`oxo-flow batch`](../commands/batch.md) instead of writing a full workflow:
+    ```bash
+    # Instead of writing a workflow, use batch for simple tasks
+    oxo-flow batch "samtools flagstat {item}" *.bam -j 8
+    oxo-flow batch "fastqc {item}" *.fastq.gz
+    ```
+
 ---
 
 ## Complete example

@@ -92,7 +92,7 @@ Jump to the **How-to Guides**:
 
 ### If you need exact syntax and options
 
-See the **Command Reference** for all 21 CLI subcommands with usage, options, and examples.
+See the **Command Reference** for all 22 CLI subcommands with usage, options, and examples.
 
 ### If you want the full technical details
 
