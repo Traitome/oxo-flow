@@ -44,3 +44,6 @@ workspace/
 
 # Metadata and checkpoints
 .oxo-flow/
+
+# Example workflow outputs (generated when testing gallery examples)
+hello.txt
