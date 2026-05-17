@@ -1095,10 +1095,16 @@ mod tests {
 
         // Strelka2 should use recal BAMs as input
         let strelka_rule = rules.iter().find(|r| r.name == "strelka2_EXP1").unwrap();
-        assert_eq!(strelka_rule.input[0], "output/recal/EXP1.recal.bam");
-        assert_eq!(strelka_rule.input[1], "output/recal/CTRL1.recal.bam");
         assert_eq!(
-            strelka_rule.output[0],
+            strelka_rule.input.get_index(0).unwrap(),
+            "output/recal/EXP1.recal.bam"
+        );
+        assert_eq!(
+            strelka_rule.input.get_index(1).unwrap(),
+            "output/recal/CTRL1.recal.bam"
+        );
+        assert_eq!(
+            strelka_rule.output.get_index(0).unwrap(),
             "output/variants/EXP1.strelka2.vcf.gz"
         );
     }
@@ -1140,7 +1146,7 @@ mod tests {
 
         let annotate_rule = rules.iter().find(|r| r.name == "annotate_EXP1").unwrap();
         assert_eq!(
-            annotate_rule.input[0],
+            annotate_rule.input.get_index(0).unwrap(),
             "output/variants/EXP1.mutect2.filtered.vcf.gz"
         );
     }

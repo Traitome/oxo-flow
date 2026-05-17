@@ -497,8 +497,8 @@ mod tests {
         vec![
             Rule {
                 name: "a".to_string(),
-                input: vec![],
-                output: vec!["a.txt".to_string()],
+                input: vec![].into(),
+                output: vec!["a.txt".to_string()].into(),
                 shell: Some("echo a".to_string()),
                 script: None,
                 threads: None,
@@ -516,8 +516,8 @@ mod tests {
             },
             Rule {
                 name: "b".to_string(),
-                input: vec!["a.txt".to_string()],
-                output: vec!["b.txt".to_string()],
+                input: vec!["a.txt".to_string()].into(),
+                output: vec!["b.txt".to_string()].into(),
                 shell: Some("echo b".to_string()),
                 script: None,
                 threads: None,
@@ -620,8 +620,8 @@ mod tests {
         let rules = vec![
             Rule {
                 name: "low".to_string(),
-                input: vec![],
-                output: vec!["low.txt".to_string()],
+                input: vec![].into(),
+                output: vec!["low.txt".to_string()].into(),
                 shell: Some("echo low".to_string()),
                 script: None,
                 threads: None,
@@ -639,8 +639,8 @@ mod tests {
             },
             Rule {
                 name: "high".to_string(),
-                input: vec![],
-                output: vec!["high.txt".to_string()],
+                input: vec![].into(),
+                output: vec!["high.txt".to_string()].into(),
                 shell: Some("echo high".to_string()),
                 script: None,
                 threads: None,
@@ -658,8 +658,8 @@ mod tests {
             },
             Rule {
                 name: "mid".to_string(),
-                input: vec![],
-                output: vec!["mid.txt".to_string()],
+                input: vec![].into(),
+                output: vec!["mid.txt".to_string()].into(),
                 shell: Some("echo mid".to_string()),
                 script: None,
                 threads: None,
@@ -690,28 +690,28 @@ mod tests {
         let mut rules = vec![
             Rule {
                 name: "source".to_string(),
-                output: vec!["a.txt".to_string(), "b.txt".to_string()],
+                output: vec!["a.txt".to_string(), "b.txt".to_string()].into(),
                 shell: Some("echo source".to_string()),
                 ..Default::default()
             },
             Rule {
                 name: "left".to_string(),
-                input: vec!["a.txt".to_string()],
-                output: vec!["left.txt".to_string()],
+                input: vec!["a.txt".to_string()].into(),
+                output: vec!["left.txt".to_string()].into(),
                 shell: Some("echo left".to_string()),
                 ..Default::default()
             },
             Rule {
                 name: "right".to_string(),
-                input: vec!["b.txt".to_string()],
-                output: vec!["right.txt".to_string()],
+                input: vec!["b.txt".to_string()].into(),
+                output: vec!["right.txt".to_string()].into(),
                 shell: Some("echo right".to_string()),
                 ..Default::default()
             },
             Rule {
                 name: "merge".to_string(),
-                input: vec!["left.txt".to_string(), "right.txt".to_string()],
-                output: vec!["final.txt".to_string()],
+                input: vec!["left.txt".to_string(), "right.txt".to_string()].into(),
+                output: vec!["final.txt".to_string()].into(),
                 shell: Some("echo merge".to_string()),
                 ..Default::default()
             },

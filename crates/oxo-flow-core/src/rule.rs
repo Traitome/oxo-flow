@@ -339,6 +339,144 @@ pub struct ExpandConfig {
     pub variables: HashMap<String, String>,
 }
 
+/// A collection of file patterns, which can be either a simple list or a named map.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FilePatterns {
+    /// List of file patterns (e.g., `["a.txt", "b.txt"]`).
+    List(Vec<String>),
+    /// Named map of file patterns (e.g., `{ reads = "reads.fq" }`).
+    Map(HashMap<String, String>),
+}
+
+impl Default for FilePatterns {
+    fn default() -> Self {
+        Self::List(Vec::new())
+    }
+}
+
+impl FilePatterns {
+    /// Returns true if the collection is empty.
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::List(v) => v.is_empty(),
+            Self::Map(m) => m.is_empty(),
+        }
+    }
+
+    /// Returns the number of patterns.
+    pub fn len(&self) -> usize {
+        match self {
+            Self::List(v) => v.len(),
+            Self::Map(m) => m.len(),
+        }
+    }
+
+    /// Returns an iterator over all patterns as strings.
+    pub fn iter(&self) -> Box<dyn Iterator<Item = &String> + '_> {
+        match self {
+            Self::List(v) => Box::new(v.iter()),
+            Self::Map(m) => Box::new(m.values()),
+        }
+    }
+
+    /// Returns a list of all patterns as strings.
+    pub fn to_vec(&self) -> Vec<String> {
+        match self {
+            Self::List(v) => v.clone(),
+            Self::Map(m) => m.values().cloned().collect(),
+        }
+    }
+
+    /// Join all patterns with a separator.
+    pub fn join(&self, sep: &str) -> String {
+        self.to_vec().join(sep)
+    }
+
+    /// Get a pattern by index (0-indexed).
+    pub fn get_index(&self, index: usize) -> Option<&String> {
+        match self {
+            Self::List(v) => v.get(index),
+            Self::Map(m) => {
+                // For maps, indexed access follows deterministic order (keys)
+                let mut keys: Vec<&String> = m.keys().collect();
+                keys.sort();
+                m.get(keys.get(index)? as &str)
+            }
+        }
+    }
+
+    /// Get a pattern by name.
+    pub fn get_named(&self, name: &str) -> Option<&String> {
+        match self {
+            Self::List(_) => None,
+            Self::Map(m) => m.get(name),
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a FilePatterns {
+    type Item = &'a String;
+    type IntoIter = Box<dyn Iterator<Item = &'a String> + 'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl std::iter::FromIterator<String> for FilePatterns {
+    fn from_iter<I: IntoIterator<Item = String>>(iter: I) -> Self {
+        Self::List(iter.into_iter().collect())
+    }
+}
+
+impl From<Vec<String>> for FilePatterns {
+    fn from(v: Vec<String>) -> Self {
+        Self::List(v)
+    }
+}
+
+impl From<HashMap<String, String>> for FilePatterns {
+    fn from(m: HashMap<String, String>) -> Self {
+        Self::Map(m)
+    }
+}
+
+impl From<&[&str]> for FilePatterns {
+    fn from(v: &[&str]) -> Self {
+        Self::List(v.iter().map(|s| s.to_string()).collect())
+    }
+}
+
+impl std::hash::Hash for FilePatterns {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            Self::List(v) => {
+                0.hash(state);
+                v.hash(state);
+            }
+            Self::Map(m) => {
+                1.hash(state);
+                let mut keys: Vec<&String> = m.keys().collect();
+                keys.sort();
+                for k in keys {
+                    k.hash(state);
+                    m.get(k).hash(state);
+                }
+            }
+        }
+    }
+}
+
+impl std::ops::Index<usize> for FilePatterns {
+    type Output = String;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.get_index(index)
+            .expect("index out of bounds for FilePatterns")
+    }
+}
+
 /// A single rule (step) in a workflow.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Rule {
@@ -346,14 +484,10 @@ pub struct Rule {
     pub name: String,
 
     /// Input file patterns (may contain wildcards like `{sample}`).
+    /// Supports either a list `["a.txt"]` or a map `{ reads = "a.txt" }`.
     #[serde(default)]
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub input: Vec<String>,
-
-    /// Named input files for convenient access (e.g., `{input.reads}`).
-    #[serde(default)]
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub named_input: HashMap<String, String>,
+    #[serde(skip_serializing_if = "FilePatterns::is_empty")]
+    pub input: FilePatterns,
 
     /// Expanded input file patterns via Cartesian product.
     #[serde(default)]
@@ -361,14 +495,10 @@ pub struct Rule {
     pub expand_inputs: Vec<ExpandConfig>,
 
     /// Output file patterns (may contain wildcards).
+    /// Supports either a list `["a.txt"]` or a map `{ bam = "a.bam" }`.
     #[serde(default)]
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub output: Vec<String>,
-
-    /// Named output files for convenient access (e.g., `{output.bam}`).
-    #[serde(default)]
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub named_output: HashMap<String, String>,
+    #[serde(skip_serializing_if = "FilePatterns::is_empty")]
+    pub output: FilePatterns,
 
     /// Shell command template to execute.
     #[serde(default)]
@@ -783,20 +913,6 @@ impl RuleBuilder {
         }
     }
 
-    /// Set the input file patterns.
-    #[must_use]
-    pub fn input(mut self, input: Vec<String>) -> Self {
-        self.rule.input = input;
-        self
-    }
-
-    /// Set the output file patterns.
-    #[must_use]
-    pub fn output(mut self, output: Vec<String>) -> Self {
-        self.rule.output = output;
-        self
-    }
-
     /// Set the shell command template.
     #[must_use]
     pub fn shell(mut self, shell: impl Into<String>) -> Self {
@@ -1014,24 +1130,24 @@ impl RuleBuilder {
         self
     }
 
+    /// Set input file patterns.
+    #[must_use]
+    pub fn input(mut self, input: impl Into<FilePatterns>) -> Self {
+        self.rule.input = input.into();
+        self
+    }
+
+    /// Set output file patterns.
+    #[must_use]
+    pub fn output(mut self, output: impl Into<FilePatterns>) -> Self {
+        self.rule.output = output.into();
+        self
+    }
+
     /// Set group label.
     #[must_use]
     pub fn group(mut self, group: impl Into<String>) -> Self {
         self.rule.group = Some(group.into());
-        self
-    }
-
-    /// Set named inputs.
-    #[must_use]
-    pub fn named_input(mut self, named_input: HashMap<String, String>) -> Self {
-        self.rule.named_input = named_input;
-        self
-    }
-
-    /// Set named outputs.
-    #[must_use]
-    pub fn named_output(mut self, named_output: HashMap<String, String>) -> Self {
-        self.rule.named_output = named_output;
         self
     }
 
@@ -1130,8 +1246,8 @@ mod tests {
     fn rule_wildcard_extraction() {
         let rule = Rule {
             name: "test".to_string(),
-            input: vec!["{sample}_R{read}.fastq.gz".to_string()],
-            output: vec!["{sample}.bam".to_string()],
+            input: vec!["{sample}_R{read}.fastq.gz".to_string()].into(),
+            output: vec!["{sample}.bam".to_string()].into(),
             shell: None,
             script: None,
             threads: None,
@@ -1158,8 +1274,8 @@ mod tests {
     fn effective_threads_shorthand() {
         let rule = Rule {
             name: "test".to_string(),
-            input: vec![],
-            output: vec![],
+            input: vec![].into(),
+            output: vec![].into(),
             shell: None,
             script: None,
             threads: Some(8),
@@ -1185,8 +1301,8 @@ mod tests {
     fn make_rule(name: &str) -> Rule {
         Rule {
             name: name.to_string(),
-            input: vec![],
-            output: vec![],
+            input: vec![].into(),
+            output: vec![].into(),
             shell: Some("echo hello".to_string()),
             script: None,
             threads: None,
@@ -1235,7 +1351,7 @@ mod tests {
     #[test]
     fn validate_outputs_without_command() {
         let mut rule = make_rule("test");
-        rule.output = vec!["out.txt".to_string()];
+        rule.output = vec!["out.txt".to_string()].into();
         rule.shell = None;
         rule.script = None;
         rule.transform = None;
@@ -1517,7 +1633,7 @@ mod tests {
             .memory("8G")
             .build();
         assert_eq!(rule.name, "test_rule");
-        assert_eq!(rule.input, vec!["input.txt"]);
+        assert_eq!(rule.input, FilePatterns::from(&["input.txt"][..]));
         assert_eq!(rule.shell, Some("cat input.txt > output.txt".to_string()));
         assert_eq!(rule.effective_threads(), 4);
     }

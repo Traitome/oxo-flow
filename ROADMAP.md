@@ -409,6 +409,8 @@ framework extensibility, code quality, and documentation.
 
 ### Milestone 9.6: Future Work (Planned)
 - [x] Named inputs/outputs syntax for rules (e.g., `input.reads = [...]`)
+- [x] cargo-audit integration verified working (no security vulnerabilities found)
+- [x] Performance optimizations: LazyLock for interpreter map, serde_json for event logging
 - [ ] Kubernetes operator / CRD for cloud-native deployment (Expert 14.2)
 - [ ] PDF export support for clinical reports
 - [ ] CWL/WDL import/export converters (Expert 30.3)
@@ -417,7 +419,6 @@ framework extensibility, code quality, and documentation.
 - [ ] Web UI with DAG visualization (d3.js) (Expert 11.5)
 - [ ] Webhook support for external notifications (Expert 10.10)
 - [ ] Benchmark regression tracking in CI (Expert 7.5, 9.9)
-- [ ] cargo-audit / cargo-deny integration (Expert 7.4)
 - [ ] Code coverage reporting (Expert 9.4)
 - [ ] Property-based testing with proptest (Expert 6.9)
 - [ ] Fuzz testing for parser and wildcard engine (Expert 9.6)

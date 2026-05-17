@@ -497,15 +497,18 @@ fn wc01_pairs_expand_to_concrete_rules() {
         .iter()
         .find(|r| r.name == "align_experiment_CASE_001")
         .unwrap();
-    assert_eq!(align_t1.input[0], "raw/EXP_01_R1.fq.gz");
-    assert_eq!(align_t1.output[0], "aligned/EXP_01.bam");
+    assert_eq!(align_t1.input.get_index(0).unwrap(), "raw/EXP_01_R1.fq.gz");
+    assert_eq!(align_t1.output.get_index(0).unwrap(), "aligned/EXP_01.bam");
 
     let mutect2_c2 = config
         .rules
         .iter()
         .find(|r| r.name == "mutect2_CASE_002")
         .unwrap();
-    assert_eq!(mutect2_c2.output[0], "variants/CASE_002.vcf.gz");
+    assert_eq!(
+        mutect2_c2.output.get_index(0).unwrap(),
+        "variants/CASE_002.vcf.gz"
+    );
 
     // DAG should be buildable and valid
     let dag = WorkflowDag::from_rules(&config.rules).unwrap();
@@ -637,8 +640,11 @@ fn wc02_sample_groups_expand_correctly() {
         .iter()
         .find(|r| r.name == "qc_control_CTRL_001")
         .unwrap();
-    assert_eq!(qc_c001.input[0], "raw/CTRL_001_R1.fq.gz");
-    assert_eq!(qc_c001.output[0], "qc/CTRL_001_fastqc.html");
+    assert_eq!(qc_c001.input.get_index(0).unwrap(), "raw/CTRL_001_R1.fq.gz");
+    assert_eq!(
+        qc_c001.output.get_index(0).unwrap(),
+        "qc/CTRL_001_fastqc.html"
+    );
 
     // DAG must be valid
     let dag = WorkflowDag::from_rules(&config.rules).unwrap();
@@ -1310,8 +1316,8 @@ fn render_shell_command_substitution() {
 
     let rule = Rule {
         name: "align".to_string(),
-        input: vec!["raw/sample_R1.fastq.gz".to_string()],
-        output: vec!["aligned/sample.bam".to_string()],
+        input: vec!["raw/sample_R1.fastq.gz".to_string()].into(),
+        output: vec!["aligned/sample.bam".to_string()].into(),
         shell: Some("bwa mem {config.reference} {input[0]} > {output[0]}".to_string()),
         ..Default::default()
     };

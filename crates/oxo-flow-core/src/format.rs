@@ -156,8 +156,10 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
         // Exception: scatter rules use scatter variables, not input wildcards
         // Exception: pairs rules use {pair_id}, {experiment}, {control} wildcards
         // Exception: sample_groups rules use {group}, {sample} wildcards
-        let input_wildcards = crate::wildcard::extract_wildcards_from_patterns(&rule.input);
-        let output_wildcards = crate::wildcard::extract_wildcards_from_patterns(&rule.output);
+        let input_wildcards =
+            crate::wildcard::extract_wildcards_from_patterns(&rule.input.to_vec());
+        let output_wildcards =
+            crate::wildcard::extract_wildcards_from_patterns(&rule.output.to_vec());
 
         // Get scatter variable if present - scatter variables are exempt from E003
         let scatter_var = rule.scatter.as_ref().map(|s| s.variable.as_str());
@@ -1090,10 +1092,16 @@ pub fn format_workflow(config: &WorkflowConfig) -> String {
             output.push_str(&format!("description = \"{}\"\n", desc));
         }
         if !rule.input.is_empty() {
-            output.push_str(&format!("input = {}\n", format_string_array(&rule.input)));
+            output.push_str(&format!(
+                "input = {}\n",
+                format_string_array(&rule.input.to_vec())
+            ));
         }
         if !rule.output.is_empty() {
-            output.push_str(&format!("output = {}\n", format_string_array(&rule.output)));
+            output.push_str(&format!(
+                "output = {}\n",
+                format_string_array(&rule.output.to_vec())
+            ));
         }
         if let Some(threads) = rule.threads {
             output.push_str(&format!("threads = {}\n", threads));

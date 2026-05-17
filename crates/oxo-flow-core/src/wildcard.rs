@@ -100,7 +100,10 @@ pub fn pattern_to_regex(pattern: &str) -> Result<Regex> {
             .captures(&pattern[mat.start()..mat.end()])
             .ok_or_else(|| OxoFlowError::Wildcard {
                 rule: String::new(),
-                message: format!("internal error: wildcard regex match failed to capture on pattern part '{}'", &pattern[mat.start()..mat.end()]),
+                message: format!(
+                    "internal error: wildcard regex match failed to capture on pattern part '{}'",
+                    &pattern[mat.start()..mat.end()]
+                ),
             })?;
         let name = &cap[1];
         regex_str.push_str(&format!("(?P<{}>\\S+)", name));

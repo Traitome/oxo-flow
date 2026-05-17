@@ -118,6 +118,15 @@ cat results/uppercase.txt
 # HELLO FROM OXO-FLOW!
 ```
 
+!!! success "What to verify"
+    After running your first workflow, check these to confirm success:
+
+    1. **Output files exist**: `ls results/` shows `uppercase.txt`
+    2. **Content is correct**: The file contains the expected uppercase text
+    3. **No error files**: Check `.oxo-flow/` for any error logs
+
+If the output doesn't match expectations, see the [Troubleshooting Guide](../how-to/troubleshooting.md).
+
 ---
 
 ## 7. Visualize the DAG

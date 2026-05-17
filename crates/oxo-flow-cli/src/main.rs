@@ -9,6 +9,7 @@ use colored::Colorize;
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
 use oxo_flow_core::executor::{CheckpointState, ExecutorConfig, LocalExecutor};
+use oxo_flow_core::rule::FilePatterns;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -1444,9 +1445,10 @@ async fn main() -> Result<()> {
                                 && !Path::new(input).exists()
                             {
                                 // Also check if it's an output of another rule
-                                let is_intermediate =
-                                    cfg.rules.iter().any(|r| r.output.contains(input));
-                                if !is_intermediate {
+                                let is_generated =
+                                    cfg.rules.iter().any(|r| r.output.to_vec().contains(input));
+
+                                if !is_generated {
                                     missing_inputs.push(input);
                                 }
                             }
@@ -2770,7 +2772,7 @@ Thumbs.db
                             oxo_flow_core::executor::expand_config_in_path(o, &wildcard_values)
                         })
                         .collect();
-                    if expanded_outputs != rule.output {
+                    if FilePatterns::List(expanded_outputs.clone()) != rule.output {
                         eprintln!("  {} {:?}", "Outputs (template):".dimmed(), rule.output);
                         eprintln!(
                             "  {} {:?}",

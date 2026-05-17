@@ -51,6 +51,24 @@ oxo-flow cluster <ACTION> [OPTIONS] [WORKFLOW/JOB_IDS]
 oxo-flow cluster submit pipeline.oxoflow -b slurm -q work
 ```
 
+### Submit to PBS/Torque
+
+```bash
+oxo-flow cluster submit pipeline.oxoflow -b pbs -q batch
+```
+
+### Submit to SGE (Sun Grid Engine)
+
+```bash
+oxo-flow cluster submit pipeline.oxoflow -b sge -q all.q
+```
+
+### Submit to LSF
+
+```bash
+oxo-flow cluster submit pipeline.oxoflow -b lsf -q normal
+```
+
 ### Submit with pending timeout
 
 ```bash
@@ -100,7 +118,9 @@ Done: 5 scripts written to .oxo-flow/cluster
 
 ## Generated Script Example
 
-For a workflow rule with conda environment:
+For a workflow rule with conda environment, different backends produce different scripts:
+
+### SLURM Script
 
 ```bash
 #!/bin/bash
@@ -111,6 +131,60 @@ For a workflow rule with conda environment:
 #SBATCH --partition=compute
 #SBATCH --output=logs/bwa_align.out
 #SBATCH --error=logs/bwa_align.err
+
+# Environment wrapping (automatically added)
+conda activate bwa_env
+
+bwa mem -t 16 ref.fa reads.fq > aligned.sam
+```
+
+### PBS/Torque Script
+
+```bash
+#!/bin/bash
+#PBS -N bwa_align
+#PBS -l nodes=1:ppn=16
+#PBS -l mem=32gb
+#PBS -l walltime=24:00:00
+#PBS -q compute
+#PBS -o logs/bwa_align.out
+#PBS -e logs/bwa_align.err
+
+# Environment wrapping (automatically added)
+conda activate bwa_env
+
+bwa mem -t 16 ref.fa reads.fq > aligned.sam
+```
+
+### SGE Script
+
+```bash
+#!/bin/bash
+#$ -N bwa_align
+#$ -pe threaded 16
+#$ -l mem_free=32G
+#$ -l h_rt=24:00:00
+#$ -q all.q
+#$ -o logs/bwa_align.out
+#$ -e logs/bwa_align.err
+
+# Environment wrapping (automatically added)
+conda activate bwa_env
+
+bwa mem -t 16 ref.fa reads.fq > aligned.sam
+```
+
+### LSF Script
+
+```bash
+#!/bin/bash
+#BSUB -J bwa_align
+#BSUB -n 16
+#BSUB -R "rusage[mem=32768]"
+#BSUB -W 24:00
+#BSUB -q normal
+#BSUB -o logs/bwa_align.out
+#BSUB -e logs/bwa_align.err
 
 # Environment wrapping (automatically added)
 conda activate bwa_env

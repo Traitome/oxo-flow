@@ -5,7 +5,7 @@
 //! variables, default settings, and a list of rules.
 
 use crate::error::{OxoFlowError, Result};
-use crate::rule::{EnvironmentSpec, Rule};
+use crate::rule::{EnvironmentSpec, FilePatterns, Rule};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -1482,9 +1482,7 @@ impl WorkflowConfig {
         for rule in &self.rules {
             // Collect all text fields that might contain wildcards
             let mut all_text: Vec<&str> = rule.input.iter().map(String::as_str).collect();
-            all_text.extend(rule.named_input.values().map(String::as_str));
             all_text.extend(rule.output.iter().map(String::as_str));
-            all_text.extend(rule.named_output.values().map(String::as_str));
             if let Some(ref shell) = rule.shell {
                 all_text.push(shell);
             }
@@ -1523,56 +1521,62 @@ impl WorkflowConfig {
                     expanded.name = new_name;
 
                     // Expand input/output/shell patterns
-                    expanded.input = rule
-                        .input
-                        .iter()
-                        .map(|p| {
-                            if has_wildcards(p) {
-                                expand_pattern(p, combo).unwrap_or_else(|_| p.clone())
-                            } else {
-                                p.clone()
-                            }
-                        })
-                        .collect();
-                    expanded.named_input = rule
-                        .named_input
-                        .iter()
-                        .map(|(k, v)| {
-                            (
-                                k.clone(),
-                                if has_wildcards(v) {
-                                    expand_pattern(v, combo).unwrap_or_else(|_| v.clone())
-                                } else {
-                                    v.clone()
-                                },
-                            )
-                        })
-                        .collect();
-                    expanded.output = rule
-                        .output
-                        .iter()
-                        .map(|p| {
-                            if has_wildcards(p) {
-                                expand_pattern(p, combo).unwrap_or_else(|_| p.clone())
-                            } else {
-                                p.clone()
-                            }
-                        })
-                        .collect();
-                    expanded.named_output = rule
-                        .named_output
-                        .iter()
-                        .map(|(k, v)| {
-                            (
-                                k.clone(),
-                                if has_wildcards(v) {
-                                    expand_pattern(v, combo).unwrap_or_else(|_| v.clone())
-                                } else {
-                                    v.clone()
-                                },
-                            )
-                        })
-                        .collect();
+                    expanded.input = match rule.input {
+                        FilePatterns::List(ref v) => FilePatterns::List(
+                            v.iter()
+                                .map(|p| {
+                                    if has_wildcards(p) {
+                                        expand_pattern(p, combo).unwrap_or_else(|_| p.to_string())
+                                    } else {
+                                        p.to_string()
+                                    }
+                                })
+                                .collect(),
+                        ),
+                        FilePatterns::Map(ref m) => FilePatterns::Map(
+                            m.iter()
+                                .map(|(k, v)| {
+                                    (
+                                        k.clone(),
+                                        if has_wildcards(v) {
+                                            expand_pattern(v, combo)
+                                                .unwrap_or_else(|_| v.to_string())
+                                        } else {
+                                            v.to_string()
+                                        },
+                                    )
+                                })
+                                .collect(),
+                        ),
+                    };
+                    expanded.output = match rule.output {
+                        FilePatterns::List(ref v) => FilePatterns::List(
+                            v.iter()
+                                .map(|p| {
+                                    if has_wildcards(p) {
+                                        expand_pattern(p, combo).unwrap_or_else(|_| p.to_string())
+                                    } else {
+                                        p.to_string()
+                                    }
+                                })
+                                .collect(),
+                        ),
+                        FilePatterns::Map(ref m) => FilePatterns::Map(
+                            m.iter()
+                                .map(|(k, v)| {
+                                    (
+                                        k.clone(),
+                                        if has_wildcards(v) {
+                                            expand_pattern(v, combo)
+                                                .unwrap_or_else(|_| v.to_string())
+                                        } else {
+                                            v.to_string()
+                                        },
+                                    )
+                                })
+                                .collect(),
+                        ),
+                    };
                     if let Some(ref shell) = rule.shell
                         && has_wildcards(shell)
                     {
@@ -1664,42 +1668,50 @@ impl WorkflowConfig {
                     scattered_rule.name = format!("{}_{}", rule.name, val);
                     scattered_rule.scatter = None; // remove scatter from generated rule
 
-                    scattered_rule.input = scattered_rule
-                        .input
-                        .iter()
-                        .map(|p| expand_pattern(p, &combo).unwrap_or_else(|_| p.clone()))
-                        .collect();
-                    scattered_rule.named_input = scattered_rule
-                        .named_input
-                        .iter()
-                        .map(|(k, v)| {
-                            (
-                                k.clone(),
-                                expand_pattern(v, &combo).unwrap_or_else(|_| v.clone()),
-                            )
-                        })
-                        .collect();
-                    scattered_rule.output = scattered_rule
-                        .output
-                        .iter()
-                        .map(|p| expand_pattern(p, &combo).unwrap_or_else(|_| p.clone()))
-                        .collect();
-                    scattered_rule.named_output = scattered_rule
-                        .named_output
-                        .iter()
-                        .map(|(k, v)| {
-                            (
-                                k.clone(),
-                                expand_pattern(v, &combo).unwrap_or_else(|_| v.clone()),
-                            )
-                        })
-                        .collect();
+                    scattered_rule.input = match scattered_rule.input {
+                        FilePatterns::List(ref v) => FilePatterns::List(
+                            v.iter()
+                                .map(|p| {
+                                    expand_pattern(p, &combo).unwrap_or_else(|_| p.to_string())
+                                })
+                                .collect(),
+                        ),
+                        FilePatterns::Map(ref m) => FilePatterns::Map(
+                            m.iter()
+                                .map(|(k, v)| {
+                                    (
+                                        k.clone(),
+                                        expand_pattern(v, &combo).unwrap_or_else(|_| v.to_string()),
+                                    )
+                                })
+                                .collect(),
+                        ),
+                    };
+                    scattered_rule.output = match scattered_rule.output {
+                        FilePatterns::List(ref v) => FilePatterns::List(
+                            v.iter()
+                                .map(|p| {
+                                    expand_pattern(p, &combo).unwrap_or_else(|_| p.to_string())
+                                })
+                                .collect(),
+                        ),
+                        FilePatterns::Map(ref m) => FilePatterns::Map(
+                            m.iter()
+                                .map(|(k, v)| {
+                                    (
+                                        k.clone(),
+                                        expand_pattern(v, &combo).unwrap_or_else(|_| v.to_string()),
+                                    )
+                                })
+                                .collect(),
+                        ),
+                    };
                     if let Some(ref shell) = scattered_rule.shell {
                         scattered_rule.shell =
                             Some(expand_pattern(shell, &combo).unwrap_or_else(|_| shell.clone()));
                     }
 
-                    scatter_outputs.extend(scattered_rule.output.clone());
+                    scatter_outputs.extend(scattered_rule.output.to_vec());
                     final_rules.push(scattered_rule);
                 }
 
@@ -1732,11 +1744,19 @@ impl WorkflowConfig {
                     // Determine chunk output path
                     let chunk_output = if rule.output.is_empty() {
                         format!(".oxo-flow/chunks/{split_var}/{value}.out")
-                    } else if rule.output[0].contains(&format!("{{{split_var}}}")) {
+                    } else if rule
+                        .output
+                        .get_index(0)
+                        .map(|o| o.contains(&format!("{{{split_var}}}")))
+                        .unwrap_or(false)
+                    {
                         // Replace only {split_var} in output
-                        rule.output[0].replace(&format!("{{{split_var}}}"), value)
+                        rule.output
+                            .get_index(0)
+                            .unwrap()
+                            .replace(&format!("{{{split_var}}}"), value)
                     } else {
-                        let base = &rule.output[0];
+                        let base = rule.output.get_index(0).unwrap();
                         let ext = base.rsplit('.').next().unwrap_or("out");
                         format!(".oxo-flow/chunks/{split_var}/{value}.{ext}")
                     };
@@ -1750,8 +1770,9 @@ impl WorkflowConfig {
                     let mut map_rule = Rule {
                         name: map_rule_name,
                         input: rule.input.clone(),
-                        output: vec![chunk_output],
+                        output: vec![chunk_output].into(),
                         shell: Some(map_shell),
+
                         threads: rule.threads,
                         memory: rule.memory.clone(),
                         resources: rule.resources.clone(),
@@ -1818,7 +1839,7 @@ impl WorkflowConfig {
 
                     let mut combine_rule = Rule {
                         name: combine_rule_name,
-                        input: all_chunk_outputs.clone(),
+                        input: FilePatterns::List(all_chunk_outputs.clone()),
                         output: rule.output.clone(),
                         shell: Some(combine_shell),
                         threads: rule.threads,
@@ -1844,7 +1865,9 @@ impl WorkflowConfig {
         // Apply gather injections and expand_inputs
         for rule in &mut final_rules {
             if let Some(injected) = gather_injections.get(&rule.name) {
-                rule.input.extend(injected.clone());
+                let mut current_input = rule.input.to_vec();
+                current_input.extend(injected.clone());
+                rule.input = FilePatterns::List(current_input);
             }
 
             // process expand_inputs
@@ -1867,7 +1890,9 @@ impl WorkflowConfig {
                 }
 
                 let expanded = crate::wildcard::cartesian_expand(&exp.pattern, &variables);
-                rule.input.extend(expanded);
+                let mut current_input = rule.input.to_vec();
+                current_input.extend(expanded);
+                rule.input = FilePatterns::List(current_input);
             }
         }
 
@@ -1916,12 +1941,17 @@ impl WorkflowConfig {
                     let chunk_output = if rule.output.is_empty() {
                         // Generate a temp chunk file
                         format!(".oxo-flow/chunks/{split_var}/{value}.out")
-                    } else if rule.output[0].contains(&format!("{{{split_var}}}")) {
-                        expand_pattern(&rule.output[0], &combo)
-                            .unwrap_or_else(|_| rule.output[0].clone())
+                    } else if rule
+                        .output
+                        .get_index(0)
+                        .map(|o| o.contains(&format!("{{{split_var}}}")))
+                        .unwrap_or(false)
+                    {
+                        expand_pattern(rule.output.get_index(0).unwrap(), &combo)
+                            .unwrap_or_else(|_| rule.output.get_index(0).unwrap().to_string())
                     } else {
                         // Append split value to output
-                        let base = &rule.output[0];
+                        let base = rule.output.get_index(0).unwrap();
                         let ext = base.rsplit('.').next().unwrap_or("out");
                         format!(".oxo-flow/chunks/{split_var}/{value}.{ext}")
                     };
@@ -1936,14 +1966,14 @@ impl WorkflowConfig {
                         });
                     }
 
+                    let map_shell = expand_pattern(&transform.map, &combo)
+                        .unwrap_or_else(|_| transform.map.clone());
+
                     let mut map_rule = Rule {
                         name: map_rule_name,
                         input: rule.input.clone(),
-                        output: vec![chunk_output],
-                        shell: Some(
-                            expand_pattern(&transform.map, &combo)
-                                .unwrap_or_else(|_| transform.map.clone()),
-                        ),
+                        output: vec![chunk_output].into(),
+                        shell: Some(map_shell),
                         threads: rule.threads,
                         memory: rule.memory.clone(),
                         resources: rule.resources.clone(),
@@ -2021,7 +2051,7 @@ impl WorkflowConfig {
 
                     let mut combine_rule = Rule {
                         name: combine_rule_name,
-                        input: all_chunk_outputs.clone(),
+                        input: FilePatterns::List(all_chunk_outputs.clone()),
                         output: rule.output.clone(),
                         shell: Some(combine_shell),
                         threads: rule.threads,
@@ -3231,8 +3261,8 @@ mod tests {
             crate::rule::Rule {
                 name: "align_sample".to_string(),
                 extends: Some("base_align".to_string()),
-                input: vec!["reads.fq".to_string()],
-                output: vec!["aligned.bam".to_string()],
+                input: vec!["reads.fq".to_string()].into(),
+                output: vec!["aligned.bam".to_string()].into(),
                 shell: Some("bwa mem ref.fa {input} > {output}".to_string()),
                 ..Default::default()
             },

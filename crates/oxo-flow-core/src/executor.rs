@@ -6,19 +6,22 @@
 
 use crate::environment::EnvironmentResolver;
 use crate::error::{OxoFlowError, Result};
-use crate::rule::Rule;
+use crate::rule::{FilePatterns, Rule};
 use crate::scheduler::ResourcePool;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use tokio::process::Command;
 use tokio::sync::{Mutex, Semaphore};
 
 /// Default interpreter mapping for script file extensions.
-fn default_interpreter_map() -> HashMap<String, String> {
+///
+/// Using a module-level static avoids recreating the same HashMap on every
+/// call to `detect_interpreter`, significantly reducing allocations.
+static DEFAULT_INTERPRETER_MAP: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
     let mut map = HashMap::new();
     // Python scripts
     map.insert(".py".to_string(), "python".to_string());
@@ -49,7 +52,7 @@ fn default_interpreter_map() -> HashMap<String, String> {
     map.insert(".nextflow".to_string(), "nextflow run".to_string());
     map.insert(".wdl".to_string(), "miniwdl run".to_string());
     map
-}
+});
 
 /// Detect interpreter for a script file based on extension.
 ///
@@ -66,8 +69,7 @@ pub fn detect_interpreter(
     }
 
     // Priority 2: custom interpreter map from workflow config
-    // Priority 3: default interpreter map
-    let defaults = default_interpreter_map();
+    // Priority 3: default interpreter map (static, no allocation per call)
 
     // Extract file extension
     let ext = Path::new(script_path)
@@ -80,7 +82,7 @@ pub fn detect_interpreter(
         if let Some(interp) = custom_map.get(extension) {
             return Some(interp.clone());
         }
-        if let Some(interp) = defaults.get(extension) {
+        if let Some(interp) = DEFAULT_INTERPRETER_MAP.get(extension) {
             return Some(interp.clone());
         }
     }
@@ -208,56 +210,65 @@ impl ExecutionEvent {
     /// Produces a single-line JSON object (NDJSON format) with a `timestamp`
     /// field added automatically. This format is compatible with log
     /// aggregation tools like Elasticsearch, Datadog, and CloudWatch.
+    ///
+    /// Uses serde_json for proper JSON escaping and efficient serialization.
     pub fn to_json_log(&self) -> String {
         let timestamp = chrono::Utc::now().to_rfc3339();
         match self {
             ExecutionEvent::WorkflowStarted {
                 workflow_name,
                 total_rules,
-            } => {
-                format!(
-                    r#"{{"timestamp":"{}","event":"workflow_started","workflow":"{}","total_rules":{}}}"#,
-                    timestamp, workflow_name, total_rules
-                )
-            }
-            ExecutionEvent::RuleStarted { rule, command } => {
-                let cmd = command.as_deref().unwrap_or("");
-                format!(
-                    r#"{{"timestamp":"{}","event":"rule_started","rule":"{}","command":"{}"}}"#,
-                    timestamp,
-                    rule,
-                    cmd.replace('"', "\\\"")
-                )
-            }
+            } => serde_json::json!({
+                "timestamp": timestamp,
+                "event": "workflow_started",
+                "workflow": workflow_name,
+                "total_rules": total_rules
+            })
+            .to_string(),
+
+            ExecutionEvent::RuleStarted { rule, command } => serde_json::json!({
+                "timestamp": timestamp,
+                "event": "rule_started",
+                "rule": rule,
+                "command": command.as_deref().unwrap_or("")
+            })
+            .to_string(),
+
             ExecutionEvent::RuleCompleted {
                 rule,
                 status,
                 duration_ms,
-            } => {
-                format!(
-                    r#"{{"timestamp":"{}","event":"rule_completed","rule":"{}","status":"{}","duration_ms":{}}}"#,
-                    timestamp, rule, status, duration_ms
-                )
-            }
-            ExecutionEvent::RuleSkipped { rule, reason } => {
-                format!(
-                    r#"{{"timestamp":"{}","event":"rule_skipped","rule":"{}","reason":"{}"}}"#,
-                    timestamp,
-                    rule,
-                    reason.replace('"', "\\\"")
-                )
-            }
+            } => serde_json::json!({
+                "timestamp": timestamp,
+                "event": "rule_completed",
+                "rule": rule,
+                "status": status.to_string(),
+                "duration_ms": duration_ms
+            })
+            .to_string(),
+
+            ExecutionEvent::RuleSkipped { rule, reason } => serde_json::json!({
+                "timestamp": timestamp,
+                "event": "rule_skipped",
+                "rule": rule,
+                "reason": reason
+            })
+            .to_string(),
+
             ExecutionEvent::WorkflowCompleted {
                 total_duration_ms,
                 succeeded,
                 failed,
                 skipped,
-            } => {
-                format!(
-                    r#"{{"timestamp":"{}","event":"workflow_completed","total_duration_ms":{},"succeeded":{},"failed":{},"skipped":{}}}"#,
-                    timestamp, total_duration_ms, succeeded, failed, skipped
-                )
-            }
+            } => serde_json::json!({
+                "timestamp": timestamp,
+                "event": "workflow_completed",
+                "total_duration_ms": total_duration_ms,
+                "succeeded": succeeded,
+                "failed": failed,
+                "skipped": skipped
+            })
+            .to_string(),
         }
     }
 
@@ -505,7 +516,7 @@ impl LocalExecutor {
                 Ok(())
             }
             Ok(o) => {
-                let stderr = String::from_utf8_lossy(&o.stderr).to_string();
+                let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
                 tracing::error!(rule = %rule.name, stderr = %stderr, "environment setup failed");
                 Err(OxoFlowError::Environment {
                     kind: env_spec.kind().to_string(),
@@ -2183,29 +2194,39 @@ pub fn render_shell_command(
     let mut expanded = cmd.to_string();
 
     // Expand {output} → all outputs space-joined
-    expanded = expanded.replace("{output}", &rule.output.join(" "));
+    let all_outputs = rule.output.to_vec();
+    expanded = expanded.replace("{output}", &all_outputs.join(" "));
 
     // Expand {output[N]} → Nth output (0-indexed)
-    for (i, out) in rule.output.iter().enumerate() {
-        expanded = expanded.replace(&format!("{{output[{i}]}}"), out);
+    for i in 0..rule.output.len() {
+        if let Some(out) = rule.output.get_index(i) {
+            expanded = expanded.replace(&format!("{{output[{i}]}}"), out);
+        }
     }
 
     // Expand {output.name}
-    for (name, out) in &rule.named_output {
-        expanded = expanded.replace(&format!("{{output.{name}}}"), out);
+    if let FilePatterns::Map(ref m) = rule.output {
+        for (name, out) in m {
+            expanded = expanded.replace(&format!("{{output.{name}}}"), out);
+        }
     }
 
     // Expand {input} → all inputs space-joined
-    expanded = expanded.replace("{input}", &rule.input.join(" "));
+    let all_inputs = rule.input.to_vec();
+    expanded = expanded.replace("{input}", &all_inputs.join(" "));
 
     // Expand {input[N]} → Nth input (0-indexed)
-    for (i, inp) in rule.input.iter().enumerate() {
-        expanded = expanded.replace(&format!("{{input[{i}]}}"), inp);
+    for i in 0..rule.input.len() {
+        if let Some(inp) = rule.input.get_index(i) {
+            expanded = expanded.replace(&format!("{{input[{i}]}}"), inp);
+        }
     }
 
     // Expand {input.name}
-    for (name, inp) in &rule.named_input {
-        expanded = expanded.replace(&format!("{{input.{name}}}"), inp);
+    if let FilePatterns::Map(ref m) = rule.input {
+        for (name, inp) in m {
+            expanded = expanded.replace(&format!("{{input.{name}}}"), inp);
+        }
     }
 
     // Expand {threads}
@@ -2353,8 +2374,8 @@ mod tests {
     fn make_rule(name: &str, shell: &str) -> Rule {
         Rule {
             name: name.to_string(),
-            input: vec![],
-            output: vec![],
+            input: vec![].into(),
+            output: vec![].into(),
             shell: Some(shell.to_string()),
             script: None,
             threads: None,
@@ -2487,8 +2508,8 @@ mod tests {
         named_output.insert("bam".to_string(), "sorted.bam".to_string());
 
         let rule = RuleBuilder::new("align")
-            .named_input(named_input)
-            .named_output(named_output)
+            .input(named_input)
+            .output(named_output)
             .build();
 
         let result = render_shell_command(
@@ -2503,8 +2524,8 @@ mod tests {
     fn render_shell_output_indexed() {
         let rule = Rule {
             name: "test".to_string(),
-            input: vec!["in.txt".to_string()],
-            output: vec!["out.txt".to_string(), "out2.txt".to_string()],
+            input: vec!["in.txt".to_string()].into(),
+            output: vec!["out.txt".to_string(), "out2.txt".to_string()].into(),
             shell: None,
             ..Default::default()
         };
@@ -2516,8 +2537,8 @@ mod tests {
     fn render_shell_output_all() {
         let rule = Rule {
             name: "test".to_string(),
-            input: vec!["a.txt".to_string(), "b.txt".to_string()],
-            output: vec!["out.txt".to_string()],
+            input: vec!["a.txt".to_string(), "b.txt".to_string()].into(),
+            output: vec!["out.txt".to_string()].into(),
             shell: None,
             ..Default::default()
         };
@@ -2530,7 +2551,7 @@ mod tests {
         let rule = Rule {
             name: "test".to_string(),
             threads: Some(8),
-            output: vec!["out.bam".to_string()],
+            output: vec!["out.bam".to_string()].into(),
             ..Default::default()
         };
         let result = render_shell_command(
@@ -2545,7 +2566,7 @@ mod tests {
     fn render_shell_config_values() {
         let rule = Rule {
             name: "test".to_string(),
-            output: vec!["hello.txt".to_string()],
+            output: vec!["hello.txt".to_string()].into(),
             ..Default::default()
         };
         let mut values = HashMap::new();
@@ -2569,8 +2590,8 @@ mod tests {
         let executor = LocalExecutor::new(config);
         let rule = Rule {
             name: "output_test".to_string(),
-            input: vec![],
-            output: vec!["hello_output.txt".to_string()],
+            input: vec![].into(),
+            output: vec!["hello_output.txt".to_string()].into(),
             shell: Some("echo hello_oxoflow_{output[0]}".to_string()),
             ..Default::default()
         };
@@ -2767,11 +2788,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let rule = Rule {
             name: "missing_out".to_string(),
-            input: vec![],
+            input: vec![].into(),
             output: vec![
                 "does_not_exist.txt".to_string(),
                 "also_missing.bam".to_string(),
-            ],
+            ]
+            .into(),
             shell: Some("echo hi".to_string()),
             script: None,
             threads: None,
@@ -2799,8 +2821,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let rule = Rule {
             name: "wildcard_out".to_string(),
-            input: vec![],
-            output: vec!["{sample}.bam".to_string(), "fixed_output.txt".to_string()],
+            input: vec![].into(),
+            output: vec!["{sample}.bam".to_string(), "fixed_output.txt".to_string()].into(),
             shell: Some("echo hi".to_string()),
             script: None,
             threads: None,
@@ -2925,7 +2947,7 @@ mod tests {
 
         let rule = Rule {
             name: "test".to_string(),
-            temp_output: vec!["temp.bam".to_string()],
+            temp_output: vec!["temp.bam".to_string()].into(),
             ..Default::default()
         };
 
@@ -2939,7 +2961,7 @@ mod tests {
 
         let rule = Rule {
             name: "test".to_string(),
-            temp_output: vec!["nonexistent.bam".to_string()],
+            temp_output: vec!["nonexistent.bam".to_string()].into(),
             ..Default::default()
         };
 
@@ -2957,7 +2979,7 @@ mod tests {
 
         let rule = Rule {
             name: "test".to_string(),
-            temp_output: vec!["a.tmp".to_string(), "b.tmp".to_string()],
+            temp_output: vec!["a.tmp".to_string(), "b.tmp".to_string()].into(),
             ..Default::default()
         };
 
@@ -2984,8 +3006,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let rule = Rule {
             name: "test".to_string(),
-            input: vec!["in.txt".to_string()],
-            output: vec!["out.txt".to_string()],
+            input: vec!["in.txt".to_string()].into(),
+            output: vec!["out.txt".to_string()].into(),
             shell: Some("echo hi".to_string()),
             ..Default::default()
         };
@@ -2997,8 +3019,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let rule = Rule {
             name: "test".to_string(),
-            input: vec!["{sample}.fastq".to_string()],
-            output: vec!["{sample}.bam".to_string()],
+            input: vec!["{sample}.fastq".to_string()].into(),
+            output: vec!["{sample}.bam".to_string()].into(),
             shell: Some("echo hi".to_string()),
             ..Default::default()
         };
@@ -3020,8 +3042,8 @@ mod tests {
 
         let rule = Rule {
             name: "test".to_string(),
-            input: vec!["input.txt".to_string()],
-            output: vec!["output.txt".to_string()],
+            input: vec!["input.txt".to_string()].into(),
+            output: vec!["output.txt".to_string()].into(),
             shell: Some("echo hi".to_string()),
             ..Default::default()
         };
@@ -3043,8 +3065,8 @@ mod tests {
 
         let rule = Rule {
             name: "test".to_string(),
-            input: vec!["input.txt".to_string()],
-            output: vec!["output.txt".to_string()],
+            input: vec!["input.txt".to_string()].into(),
+            output: vec!["output.txt".to_string()].into(),
             shell: Some("echo hi".to_string()),
             ..Default::default()
         };
@@ -3059,7 +3081,7 @@ mod tests {
 
         let rule = Rule {
             name: "test".to_string(),
-            output: vec!["output.txt".to_string()],
+            output: vec!["output.txt".to_string()].into(),
             shell: Some("echo hi".to_string()),
             ..Default::default()
         };
@@ -3078,7 +3100,7 @@ mod tests {
 
         let rule = Rule {
             name: "test".to_string(),
-            output: vec!["results_{config.sample}.txt".to_string()],
+            output: vec!["results_{config.sample}.txt".to_string()].into(),
             shell: Some("echo done".to_string()),
             ..Default::default()
         };
@@ -3103,7 +3125,7 @@ mod tests {
 
         let rule = Rule {
             name: "align".to_string(),
-            output: vec!["aligned_{config.sample}.bam".to_string()],
+            output: vec!["aligned_{config.sample}.bam".to_string()].into(),
             shell: Some("bwa mem ...".to_string()),
             ..Default::default()
         };
@@ -3593,8 +3615,8 @@ mod tests {
     fn content_aware_skip_no_outputs() {
         let rule = Rule {
             name: "test".to_string(),
-            input: vec!["in.txt".to_string()],
-            output: vec![],
+            input: vec!["in.txt".to_string()].into(),
+            output: vec![].into(),
             ..Default::default()
         };
         let checksums = HashMap::new();
@@ -3609,8 +3631,8 @@ mod tests {
     fn content_aware_skip_wildcard_patterns() {
         let rule = Rule {
             name: "test".to_string(),
-            input: vec!["{sample}.txt".to_string()],
-            output: vec!["{sample}.bam".to_string()],
+            input: vec!["{sample}.txt".to_string()].into(),
+            output: vec!["{sample}.bam".to_string()].into(),
             ..Default::default()
         };
         let checksums = HashMap::new();
@@ -3625,7 +3647,7 @@ mod tests {
     fn compute_input_checksums_skips_wildcards() {
         let rule = Rule {
             name: "test".to_string(),
-            input: vec!["{sample}.txt".to_string()],
+            input: vec!["{sample}.txt".to_string()].into(),
             ..Default::default()
         };
         let checksums = compute_input_checksums(&rule, Path::new("/nonexistent"));
@@ -3939,10 +3961,10 @@ mod tests {
 
         let rule = Rule {
             name: "test_rule".to_string(),
-            input: vec!["input.txt".to_string()],
-            output: vec!["output.txt".to_string()],
+            input: vec!["input.txt".to_string()].into(),
+            output: vec!["output.txt".to_string()].into(),
             shell: Some("exit 1".to_string()),
-            temp_output: vec![temp_file.to_str().unwrap().to_string()],
+            temp_output: vec![temp_file.to_str().unwrap().to_string()].into(),
             ..Default::default()
         };
 
@@ -4091,8 +4113,8 @@ mod tests {
 
         let rule = Rule {
             name: "python_script".to_string(),
-            input: vec![],
-            output: vec![],
+            input: vec![].into(),
+            output: vec![].into(),
             script: Some(script_path.to_str().unwrap().to_string()),
             ..Default::default()
         };
@@ -4125,8 +4147,8 @@ mod tests {
 
         let rule = Rule {
             name: "sequential".to_string(),
-            input: vec![],
-            output: vec![],
+            input: vec![].into(),
+            output: vec![].into(),
             shell: Some("echo 'step1 done'".to_string()),
             script: Some(script_path.to_str().unwrap().to_string()),
             ..Default::default()

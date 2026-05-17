@@ -156,10 +156,7 @@ impl WorkflowDag {
                 }
             } else if on_stack.contains(&neighbor) {
                 // Found a cycle - extract it
-                let cycle_start = stack
-                    .iter()
-                    .position(|&n| n == neighbor)
-                    .unwrap_or(0);
+                let cycle_start = stack.iter().position(|&n| n == neighbor).unwrap_or(0);
                 let mut cycle: Vec<String> = stack[cycle_start..]
                     .iter()
                     .map(|&n| self.graph[n].name.clone())
@@ -1086,12 +1083,12 @@ mod tests {
     fn detect_output_collisions_none() {
         let r1 = crate::rule::Rule {
             name: "align".to_string(),
-            output: vec!["aligned/{sample}.bam".to_string()],
+            output: vec!["aligned/{sample}.bam".to_string()].into(),
             ..Default::default()
         };
         let r2 = crate::rule::Rule {
             name: "sort".to_string(),
-            output: vec!["sorted/{sample}.bam".to_string()],
+            output: vec!["sorted/{sample}.bam".to_string()].into(),
             ..Default::default()
         };
         let warnings = WorkflowDag::detect_output_collisions(&[r1, r2]);
@@ -1102,12 +1099,12 @@ mod tests {
     fn detect_output_collisions_found() {
         let r1 = crate::rule::Rule {
             name: "caller_a".to_string(),
-            output: vec!["{sample}.vcf".to_string()],
+            output: vec!["{sample}.vcf".to_string()].into(),
             ..Default::default()
         };
         let r2 = crate::rule::Rule {
             name: "caller_b".to_string(),
-            output: vec!["{sample}.vcf".to_string()],
+            output: vec!["{sample}.vcf".to_string()].into(),
             ..Default::default()
         };
         let warnings = WorkflowDag::detect_output_collisions(&[r1, r2]);
@@ -1125,8 +1122,8 @@ mod tests {
                 };
                 crate::rule::Rule {
                     name: format!("step_{}", i),
-                    input,
-                    output: vec![format!("step_{}.out", i)],
+                    input: crate::rule::FilePatterns::List(input),
+                    output: vec![format!("step_{}.out", i)].into(),
                     shell: Some(format!("process step_{}", i)),
                     ..Default::default()
                 }

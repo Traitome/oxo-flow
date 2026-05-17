@@ -1356,8 +1356,8 @@ async fn parse_workflow(
         .iter()
         .map(|r| RuleSummary {
             name: r.name.clone(),
-            inputs: r.input.clone(),
-            outputs: r.output.clone(),
+            inputs: r.input.to_vec(),
+            outputs: r.output.to_vec(),
             environment: r.environment.kind().to_string(),
             threads: r.effective_threads(),
         })
@@ -1405,8 +1405,8 @@ async fn dry_run(Json(req): Json<DryRunRequest>) -> Result<impl IntoResponse, Ap
         .filter_map(|name| config.get_rule(name))
         .map(|r| RuleSummary {
             name: r.name.clone(),
-            inputs: r.input.clone(),
-            outputs: r.output.clone(),
+            inputs: r.input.to_vec(),
+            outputs: r.output.to_vec(),
             environment: r.environment.kind().to_string(),
             threads: r.effective_threads(),
         })
@@ -1620,7 +1620,11 @@ async fn clean_workflow(Json(req): Json<ValidateRequest>) -> Result<Json<CleanRe
     let config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
         .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
 
-    let files_to_clean: Vec<String> = config.rules.iter().flat_map(|r| r.output.clone()).collect();
+    let files_to_clean: Vec<String> = config
+        .rules
+        .iter()
+        .flat_map(|r| r.output.to_vec())
+        .collect();
 
     Ok(Json(CleanResponse {
         workflow_name: config.workflow.name.clone(),

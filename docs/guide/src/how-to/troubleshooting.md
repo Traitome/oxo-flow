@@ -11,6 +11,46 @@ If your workflow isn't running as expected, check these common items first:
 3.  **Dry-run first?** Run `oxo-flow dry-run workflow.oxoflow` to see what oxo-flow *intends* to do without actually running commands.
 4.  **Working directory?** Make sure you are running commands from the project root directory (the one containing your `.oxoflow` file).
 
+### "It ran but nothing happened"
+
+**Symptom**: `oxo-flow run` shows success but no output files appear.
+
+**Solution**:
+
+1. Check the output directory path in your `.oxoflow` file — paths are relative to the workflow file location
+2. Use `oxo-flow debug workflow.oxoflow` to see the actual commands being run
+3. Verify the shell command actually creates the output file:
+   ```bash
+   # Test the command manually
+   mkdir -p data && echo 'Hello from oxo-flow!' > data/greeting.txt
+   ls data/greeting.txt  # Does the file exist?
+   ```
+
+### "No workflow file found"
+
+**Symptom**: `oxo-flow run` without arguments fails with "no .oxoflow file found"
+
+**Solution**:
+
+1. Ensure you're in a directory containing a `.oxoflow` file
+2. Or explicitly specify the workflow path: `oxo-flow run path/to/workflow.oxoflow`
+3. Use `oxo-flow init my-pipeline` to create a new project if none exists
+
+### "Validate fails with parse error"
+
+**Symptom**: `oxo-flow validate workflow.oxoflow` shows TOML syntax errors
+
+**Common TOML mistakes**:
+
+| Mistake | Wrong | Correct |
+|---------|-------|---------|
+| Missing quotes | `name = my-rule` | `name = "my-rule"` |
+| Wrong array syntax | `[rules]` | `[[rules]]` |
+| Unclosed string | `shell = "echo` | `shell = "echo hello"` |
+| Invalid table header | `[[rule]]` | `[[rules]]` |
+
+Use the [TOML primer](../reference/workflow-format.md#toml-primer) for syntax basics.
+
 ---
 
 ## Workflow Parsing Errors

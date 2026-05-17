@@ -490,8 +490,8 @@ mod tests {
     fn make_rule(name: &str, threads: u32, memory: Option<&str>) -> Rule {
         Rule {
             name: name.to_string(),
-            input: vec![],
-            output: vec![],
+            input: vec![].into(),
+            output: vec![].into(),
             shell: Some("echo hello".to_string()),
             script: None,
             threads: Some(threads),
@@ -713,8 +713,8 @@ mod tests {
     fn slurm_gpu_directive() {
         let rule = Rule {
             name: "gpu_job".to_string(),
-            input: vec![],
-            output: vec![],
+            input: vec![].into(),
+            output: vec![].into(),
             shell: Some("python train.py".to_string()),
             script: None,
             threads: Some(4),
@@ -745,8 +745,8 @@ mod tests {
     fn slurm_gpu_spec_directive() {
         let rule = Rule {
             name: "gpu_v100".to_string(),
-            input: vec![],
-            output: vec![],
+            input: vec![].into(),
+            output: vec![].into(),
             shell: Some("python train.py".to_string()),
             script: None,
             threads: Some(4),
@@ -782,8 +782,8 @@ mod tests {
     fn pbs_gpu_directive() {
         let rule = Rule {
             name: "gpu_job".to_string(),
-            input: vec![],
-            output: vec![],
+            input: vec![].into(),
+            output: vec![].into(),
             shell: Some("python train.py".to_string()),
             script: None,
             threads: Some(4),
@@ -819,8 +819,8 @@ mod tests {
     fn sge_gpu_directive() {
         let rule = Rule {
             name: "gpu_job".to_string(),
-            input: vec![],
-            output: vec![],
+            input: vec![].into(),
+            output: vec![].into(),
             shell: Some("python train.py".to_string()),
             script: None,
             threads: Some(4),
@@ -856,8 +856,8 @@ mod tests {
     fn lsf_gpu_directive() {
         let rule = Rule {
             name: "gpu_job".to_string(),
-            input: vec![],
-            output: vec![],
+            input: vec![].into(),
+            output: vec![].into(),
             shell: Some("python train.py".to_string()),
             script: None,
             threads: Some(4),
@@ -895,8 +895,8 @@ mod tests {
     fn per_rule_walltime_slurm() {
         let rule = Rule {
             name: "long_job".to_string(),
-            input: vec![],
-            output: vec![],
+            input: vec![].into(),
+            output: vec![].into(),
             shell: Some("sleep 100".to_string()),
             script: None,
             threads: Some(1),
@@ -933,8 +933,8 @@ mod tests {
     fn per_rule_walltime_pbs() {
         let rule = Rule {
             name: "long_job".to_string(),
-            input: vec![],
-            output: vec![],
+            input: vec![].into(),
+            output: vec![].into(),
             shell: Some("sleep 100".to_string()),
             script: None,
             threads: Some(1),
@@ -969,8 +969,8 @@ mod tests {
     fn per_rule_walltime_sge() {
         let rule = Rule {
             name: "medium_job".to_string(),
-            input: vec![],
-            output: vec![],
+            input: vec![].into(),
+            output: vec![].into(),
             shell: Some("analysis.sh".to_string()),
             script: None,
             threads: Some(2),
@@ -1019,8 +1019,8 @@ mod tests {
     fn slurm_module_loading() {
         let rule = Rule {
             name: "gatk_job".to_string(),
-            input: vec![],
-            output: vec![],
+            input: vec![].into(),
+            output: vec![].into(),
             shell: Some("gatk HaplotypeCaller".to_string()),
             script: None,
             threads: Some(4),
@@ -1056,8 +1056,8 @@ mod tests {
     fn pbs_module_loading() {
         let rule = Rule {
             name: "bwa_job".to_string(),
-            input: vec![],
-            output: vec![],
+            input: vec![].into(),
+            output: vec![].into(),
             shell: Some("bwa mem ref.fa reads.fq".to_string()),
             script: None,
             threads: Some(8),
@@ -1185,8 +1185,8 @@ mod tests {
         use crate::rule::{GpuSpec, Resources};
         let rule = Rule {
             name: "gpu_job".to_string(),
-            input: vec!["data.h5".to_string()],
-            output: vec!["model.pt".to_string()],
+            input: vec!["data.h5".to_string()].into(),
+            output: vec!["model.pt".to_string()].into(),
             shell: Some("python train.py".to_string()),
             script: None,
             threads: Some(4),
@@ -1229,8 +1229,8 @@ mod tests {
         use crate::rule::{GpuSpec, Resources};
         let rule = Rule {
             name: "gpu_pbs".to_string(),
-            input: vec![],
-            output: vec![],
+            input: vec![].into(),
+            output: vec![].into(),
             shell: Some("python train.py".to_string()),
             script: None,
             threads: Some(4),
@@ -1275,8 +1275,8 @@ mod tests {
         use crate::rule::{GpuSpec, Resources};
         let rule = Rule {
             name: "gpu_sge".to_string(),
-            input: vec![],
-            output: vec![],
+            input: vec![].into(),
+            output: vec![].into(),
             shell: Some("python train.py".to_string()),
             script: None,
             threads: Some(4),
