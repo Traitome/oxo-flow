@@ -98,3 +98,60 @@ You can use both `[[sample_groups]]` and `[[pairs]]` in the same workflow.  They
 ## Full Example
 
 See [`examples/cohort_analysis.oxoflow`](https://github.com/Traitome/oxo-flow/blob/main/examples/cohort_analysis.oxoflow) for a complete population genomics pipeline including QC, alignment, deduplication, variant calling, and multi-QC aggregation.
+
+---
+
+## Loading Groups from External File
+
+For large cohorts with many groups and samples, use `sample_groups_file` in `[workflow]` instead of inline `[[sample_groups]]`:
+
+```toml
+[workflow]
+name = "cohort-analysis"
+sample_groups_file = "metadata/groups.tsv"  # or .csv, .json
+```
+
+Supported formats:
+
+### TSV Format
+
+```tsv
+group	sample
+healthy	H001
+healthy	H002
+disease	D001
+disease	D002
+```
+
+For groups with metadata, use JSON format.
+
+### JSON Format
+
+```json
+[
+  {
+    "name": "treatment_arm_A",
+    "samples": ["PT_A001", "PT_A002"],
+    "metadata": {
+      "drug": "compound_X",
+      "dose": "100mg"
+    }
+  },
+  {
+    "name": "treatment_arm_B",
+    "samples": ["PT_B001", "PT_B002"],
+    "metadata": {
+      "drug": "compound_Y",
+      "dose": "50mg"
+    }
+  }
+]
+```
+
+You can combine inline `[[sample_groups]]` with `sample_groups_file` — entries from both sources are merged.
+
+!!! tip "External file benefits"
+    - Easily manage large cohort definitions
+    - Share group definitions across multiple workflows
+    - Update sample lists without modifying workflow files
+    - Supports metadata for downstream reporting

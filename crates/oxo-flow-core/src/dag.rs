@@ -208,7 +208,7 @@ impl WorkflowDag {
     /// valid execution order.
     ///
     /// If `targets` is empty the full execution order is returned (same as
-    /// [`execution_order`]).
+    /// [`Self::execution_order`]).
     ///
     /// # Errors
     ///

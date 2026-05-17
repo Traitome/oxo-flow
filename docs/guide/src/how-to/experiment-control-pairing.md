@@ -93,3 +93,68 @@ oxo-flow dry-run somatic.oxoflow
 ## Full Example
 
 See [`examples/paired_experiment_control_pairs.oxoflow`](https://github.com/Traitome/oxo-flow/blob/main/examples/paired_experiment_control_pairs.oxoflow) for a complete clinical WGS somatic calling pipeline with alignment, deduplication, variant calling, filtering, and HTML report generation.
+
+---
+
+## Loading Pairs from External File
+
+For large cohort studies with hundreds or thousands of pairs, use `pairs_file` in `[workflow]` instead of inline `[[pairs]]`:
+
+```toml
+[workflow]
+name = "somatic-calling"
+pairs_file = "metadata/pairs.tsv"  # or .csv, .json
+```
+
+Supported formats:
+
+### TSV Format
+
+```tsv
+pair_id	experiment	control
+CASE_001	EXP_01	CTRL_01
+CASE_002	EXP_02	CTRL_02
+```
+
+### CSV Format
+
+```csv
+pair_id,experiment,control
+CASE_001,EXP_01,CTRL_01
+CASE_002,EXP_02,CTRL_02
+```
+
+### JSON Format
+
+```json
+[
+  {"pair_id": "CASE_001", "experiment": "EXP_01", "control": "CTRL_01"},
+  {"pair_id": "CASE_002", "experiment": "EXP_02", "control": "CTRL_02"}
+]
+```
+
+You can combine inline `[[pairs]]` with `pairs_file` — entries from both sources are merged.
+
+---
+
+## Auto-Discovery from File Pattern
+
+For workflows where paired BAM files already exist, use `pairs_pattern` to auto-discover pairs by scanning the filesystem:
+
+```toml
+[workflow]
+name = "somatic-calling"
+pairs_pattern = "aligned/{pair_id}/{experiment}_vs_{control}.bam"
+```
+
+For a file `aligned/CASE_001/EXP_01_vs_CTRL_01.bam`, this creates:
+- `pair_id = CASE_001`
+- `experiment = EXP_01`
+- `control = CTRL_01`
+
+The pattern must contain `{pair_id}`, `{experiment}`, and `{control}` wildcards. Optional `{experiment_type}` is also supported.
+
+!!! tip "Auto-discovery benefits"
+    - No manual pair definitions needed
+    - Automatically adapts when new paired files are added
+    - Works with any file naming convention that includes the required wildcards
