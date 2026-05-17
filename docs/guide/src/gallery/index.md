@@ -18,7 +18,7 @@ Use this gallery to learn oxo-flow incrementally — each example builds on conc
 | 06 | [RNA-seq Quantification](rnaseq.md) | ⭐⭐⭐⭐ | Complete transcriptomics pipeline, STAR, featureCounts, MultiQC |
 | 07 | [WGS Germline Calling](wgs-germline.md) | ⭐⭐⭐⭐⭐ | GATK best practices, BQSR, HaplotypeCaller, VEP annotation |
 | 08 | [Multi-Omics Integration](multiomics.md) | ⭐⭐⭐⭐⭐ | WGS + RNA-seq + Methylation, branching DAG, cross-omics integration |
-| 09 | [Single-Cell RNA-seq](single-cell-rnaseq.md) | ⭐⭐⭐⭐⭐ | Droplet-based scRNA-seq, 10x Genomics, CellRanger, Seurat |
+| 09 | [Single-Cell RNA-seq](single-cell-rnaseq.md) | ⭐⭐⭐⭐ | Droplet-based scRNA-seq, 10x Genomics, CellRanger, Seurat |
 
 ---
 

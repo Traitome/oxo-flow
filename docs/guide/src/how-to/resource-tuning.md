@@ -77,7 +77,7 @@ Generated SLURM directive: `--gres=gpu:a100:2:40g --mem-per-gpu=40G`
 ### Common GPU Tools
 
 | Tool | GPU Memory | Notes |
-|---|---|
+|---|---|---|
 | **ParaBricks** | 40+ GB per GPU | NVIDIA A100 recommended |
 | **Clara Parabricks** | 32+ GB | GPU-accelerated variant calling |
 | **DeepVariant GPU** | 16+ GB | Faster than CPU version |
