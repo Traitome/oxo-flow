@@ -28,6 +28,7 @@ sysinfo = { workspace = true }
 reqwest = { workspace = true }
 hex = { workspace = true }
 tempfile = { workspace = true }
+csv = "1.4.0"
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true }

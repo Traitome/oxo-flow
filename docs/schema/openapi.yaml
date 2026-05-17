@@ -1,0 +1,158 @@
+openapi: 3.0.0
+info:
+  title: oxo-flow REST API
+  description: API for managing and executing bioinformatics workflows
+  version: 0.5.1
+servers:
+  - url: http://localhost:8080
+    description: Default local server
+
+paths:
+  /api/health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "ok"
+
+  /api/version:
+    get:
+      summary: Get engine version
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version:
+                    type: string
+                    example: "0.5.1"
+
+  /api/system:
+    get:
+      summary: System information
+      responses:
+        '200':
+          description: OK
+
+  /api/metrics:
+    get:
+      summary: Runtime metrics
+      responses:
+        '200':
+          description: OK
+
+  /api/workflows:
+    get:
+      summary: List workflows
+      responses:
+        '200':
+          description: OK
+
+  /api/workflows/validate:
+    post:
+      summary: Validate a workflow file
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                workflow:
+                  type: string
+                  description: "Path to the .oxoflow file"
+      responses:
+        '200':
+          description: Validation successful
+        '400':
+          description: Validation failed
+
+  /api/workflows/run:
+    post:
+      summary: Run a workflow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                workflow:
+                  type: string
+                  description: "Path to the .oxoflow file"
+                jobs:
+                  type: integer
+                  default: 1
+                keep_going:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: Workflow execution started
+
+  /api/workflows/dry-run:
+    post:
+      summary: Dry run a workflow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                workflow:
+                  type: string
+      responses:
+        '200':
+          description: Dry run result
+
+  /api/workflows/clean:
+    post:
+      summary: Clean workflow outputs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                workflow:
+                  type: string
+                dry_run:
+                  type: boolean
+                force:
+                  type: boolean
+                orphans:
+                  type: boolean
+      responses:
+        '200':
+          description: Clean successful
+
+  /api/workflows/export:
+    post:
+      summary: Export workflow to another format (e.g. CWL, Nextflow)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                workflow:
+                  type: string
+                format:
+                  type: string
+      responses:
+        '200':
+          description: Exported workflow

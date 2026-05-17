@@ -1871,6 +1871,10 @@ Thumbs.db
             orphans,
         } => {
             print_banner();
+            
+            // If neither --force nor --dry-run is provided, default to dry-run
+            // to prevent accidental data loss.
+            let is_dry_run = dry_run || !force;
 
             // Handle orphan cleanup mode
             if orphans {
@@ -1898,7 +1902,7 @@ Thumbs.db
                     return Ok(());
                 }
 
-                if dry_run {
+                if is_dry_run {
                     eprintln!("{}", "Would clean orphan chunks (dry-run):".bold().yellow());
                     for dir in &orphan_dirs {
                         eprintln!("  {} (directory)", dir.display());
@@ -1908,22 +1912,11 @@ Thumbs.db
                         "Total:".bold(),
                         orphan_dirs.len()
                     );
-                } else {
-                    // Prompt for confirmation unless --force is given
-                    if !force {
-                        eprintln!(
-                            "{} {} orphan chunk directory(s) will be deleted. Continue? [y/N]",
-                            "Clean:".bold().yellow(),
-                            orphan_dirs.len()
-                        );
-                        let mut answer = String::new();
-                        std::io::stdin().read_line(&mut answer)?;
-                        if answer.trim().to_lowercase() != "y" {
-                            eprintln!("Aborted.");
-                            return Ok(());
-                        }
+                    if !dry_run && !force {
+                        eprintln!("\n{}", "Run with --force to actually delete these directories.".bold().cyan());
                     }
-
+                } else {
+                    // Force is true at this point, proceed with deletion
                     let mut deleted = 0usize;
                     let mut failed = 0usize;
 
@@ -1986,7 +1979,7 @@ Thumbs.db
                 }
             }
 
-            if dry_run {
+            if is_dry_run {
                 eprintln!("{}", "Would clean (dry-run):".bold().yellow());
                 for output in &outputs {
                     // After config expansion, only true wildcard patterns (e.g. {sample}) remain
@@ -2000,6 +1993,9 @@ Thumbs.db
                     }
                 }
                 eprintln!("\n{} {} output patterns", "Total:".bold(), outputs.len());
+                if !dry_run && !force {
+                    eprintln!("\n{}", "Run with --force to actually delete these files.".bold().cyan());
+                }
             } else {
                 // Determine which files are deletable
                 let mut deletable: Vec<String> = Vec::new();
@@ -2034,21 +2030,6 @@ Thumbs.db
                         rejected
                     );
                 } else {
-                    // Prompt for confirmation unless --force is given
-                    if !force {
-                        eprintln!(
-                            "{} {} file(s) will be deleted. Continue? [y/N]",
-                            "Clean:".bold().yellow(),
-                            deletable.len()
-                        );
-                        let mut answer = String::new();
-                        std::io::stdin().read_line(&mut answer)?;
-                        if answer.trim().to_lowercase() != "y" {
-                            eprintln!("Aborted.");
-                            return Ok(());
-                        }
-                    }
-
                     let mut deleted = 0usize;
                     let mut failed = 0usize;
 
@@ -2488,15 +2469,16 @@ Thumbs.db
 
                     for rule_name in &order {
                         let rule = config.get_rule(rule_name).unwrap();
-                        let shell_cmd = match rule.shell.as_deref() {
-                            Some(cmd) => oxo_flow_core::executor::render_shell_command(
-                                cmd,
-                                rule,
-                                &wildcard_values,
-                            ),
+                        
+                        let shell_cmd = match oxo_flow_core::executor::build_execution_command(
+                            rule,
+                            &wildcard_values,
+                            &config.workflow.interpreter_map
+                        ) {
+                            Some(cmd) => cmd,
                             None => {
                                 eprintln!(
-                                    "  {} {} — no shell command, skipping",
+                                    "  {} {} — no shell command or script, skipping",
                                     "⊘".yellow(),
                                     rule_name
                                 );

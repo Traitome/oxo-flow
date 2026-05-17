@@ -739,56 +739,16 @@ impl LocalExecutor {
             skip_reason: None,
         };
 
-        // Build commands to execute: shell (if present) + script (if present)
-        // Execution order: shell first, then script (sequential)
-        let shell_cmd = rule
-            .shell
-            .as_ref()
-            .map(|cmd| render_shell_command(cmd, rule, wildcard_values));
-
-        let script_cmd = rule.script.as_ref().map(|script_path| {
-            let expanded_script = render_shell_command(script_path, rule, wildcard_values);
-            // Get the base script path (first token) for interpreter detection
-            let base_script = expanded_script
-                .split_whitespace()
-                .next()
-                .unwrap_or(&expanded_script);
-
-            match detect_interpreter(
-                base_script,
-                rule.interpreter.as_deref(),
-                &self.config.interpreter_map,
-            ) {
-                Some(interp) => {
-                    // Validate interpreter path for safety
-                    if let Err(e) = validate_interpreter_path(&interp) {
-                        tracing::warn!(
-                            rule = %rule.name,
-                            interpreter = %interp,
-                            error = %e,
-                            "interpreter path validation failed, using as-is"
-                        );
-                    }
-                    build_script_command(&interp, &expanded_script)
-                }
-                None => {
-                    tracing::warn!(
-                        rule = %rule.name,
-                        script = %expanded_script,
-                        "no interpreter detected for script, will execute as shell command"
-                    );
-                    expanded_script
-                }
+        // Build execution command combining shell, script, and envvars
+        let base_cmd = match build_execution_command(rule, wildcard_values, &self.config.interpreter_map) {
+            Some(cmd) => cmd,
+            None => {
+                record.status = JobStatus::Skipped;
+                record.finished_at = Some(Utc::now());
+                record.skip_reason = Some("no shell or script defined".to_string());
+                return Ok(record);
             }
-        });
-
-        // Skip if neither shell nor script is defined
-        if shell_cmd.is_none() && script_cmd.is_none() {
-            record.status = JobStatus::Skipped;
-            record.finished_at = Some(Utc::now());
-            record.skip_reason = Some("no shell or script defined".to_string());
-            return Ok(record);
-        }
+        };
 
         // Evaluate the `when` condition — skip execution if it resolves to false.
         if let Some(ref condition) = rule.when {
@@ -818,15 +778,7 @@ impl LocalExecutor {
             return Ok(record);
         }
 
-        // Build list of commands to execute (shell first, then script)
-        let commands_to_execute: Vec<String> = match (&shell_cmd, &script_cmd) {
-            (Some(shell), Some(script)) => {
-                vec![shell.clone(), script.clone()]
-            }
-            (Some(shell), None) => vec![shell.clone()],
-            (None, Some(script)) => vec![script.clone()],
-            (None, None) => vec![], // Already handled above
-        };
+        let commands_to_execute: Vec<String> = vec![base_cmd];
 
         // Resolve all commands through environment resolver
         let resolved_commands: Vec<String> = commands_to_execute
@@ -992,7 +944,6 @@ impl LocalExecutor {
                         .arg("-c")
                         .arg(cmd)
                         .current_dir(&self.config.workdir)
-                        .envs(&rule.envvars)
                         .stdout(Stdio::piped())
                         .stderr(Stdio::piped())
                         .spawn()
@@ -1002,7 +953,7 @@ impl LocalExecutor {
                         })?
                 };
 
-                let child_pid = child.id().unwrap_or(0);
+                let child_pid_opt = child.id();
 
                 // Use per-rule timeout
                 let cmd_result = if let Some(duration) = timeout {
@@ -1010,72 +961,74 @@ impl LocalExecutor {
                         Ok(inner) => inner,
                         Err(_) => {
                             // Timeout occurred - kill the process group
-                            if child_pid > 0
-                                && let Err(e) = Self::kill_process_tree(child_pid)
-                            {
-                                tracing::warn!(
-                                    rule = %rule.name,
-                                    pid = %child_pid,
-                                    error = %e,
-                                    "failed to kill process group on timeout"
-                                );
+                            if let Some(child_pid) = child_pid_opt {
+                                if child_pid > 0 {
+                                    if let Err(e) = Self::kill_process_tree(child_pid) {
+                                        tracing::warn!(
+                                            rule = %rule.name,
+                                            pid = %child_pid,
+                                            error = %e,
+                                            "failed to kill process group on timeout"
+                                        );
+                                    }
+                                }
                             }
-                            record.finished_at = Some(Utc::now());
-                            record.status = JobStatus::Failed;
-                            record.stderr = Some(format!(
-                                "command timed out after {duration:?} for rule '{}'",
-                                rule.name
-                            ));
+                            
+                            let msg = format!("command timed out after {duration:?} for rule '{}'", rule.name);
+                            combined_stderr.push_str(&msg);
+                            combined_stderr.push('\n');
+                            
                             tracing::error!(
                                 rule = %rule.name,
                                 timeout = ?duration,
-                                pid = %child_pid,
+                                pid = ?child_pid_opt,
                                 command = %cmd,
                                 "command timed out"
                             );
-                            // Release resources even on timeout
-                            self.release_resources(rule).await;
-                            // Clean up temp outputs on failure
-                            self.cleanup_temp_outputs(rule, wildcard_values).await;
-                            if !self.config.keep_going {
-                                return Err(OxoFlowError::Execution {
-                                    rule: rule.name.clone(),
-                                    message: format!("command timed out after {duration:?}"),
-                                });
-                            }
-                            return Ok(record);
+                            
+                            last_exit_code = Some(124); // 124 is standard timeout exit code
+                            all_commands_succeeded = false;
+                            record.status = JobStatus::TimedOut;
+                            
+                            // Break out of command loop on failure to trigger retry logic
+                            break;
                         }
                     }
                 } else {
                     child.wait_with_output().await
                 };
 
-                let output = cmd_result.map_err(|e| OxoFlowError::Execution {
-                    rule: rule.name.clone(),
-                    message: e.to_string(),
-                })?;
+                // Only process command output if we didn't timeout
+                if record.status != JobStatus::TimedOut {
+                    let output = cmd_result.map_err(|e| OxoFlowError::Execution {
+                        rule: rule.name.clone(),
+                        message: e.to_string(),
+                    })?;
 
-                // Accumulate stdout/stderr
-                combined_stdout.push_str(&String::from_utf8_lossy(&output.stdout));
-                combined_stderr.push_str(&String::from_utf8_lossy(&output.stderr));
-                last_exit_code = output.status.code();
+                    // Accumulate stdout/stderr
+                    combined_stdout.push_str(&String::from_utf8_lossy(&output.stdout));
+                    combined_stderr.push_str(&String::from_utf8_lossy(&output.stderr));
+                    last_exit_code = output.status.code();
 
-                if !output.status.success() {
-                    all_commands_succeeded = false;
-                    let code = output.status.code().unwrap_or(-1);
-                    tracing::warn!(
-                        rule = %rule.name,
-                        command_index = cmd_idx + 1,
-                        code = %code,
-                        "command failed"
-                    );
-                    // Break out of command loop on failure (don't execute remaining commands)
-                    break;
+                    if !output.status.success() {
+                        all_commands_succeeded = false;
+                        let code = output.status.code().unwrap_or(-1);
+                        tracing::warn!(
+                            rule = %rule.name,
+                            command_index = cmd_idx + 1,
+                            code = %code,
+                            "command failed"
+                        );
+                        record.status = JobStatus::Failed;
+                        // Break out of command loop on failure (don't execute remaining commands)
+                        break;
+                    }
                 }
             }
 
             // Check if all commands succeeded
             if all_commands_succeeded {
+                record.status = JobStatus::Success;
                 break; // Exit retry loop on success
             }
 
@@ -1088,6 +1041,18 @@ impl LocalExecutor {
                     max_attempts = max_attempts,
                     "commands failed, will retry"
                 );
+                
+                // Sleep if retry_delay is specified
+                if let Some(ref delay_str) = rule.retry_delay {
+                    if let Some(secs) = crate::rule::parse_duration_secs(delay_str) {
+                        tracing::info!(rule = %rule.name, delay = secs, "waiting before retry");
+                        tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                    }
+                }
+                
+                // Reset status for next attempt
+                record.status = JobStatus::Running;
+                
                 // Continue to next iteration to retry all commands
                 continue;
             }
@@ -1182,13 +1147,6 @@ impl LocalExecutor {
                     );
                 }
             }
-        }
-
-        if !self.config.keep_going {
-            return Err(OxoFlowError::TaskFailed {
-                rule: rule.name.clone(),
-                code,
-            });
         }
 
         Ok(record)
@@ -2187,6 +2145,71 @@ pub fn validate_path_safety(workdir: &std::path::Path, path: &str) -> crate::Res
         }
     }
     Ok(())
+}
+
+/// Resolves the shell command, script command, and environment variables into a single execution string.
+#[must_use]
+pub fn build_execution_command(
+    rule: &Rule,
+    wildcard_values: &std::collections::HashMap<String, String>,
+    interpreter_map: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    let shell_cmd = rule
+        .shell
+        .as_ref()
+        .map(|cmd| render_shell_command(cmd, rule, wildcard_values));
+
+    let script_cmd = rule.script.as_ref().map(|script_path| {
+        let expanded_script = render_shell_command(script_path, rule, wildcard_values);
+        let base_script = expanded_script
+            .split_whitespace()
+            .next()
+            .unwrap_or(&expanded_script);
+
+        match detect_interpreter(base_script, rule.interpreter.as_deref(), interpreter_map) {
+            Some(interp) => {
+                if let Err(e) = validate_interpreter_path(&interp) {
+                    tracing::warn!(
+                        rule = %rule.name,
+                        interpreter = %interp,
+                        error = %e,
+                        "interpreter path validation failed, using as-is"
+                    );
+                }
+                build_script_command(&interp, &expanded_script)
+            }
+            None => {
+                tracing::warn!(
+                    rule = %rule.name,
+                    script = %expanded_script,
+                    "no interpreter detected for script, will execute as shell command"
+                );
+                expanded_script
+            }
+        }
+    });
+
+    if shell_cmd.is_none() && script_cmd.is_none() {
+        return None;
+    }
+
+    let mut base_cmd = match (&shell_cmd, &script_cmd) {
+        (Some(shell), Some(script)) => format!("{}\n{}", shell, script),
+        (Some(shell), None) => shell.clone(),
+        (None, Some(script)) => script.clone(),
+        (None, None) => unreachable!(),
+    };
+
+    if !rule.envvars.is_empty() {
+        let mut env_prefix = String::new();
+        for (k, v) in &rule.envvars {
+            let escaped_v = v.replace('\'', "'\\''");
+            env_prefix.push_str(&format!("export {}='{}'\n", k, escaped_v));
+        }
+        base_cmd = format!("{}{}", env_prefix, base_cmd);
+    }
+
+    Some(base_cmd)
 }
 
 /// Render a shell command template by substituting all placeholder variables.

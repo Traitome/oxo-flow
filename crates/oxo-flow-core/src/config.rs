@@ -454,6 +454,22 @@ impl ExperimentControlPair {
     /// ]
     /// ```
     pub fn load_from_file(path: &Path) -> Result<Vec<Self>> {
+        let metadata = std::fs::metadata(path).map_err(|e| OxoFlowError::Parse {
+            path: path.to_path_buf(),
+            message: format!("failed to read metadata for pairs file: {}", e),
+        })?;
+
+        // 50MB limit to prevent OOM on accidental binary file input
+        if metadata.len() > 50 * 1024 * 1024 {
+            return Err(OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: format!(
+                    "pairs file is too large ({} bytes). Maximum allowed size is 50MB.",
+                    metadata.len()
+                ),
+            });
+        }
+
         let content = std::fs::read_to_string(path).map_err(|e| OxoFlowError::Parse {
             path: path.to_path_buf(),
             message: format!("failed to read pairs file: {}", e),
@@ -601,20 +617,24 @@ impl ExperimentControlPair {
     }
 
     fn parse_delimited(content: &str, delimiter: char, path: &Path) -> Result<Vec<Self>> {
-        let mut pairs = Vec::new();
-        let mut lines = content.lines();
+        let mut reader = csv::ReaderBuilder::new()
+            .delimiter(delimiter as u8)
+            .has_headers(true)
+            .trim(csv::Trim::All)
+            .comment(Some(b'#'))
+            .from_reader(content.as_bytes());
 
-        // Parse header
-        let header_line = lines.next().ok_or_else(|| OxoFlowError::Parse {
-            path: path.to_path_buf(),
-            message: "pairs file is empty".to_string(),
-        })?;
+        let headers = reader.headers()
+            .map_err(|e| OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: format!("pairs file is empty or has invalid headers: {}", e),
+            })?
+            .clone();
 
-        let headers: Vec<&str> = header_line.split(delimiter).collect();
         let col_index: HashMap<&str, usize> = headers
             .iter()
             .enumerate()
-            .map(|(i, h)| (h.trim(), i))
+            .map(|(i, h)| (h, i))
             .collect();
 
         // Required columns
@@ -642,23 +662,18 @@ impl ExperimentControlPair {
             .get("experiment_type")
             .or(col_index.get("tumor_type"));
 
-        // Parse data rows
-        for line in lines {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-
-            let fields: Vec<&str> = line.split(delimiter).collect();
-            if fields.len() < headers.len() {
-                continue;
-            }
+        let mut pairs = Vec::new();
+        for (row_idx, result) in reader.records().enumerate() {
+            let record = result.map_err(|e| OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: format!("error parsing row {}: {}", row_idx + 2, e),
+            })?;
 
             let pair = Self {
-                pair_id: fields[*pair_id_col].trim().to_string(),
-                experiment: fields[*experiment_col].trim().to_string(),
-                control: fields[*control_col].trim().to_string(),
-                experiment_type: experiment_type_col.map(|i| fields[*i].trim().to_string()),
+                pair_id: record.get(*pair_id_col).unwrap_or("").to_string(),
+                experiment: record.get(*experiment_col).unwrap_or("").to_string(),
+                control: record.get(*control_col).unwrap_or("").to_string(),
+                experiment_type: experiment_type_col.and_then(|&i| record.get(i).map(|s| s.to_string())),
                 metadata: HashMap::new(),
             };
             pairs.push(pair);
@@ -718,6 +733,22 @@ impl SampleGroup {
     /// ]
     /// ```
     pub fn load_from_file(path: &Path) -> Result<Vec<Self>> {
+        let metadata = std::fs::metadata(path).map_err(|e| OxoFlowError::Parse {
+            path: path.to_path_buf(),
+            message: format!("failed to read metadata for sample_groups file: {}", e),
+        })?;
+
+        // 50MB limit to prevent OOM on accidental binary file input
+        if metadata.len() > 50 * 1024 * 1024 {
+            return Err(OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: format!(
+                    "sample_groups file is too large ({} bytes). Maximum allowed size is 50MB.",
+                    metadata.len()
+                ),
+            });
+        }
+
         let content = std::fs::read_to_string(path).map_err(|e| OxoFlowError::Parse {
             path: path.to_path_buf(),
             message: format!("failed to read sample_groups file: {}", e),
@@ -752,19 +783,24 @@ impl SampleGroup {
     }
 
     fn parse_delimited(content: &str, delimiter: char, path: &Path) -> Result<Vec<Self>> {
-        let mut groups = Vec::new();
-        let mut lines = content.lines();
+        let mut reader = csv::ReaderBuilder::new()
+            .delimiter(delimiter as u8)
+            .has_headers(true)
+            .trim(csv::Trim::All)
+            .comment(Some(b'#'))
+            .from_reader(content.as_bytes());
 
-        let header_line = lines.next().ok_or_else(|| OxoFlowError::Parse {
-            path: path.to_path_buf(),
-            message: "sample_groups file is empty".to_string(),
-        })?;
+        let headers = reader.headers()
+            .map_err(|e| OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: format!("sample_groups file is empty or has invalid headers: {}", e),
+            })?
+            .clone();
 
-        let headers: Vec<&str> = header_line.split(delimiter).collect();
         let col_index: HashMap<&str, usize> = headers
             .iter()
             .enumerate()
-            .map(|(i, h)| (h.trim(), i))
+            .map(|(i, h)| (h, i))
             .collect();
 
         let name_col = col_index.get("name").ok_or_else(|| OxoFlowError::Parse {
@@ -778,26 +814,23 @@ impl SampleGroup {
                 message: "sample_groups file missing 'samples' column".to_string(),
             })?;
 
-        for line in lines {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-
-            let fields: Vec<&str> = line.split(delimiter).collect();
-            if fields.len() < headers.len() {
-                continue;
-            }
+        let mut groups = Vec::new();
+        for (row_idx, result) in reader.records().enumerate() {
+            let record = result.map_err(|e| OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: format!("error parsing row {}: {}", row_idx + 2, e),
+            })?;
 
             // Samples can be comma-separated within the field
-            let samples: Vec<String> = fields[*samples_col]
+            let samples: Vec<String> = record.get(*samples_col)
+                .unwrap_or("")
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
 
             let group = Self {
-                name: fields[*name_col].trim().to_string(),
+                name: record.get(*name_col).unwrap_or("").to_string(),
                 samples,
                 metadata: HashMap::new(),
             };

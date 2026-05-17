@@ -1,0 +1,161 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://traitome.github.io/oxo-flow/schema/oxoflow-v1.schema.json",
+  "title": "oxo-flow workflow definition",
+  "description": "Schema for .oxoflow workflow files",
+  "type": "object",
+  "required": ["workflow", "rules"],
+  "properties": {
+    "workflow": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name of the workflow"
+        },
+        "version": {
+          "type": "string",
+          "description": "Version of the workflow (e.g., 1.0.0)"
+        },
+        "format_version": {
+          "type": "string",
+          "description": "Format specification version for compatibility checking"
+        },
+        "description": {
+          "type": "string",
+          "description": "Description of the workflow"
+        },
+        "author": {
+          "type": "string",
+          "description": "Author of the workflow"
+        },
+        "min_version": {
+          "type": "string",
+          "description": "Minimum oxo-flow version required"
+        },
+        "genome_build": {
+          "type": "string",
+          "description": "Genome build (e.g., GRCh38, hg38)"
+        },
+        "interpreter_map": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Custom interpreter mappings for script file extensions"
+        },
+        "pairs_file": {
+          "type": "string",
+          "description": "Path to an external file containing experiment-control pairs"
+        },
+        "sample_groups_file": {
+          "type": "string",
+          "description": "Path to an external file containing cohort sample groups"
+        }
+      }
+    },
+    "config": {
+      "type": "object",
+      "description": "Default configuration variables for wildcard expansion",
+      "additionalProperties": true
+    },
+    "cluster": {
+      "type": "object",
+      "description": "Cluster execution profile configurations",
+      "additionalProperties": {
+        "type": "object"
+      }
+    },
+    "webhooks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["url"],
+        "properties": {
+          "url": { "type": "string" },
+          "events": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "format": { "type": "string" },
+          "secret": { "type": "string" }
+        }
+      }
+    },
+    "rules": {
+      "type": "array",
+      "description": "Workflow execution rules",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Unique identifier for the rule"
+          },
+          "description": {
+            "type": "string"
+          },
+          "input": {
+            "oneOf": [
+              { "type": "array", "items": { "type": "string" } },
+              { "type": "object", "additionalProperties": { "type": "string" } }
+            ]
+          },
+          "output": {
+            "oneOf": [
+              { "type": "array", "items": { "type": "string" } },
+              { "type": "object", "additionalProperties": { "type": "string" } }
+            ]
+          },
+          "shell": {
+            "type": "string",
+            "description": "Shell command template to execute"
+          },
+          "script": {
+            "type": "string",
+            "description": "Path to a script to execute"
+          },
+          "threads": {
+            "oneOf": [
+              { "type": "integer" },
+              { "type": "string" }
+            ]
+          },
+          "memory": {
+            "type": "string",
+            "description": "Memory requirement (e.g., '16G', '8000M')"
+          },
+          "envvars": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "when": {
+            "type": "string"
+          },
+          "depends_on": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "checkpoint": {
+            "type": "boolean"
+          },
+          "localrule": {
+            "type": "boolean"
+          },
+          "retries": {
+            "type": "integer"
+          },
+          "retry_delay": {
+            "type": "string"
+          },
+          "on_success": {
+            "type": "string"
+          },
+          "on_failure": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
