@@ -723,7 +723,7 @@ fn run_batch_command(cmd: &str, workdir: &Path) -> Result<i32> {
 }
 
 /// Result for a single batch item.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 struct BatchResult {
     item: String,
     command: String,
@@ -737,7 +737,7 @@ struct BatchResult {
 async fn execute_batch(
     template: &str,
     items: &[String],
-    _jobs: usize, // TODO: Implement true parallelism with Semaphore
+    jobs: usize,
     stop_on_error: bool,
     workdir: Option<&PathBuf>,
     environment: Option<&String>,
@@ -745,98 +745,136 @@ async fn execute_batch(
     json_output: bool,
 ) -> Result<()> {
     use indicatif::{ProgressBar, ProgressStyle};
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::Semaphore;
 
     let workdir = workdir
         .cloned()
         .unwrap_or_else(|| std::env::current_dir().unwrap());
     let total = items.len();
-    let progress = ProgressBar::new(total as u64);
+    let semaphore = Arc::new(Semaphore::new(jobs));
+    let results: Arc<Mutex<Vec<BatchResult>>> = Arc::new(Mutex::new(Vec::new()));
+    let progress = Arc::new(ProgressBar::new(total as u64));
+    let stop_flag: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+
     progress.set_style(
         ProgressStyle::default_bar()
-            .template(
-                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} Done:{done} Fail:{fail}",
-            )
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len}")
             .expect("valid template")
             .progress_chars("#>-"),
     );
 
-    let mut results: Vec<BatchResult> = Vec::new();
-    let mut failed = 0usize;
-    let mut done = 0usize;
+    let mut tasks = Vec::new();
 
     for (nr, item) in items.iter().enumerate() {
+        let permit = semaphore.clone().acquire_owned().await.unwrap();
         let cmd = expand_batch_template(template, item, nr + 1);
+        let item_clone = item.clone();
+        let cmd_clone = cmd.clone();
+        let workdir_clone = workdir.clone();
+        let env_clone = environment.cloned();
+        let results_clone = results.clone();
+        let progress_clone = progress.clone();
+        let stop_flag_clone = stop_flag.clone();
 
-        // Validate shell safety
+        // Validate shell safety before spawning
         if let Err(e) = oxo_flow_core::executor::validate_shell_safety(&cmd) {
             eprintln!("{} {} - {}", "Error:".bold().red(), item, e);
-            failed += 1;
-            progress.set_message(format!("Done:{} Fail:{}", done, failed));
-            progress.inc(1);
-            results.push(BatchResult {
+            results_clone.lock().unwrap().push(BatchResult {
                 item: item.clone(),
                 command: cmd.clone(),
                 exit_code: None,
                 success: false,
                 error: Some(e.to_string()),
             });
+            progress_clone.inc(1);
             if stop_on_error {
-                progress.finish_and_clear();
-                return Err(anyhow::anyhow!("stopped on error"));
+                *stop_flag_clone.lock().unwrap() = true;
             }
+            // Release permit and continue
+            permit.forget();
             continue;
         }
 
         // Wrap with environment if specified
-        let final_cmd = if let Some(env) = environment {
+        let final_cmd = if let Some(env) = &env_clone {
             wrap_batch_command(&cmd, env)
         } else {
             cmd.clone()
         };
 
-        // Execute command
-        let result = run_batch_command(&final_cmd, &workdir);
+        let task = tokio::spawn(async move {
+            // Clone for spawn_blocking (needs 'static lifetime)
+            let final_cmd_for_blocking = final_cmd.clone();
+            let workdir_for_blocking = workdir_clone.clone();
 
-        match result {
-            Ok(exit_code) => {
-                if exit_code == 0 {
-                    done += 1;
-                    if checksum {
-                        tracing::info!("checksum verification for {}", item);
+            // Execute command in blocking context
+            let result = tokio::task::spawn_blocking(move || {
+                run_batch_command(&final_cmd_for_blocking, &workdir_for_blocking)
+            })
+            .await;
+
+            let exit_result = result.expect("spawn_blocking failed");
+
+            // Record result
+            let mut results_lock = results_clone.lock().unwrap();
+            match exit_result {
+                Ok(exit_code) => {
+                    results_lock.push(BatchResult {
+                        item: item_clone.clone(),
+                        command: cmd_clone,
+                        exit_code: Some(exit_code),
+                        success: exit_code == 0,
+                        error: None,
+                    });
+                    if exit_code != 0 && stop_on_error {
+                        *stop_flag_clone.lock().unwrap() = true;
                     }
-                } else {
-                    failed += 1;
+                    if checksum {
+                        tracing::info!("checksum verification for {}", item_clone);
+                    }
                 }
-                progress.set_message(format!("Done:{} Fail:{}", done, failed));
-                progress.inc(1);
-                results.push(BatchResult {
-                    item: item.clone(),
-                    command: cmd,
-                    exit_code: Some(exit_code),
-                    success: exit_code == 0,
-                    error: None,
-                });
-            }
-            Err(e) => {
-                failed += 1;
-                progress.set_message(format!("Done:{} Fail:{}", done, failed));
-                progress.inc(1);
-                results.push(BatchResult {
-                    item: item.clone(),
-                    command: cmd,
-                    exit_code: None,
-                    success: false,
-                    error: Some(e.to_string()),
-                });
-                if stop_on_error {
-                    progress.finish_and_clear();
-                    return Err(anyhow::anyhow!("stopped on error: {}", e));
+                Err(e) => {
+                    results_lock.push(BatchResult {
+                        item: item_clone.clone(),
+                        command: cmd_clone,
+                        exit_code: None,
+                        success: false,
+                        error: Some(e.to_string()),
+                    });
+                    if stop_on_error {
+                        *stop_flag_clone.lock().unwrap() = true;
+                    }
                 }
             }
+            progress_clone.inc(1);
+
+            // Release permit
+            drop(permit);
+        });
+
+        tasks.push(task);
+
+        // Check if we should stop spawning new tasks
+        if *stop_flag.lock().unwrap() {
+            break;
+        }
+    }
+
+    // Wait for all tasks to complete
+    for task in tasks {
+        if let Err(e) = task.await {
+            tracing::error!("task failed: {}", e);
         }
     }
 
     progress.finish_and_clear();
+
+    // Calculate summary
+    let results_lock = results.lock().unwrap();
+    let total_results = results_lock.len();
+    let failed = results_lock.iter().filter(|r| !r.success).count();
+    let done = total_results - failed;
 
     // Output summary
     if json_output {
@@ -846,7 +884,7 @@ async fn execute_batch(
             "total": total,
             "failed": failed,
             "success": failed == 0,
-            "results": results
+            "results": results_lock.clone()
         });
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
     } else {
