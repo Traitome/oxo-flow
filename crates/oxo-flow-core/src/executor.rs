@@ -809,7 +809,15 @@ impl LocalExecutor {
         // Record primary command (shell if exists, otherwise script)
         record.command = resolved_commands.first().cloned();
 
-        // Validate shell safety - block execution of dangerous patterns
+        // Validate wildcard VALUES for injection before they are substituted.
+        // This catches malicious content in externally supplied values
+        // (e.g., sample names from a CSV file).
+        if let Err(e) = validate_wildcard_injection(wildcard_values) {
+            tracing::error!(rule = %rule.name, error = %e, "wildcard injection detected");
+            return Err(e);
+        }
+
+        // Validate shell safety - block unconditionally destructive commands
         for cmd in &resolved_commands {
             if let Err(e) = validate_shell_safety(cmd) {
                 tracing::error!(rule = %rule.name, error = %e, "blocked dangerous shell command");
@@ -2030,20 +2038,21 @@ pub fn sanitize_shell_command(cmd: &str) -> Vec<String> {
 /// Block dangerous shell patterns that could lead to command injection.
 /// Returns Ok(()) if safe, Err if dangerous patterns are detected.
 ///
-/// Blocks patterns that allow arbitrary code execution:
-/// - Command substitution ($() and backticks)
-/// - Unconditional chaining (; and newline)
-/// - Dangerous deletion (rm -rf /)
+/// Only blocks unconditionally destructive commands (e.g., `rm -rf /`).
+/// Common bioinformatics shell idioms such as `$(command)`, backtick
+/// substitution, pipes (`|`), and `&&` are intentionally **not** blocked
+/// here because they appear in virtually every genomics shell template.
+///
+/// Shell templates in `.oxoflow` files are written by the pipeline author
+/// and are trusted. To catch injection through wildcard values coming from
+/// external sources (e.g., sample sheets), use
+/// [`validate_wildcard_injection`] instead.
 ///
 /// Note: &&, ||, and | are NOT blocked as they are common in
 /// bioinformatics pipelines for error handling and streaming.
 #[must_use = "shell safety validation returns a Result that must be checked"]
 pub fn validate_shell_safety(cmd: &str) -> crate::Result<()> {
-    let block_patterns = [
-        ("$(", "command substitution"),
-        ("`", "backtick substitution"),
-        ("rm -rf /", "dangerous deletion"),
-    ];
+    let block_patterns = [("rm -rf /", "dangerous deletion")];
     for (pattern, desc) in &block_patterns {
         if cmd.contains(pattern) {
             return Err(crate::OxoFlowError::Validation {
@@ -2056,6 +2065,50 @@ pub fn validate_shell_safety(cmd: &str) -> crate::Result<()> {
                     "Remove dangerous shell constructs or use a script file instead".to_string(),
                 ),
             });
+        }
+    }
+    Ok(())
+}
+
+/// Validate wildcard VALUES for shell injection patterns.
+///
+/// Unlike [`validate_shell_safety`] which operates on the full rendered
+/// command (and therefore trusts the shell template), this function checks
+/// only the values that will be *substituted* into the template via
+/// wildcard expansion (e.g., sample names from a CSV file, file paths).
+///
+/// Returns `Ok(())` if all values are safe, or an error if any value
+/// contains a pattern that would execute arbitrary shell code.
+#[must_use = "wildcard injection validation returns a Result that must be checked"]
+pub fn validate_wildcard_injection(
+    wildcard_values: &std::collections::HashMap<String, String>,
+) -> crate::Result<()> {
+    // Patterns that indicate injection attempts in externally supplied values.
+    // Config values from the .oxoflow file itself (prefixed with "config.")
+    // are trusted and skipped.
+    let injection_patterns = [
+        ("$(", "command substitution"),
+        ("`", "backtick substitution"),
+    ];
+    for (key, value) in wildcard_values {
+        // Skip config.* keys — these come from the trusted .oxoflow file.
+        if key.starts_with("config.") {
+            continue;
+        }
+        for (pattern, desc) in &injection_patterns {
+            if value.contains(pattern) {
+                return Err(crate::OxoFlowError::Validation {
+                    message: format!(
+                        "Wildcard injection detected: {} pattern in value '{}' for key '{}'",
+                        desc, value, key
+                    ),
+                    rule: None,
+                    suggestion: Some(
+                        "Ensure sample names and file paths do not contain shell metacharacters."
+                            .to_string(),
+                    ),
+                });
+            }
         }
     }
     Ok(())
@@ -3204,13 +3257,27 @@ mod tests {
     // -- validate_shell_safety tests -----------------------------------------
 
     #[test]
-    fn validate_shell_safety_blocks_command_substitution() {
-        assert!(validate_shell_safety("echo $(whoami)").is_err());
+    fn validate_shell_safety_allows_command_substitution_in_template() {
+        // $() is a legitimate bash idiom in bioinformatics shell templates.
+        // Injection prevention is handled by validate_wildcard_injection.
+        assert!(validate_shell_safety("echo $(whoami)").is_ok());
+        assert!(validate_shell_safety("lines=$(wc -l < input.txt)").is_ok());
+        assert!(
+            validate_shell_safety(
+                "gatk GatherVcfs $(for f in input; do echo \"-I $f\"; done) -O out.vcf"
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_shell_safety("for i in $(seq 1 100); do echo \"$i,$((RANDOM % 1000))\"; done")
+                .is_ok()
+        );
     }
 
     #[test]
-    fn validate_shell_safety_blocks_backtick() {
-        assert!(validate_shell_safety("echo `whoami`").is_err());
+    fn validate_shell_safety_allows_backtick_in_template() {
+        // Backtick substitution is a common bash idiom and is trusted in templates.
+        assert!(validate_shell_safety("echo `date`").is_ok());
     }
 
     #[test]
@@ -3247,6 +3314,47 @@ mod tests {
     fn validate_shell_safety_blocks_dangerous_deletion() {
         assert!(validate_shell_safety("rm -rf /").is_err());
         assert!(validate_shell_safety("sudo rm -rf /").is_err());
+    }
+
+    // -- validate_wildcard_injection tests ------------------------------------
+
+    #[test]
+    fn wildcard_injection_blocks_command_substitution_in_value() {
+        let mut values = HashMap::new();
+        values.insert("sample".to_string(), "$(whoami)".to_string());
+        assert!(
+            validate_wildcard_injection(&values).is_err(),
+            "$(whoami) in a sample name should be blocked as injection"
+        );
+    }
+
+    #[test]
+    fn wildcard_injection_blocks_backtick_in_value() {
+        let mut values = HashMap::new();
+        values.insert("sample".to_string(), "`whoami`".to_string());
+        assert!(validate_wildcard_injection(&values).is_err());
+    }
+
+    #[test]
+    fn wildcard_injection_allows_safe_sample_name() {
+        let mut values = HashMap::new();
+        values.insert("sample".to_string(), "CTRL_001".to_string());
+        values.insert("chr".to_string(), "chr1".to_string());
+        assert!(validate_wildcard_injection(&values).is_ok());
+    }
+
+    #[test]
+    fn wildcard_injection_skips_config_keys() {
+        // config.* keys come from the trusted .oxoflow file and are exempt.
+        let mut values = HashMap::new();
+        values.insert(
+            "config.reference".to_string(),
+            "/data/ref/$(echo injected).fa".to_string(),
+        );
+        assert!(
+            validate_wildcard_injection(&values).is_ok(),
+            "config.* values are trusted and should not be checked for injection"
+        );
     }
 
     #[test]

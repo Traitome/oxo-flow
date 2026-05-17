@@ -89,7 +89,11 @@ conda = "envs/subread.yaml"
 
 [[rules]]
 name = "multiqc"
-input = ["qc/{sample}_fastp.json", "counts/{sample}.counts.txt"]
+# Explicitly depends on all per-sample rules so multiqc runs once after
+# all samples have been processed, regardless of wildcard expansion.
+# Using directory paths as inputs avoids creating one multiqc instance
+# per sample when [[sample_groups]] is defined.
+depends_on = ["fastp_trim", "featurecounts", "index_bam"]
 output = ["results/multiqc_report.html"]
 description = "Aggregate QC metrics into a single report"
 shell = """
