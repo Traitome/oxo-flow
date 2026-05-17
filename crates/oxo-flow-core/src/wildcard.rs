@@ -5,7 +5,7 @@
 
 use crate::error::{OxoFlowError, Result};
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 /// Compiled regex that matches a single `{name}` wildcard placeholder.
@@ -295,9 +295,10 @@ pub fn discover_wildcards_from_pattern(
 /// ```
 pub fn extract_wildcards(pattern: &str) -> Vec<String> {
     let mut names = Vec::new();
+    let mut seen = HashSet::new();
     for cap in WILDCARD_RE.captures_iter(pattern) {
         let name = cap[1].to_string();
-        if !names.contains(&name) {
+        if seen.insert(name.clone()) {
             names.push(name);
         }
     }
@@ -400,9 +401,10 @@ pub fn cartesian_product(wildcard_lists: &HashMap<String, Vec<String>>) -> Wildc
 /// Extract wildcard names from multiple patterns.
 pub fn extract_wildcards_from_patterns(patterns: &[String]) -> Vec<String> {
     let mut names = Vec::new();
+    let mut seen = HashSet::new();
     for pattern in patterns {
         for name in extract_wildcards(pattern) {
-            if !names.contains(&name) {
+            if seen.insert(name.clone()) {
                 names.push(name);
             }
         }

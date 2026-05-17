@@ -69,8 +69,10 @@ helps contributors identify areas for improvement.
   checksums, and provenance tracking, it has not undergone formal FDA validation.
 - **No HIPAA/GDPR de-identification tools** — PHI handling and data de-identification
   must be managed by the user or external tools.
-- **No PDF Export** — Clinical reporting output is currently limited to HTML and JSON.
-  Exporting directly to PDF (often required for electronic medical records) is not yet supported.
+- **No native PDF Export** — Clinical reporting output is HTML and JSON.
+  PDF export requires `wkhtmltopdf` to be installed on the system
+  (via `brew install wkhtmltopdf` on macOS or `apt install wkhtmltopdf` on Linux).
+  A native PDF renderer without external dependencies is not yet available.
 - **"Clinical-grade" refers to design intent** — The engineering practices (audit trails,
   reproducibility, provenance) are designed with clinical workflows in mind, but formal
   regulatory certification is the responsibility of the deploying organization.

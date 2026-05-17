@@ -1,5 +1,6 @@
-#![allow(deprecated)]
 //! Job scheduling with resource constraints.
+// Test code uses deprecated `Rule::threads` / `Rule::memory` shorthand fields.
+#![allow(deprecated)]
 //!
 //! The scheduler determines which jobs can run concurrently based on
 //! available resources and dependency satisfaction.

@@ -1,5 +1,8 @@
-#![allow(deprecated)]
 //! Workflow configuration and `.oxoflow` file parsing.
+// Accesses deprecated `Rule::threads` / `Rule::memory` shorthand fields to
+// apply defaults and expand rules.  Will be removed once the shorthand
+// fields are retired.
+#![allow(deprecated)]
 //!
 //! The `.oxoflow` format is TOML-based with workflow metadata, configuration
 //! variables, default settings, and a list of rules.

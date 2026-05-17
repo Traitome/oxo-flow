@@ -1,5 +1,8 @@
-#![allow(deprecated)]
 //! Task execution engine for oxo-flow.
+// Accesses deprecated `Rule::threads` / `Rule::memory` shorthand fields for
+// backward-compatible deserialization and expansion.  All runtime reads use
+// `effective_threads()` / `effective_memory()`.
+#![allow(deprecated)]
 //!
 //! Executes workflow rules as local processes, handling concurrency,
 //! status tracking, and environment activation.
@@ -71,11 +74,20 @@ pub fn detect_interpreter(
     // Priority 2: custom interpreter map from workflow config
     // Priority 3: default interpreter map (static, no allocation per call)
 
-    // Extract file extension
+    // Extract file extension and build a lowercase ".ext" key for lookup
     let ext = Path::new(script_path)
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| format!(".{}", e.to_lowercase()));
+        .map(|e| {
+            let mut key = String::with_capacity(e.len() + 1);
+            key.push('.');
+            for c in e.chars() {
+                for lc in c.to_lowercase() {
+                    key.push(lc);
+                }
+            }
+            key
+        });
 
     if let Some(ref extension) = ext {
         // Check custom map first, then defaults

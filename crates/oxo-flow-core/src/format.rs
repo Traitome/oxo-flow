@@ -1,5 +1,7 @@
-#![allow(deprecated)]
 //! .oxoflow file format specification, validation, formatting, and linting.
+// Accesses deprecated `Rule::threads` / `Rule::memory` for linting and
+// canonical formatting output.
+#![allow(deprecated)]
 //!
 //! This module provides utilities for working with .oxoflow files beyond
 //! basic TOML parsing — including deep validation, best-practice linting,

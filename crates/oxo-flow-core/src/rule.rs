@@ -355,6 +355,33 @@ impl Default for FilePatterns {
     }
 }
 
+/// Custom iterator over [`FilePatterns`] that avoids heap allocation.
+///
+/// Unlike the previous `Box<dyn Iterator>` implementation, this enum-based
+/// iterator incurs no allocation when created.
+pub enum FilePatternsIter<'a> {
+    List(std::slice::Iter<'a, String>),
+    Map(std::collections::hash_map::Values<'a, String, String>),
+}
+
+impl<'a> Iterator for FilePatternsIter<'a> {
+    type Item = &'a String;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::List(iter) => iter.next(),
+            Self::Map(iter) => iter.next(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::List(iter) => iter.size_hint(),
+            Self::Map(iter) => iter.size_hint(),
+        }
+    }
+}
+
 impl FilePatterns {
     /// Returns true if the collection is empty.
     pub fn is_empty(&self) -> bool {
@@ -373,10 +400,10 @@ impl FilePatterns {
     }
 
     /// Returns an iterator over all patterns as strings.
-    pub fn iter(&self) -> Box<dyn Iterator<Item = &String> + '_> {
+    pub fn iter(&self) -> FilePatternsIter<'_> {
         match self {
-            Self::List(v) => Box::new(v.iter()),
-            Self::Map(m) => Box::new(m.values()),
+            Self::List(v) => FilePatternsIter::List(v.iter()),
+            Self::Map(m) => FilePatternsIter::Map(m.values()),
         }
     }
 
@@ -398,7 +425,6 @@ impl FilePatterns {
         match self {
             Self::List(v) => v.get(index),
             Self::Map(m) => {
-                // For maps, indexed access follows deterministic order (keys)
                 let mut keys: Vec<&String> = m.keys().collect();
                 keys.sort();
                 m.get(keys.get(index)? as &str)
@@ -417,7 +443,7 @@ impl FilePatterns {
 
 impl<'a> IntoIterator for &'a FilePatterns {
     type Item = &'a String;
-    type IntoIter = Box<dyn Iterator<Item = &'a String> + 'a>;
+    type IntoIter = FilePatternsIter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()

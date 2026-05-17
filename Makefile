@@ -1,8 +1,8 @@
-.PHONY: ci fmt clippy build test coverage bench
+.PHONY: ci fmt clippy build test coverage bench audit
 
 ## Run all local CI quality-gate checks (mirrors the "Test" job in ci.yml).
 ## Every check must pass before calling report_progress / git push.
-ci: fmt clippy build test
+ci: fmt clippy build test audit
 
 fmt:
 	cargo fmt -- --check
@@ -15,6 +15,9 @@ build:
 
 test:
 	cargo test --workspace
+
+audit:
+	cargo audit
 
 ## Generate code coverage report (requires cargo-tarpaulin).
 ## Install: cargo install cargo-tarpaulin

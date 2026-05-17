@@ -9,7 +9,7 @@
 
 ## Multi-Expert System Evaluation
 
-The following evaluation synthesizes perspectives from 20 domain experts to guide the
+The following evaluation synthesizes perspectives from 30 domain experts to guide the
 project's design decisions, priorities, and architecture.
 
 ### Expert Panel Summary
@@ -36,6 +36,16 @@ project's design decisions, priorities, and architecture.
 | 18 | Documentation Expert | MkDocs user guide, rustdoc API docs, workflow gallery, migration guides |
 | 19 | UX Designer | Clear error messages, progress bars, colored output, and helpful --help text |
 | 20 | Data Scientist | Template-based report generation with Tera; interactive plots via embedded JavaScript |
+| 21 | Regulatory Affairs Specialist | Audit trails must be tamper-evident; pipeline runs need immutable logs for FDA 21 CFR Part 11 |
+| 22 | Single-Cell Bioinformatician | Must handle millions of cells efficiently; scatter-gather with chunked processing essential |
+| 23 | Database Engineer | SQLite for persistence is appropriate at current scale; design schema for future migration |
+| 24 | Rust Performance Engineer | Avoid unnecessary clones; use zero-copy parsing; pre-allocate buffers in hot paths |
+| 25 | MLOps Engineer | Pipeline artifacts need versioning and lineage tracking for model reproducibility |
+| 26 | Clinical Laboratory Director | Turnaround time matters; parallel execution of independent samples is critical for clinical throughput |
+| 27 | Open-Source Community Manager | Clear CONTRIBUTING.md, responsive issue triage, and semantic versioning build trust |
+| 28 | Accessibility Engineer | CLI output should support screen readers; web UI needs WCAG 2.1 AA compliance |
+| 29 | Financial Analyst | Cost tracking per rule enables budget-aware scheduling; resource waste should be minimized |
+| 30 | Educator/Trainer | Progressive learning path from simple to complex workflows; gallery examples are key |
 
 ### Consensus Design Decisions
 

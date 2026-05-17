@@ -1,5 +1,6 @@
-#![allow(deprecated)]
 //! Cluster execution backends for HPC job submission.
+// Test code uses deprecated `Rule::threads` / `Rule::memory` shorthand fields.
+#![allow(deprecated)]
 //!
 //! Supports SLURM, PBS/Torque, SGE, and LSF job schedulers.
 
