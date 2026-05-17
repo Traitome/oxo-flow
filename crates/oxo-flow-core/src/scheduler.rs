@@ -47,7 +47,7 @@ impl SchedulerState {
     /// Mark a rule as running.
     pub fn mark_running(&mut self, rule: &str) {
         self.statuses.insert(rule.to_string(), JobStatus::Running);
-        self.running.insert(rule.to_string());
+        self.running.insert(rule.to_owned());
     }
 
     /// Mark a rule as completed with a record.

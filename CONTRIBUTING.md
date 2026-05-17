@@ -78,11 +78,12 @@ git checkout -b feat/my-feature
 make ci
 ```
 
-All four checks must pass:
+All five checks must pass:
 - `cargo fmt -- --check`
 - `cargo clippy --workspace -- -D warnings`
 - `cargo build --workspace`
 - `cargo test --workspace`
+- `cargo audit`
 
 ### 4. Commit with Conventional Commits
 

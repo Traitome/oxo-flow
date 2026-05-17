@@ -27,9 +27,9 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 tokio-stream = { workspace = true }
-async-stream = "0.3"
-dashmap = "6.1.0"
+async-stream = "0.3.6"
+dashmap = "6.1"
 sqlx = { version = "0.8.3", features = ["sqlite", "runtime-tokio", "uuid", "chrono"] }
-sysinfo = "0.35.0"
-futures = "0.3.31"
+sysinfo = { workspace = true }
+futures = "0.3.32"
 regex.workspace = true

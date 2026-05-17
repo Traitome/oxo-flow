@@ -122,7 +122,3 @@ vulnerable transitive dependencies so we can update them promptly.
 We gratefully acknowledge security researchers who responsibly disclose
 vulnerabilities. With your permission, we will credit you in the security
 advisory.
-
----
-
-This project is licensed under the [Apache License 2.0](LICENSE).

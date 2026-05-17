@@ -262,6 +262,7 @@ pub fn discover_wildcards_from_pattern(
     let re = pattern_to_regex(pattern)?;
     let wildcard_names = extract_wildcards(pattern);
     let mut results = Vec::new();
+    let mut seen = HashSet::new();
 
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
@@ -273,8 +274,18 @@ pub fn discover_wildcards_from_pattern(
                         values.insert(name.clone(), m.as_str().to_string());
                     }
                 }
-                if !values.is_empty() && !results.contains(&values) {
-                    results.push(values);
+                if !values.is_empty() {
+                    // Build a compact dedup key from sorted key=value pairs
+                    let mut parts: Vec<(&str, &str)> = values
+                        .iter()
+                        .map(|(k, v)| (k.as_str(), v.as_str()))
+                        .collect();
+                    parts.sort_by_key(|(k, _)| *k);
+                    let dedup_key: String =
+                        parts.iter().flat_map(|(k, v)| [k, "=", v, ","]).collect();
+                    if seen.insert(dedup_key) {
+                        results.push(values);
+                    }
                 }
             }
         }
@@ -378,21 +389,40 @@ pub fn cartesian_product(wildcard_lists: &HashMap<String, Vec<String>>) -> Wildc
         return vec![WildcardValues::new()];
     }
 
-    let mut combinations: WildcardCombinations = vec![WildcardValues::new()];
+    // Pre-calculate total combinations for single allocation
+    let total = keys
+        .iter()
+        .map(|k| wildcard_lists[*k].len().max(1))
+        .product::<usize>()
+        .max(1);
+
+    let mut combinations: WildcardCombinations = Vec::with_capacity(total);
+    combinations.push(HashMap::with_capacity(keys.len()));
 
     for key in &keys {
         let values = &wildcard_lists[*key];
-        let mut new_combinations = Vec::new();
+        if values.is_empty() {
+            continue;
+        }
+        let prev_len = combinations.len();
+        let value_count = values.len();
 
-        for combo in &combinations {
-            for value in values {
-                let mut new_combo = combo.clone();
+        // Pre-allocate space for expanded combinations
+        combinations.reserve(prev_len * (value_count - 1));
+
+        // Clone existing combinations for additional values (index 1..)
+        for (_, value) in values.iter().enumerate().skip(1) {
+            for j in 0..prev_len {
+                let mut new_combo = combinations[j].clone();
                 new_combo.insert((*key).clone(), value.clone());
-                new_combinations.push(new_combo);
+                combinations.push(new_combo);
             }
         }
 
-        combinations = new_combinations;
+        // Update original combinations in-place with first value
+        for combo in &mut combinations[..prev_len] {
+            combo.insert((*key).clone(), values[0].clone());
+        }
     }
 
     combinations

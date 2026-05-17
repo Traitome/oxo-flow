@@ -232,6 +232,8 @@ oxo-flow serve --host 0.0.0.0 -p 8080
 |--------|----------|-------------|
 | `GET` | `/api/health` | Health check |
 | `GET` | `/api/version` | Server and engine version info |
+| `GET` | `/api/system` | System information (CPU, memory, OS) |
+| `GET` | `/api/metrics` | Runtime metrics (requests, active workflows) |
 | `GET` | `/api/workflows` | List available workflows |
 | `GET` | `/api/environments` | List available environment backends |
 | `POST` | `/api/workflows/validate` | Validate workflow TOML |
@@ -241,7 +243,18 @@ oxo-flow serve --host 0.0.0.0 -p 8080
 | `POST` | `/api/workflows/run` | Start workflow execution |
 | `POST` | `/api/workflows/clean` | List output files that would be cleaned |
 | `POST` | `/api/workflows/export` | Export workflow for sharing or archival |
+| `POST` | `/api/workflows/format` | Reformat workflow into canonical TOML |
+| `POST` | `/api/workflows/lint` | Run linting checks on a workflow |
+| `POST` | `/api/workflows/stats` | Show workflow statistics |
+| `POST` | `/api/workflows/diff` | Compare two workflow files |
 | `POST` | `/api/reports/generate` | Generate a report (HTML or JSON) |
+| `GET` | `/api/events` | Server-sent events for real-time updates |
+| `GET` | `/api/runs` | List execution runs |
+| `DELETE` | `/api/runs/{id}` | Cancel a running workflow |
+| `GET` | `/api/runs/{id}/logs` | Get logs for a specific run |
+| `POST` | `/api/auth/login` | Authenticate and create session |
+| `GET` | `/api/auth/me` | Get current authenticated user |
+| `GET` | `/api/license` | Check license status |
 
 ## Venus Pipeline 🌟
 

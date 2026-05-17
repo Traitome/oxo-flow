@@ -626,7 +626,12 @@ impl LocalExecutor {
 
     /// Release resources after rule completion.
     async fn release_resources(&self, rule: &Rule) {
-        let (max_threads, max_memory_mb) = Self::detect_system_resources(&self.config);
+        // Use config limits directly instead of re-detecting system resources
+        let max_threads = self
+            .config
+            .max_threads
+            .unwrap_or_else(|| num_cpus::get() as u32);
+        let max_memory_mb = self.config.max_memory_mb.unwrap_or(8192);
         let mut pool = self.resource_pool.lock().await;
         pool.release(
             rule,

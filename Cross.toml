@@ -1,0 +1,21 @@
+# Cross-compilation configuration for Linux targets.
+# reqwest uses rustls (no OpenSSL dependency), so only basic
+# cross-compilation toolchain setup is needed.
+
+[target.aarch64-unknown-linux-musl]
+pre-build = [
+    "apt-get update",
+    "apt-get install -y musl-tools",
+]
+
+[target.armv7-unknown-linux-musleabihf]
+pre-build = [
+    "apt-get update",
+    "apt-get install -y musl-tools",
+]
+
+[target.x86_64-unknown-linux-musl]
+pre-build = [
+    "apt-get update",
+    "apt-get install -y musl-tools",
+]

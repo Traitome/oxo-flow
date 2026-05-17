@@ -103,7 +103,3 @@ can be used to:
 For clinical and regulated environments, oxo-flow's reproducibility mechanisms
 support formal validation protocols. See
 [VALIDATION_PROTOCOL.md](docs/VALIDATION_PROTOCOL.md) for IQ/OQ/PQ templates.
-
----
-
-This project is licensed under the [Apache License 2.0](LICENSE).

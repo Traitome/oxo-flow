@@ -144,7 +144,3 @@ For urgent bug fixes or security patches:
 1. Create a branch from the release tag: `git checkout -b hotfix/vX.Y.Z vX.Y.Z`
 2. Apply the fix and add tests
 3. Follow the standard release process from step 2 onward
-
----
-
-This project is licensed under the [Apache License 2.0](LICENSE).

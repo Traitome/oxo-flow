@@ -27,7 +27,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 glob = { workspace = true }
-filetime = "0.2"
+filetime = "0.2.29"
 sysinfo = { workspace = true }
 num_cpus = { workspace = true }
 
