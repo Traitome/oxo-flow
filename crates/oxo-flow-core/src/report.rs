@@ -217,6 +217,111 @@ impl Report {
         html
     }
 
+    /// Render the report as HTML optimized for PDF generation.
+    ///
+    /// This version includes print-specific CSS for better PDF output:
+    /// - Page breaks between major sections
+    /// - No navigation/UI elements
+    /// - Optimized typography for printing
+    pub fn to_printable_html(&self) -> String {
+        let html = self.to_html();
+        // Add print-specific styles
+        let print_styles = r#"
+  <style media="print">
+    @page { margin: 2cm; size: A4; }
+    body { max-width: none; padding: 0; font-size: 10pt; }
+    nav.toc { display: none; }
+    section { page-break-inside: avoid; margin-bottom: 1cm; border: none; }
+    h2 { page-break-after: avoid; }
+    table { page-break-inside: avoid; }
+    footer { position: fixed; bottom: 0; left: 0; right: 0; }
+  </style>
+"#;
+        // Insert print styles before the closing </head>
+        html.replace("</head>", &format!("{}\n</head>", print_styles))
+    }
+
+    /// Generate a PDF using wkhtmltopdf command.
+    ///
+    /// Returns the command string to execute. Requires wkhtmltopdf to be installed.
+    /// The output PDF will be saved to the specified path.
+    ///
+    /// # Arguments
+    /// * `output_path` - Path to save the PDF file
+    /// * `options` - Additional wkhtmltopdf options (e.g., "--enable-local-file-access")
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let report = Report::new("Clinical Report", "venus", "1.0.0");
+    /// let cmd = report.to_pdf_command("report.pdf", vec!["--enable-local-file-access"]);
+    /// // Execute: std::process::Command::new("sh").arg("-c").arg(cmd).output()
+    /// ```
+    pub fn to_pdf_command(&self, output_path: &str, options: Vec<&str>) -> String {
+        let html = self.to_printable_html();
+        let opts = options.join(" ");
+        format!(
+            "wkhtmltopdf {} --encoding utf-8 \"{}\" \"{}\"",
+            if opts.is_empty() { "" } else { &opts },
+            html.replace('"', "\\\"").replace('\n', " "),
+            output_path
+        )
+    }
+
+    /// Generate PDF asynchronously using embedded HTML.
+    ///
+    /// Writes HTML to a temporary file and calls wkhtmltopdf.
+    /// Requires wkhtmltopdf to be installed on the system.
+    pub async fn to_pdf(&self, output_path: &std::path::Path) -> Result<()> {
+        let html = self.to_printable_html();
+
+        // Write HTML to temp file
+        let temp_dir = tempfile::tempdir()?;
+        let html_path = temp_dir.path().join("report.html");
+        tokio::fs::write(&html_path, &html).await?;
+
+        // Run wkhtmltopdf
+        let output = tokio::process::Command::new("wkhtmltopdf")
+            .arg("--enable-local-file-access")
+            .arg("--encoding")
+            .arg("utf-8")
+            .arg("--page-size")
+            .arg("A4")
+            .arg("--margin-top")
+            .arg("20mm")
+            .arg("--margin-bottom")
+            .arg("20mm")
+            .arg("--margin-left")
+            .arg("20mm")
+            .arg("--margin-right")
+            .arg("20mm")
+            .arg(&html_path)
+            .arg(output_path)
+            .output()
+            .await;
+
+        match output {
+            Ok(o) if o.status.success() => {
+                tracing::info!(path = %output_path.display(), "PDF generated successfully");
+                Ok(())
+            }
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
+                Err(OxoFlowError::Validation {
+                    message: format!("wkhtmltopdf failed: {}", stderr),
+                    rule: None,
+                    suggestion: Some("Ensure wkhtmltopdf is installed (brew install wkhtmltopdf on macOS)".to_string()),
+                })
+            }
+            Err(e) => {
+                Err(OxoFlowError::Validation {
+                    message: format!("failed to run wkhtmltopdf: {}", e),
+                    rule: None,
+                    suggestion: Some("Install wkhtmltopdf: brew install wkhtmltopdf (macOS) or apt install wkhtmltopdf (Linux)".to_string()),
+                })
+            }
+        }
+    }
+
     /// Generate an execution summary section from job records.
     pub fn execution_summary(records: &HashMap<String, JobRecord>) -> ReportSection {
         let mut rows = Vec::new();

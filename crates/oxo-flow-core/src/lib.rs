@@ -50,6 +50,7 @@ pub mod format;
 pub mod report;
 pub mod rule;
 pub mod scheduler;
+pub mod webhook;
 pub mod wildcard;
 
 // Re-export key types at the crate root for convenience.
@@ -68,4 +69,5 @@ pub use executor::{
 pub use rule::Rule;
 pub use rule::{CombineConfig, SplitConfig, TransformConfig};
 pub use rule::{EnvironmentSpec, GpuSpec, ResourceHint, Resources, RuleBuilder};
+pub use webhook::{WebhookClient, WebhookConfig, WebhookData, WebhookEvent, WebhookPayload};
 pub use wildcard::{wildcard_combinations_from_groups, wildcard_combinations_from_pairs};
