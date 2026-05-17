@@ -35,3 +35,8 @@ fs2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "wildcard_bench"
+harness = false

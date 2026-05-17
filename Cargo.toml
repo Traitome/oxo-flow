@@ -63,6 +63,9 @@ fs2 = "0.4"
 # Crypto
 sha2 = "0.10"
 
+# Benchmarking
+criterion = { version = "0.5", features = ["html_reports"] }
+
 # Web
 axum = "0.8"
 tower = "0.5"

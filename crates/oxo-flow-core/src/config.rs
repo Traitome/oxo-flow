@@ -1462,13 +1462,26 @@ impl WorkflowConfig {
     /// simply ignored).
     pub fn expand_wildcards(&mut self) -> Result<()> {
         use crate::wildcard::{
-            expand_pattern, has_wildcards, wildcard_combinations_from_groups,
-            wildcard_combinations_from_pairs,
+            expand_pattern, has_wildcards, validate_wildcard_constraints_compiled,
+            wildcard_combinations_from_groups, wildcard_combinations_from_pairs,
         };
+        use regex::Regex;
 
         let pair_combos = wildcard_combinations_from_pairs(&self.pairs);
         let group_combos = wildcard_combinations_from_groups(&self.sample_groups);
-        let constraints = &self.wildcard_constraints;
+
+        // Pre-compile constraints for performance
+        let mut compiled_constraints = HashMap::new();
+        for (name, pattern) in &self.wildcard_constraints {
+            let re = Regex::new(pattern).map_err(|e| OxoFlowError::Wildcard {
+                rule: String::new(),
+                message: format!(
+                    "invalid regex constraint '{}' for wildcard '{}': {}",
+                    pattern, name, e
+                ),
+            })?;
+            compiled_constraints.insert(name.clone(), re);
+        }
 
         // Wildcards that trigger pair expansion.
         // Include backward-compatible aliases `{tumor}`/`{normal}`.
@@ -1505,7 +1518,7 @@ impl WorkflowConfig {
                 // Expand for each pair
                 for combo in &pair_combos {
                     // Validate constraints
-                    crate::wildcard::validate_wildcard_constraints(combo, constraints)?;
+                    validate_wildcard_constraints_compiled(combo, &compiled_constraints)?;
 
                     let suffix = combo
                         .get("pair_id")
@@ -1590,7 +1603,7 @@ impl WorkflowConfig {
                 // Expand for each (group, sample) combination
                 for combo in &group_combos {
                     // Validate constraints
-                    crate::wildcard::validate_wildcard_constraints(combo, constraints)?;
+                    validate_wildcard_constraints_compiled(combo, &compiled_constraints)?;
 
                     let group = combo.get("group").map(String::as_str).unwrap_or("group");
                     let sample = combo.get("sample").map(String::as_str).unwrap_or("sample");

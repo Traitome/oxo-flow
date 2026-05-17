@@ -43,34 +43,21 @@ pub type WildcardCombinations = Vec<WildcardValues>;
 /// ```
 pub type WildcardConstraints = HashMap<String, String>;
 
-/// Validate wildcard values against regex constraints.
-///
-/// Returns Ok(()) if all constrained wildcards match their patterns,
-/// or an error listing all violations.
-pub fn validate_wildcard_constraints(
+/// Validate wildcard values against pre-compiled regex constraints.
+pub fn validate_wildcard_constraints_compiled(
     values: &WildcardValues,
-    constraints: &WildcardConstraints,
+    constraints: &HashMap<String, Regex>,
 ) -> Result<()> {
     let mut violations = Vec::new();
 
-    for (name, pattern) in constraints {
-        if let Some(value) = values.get(name) {
-            match Regex::new(pattern) {
-                Ok(re) => {
-                    if !re.is_match(value) {
-                        violations.push(format!(
-                            "wildcard '{}' value '{}' does not match constraint '{}'",
-                            name, value, pattern
-                        ));
-                    }
-                }
-                Err(e) => {
-                    violations.push(format!(
-                        "invalid regex constraint '{}' for wildcard '{}': {}",
-                        pattern, name, e
-                    ));
-                }
-            }
+    for (name, re) in constraints {
+        if let Some(value) = values.get(name).filter(|v| !re.is_match(v)) {
+            violations.push(format!(
+                "wildcard '{}' value '{}' does not match constraint '{}'",
+                name,
+                value,
+                re.as_str()
+            ));
         }
     }
 
@@ -82,6 +69,34 @@ pub fn validate_wildcard_constraints(
             message: violations.join("; "),
         })
     }
+}
+
+/// Validate wildcard values against regex constraints.
+///
+/// NOTE: This function compiles regexes on every call. Use `validate_wildcard_constraints_compiled`
+/// for better performance when validating multiple combinations.
+pub fn validate_wildcard_constraints(
+    values: &WildcardValues,
+    constraints: &WildcardConstraints,
+) -> Result<()> {
+    let mut compiled = HashMap::new();
+    for (name, pattern) in constraints {
+        match Regex::new(pattern) {
+            Ok(re) => {
+                compiled.insert(name.clone(), re);
+            }
+            Err(e) => {
+                return Err(OxoFlowError::Wildcard {
+                    rule: String::new(),
+                    message: format!(
+                        "invalid regex constraint '{}' for wildcard '{}': {}",
+                        pattern, name, e
+                    ),
+                });
+            }
+        }
+    }
+    validate_wildcard_constraints_compiled(values, &compiled)
 }
 
 /// Convert a wildcard pattern (e.g., `{sample}_R{read}.fastq.gz`) to a regex
@@ -142,32 +157,97 @@ pub fn pattern_to_regex(pattern: &str) -> Result<Regex> {
 /// assert!(results.contains(&"S2_R2.fastq.gz".to_string()));
 /// ```
 pub fn cartesian_expand(pattern: &str, variables: &HashMap<String, Vec<String>>) -> Vec<String> {
-    let mut results = vec![pattern.to_string()];
-
     // Identify which wildcards in the pattern have provided values
     let wildcards = extract_wildcards(pattern);
     let mut active_vars = Vec::new();
     for name in wildcards {
-        if let Some(vals) = variables.get(&name) {
+        if let Some(vals) = variables.get(&name).filter(|v| !v.is_empty()) {
             active_vars.push((name, vals));
         }
     }
 
     if active_vars.is_empty() {
-        return results;
+        return vec![pattern.to_string()];
     }
 
-    // Iteratively expand each variable
-    for (name, vals) in active_vars {
-        let mut new_results = Vec::new();
-        let placeholder = format!("{{{name}}}");
-        for r in results {
-            for v in vals {
-                new_results.push(r.replace(&placeholder, v));
-            }
-        }
-        results = new_results;
+    // Pre-calculate pattern parts to avoid string searching/replacement in loops
+    #[derive(Debug)]
+    enum Part {
+        Literal(String),
+        Placeholder(usize), // Index into active_vars
     }
+
+    let mut parts = Vec::new();
+    let mut last_end = 0;
+    for mat in WILDCARD_RE.find_iter(pattern) {
+        if mat.start() > last_end {
+            parts.push(Part::Literal(pattern[last_end..mat.start()].to_string()));
+        }
+        let cap = WILDCARD_RE.captures(mat.as_str()).unwrap();
+        let name = &cap[1];
+
+        // Find index of this wildcard in active_vars
+        if let Some(idx) = active_vars.iter().position(|(n, _)| *n == name) {
+            parts.push(Part::Placeholder(idx));
+        } else {
+            // Not an active variable, keep as literal placeholder
+            parts.push(Part::Literal(format!("{{{name}}}")));
+        }
+        last_end = mat.end();
+    }
+    if last_end < pattern.len() {
+        parts.push(Part::Literal(pattern[last_end..].to_string()));
+    }
+
+    // Generate combinations using recursive part assembly
+    let mut results = Vec::new();
+    let mut current_values = vec![""; active_vars.len()];
+
+    fn generate<'a>(
+        var_idx: usize,
+        active_vars_list: &[(&String, &'a Vec<String>)],
+        current_values: &mut [&'a str],
+        parts: &[Part],
+        results: &mut Vec<String>,
+    ) {
+        if var_idx == active_vars_list.len() {
+            // All variables assigned, assemble the final string
+            let mut assembled = String::with_capacity(256);
+            for part in parts {
+                match part {
+                    Part::Literal(s) => assembled.push_str(s),
+                    Part::Placeholder(idx) => {
+                        assembled.push_str(current_values[*idx]);
+                    }
+                }
+            }
+            results.push(assembled);
+            return;
+        }
+
+        let (_, vals) = active_vars_list[var_idx];
+        for val in vals {
+            current_values[var_idx] = val;
+            generate(
+                var_idx + 1,
+                active_vars_list,
+                current_values,
+                parts,
+                results,
+            );
+        }
+    }
+
+    let active_vars_refs: Vec<(&String, &Vec<String>)> =
+        active_vars.iter().map(|(n, v)| (n, *v)).collect();
+
+    generate(
+        0,
+        &active_vars_refs,
+        &mut current_values,
+        &parts,
+        &mut results,
+    );
 
     results
 }
@@ -240,19 +320,29 @@ pub fn extract_wildcards(pattern: &str) -> Vec<String> {
 /// ```
 #[must_use = "expanding a pattern returns a Result that must be used"]
 pub fn expand_pattern(pattern: &str, values: &WildcardValues) -> Result<String> {
-    let mut result = pattern.to_string();
+    if !pattern.contains('{') {
+        return Ok(pattern.to_string());
+    }
+
+    let mut result = String::with_capacity(pattern.len() + 32);
+    let mut last_end = 0;
     let mut missing = Vec::new();
 
-    for cap in WILDCARD_RE.captures_iter(pattern) {
+    for mat in WILDCARD_RE.find_iter(pattern) {
+        result.push_str(&pattern[last_end..mat.start()]);
+
+        let cap = WILDCARD_RE.captures(mat.as_str()).unwrap();
         let name = &cap[1];
+
         match values.get(name) {
             Some(value) => {
-                result = result.replace(&format!("{{{name}}}"), value);
+                result.push_str(value);
             }
             None => {
                 missing.push(name.to_string());
             }
         }
+        last_end = mat.end();
     }
 
     if !missing.is_empty() {
@@ -262,6 +352,7 @@ pub fn expand_pattern(pattern: &str, values: &WildcardValues) -> Result<String> 
         });
     }
 
+    result.push_str(&pattern[last_end..]);
     Ok(result)
 }
 
