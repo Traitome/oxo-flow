@@ -26,10 +26,11 @@ The top-level report container:
 ```rust
 pub struct Report {
     pub title: String,
-    pub workflow: String,
-    pub version: String,
     pub generated_at: DateTime<Utc>,
+    pub workflow_name: String,
+    pub workflow_version: String,
     pub sections: Vec<ReportSection>,
+    pub metadata: HashMap<String, String>,
 }
 ```
 
@@ -52,10 +53,21 @@ The content of a section, supporting multiple formats:
 
 ```rust
 pub enum ReportContent {
+    Text { text: String },
+    Markdown { markdown: String },
+    Html { html: String },
+    Table {
+        headers: Vec<String>,
+        rows: Vec<Vec<String>>,
+    },
     KeyValue { pairs: Vec<(String, String)> },
-    Table { headers: Vec<String>, rows: Vec<Vec<String>> },
-    Text(String),
-    Html(String),
+    Json { data: serde_json::Value },
+    Chart {
+        title: String,
+        labels: Vec<String>,
+        values: Vec<f64>,
+        unit: String,
+    },
 }
 ```
 

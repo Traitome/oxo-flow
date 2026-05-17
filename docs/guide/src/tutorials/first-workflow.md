@@ -62,6 +62,9 @@ results_dir = "results"
 threads = 4
 memory = "8G"
 
+!!! info "Wildcard Patterns"
+    The `{sample}` in the file paths below is a **wildcard**. oxo-flow will scan your `raw_data` directory for files matching the pattern `{sample}_R1.fastq.gz`, extract the sample name, and automatically generate a task for every sample it finds.
+
 [[rules]]
 name = "fastqc_raw"
 input = [

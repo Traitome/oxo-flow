@@ -140,19 +140,21 @@ pub struct EnvironmentSpec {
     pub docker: Option<String>,
     pub singularity: Option<String>,
     pub venv: Option<String>,
+    pub modules: Vec<String>,
 }
 ```
 
 In TOML:
 
 ```toml
-# Only one backend per rule
+# Only one backend per rule (plus optional HPC modules)
 environment = { conda = "envs/tools.yaml" }
 environment = { docker = "biocontainers/bwa:0.7.17" }
 environment = { venv = "envs/requirements.txt" }
+environment = { modules = ["gcc/11.2", "cuda/11.7"] }
 ```
 
-If multiple backends are specified, the first one found is used in this priority order: docker, singularity, conda, pixi, venv.
+If multiple backends are specified, the first one found is used in this priority order: docker, singularity, conda, pixi, venv. HPC `modules` are loaded regardless of the primary backend if the executor supports them.
 
 ---
 

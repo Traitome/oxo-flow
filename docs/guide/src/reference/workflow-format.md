@@ -42,6 +42,9 @@ Workflow files must use the `.oxoflow` extension (e.g., `qc_pipeline.oxoflow`).
 [report]            # Optional: report configuration
 [[include]]         # Optional: include external workflow files
 [[rules]]           # Required: one or more rules
+[[pairs]]           # Optional: experiment-control pairs (WC-01)
+[[sample_groups]]   # Optional: multi-sample groups (WC-02)
+[resource_budget]   # Optional: resource limits
 ```
 
 ---
@@ -601,27 +604,34 @@ threads = 16  # Override inherited value
 
 ## Wildcards
 
-### Pattern syntax
+Wildcards enable dynamic, pattern-based pipeline definitions. For a detailed guide on how they are discovered, expanded, and constrained, see the [Wildcards Reference](./wildcards.md).
+
+### Basic Syntax
 
 Use `{name}` in file paths for dynamic expansion:
 
 ```toml
-input = ["{sample}_R1.fastq.gz"]
+input = ["raw/{sample}.fastq.gz"]
 output = ["aligned/{sample}.bam"]
 ```
 
-### Built-in placeholders
+### Built-in Placeholders
+
+Built-in placeholders use the same syntax but have reserved meanings:
 
 | Placeholder | Expands to |
 |---|---|
 | `{input}` | Space-separated input files |
 | `{output}` | Space-separated output files |
 | `{threads}` | Thread count for this rule |
+| `{memory}` | Memory allocation for this rule |
 | `{config.*}` | Value from `[config]` section |
 
-### Custom wildcards
+### Custom Wildcards
 
-Any `{name}` pattern not matching a built-in placeholder is treated as a wildcard. oxo-flow expands wildcards by matching against available files or explicit sample lists.
+Any `{name}` pattern not matching a built-in placeholder is treated as a wildcard. oxo-flow expands these based on:
+1. **File discovery**: Scanning for matching files in the `input` path.
+2. **Explicit lists**: Defined in [`[[pairs]]`](#pairs-experiment-control-pairing-wc-01) or [`[[sample_groups]]`](#sample_groups-multi-sample-cohorts-wc-02).
 
 ---
 

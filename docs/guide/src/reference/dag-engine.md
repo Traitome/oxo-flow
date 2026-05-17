@@ -25,13 +25,20 @@ The DAG engine is implemented in `crates/oxo-flow-core/src/dag.rs` using the [`p
 
 ```rust
 pub struct WorkflowDag {
-    graph: DiGraph<String, ()>,
-    node_indices: HashMap<String, NodeIndex>,
+    graph: DiGraph<DagNode, ()>,
+    name_to_node: HashMap<String, NodeIndex>,
+    output_to_node: HashMap<String, NodeIndex>,
+}
+
+pub struct DagNode {
+    pub name: String,
+    pub rule_index: usize,
 }
 ```
 
-- `graph` — a directed graph where nodes are rule names and edges are dependencies
-- `node_indices` — maps rule names to their graph node indices for O(1) lookup
+- `graph` — a directed graph where nodes are `DagNode` (rule name + index) and edges are dependencies
+- `name_to_node` — maps rule names to their graph node indices for O(1) lookup
+- `output_to_node` — maps output file patterns to the rule node that produces them
 
 ---
 
