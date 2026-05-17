@@ -1481,13 +1481,13 @@ impl WorkflowConfig {
 
         for rule in &self.rules {
             // Collect all text fields that might contain wildcards
-            let all_text: Vec<&str> = rule
-                .input
-                .iter()
-                .chain(rule.output.iter())
-                .chain(rule.shell.iter())
-                .map(String::as_str)
-                .collect();
+            let mut all_text: Vec<&str> = rule.input.iter().map(String::as_str).collect();
+            all_text.extend(rule.named_input.values().map(String::as_str));
+            all_text.extend(rule.output.iter().map(String::as_str));
+            all_text.extend(rule.named_output.values().map(String::as_str));
+            if let Some(ref shell) = rule.shell {
+                all_text.push(shell);
+            }
 
             let uses_pair_wildcard = !pair_combos.is_empty()
                 && all_text.iter().any(|t| {
@@ -1534,6 +1534,20 @@ impl WorkflowConfig {
                             }
                         })
                         .collect();
+                    expanded.named_input = rule
+                        .named_input
+                        .iter()
+                        .map(|(k, v)| {
+                            (
+                                k.clone(),
+                                if has_wildcards(v) {
+                                    expand_pattern(v, combo).unwrap_or_else(|_| v.clone())
+                                } else {
+                                    v.clone()
+                                },
+                            )
+                        })
+                        .collect();
                     expanded.output = rule
                         .output
                         .iter()
@@ -1543,6 +1557,20 @@ impl WorkflowConfig {
                             } else {
                                 p.clone()
                             }
+                        })
+                        .collect();
+                    expanded.named_output = rule
+                        .named_output
+                        .iter()
+                        .map(|(k, v)| {
+                            (
+                                k.clone(),
+                                if has_wildcards(v) {
+                                    expand_pattern(v, combo).unwrap_or_else(|_| v.clone())
+                                } else {
+                                    v.clone()
+                                },
+                            )
                         })
                         .collect();
                     if let Some(ref shell) = rule.shell
@@ -1641,10 +1669,30 @@ impl WorkflowConfig {
                         .iter()
                         .map(|p| expand_pattern(p, &combo).unwrap_or_else(|_| p.clone()))
                         .collect();
+                    scattered_rule.named_input = scattered_rule
+                        .named_input
+                        .iter()
+                        .map(|(k, v)| {
+                            (
+                                k.clone(),
+                                expand_pattern(v, &combo).unwrap_or_else(|_| v.clone()),
+                            )
+                        })
+                        .collect();
                     scattered_rule.output = scattered_rule
                         .output
                         .iter()
                         .map(|p| expand_pattern(p, &combo).unwrap_or_else(|_| p.clone()))
+                        .collect();
+                    scattered_rule.named_output = scattered_rule
+                        .named_output
+                        .iter()
+                        .map(|(k, v)| {
+                            (
+                                k.clone(),
+                                expand_pattern(v, &combo).unwrap_or_else(|_| v.clone()),
+                            )
+                        })
                         .collect();
                     if let Some(ref shell) = scattered_rule.shell {
                         scattered_rule.shell =

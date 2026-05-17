@@ -350,6 +350,11 @@ pub struct Rule {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub input: Vec<String>,
 
+    /// Named input files for convenient access (e.g., `{input.reads}`).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub named_input: HashMap<String, String>,
+
     /// Expanded input file patterns via Cartesian product.
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -359,6 +364,11 @@ pub struct Rule {
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub output: Vec<String>,
+
+    /// Named output files for convenient access (e.g., `{output.bam}`).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub named_output: HashMap<String, String>,
 
     /// Shell command template to execute.
     #[serde(default)]
@@ -1008,6 +1018,20 @@ impl RuleBuilder {
     #[must_use]
     pub fn group(mut self, group: impl Into<String>) -> Self {
         self.rule.group = Some(group.into());
+        self
+    }
+
+    /// Set named inputs.
+    #[must_use]
+    pub fn named_input(mut self, named_input: HashMap<String, String>) -> Self {
+        self.rule.named_input = named_input;
+        self
+    }
+
+    /// Set named outputs.
+    #[must_use]
+    pub fn named_output(mut self, named_output: HashMap<String, String>) -> Self {
+        self.rule.named_output = named_output;
         self
     }
 

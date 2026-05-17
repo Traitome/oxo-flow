@@ -66,7 +66,11 @@ While they use the same `{}` syntax, built-in placeholders are NOT wildcards; th
 | Placeholder | Expands to |
 |---|---|
 | `{input}` | Space-separated list of all input files |
+| `{input[N]}` | The Nth input file (0-indexed) |
+| `{input.name}` | The input file named `name` from `named_input` |
 | `{output}` | Space-separated list of all output files |
+| `{output[N]}` | The Nth output file (0-indexed) |
+| `{output.name}` | The output file named `name` from `named_output` |
 | `{threads}` | CPU thread count assigned to the task |
 | `{memory}` | Memory allocation assigned to the task |
 | `{config.X}` | Value of variable `X` from the `[config]` section |

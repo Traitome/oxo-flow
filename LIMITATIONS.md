@@ -24,8 +24,6 @@ helps contributors identify areas for improvement.
   format. There is no built-in importer for Common Workflow Language (CWL) or
   Workflow Description Language (WDL) files. This is planned for a future
   release.
-- **No named inputs/outputs** — Currently, input and output files are accessed by index
-  (e.g., `{input[0]}`). Named inputs (e.g., `{input.reads}`) are not yet supported.
 - **No native Nextflow/Snakemake import** — Similarly, there is no automatic
   conversion from Nextflow or Snakemake workflow definitions.
 - **No built-in cloud object storage streaming** — While cloud execution

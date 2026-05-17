@@ -2190,12 +2190,22 @@ pub fn render_shell_command(
         expanded = expanded.replace(&format!("{{output[{i}]}}"), out);
     }
 
+    // Expand {output.name}
+    for (name, out) in &rule.named_output {
+        expanded = expanded.replace(&format!("{{output.{name}}}"), out);
+    }
+
     // Expand {input} → all inputs space-joined
     expanded = expanded.replace("{input}", &rule.input.join(" "));
 
     // Expand {input[N]} → Nth input (0-indexed)
     for (i, inp) in rule.input.iter().enumerate() {
         expanded = expanded.replace(&format!("{{input[{i}]}}"), inp);
+    }
+
+    // Expand {input.name}
+    for (name, inp) in &rule.named_input {
+        expanded = expanded.replace(&format!("{{input.{name}}}"), inp);
     }
 
     // Expand {threads}
@@ -2338,7 +2348,7 @@ pub fn cleanup_cache(workdir: &Path, max_age_days: u64) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rule::{EnvironmentSpec, Resources};
+    use crate::rule::{EnvironmentSpec, Resources, RuleBuilder};
 
     fn make_rule(name: &str, shell: &str) -> Rule {
         Rule {
@@ -2468,6 +2478,26 @@ mod tests {
     }
 
     // -- render_shell_command tests -------------------------------------------
+
+    #[test]
+    fn render_shell_command_named_io() {
+        let mut named_input = HashMap::new();
+        named_input.insert("reads".to_string(), "data.fq".to_string());
+        let mut named_output = HashMap::new();
+        named_output.insert("bam".to_string(), "sorted.bam".to_string());
+
+        let rule = RuleBuilder::new("align")
+            .named_input(named_input)
+            .named_output(named_output)
+            .build();
+
+        let result = render_shell_command(
+            "bwa mem {input.reads} > {output.bam}",
+            &rule,
+            &HashMap::new(),
+        );
+        assert_eq!(result, "bwa mem data.fq > sorted.bam");
+    }
 
     #[test]
     fn render_shell_output_indexed() {

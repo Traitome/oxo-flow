@@ -621,11 +621,33 @@ Built-in placeholders use the same syntax but have reserved meanings:
 
 | Placeholder | Expands to |
 |---|---|
-| `{input}` | Space-separated input files |
-| `{output}` | Space-separated output files |
-| `{threads}` | Thread count for this rule |
-| `{memory}` | Memory allocation for this rule |
-| `{config.*}` | Value from `[config]` section |
+| `{input}` | Space-separated list of all input files |
+| `{input[N]}` | The Nth input file (0-indexed) |
+| `{input.name}` | The input file named `name` from `named_input` |
+| `{output}` | Space-separated list of all output files |
+| `{output[N]}` | The Nth output file (0-indexed) |
+| `{output.name}` | The output file named `name` from `named_output` |
+| `{threads}` | Thread count assigned to this rule |
+| `{memory}` | Memory allocation assigned to this rule |
+| `{config.*}` | Value from the `[config]` section |
+
+### Named Input & Output
+
+For complex rules with many files, use `named_input` and `named_output` to improve readability:
+
+```toml
+[[rules]]
+name = "align"
+
+[rules.named_input]
+reads1 = "raw/{sample}_R1.fastq.gz"
+reads2 = "raw/{sample}_R2.fastq.gz"
+
+[rules.named_output]
+bam = "aligned/{sample}.bam"
+
+shell = "bwa mem {input.reads1} {input.reads2} > {output.bam}"
+```
 
 ### Custom Wildcards
 
