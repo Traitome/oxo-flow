@@ -481,7 +481,8 @@ enum ConfigAction {
         workflow: PathBuf,
     },
 
-    /// Show workflow statistics.
+    /// Show workflow statistics (alias: check).
+    #[command(alias = "check")]
     Stats {
         /// Path to the .oxoflow workflow file.
         #[arg(value_name = "WORKFLOW")]
@@ -2293,7 +2294,7 @@ Thumbs.db
                     }
                 }
                 ProfileAction::Show { name } => match name.as_str() {
-                    "local" => {
+                    "local" | "default" => {
                         eprintln!("{}", "Profile: local".bold());
                         eprintln!("  Executor:    local process");
                         eprintln!("  Max jobs:    auto (CPU count)");
