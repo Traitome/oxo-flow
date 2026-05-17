@@ -1005,6 +1005,13 @@ When `cleanup = true`, chunk files are automatically cleaned up after combine su
 cleanup = true
 ```
 
+### Failure and Retry Logic
+
+In a scatter-gather process, failures are handled at the chunk (map) level:
+- If a single chunk fails, only that specific chunk is retried according to the rule's `retries` setting.
+- Sibling chunks continue to process in parallel.
+- The combine step will not execute until all chunks succeed. If any chunk fails exhaustively (after all retries), the combine step is cancelled.
+
 ### Expanded Rule Naming
 
 Transform rules expand into:

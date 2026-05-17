@@ -24,6 +24,8 @@ helps contributors identify areas for improvement.
   format. There is no built-in importer for Common Workflow Language (CWL) or
   Workflow Description Language (WDL) files. This is planned for a future
   release.
+- **No named inputs/outputs** — Currently, input and output files are accessed by index
+  (e.g., `{input[0]}`). Named inputs (e.g., `{input.reads}`) are not yet supported.
 - **No native Nextflow/Snakemake import** — Similarly, there is no automatic
   conversion from Nextflow or Snakemake workflow definitions.
 - **No built-in cloud object storage streaming** — While cloud execution
@@ -58,7 +60,8 @@ helps contributors identify areas for improvement.
   APIs from GA4GH are not implemented.
 - **No FHIR/HL7 integration** — Clinical data interchange standards are not natively
   supported. Report output is HTML/JSON which can be post-processed into FHIR resources.
-- **No OpenAPI specification** — The REST API does not yet publish an OpenAPI/Swagger spec.
+- **No OpenAPI specification** — The REST API does not yet publish an OpenAPI/Swagger spec,
+  which currently requires developers to refer directly to the Rust source for API structures.
 - **TOML is not an industry standard** — The `.oxoflow` format is purpose-built for
   readability but is not an established bioinformatics standard like CWL or WDL.
 
@@ -68,6 +71,8 @@ helps contributors identify areas for improvement.
   checksums, and provenance tracking, it has not undergone formal FDA validation.
 - **No HIPAA/GDPR de-identification tools** — PHI handling and data de-identification
   must be managed by the user or external tools.
+- **No PDF Export** — Clinical reporting output is currently limited to HTML and JSON.
+  Exporting directly to PDF (often required for electronic medical records) is not yet supported.
 - **"Clinical-grade" refers to design intent** — The engineering practices (audit trails,
   reproducibility, provenance) are designed with clinical workflows in mind, but formal
   regulatory certification is the responsibility of the deploying organization.

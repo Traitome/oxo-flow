@@ -110,6 +110,7 @@ nav:
       - Installation: tutorials/installation.md
       - Quick Start: tutorials/quickstart.md
       - Your First Workflow: tutorials/first-workflow.md
+      - Writing Custom Scripts: tutorials/custom-scripts.md
       - Variant Calling Pipeline: tutorials/variant-calling.md
       - Environment Management: tutorials/environment-management.md
   - Workflow Gallery:

@@ -411,6 +411,8 @@ framework extensibility, code quality, and documentation.
 - [ ] Kubernetes operator / CRD for cloud-native deployment (Expert 14.2)
 - [ ] Native S3/GCS object storage integration (Expert 14.4, 15.7)
 - [ ] OpenAPI/Swagger specification for REST API (Expert 10.6, 30.5)
+- [ ] Named inputs/outputs syntax for rules (e.g., `input.reads = [...]`)
+- [ ] PDF export support for clinical reports
 - [ ] CWL/WDL import/export converters (Expert 30.3)
 - [ ] GA4GH TES/WES API compatibility (Expert 30.4)
 - [ ] Interactive CLI wizard for new workflow creation (Expert 16.7)

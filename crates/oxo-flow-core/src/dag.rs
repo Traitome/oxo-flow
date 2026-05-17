@@ -159,7 +159,7 @@ impl WorkflowDag {
                 let cycle_start = stack
                     .iter()
                     .position(|&n| n == neighbor)
-                    .expect("neighbor must be in stack when on_stack is true");
+                    .unwrap_or(0);
                 let mut cycle: Vec<String> = stack[cycle_start..]
                     .iter()
                     .map(|&n| self.graph[n].name.clone())

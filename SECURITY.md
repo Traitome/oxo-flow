@@ -26,7 +26,7 @@ oxo-flow implements several security mechanisms, but has known limitations that 
 - **Encoded commands**: Base64-encoded commands, `python -c`, `perl -e`, and similar patterns bypass detection.
 - **Remote execution**: SSH commands and `curl | sh` patterns are not flagged.
 
-**Recommendation:** Only use trusted workflow files from verified sources. Never accept wildcard values from untrusted input.
+**Recommendation:** To defend against secondary injection attacks from malicious wildcard values, use `wildcard_constraints` in your `[workflow]` section to strictly allowlist safe characters (e.g., `^[a-zA-Z0-9_]+$`). oxo-flow validates wildcards against these regex patterns before expansion. Never accept wildcard values from untrusted input without constraints.
 
 ### Path Traversal Protection
 
