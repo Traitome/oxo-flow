@@ -44,6 +44,9 @@ dependencies:
 
 Replace `qc-pipeline.oxoflow` with:
 
+!!! tip "Configuration Syntax"
+    `{config.samples_dir}` refers to the `samples_dir` variable defined in the `[config]` section. This allows you to centralize paths and settings.
+
 ```toml
 [workflow]
 name = "qc-pipeline"
@@ -54,9 +57,6 @@ author = "Your Name"
 [config]
 samples_dir = "raw_data"
 results_dir = "results"
-
-!!! tip "Configuration Syntax"
-    `{config.samples_dir}` refers to the `samples_dir` variable defined in the `[config]` section. This allows you to centralize paths and settings.
 
 [defaults]
 threads = 4

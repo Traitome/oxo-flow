@@ -259,9 +259,9 @@ FASTQ → fastp → bwa-mem2 → MarkDuplicates → BQSR → Mutect2 → FilterM
 
 | Mode | Callers | Use case |
 |------|---------|----------|
-| **Experiment-only** | Mutect2 + FilterMutectCalls | Somatic/experimental variant calling + annotation + clinical report |
-| **Control-only** | HaplotypeCaller | Germline/control variant calling + annotation |
-| **Experiment-Control** | Mutect2 + Strelka2 + HaplotypeCaller | Full paired analysis + annotation + clinical report |
+| **Tumor-only** | Mutect2 + FilterMutectCalls | Somatic variant calling + annotation + clinical report |
+| **Normal-only** | HaplotypeCaller | Germline variant calling + annotation |
+| **Tumor-Normal** | Mutect2 + Strelka2 + HaplotypeCaller | Full paired analysis + annotation + clinical report |
 
 See [`pipelines/venus/`](pipelines/venus/) for pipeline configuration, environment specs, and report templates.
 

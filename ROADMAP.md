@@ -1,7 +1,7 @@
 # oxo-flow Roadmap
 
 > **Mission**: Build a Rust-native bioinformatics pipeline engine with first-principles design,
-> with first-class clinical-grade reporting, environment management, and a powerful web interface.
+> first-class clinical-grade reporting, environment management, and a powerful web interface.
 >
 > Licensed under Apache 2.0 — fully open source and free.
 
@@ -118,8 +118,8 @@ memory = "8G"
 
 [[rules]]
 name = "fastp_trim"
-input = ["raw/{sample}_R{read}.fastq.gz"]
-output = ["trimmed/{sample}_R{read}.fastq.gz", "qc/{sample}_fastp.json"]
+input = ["raw/{sample}_R1.fastq.gz", "raw/{sample}_R2.fastq.gz"]
+output = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz", "qc/{sample}_fastp.json"]
 threads = 8
 memory = "16G"
 environment = { conda = "envs/fastp.yaml" }

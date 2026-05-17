@@ -122,7 +122,7 @@ cargo publish -p oxo-flow-web
 
 ### 5. Create the GitHub Release
 
-- Go to the [Releases page](https://github.com/oxo-flow/oxo-flow/releases)
+- Go to the [Releases page](https://github.com/Traitome/oxo-flow/releases)
 - Click **Draft a new release**
 - Select the tag `vX.Y.Z`
 - Copy the relevant section from `CHANGELOG.md` into the release notes

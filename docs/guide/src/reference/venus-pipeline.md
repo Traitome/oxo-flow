@@ -37,7 +37,7 @@ graph TD
 | Duplicate Marking | GATK MarkDuplicates | PCR duplicate identification |
 | Base Recalibration | GATK BQSR | Base quality score recalibration |
 | Variant Calling | GATK Mutect2 | Somatic variant detection |
-| Variant Filtering | bcftools | Quality-based variant filtering |
+| Variant Filtering | GATK FilterMutectCalls | Quality-based variant filtering |
 | Annotation | VEP / SnpEff | Functional variant annotation |
 | Clinical Report | oxo-flow report | Structured report generation |
 
