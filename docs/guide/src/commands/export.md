@@ -54,7 +54,7 @@ oxo-flow export pipeline.oxoflow -f toml -o bundle.oxoflow
 ## Output
 
 ```
-oxo-flow 0.4.2 — Bioinformatics Pipeline Engine
+oxo-flow 0.5.1 — Bioinformatics Pipeline Engine
 ✓ Exported docker to stdout
 FROM ubuntu:22.04
 RUN apt-get update && apt-get install -y ...

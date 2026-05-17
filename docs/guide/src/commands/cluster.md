@@ -84,7 +84,7 @@ oxo-flow cluster cancel -b slurm 12345 12346
 ## Output
 
 ```
-oxo-flow 0.4.2 — Bioinformatics Pipeline Engine
+oxo-flow 0.5.1 — Bioinformatics Pipeline Engine
 Cluster: Generating slurm job scripts for 5 rules
   ✓ .oxo-flow/cluster/fastqc.sh
   ✓ .oxo-flow/cluster/trim_reads.sh

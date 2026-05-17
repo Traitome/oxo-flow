@@ -66,7 +66,7 @@ oxo-flow clean pipeline.oxoflow --orphans
 ### Dry-run output
 
 ```
-oxo-flow 0.4.2 — Bioinformatics Pipeline Engine
+oxo-flow 0.5.1 — Bioinformatics Pipeline Engine
 Would clean (dry-run):
   results/trimmed/sample1_R1.fastq.gz (exists)
   results/trimmed/sample1_R2.fastq.gz (exists)
@@ -79,7 +79,7 @@ Total: 4 output patterns
 ### Clean output
 
 ```
-oxo-flow 0.4.2 — Bioinformatics Pipeline Engine
+oxo-flow 0.5.1 — Bioinformatics Pipeline Engine
 Clean: 2 file(s) will be deleted. Continue? [y/N]
 y
   ✓ results/trimmed/sample1_R1.fastq.gz

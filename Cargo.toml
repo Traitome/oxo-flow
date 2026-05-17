@@ -1,6 +1,6 @@
 [package]
 name = "oxo-flow"
-version = "0.5.0"
+version = "0.5.1"
 edition.workspace = true
 publish = false
 
@@ -13,7 +13,7 @@ oxo-flow-core = { path = "crates/oxo-flow-core" }
 oxo-flow-venus = { path = "crates/venus" }
 
 [workspace.package]
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 authors = ["Traitome <https://github.com/Traitome>"]
 license = "Apache-2.0"
@@ -22,8 +22,8 @@ homepage = "https://github.com/Traitome/oxo-flow"
 
 [workspace.dependencies]
 # Internal workspace crates
-oxo-flow-core = { path = "crates/oxo-flow-core", version = "0.5.0" }
-oxo-flow-web = { path = "crates/oxo-flow-web", version = "0.5.0" }
+oxo-flow-core = { path = "crates/oxo-flow-core", version = "0.5.1" }
+oxo-flow-web = { path = "crates/oxo-flow-web", version = "0.5.1" }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

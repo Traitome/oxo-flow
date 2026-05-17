@@ -87,7 +87,7 @@ Example output structure:
 {
   "title": "my-pipeline Report",
   "workflow": "my-pipeline",
-  "version": "1.0.0",
+  "version": "0.5.1",
   "generated_at": "2026-04-05T12:00:00Z",
   "sections": [
     {

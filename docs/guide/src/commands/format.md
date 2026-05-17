@@ -54,7 +54,7 @@ oxo-flow format pipeline.oxoflow --check
 ## Output
 
 ```
-oxo-flow 0.4.2 — Bioinformatics Pipeline Engine
+oxo-flow 0.5.1 — Bioinformatics Pipeline Engine
 [workflow]
 name = "my-pipeline"
 version = "0.1.0"

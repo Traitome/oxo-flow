@@ -79,7 +79,7 @@ oxo-flow dry-run my-pipeline.oxoflow
 ```
 
 ```
-oxo-flow 0.4.2 — Bioinformatics Pipeline Engine
+oxo-flow 0.5.1 — Bioinformatics Pipeline Engine
 Dry-run: 2 rules would execute:
   1. create_data [threads=2, env=none]
      $ mkdir -p data && echo 'Hello from oxo-flow!' > data/greeting.txt
@@ -96,7 +96,7 @@ oxo-flow run my-pipeline.oxoflow
 ```
 
 ```
-oxo-flow 0.4.2 — Bioinformatics Pipeline Engine
+oxo-flow 0.5.1 — Bioinformatics Pipeline Engine
 DAG: 2 rules in execution order
   1. create_data
   2. transform
