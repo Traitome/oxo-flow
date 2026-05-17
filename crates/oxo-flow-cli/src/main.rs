@@ -1294,13 +1294,9 @@ async fn main() -> Result<()> {
                 dag.execution_order_for_targets(&target_refs)
                     .with_context(|| "failed to resolve target rules")?
             };
-            eprintln!(
-                "{} {} rules would execute:",
-                "Dry-run:".bold().yellow(),
-                order.len()
-            );
 
             // Build config variable map for placeholder expansion in command preview
+            // and for evaluating `when` conditions.
             let mut wildcard_values: HashMap<String, String> = HashMap::new();
             for (key, value) in &config.config {
                 let string_val = match value {
@@ -1310,7 +1306,45 @@ async fn main() -> Result<()> {
                 wildcard_values.insert(format!("config.{key}"), string_val);
             }
 
-            for (i, rule_name) in order.iter().enumerate() {
+            // Build a config-value map for `when` condition evaluation.
+            let config_values: HashMap<String, toml::Value> = config
+                .config
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+
+            // Filter out rules whose `when` condition evaluates to false given
+            // the current workflow config.  These rules would be skipped at
+            // runtime, so showing them in the dry-run output is misleading.
+            let active_order: Vec<_> = order
+                .iter()
+                .filter(|rule_name| {
+                    let rule = config.get_rule(rule_name).unwrap();
+                    if let Some(ref condition) = rule.when {
+                        let skip =
+                            !oxo_flow_core::executor::evaluate_condition(condition, &config_values);
+                        if skip {
+                            eprintln!(
+                                "  {} {} — condition '{}' evaluated to false, skipping",
+                                "⊘".dimmed(),
+                                rule_name.dimmed(),
+                                condition
+                            );
+                        }
+                        !skip
+                    } else {
+                        true
+                    }
+                })
+                .collect();
+
+            eprintln!(
+                "{} {} rules would execute:",
+                "Dry-run:".bold().yellow(),
+                active_order.len()
+            );
+
+            for (i, rule_name) in active_order.iter().enumerate() {
                 let rule = config.get_rule(rule_name).unwrap();
                 eprintln!(
                     "  {}. {} [threads={}, env={}]",
