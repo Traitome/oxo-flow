@@ -34,14 +34,13 @@ input = ["{sample}_R1.fastq.gz"]
 output = ["aligned/{sample}.bam"]
 threads = 16
 memory = "32G"
+environment = { singularity = "docker://biocontainers/bwa:0.7.17" }
+shell = "bwa mem -t {threads} ref.fa {input} | samtools sort -o {output}"
 
 [rules.resources]
 gpu = 0
 disk = "100G"
 time_limit = "24h"
-
-environment = { singularity = "docker://biocontainers/bwa:0.7.17" }
-shell = "bwa mem -t {threads} ref.fa {input} | samtools sort -o {output}"
 ```
 
 ### Resource fields

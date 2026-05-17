@@ -70,7 +70,7 @@ Start with the **Tutorials** in order:
 
 ### If you want to learn by example
 
-Explore the **[Workflow Gallery](./gallery/index.md)** — 8 curated workflows from hello-world to multi-omics integration, each with validation output, DAG visualizations, and scientific context:
+Explore the **[Workflow Gallery](./gallery/index.md)** — 9 curated workflows from hello-world to multi-omics integration, each with validation output, DAG visualizations, and scientific context:
 
 1. [Hello World](./gallery/hello-world.md) ⭐ — Minimal rule structure
 2. [File Pipeline](./gallery/file-pipeline.md) ⭐⭐ — Multi-rule dependencies
@@ -80,6 +80,7 @@ Explore the **[Workflow Gallery](./gallery/index.md)** — 8 curated workflows f
 6. [RNA-seq Quantification](./gallery/rnaseq.md) ⭐⭐⭐⭐ — Transcriptomics pipeline
 7. [WGS Germline Calling](./gallery/wgs-germline.md) ⭐⭐⭐⭐⭐ — GATK best practices
 8. [Multi-Omics Integration](./gallery/multiomics.md) ⭐⭐⭐⭐⭐ — WGS + RNA-seq + Methylation
+9. [Single-Cell RNA-seq](./gallery/single-cell-rnaseq.md) ⭐⭐⭐⭐ — scRNA-seq analysis
 
 ### If you need to accomplish a specific task
 
