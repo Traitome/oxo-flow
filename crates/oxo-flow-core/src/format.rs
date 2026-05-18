@@ -326,6 +326,21 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
         }
     }
 
+    // E010: Check for undefined env_group references
+    for rule in &config.rules {
+        if let Some(ref group_name) = rule.env_group {
+            if !config.env_groups.contains_key(group_name) {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    message: format!("Rule '{}' references undefined env_group '{}'", rule.name, group_name),
+                    rule: Some(rule.name.clone()),
+                    code: "E010".to_string(),
+                    suggestion: Some(format!("Define [env_groups.{}] or remove env_group from rule", group_name)),
+                });
+            }
+        }
+    }
+
     // E009: Path safety validation - detect dangerous paths in inputs/outputs
     for rule in &config.rules {
         // Check for path traversal (..) in inputs
