@@ -945,6 +945,14 @@ pub struct WorkflowConfig {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub reference_databases: Vec<ReferenceDatabase>,
 
+    /// Named environment groups for sharing environments across rules.
+    ///
+    /// Rules can reference these via `env_group = "name"` instead of
+    /// specifying `environment` directly.
+    #[serde(default, rename = "env_groups")]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub env_groups: HashMap<String, EnvironmentSpec>,
+
     /// Global wildcard constraints (regular expressions).
     /// Each key is a wildcard name, value is the regex pattern it must match.
     #[serde(default)]
@@ -2188,6 +2196,27 @@ impl WorkflowConfig {
             }
         }
         warnings
+    }
+
+    /// Resolve environment for a rule, checking env_group first.
+    ///
+    /// Returns the environment spec from the following sources (in order):
+    /// 1. `env_groups[group_name]` if `rule.env_group` is set
+    /// 2. `rule.environment` if not empty
+    /// 3. `defaults.environment` as fallback
+    pub fn resolve_environment(&self, rule: &Rule) -> Option<EnvironmentSpec> {
+        // Check env_group first
+        if let Some(ref group_name) = rule.env_group {
+            if let Some(env) = self.env_groups.get(group_name) {
+                return Some(env.clone());
+            }
+        }
+        // Fall back to rule's environment if not empty
+        if !rule.environment.is_empty() {
+            return Some(rule.environment.clone());
+        }
+        // Fall back to defaults
+        self.defaults.environment.clone()
     }
 }
 

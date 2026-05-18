@@ -594,6 +594,14 @@ pub struct Rule {
     #[serde(skip_serializing_if = "EnvironmentSpec::is_empty")]
     pub environment: EnvironmentSpec,
 
+    /// Reference to a named environment group defined in workflow config.
+    ///
+    /// When set, the environment is looked up from `workflow.env_groups[name]`
+    /// instead of using the inline `environment` field.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env_group: Option<String>,
+
     /// Log file path pattern.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
