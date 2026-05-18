@@ -103,6 +103,8 @@ pub enum Commands {
     Validate {
         #[arg(value_name = "WORKFLOW")]
         workflow: PathBuf,
+        #[arg(long, help = "Validate as a sub-workflow fragment (skip DAG validation)")]
+        as_include: bool,
     },
     /// Initialize a new workflow project.
     Init {
@@ -448,7 +450,9 @@ async fn main() -> Result<()> {
         Commands::DryRun { workflow, target } => {
             dry_run_command(workflow, target, cli.verbose).await?
         }
-        Commands::Validate { workflow } => validate_command(workflow)?,
+        Commands::Validate { workflow, as_include } => {
+            validate_command(workflow, as_include)?;
+        }
         Commands::Init { name, dir } => init_command(name, dir)?,
         Commands::Template {
             template,
