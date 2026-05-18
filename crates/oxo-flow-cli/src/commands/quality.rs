@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::commands::print_banner;
 
-pub fn validate_command(workflow: PathBuf) -> Result<()> {
+pub fn validate_command(workflow: PathBuf, as_include: bool) -> Result<()> {
     let config_res = WorkflowConfig::from_file(&workflow);
     match config_res {
         Ok(cfg) => {
@@ -36,61 +36,82 @@ pub fn validate_command(workflow: PathBuf) -> Result<()> {
                 }
             }
 
-            // Check for missing input files
+            // Check for missing input files (skip for --as-include)
             let mut missing_inputs = Vec::new();
-            for rule in &cfg.rules {
-                for input in &rule.input {
-                    // Only check if it's not a wildcard path and doesn't exist
-                    if !input.contains('{') && !input.contains('}') && !Path::new(input).exists() {
-                        // Also check if it's an output of another rule
-                        let is_generated =
-                            cfg.rules.iter().any(|r| r.output.to_vec().contains(input));
+            if !as_include {
+                for rule in &cfg.rules {
+                    for input in &rule.input {
+                        // Only check if it's not a wildcard path and doesn't exist
+                        if !input.contains('{') && !input.contains('}') && !Path::new(input).exists() {
+                            // Also check if it's an output of another rule
+                            let is_generated =
+                                cfg.rules.iter().any(|r| r.output.to_vec().contains(input));
 
-                        if !is_generated {
-                            missing_inputs.push(input);
+                            if !is_generated {
+                                missing_inputs.push(input);
+                            }
                         }
                     }
                 }
             }
 
-            // Also validate DAG construction
-            match WorkflowDag::from_rules(&cfg.rules) {
-                Ok(dag) => {
-                    if error_count == 0 {
-                        eprintln!(
-                            "{} {} — {} rules, {} dependencies",
-                            "✓".green().bold(),
-                            workflow.display(),
-                            dag.node_count(),
-                            dag.edge_count()
-                        );
-                    } else {
-                        eprintln!(
-                            "{} {} — {} validation error(s)",
-                            "✗".red().bold(),
-                            workflow.display(),
-                            error_count
-                        );
-                    }
-
-                    if !missing_inputs.is_empty() {
-                        eprintln!(
-                            "\n  {} The following input files do not exist:",
-                            "⚠ Warning:".yellow().bold()
-                        );
-                        for input in missing_inputs {
-                            eprintln!("    - {}", input);
-                        }
-                    }
-                }
-                Err(e) => {
+            // Validate DAG construction (skip for --as-include)
+            if as_include {
+                // For sub-workflow fragments, skip DAG validation
+                if error_count == 0 {
                     eprintln!(
-                        "{} {} — DAG error: {}",
+                        "{} {} — {} rules (fragment validation)",
+                        "✓".green().bold(),
+                        workflow.display(),
+                        cfg.rules.len()
+                    );
+                } else {
+                    eprintln!(
+                        "{} {} — {} validation error(s)",
                         "✗".red().bold(),
                         workflow.display(),
-                        e
+                        error_count
                     );
-                    std::process::exit(1);
+                }
+            } else {
+                match WorkflowDag::from_rules(&cfg.rules) {
+                    Ok(dag) => {
+                        if error_count == 0 {
+                            eprintln!(
+                                "{} {} — {} rules, {} dependencies",
+                                "✓".green().bold(),
+                                workflow.display(),
+                                dag.node_count(),
+                                dag.edge_count()
+                            );
+                        } else {
+                            eprintln!(
+                                "{} {} — {} validation error(s)",
+                                "✗".red().bold(),
+                                workflow.display(),
+                                error_count
+                            );
+                        }
+
+                        if !missing_inputs.is_empty() {
+                            eprintln!(
+                                "\n  {} The following input files do not exist:",
+                                "⚠ Warning:".yellow().bold()
+                            );
+                            for input in missing_inputs {
+                                eprintln!("    - {}", input);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "{} {} — DAG error: {}",
+                            "✗".red().bold(),
+                            workflow.display(),
+                            e
+                        );
+                        std::process::exit(1);
+                    }
                 }
             }
 
@@ -330,7 +351,7 @@ pub async fn watch_command(workflow: PathBuf) -> Result<()> {
             );
 
             // Run validate
-            match validate_command(workflow_path.clone()) {
+            match validate_command(workflow_path.clone(), false) {
                 Ok(()) => {
                     eprintln!();
                 }

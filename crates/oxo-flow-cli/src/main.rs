@@ -551,7 +551,7 @@ async fn main() -> Result<()> {
         Commands::Test { workflow, output } => {
             use colored::Colorize;
             // Test mode: validate + lint + dry-run + optional output verification
-            validate_command(workflow.clone())?;
+            validate_command(workflow.clone(), false)?;
             lint_command(workflow.clone(), false)?;
             dry_run_command(Some(workflow), vec![], cli.verbose).await?;
             if let Some(output_path) = output {
