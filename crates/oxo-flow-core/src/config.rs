@@ -645,12 +645,14 @@ impl ExperimentControlPair {
             })?;
         let experiment_col = col_index
             .get("experiment")
+            .or_else(|| col_index.get("tumor"))
             .ok_or_else(|| OxoFlowError::Parse {
                 path: path.to_path_buf(),
                 message: "pairs file missing 'experiment' column (or 'tumor')".to_string(),
             })?;
         let control_col = col_index
             .get("control")
+            .or_else(|| col_index.get("normal"))
             .ok_or_else(|| OxoFlowError::Parse {
                 path: path.to_path_buf(),
                 message: "pairs file missing 'control' column (or 'normal')".to_string(),
@@ -668,13 +670,25 @@ impl ExperimentControlPair {
                 message: format!("error parsing row {}: {}", row_idx + 2, e),
             })?;
 
+            let mut metadata = HashMap::new();
+            for (i, header) in headers.iter().enumerate() {
+                // If it's not one of the standard columns, add to metadata
+                if i != *pair_id_col
+                    && i != *experiment_col
+                    && i != *control_col
+                    && experiment_type_col.map_or(true, |&j| i != j)
+                {
+                    metadata.insert(header.to_string(), record.get(i).unwrap_or("").to_string());
+                }
+            }
+
             let pair = Self {
                 pair_id: record.get(*pair_id_col).unwrap_or("").to_string(),
                 experiment: record.get(*experiment_col).unwrap_or("").to_string(),
                 control: record.get(*control_col).unwrap_or("").to_string(),
                 experiment_type: experiment_type_col
                     .and_then(|&i| record.get(i).map(|s| s.to_string())),
-                metadata: HashMap::new(),
+                metadata,
             };
             pairs.push(pair);
         }
@@ -1330,7 +1344,22 @@ impl WorkflowConfig {
 
         // Wildcards that trigger pair expansion.
         // Include backward-compatible aliases `{tumor}`/`{normal}`.
-        const PAIR_WILDCARDS: &[&str] = &["experiment", "control", "tumor", "normal", "pair_id"];
+        let mut pair_wildcards = vec![
+            "experiment",
+            "control",
+            "tumor",
+            "normal",
+            "pair_id",
+            "experiment_type",
+            "tumor_type",
+        ];
+        // Also include any metadata keys from defined pairs
+        for pair in &self.pairs {
+            for key in pair.metadata.keys() {
+                pair_wildcards.push(key.as_str());
+            }
+        }
+
         // Wildcards that trigger group expansion
         const GROUP_WILDCARDS: &[&str] = &["group", "sample"];
 
@@ -1347,7 +1376,7 @@ impl WorkflowConfig {
 
             let uses_pair_wildcard = !pair_combos.is_empty()
                 && all_text.iter().any(|t| {
-                    PAIR_WILDCARDS
+                    pair_wildcards
                         .iter()
                         .any(|w| t.contains(&format!("{{{w}}}")))
                 });

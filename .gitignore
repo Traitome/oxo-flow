@@ -47,3 +47,5 @@ workspace/
 
 # Example workflow outputs (generated when testing gallery examples)
 hello.txt
+oxo-flow-clindet/
+.playwright-mcp/

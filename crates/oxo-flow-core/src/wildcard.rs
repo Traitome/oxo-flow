@@ -338,7 +338,6 @@ pub fn expand_pattern(pattern: &str, values: &WildcardValues) -> Result<String> 
 
     let mut result = String::with_capacity(pattern.len() + 32);
     let mut last_end = 0;
-    let mut missing = Vec::new();
 
     for mat in WILDCARD_RE.find_iter(pattern) {
         result.push_str(&pattern[last_end..mat.start()]);
@@ -351,17 +350,14 @@ pub fn expand_pattern(pattern: &str, values: &WildcardValues) -> Result<String> 
                 result.push_str(value);
             }
             None => {
-                missing.push(name.to_string());
+                // If wildcard is not found, keep it as-is for later expansion
+                // (e.g. {threads}, {input}, {memory}, etc.)
+                result.push_str("{");
+                result.push_str(name);
+                result.push_str("}");
             }
         }
         last_end = mat.end();
-    }
-
-    if !missing.is_empty() {
-        return Err(OxoFlowError::Wildcard {
-            rule: String::new(),
-            message: format!("unresolved wildcards: {}", missing.join(", ")),
-        });
     }
 
     result.push_str(&pattern[last_end..]);
