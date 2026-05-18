@@ -109,9 +109,9 @@ curl -X POST http://127.0.0.1:8080/api/workflows/validate \
 ## Notes
 
 - The web server is built with [axum](https://github.com/tokio-rs/axum) and runs on the tokio async runtime
-- CORS is enabled by default, allowing requests from any origin
+- CORS is restricted to localhost by default; use `OXO_FLOW_ALLOWED_ORIGINS` to override
 - The server is intended for development and internal use — for production deployments, place it behind a reverse proxy (nginx, Caddy)
-- See the [Web API reference](../reference/web-api.md) for complete endpoint documentation
+- See the [Web API reference](../reference/web-api.md) for complete endpoint and authentication documentation
 
 ## ⚠️ Security: Configuring Authentication
 

@@ -1104,6 +1104,32 @@ shell = "bwa mem -t {threads} {config.reference} {input} | samtools sort -o {out
 
 ---
 
+## JSON Schema
+
+oxo-flow provides a comprehensive JSON Schema for the `.oxoflow` format. This can be used for automated validation in your CI/CD pipelines or for real-time autocompletion and error checking in your IDE (like VS Code or IntelliJ).
+
+### Getting the Schema
+
+You can output the schema directly from the CLI:
+
+```bash
+oxo-flow schema > oxoflow.schema.json
+```
+
+### IDE Configuration (VS Code)
+
+To enable validation in VS Code, add the following to your `settings.json`:
+
+```json
+"yaml.schemas": {
+    "https://traitome.github.io/oxo-flow/schema/oxoflow-v1.schema.json": "*.oxoflow"
+}
+```
+
+(Note: Although `.oxoflow` is TOML, many VS Code extensions can apply JSON schemas to multiple formats).
+
+---
+
 ## See Also
 
 - [Create a Workflow](../how-to/create-workflow.md) — practical authoring guide

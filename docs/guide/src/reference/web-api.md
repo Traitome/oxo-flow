@@ -198,15 +198,58 @@ Returns available environment backends.
 
 ---
 
-## CORS
+## Authentication
 
-CORS is enabled by default, allowing requests from any origin. This makes the API accessible from web-based frontends and development tools.
+oxo-flow uses a session-based authentication system. To access protected endpoints, you must first log in to obtain a session token.
+
+### Login
+
+```http
+POST /api/auth/login
+Content-Type: application/json
+
+{
+  "username": "admin",
+  "password": "your-password"
+}
+```
+
+**Response:**
+
+If successful, the server returns a JSON response containing the token and user info, and sets a **Secure, HttpOnly** cookie named `oxo_session`.
+
+```json
+{
+  "token": "...",
+  "username": "admin",
+  "role": "admin"
+}
+```
+
+### Authorization
+
+All protected endpoints require either:
+1.  The `oxo_session` cookie (automatically sent by browsers).
+2.  An `Authorization: Bearer <token>` HTTP header.
 
 ---
 
-## Authentication
+## OpenAPI Specification
 
-The current version does not include authentication. For production deployments, place the server behind a reverse proxy (nginx, Caddy, Traefik) that handles TLS and authentication.
+A complete OpenAPI 3.0 specification for the Web API is available in the repository at `docs/schema/openapi.yaml`. You can use this file to generate client libraries or explore the API using tools like Swagger UI or Postman.
+
+---
+
+## CORS
+
+By default, CORS is restricted to `localhost:8080` and `127.0.0.1:8080` to protect against cross-site request forgery.
+
+To allow access from other origins (e.g., a production frontend), set the `OXO_FLOW_ALLOWED_ORIGINS` environment variable:
+
+```bash
+export OXO_FLOW_ALLOWED_ORIGINS="https://my-frontend.com,https://dashboard.internal.org"
+oxo-flow serve
+```
 
 ---
 
