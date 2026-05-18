@@ -7,7 +7,7 @@ authors:
     given-names: Shixiang
     orcid: "https://orcid.org/0000-0001-9855-7357"
     affiliation: "Traitome"
-version: 0.5.2
+version: 0.5.3
 date-released: "2026-05-18"
 license: Apache-2.0
 url: "https://github.com/Traitome/oxo-flow"
