@@ -379,3 +379,60 @@ pub async fn watch_command(workflow: PathBuf) -> Result<()> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use assert_cmd::Command;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_as_include_skips_dag_validation() {
+        // Create a fragment with rules that reference undefined inputs
+        let fragment = r#"
+[workflow]
+name = "qc-fragment"
+
+[[rules]]
+name = "fastqc"
+input = ["{sample}.fastq"]
+output = ["{sample}_fastqc.html"]
+shell = "fastqc {input}"
+"#;
+        let mut file = NamedTempFile::with_suffix(".oxoflow").unwrap();
+        file.write_all(fragment.as_bytes()).unwrap();
+
+        // Should pass with --as-include (skips DAG validation)
+        Command::cargo_bin("oxo-flow")
+            .unwrap()
+            .arg("validate")
+            .arg("--as-include")
+            .arg(file.path())
+            .assert()
+            .success();
+    }
+
+    #[test]
+    fn test_as_include_validates_syntax() {
+        // Create an invalid fragment (missing required 'name' field)
+        let fragment = r#"
+[workflow]
+name = "bad-fragment"
+
+[[rules]]
+# Missing required 'name' field
+input = ["test.txt"]
+"#;
+        let mut file = NamedTempFile::with_suffix(".oxoflow").unwrap();
+        file.write_all(fragment.as_bytes()).unwrap();
+
+        // Should fail even with --as-include (syntax errors)
+        Command::cargo_bin("oxo-flow")
+            .unwrap()
+            .arg("validate")
+            .arg("--as-include")
+            .arg(file.path())
+            .assert()
+            .failure();
+    }
+}

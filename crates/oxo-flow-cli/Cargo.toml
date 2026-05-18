@@ -34,3 +34,4 @@ num_cpus = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+assert_cmd = "2.2.0"
