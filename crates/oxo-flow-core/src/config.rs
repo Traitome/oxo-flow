@@ -3700,4 +3700,70 @@ mod tests {
         // For json_merge, the shell should use jq
         assert!(aggregate_rule.shell.as_ref().unwrap().contains("jq"));
     }
+
+    #[test]
+    fn reference_dir_derives_standard_paths() {
+        let config: WorkflowConfig = toml::from_str(
+            r#"
+reference_dir = "/data/GRCh38"
+
+[workflow]
+name = "test"
+"#,
+        )
+        .unwrap();
+
+        let derived = config.derive_reference_paths();
+        assert_eq!(
+            derived.get("reference_fasta"),
+            Some(&"/data/GRCh38/genome.fa".to_string())
+        );
+        assert_eq!(
+            derived.get("gene_annotation"),
+            Some(&"/data/GRCh38/genes.gtf".to_string())
+        );
+        assert_eq!(
+            derived.get("bwa_index"),
+            Some(&"/data/GRCh38/bwa/genome.fa".to_string())
+        );
+    }
+
+    #[test]
+    fn reference_dir_explicit_overrides_derived() {
+        let config: WorkflowConfig = toml::from_str(
+            r#"
+reference_dir = "/data/GRCh38"
+
+[workflow]
+name = "test"
+
+[config]
+reference_fasta = "/custom/genome.fa"
+"#,
+        )
+        .unwrap();
+
+        let derived = config.derive_reference_paths();
+        // Should not derive reference_fasta since it's explicitly set
+        assert_eq!(derived.get("reference_fasta"), None);
+        // But should still derive others
+        assert_eq!(
+            derived.get("gene_annotation"),
+            Some(&"/data/GRCh38/genes.gtf".to_string())
+        );
+    }
+
+    #[test]
+    fn reference_dir_none_derives_nothing() {
+        let config: WorkflowConfig = toml::from_str(
+            r#"
+[workflow]
+name = "test"
+"#,
+        )
+        .unwrap();
+
+        let derived = config.derive_reference_paths();
+        assert!(derived.is_empty());
+    }
 }
