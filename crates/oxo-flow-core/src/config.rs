@@ -676,7 +676,7 @@ impl ExperimentControlPair {
                 if i != *pair_id_col
                     && i != *experiment_col
                     && i != *control_col
-                    && experiment_type_col.map_or(true, |&j| i != j)
+                    && experiment_type_col.is_none_or(|&j| i != j)
                 {
                     metadata.insert(header.to_string(), record.get(i).unwrap_or("").to_string());
                 }

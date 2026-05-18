@@ -352,9 +352,9 @@ pub fn expand_pattern(pattern: &str, values: &WildcardValues) -> Result<String> 
             None => {
                 // If wildcard is not found, keep it as-is for later expansion
                 // (e.g. {threads}, {input}, {memory}, etc.)
-                result.push_str("{");
+                result.push('{');
                 result.push_str(name);
-                result.push_str("}");
+                result.push('}');
             }
         }
         last_end = mat.end();
@@ -637,9 +637,11 @@ mod tests {
 
     #[test]
     fn expand_pattern_missing_wildcard() {
+        // Permissive expansion: unknown wildcards are kept as-is for later expansion
+        // (e.g., {threads}, {input}, {memory}, etc.)
         let values = WildcardValues::new();
-        let result = expand_pattern("{sample}.bam", &values);
-        assert!(result.is_err());
+        let result = expand_pattern("{sample}.bam", &values).unwrap();
+        assert_eq!(result, "{sample}.bam");
     }
 
     #[test]
