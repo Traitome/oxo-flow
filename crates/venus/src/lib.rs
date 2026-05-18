@@ -785,6 +785,7 @@ pub fn generate_oxoflow(config: &VenusConfig) -> anyhow::Result<String> {
             );
             map
         },
+        reference_dir: None,
         defaults: oxo_flow_core::config::Defaults {
             threads: Some(config.threads),
             memory: None,

@@ -880,6 +880,21 @@ pub struct WorkflowConfig {
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub config: HashMap<String, toml::Value>,
 
+    /// Base directory for reference files.
+    ///
+    /// When set, standard reference paths are auto-derived:
+    /// - `reference_fasta` → `{reference_dir}/genome.fa`
+    /// - `gene_annotation` → `{reference_dir}/genes.gtf`
+    /// - `bwa_index` → `{reference_dir}/bwa/genome.fa`
+    /// - `bowtie2_index` → `{reference_dir}/bowtie2/genome.fa`
+    /// - `star_index` → `{reference_dir}/star`
+    /// - `hisat2_index` → `{reference_dir}/hisat2/genome.fa`
+    ///
+    /// Explicit values in config override these defaults.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference_dir: Option<String>,
+
     /// Default settings for all rules.
     #[serde(default)]
     #[serde(skip_serializing_if = "is_defaults_empty")]
@@ -1161,6 +1176,43 @@ impl WorkflowConfig {
         }
 
         Ok(())
+    }
+
+    /// Derive standard reference paths from `reference_dir`.
+    ///
+    /// Returns a map of derived paths for keys that are not explicitly set.
+    pub fn derive_reference_paths(&self) -> HashMap<String, String> {
+        let Some(ref base) = self.reference_dir else {
+            return HashMap::new();
+        };
+
+        let derivations = [
+            ("reference_fasta", "genome.fa"),
+            ("gene_annotation", "genes.gtf"),
+            ("bwa_index", "bwa/genome.fa"),
+            ("bowtie2_index", "bowtie2/genome.fa"),
+            ("star_index", "star"),
+            ("hisat2_index", "hisat2/genome.fa"),
+        ];
+
+        let mut result = HashMap::new();
+        for (key, suffix) in derivations {
+            // Only derive if not explicitly set
+            if !self.config.contains_key(key) {
+                result.insert(key.to_string(), format!("{}/{}", base, suffix));
+            }
+        }
+        result
+    }
+
+    /// Merge derived reference paths into config.
+    #[must_use]
+    pub fn with_derived_references(mut self) -> Self {
+        let derived = self.derive_reference_paths();
+        for (key, value) in derived {
+            self.config.insert(key, toml::Value::String(value));
+        }
+        self
     }
 
     /// Resolve include directives by loading and merging rules from included files.
