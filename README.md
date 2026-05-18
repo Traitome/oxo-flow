@@ -218,6 +218,40 @@ docker = "biocontainers/bwa-mem2:2.2.1"
 
 Wildcards like `{sample}` are expanded automatically based on input file discovery or explicit configuration, enabling concise and powerful pattern-based pipeline definitions.
 
+### Reference Directory Convention
+
+Set a base directory and let oxo-flow derive standard paths:
+
+```toml
+reference_dir = "/data/references/GRCh38"
+
+# Auto-derived:
+# - reference_fasta → /data/references/GRCh38/genome.fa
+# - gene_annotation → /data/references/GRCh38/genes.gtf
+# - bwa_index → /data/references/GRCh38/bwa/genome.fa
+# ... etc.
+
+# Override specific paths:
+reference_fasta = "/custom/path/genome.fa"
+```
+
+### Environment Groups
+
+Share environments across multiple rules:
+
+```toml
+[env_groups.qc]
+conda = "envs/qc.yaml"
+
+[[rules]]
+name = "fastqc"
+env_group = "qc"
+
+[[rules]]
+name = "multiqc"
+env_group = "qc"  # Reuses same environment
+```
+
 ## CLI Commands
 
 The `oxo-flow` binary provides 22 subcommands for the complete workflow lifecycle:
@@ -226,7 +260,7 @@ The `oxo-flow` binary provides 22 subcommands for the complete workflow lifecycl
 |---------|-------------|
 | `oxo-flow run` | Execute a workflow (`-j` parallel jobs, `-k` keep-going, `--timeout` per-job) |
 | `oxo-flow dry-run` | Simulate execution — show what would run without executing |
-| `oxo-flow validate` | Validate an `.oxoflow` file for syntax and semantic correctness |
+| `oxo-flow validate` | Validate an `.oxoflow` file for syntax and semantic correctness (`--as-include` for sub-workflows) |
 | `oxo-flow graph` | Export the workflow DAG in DOT format for visualization |
 | `oxo-flow report` | Generate execution reports (`-f html\|json`, `-o` output path) |
 | `oxo-flow batch` | Execute command templates in parallel across multiple items (lightweight alternative to full workflows) |
@@ -253,6 +287,16 @@ The `oxo-flow` binary provides 22 subcommands for the complete workflow lifecycl
 | `oxo-flow schema` | Output the JSON Schema for the `.oxoflow` format |
 | `oxo-flow test` | Run a workflow in test mode: validate + lint + dry-run |
 | `oxo-flow publish` | Bundle a workflow with its environment files for sharing |
+
+### Validate Sub-Workflows
+
+When validating a sub-workflow that will be included via `[[include]]`:
+
+```bash
+oxo-flow validate rules/qc.oxoflow --as-include
+```
+
+This skips DAG validation since fragments don't have complete dependency graphs.
 
 ## Web API Endpoints
 
