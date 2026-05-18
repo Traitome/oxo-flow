@@ -1,6 +1,15 @@
 [advisories]
 # RSA vulnerability - not applicable (we use sqlite, not mysql)
-ignore = ["RUSTSEC-2023-0071"]
+# rustls-webpki vulns - transitive dep of aws-sdk-s3 (optional s3-storage feature)
+# via aws-smithy-runtime -> hyper-rustls 0.24 -> rustls 0.21 -> rustls-webpki 0.101
+# Our primary TLS stack uses reqwest/rustls 0.23/rustls-webpki 0.103 which is unaffected.
+# These cannot be fixed without upstream aws-sdk-s3 updating its hyper-rustls dependency.
+ignore = [
+    "RUSTSEC-2023-0071",
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0104",
+]
 
 # Report unmaintained crate warnings as informational (not errors)
 informational_warnings = ["unmaintained"]
