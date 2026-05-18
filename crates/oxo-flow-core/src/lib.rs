@@ -40,8 +40,10 @@
 //! ```
 
 pub mod clinical;
+#[cfg(feature = "cluster")]
 pub mod cluster;
 pub mod config;
+#[cfg(feature = "container")]
 pub mod container;
 pub mod dag;
 pub mod environment;
@@ -49,9 +51,12 @@ pub mod error;
 pub mod executor;
 pub mod format;
 
+#[cfg(feature = "report")]
 pub mod report;
 pub mod rule;
 pub mod scheduler;
+pub mod storage;
+#[cfg(feature = "webhook")]
 pub mod webhook;
 pub mod wildcard;
 
@@ -73,5 +78,6 @@ pub use executor::{
 pub use rule::Rule;
 pub use rule::{CombineConfig, SplitConfig, TransformConfig};
 pub use rule::{EnvironmentSpec, GpuSpec, ResourceHint, Resources, RuleBuilder};
+#[cfg(feature = "webhook")]
 pub use webhook::{WebhookClient, WebhookConfig, WebhookData, WebhookEvent, WebhookPayload};
 pub use wildcard::{wildcard_combinations_from_groups, wildcard_combinations_from_pairs};

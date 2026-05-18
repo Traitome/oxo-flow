@@ -186,6 +186,8 @@ pub mod completions;
 pub mod infra;
 pub mod output;
 pub mod project;
+pub mod provenance;
+pub mod publish;
 pub mod quality;
 pub mod run;
 pub mod web;

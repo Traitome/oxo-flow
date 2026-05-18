@@ -5,17 +5,17 @@
 [target.aarch64-unknown-linux-musl]
 pre-build = [
     "apt-get update",
-    "apt-get install -y musl-tools",
+    "DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confnew\" musl-tools",
 ]
 
 [target.armv7-unknown-linux-musleabihf]
 pre-build = [
     "apt-get update",
-    "apt-get install -y musl-tools",
+    "DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confnew\" musl-tools",
 ]
 
 [target.x86_64-unknown-linux-musl]
 pre-build = [
     "apt-get update",
-    "apt-get install -y musl-tools",
+    "DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confnew\" musl-tools",
 ]

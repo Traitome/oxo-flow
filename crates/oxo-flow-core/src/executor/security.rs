@@ -1,6 +1,8 @@
 use crate::error::{OxoFlowError, Result};
+use regex::Regex;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::LazyLock;
 
 /// Validate that an interpreter path is safe to use.
 ///
@@ -43,6 +45,103 @@ pub fn validate_interpreter_path(interpreter: &str) -> Result<()> {
     Ok(())
 }
 
+/// A category of dangerous shell patterns with associated regex patterns.
+struct DangerCategory {
+    /// Short identifier for the category (e.g., "RECURSIVE_DELETION").
+    name: &'static str,
+    /// Regex patterns that match commands in this category.
+    patterns: &'static [&'static str],
+    /// Human-readable description of the danger.
+    description: &'static str,
+}
+
+/// All defined danger categories and their regex patterns.
+static DANGER_CATEGORIES: &[DangerCategory] = &[
+    DangerCategory {
+        name: "RECURSIVE_DELETION",
+        patterns: &[
+            r"rm\s+-rf\s+(?:--\S+\s+)*/",
+            r"rm\s+-rf\s+(?:--\S+\s+)*~",
+            r"rm\s+-r\s+(?:--\S+\s+)*/",
+        ],
+        description: "dangerous recursive deletion",
+    },
+    DangerCategory {
+        name: "FILESYSTEM_DESTRUCTION",
+        patterns: &[r"mkfs\.?\w*", r"mkswap", r"dd\s+if=.*of=/dev/sd"],
+        description: "filesystem destruction",
+    },
+    DangerCategory {
+        name: "PERMISSION_ESCALATION",
+        patterns: &[r"chmod\s+.*777\s+/", r"chmod\s+-R\s+777"],
+        description: "overly permissive permission change",
+    },
+    DangerCategory {
+        name: "BLOCK_DEVICE_WRITE",
+        patterns: &[r">\s*/dev/sd[a-z]", r">>\s*/dev/sd[a-z]"],
+        description: "direct block device write",
+    },
+    DangerCategory {
+        name: "REMOTE_EXECUTION",
+        patterns: &[
+            r"(?:wget|curl).*\|\s*(?:sh|bash|dash)",
+            r"(?:wget|curl).*\|\s*sudo",
+        ],
+        description: "remote code execution",
+    },
+    DangerCategory {
+        name: "FORK_BOMB",
+        patterns: &[r"\(\)\s*\{.*:.*\|.*&.*\}", r":\(\)\s*\{"],
+        description: "fork bomb",
+    },
+    DangerCategory {
+        name: "DATA_DESTRUCTION",
+        patterns: &[r"dd\s+if=/dev/(?:zero|random|urandom)"],
+        description: "data destruction via dd",
+    },
+];
+
+/// Compiled regex patterns for blocking dangerous commands, paired with their
+/// category name and human-readable description. Compiled once via [`LazyLock`]
+/// for efficiency.
+static COMPILED_BLOCK_PATTERNS: LazyLock<Vec<(Regex, &'static str, &'static str)>> =
+    LazyLock::new(|| {
+        let mut patterns = Vec::new();
+        for category in DANGER_CATEGORIES {
+            for pattern_str in category.patterns {
+                if let Ok(re) = Regex::new(pattern_str) {
+                    patterns.push((re, category.name, category.description));
+                }
+            }
+        }
+        patterns
+    });
+
+/// Compiled regex patterns for warning-level checks (non-blocking).
+/// These detect suspicious behavior that may be legitimate in some contexts
+/// (e.g., `$(command)` substitution in shell templates).
+static WARNING_PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
+    let mut patterns = Vec::new();
+    let warning_patterns: &[(&str, &str)] = &[
+        (r"\$\([^)]*\)", "Command substitution detected"),
+        (r"`[^`]*`", "Backtick command substitution detected"),
+        (r">/dev/", "Redirect to /dev/ detected"),
+        (r"rm\s+-rf\s+/", "Dangerous recursive deletion detected"),
+        (r"chmod\s+777\b", "Overly permissive chmod detected"),
+        (r"\beval\s+", "eval usage detected"),
+        (
+            r"(?:wget|curl).*?(?:\|\s*(?:sh|bash|dash|sudo)|&&\s*(?:bash|sh))",
+            "Remote pipe to shell detected",
+        ),
+    ];
+    for (pattern_str, desc) in warning_patterns {
+        if let Ok(re) = Regex::new(pattern_str) {
+            patterns.push((re, *desc));
+        }
+    }
+    patterns
+});
+
 /// Check a shell command for potentially dangerous patterns.
 ///
 /// Returns a list of warnings for suspicious patterns that could indicate
@@ -59,17 +158,12 @@ pub fn validate_interpreter_path(interpreter: &str) -> Result<()> {
 #[must_use]
 pub fn sanitize_shell_command(cmd: &str) -> Vec<String> {
     let mut warnings = Vec::new();
-    let dangerous_patterns = [
-        ("$(", "Command substitution detected"),
-        ("`", "Backtick command substitution detected"),
-        (">/dev/", "Redirect to /dev/ detected"),
-        ("rm -rf /", "Dangerous recursive deletion detected"),
-        ("chmod 777", "Overly permissive chmod detected"),
-        ("eval ", "eval usage detected"),
-    ];
-    for (pattern, warning) in &dangerous_patterns {
-        if cmd.contains(pattern) {
-            warnings.push(format!("Shell command warning: {} in '{}'", warning, cmd));
+    for (re, description) in WARNING_PATTERNS.iter() {
+        if re.is_match(cmd) {
+            warnings.push(format!(
+                "Shell command warning: {} in '{}'",
+                description, cmd
+            ));
         }
     }
     warnings
@@ -78,7 +172,16 @@ pub fn sanitize_shell_command(cmd: &str) -> Vec<String> {
 /// Block dangerous shell patterns that could lead to command injection.
 /// Returns Ok(()) if safe, Err if dangerous patterns are detected.
 ///
-/// Only blocks unconditionally destructive commands (e.g., `rm -rf /`).
+/// Uses category-based regex matching against compiled patterns defined in
+/// [`DANGER_CATEGORIES`] to detect destructive commands such as:
+/// - Recursive deletion of root or home (`rm -rf /`, `rm -rf ~`)
+/// - Filesystem destruction (`mkfs`, `mkswap`, `dd` to block devices)
+/// - Permission escalation (`chmod 777 /`, `chmod -R 777`)
+/// - Block device writes (`> /dev/sd*`, `>> /dev/sd*`)
+/// - Remote code execution (pipe wget/curl to shell)
+/// - Fork bombs
+/// - Data destruction via `dd` from `/dev/zero`, `/dev/random`, `/dev/urandom`
+///
 /// Common bioinformatics shell idioms such as `$(command)`, backtick
 /// substitution, pipes (`|`), and `&&` are intentionally **not** blocked
 /// here because they appear in virtually every genomics shell template.
@@ -92,20 +195,12 @@ pub fn sanitize_shell_command(cmd: &str) -> Vec<String> {
 /// bioinformatics pipelines for error handling and streaming.
 #[must_use = "shell safety validation returns a Result that must be checked"]
 pub fn validate_shell_safety(cmd: &str) -> Result<()> {
-    // R12: Improve validate_shell_safety coverage
-    let block_patterns = [
-        ("rm -rf /", "dangerous deletion"),
-        ("rm -rf ~", "dangerous deletion of home directory"),
-        ("mkfs", "filesystem creation"),
-        ("dd if=/dev/zero", "data destruction"),
-        (":(){ :|:& };:", "fork bomb"),
-    ];
-    for (pattern, desc) in &block_patterns {
-        if cmd.contains(pattern) {
+    for (re, _name, description) in COMPILED_BLOCK_PATTERNS.iter() {
+        if re.is_match(cmd) {
             return Err(OxoFlowError::Validation {
                 message: format!(
                     "Shell command blocked: {} pattern detected in '{}'",
-                    desc, cmd
+                    description, cmd
                 ),
                 rule: None,
                 suggestion: Some(

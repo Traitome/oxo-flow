@@ -1,6 +1,6 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use colored::Colorize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::commands::print_banner;
 
@@ -129,12 +129,256 @@ Thumbs.db
     Ok(())
 }
 
-pub fn template_command(_name: Option<String>) -> Result<()> {
-    print_banner();
+// ---------------------------------------------------------------------------
+// Gallery / template helpers
+// ---------------------------------------------------------------------------
+
+/// Walk upward from `start` looking for an `examples/gallery/` directory.
+fn walk_up_for_gallery(start: &Path) -> Option<PathBuf> {
+    let mut current = Some(start);
+    while let Some(dir) = current {
+        let gallery = dir.join("examples").join("gallery");
+        if gallery.is_dir() {
+            return Some(gallery);
+        }
+        current = dir.parent();
+    }
+    None
+}
+
+/// Locate the `examples/gallery/` directory using several strategies.
+fn find_gallery_directory() -> Result<PathBuf> {
+    // Strategy 1 – walk up from CWD
+    if let Ok(cwd) = std::env::current_dir()
+        && let Some(gallery) = walk_up_for_gallery(&cwd)
+    {
+        return Ok(gallery);
+    }
+
+    // Strategy 2 – walk up from the binary path
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(parent) = exe.parent()
+        && let Some(gallery) = walk_up_for_gallery(parent)
+    {
+        return Ok(gallery);
+    }
+
+    // Strategy 3 – compile-time manifest dir (works in development)
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if let Some(gallery) = walk_up_for_gallery(&manifest_dir) {
+        return Ok(gallery);
+    }
+
+    anyhow::bail!(
+        "could not find examples/gallery/ directory.\n\
+         Make sure you are inside the oxo-flow repository."
+    )
+}
+
+/// Extract a display title and one-line description from the leading comments
+/// of a `.oxoflow` template file.
+fn parse_template_header(content: &str) -> (String, String) {
+    let mut title = String::new();
+    let mut description = String::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('#') {
+            break;
+        }
+        let comment = trimmed.trim_start_matches('#').trim();
+        if comment.is_empty() {
+            continue;
+        }
+        if title.is_empty() {
+            title = comment.to_string();
+        } else if description.is_empty() {
+            description = comment.to_string();
+        } else {
+            break; // only need first two meaningful comment lines
+        }
+    }
+
+    (title, description)
+}
+
+/// Replace the first `name = "..."` (the workflow name field) with `new_name`.
+fn substitute_workflow_name(content: &str, new_name: &str) -> String {
+    let marker = "name = \"";
+    if let Some(start) = content.find(marker) {
+        let after_equals = start + marker.len();
+        if let Some(end) = content[after_equals..].find('"') {
+            let mut result = content[..start].to_string();
+            result.push_str(&format!("name = \"{}\"", new_name));
+            result.push_str(&content[after_equals + end + 1..]);
+            return result;
+        }
+    }
+    content.to_string()
+}
+
+/// Derive a "descriptive name" from the file stem by stripping a leading
+/// `XX_` number prefix (e.g. `01_hello_world` -> `hello_world`).
+fn descriptive_name_from_stem(stem: &str) -> String {
+    stem.split_once('_')
+        .map(|(_, rest)| rest.to_string())
+        .unwrap_or_else(|| stem.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// List all available templates
+// ---------------------------------------------------------------------------
+
+fn list_templates(gallery_dir: &Path) -> Result<()> {
+    let mut entries: Vec<(String, String, String)> = Vec::new();
+
+    for entry in std::fs::read_dir(gallery_dir)
+        .with_context(|| format!("cannot read gallery directory {}", gallery_dir.display()))?
+    {
+        let entry = entry.context("cannot read directory entry")?;
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "oxoflow") {
+            let content = std::fs::read_to_string(&path)
+                .with_context(|| format!("cannot read {}", path.display()))?;
+            let (title, description) = parse_template_header(&content);
+            let filename = path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            entries.push((filename, title, description));
+        }
+    }
+
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    eprintln!();
+    eprintln!("{}", "Available templates:".bold().cyan());
+    eprintln!();
+
+    for (filename, title, description) in &entries {
+        if !title.is_empty() {
+            eprintln!("  {}  {}", filename.bold(), title.dimmed());
+        } else {
+            eprintln!("  {}", filename.bold());
+        }
+        if !description.is_empty() {
+            eprintln!("      {}", description.dimmed());
+        }
+        eprintln!();
+    }
+
     eprintln!(
-        "{} The 'template' command is not yet implemented.",
-        "Note:".bold().cyan()
+        "{}  {} <NAME>  to generate a workflow from a template.",
+        "Usage:".bold(),
+        "oxo-flow template".bold().cyan()
     );
-    eprintln!("  Try 'oxo-flow init' to create a basic workflow structure.");
+    eprintln!();
+
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Apply a single template (copy + name substitution)
+// ---------------------------------------------------------------------------
+
+fn apply_template(gallery_dir: &Path, template_name: &str) -> Result<()> {
+    // Collect candidate files matching by full stem or descriptive suffix.
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(gallery_dir)
+        .with_context(|| format!("cannot read gallery directory {}", gallery_dir.display()))?
+    {
+        let entry = entry.context("cannot read directory entry")?;
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "oxoflow") {
+            let stem = path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            if stem == template_name || stem.ends_with(&format!("_{}", template_name)) {
+                candidates.push(path);
+            }
+        }
+    }
+
+    let template_path = match candidates.len() {
+        0 => anyhow::bail!(
+            "template '{}' not found.\n  \
+             Use 'oxo-flow template' to list available templates.",
+            template_name
+        ),
+        1 => candidates.into_iter().next().unwrap(),
+        _ => {
+            // Prefer an exact stem match
+            let exact: Vec<&PathBuf> = candidates
+                .iter()
+                .filter(|p| p.file_stem().is_some_and(|s| s == template_name))
+                .collect();
+            if exact.len() == 1 {
+                exact.into_iter().next().unwrap().clone()
+            } else {
+                candidates.into_iter().next().unwrap()
+            }
+        }
+    };
+
+    let content = std::fs::read_to_string(&template_path)
+        .with_context(|| format!("cannot read {}", template_path.display()))?;
+
+    // Derive the new workflow name from the file stem (strip number prefix)
+    let template_stem = template_path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let new_name = descriptive_name_from_stem(&template_stem);
+
+    // Substitute the `name` field
+    let new_content = substitute_workflow_name(&content, &new_name);
+
+    // Write to current directory
+    let output_path = std::env::current_dir()
+        .context("cannot determine current directory")?
+        .join(format!("{}.oxoflow", &new_name));
+
+    if output_path.exists() {
+        anyhow::bail!(
+            "{} already exists.\n  \
+             Remove it first or choose a different name.",
+            output_path.display()
+        );
+    }
+
+    std::fs::write(&output_path, new_content)
+        .with_context(|| format!("cannot write {}", output_path.display()))?;
+
+    eprintln!();
+    eprintln!(
+        "{} Created workflow from template: {}",
+        "\u{2713}".green().bold(),
+        template_path.file_name().unwrap().to_string_lossy()
+    );
+    eprintln!("  {}", output_path.display());
+    eprintln!();
+    eprintln!("{}  To run this workflow:", "Next steps:".bold().cyan());
+    eprintln!("    oxo-flow run {}.oxoflow", &new_name);
+    eprintln!();
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Public entry point
+// ---------------------------------------------------------------------------
+
+pub fn template_command(name: Option<String>) -> Result<()> {
+    print_banner();
+
+    let gallery_dir = find_gallery_directory()?;
+
+    match name {
+        None => list_templates(&gallery_dir),
+        Some(template_name) => apply_template(&gallery_dir, &template_name),
+    }
 }

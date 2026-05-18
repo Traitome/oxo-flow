@@ -134,8 +134,9 @@ cargo build --release --workspace
 ### First workflow
 
 ```bash
-# Create a new pipeline project
+# Create a new pipeline project (creates my-pipeline/ directory and my-pipeline.oxoflow)
 oxo-flow init my-pipeline
+cd my-pipeline
 
 # Validate the workflow
 oxo-flow validate my-pipeline.oxoflow
@@ -152,6 +153,33 @@ dot -Tpng dag.dot -o dag.png
 
 # Generate an HTML report
 oxo-flow report my-pipeline.oxoflow -f html -o report.html
+```
+
+## Cluster / HPC
+
+oxo-flow supports job submission to HPC cluster schedulers including SLURM, PBS/PBS Pro, SGE/UGE, and LSF. The `oxo-flow cluster` subcommand manages the full submission lifecycle.
+
+```bash
+# Submit a workflow to a SLURM cluster
+oxo-flow cluster submit workflow.oxoflow --backend slurm --queue short -o jobs/
+
+# Check submission status
+oxo-flow cluster status --id <job-id>
+
+# Cancel a submitted job
+oxo-flow cluster cancel --id <job-id>
+```
+
+**Supported backends:** `slurm`, `pbs`, `sge`, `lsf`. Configure cluster profiles with `oxo-flow profile` for reusable queue, walltime, and resource defaults.
+
+Workflows can also be executed directly on a cluster without the submit subcommand by using a profile:
+
+```bash
+# List available profiles
+oxo-flow profile list
+
+# Run a workflow using a SLURM profile
+oxo-flow run workflow.oxoflow --profile slurm
 ```
 
 ## Workflow Format (`.oxoflow`)
@@ -218,6 +246,13 @@ The `oxo-flow` binary provides 22 subcommands for the complete workflow lifecycl
 | `oxo-flow diff` | Compare two `.oxoflow` workflow files and show differences |
 | `oxo-flow debug` | Show expanded commands after variable substitution |
 | `oxo-flow touch` | Mark workflow outputs as up-to-date without re-executing |
+| `oxo-flow template` | Generate a workflow from a gallery template (`oxo-flow template` lists all) |
+| `oxo-flow watch` | Watch a workflow file for changes and re-validate automatically |
+| `oxo-flow resume` | Resume an interrupted workflow from a checkpoint file |
+| `oxo-flow provenance` | Verify output file integrity against stored checksums |
+| `oxo-flow schema` | Output the JSON Schema for the `.oxoflow` format |
+| `oxo-flow test` | Run a workflow in test mode: validate + lint + dry-run |
+| `oxo-flow publish` | Bundle a workflow with its environment files for sharing |
 
 ## Web API Endpoints
 

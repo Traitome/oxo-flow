@@ -2,6 +2,7 @@ use crate::environment::EnvironmentResolver;
 use crate::error::{OxoFlowError, Result};
 use crate::rule::{FilePatterns, Rule};
 use crate::scheduler::ResourcePool;
+use crate::storage::StoragePath;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -476,6 +477,9 @@ impl LocalExecutor {
 
         let resolved_commands = vec![self.resolve_command(&base_cmd, rule)];
         record.command = resolved_commands.first().cloned();
+
+        // Detect remote storage paths in inputs/outputs (stub, no-op for now).
+        warn_if_remote_paths(rule, wildcard_values);
 
         validate_wildcard_injection(wildcard_values)?;
         for cmd in &resolved_commands {
@@ -1095,4 +1099,32 @@ pub fn cleanup_cache(workdir: &Path, max_age_days: u64) -> usize {
         }
     }
     removed
+}
+
+/// Check rule input/output paths for remote storage URIs and log a warning
+/// if any are found. Full remote-file integration is not yet implemented, so
+/// this serves as an early-detection signal to users.
+///
+/// This is a placeholder -- future work will wire up `StorageResolver` to
+/// transparently stage remote inputs and upload outputs.
+pub fn warn_if_remote_paths(rule: &Rule, wildcard_values: &HashMap<String, String>) {
+    let check_path = |path: &str| {
+        let rendered = render_shell_command(path, rule, wildcard_values);
+        let sp = StoragePath::parse(&rendered);
+        if sp.is_remote() {
+            tracing::warn!(
+                rule = %rule.name,
+                path = %rendered,
+                scheme = ?sp.scheme,
+                "remote storage path detected but full integration is not yet implemented; \
+                 this path may not be accessible"
+            );
+        }
+    };
+    for input in rule.input.iter() {
+        check_path(input);
+    }
+    for output in rule.output.iter() {
+        check_path(output);
+    }
 }

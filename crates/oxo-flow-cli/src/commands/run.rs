@@ -4,6 +4,7 @@ use colored::Colorize;
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
 use oxo_flow_core::executor::{CheckpointState, ExecutorConfig, LocalExecutor};
+use oxo_flow_core::rule::parse_duration_secs;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -15,7 +16,9 @@ pub async fn run_command(
     workdir: Option<PathBuf>,
     target: Vec<String>,
     retry: u32,
-    timeout: u64,
+    timeout: String,
+    resume_failed: bool,
+    profile: Option<String>,
     max_threads: u32,
     max_memory: u64,
     skip_env_setup: bool,
@@ -50,6 +53,46 @@ pub async fn run_command(
         "DAG:".bold().green(),
         order.len()
     );
+
+    // Load profile if specified and merge config values.
+    if let Some(ref profile_name) = profile {
+        let profile_paths = [
+            workflow_dir
+                .join("profiles")
+                .join(format!("{profile_name}.toml")),
+            workflow_dir
+                .join("profiles")
+                .join(format!("{profile_name}.oxoflow")),
+        ];
+        let profile_path = profile_paths.iter().find(|p| p.exists());
+        if let Some(path) = profile_path {
+            let profile_content = std::fs::read_to_string(path)
+                .with_context(|| format!("failed to read profile {}", path.display()))?;
+            let profile_toml: toml::Value = profile_content
+                .parse()
+                .with_context(|| format!("failed to parse profile {}", path.display()))?;
+            if let Some(config_table) = profile_toml.get("config").and_then(toml::Value::as_table) {
+                for (key, value) in config_table {
+                    config
+                        .config
+                        .entry(key.clone())
+                        .or_insert_with(|| value.clone());
+                }
+                eprintln!(
+                    "{} Merged {} config values from profile '{}'",
+                    "Profile:".bold().cyan(),
+                    config_table.len(),
+                    profile_name
+                );
+            }
+        } else {
+            eprintln!(
+                "{} Profile '{}' not found in profiles/ directory",
+                "Warning:".bold().yellow(),
+                profile_name
+            );
+        }
+    }
     for (i, rule_name) in order.iter().enumerate() {
         eprintln!("  {}. {}", i + 1, rule_name);
     }
@@ -63,14 +106,29 @@ pub async fn run_command(
             .progress_chars("#>-"),
     );
 
+    let timeout_secs: u64 = if timeout == "0" {
+        0
+    } else if let Ok(n) = timeout.parse::<u64>() {
+        n
+    } else {
+        parse_duration_secs(&timeout).unwrap_or_else(|| {
+            eprintln!(
+                "{} Invalid timeout format '{}', defaulting to no timeout",
+                "Warning:".bold().yellow(),
+                timeout
+            );
+            0
+        })
+    };
+
     let exec_config = ExecutorConfig {
         max_jobs: jobs,
         dry_run: false,
         workdir: workdir.clone().unwrap_or_else(|| workflow_dir.clone()),
         keep_going,
         retry_count: retry,
-        timeout: if timeout > 0 {
-            Some(std::time::Duration::from_secs(timeout))
+        timeout: if timeout_secs > 0 {
+            Some(std::time::Duration::from_secs(timeout_secs))
         } else {
             None
         },
@@ -109,6 +167,19 @@ pub async fn run_command(
     } else {
         CheckpointState::default()
     };
+
+    // When --resume-failed is set, clear failed rules from checkpoint so they re-execute.
+    if resume_failed && checkpoint_path.exists() {
+        let failed_count = checkpoint.failed_rules.len();
+        let completed_count = checkpoint.completed_rules.len();
+        checkpoint.failed_rules.clear();
+        eprintln!(
+            "{} Resuming {} completed, re-running {} failed rules",
+            "Resume:".bold().cyan(),
+            completed_count,
+            failed_count
+        );
+    }
 
     let mut wildcard_values: HashMap<String, String> = HashMap::new();
     for (key, value) in &config.config {

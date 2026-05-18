@@ -12,6 +12,8 @@ use crate::commands::completions::handle_completions;
 use crate::commands::infra::{env_command, package_command, profile_command};
 use crate::commands::output::{handle_diff, handle_export, handle_graph, handle_report};
 use crate::commands::project::{init_command, template_command};
+use crate::commands::provenance::provenance_verify_command;
+use crate::commands::publish::publish_command;
 use crate::commands::quality::{
     format_command, lint_command, touch_command, validate_command, watch_command,
 };
@@ -69,7 +71,11 @@ pub enum Commands {
         #[arg(short = 'r', long, default_value = "0")]
         retry: u32,
         #[arg(long, default_value = "0")]
-        timeout: u64,
+        timeout: String,
+        #[arg(long)]
+        resume_failed: bool,
+        #[arg(long)]
+        profile: Option<String>,
         #[arg(long, default_value = "0")]
         max_threads: u32,
         #[arg(long, default_value = "0")]
@@ -108,7 +114,7 @@ pub enum Commands {
     /// Generate a workflow from a predefined template.
     Template {
         #[arg(value_name = "TEMPLATE")]
-        template: String,
+        template: Option<String>,
         #[arg(short = 'o', long)]
         output: Option<PathBuf>,
     },
@@ -267,6 +273,27 @@ pub enum Commands {
         #[arg(short = 'o', long)]
         output: Option<PathBuf>,
     },
+    /// Verify output file integrity using stored checksums.
+    Provenance {
+        #[command(subcommand)]
+        action: ProvenanceAction,
+    },
+    /// Output the JSON Schema for the .oxoflow format.
+    Schema,
+    /// Run a workflow in test mode, validating and verifying outputs.
+    Test {
+        #[arg(value_name = "WORKFLOW")]
+        workflow: PathBuf,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// Publish a workflow with its environment files into a bundle.
+    Publish {
+        #[arg(value_name = "WORKFLOW")]
+        workflow: PathBuf,
+        #[arg(short = 'o', long)]
+        output: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -352,6 +379,15 @@ pub enum ClusterAction {
     },
 }
 
+#[derive(Subcommand, Debug)]
+pub enum ProvenanceAction {
+    /// Verify output file checksums from a checkpoint or provenance file.
+    Verify {
+        #[arg(value_name = "CHECKPOINT_PATH")]
+        checkpoint: PathBuf,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -384,6 +420,8 @@ async fn main() -> Result<()> {
             target,
             retry,
             timeout,
+            resume_failed,
+            profile,
             max_threads,
             max_memory,
             skip_env_setup,
@@ -397,6 +435,8 @@ async fn main() -> Result<()> {
                 target,
                 retry,
                 timeout,
+                resume_failed,
+                profile,
                 max_threads,
                 max_memory,
                 skip_env_setup,
@@ -413,7 +453,7 @@ async fn main() -> Result<()> {
         Commands::Template {
             template,
             output: _,
-        } => template_command(Some(template))?,
+        } => template_command(template)?,
         Commands::Graph {
             workflow,
             format,
@@ -497,6 +537,37 @@ async fn main() -> Result<()> {
             )
             .await?
         }
+        Commands::Provenance { action } => match action {
+            ProvenanceAction::Verify { checkpoint } => provenance_verify_command(checkpoint)?,
+        },
+        Commands::Schema => {
+            let schema = include_str!("../../../docs/schema/oxoflow-v1.schema.json");
+            println!("{schema}");
+        }
+        Commands::Test { workflow, output } => {
+            use colored::Colorize;
+            // Test mode: validate + lint + dry-run + optional output verification
+            validate_command(workflow.clone())?;
+            lint_command(workflow.clone(), false)?;
+            dry_run_command(Some(workflow), vec![], cli.verbose).await?;
+            if let Some(output_path) = output {
+                if output_path.exists() {
+                    eprintln!(
+                        "{} Output file exists: {}",
+                        "✓".green().bold(),
+                        output_path.display()
+                    );
+                } else {
+                    eprintln!(
+                        "{} Output file not found: {}",
+                        "✗".red().bold(),
+                        output_path.display()
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
+        Commands::Publish { workflow, output } => publish_command(workflow, output)?,
     }
 
     Ok(())

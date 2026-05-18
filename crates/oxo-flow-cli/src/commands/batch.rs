@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
 
@@ -65,7 +66,7 @@ pub async fn batch_command(
 
     let semaphore = Arc::new(Semaphore::new(jobs));
     let results = Arc::new(Mutex::new(Vec::new()));
-    let stop_flag = Arc::new(Mutex::new(false));
+    let stop_flag = Arc::new(AtomicBool::new(false));
 
     let progress = ProgressBar::new(items.len() as u64);
     let style = ProgressStyle::default_bar()
@@ -81,9 +82,7 @@ pub async fn batch_command(
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
     for (nr, item) in items.iter().enumerate() {
-        if let Ok(stop) = stop_flag.lock()
-            && *stop
-        {
+        if stop_flag.load(Ordering::Relaxed) {
             break;
         }
 
@@ -100,12 +99,10 @@ pub async fn batch_command(
 
         progress.set_message(format!("item {}", nr + 1));
 
-        if let Ok(stop) = stop_flag_clone.lock()
-            && *stop
-        {
+        if stop_flag_clone.load(Ordering::Relaxed) {
             progress_clone.inc(1);
-            if stop_on_error && let Ok(mut stop) = stop_flag_clone.lock() {
-                *stop = true;
+            if stop_on_error {
+                stop_flag_clone.store(true, Ordering::Relaxed);
             }
             // Release permit and continue
             drop(permit);
@@ -143,11 +140,8 @@ pub async fn batch_command(
                             success: exit_code == 0,
                             error: None,
                         });
-                        if exit_code != 0
-                            && stop_on_error
-                            && let Ok(mut stop) = stop_flag_clone.lock()
-                        {
-                            *stop = true;
+                        if exit_code != 0 && stop_on_error {
+                            stop_flag_clone.store(true, Ordering::Relaxed);
                         }
                         if checksum {
                             tracing::info!("checksum verification for {}", item_clone);
@@ -161,8 +155,8 @@ pub async fn batch_command(
                             success: false,
                             error: Some(e.to_string()),
                         });
-                        if stop_on_error && let Ok(mut stop) = stop_flag_clone.lock() {
-                            *stop = true;
+                        if stop_on_error {
+                            stop_flag_clone.store(true, Ordering::Relaxed);
                         }
                     }
                 }

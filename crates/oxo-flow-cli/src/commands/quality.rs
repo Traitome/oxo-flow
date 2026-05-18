@@ -285,12 +285,76 @@ pub fn touch_command(workflow: PathBuf, rules: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-pub async fn watch_command(_workflow: PathBuf) -> Result<()> {
+pub async fn watch_command(workflow: PathBuf) -> Result<()> {
     print_banner();
+
+    let workflow_path =
+        std::path::absolute(&workflow).context("failed to resolve workflow path")?;
+
+    if !workflow_path.exists() {
+        eprintln!(
+            "{} Workflow file not found: {}",
+            "error:".bold().red(),
+            workflow_path.display()
+        );
+        std::process::exit(1);
+    }
+
     eprintln!(
-        "{} The 'watch' command is not yet implemented.",
-        "Note:".bold().cyan()
+        "{} {} for changes...",
+        "Watching".bold().cyan(),
+        workflow_path.display()
     );
-    eprintln!("  Use a tool like 'entr' or 'watchexec' to trigger oxo-flow on file changes.");
-    Ok(())
+    eprintln!("  Press Ctrl+C to stop.");
+
+    let mut last_mtime = std::fs::metadata(&workflow_path)
+        .and_then(|m| m.modified())
+        .ok();
+
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+        let current_mtime = std::fs::metadata(&workflow_path)
+            .and_then(|m| m.modified())
+            .ok();
+
+        let changed = match (last_mtime, current_mtime) {
+            (Some(last), Some(current)) => current != last,
+            _ => false,
+        };
+
+        if changed {
+            eprintln!(
+                "\n{} Change detected, re-validating...",
+                "Change detected:".bold().green()
+            );
+
+            // Run validate
+            match validate_command(workflow_path.clone()) {
+                Ok(()) => {
+                    eprintln!();
+                }
+                Err(e) => {
+                    eprintln!("  validation error: {}\n", e);
+                }
+            }
+
+            // Run lint
+            match lint_command(workflow_path.clone(), false) {
+                Ok(()) => {
+                    eprintln!();
+                }
+                Err(e) => {
+                    eprintln!("  lint error: {}\n", e);
+                }
+            }
+
+            eprintln!(
+                "{} {} for changes...",
+                "Watching".bold().cyan(),
+                workflow_path.display()
+            );
+            last_mtime = current_mtime;
+        }
+    }
 }
