@@ -1871,7 +1871,7 @@ Thumbs.db
             orphans,
         } => {
             print_banner();
-            
+
             // If neither --force nor --dry-run is provided, default to dry-run
             // to prevent accidental data loss.
             let is_dry_run = dry_run || !force;
@@ -1913,7 +1913,12 @@ Thumbs.db
                         orphan_dirs.len()
                     );
                     if !dry_run && !force {
-                        eprintln!("\n{}", "Run with --force to actually delete these directories.".bold().cyan());
+                        eprintln!(
+                            "\n{}",
+                            "Run with --force to actually delete these directories."
+                                .bold()
+                                .cyan()
+                        );
                     }
                 } else {
                     // Force is true at this point, proceed with deletion
@@ -1994,7 +1999,12 @@ Thumbs.db
                 }
                 eprintln!("\n{} {} output patterns", "Total:".bold(), outputs.len());
                 if !dry_run && !force {
-                    eprintln!("\n{}", "Run with --force to actually delete these files.".bold().cyan());
+                    eprintln!(
+                        "\n{}",
+                        "Run with --force to actually delete these files."
+                            .bold()
+                            .cyan()
+                    );
                 }
             } else {
                 // Determine which files are deletable
@@ -2469,11 +2479,11 @@ Thumbs.db
 
                     for rule_name in &order {
                         let rule = config.get_rule(rule_name).unwrap();
-                        
+
                         let shell_cmd = match oxo_flow_core::executor::build_execution_command(
                             rule,
                             &wildcard_values,
-                            &config.workflow.interpreter_map
+                            &config.workflow.interpreter_map,
                         ) {
                             Some(cmd) => cmd,
                             None => {

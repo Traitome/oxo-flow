@@ -740,15 +740,16 @@ impl LocalExecutor {
         };
 
         // Build execution command combining shell, script, and envvars
-        let base_cmd = match build_execution_command(rule, wildcard_values, &self.config.interpreter_map) {
-            Some(cmd) => cmd,
-            None => {
-                record.status = JobStatus::Skipped;
-                record.finished_at = Some(Utc::now());
-                record.skip_reason = Some("no shell or script defined".to_string());
-                return Ok(record);
-            }
-        };
+        let base_cmd =
+            match build_execution_command(rule, wildcard_values, &self.config.interpreter_map) {
+                Some(cmd) => cmd,
+                None => {
+                    record.status = JobStatus::Skipped;
+                    record.finished_at = Some(Utc::now());
+                    record.skip_reason = Some("no shell or script defined".to_string());
+                    return Ok(record);
+                }
+            };
 
         // Evaluate the `when` condition — skip execution if it resolves to false.
         if let Some(ref condition) = rule.when {
@@ -961,23 +962,25 @@ impl LocalExecutor {
                         Ok(inner) => inner,
                         Err(_) => {
                             // Timeout occurred - kill the process group
-                            if let Some(child_pid) = child_pid_opt {
-                                if child_pid > 0 {
-                                    if let Err(e) = Self::kill_process_tree(child_pid) {
-                                        tracing::warn!(
-                                            rule = %rule.name,
-                                            pid = %child_pid,
-                                            error = %e,
-                                            "failed to kill process group on timeout"
-                                        );
-                                    }
-                                }
+                            if let Some(child_pid) = child_pid_opt
+                                && child_pid > 0
+                                && let Err(e) = Self::kill_process_tree(child_pid)
+                            {
+                                tracing::warn!(
+                                    rule = %rule.name,
+                                    pid = %child_pid,
+                                    error = %e,
+                                    "failed to kill process group on timeout"
+                                );
                             }
-                            
-                            let msg = format!("command timed out after {duration:?} for rule '{}'", rule.name);
+
+                            let msg = format!(
+                                "command timed out after {duration:?} for rule '{}'",
+                                rule.name
+                            );
                             combined_stderr.push_str(&msg);
                             combined_stderr.push('\n');
-                            
+
                             tracing::error!(
                                 rule = %rule.name,
                                 timeout = ?duration,
@@ -985,11 +988,11 @@ impl LocalExecutor {
                                 command = %cmd,
                                 "command timed out"
                             );
-                            
+
                             last_exit_code = Some(124); // 124 is standard timeout exit code
                             all_commands_succeeded = false;
                             record.status = JobStatus::TimedOut;
-                            
+
                             // Break out of command loop on failure to trigger retry logic
                             break;
                         }
@@ -1041,18 +1044,18 @@ impl LocalExecutor {
                     max_attempts = max_attempts,
                     "commands failed, will retry"
                 );
-                
+
                 // Sleep if retry_delay is specified
-                if let Some(ref delay_str) = rule.retry_delay {
-                    if let Some(secs) = crate::rule::parse_duration_secs(delay_str) {
-                        tracing::info!(rule = %rule.name, delay = secs, "waiting before retry");
-                        tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
-                    }
+                if let Some(ref delay_str) = rule.retry_delay
+                    && let Some(secs) = crate::rule::parse_duration_secs(delay_str)
+                {
+                    tracing::info!(rule = %rule.name, delay = secs, "waiting before retry");
+                    tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
                 }
-                
+
                 // Reset status for next attempt
                 record.status = JobStatus::Running;
-                
+
                 // Continue to next iteration to retry all commands
                 continue;
             }

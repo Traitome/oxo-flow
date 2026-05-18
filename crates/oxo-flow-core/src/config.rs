@@ -624,18 +624,16 @@ impl ExperimentControlPair {
             .comment(Some(b'#'))
             .from_reader(content.as_bytes());
 
-        let headers = reader.headers()
+        let headers = reader
+            .headers()
             .map_err(|e| OxoFlowError::Parse {
                 path: path.to_path_buf(),
                 message: format!("pairs file is empty or has invalid headers: {}", e),
             })?
             .clone();
 
-        let col_index: HashMap<&str, usize> = headers
-            .iter()
-            .enumerate()
-            .map(|(i, h)| (h, i))
-            .collect();
+        let col_index: HashMap<&str, usize> =
+            headers.iter().enumerate().map(|(i, h)| (h, i)).collect();
 
         // Required columns
         let pair_id_col = col_index
@@ -673,7 +671,8 @@ impl ExperimentControlPair {
                 pair_id: record.get(*pair_id_col).unwrap_or("").to_string(),
                 experiment: record.get(*experiment_col).unwrap_or("").to_string(),
                 control: record.get(*control_col).unwrap_or("").to_string(),
-                experiment_type: experiment_type_col.and_then(|&i| record.get(i).map(|s| s.to_string())),
+                experiment_type: experiment_type_col
+                    .and_then(|&i| record.get(i).map(|s| s.to_string())),
                 metadata: HashMap::new(),
             };
             pairs.push(pair);
@@ -790,18 +789,16 @@ impl SampleGroup {
             .comment(Some(b'#'))
             .from_reader(content.as_bytes());
 
-        let headers = reader.headers()
+        let headers = reader
+            .headers()
             .map_err(|e| OxoFlowError::Parse {
                 path: path.to_path_buf(),
                 message: format!("sample_groups file is empty or has invalid headers: {}", e),
             })?
             .clone();
 
-        let col_index: HashMap<&str, usize> = headers
-            .iter()
-            .enumerate()
-            .map(|(i, h)| (h, i))
-            .collect();
+        let col_index: HashMap<&str, usize> =
+            headers.iter().enumerate().map(|(i, h)| (h, i)).collect();
 
         let name_col = col_index.get("name").ok_or_else(|| OxoFlowError::Parse {
             path: path.to_path_buf(),
@@ -822,7 +819,8 @@ impl SampleGroup {
             })?;
 
             // Samples can be comma-separated within the field
-            let samples: Vec<String> = record.get(*samples_col)
+            let samples: Vec<String> = record
+                .get(*samples_col)
                 .unwrap_or("")
                 .split(',')
                 .map(|s| s.trim().to_string())
