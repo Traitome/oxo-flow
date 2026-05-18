@@ -627,6 +627,14 @@ pub struct Rule {
     #[serde(skip_serializing_if = "is_false")]
     pub target: bool,
 
+    /// Whether this rule is optional (skip if inputs missing).
+    ///
+    /// When true, the rule is skipped if any input files don't exist.
+    /// Useful for optional analysis steps that may not apply to all samples.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "is_false")]
+    pub optional: bool,
+
     /// Group label for grouping jobs on cluster execution.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
