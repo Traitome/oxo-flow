@@ -383,6 +383,16 @@ pub enum FilePatterns {
     List(Vec<String>),
     /// Named map of file patterns (e.g., `{ reads = "reads.fq" }`).
     Map(HashMap<String, String>),
+    /// Directory input with optional glob pattern.
+    ///
+    /// Tracks all files in directory for modification detection.
+    Dir {
+        /// Directory path.
+        path: String,
+        /// Optional glob pattern to filter files (e.g., "*.fastq").
+        #[serde(default)]
+        pattern: Option<String>,
+    },
 }
 
 impl Default for FilePatterns {
@@ -398,6 +408,7 @@ impl Default for FilePatterns {
 pub enum FilePatternsIter<'a> {
     List(std::slice::Iter<'a, String>),
     Map(std::collections::hash_map::Values<'a, String, String>),
+    Dir(std::slice::Iter<'a, String>),
 }
 
 impl<'a> Iterator for FilePatternsIter<'a> {
@@ -407,6 +418,7 @@ impl<'a> Iterator for FilePatternsIter<'a> {
         match self {
             Self::List(iter) => iter.next(),
             Self::Map(iter) => iter.next(),
+            Self::Dir(iter) => iter.next(),
         }
     }
 
@@ -414,6 +426,7 @@ impl<'a> Iterator for FilePatternsIter<'a> {
         match self {
             Self::List(iter) => iter.size_hint(),
             Self::Map(iter) => iter.size_hint(),
+            Self::Dir(iter) => iter.size_hint(),
         }
     }
 }
@@ -424,6 +437,7 @@ impl FilePatterns {
         match self {
             Self::List(v) => v.is_empty(),
             Self::Map(m) => m.is_empty(),
+            Self::Dir { .. } => false,
         }
     }
 
@@ -432,6 +446,7 @@ impl FilePatterns {
         match self {
             Self::List(v) => v.len(),
             Self::Map(m) => m.len(),
+            Self::Dir { .. } => 1,
         }
     }
 
@@ -440,6 +455,9 @@ impl FilePatterns {
         match self {
             Self::List(v) => FilePatternsIter::List(v.iter()),
             Self::Map(m) => FilePatternsIter::Map(m.values()),
+            // For Dir, we need to use a static slice approach
+            // This returns an iterator over a single-element slice
+            Self::Dir { path, .. } => FilePatternsIter::List(std::slice::from_ref(path).iter()),
         }
     }
 
@@ -448,6 +466,7 @@ impl FilePatterns {
         match self {
             Self::List(v) => v.clone(),
             Self::Map(m) => m.values().cloned().collect(),
+            Self::Dir { path, .. } => vec![path.clone()],
         }
     }
 
@@ -465,6 +484,13 @@ impl FilePatterns {
                 keys.sort();
                 m.get(keys.get(index)? as &str)
             }
+            Self::Dir { path, .. } => {
+                if index == 0 {
+                    Some(path)
+                } else {
+                    None
+                }
+            }
         }
     }
 
@@ -473,6 +499,7 @@ impl FilePatterns {
         match self {
             Self::List(_) => None,
             Self::Map(m) => m.get(name),
+            Self::Dir { .. } => None,
         }
     }
 }
@@ -525,6 +552,11 @@ impl std::hash::Hash for FilePatterns {
                     k.hash(state);
                     m.get(k).hash(state);
                 }
+            }
+            Self::Dir { path, pattern } => {
+                2.hash(state);
+                path.hash(state);
+                pattern.hash(state);
             }
         }
     }

@@ -1495,6 +1495,14 @@ impl WorkflowConfig {
                                 })
                                 .collect(),
                         ),
+                        FilePatterns::Dir { ref path, ref pattern } => FilePatterns::Dir {
+                            path: if has_wildcards(path) {
+                                expand_pattern(path, combo).unwrap_or_else(|_| path.clone())
+                            } else {
+                                path.clone()
+                            },
+                            pattern: pattern.clone(),
+                        },
                     };
                     expanded.output = match rule.output {
                         FilePatterns::List(ref v) => FilePatterns::List(
@@ -1523,6 +1531,14 @@ impl WorkflowConfig {
                                 })
                                 .collect(),
                         ),
+                        FilePatterns::Dir { ref path, ref pattern } => FilePatterns::Dir {
+                            path: if has_wildcards(path) {
+                                expand_pattern(path, combo).unwrap_or_else(|_| path.clone())
+                            } else {
+                                path.clone()
+                            },
+                            pattern: pattern.clone(),
+                        },
                     };
                     if let Some(ref shell) = rule.shell
                         && has_wildcards(shell)
@@ -1633,6 +1649,10 @@ impl WorkflowConfig {
                                 })
                                 .collect(),
                         ),
+                        FilePatterns::Dir { ref path, ref pattern } => FilePatterns::Dir {
+                            path: expand_pattern(path, &combo).unwrap_or_else(|_| path.clone()),
+                            pattern: pattern.clone(),
+                        },
                     };
                     scattered_rule.output = match scattered_rule.output {
                         FilePatterns::List(ref v) => FilePatterns::List(
@@ -1652,6 +1672,10 @@ impl WorkflowConfig {
                                 })
                                 .collect(),
                         ),
+                        FilePatterns::Dir { ref path, ref pattern } => FilePatterns::Dir {
+                            path: expand_pattern(path, &combo).unwrap_or_else(|_| path.clone()),
+                            pattern: pattern.clone(),
+                        },
                     };
                     if let Some(ref shell) = scattered_rule.shell {
                         scattered_rule.shell =
