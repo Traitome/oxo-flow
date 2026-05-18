@@ -42,7 +42,10 @@ pub fn validate_command(workflow: PathBuf, as_include: bool) -> Result<()> {
                 for rule in &cfg.rules {
                     for input in &rule.input {
                         // Only check if it's not a wildcard path and doesn't exist
-                        if !input.contains('{') && !input.contains('}') && !Path::new(input).exists() {
+                        if !input.contains('{')
+                            && !input.contains('}')
+                            && !Path::new(input).exists()
+                        {
                             // Also check if it's an output of another rule
                             let is_generated =
                                 cfg.rules.iter().any(|r| r.output.to_vec().contains(input));

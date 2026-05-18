@@ -1495,7 +1495,10 @@ impl WorkflowConfig {
                                 })
                                 .collect(),
                         ),
-                        FilePatterns::Dir { ref path, ref pattern } => FilePatterns::Dir {
+                        FilePatterns::Dir {
+                            ref path,
+                            ref pattern,
+                        } => FilePatterns::Dir {
                             path: if has_wildcards(path) {
                                 expand_pattern(path, combo).unwrap_or_else(|_| path.clone())
                             } else {
@@ -1531,7 +1534,10 @@ impl WorkflowConfig {
                                 })
                                 .collect(),
                         ),
-                        FilePatterns::Dir { ref path, ref pattern } => FilePatterns::Dir {
+                        FilePatterns::Dir {
+                            ref path,
+                            ref pattern,
+                        } => FilePatterns::Dir {
                             path: if has_wildcards(path) {
                                 expand_pattern(path, combo).unwrap_or_else(|_| path.clone())
                             } else {
@@ -1649,7 +1655,10 @@ impl WorkflowConfig {
                                 })
                                 .collect(),
                         ),
-                        FilePatterns::Dir { ref path, ref pattern } => FilePatterns::Dir {
+                        FilePatterns::Dir {
+                            ref path,
+                            ref pattern,
+                        } => FilePatterns::Dir {
                             path: expand_pattern(path, &combo).unwrap_or_else(|_| path.clone()),
                             pattern: pattern.clone(),
                         },
@@ -1672,7 +1681,10 @@ impl WorkflowConfig {
                                 })
                                 .collect(),
                         ),
-                        FilePatterns::Dir { ref path, ref pattern } => FilePatterns::Dir {
+                        FilePatterns::Dir {
+                            ref path,
+                            ref pattern,
+                        } => FilePatterns::Dir {
                             path: expand_pattern(path, &combo).unwrap_or_else(|_| path.clone()),
                             pattern: pattern.clone(),
                         },
@@ -2230,10 +2242,10 @@ impl WorkflowConfig {
     /// 3. `defaults.environment` as fallback
     pub fn resolve_environment(&self, rule: &Rule) -> Option<EnvironmentSpec> {
         // Check env_group first
-        if let Some(ref group_name) = rule.env_group {
-            if let Some(env) = self.env_groups.get(group_name) {
-                return Some(env.clone());
-            }
+        if let Some(ref group_name) = rule.env_group
+            && let Some(env) = self.env_groups.get(group_name)
+        {
+            return Some(env.clone());
         }
         // Fall back to rule's environment if not empty
         if !rule.environment.is_empty() {
