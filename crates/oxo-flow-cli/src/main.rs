@@ -541,7 +541,7 @@ async fn main() -> Result<()> {
             ProvenanceAction::Verify { checkpoint } => provenance_verify_command(checkpoint)?,
         },
         Commands::Schema => {
-            let schema = include_str!("../../../docs/schema/oxoflow-v1.schema.json");
+            let schema = include_str!("../schema/oxoflow-v1.schema.json");
             println!("{schema}");
         }
         Commands::Test { workflow, output } => {

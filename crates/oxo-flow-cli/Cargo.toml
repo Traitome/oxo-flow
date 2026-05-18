@@ -1,6 +1,7 @@
 [package]
 name = "oxo-flow-cli"
 version.workspace = true
+include = ["src/**/*", "schema/**/*", "README.md", "LICENSE"]
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
