@@ -2644,6 +2644,48 @@ mod tests {
         assert!(!result.errors().iter().any(|d| d.code == "E009"));
     }
 
+    // ---- E010: Undefined env_group references -----------------------------------
+
+    #[test]
+    fn validate_e010_undefined_env_group() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            input = ["in.txt"]
+            output = ["out.txt"]
+            shell = "cat {input} > {output}"
+            env_group = "undefined_group"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(!result.valid);
+        assert!(result.errors().iter().any(|d| d.code == "E010"));
+    }
+
+    #[test]
+    fn validate_e010_defined_env_group_passes() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [env_groups.qc]
+            conda = "envs/qc.yaml"
+
+            [[rules]]
+            name = "step1"
+            input = ["in.txt"]
+            output = ["out.txt"]
+            shell = "cat {input} > {output}"
+            env_group = "qc"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(!result.errors().iter().any(|d| d.code == "E010"));
+    }
+
     // ---- W017: Absolute path warning -------------------------------------------
 
     #[test]

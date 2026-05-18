@@ -252,6 +252,31 @@ name = "multiqc"
 env_group = "qc"  # Reuses same environment
 ```
 
+### Optional Rules
+
+Rules can be marked as optional to skip execution when inputs are missing:
+
+```toml
+[[rules]]
+name = "optional_qc"
+input = ["{sample}_extra.fastq"]  # May not exist for all samples
+output = ["{sample}_extra_qc.html"]
+shell = "fastqc {input}"
+optional = true  # Skip gracefully if input missing
+```
+
+### Directory Input
+
+Track all files in a directory for modification detection:
+
+```toml
+[[rules]]
+name = "process_dir"
+input = { dir = "data/raw/", pattern = "*.fastq" }  # Optional glob pattern
+output = ["results/processed/"]
+shell = "process-dir {input} -o {output}"
+```
+
 ## CLI Commands
 
 The `oxo-flow` binary provides 22 subcommands for the complete workflow lifecycle:
