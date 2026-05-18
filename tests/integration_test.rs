@@ -714,7 +714,7 @@ fn wf01_example_conditional_workflow() {
 /// Test evaluate_condition with various expressions through the executor.
 #[test]
 fn wf01_evaluate_condition_integration() {
-    use oxo_flow_core::executor::evaluate_condition;
+    use oxo_flow_core::executor::process::evaluate_condition;
 
     let mut config = std::collections::HashMap::new();
     config.insert("run_qc".to_string(), toml::Value::Boolean(true));
@@ -1310,7 +1310,7 @@ fn checkpoint_prometheus_metrics() {
 /// Test render_shell_command substitutes rule inputs/outputs and wildcards.
 #[test]
 fn render_shell_command_substitution() {
-    use oxo_flow_core::executor::render_shell_command;
+    use oxo_flow_core::executor::process::render_shell_command;
     use oxo_flow_core::rule::Rule;
     use std::collections::HashMap;
 

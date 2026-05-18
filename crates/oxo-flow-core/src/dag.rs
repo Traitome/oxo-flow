@@ -212,12 +212,16 @@ impl WorkflowDag {
     /// Returns [`OxoFlowError::RuleNotFound`] if any target name does not exist
     /// in the DAG.
     #[must_use = "execution ordering returns a Result that must be used"]
+    /// Returns the topological execution order for a subset of target rules.
+    ///
+    /// This includes the targets themselves and all their transitive upstream
+    /// dependencies.
     pub fn execution_order_for_targets(&self, targets: &[&str]) -> Result<Vec<String>> {
         if targets.is_empty() {
             return self.execution_order();
         }
 
-        // Validate all target names first so we give a clear error message.
+        // Validate all target names first
         for &target in targets {
             if !self.name_to_node.contains_key(target) {
                 return Err(OxoFlowError::RuleNotFound {
@@ -226,8 +230,7 @@ impl WorkflowDag {
             }
         }
 
-        // Collect the set of nodes to include: each target plus all transitive
-        // upstream dependencies (follow incoming edges backwards).
+        // Transitive dependency collection using BFS/DFS
         let mut included: HashSet<NodeIndex> = HashSet::new();
         let mut stack: Vec<NodeIndex> = targets.iter().map(|&t| self.name_to_node[t]).collect();
 
@@ -244,11 +247,18 @@ impl WorkflowDag {
             }
         }
 
-        // Filter the full topological order down to the included subset.
-        Ok(self
-            .topological_order()?
+        // Optimization: Use a cached or pre-calculated topological order if possible.
+        // For now, we still calculate it, but we filter it efficiently.
+        let full_order = self.topological_order()?;
+
+        Ok(full_order
             .into_iter()
-            .filter(|n| included.contains(&self.name_to_node[&n.name]))
+            .filter(|n| {
+                self.name_to_node
+                    .get(&n.name)
+                    .map(|&idx| included.contains(&idx))
+                    .unwrap_or(false)
+            })
             .map(|n| n.name.clone())
             .collect())
     }

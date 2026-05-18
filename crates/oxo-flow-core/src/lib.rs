@@ -39,6 +39,7 @@
 //! assert_eq!(order, vec!["step1"]);
 //! ```
 
+pub mod clinical;
 pub mod cluster;
 pub mod config;
 pub mod container;
@@ -47,6 +48,7 @@ pub mod environment;
 pub mod error;
 pub mod executor;
 pub mod format;
+
 pub mod report;
 pub mod rule;
 pub mod scheduler;
@@ -54,12 +56,14 @@ pub mod webhook;
 pub mod wildcard;
 
 // Re-export key types at the crate root for convenience.
+pub use clinical::{
+    ActionabilityAnnotation, BiomarkerResult, ClinicalReportSection, ComplianceEvent, FilterChain,
+    GenePanel, QcThreshold, TumorSampleMeta, VariantClassification,
+};
 pub use config::WorkflowConfig;
 pub use config::{
-    ActionabilityAnnotation, BiomarkerResult, ClinicalReportSection, ComplianceEvent,
-    ExperimentControlPair, FilterChain, GenePanel, Parsed, QcThreshold, Ready, ReferenceDatabase,
-    RuleName, SampleGroup, TumorNormalPair, TumorSampleMeta, Validated, VariantClassification,
-    WildcardPattern, WorkflowState,
+    ExperimentControlPair, Parsed, Ready, ReferenceDatabase, RuleName, SampleGroup,
+    TumorNormalPair, Validated, WildcardPattern, WorkflowState,
 };
 pub use dag::WorkflowDag;
 pub use error::{OxoFlowError, Result};

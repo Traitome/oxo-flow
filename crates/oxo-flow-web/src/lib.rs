@@ -22,7 +22,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 
 // ---------------------------------------------------------------------------
 // Global metrics counters
@@ -272,9 +272,30 @@ fn generate_session_token() -> String {
 
 /// Extract a session from the `Authorization: Bearer <token>` header.
 async fn extract_session(headers: &axum::http::HeaderMap) -> Option<db::Session> {
-    let value = headers.get("authorization")?.to_str().ok()?;
-    let token = value.strip_prefix("Bearer ")?;
-    db::get_session(token).await.ok().flatten()
+    // 1. Try Authorization header (Bearer token)
+    if let Some(auth_header) = headers.get("authorization")
+        && let Ok(value) = auth_header.to_str()
+        && let Some(token) = value.strip_prefix("Bearer ")
+        && let Ok(Some(session)) = db::get_session(token).await
+    {
+        return Some(session);
+    }
+
+    // 2. Try Cookie header (HttpOnly)
+    if let Some(cookie_header) = headers.get("cookie")
+        && let Ok(value) = cookie_header.to_str()
+    {
+        for cookie in value.split(';') {
+            let cookie = cookie.trim();
+            if let Some(token) = cookie.strip_prefix("oxo_session=")
+                && let Ok(Some(session)) = db::get_session(token).await
+            {
+                return Some(session);
+            }
+        }
+    }
+
+    None
 }
 
 /// Check the oxo-flow license status.
@@ -1428,14 +1449,14 @@ async fn sse_events() -> impl IntoResponse {
 // ---------------------------------------------------------------------------
 
 /// `POST /api/auth/login` — Authenticate and obtain a session token.
-async fn login(Json(req): Json<LoginRequest>) -> Result<Json<LoginResponse>, ApiError> {
+async fn login(Json(req): Json<LoginRequest>) -> Result<impl IntoResponse, ApiError> {
     let user = check_credentials_db(&req.username, &req.password)
         .await
         .ok_or_else(|| ApiError {
             status: StatusCode::UNAUTHORIZED,
             body: ErrorResponse {
                 error: "Invalid credentials".to_string(),
-                detail: None,
+                detail: Some("The username or password provided is incorrect.".to_string()),
             },
         })?;
 
@@ -1460,11 +1481,20 @@ async fn login(Json(req): Json<LoginRequest>) -> Result<Json<LoginResponse>, Api
         },
     })?;
 
-    Ok(Json(LoginResponse {
-        token,
-        username: user.username,
-        role,
-    }))
+    let cookie = format!(
+        "oxo_session={}; HttpOnly; Path=/; Max-Age=86400; SameSite=Strict; Secure",
+        token
+    );
+
+    Ok((
+        StatusCode::OK,
+        [("set-cookie", cookie)],
+        Json(LoginResponse {
+            token,
+            username: user.username,
+            role,
+        }),
+    ))
 }
 
 /// `GET /api/auth/me` — Return the identity of the current session.
@@ -1666,15 +1696,42 @@ fn build_router_inner(limiter: Option<RateLimiter>) -> Router {
         .unwrap_or_default();
 
     let cors = if origins.is_empty() {
+        // Safe default: only allow same-origin or local dev
         CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods(Any)
-            .allow_headers(Any)
+            .allow_origin([
+                "http://localhost:8080".parse().unwrap(),
+                "http://127.0.0.1:8080".parse().unwrap(),
+            ])
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::PUT,
+                axum::http::Method::DELETE,
+                axum::http::Method::OPTIONS,
+            ])
+            .allow_headers([
+                axum::http::header::AUTHORIZATION,
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::ACCEPT,
+                axum::http::header::COOKIE,
+            ])
+            .allow_credentials(true)
     } else {
         CorsLayer::new()
             .allow_origin(origins)
-            .allow_methods(Any)
-            .allow_headers(Any)
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::PUT,
+                axum::http::Method::DELETE,
+                axum::http::Method::OPTIONS,
+            ])
+            .allow_headers([
+                axum::http::header::AUTHORIZATION,
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::ACCEPT,
+                axum::http::header::COOKIE,
+            ])
             .allow_credentials(true)
     };
 

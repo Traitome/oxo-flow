@@ -57,6 +57,71 @@ impl SchedulerState {
         self.records.insert(record.rule.clone(), record);
     }
 
+    /// Check if the scheduler is in a deadlock state.
+    ///
+    /// A deadlock occurs if there are pending rules but none are ready to run,
+    /// and no rules are currently running to release resources or satisfy dependencies.
+    pub fn check_deadlock(
+        &self,
+        dag: &WorkflowDag,
+        available_threads: u32,
+        available_memory_mb: u64,
+        rules: &[Rule],
+    ) -> Result<()> {
+        let ready = self.ready_rules(dag)?;
+
+        if ready.is_empty() && self.running.is_empty() {
+            let pending: Vec<_> = self
+                .statuses
+                .iter()
+                .filter(|(_, status)| **status == JobStatus::Pending)
+                .map(|(n, _)| n.clone())
+                .collect();
+
+            if !pending.is_empty() {
+                // Potential deadlock
+                // Check if any pending rule could EVER run with full system resources
+                for rule_name in &pending {
+                    if let Some(rule) = rules.iter().find(|r| r.name == *rule_name) {
+                        let req_threads = rule.effective_threads();
+                        let req_memory = rule
+                            .effective_memory()
+                            .and_then(parse_memory_mb)
+                            .unwrap_or(0);
+
+                        if req_threads > available_threads {
+                            return Err(crate::OxoFlowError::ResourceExhausted {
+                                rule: rule_name.clone(),
+                                required_threads: req_threads,
+                                available_threads,
+                                required_memory_mb: req_memory,
+                                available_memory_mb,
+                            });
+                        }
+                        if req_memory > available_memory_mb {
+                            return Err(crate::OxoFlowError::ResourceExhausted {
+                                rule: rule_name.clone(),
+                                required_threads: req_threads,
+                                available_threads,
+                                required_memory_mb: req_memory,
+                                available_memory_mb,
+                            });
+                        }
+                    }
+                }
+
+                return Err(crate::OxoFlowError::Config {
+                    message: format!(
+                        "Deadlock detected: {} rules are pending but none can start. Check resource constraints and dependencies.",
+                        pending.len()
+                    ),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
     /// Returns all rules that are ready to run (dependencies satisfied, not yet started).
     pub fn ready_rules(&self, dag: &WorkflowDag) -> Result<Vec<String>> {
         let mut ready = Vec::new();
