@@ -1082,42 +1082,41 @@ impl WorkflowConfig {
         }
 
         // Resolve modular includes
-        if let Some(parent) = path.parent() {
-            config.resolve_includes(parent)?;
+        let parent = crate::parent_dir(path);
+        config.resolve_includes(parent)?;
 
-            // Load pairs from external file if specified
-            if let Some(ref pairs_file) = config.workflow.pairs_file {
-                let pairs_path = parent.join(pairs_file);
-                let file_pairs = ExperimentControlPair::load_from_file(&pairs_path)?;
-                let count = file_pairs.len();
-                // Merge with inline pairs
-                config.pairs.extend(file_pairs);
-                tracing::info!("Loaded {} pairs from {}", count, pairs_file);
-            }
+        // Load pairs from external file if specified
+        if let Some(ref pairs_file) = config.workflow.pairs_file {
+            let pairs_path = parent.join(pairs_file);
+            let file_pairs = ExperimentControlPair::load_from_file(&pairs_path)?;
+            let count = file_pairs.len();
+            // Merge with inline pairs
+            config.pairs.extend(file_pairs);
+            tracing::info!("Loaded {} pairs from {}", count, pairs_file);
+        }
 
-            // Discover pairs from pattern if specified
-            if let Some(ref pairs_pattern) = config.workflow.pairs_pattern {
-                let discovered_pairs =
-                    ExperimentControlPair::discover_from_pattern(pairs_pattern, parent)?;
-                let count = discovered_pairs.len();
-                // Merge with inline/file pairs
-                config.pairs.extend(discovered_pairs);
-                tracing::info!(
-                    "Discovered {} pairs from pattern '{}'",
-                    count,
-                    pairs_pattern
-                );
-            }
+        // Discover pairs from pattern if specified
+        if let Some(ref pairs_pattern) = config.workflow.pairs_pattern {
+            let discovered_pairs =
+                ExperimentControlPair::discover_from_pattern(pairs_pattern, parent)?;
+            let count = discovered_pairs.len();
+            // Merge with inline/file pairs
+            config.pairs.extend(discovered_pairs);
+            tracing::info!(
+                "Discovered {} pairs from pattern '{}'",
+                count,
+                pairs_pattern
+            );
+        }
 
-            // Load sample_groups from external file if specified
-            if let Some(ref groups_file) = config.workflow.sample_groups_file {
-                let groups_path = parent.join(groups_file);
-                let file_groups = SampleGroup::load_from_file(&groups_path)?;
-                let count = file_groups.len();
-                // Merge with inline groups
-                config.sample_groups.extend(file_groups);
-                tracing::info!("Loaded {} sample groups from {}", count, groups_file);
-            }
+        // Load sample_groups from external file if specified
+        if let Some(ref groups_file) = config.workflow.sample_groups_file {
+            let groups_path = parent.join(groups_file);
+            let file_groups = SampleGroup::load_from_file(&groups_path)?;
+            let count = file_groups.len();
+            // Merge with inline groups
+            config.sample_groups.extend(file_groups);
+            tracing::info!("Loaded {} sample groups from {}", count, groups_file);
         }
 
         config.validate()?;

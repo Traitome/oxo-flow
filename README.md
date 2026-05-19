@@ -34,13 +34,27 @@ oxo-flow is a high-performance, modular bioinformatics pipeline engine built fro
 - 📦 **Environment management** — First-class support for conda, pixi, docker, singularity, and venv
 - 🧬 **Bioinformatics-first** — Purpose-built for genomics workflows and clinical-grade pipelines
 - 📊 **Clinical-grade reporting** — Modular HTML/PDF/JSON report generation with ACMG/AMP variant classification, biomarker tracking, and compliance audit trails
-- 🌐 **Command Center** — Multi-tenant Web UI with real-time resource sensing, physical workspace isolation, and live log streaming
+- 🌐 **Command Center** — Multi-user Web UI with real-time resource sensing, physical workspace isolation, and on-demand log retrieval
 - 🗄️ **Persistent State** — SQLite-backed execution history and audit logs; automatic recovery of orphaned runs after server restart
-- 🔒 **OS Identity Binding** — Secure task execution via Sudo or SSH, leveraging host POSIX permissions for data isolation
+- 🔒 **OS Identity Binding** — Secure task execution via Sudo, leveraging host POSIX user permissions for data isolation
 - 🐳 **Container packaging** — Multi-stage Docker builds, rootless containers, and HEALTHCHECK support
 - ⚡ **Rust performance** — Fearless concurrency, zero-cost abstractions, `#![forbid(unsafe_code)]` across all crates
 - 🔧 **Resource-aware scheduling** — Jobs declare CPU, memory, GPU, and disk; the scheduler respects constraints across local and cluster backends (SLURM, PBS, SGE, LSF)
 - 🔒 **Security hardened** — Shell injection prevention, path traversal protection, secret scanning, and per-IP rate limiting
+
+### What is ACMG/AMP?
+
+**ACMG** (American College of Medical Genetics and Genomics) and **AMP** (Association for Molecular Pathology) jointly published guidelines for the interpretation of sequence variants. These guidelines define a five-tier classification system:
+
+| Tier | Classification | Clinical Meaning |
+|------|---------------|-----------------|
+| Tier I / Pathogenic | Strong clinical significance | Disease-causing; actionable for patient care |
+| Tier II / Likely Pathogenic | Potential clinical significance | High confidence of disease association |
+| Tier III / VUS | Uncertain significance | Insufficient evidence; re-evaluate periodically |
+| Tier IV / Likely Benign | Probably not disease-causing | Strong evidence against pathogenicity |
+| Benign | No clinical significance | Confirmed benign polymorphism |
+
+oxo-flow's `VariantClassification` enum models both the somatic (Tier I–IV, per AMP/ASCO/CAP) and germline (Pathogenic–Benign, per ACMG) classification frameworks. The reporting system uses these classifications to generate clinical-grade HTML/PDF reports with variant tables, biomarker summaries, and compliance audit metadata.
 
 ## Why oxo-flow?
 
@@ -50,7 +64,7 @@ oxo-flow is a high-performance, modular bioinformatics pipeline engine built fro
 | **Performance** | Native binary, zero interpreter overhead | Python startup overhead | JVM startup overhead |
 | **Workflow format** | TOML (`.oxoflow`) — declarative, composable | Snakefile / `.smk` (Python DSL) | Nextflow DSL (`.nf`) (Groovy DSL) |
 | **Environment support** | conda, pixi, docker, singularity, venv — per-rule | conda, singularity, docker | conda, docker, singularity, modules |
-| **Web interface** | Built-in REST API with RBAC and rate limiting | External Snakemake-UI | Nextflow Tower (commercial) |
+| **Web interface** | Built-in REST API with session auth and rate limiting | External Snakemake-UI | Nextflow Tower (commercial) |
 | **Clinical reporting** | ACMG/AMP variant classification, compliance events | Not built-in | Not built-in |
 | **Container packaging** | Multi-stage builds, rootless containers | Singularity/Docker | Docker/Singularity |
 | **Cluster backends** | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF, k8s |
@@ -74,7 +88,7 @@ oxo-flow is built on six engineering and scientific principles:
 
 5. **Clinical-grade quality** — Reports are accurate, traceable, and auditable. Every step logs its provenance, inputs, outputs, software versions, and execution environment.
 
-6. **Inverse design** — Start from what the user needs (clinical report, publication figure) and work backward to determine the data, tools, and steps required.
+6. **Outcome-driven design** — Workflows are structured around the desired deliverables (clinical report, publication figure, QC dashboard). The DAG engine's target-aware execution (`-t` flag) computes the minimal set of rules needed to produce specific outputs.
 
 ## Workflow Gallery
 
@@ -285,7 +299,7 @@ shell = "process-dir {input} -o {output}"
 
 ## CLI Commands
 
-The `oxo-flow` binary provides 22 subcommands for the complete workflow lifecycle:
+The `oxo-flow` binary provides 29 subcommands for the complete workflow lifecycle:
 
 | Command | Description |
 |---------|-------------|

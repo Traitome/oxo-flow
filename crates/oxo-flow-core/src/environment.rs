@@ -445,7 +445,8 @@ impl EnvironmentCache {
     fn save(&self) -> Result<()> {
         if let Some(ref path) = self.cache_file {
             // Ensure parent directory exists
-            if let Some(parent) = path.parent() {
+            let parent = crate::parent_dir(path);
+            if parent != std::path::Path::new(".") {
                 std::fs::create_dir_all(parent).map_err(|e| OxoFlowError::Config {
                     message: format!("failed to create cache directory: {}", e),
                 })?;
@@ -1043,6 +1044,60 @@ mod tests {
         assert!(cache.is_ready("docker:ubuntu:22.04"));
 
         // Idempotent — marking twice doesn't break anything
+        cache.mark_ready("conda:envs/qc.yaml");
+        assert!(cache.is_ready("conda:envs/qc.yaml"));
+    }
+
+    // --- ModulesBackend tests -------------------------------------------------
+
+    #[test]
+    fn modules_backend_name() {
+        assert_eq!(ModulesBackend.name(), "modules");
+    }
+
+    #[test]
+    fn modules_setup_command() {
+        let backend = ModulesBackend;
+        let result = backend.setup_command("java/11,gatk/4.2");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "true");
+    }
+
+    #[test]
+    fn modules_teardown_is_noop() {
+        let backend = ModulesBackend;
+        assert!(backend.teardown_command("java/11").unwrap().is_none());
+    }
+
+    #[test]
+    fn modules_wrap_command() {
+        let backend = ModulesBackend;
+        let cmd = backend
+            .wrap_command("java -jar gatk.jar", "java/11,gatk/4.2", None)
+            .unwrap();
+        assert!(cmd.contains("module load java/11 gatk/4.2"));
+        assert!(cmd.contains("java -jar gatk.jar"));
+    }
+
+    #[test]
+    fn modules_cache_key() {
+        let backend = ModulesBackend;
+        assert_eq!(
+            backend.cache_key("java/11,gatk/4.2"),
+            "modules:java/11,gatk/4.2"
+        );
+    }
+
+    // --- cache file persistence test -----------------------------------------
+
+    #[test]
+    fn environment_cache_dir_initialization() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_path = dir.path().join("cache.json");
+
+        // with_cache_dir creates a fresh cache backed by the file
+        let mut cache = EnvironmentCache::with_cache_dir(&cache_path);
+        assert!(!cache.is_ready("conda:envs/qc.yaml"));
         cache.mark_ready("conda:envs/qc.yaml");
         assert!(cache.is_ready("conda:envs/qc.yaml"));
     }

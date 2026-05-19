@@ -2957,4 +2957,74 @@ threads = 4
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
     }
+
+    // --- RateLimiter tests ---------------------------------------------------
+
+    #[test]
+    fn rate_limiter_allows_within_limit() {
+        let config = RateLimiterConfig {
+            max_requests: 3,
+            window: std::time::Duration::from_secs(60),
+        };
+        let limiter = RateLimiter::new(config);
+
+        assert!(limiter.check_rate_limit("127.0.0.1").is_ok());
+        assert!(limiter.check_rate_limit("127.0.0.1").is_ok());
+        assert!(limiter.check_rate_limit("127.0.0.1").is_ok());
+    }
+
+    #[test]
+    fn rate_limiter_blocks_over_limit() {
+        let config = RateLimiterConfig {
+            max_requests: 2,
+            window: std::time::Duration::from_secs(60),
+        };
+        let limiter = RateLimiter::new(config);
+
+        limiter.check_rate_limit("10.0.0.1").unwrap();
+        limiter.check_rate_limit("10.0.0.1").unwrap();
+
+        let result = limiter.check_rate_limit("10.0.0.1");
+        assert!(result.is_err(), "should block 3rd request with limit of 2");
+    }
+
+    #[test]
+    fn rate_limiter_separates_keys() {
+        let config = RateLimiterConfig {
+            max_requests: 1,
+            window: std::time::Duration::from_secs(60),
+        };
+        let limiter = RateLimiter::new(config);
+
+        limiter.check_rate_limit("192.168.1.1").unwrap();
+        // Different IP should not be affected
+        assert!(limiter.check_rate_limit("192.168.1.2").is_ok());
+    }
+
+    // --- SSE endpoint test -------------------------------------------------
+
+    #[tokio::test]
+    async fn events_endpoint_returns_server_sent_events_content_type() {
+        let app = build_router();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/events")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .map(|v| v.to_str().unwrap_or(""))
+            .unwrap_or("");
+        assert!(
+            content_type.contains("text/event-stream"),
+            "expected text/event-stream, got: {content_type}"
+        );
+    }
 }

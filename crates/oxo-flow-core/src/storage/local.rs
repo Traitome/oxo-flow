@@ -27,7 +27,8 @@ impl StorageBackend for LocalStorage {
 
     async fn write(&self, path: &StoragePath, data: &[u8]) -> Result<()> {
         let p = Path::new(&path.key);
-        if let Some(parent) = p.parent() {
+        let parent = crate::parent_dir(p);
+        if parent != Path::new(".") {
             tokio::fs::create_dir_all(parent).await?;
         }
         Ok(tokio::fs::write(p, data).await?)

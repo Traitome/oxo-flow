@@ -81,3 +81,28 @@ pub use rule::{EnvironmentSpec, GpuSpec, ResourceHint, Resources, RuleBuilder};
 #[cfg(feature = "webhook")]
 pub use webhook::{WebhookClient, WebhookConfig, WebhookData, WebhookEvent, WebhookPayload};
 pub use wildcard::{wildcard_combinations_from_groups, wildcard_combinations_from_pairs};
+
+/// Return the parent directory of `path`, falling back to `"."` when the path
+/// has no parent component (e.g., a bare filename like `workflow.oxoflow`).
+///
+/// Rust's `Path::parent()` returns `Some(Path::new(""))` for bare filenames,
+/// which causes `Command::current_dir("")` to fail with "No such file or
+/// directory". This helper converts the empty-path case to `"."`.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+/// let p = oxo_flow_core::parent_dir(Path::new("workflow.oxoflow"));
+/// assert_eq!(p, Path::new("."));
+///
+/// let p = oxo_flow_core::parent_dir(Path::new("subdir/workflow.oxoflow"));
+/// assert_eq!(p, Path::new("subdir"));
+/// ```
+#[must_use]
+pub fn parent_dir(path: &std::path::Path) -> &std::path::Path {
+    match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => std::path::Path::new("."),
+    }
+}

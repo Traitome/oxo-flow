@@ -29,7 +29,7 @@ oxo-flow-web = { path = "crates/oxo-flow-web", version = "0.5.4" }
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = "0.8"
+toml = "1.1"
 
 # Error handling
 anyhow = "1.0"
@@ -57,7 +57,7 @@ glob = "0.3"
 regex = "1"
 tempfile = "3"
 num_cpus = "1"
-sysinfo = "0.35"
+sysinfo = "0.38"
 nix = { version = "0.30", features = ["signal", "process"] }
 fs2 = "0.4"
 

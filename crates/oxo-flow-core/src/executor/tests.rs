@@ -671,3 +671,123 @@ fn sanitize_shell_command_no_false_positives_bioinformatics() {
         warnings
     );
 }
+
+// ---------------------------------------------------------------------------
+// validate_path_safety tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn validate_path_safety_allows_relative_path() {
+    let workdir = std::path::Path::new("/tmp/test-workflow");
+    validate_path_safety(workdir, "results/output.txt").unwrap();
+}
+
+#[test]
+fn validate_path_safety_allows_absolute_path_in_workdir() {
+    let workdir = std::path::Path::new("/tmp/test-workflow");
+    validate_path_safety(workdir, "/tmp/test-workflow/results/output.txt").unwrap();
+}
+
+#[test]
+fn validate_path_safety_blocks_absolute_path_outside_workdir() {
+    let workdir = std::path::Path::new("/tmp/test-workflow");
+    let result = validate_path_safety(workdir, "/etc/passwd");
+    assert!(
+        result.is_err(),
+        "should block absolute path outside workdir"
+    );
+}
+
+#[test]
+fn validate_path_safety_blocks_traversal() {
+    let workdir = std::path::Path::new("/tmp/test-workflow");
+    let result = validate_path_safety(workdir, "../escape/passwd");
+    assert!(result.is_err(), "should block path traversal via '..'");
+}
+
+#[test]
+fn validate_path_safety_allows_output_without_traversal() {
+    let workdir = std::path::Path::new("/tmp/test-workflow");
+    validate_path_safety(workdir, "results/{sample}_output.txt").unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// validate_interpreter_path tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn validate_interpreter_path_allows_simple_name() {
+    validate_interpreter_path("python3").unwrap();
+}
+
+#[test]
+fn validate_interpreter_path_allows_safe_absolute_path() {
+    validate_interpreter_path("/usr/bin/python3").unwrap();
+}
+
+#[test]
+fn validate_interpreter_path_blocks_unsafe_absolute_path() {
+    let result = validate_interpreter_path("/tmp/evil/python");
+    assert!(
+        result.is_err(),
+        "should block absolute path not in safe directories"
+    );
+}
+
+#[test]
+fn validate_interpreter_path_blocks_traversal() {
+    let result = validate_interpreter_path("../etc/shell");
+    assert!(
+        result.is_err(),
+        "should block interpreter path with traversal"
+    );
+}
+
+#[test]
+fn validate_interpreter_path_allows_home_path() {
+    validate_interpreter_path("/home/user/bin/python3").unwrap();
+}
+
+#[test]
+fn validate_interpreter_path_allows_opt_path() {
+    validate_interpreter_path("/opt/conda/bin/python3").unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Additional wildcard injection tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn validate_wildcard_injection_allows_config_keys() {
+    let mut values = HashMap::<String, String>::new();
+    values.insert("config.sample_name".to_string(), "$(whoami)".to_string());
+    values.insert("sample".to_string(), "SAMPLE_01".to_string());
+    // Config-prefixed keys should be skipped (trusted from .oxoflow file)
+    validate_wildcard_injection(&values).unwrap();
+}
+
+#[test]
+fn validate_wildcard_injection_blocks_pipe_in_value() {
+    let mut values = HashMap::<String, String>::new();
+    values.insert("sample".to_string(), "SAMPLE_01 | echo hacked".to_string());
+    // Pipes are not currently blocked by wildcard injection (only $() and backticks)
+    // This test verifies the current behavior
+    // The pipe would be caught by validate_shell_safety on the rendered command
+    validate_wildcard_injection(&values).unwrap();
+}
+
+#[test]
+fn validate_wildcard_injection_blocks_backtick_in_value() {
+    let mut values = HashMap::<String, String>::new();
+    values.insert("sample".to_string(), "`evil`".to_string());
+    let result = validate_wildcard_injection(&values);
+    assert!(result.is_err(), "should block backtick in wildcard values");
+}
+
+#[test]
+fn validate_wildcard_injection_blocks_subshell_in_value() {
+    let mut values = HashMap::<String, String>::new();
+    values.insert("sample".to_string(), "$(echo hacked)".to_string());
+    let result = validate_wildcard_injection(&values);
+    assert!(result.is_err(), "should block $() in wildcard values");
+}

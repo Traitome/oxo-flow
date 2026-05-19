@@ -82,7 +82,8 @@ impl CheckpointState {
 
     /// Save checkpoint state to a file.
     pub fn save_to_file(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
+        let parent = crate::parent_dir(path);
+        if parent != std::path::Path::new(".") {
             std::fs::create_dir_all(parent).map_err(|e| OxoFlowError::Config {
                 message: format!("failed to create checkpoint directory: {e}"),
             })?;

@@ -291,3 +291,70 @@ pub async fn log_action(user_id: &str, action: &str, target: &str) -> Result<()>
     .await?;
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test that the model structs can be constructed correctly.
+    #[test]
+    fn run_model_fields() {
+        let run = Run {
+            id: "test-id".to_string(),
+            user_id: "user-1".to_string(),
+            workflow_name: "test".to_string(),
+            status: "pending".to_string(),
+            pid: None,
+            started_at: None,
+            finished_at: None,
+        };
+        assert_eq!(run.id, "test-id");
+        assert_eq!(run.status, "pending");
+        assert!(run.pid.is_none());
+    }
+
+    #[test]
+    fn audit_log_model_fields() {
+        let log = AuditLog {
+            id: "log-1".to_string(),
+            user_id: "admin".to_string(),
+            action: "run".to_string(),
+            target: "test-workflow".to_string(),
+            timestamp: Utc::now(),
+        };
+        assert_eq!(log.action, "run");
+        assert_eq!(log.user_id, "admin");
+    }
+
+    #[test]
+    fn session_model_fields() {
+        let now = Utc::now();
+        let session = Session {
+            token: "abc123".to_string(),
+            user_id: "admin".to_string(),
+            created_at: now,
+            expires_at: now,
+        };
+        assert_eq!(session.token, "abc123");
+    }
+
+    #[test]
+    fn user_model_fields() {
+        let user = User {
+            id: "user-1".to_string(),
+            username: "testuser".to_string(),
+            role: "user".to_string(),
+            auth_type: "sudo".to_string(),
+            os_user: "testuser".to_string(),
+            created_at: Utc::now(),
+        };
+        assert_eq!(user.username, "testuser");
+        assert_eq!(user.role, "user");
+        assert_eq!(user.auth_type, "sudo");
+        assert_eq!(user.os_user, "testuser");
+    }
+}

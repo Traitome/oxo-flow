@@ -13,7 +13,10 @@ use tokio::process::Command;
 use tokio::sync::{Mutex, Semaphore};
 
 use super::checkpoint::cleanup_temp_outputs;
-use super::security::{sanitize_shell_command, validate_shell_safety, validate_wildcard_injection};
+use super::security::{
+    sanitize_shell_command, validate_path_safety, validate_shell_safety,
+    validate_wildcard_injection,
+};
 
 /// Default interpreter mapping for script file extensions.
 pub static DEFAULT_INTERPRETER_MAP: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
@@ -47,7 +50,13 @@ pub fn detect_interpreter(
     custom_map: &HashMap<String, String>,
 ) -> Option<String> {
     if let Some(interp) = interpreter_override {
-        return Some(interp.to_string());
+        return match super::security::validate_interpreter_path(interp) {
+            Ok(()) => Some(interp.to_string()),
+            Err(e) => {
+                tracing::warn!("interpreter override rejected: {e}");
+                None
+            }
+        };
     }
     let ext = Path::new(script_path)
         .extension()
@@ -487,6 +496,11 @@ impl LocalExecutor {
             for warning in sanitize_shell_command(cmd) {
                 tracing::warn!(rule = %rule.name, "{warning}");
             }
+        }
+
+        // Validate output paths for traversal safety
+        for output_pattern in rule.output.to_vec() {
+            validate_path_safety(&self.config.workdir, &output_pattern)?;
         }
 
         if self.config.dry_run {

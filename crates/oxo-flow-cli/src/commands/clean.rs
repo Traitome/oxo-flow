@@ -15,7 +15,7 @@ pub fn clean_command(workflow: PathBuf, dry_run: bool, force: bool, orphans: boo
 
     // Handle orphan cleanup mode
     if orphans {
-        let workdir = workflow.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let workdir = oxo_flow_core::parent_dir(&workflow).to_path_buf();
         let chunks_dir = workdir.join(".oxo-flow/chunks");
 
         if !chunks_dir.exists() {

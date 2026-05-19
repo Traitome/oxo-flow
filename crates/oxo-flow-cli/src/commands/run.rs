@@ -26,10 +26,7 @@ pub async fn run_command(
 ) -> Result<()> {
     print_banner();
     let workflow = resolve_workflow(workflow)?;
-    let workflow_dir = workflow
-        .parent()
-        .unwrap_or(std::path::Path::new("."))
-        .to_path_buf();
+    let workflow_dir = oxo_flow_core::parent_dir(&workflow).to_path_buf();
 
     let mut config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;

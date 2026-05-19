@@ -73,10 +73,7 @@ pub fn expand_batch_template(template: &str, item: &str, nr: usize) -> String {
         .extension()
         .map(|e| e.to_string_lossy())
         .unwrap_or_default();
-    let dir = path
-        .parent()
-        .map(|p| p.to_string_lossy())
-        .unwrap_or_else(|| ".".into());
+    let dir = oxo_flow_core::parent_dir(path).to_string_lossy();
 
     template
         .replace("{}", item)
