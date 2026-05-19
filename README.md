@@ -146,6 +146,9 @@ git clone https://github.com/Traitome/oxo-flow.git
 cd oxo-flow
 cargo build --release --workspace
 
+# Install the CLI to your local cargo bin directory:
+cargo install --path crates/oxo-flow-cli
+
 # Binaries are in target/release/
 # - oxo-flow        (CLI)
 # - oxo-flow-web    (Web server)
@@ -387,7 +390,7 @@ oxo-flow/
 ├── crates/
 │   ├── oxo-flow-core/     # Core library: DAG engine, executor, environment mgmt,
 │   │                      # config parsing, scheduler, wildcard expansion, reporting
-│   ├── oxo-flow-cli/      # CLI binary ("oxo-flow") — Clap-based, 22 subcommands
+│   ├── oxo-flow-cli/      # CLI binary ("oxo-flow") — Clap-based, 29 subcommands
 │   └── oxo-flow-web/      # Web server ("oxo-flow-web") — axum REST API + frontend
 ├── examples/              # Example .oxoflow workflows
 ├── tests/                 # Integration tests
