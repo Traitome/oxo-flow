@@ -43,8 +43,7 @@ helps contributors identify areas for improvement.
 
 - **Not a domain-specific pipeline** — oxo-flow is a general-purpose workflow engine.
   It does not include pre-built analysis logic for specific omics domains
-  (microbiome, proteomics, metabolomics, spatial transcriptomics). The Venus pipeline
-  demonstrates clinical genomics workflows; other domains can build pipelines using
+  (microbiome, proteomics, metabolomics, spatial transcriptomics). Other domains can build pipelines using
   the same framework.
 - **No built-in bioinformatics algorithms** — oxo-flow orchestrates external tools;
   it does not implement alignment, variant calling, or statistical analysis natively.

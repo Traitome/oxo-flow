@@ -1,6 +1,6 @@
 # System Architecture
 
-oxo-flow is organized as a Cargo workspace with four crates that form a layered architecture.
+oxo-flow is organized as a Cargo workspace with three crates that form a layered architecture.
 
 ---
 
@@ -11,8 +11,7 @@ oxo-flow/
 ├── crates/
 │   ├── oxo-flow-core/    # Core library
 │   ├── oxo-flow-cli/     # CLI binary
-│   ├── oxo-flow-web/     # Web API server
-│   └── venus/            # Clinical pipeline
+│   └── oxo-flow-web/     # Web API server
 ├── pipelines/            # Pipeline definitions
 ├── examples/             # Example workflows
 └── tests/                # Integration tests
@@ -25,15 +24,12 @@ oxo-flow/
 ```mermaid
 graph TD
     CLI[oxo-flow-cli] --> Core[oxo-flow-core]
-    CLI --> Web[oxo-flow-web]
-    Web --> Core
-    Venus[oxo-flow-venus] --> Core
+    Web[oxo-flow-web] --> Core
 ```
 
 - **oxo-flow-core** is the foundation — all other crates depend on it
 - **oxo-flow-cli** is the user-facing binary that ties everything together
 - **oxo-flow-web** provides the REST API layer on top of core
-- **oxo-flow-venus** is a domain-specific pipeline crate built on core
 
 ---
 

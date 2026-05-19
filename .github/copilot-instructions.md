@@ -56,16 +56,6 @@ oxo-flow/                         # Cargo workspace root
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       └── lib.rs            # Web server with REST API
-│   └── venus/                    # Clinical variant calling pipeline built on oxo-flow
-│       ├── Cargo.toml
-│       └── src/
-│           └── lib.rs            # Venus pipeline definitions
-├── pipelines/
-│   └── venus/                    # Venus pipeline .oxoflow files and resources
-│       ├── rules/                # Individual step definitions
-│       ├── envs/                 # Conda/container environment specs
-│       ├── schemas/              # Validation schemas for config
-│       └── report/               # Report templates
 ├── examples/                     # Example .oxoflow files
 ├── docs/                         # Documentation (MkDocs)
 │   └── guide/
@@ -92,7 +82,7 @@ Integration tests should test the CLI binary and core library public API.
 
 3. **Wildcard expansion** — oxo-flow supports `{sample}`, `{chr}` style wildcards in file paths. The engine expands wildcards based on input file discovery or explicit configuration.
 
-4. **Modular reporting** — The report system generates structured HTML/PDF/JSON reports from templates. Clinical pipelines like Venus use this for patient-facing reports.
+4. **Modular reporting** — The report system generates structured HTML/PDF/JSON reports from templates, suitable for patient-facing clinical reports.
 
 5. **Container-first reproducibility** — Workflows can be packaged into self-contained containers with all dependencies, data references, and configuration baked in.
 
@@ -132,7 +122,7 @@ Integration tests should test the CLI binary and core library public API.
 3. Add integration test
 4. Update CLI docs
 
-**New pipeline (like Venus):**
+**New pipeline:**
 1. Create `.oxoflow` files in `pipelines/<name>/`
 2. Add environment specs in `pipelines/<name>/envs/`
 3. Add report templates if applicable

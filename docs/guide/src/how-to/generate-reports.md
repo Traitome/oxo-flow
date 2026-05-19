@@ -108,12 +108,6 @@ Example output structure:
 
 ---
 
-## Clinical Reports
-
-The Venus pipeline uses the reporting system to generate clinical-grade reports for experiment variant calling results. See the [Venus Pipeline](../reference/venus-pipeline.md) reference for details.
-
----
-
 ## Programmatic Report Generation
 
 You can also generate reports programmatically using the core library:
@@ -145,4 +139,3 @@ let json = report.to_json().unwrap();
 
 - [Reporting System](../reference/reporting-system.md) — architecture and template system
 - [`report` command](../commands/report.md) — CLI reference
-- [Venus Pipeline](../reference/venus-pipeline.md) — clinical reporting example

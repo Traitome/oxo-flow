@@ -272,6 +272,5 @@ $ oxo-flow validate examples/gallery/08_multiomics_integration.oxoflow
 
 ## Further Reading
 
-- [Venus Pipeline](../reference/venus-pipeline.md) — Clinical-grade somatic variant calling built on oxo-flow
 - [DAG Engine](../reference/dag-engine.md) — How oxo-flow resolves dependencies and optimizes parallel execution
 - [Environment System](../reference/environment-system.md) — Technical details on environment backend isolation

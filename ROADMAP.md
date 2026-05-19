@@ -17,7 +17,7 @@ project's design decisions, priorities, and architecture.
 | # | Role | Key Recommendation |
 |---|------|--------------------|
 | 1 | Bioinformatics Expert | Prioritize wildcard compatibility and file-based dependency resolution |
-| 2 | Tumor Bioinformatics Expert | Venus pipeline must support tumor-only, normal-only, and paired modes with clinical annotations |
+| 2 | Tumor Bioinformatics Expert | The pipeline must support tumor-only, normal-only, and paired modes with clinical annotations |
 | 3 | Clinical Oncologist | Reports must include variant classification (ACMG/AMP), drug annotations, and trial matching |
 | 4 | Software Engineer | Modular crate architecture with clean trait abstractions enables long-term maintainability |
 | 5 | Workflow Engine Expert | DAG engine must handle dynamic rule expansion from wildcards before execution |
@@ -54,7 +54,7 @@ project's design decisions, priorities, and architecture.
 3. **Template-based reporting** — Tera engine for HTML reports with CSS styling; JSON for programmatic access
 4. **REST API design** — CRUD for workflows, runs, reports; SSE for real-time execution monitoring
 5. **Container-first packaging** — Generate Dockerfile/Singularity definitions from workflow specs automatically
-6. **Venus as reference pipeline** — Clinical tumor variant calling pipeline validates the entire engine stack
+6. **Reference pipeline** — Clinical tumor variant calling pipeline validated the entire engine stack
 
 ---
 
@@ -312,45 +312,6 @@ sections = ["summary", "variants", "coverage", "qc_metrics"]
 - [x] Self-contained container images
 - [x] Label metadata for OCI compliance
 - [x] Configurable base images
-
----
-
-## Phase 7: Venus Pipeline
-
-**Goal**: Clinical-grade tumor variant detection pipeline built on oxo-flow.
-
-### Milestone 7.1: DNA Variant Calling
-- [x] FASTQ QC (fastp/FastQC)
-- [x] Read alignment (BWA-MEM2/minimap2)
-- [x] Duplicate marking (GATK MarkDuplicates / sambamba)
-- [x] Base quality recalibration (GATK BQSR)
-- [x] Germline SNV/indel calling (GATK HaplotypeCaller, DeepVariant)
-- [x] Somatic/experimental SNV/indel calling (Mutect2, Strelka2, VarDict)
-- [x] Consensus variant merging
-
-### Milestone 7.2: Copy Number and Structural Variants
-- [x] CNV calling (CNVkit, GATK CNV, FACETS)
-- [x] SV calling (Manta, DELLY, GRIDSS)
-- [x] Tumor purity/ploidy estimation (PURPLE, Sequenza)
-
-### Milestone 7.3: Variant Annotation
-- [x] Functional annotation (VEP, SnpEff, ANNOVAR)
-- [x] Clinical database annotation (ClinVar, COSMIC, OncoKB)
-- [x] Actionability assessment
-- [x] Mutational signature analysis
-
-### Milestone 7.4: Three Scenarios
-- [x] Tumor-only mode
-- [x] Normal-only (germline) mode
-- [x] Tumor-normal paired mode
-
-### Milestone 7.5: Clinical Report
-- [x] Patient information header
-- [x] Variant classification (pathogenic, likely pathogenic, VUS, etc.)
-- [x] Drug sensitivity/resistance annotations
-- [x] Clinical trial matching
-- [x] QC summary and coverage metrics
-- [x] PDF report with institutional branding
 
 ---
 

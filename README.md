@@ -16,7 +16,6 @@
 [![Core Downloads](https://img.shields.io/crates/d/oxo-flow-core.svg?label=core%20downloads)](https://crates.io/crates/oxo-flow-core)
 [![CLI Downloads](https://img.shields.io/crates/d/oxo-flow-cli.svg?label=cli%20downloads)](https://crates.io/crates/oxo-flow-cli)
 [![Web Downloads](https://img.shields.io/crates/d/oxo-flow-web.svg?label=web%20downloads)](https://crates.io/crates/oxo-flow-web)
-[![Venus Downloads](https://img.shields.io/crates/d/oxo-flow-venus.svg?label=venus%20downloads)](https://crates.io/crates/oxo-flow-venus)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Traitome/oxo-flow)
 
 [Documentation](https://traitome.github.io/oxo-flow/documentation/) · [Workflow Gallery](https://traitome.github.io/oxo-flow/documentation/gallery/) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
@@ -128,7 +127,6 @@ cargo build --release --workspace
 # Binaries are in target/release/
 # - oxo-flow        (CLI)
 # - oxo-flow-web    (Web server)
-# - venus           (Venus pipeline)
 ```
 
 ### First workflow
@@ -360,31 +358,7 @@ oxo-flow serve --host 0.0.0.0 -p 8080
 | `GET` | `/api/auth/me` | Get current authenticated user |
 | `GET` | `/api/license` | Check license status |
 
-## Venus Pipeline 🌟
-
-**Venus** (启明星 — "Morning Star") is a clinical-grade tumor variant detection pipeline built on oxo-flow. It supports tumor-only, normal-only, and tumor-normal paired analysis modes for WGS, WES, and panel sequencing.
-
-### Pipeline Steps
-
-```
-FASTQ → fastp → bwa-mem2 → MarkDuplicates → BQSR → Mutect2 → FilterMutectCalls → VEP → Report
-                                                   → HaplotypeCaller → VEP → Report
-                                                   → Strelka2 (paired mode)
-```
-
-### Analysis Modes
-
-| Mode | Callers | Use case |
-|------|---------|----------|
-| **Tumor-only** | Mutect2 + FilterMutectCalls | Somatic variant calling + annotation + clinical report |
-| **Normal-only** | HaplotypeCaller | Germline variant calling + annotation |
-| **Tumor-Normal** | Mutect2 + Strelka2 + HaplotypeCaller | Full paired analysis + annotation + clinical report |
-
-See [`pipelines/venus/`](pipelines/venus/) for pipeline configuration, environment specs, and report templates.
-
-## Architecture
-
-oxo-flow is organized as a Cargo workspace with four crates:
+oxo-flow is organized as a Cargo workspace with three crates:
 
 ```
 oxo-flow/
@@ -392,10 +366,7 @@ oxo-flow/
 │   ├── oxo-flow-core/     # Core library: DAG engine, executor, environment mgmt,
 │   │                      # config parsing, scheduler, wildcard expansion, reporting
 │   ├── oxo-flow-cli/      # CLI binary ("oxo-flow") — Clap-based, 22 subcommands
-│   ├── oxo-flow-web/      # Web server ("oxo-flow-web") — axum REST API + frontend
-│   └── venus/             # Venus pipeline ("oxo-flow-venus") — clinical variant detection
-├── pipelines/
-│   └── venus/             # Venus .oxoflow files, envs, schemas, report templates
+│   └── oxo-flow-web/      # Web server ("oxo-flow-web") — axum REST API + frontend
 ├── examples/              # Example .oxoflow workflows
 ├── tests/                 # Integration tests
 └── docs/                  # Documentation (MkDocs)
@@ -406,7 +377,6 @@ oxo-flow/
 | `oxo-flow-core` | Library | — | Apache-2.0 |
 | `oxo-flow-cli` | Binary | `oxo-flow` | Apache-2.0 |
 | `oxo-flow-web` | Binary | `oxo-flow-web` | Dual Academic / Commercial |
-| `oxo-flow-venus` | Binary | `venus` | Apache-2.0 |
 
 ### Core modules
 
@@ -432,7 +402,7 @@ Comprehensive documentation is available at **[traitome.github.io/oxo-flow/docum
 | If you are... | Recommended Start |
 |---|---|
 | **New to oxo-flow** | [Quick Start](https://traitome.github.io/oxo-flow/documentation/tutorials/quickstart/) · [First Workflow](https://traitome.github.io/oxo-flow/documentation/tutorials/first-workflow/) |
-| **A Bioinformatician** | [Workflow Gallery](https://traitome.github.io/oxo-flow/documentation/gallery/) · [Venus Pipeline](https://traitome.github.io/oxo-flow/documentation/reference/venus-pipeline/) |
+| **A Bioinformatician** | [Workflow Gallery](https://traitome.github.io/oxo-flow/documentation/gallery/) |
 | **A Pipeline Engineer** | [Workflow Format Specification](https://traitome.github.io/oxo-flow/documentation/reference/workflow-format/) · [CLI Reference](https://traitome.github.io/oxo-flow/documentation/commands/run/) |
 | **A DevOps/Cloud Admin** | [Environment Management](https://traitome.github.io/oxo-flow/documentation/tutorials/environment-management/) · [Running on Cluster](https://traitome.github.io/oxo-flow/documentation/how-to/run-on-cluster/) |
 | **A Clinical Lab Lead** | [Reporting System](https://traitome.github.io/oxo-flow/documentation/reference/reporting-system/) · [Validation Protocol](docs/VALIDATION_PROTOCOL.md) |
@@ -483,10 +453,9 @@ This project uses a **split licensing model**:
 |-------|---------|---------|
 | `oxo-flow-core` | [Apache-2.0](LICENSE) | Free and open-source |
 | `oxo-flow-cli` | [Apache-2.0](LICENSE) | Free and open-source |
-| `oxo-flow-venus` | [Apache-2.0](LICENSE) | Free and open-source |
 | `oxo-flow-web` | [Academic](LICENSE-ACADEMIC) / [Commercial](LICENSE-COMMERCIAL) | Free for academic and non-commercial use; commercial use requires a separate license |
 
-The core library, CLI, and Venus pipeline are licensed under the **Apache License 2.0** — you are free to use, modify, and distribute them without restriction.
+The core library and CLI are licensed under the **Apache License 2.0** — you are free to use, modify, and distribute them without restriction.
 
 The **web interface** (`oxo-flow-web`) is available under a **dual license**: free for academic and non-commercial use under the Academic License, and requiring a commercial license for commercial deployments. See [LICENSE-ACADEMIC](LICENSE-ACADEMIC) and [LICENSE-COMMERCIAL](LICENSE-COMMERCIAL) for details.
 

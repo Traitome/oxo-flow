@@ -168,24 +168,7 @@ The `template` field selects a report template. Built-in templates:
 
 Templates are rendered with [Tera](https://tera.netlify.app/), a Jinja2-like template engine for Rust.
 
----
-
-## Clinical Reports
-
-The Venus pipeline uses the reporting system to generate clinical tumor variant calling reports. These include:
-
-- Patient/sample metadata
-- Variant summary tables
-- Quality control metrics
-- Methodology description
-- Structured for regulatory compliance
-
-See the [Venus Pipeline](./venus-pipeline.md) reference for details.
-
----
-
 ## See Also
 
 - [Generate Reports how-to](../how-to/generate-reports.md) — practical guide
 - [`report` command](../commands/report.md) — CLI reference
-- [Venus Pipeline](./venus-pipeline.md) — clinical reporting example

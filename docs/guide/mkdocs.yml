@@ -165,7 +165,6 @@ nav:
       - Reporting System: reference/reporting-system.md
       - Webhooks: reference/webhook.md
       - Web API: reference/web-api.md
-      - Venus Pipeline: reference/venus-pipeline.md
   - Development:
       - Contributing: development/contributing.md
       - Changelog: development/changelog.md

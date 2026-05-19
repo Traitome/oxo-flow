@@ -265,4 +265,3 @@ oxo-flow report variant-calling.oxoflow -f html -o report.html
 
 - [Environment Management](./environment-management.md) — docker, singularity, and mixed environments
 - [Run on a Cluster](../how-to/run-on-cluster.md) — submit to SLURM, PBS, or SGE
-- [Venus Pipeline](../reference/venus-pipeline.md) — oxo-flow's built-in clinical variant calling pipeline

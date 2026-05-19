@@ -43,7 +43,6 @@ oxo-flow/
 │   ├── oxo-flow-core/   # Core library: DAG, executor, environments, reporting
 │   ├── oxo-flow-cli/    # CLI binary (oxo-flow command)
 │   ├── oxo-flow-web/    # Web REST API (axum-based)
-│   └── venus/           # Venus tumor variant calling pipeline
 ├── pipelines/           # Pipeline definitions (.oxoflow files)
 ├── examples/            # Example workflows
 ├── tests/               # Integration tests
@@ -164,7 +163,6 @@ cargo test --workspace --verbose
 |---|---|
 | oxo-flow-core | Apache 2.0 |
 | oxo-flow-cli | Apache 2.0 |
-| oxo-flow-venus | Apache 2.0 |
 | oxo-flow-web | Dual (Academic free / Commercial paid) |
 
 By contributing, you agree that your contributions will be licensed under the same terms as the project.
