@@ -49,4 +49,5 @@ workspace/
 hello.txt
 oxo-flow-clindet/
 oxo-flow-circrna/
+oxo-flow-venus/
 .playwright-mcp/
