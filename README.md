@@ -15,6 +15,8 @@
 [![GitHub Downloads](https://img.shields.io/github/downloads/Traitome/oxo-flow/total.svg?label=github%20downloads)](https://github.com/Traitome/oxo-flow/releases)
 [![Core Downloads](https://img.shields.io/crates/d/oxo-flow-core.svg?label=core%20downloads)](https://crates.io/crates/oxo-flow-core)
 [![CLI Downloads](https://img.shields.io/crates/d/oxo-flow-cli.svg?label=cli%20downloads)](https://crates.io/crates/oxo-flow-cli)
+[![install with bioconda](https://img.shields.io/badge/install%20with-bioconda-brightgreen.svg?style=flat)](http://bioconda.github.io/recipes/oxo-flow-cli/README.html)
+[![Conda](https://img.shields.io/conda/dn/bioconda/oxo-flow-cli.svg?label=conda%20downloads)](https://anaconda.org/bioconda/oxo-flow-cli/files)
 [![Web Downloads](https://img.shields.io/crates/d/oxo-flow-web.svg?label=web%20downloads)](https://crates.io/crates/oxo-flow-web)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Traitome/oxo-flow)
 
@@ -115,6 +117,12 @@ sudo mv oxo-flow /usr/local/bin/
 
 ```bash
 cargo install oxo-flow-cli
+```
+
+### Install with Conda
+
+```bash
+conda install -c bioconda oxo-flow-cli
 ```
 
 ### Build from source
