@@ -2507,7 +2507,6 @@ version = "0.5.3"
 dependencies = [
  "assert_cmd",
  "oxo-flow-core",
- "oxo-flow-venus",
  "predicates",
  "serde_json",
  "tempfile",
@@ -2569,18 +2568,6 @@ dependencies = [
  "toml",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "oxo-flow-venus"
-version = "0.5.3"
-dependencies = [
- "anyhow",
- "oxo-flow-core",
- "serde",
- "serde_json",
- "toml",
- "tracing",
 ]
 
 [[package]]
