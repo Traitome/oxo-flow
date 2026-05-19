@@ -509,6 +509,25 @@ impl LocalExecutor {
             return Ok(record);
         }
 
+        // Create parent directories for all output files
+        for output_pattern in &rule.output {
+            let path = self.config.workdir.join(output_pattern);
+            if let Some(parent) = path.parent()
+                && !parent.as_os_str().is_empty()
+                && !parent.exists()
+            {
+                tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                    OxoFlowError::Execution {
+                        rule: rule.name.clone(),
+                        message: format!(
+                            "failed to create output directory {}: {e}",
+                            parent.display()
+                        ),
+                    }
+                })?;
+            }
+        }
+
         self.ensure_environment_ready(rule).await?;
         self.check_resources(rule).await?;
 
