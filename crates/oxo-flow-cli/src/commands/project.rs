@@ -6,7 +6,32 @@ use crate::commands::print_banner;
 
 pub fn init_command(name: String, dir: Option<PathBuf>) -> Result<()> {
     print_banner();
+
+    // Validate project name: must be non-empty and a valid identifier
+    if name.trim().is_empty() {
+        anyhow::bail!(
+            "project name must not be empty. Provide a name, e.g.:\n  oxo-flow init my-pipeline"
+        );
+    }
+    // Reject names that are only whitespace or contain path separators
+    if name.contains('/') || name.contains('\\') {
+        anyhow::bail!(
+            "project name '{}' must not contain path separators. Use a simple name, e.g.: my-pipeline",
+            name
+        );
+    }
+
     let project_dir = dir.unwrap_or_else(|| PathBuf::from(&name));
+
+    // Warn if project directory already exists
+    if project_dir.exists() {
+        eprintln!(
+            "{} Directory '{}' already exists. Files may be overwritten.",
+            "Warning:".bold().yellow(),
+            project_dir.display()
+        );
+    }
+
     std::fs::create_dir_all(&project_dir)?;
 
     let workflow_content = format!(
@@ -27,7 +52,7 @@ memory = "1G"
 name = "hello_world"
 input = ["data/input.txt"]
 output = ["results/{{config.sample_name}}_output.txt"]
-# Double braces are used to reference wildcards or config variables
+# Curly braces reference inputs, outputs, config variables, and wildcards
 shell = "cat {{input[0]}} > {{output[0]}} && echo 'Hello from oxo-flow!' >> {{output[0]}}"
 "#
     );

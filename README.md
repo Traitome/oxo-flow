@@ -170,8 +170,8 @@ oxo-flow dry-run my-pipeline.oxoflow
 # Execute with 8 parallel jobs
 oxo-flow run my-pipeline.oxoflow -j 8
 
-# Visualize the DAG
-oxo-flow graph my-pipeline.oxoflow > dag.dot
+# Visualize the DAG (use -f dot for Graphviz DOT output)
+oxo-flow graph my-pipeline.oxoflow -f dot > dag.dot
 dot -Tpng dag.dot -o dag.png
 
 # Generate an HTML report

@@ -698,6 +698,26 @@ impl LocalExecutor {
                     .as_deref()
                     .map(|cmd| self.resolve_command(cmd, rule));
 
+                // Apply shell safety checks in dry-run mode so dangerous
+                // commands are visible to users before actual execution.
+                if let Some(ref cmd) = wrapped {
+                    if let Err(e) = validate_shell_safety(cmd) {
+                        tracing::warn!(rule = %rule.name, error = %e, "dry-run: dangerous shell command detected");
+                    }
+                    for warning in sanitize_shell_command(cmd) {
+                        tracing::warn!(rule = %rule.name, "{warning}");
+                    }
+                }
+                // Also check the raw command if no wrapped version
+                if let Some(ref raw_cmd) = command {
+                    if let Err(e) = validate_shell_safety(raw_cmd) {
+                        tracing::warn!(rule = %rule.name, error = %e, "dry-run: dangerous shell command detected");
+                    }
+                    for warning in sanitize_shell_command(raw_cmd) {
+                        tracing::warn!(rule = %rule.name, "{warning}");
+                    }
+                }
+
                 JobRecord {
                     rule: rule.name.clone(),
                     status: JobStatus::Skipped,

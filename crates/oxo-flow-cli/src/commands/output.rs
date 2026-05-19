@@ -59,8 +59,12 @@ pub fn handle_report(workflow: PathBuf, format: String, output: Option<PathBuf>)
     });
 
     let content = match format.as_str() {
+        "html" | "htm" => report.to_html(),
         "json" => report.to_json().map_err(|e| anyhow::anyhow!(e))?,
-        _ => report.to_html(),
+        other => anyhow::bail!(
+            "unsupported report format: '{}'. Supported formats: html, json",
+            other
+        ),
     };
 
     match output {
