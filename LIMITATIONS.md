@@ -57,8 +57,9 @@ helps contributors identify areas for improvement.
   APIs from GA4GH are not implemented.
 - **No FHIR/HL7 integration** — Clinical data interchange standards are not natively
   supported. Report output is HTML/JSON which can be post-processed into FHIR resources.
-- **No OpenAPI specification** — The REST API does not yet publish an OpenAPI/Swagger spec,
-  which currently requires developers to refer directly to the Rust source for API structures.
+- **Limited OpenAPI specification** — A basic OpenAPI 3.0 specification is available at
+  [`docs/schema/openapi.yaml`](docs/schema/openapi.yaml), but it may not cover all endpoints
+  comprehensively. Full OpenAPI generation from source annotations is planned.
 - **TOML is not an industry standard** — The `.oxoflow` format is purpose-built for
   readability but is not an established bioinformatics standard like CWL or WDL.
 
@@ -84,7 +85,7 @@ helps contributors identify areas for improvement.
 - **Conda/Pixi environment resolution** — Environment creation depends on
   external package managers. Network issues or solver conflicts are outside
   oxo-flow's control.
-- **Cluster backend specifics** — SLURM, PBS, and SGE backends rely on the
+- **Cluster backend specifics** — SLURM, PBS, SGE, and LSF backends rely on the
   scheduler being correctly configured on the host system. oxo-flow cannot
   diagnose cluster misconfiguration.
 - **GPU scheduling** — GPU resource declarations (including model, memory, and compute
@@ -100,7 +101,9 @@ helps contributors identify areas for improvement.
   embedded images can consume significant memory. Consider using JSON output
   for very large datasets.
 - **Hot-reload of `.oxoflow` files** — Changes to workflow files during
-  execution are not detected. The workflow must be re-run from the beginning.
+  execution are not detected; the workflow must be re-run from the beginning.
+  The `oxo-flow watch` command provides edit-time re-validation on file
+  change (via mtime polling) but does not automatically re-execute.
 
 ## Roadmap
 

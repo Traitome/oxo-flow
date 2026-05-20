@@ -42,9 +42,8 @@ pub fn publish_command(workflow: PathBuf, output: Option<PathBuf>) -> Result<()>
     // Read workflow to discover referenced environment files
     let content =
         std::fs::read_to_string(&workflow_path).context("failed to read workflow file")?;
-    let toml_value: toml::Value = content
-        .parse()
-        .context("failed to parse workflow as TOML")?;
+    let toml_value: toml::Table =
+        toml::from_str(&content).context("failed to parse workflow as TOML")?;
 
     let mut referenced_files: Vec<(String, PathBuf)> = Vec::new();
 
