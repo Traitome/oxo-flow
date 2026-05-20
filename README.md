@@ -33,7 +33,7 @@ oxo-flow is a high-performance, modular bioinformatics pipeline engine built fro
 - 🔀 **DAG-based execution** — Automatic dependency resolution, topological ordering, and parallel execution
 - 📦 **Environment management** — First-class support for conda, pixi, docker, singularity, and venv
 - 🧬 **Bioinformatics-first** — Purpose-built for genomics workflows and clinical-grade pipelines
-- 📊 **Clinical-grade reporting** — Modular HTML/PDF/JSON report generation with ACMG/AMP variant classification, biomarker tracking, and compliance audit trails
+- 📊 **Clinical-grade reporting** — Modular HTML/PDF/JSON report generation with variant classification, biomarker tracking, and compliance audit trails
 - 🌐 **Command Center** — Multi-user Web UI with real-time resource sensing, physical workspace isolation, and on-demand log retrieval
 - 🗄️ **Persistent State** — SQLite-backed execution history and audit logs; automatic recovery of orphaned runs after server restart
 - 🔒 **OS Identity Binding** — Secure task execution via Sudo, leveraging host POSIX user permissions for data isolation
@@ -41,20 +41,6 @@ oxo-flow is a high-performance, modular bioinformatics pipeline engine built fro
 - ⚡ **Rust performance** — Fearless concurrency, zero-cost abstractions, `#![forbid(unsafe_code)]` across all crates
 - 🔧 **Resource-aware scheduling** — Jobs declare CPU, memory, GPU, and disk; the scheduler respects constraints across local and cluster backends (SLURM, PBS, SGE, LSF)
 - 🔒 **Security hardened** — Shell injection prevention, path traversal protection, secret scanning, and per-IP rate limiting
-
-### What is ACMG/AMP?
-
-**ACMG** (American College of Medical Genetics and Genomics) and **AMP** (Association for Molecular Pathology) jointly published guidelines for the interpretation of sequence variants. These guidelines define a five-tier classification system:
-
-| Tier | Classification | Clinical Meaning |
-|------|---------------|-----------------|
-| Tier I / Pathogenic | Strong clinical significance | Disease-causing; actionable for patient care |
-| Tier II / Likely Pathogenic | Potential clinical significance | High confidence of disease association |
-| Tier III / VUS | Uncertain significance | Insufficient evidence; re-evaluate periodically |
-| Tier IV / Likely Benign | Probably not disease-causing | Strong evidence against pathogenicity |
-| Benign | No clinical significance | Confirmed benign polymorphism |
-
-oxo-flow's `VariantClassification` enum models both the somatic (Tier I–IV, per AMP/ASCO/CAP) and germline (Pathogenic–Benign, per ACMG) classification frameworks. The reporting system uses these classifications to generate clinical-grade HTML/PDF reports with variant tables, biomarker summaries, and compliance audit metadata.
 
 ## Why oxo-flow?
 
@@ -65,7 +51,7 @@ oxo-flow's `VariantClassification` enum models both the somatic (Tier I–IV, pe
 | **Workflow format** | TOML (`.oxoflow`) — declarative, composable | Snakefile / `.smk` (Python DSL) | Nextflow DSL (`.nf`) (Groovy DSL) |
 | **Environment support** | conda, pixi, docker, singularity, venv — per-rule | conda, singularity, docker | conda, docker, singularity, modules |
 | **Web interface** | Built-in REST API with session auth and rate limiting | External Snakemake-UI | Nextflow Tower (commercial) |
-| **Clinical reporting** | ACMG/AMP variant classification, compliance events | Not built-in | Not built-in |
+| **Clinical reporting** | Variant classification, compliance events | Not built-in | Not built-in |
 | **Container packaging** | Multi-stage builds, rootless containers | Singularity/Docker | Docker/Singularity |
 | **Cluster backends** | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF, k8s |
 | **Type safety** | Type-state lifecycle, `RuleBuilder`, newtypes | Dynamic Python | Dynamic Groovy |
@@ -309,7 +295,7 @@ The `oxo-flow` binary provides 29 subcommands for the complete workflow lifecycl
 | `oxo-flow run` | Execute a workflow (`-j` parallel jobs, `-k` keep-going, `--timeout` per-job) |
 | `oxo-flow dry-run` | Simulate execution — show what would run without executing |
 | `oxo-flow validate` | Validate an `.oxoflow` file for syntax and semantic correctness (`--as-include` for sub-workflows) |
-| `oxo-flow graph` | Export the workflow DAG in DOT format for visualization |
+| `oxo-flow graph` | Output the workflow DAG for visualization (`-f ascii\|dot\|dot-clustered\|tree`) |
 | `oxo-flow report` | Generate execution reports (`-f html\|json`, `-o` output path) |
 | `oxo-flow batch` | Execute command templates in parallel across multiple items (lightweight alternative to full workflows) |
 | `oxo-flow env` | Manage software environments (list, check) |
