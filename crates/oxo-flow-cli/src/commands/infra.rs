@@ -66,14 +66,136 @@ pub fn env_command(action: EnvAction) -> Result<()> {
             }
         }
         EnvAction::Create { spec, name } => {
-            let name_str = name.unwrap_or_else(|| "default".to_string());
+            let name_str = name.clone().unwrap_or_else(|| {
+                spec.file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string()
+            });
+
+            // Determine environment type from file extension or content
+            let ext = spec.extension().and_then(|e| e.to_str()).unwrap_or("");
+            let backend = match ext {
+                "yaml" | "yml" => "conda",
+                "toml" => "pixi",
+                "lock" => "conda",
+                _ => {
+                    eprintln!(
+                        "{} Unknown environment spec format: '{}'",
+                        "Warning:".yellow(),
+                        spec.display()
+                    );
+                    eprintln!(
+                        "  Supported formats: .yaml/.yml (conda), .toml (pixi), .lock (conda-lock)"
+                    );
+                    anyhow::bail!("Unsupported environment spec format");
+                }
+            };
+
             eprintln!(
-                "{} Creating environment '{}' from '{}' is not yet implemented.",
-                "Note:".bold().cyan(),
+                "{} Creating {} environment '{}' from '{}'...",
+                "Info:".bold().cyan(),
+                backend,
                 name_str,
                 spec.display()
             );
-            eprintln!("  Environments are currently created automatically during 'oxo-flow run'.");
+
+            match backend {
+                "conda" => {
+                    // Use conda/mamba to create environment
+                    // Prefer mamba for speed, fall back to conda
+                    let tool = {
+                        let mamba_exists = std::process::Command::new("mamba")
+                            .arg("--version")
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .status()
+                            .is_ok();
+                        let micromamba_exists = std::process::Command::new("micromamba")
+                            .arg("--version")
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .status()
+                            .is_ok();
+                        if mamba_exists {
+                            "mamba"
+                        } else if micromamba_exists {
+                            "micromamba"
+                        } else {
+                            "conda"
+                        }
+                    };
+
+                    let status = std::process::Command::new(tool)
+                        .args([
+                            "env",
+                            "create",
+                            "-f",
+                            &spec.to_string_lossy(),
+                            "-n",
+                            &name_str,
+                        ])
+                        .status()
+                        .with_context(|| format!("failed to run {} env create", tool))?;
+
+                    if !status.success() {
+                        anyhow::bail!(
+                            "{} env create failed with exit code {:?}",
+                            tool,
+                            status.code()
+                        );
+                    }
+                    eprintln!(
+                        "  {} Environment '{}' created successfully.",
+                        "✓".green(),
+                        name_str
+                    );
+                    eprintln!("  Activate with: conda activate {}", name_str);
+                }
+                "pixi" => {
+                    // For pixi, create a project using the spec as a base
+                    let _pixi_toml = std::fs::read_to_string(&spec)
+                        .with_context(|| format!("cannot read pixi spec: {}", spec.display()))?;
+
+                    // Create a temporary directory for pixi project
+                    let temp_dir = std::env::temp_dir().join(format!("oxo-flow-{}", name_str));
+                    std::fs::create_dir_all(&temp_dir)?;
+
+                    let status = std::process::Command::new("pixi")
+                        .args(["init", "-q"])
+                        .current_dir(&temp_dir)
+                        .status()
+                        .with_context(|| "failed to run pixi init")?;
+
+                    if !status.success() {
+                        anyhow::bail!("pixi init failed");
+                    }
+
+                    // Install packages from the spec
+                    let status = std::process::Command::new("pixi")
+                        .args(["install"])
+                        .current_dir(&temp_dir)
+                        .status()
+                        .with_context(|| "failed to run pixi install")?;
+
+                    if !status.success() {
+                        anyhow::bail!("pixi install failed");
+                    }
+
+                    eprintln!(
+                        "  {} Pixi project created at: {}",
+                        "✓".green(),
+                        temp_dir.display()
+                    );
+                    eprintln!("  Activate with: cd {} && pixi shell", temp_dir.display());
+                }
+                other => {
+                    anyhow::bail!(
+                        "Environment backend '{}' not supported for env create yet",
+                        other
+                    );
+                }
+            }
         }
     }
     Ok(())

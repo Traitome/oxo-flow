@@ -429,9 +429,32 @@ pub async fn debug_command(workflow: PathBuf, rule_name: Option<String>) -> Resu
 
 pub async fn handle_status(checkpoint_path: PathBuf) -> Result<()> {
     print_banner();
+
+    // Detect common mistake: user passes a .oxoflow file instead of checkpoint
+    if checkpoint_path
+        .extension()
+        .is_some_and(|ext| ext == "oxoflow")
+    {
+        eprintln!(
+            "{} '{}' appears to be a workflow file, not a checkpoint.",
+            "Warning:".bold().yellow(),
+            checkpoint_path.display()
+        );
+        eprintln!(
+            "  The 'status' command expects a checkpoint file (e.g., .oxo-flow/checkpoint.json)."
+        );
+        eprintln!(
+            "  Run 'oxo-flow run {}' first to generate a checkpoint.",
+            checkpoint_path.display()
+        );
+        anyhow::bail!("Cannot read workflow file as checkpoint");
+    }
+
     let state = CheckpointState::load_from_file(&checkpoint_path).with_context(|| {
         format!(
-            "failed to load checkpoint from {}",
+            "failed to load checkpoint from '{}'.\n  \
+             Check that the file exists and is a valid checkpoint (JSON format).\n  \
+             Checkpoint files are generated automatically by 'oxo-flow run' in .oxo-flow/checkpoint.json.",
             checkpoint_path.display()
         )
     })?;

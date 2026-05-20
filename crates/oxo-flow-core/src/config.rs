@@ -177,6 +177,27 @@ pub struct WorkflowMeta {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pairs_pattern: Option<String>,
+
+    /// Wildcard pattern for auto-discovering samples from the filesystem.
+    ///
+    /// When specified, oxo-flow scans for files matching this pattern and extracts
+    /// `{sample}` values automatically, eliminating the need for explicit
+    /// `[[sample_groups]]` declaration.
+    ///
+    /// The pattern must contain the `{sample}` wildcard.
+    ///
+    /// # Example
+    ///
+    /// ```toml
+    /// [workflow]
+    /// sample_pattern = "raw/{sample}_R1.fastq.gz"
+    /// ```
+    ///
+    /// For files `raw/Pt01_R1.fastq.gz`, `raw/Pt02_R1.fastq.gz`, creates sample
+    /// group `auto-discovered` with samples ["Pt01", "Pt02"].
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_pattern: Option<String>,
 }
 
 fn default_version() -> String {
@@ -1117,6 +1138,64 @@ impl WorkflowConfig {
             // Merge with inline groups
             config.sample_groups.extend(file_groups);
             tracing::info!("Loaded {} sample groups from {}", count, groups_file);
+        }
+
+        // Auto-discover samples from filesystem pattern
+        if let Some(ref sample_pattern) = config.workflow.sample_pattern {
+            // Validate pattern contains {sample} wildcard
+            if !sample_pattern.contains("{sample}") {
+                return Err(OxoFlowError::Config {
+                    message: format!(
+                        "sample_pattern must contain {{sample}} wildcard: '{}'",
+                        sample_pattern
+                    ),
+                });
+            }
+
+            // Resolve the base directory and filename pattern.
+            // If the pattern contains a path separator, split into dir + filename.
+            let sp = std::path::Path::new(sample_pattern);
+            let (search_dir, file_pattern) = if let Some(file_name) = sp.file_name() {
+                let dir = sp.parent().unwrap_or(std::path::Path::new(""));
+                (parent.join(dir), file_name.to_string_lossy().to_string())
+            } else {
+                (parent.to_path_buf(), sample_pattern.clone())
+            };
+
+            let discovered =
+                crate::wildcard::discover_wildcards_from_pattern(&search_dir, &file_pattern)?;
+            if discovered.is_empty() {
+                tracing::warn!(
+                    "sample_pattern '{}' matched no files in {}",
+                    sample_pattern,
+                    search_dir.display()
+                );
+            } else {
+                // Extract sample values from discovered combinations
+                let auto_samples: Vec<String> = discovered
+                    .iter()
+                    .filter_map(|combo| combo.get("sample").cloned())
+                    .collect();
+
+                if !auto_samples.is_empty() {
+                    let auto_group = SampleGroup {
+                        name: "auto-discovered".to_string(),
+                        samples: auto_samples.clone(),
+                        metadata: HashMap::new(),
+                    };
+                    config.sample_groups.push(auto_group);
+                    tracing::info!(
+                        "Auto-discovered {} samples from pattern '{}'",
+                        auto_samples.len(),
+                        sample_pattern
+                    );
+                } else {
+                    tracing::warn!(
+                        "sample_pattern '{}' matched files but no {{sample}} values were extracted",
+                        sample_pattern
+                    );
+                }
+            }
         }
 
         config.validate()?;

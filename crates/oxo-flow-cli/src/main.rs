@@ -460,10 +460,7 @@ async fn main() -> Result<()> {
             validate_command(workflow, as_include)?;
         }
         Commands::Init { name, dir } => init_command(name, dir)?,
-        Commands::Template {
-            template,
-            output: _,
-        } => template_command(template)?,
+        Commands::Template { template, output } => template_command(template, output)?,
         Commands::Graph {
             workflow,
             format,
