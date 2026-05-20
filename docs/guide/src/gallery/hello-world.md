@@ -61,7 +61,7 @@ $ oxo-flow validate examples/gallery/01_hello_world.oxoflow
 
 ```bash
 $ oxo-flow dry-run examples/gallery/01_hello_world.oxoflow
-oxo-flow 0.5.4 — Bioinformatics Pipeline Engine
+oxo-flow 0.5.5 — Bioinformatics Pipeline Engine
 Dry-run: 1 rules would execute:
   1. greet [threads=1, env=system]
      $ echo 'Hello from oxo-flow!' > {output[0]}

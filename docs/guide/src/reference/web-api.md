@@ -28,7 +28,7 @@ Returns server status and version.
 ```json
 {
   "status": "ok",
-  "version": "0.5.4"
+  "version": "0.5.5"
 }
 ```
 
@@ -49,7 +49,7 @@ Returns a list of loaded workflows.
   "workflows": [
     {
       "name": "my-pipeline",
-      "version": "0.5.4",
+      "version": "0.5.5",
       "rules_count": 5
     }
   ]
@@ -290,7 +290,7 @@ Returns current system usage, request counts, and execution metrics.
 ```json
 {
   "uptime_secs": 86400.5,
-  "version": "0.5.4",
+  "version": "0.5.5",
   "pid": 1234,
   "os": "linux",
   "arch": "x86_64",
