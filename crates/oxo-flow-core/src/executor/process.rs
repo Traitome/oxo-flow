@@ -516,15 +516,15 @@ impl LocalExecutor {
                 && !parent.as_os_str().is_empty()
                 && !parent.exists()
             {
-                tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                    OxoFlowError::Execution {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| OxoFlowError::Execution {
                         rule: rule.name.clone(),
                         message: format!(
                             "failed to create output directory {}: {e}",
                             parent.display()
                         ),
-                    }
-                })?;
+                    })?;
             }
         }
 
