@@ -1021,6 +1021,229 @@ impl ReportBuilder {
         self
     }
 
+    /// Add a generic dashboard from minimal execution stats (works for any task type).
+    pub fn generic_dashboard(
+        mut self,
+        total_rules: usize,
+        succeeded: usize,
+        failed: usize,
+        total_runtime_secs: Option<f64>,
+    ) -> Self {
+        let mut items = vec![
+            QcIndicator {
+                label: "Pipeline Status".into(),
+                value: format!("{}/{} succeeded", succeeded, total_rules),
+                status: if failed == 0 {
+                    QcStatusLevel::Pass
+                } else {
+                    QcStatusLevel::Warn
+                },
+                description: if failed == 0 {
+                    "All tasks completed".into()
+                } else {
+                    format!("{} task(s) failed", failed)
+                },
+            },
+            QcIndicator {
+                label: "Total Tasks".into(),
+                value: total_rules.to_string(),
+                status: QcStatusLevel::Info,
+                description: "Rules in workflow".into(),
+            },
+        ];
+        if let Some(runtime) = total_runtime_secs {
+            items.push(QcIndicator {
+                label: "Total Runtime".into(),
+                value: if runtime > 3600.0 {
+                    format!("{:.1}h", runtime / 3600.0)
+                } else if runtime > 60.0 {
+                    format!("{:.1}min", runtime / 60.0)
+                } else {
+                    format!("{:.0}s", runtime)
+                },
+                status: QcStatusLevel::Info,
+                description: "Wall clock time".into(),
+            });
+        }
+        self.report.add_section(ReportSection {
+            title: "Dashboard".into(),
+            id: "dashboard".into(),
+            content: ReportContent::QcIndicatorGroup { items },
+            subsections: vec![],
+        });
+        self
+    }
+
+    /// Add a task summary section showing all rules with their shell commands.
+    pub fn task_summary(mut self, rules: &[crate::rule::Rule]) -> Self {
+        let headers: Vec<String> = vec![
+            "Task",
+            "Type",
+            "Inputs",
+            "Outputs",
+            "Environment",
+            "Resources",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        let rows: Vec<Vec<String>> = rules
+            .iter()
+            .map(|r| {
+                let task_type = if r.shell.is_some() {
+                    "shell"
+                } else if r.script.is_some() {
+                    "script"
+                } else if r.transform.is_some() {
+                    "transform"
+                } else {
+                    "other"
+                };
+                let input_count = r.input.len();
+                let output_count = r.output.len();
+                let env = r.environment.kind();
+                let resources = format!(
+                    "t={} m={}",
+                    r.resources.threads,
+                    r.resources.memory.as_deref().unwrap_or("-")
+                );
+                vec![
+                    r.name.clone(),
+                    task_type.into(),
+                    input_count.to_string(),
+                    output_count.to_string(),
+                    env.to_string(),
+                    resources,
+                ]
+            })
+            .collect();
+
+        self.report.add_section(ReportSection {
+            title: "Task Summary".into(),
+            id: "task-summary".into(),
+            content: ReportContent::Table { headers, rows },
+            subsections: vec![],
+        });
+        self
+    }
+
+    /// Add a shell command manifest showing the expanded command for each rule.
+    pub fn command_manifest(mut self, rules: &[crate::rule::Rule]) -> Self {
+        let headers: Vec<String> = vec!["Task", "Command"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let rows: Vec<Vec<String>> = rules
+            .iter()
+            .map(|r| {
+                let cmd = r
+                    .shell
+                    .as_deref()
+                    .or(r.script.as_deref())
+                    .unwrap_or("(no command)");
+                vec![r.name.clone(), cmd.to_string()]
+            })
+            .collect();
+
+        self.report.add_section(ReportSection {
+            title: "Commands".into(),
+            id: "commands".into(),
+            content: ReportContent::Table { headers, rows },
+            subsections: vec![],
+        });
+        self
+    }
+
+    /// Add an execution status table from checkpoint data.
+    pub fn execution_status(
+        mut self,
+        completed: &std::collections::HashSet<String>,
+        failed: &std::collections::HashSet<String>,
+        benchmarks: &std::collections::HashMap<
+            String,
+            crate::executor::checkpoint::BenchmarkRecord,
+        >,
+    ) -> Self {
+        let headers: Vec<String> = vec!["Task", "Status", "Duration", "Exit Code"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let mut rows = Vec::new();
+        for name in completed {
+            let bench = benchmarks.get(name);
+            rows.push(vec![
+                name.clone(),
+                "✓ Completed".into(),
+                bench.map_or("-".into(), |b| format!("{:.1}s", b.wall_time_secs)),
+                "0".into(),
+            ]);
+        }
+        for name in failed {
+            rows.push(vec![
+                name.clone(),
+                "✗ Failed".into(),
+                "-".into(),
+                "≠0".into(),
+            ]);
+        }
+        if !rows.is_empty() {
+            self.report.add_section(ReportSection {
+                title: "Execution Status".into(),
+                id: "execution-status".into(),
+                content: ReportContent::Table { headers, rows },
+                subsections: vec![],
+            });
+        }
+        self
+    }
+
+    /// Add an I/O manifest listing all input and output file patterns.
+    pub fn io_manifest(mut self, rules: &[crate::rule::Rule]) -> Self {
+        let mut all_inputs: Vec<String> = Vec::new();
+        let mut all_outputs: Vec<String> = Vec::new();
+        for r in rules {
+            for i in &r.input {
+                let s = i.to_string();
+                if !all_inputs.contains(&s) {
+                    all_inputs.push(s);
+                }
+            }
+            for o in &r.output {
+                let s = o.to_string();
+                if !all_outputs.contains(&s) {
+                    all_outputs.push(s);
+                }
+            }
+        }
+        let input_section = ReportSection {
+            title: "Input Files".into(),
+            id: "input-files".into(),
+            content: ReportContent::Table {
+                headers: vec!["Pattern".into()],
+                rows: all_inputs.into_iter().map(|i| vec![i]).collect(),
+            },
+            subsections: vec![],
+        };
+        let output_section = ReportSection {
+            title: "Output Files".into(),
+            id: "output-files".into(),
+            content: ReportContent::Table {
+                headers: vec!["Pattern".into()],
+                rows: all_outputs.into_iter().map(|o| vec![o]).collect(),
+            },
+            subsections: vec![],
+        };
+        self.report.add_section(ReportSection {
+            title: "File Manifest".into(),
+            id: "file-manifest".into(),
+            content: ReportContent::Text {
+                text: String::new(),
+            },
+            subsections: vec![input_section, output_section],
+        });
+        self
+    }
+
     pub fn clinical_disclaimer(mut self) -> Self {
         self.report.add_section(clinical_disclaimer_section());
         self
