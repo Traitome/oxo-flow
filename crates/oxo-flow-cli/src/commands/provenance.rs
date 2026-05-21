@@ -61,7 +61,7 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf) -> Result<()> {
         // Look for files matching rule output patterns in the workdir
         if let Some(completed) = checkpoint.get("completed_rules").and_then(|v| v.as_array()) {
             eprintln!(
-                "  {} No stored checksums found. Run workflow with --enable-provenance.",
+                "  {} No stored checksums found. Run workflow with --provenance to enable tracking.",
                 "Note:".bold().yellow()
             );
             eprintln!(

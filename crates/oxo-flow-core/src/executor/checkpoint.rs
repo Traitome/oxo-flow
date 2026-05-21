@@ -29,6 +29,16 @@ pub struct CheckpointState {
     pub failed_rules: HashSet<String>,
     /// Benchmark records keyed by rule name.
     pub benchmarks: HashMap<String, BenchmarkRecord>,
+    /// Path to the workflow file that generated this checkpoint.
+    /// Enables the `resume` command to locate the original workflow.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow_path: Option<String>,
+    /// Output file checksums for provenance verification.
+    /// Maps relative output file path → "sha256:<hex>".
+    #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub checksums: HashMap<String, String>,
 }
 
 impl CheckpointState {
@@ -38,7 +48,19 @@ impl CheckpointState {
             completed_rules: HashSet::new(),
             failed_rules: HashSet::new(),
             benchmarks: HashMap::new(),
+            workflow_path: None,
+            checksums: HashMap::new(),
         }
+    }
+
+    /// Record a checksum for an output file (provenance tracking).
+    pub fn record_checksum(&mut self, path: &str, checksum: String) {
+        self.checksums.insert(path.to_string(), checksum);
+    }
+
+    /// Set the workflow path that generated this checkpoint.
+    pub fn set_workflow_path(&mut self, path: &Path) {
+        self.workflow_path = Some(path.to_string_lossy().to_string());
     }
 
     /// Mark a rule as successfully completed and store its benchmark.

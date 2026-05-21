@@ -136,8 +136,18 @@ impl OxoFlowError {
                     Some("run 'oxo-flow validate' to check your configuration".to_string())
                 }
             }
-            OxoFlowError::Parse { path, .. } => {
-                Some(format!("check the TOML syntax in '{}'", path.display()))
+            OxoFlowError::Parse { path, message } => {
+                let mut hint = format!("check the TOML syntax in '{}'", path.display());
+                if message.contains("missing escaped value")
+                    || message.contains("invalid escape")
+                    || message.contains("expected")
+                {
+                    hint.push_str(
+                        ". Hint: TOML double-quoted strings require escaping special characters like '$' and '\\'. \
+                         Use triple-quoted strings (\"\"\"...\"\"\") or single-quoted strings ('...') for shell commands.",
+                    );
+                }
+                Some(hint)
             }
             OxoFlowError::CycleDetected { .. } => Some(
                 "review rule input/output patterns and depends_on fields to break the circular dependency".to_string(),

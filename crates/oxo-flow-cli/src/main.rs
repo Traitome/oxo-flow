@@ -84,6 +84,8 @@ pub enum Commands {
         skip_env_setup: bool,
         #[arg(long)]
         cache_dir: Option<PathBuf>,
+        #[arg(long)]
+        provenance: bool,
     },
     /// Resume an interrupted workflow from a checkpoint.
     Resume {
@@ -431,6 +433,7 @@ async fn main() -> Result<()> {
             max_memory,
             skip_env_setup,
             cache_dir,
+            provenance,
         } => {
             run_command(
                 workflow,
@@ -446,10 +449,11 @@ async fn main() -> Result<()> {
                 max_memory,
                 skip_env_setup,
                 cache_dir,
+                provenance,
             )
             .await?
         }
-        Commands::Resume { checkpoint, jobs } => resume_command(Some(checkpoint), jobs).await?,
+        Commands::Resume { checkpoint, jobs } => resume_command(checkpoint, jobs).await?,
         Commands::DryRun { workflow, target } => {
             dry_run_command(workflow, target, cli.verbose).await?
         }

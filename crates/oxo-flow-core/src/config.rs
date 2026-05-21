@@ -1067,6 +1067,19 @@ impl<S> WorkflowState<S> {
     }
 }
 
+/// Expand `{config.name}` placeholders in a path using provided config values.
+fn expand_config_vars_in_path(path: &str, config: &HashMap<String, toml::Value>) -> String {
+    let mut result = path.to_string();
+    for (key, value) in config {
+        let string_val = match value {
+            toml::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        result = result.replace(&format!("{{{{config.{key}}}}}"), &string_val);
+    }
+    result
+}
+
 impl WorkflowConfig {
     /// Parse a workflow configuration from a TOML string.
     #[must_use = "parsing a config returns a Result that must be used"]
@@ -1142,24 +1155,33 @@ impl WorkflowConfig {
 
         // Auto-discover samples from filesystem pattern
         if let Some(ref sample_pattern) = config.workflow.sample_pattern {
+            // Expand config variables in the pattern (e.g. {config.data_dir}/.../{sample}_R1.fq.gz)
+            let expanded_pattern = expand_config_vars_in_path(sample_pattern, &config.config);
+
             // Validate pattern contains {sample} wildcard
-            if !sample_pattern.contains("{sample}") {
+            if !expanded_pattern.contains("{sample}") {
                 return Err(OxoFlowError::Config {
                     message: format!(
-                        "sample_pattern must contain {{sample}} wildcard: '{}'",
-                        sample_pattern
+                        "sample_pattern must contain {{sample}} wildcard after expansion: '{}'",
+                        expanded_pattern
                     ),
                 });
             }
 
             // Resolve the base directory and filename pattern.
-            // If the pattern contains a path separator, split into dir + filename.
-            let sp = std::path::Path::new(sample_pattern);
-            let (search_dir, file_pattern) = if let Some(file_name) = sp.file_name() {
+            let sp = std::path::Path::new(&expanded_pattern);
+            let (search_dir, file_pattern) = if sp.is_absolute() {
+                if let Some(file_name) = sp.file_name() {
+                    let dir = sp.parent().unwrap_or(std::path::Path::new("/"));
+                    (dir.to_path_buf(), file_name.to_string_lossy().to_string())
+                } else {
+                    (parent.to_path_buf(), expanded_pattern)
+                }
+            } else if let Some(file_name) = sp.file_name() {
                 let dir = sp.parent().unwrap_or(std::path::Path::new(""));
                 (parent.join(dir), file_name.to_string_lossy().to_string())
             } else {
-                (parent.to_path_buf(), sample_pattern.clone())
+                (parent.to_path_buf(), expanded_pattern)
             };
 
             let discovered =

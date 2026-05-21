@@ -494,7 +494,7 @@ impl LocalExecutor {
         for cmd in &resolved_commands {
             validate_shell_safety(cmd)?;
             for warning in sanitize_shell_command(cmd) {
-                tracing::warn!(rule = %rule.name, "{warning}");
+                tracing::info!(rule = %rule.name, "{warning} (common in bioinformatics scripts)");
             }
         }
 
@@ -724,7 +724,7 @@ impl LocalExecutor {
                         tracing::warn!(rule = %rule.name, error = %e, "dry-run: dangerous shell command detected");
                     }
                     for warning in sanitize_shell_command(cmd) {
-                        tracing::warn!(rule = %rule.name, "{warning}");
+                        tracing::info!(rule = %rule.name, "{warning} (common in bioinformatics scripts)");
                     }
                 }
                 // Also check the raw command if no wrapped version
@@ -733,7 +733,7 @@ impl LocalExecutor {
                         tracing::warn!(rule = %rule.name, error = %e, "dry-run: dangerous shell command detected");
                     }
                     for warning in sanitize_shell_command(raw_cmd) {
-                        tracing::warn!(rule = %rule.name, "{warning}");
+                        tracing::info!(rule = %rule.name, "{warning} (common in bioinformatics scripts)");
                     }
                 }
 
