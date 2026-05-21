@@ -551,12 +551,25 @@ fn cli_cluster_submit() {
 
 #[test]
 fn cli_cluster_status() {
-    // This will fail on systems without SLURM, which is expected
-    oxo_flow_cmd()
+    // Test that cluster status command executes squeue
+    // On systems with SLURM: command succeeds with squeue output
+    // On systems without SLURM: command fails with squeue error
+    let output = oxo_flow_cmd()
         .args(["cluster", "status", "-b", "slurm"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("squeue"));
+        .output()
+        .expect("Failed to execute command");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{}{}", stderr, stdout);
+
+    // Verify that squeue is mentioned in either stdout or stderr
+    assert!(
+        combined.contains("squeue"),
+        "Expected 'squeue' in output, got stdout: {}, stderr: {}",
+        stdout,
+        stderr
+    );
 }
 
 #[test]
