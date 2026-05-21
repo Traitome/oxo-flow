@@ -310,6 +310,10 @@ fn generate_slurm_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig
 
     lines.push(String::new());
 
+    // Error handling: exit on error
+    lines.push("set -e".to_string());
+    lines.push(String::new());
+
     // Create logs directory before execution
     lines.push("mkdir -p logs".to_string());
 
@@ -390,6 +394,10 @@ fn generate_pbs_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
 
     lines.push(String::new());
 
+    // Error handling: exit on error
+    lines.push("set -e".to_string());
+    lines.push(String::new());
+
     // Create logs directory before execution
     lines.push("mkdir -p logs".to_string());
 
@@ -445,6 +453,10 @@ fn generate_sge_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
 
     lines.push(String::new());
 
+    // Error handling: exit on error
+    lines.push("set -e".to_string());
+    lines.push(String::new());
+
     // Create logs directory before execution
     lines.push("mkdir -p logs".to_string());
 
@@ -497,6 +509,10 @@ fn generate_lsf_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
         lines.push(format!("#BSUB {arg}"));
     }
 
+    lines.push(String::new());
+
+    // Error handling: exit on error
+    lines.push("set -e".to_string());
     lines.push(String::new());
 
     // Create logs directory before execution

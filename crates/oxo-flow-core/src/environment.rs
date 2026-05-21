@@ -358,7 +358,20 @@ impl EnvironmentBackend for ModulesBackend {
         _resources: Option<&crate::rule::Resources>,
     ) -> Result<String> {
         let modules = spec.replace(',', " ");
-        Ok(format!("module load {modules} && {command}"))
+        // Initialize module system before loading modules
+        // Different HPC sites use different module system installations
+        let module_init = r#"# Initialize module system
+if [ -f /etc/profile.d/modules.sh ]; then
+    source /etc/profile.d/modules.sh
+elif [ -f /usr/share/modules/init/bash ]; then
+    source /usr/share/modules/init/bash
+elif [ -f /usr/share/Modules/init/bash ]; then
+    source /usr/share/Modules/init/bash
+elif [ -f /opt/Modules/default/init/bash ]; then
+    source /opt/Modules/default/init/bash
+fi
+"#;
+        Ok(format!("{module_init}module load {modules} && {command}"))
     }
 
     fn setup_command(&self, _spec: &str) -> Result<String> {
