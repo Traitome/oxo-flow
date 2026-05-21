@@ -213,15 +213,30 @@ pub fn file_is_newer(source: &Path, target: &Path) -> bool {
 /// or an error if the file cannot be read.
 pub fn compute_file_checksum(path: &Path) -> Result<String> {
     use sha2::{Digest, Sha256};
+    use std::io::Read;
 
-    let content = std::fs::read(path).map_err(|e| OxoFlowError::Execution {
+    let file = std::fs::File::open(path).map_err(|e| OxoFlowError::Execution {
         rule: String::new(),
-        message: format!("failed to read {} for checksum: {e}", path.display()),
+        message: format!("failed to open {} for checksum: {e}", path.display()),
     })?;
 
-    // SHA-256 for clinical-grade integrity verification (CLIA/CAP requirement)
+    // Streaming SHA-256 with 64KB buffer — avoids loading entire file into memory.
+    // Critical for large bioinformatics files (BAM, FASTQ can be >100GB).
+    let mut reader = std::io::BufReader::with_capacity(65536, file);
     let mut hasher = Sha256::new();
-    hasher.update(&content);
+    let mut buffer = [0u8; 65536];
+    loop {
+        let n = reader
+            .read(&mut buffer)
+            .map_err(|e| OxoFlowError::Execution {
+                rule: String::new(),
+                message: format!("failed to read {} for checksum: {e}", path.display()),
+            })?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
     let hash = hasher.finalize();
     Ok(format!("sha256:{:x}", hash))
 }

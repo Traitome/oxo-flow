@@ -58,8 +58,8 @@ WDL, and no importers for those formats are currently available.
   the scheduler being correctly configured on the host system. oxo-flow
   cannot diagnose cluster misconfiguration.
 - **GPU scheduling** — GPU resource declarations are passed to the cluster
-  scheduler but oxo-flow does not verify GPU availability on the local
-  executor.
+  scheduler. On the local executor, a warning is emitted when GPU specs are
+  declared but GPU availability is not verified.
 
 ## Standards & Compliance
 
@@ -83,8 +83,8 @@ WDL, and no importers for those formats are currently available.
   `{sample}` that resolve to paths with many directory levels may be
   slower than flat structures.
 - **Report generation memory usage** — Generating large HTML reports can
-  consume significant memory. Consider using JSON output for very large
-  datasets.
+  consume significant memory. File checksums use streaming I/O (64KB buffer)
+  to handle large files without loading them entirely into memory.
 - **Hot-reload of `.oxoflow` files** — Changes to workflow files during
   execution are not detected. The `oxo-flow watch` command provides
   edit-time re-validation but does not automatically re-execute.

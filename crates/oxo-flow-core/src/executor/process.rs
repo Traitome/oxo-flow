@@ -506,6 +506,15 @@ impl LocalExecutor {
             validate_path_safety(&self.config.workdir, &output_pattern)?;
         }
 
+        // Warn if GPU is requested but running on local executor (no GPU scheduling)
+        if rule.resources.gpu_spec.is_some() {
+            tracing::warn!(
+                rule = %rule.name,
+                "GPU spec declared but running on local executor — GPU resources will not be verified. \
+                 Use a cluster backend (slurm, pbs, sge, lsf) for GPU scheduling."
+            );
+        }
+
         if self.config.dry_run {
             record.status = JobStatus::Skipped;
             record.finished_at = Some(Utc::now());
