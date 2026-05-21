@@ -49,9 +49,37 @@ time_limit = "24h"
 |---|---|---|---|
 | `threads` | Integer | `16` | Number of CPU cores |
 | `memory` | String | `"32G"` | RAM allocation |
-| `gpu` | Integer | `1` | Number of GPUs |
+| `gpu` | Integer | `1` | Number of GPUs (simple count) |
+| `gpu_spec` | Table | See below | Detailed GPU specification |
 | `disk` | String | `"100G"` | Local disk space |
 | `time_limit` | String | `"24h"` | Wall-time limit |
+
+### GPU Specification
+
+For basic GPU requests, use the `gpu` field:
+
+```toml
+[rules.resources]
+gpu = 2  # Request 2 GPUs
+```
+
+For advanced GPU configuration (SLURM only), use `gpu_spec`:
+
+```toml
+[rules.resources.gpu_spec]
+count = 2
+model = "a100"       # GPU model (optional, SLURM only)
+memory_gb = 40       # Per-GPU memory in GB (optional, SLURM only)
+```
+
+Different schedulers handle GPU requests differently:
+
+| Scheduler | GPU Directive | Notes |
+|-----------|---------------|-------|
+| **SLURM** | `--gres=gpu:2` or `--gres=gpu:a100:2:40g` | Full support for model and memory spec |
+| **PBS** | `gpu=2` | Basic count only; model selection varies by site |
+| **SGE** | `-l gpu=2` | Basic count only; requires queue configuration |
+| **LSF** | `-gpu 2` | Basic count only |
 
 ---
 
@@ -125,6 +153,67 @@ When generating cluster scripts, oxo-flow automatically wraps commands through t
 | Singularity | `singularity exec <image> <command>` |
 | Pixi | `pixi run <command>` |
 | Venv | `source <venv>/bin/activate; <command>` |
+| Modules | `module load <mod1> <mod2>; <command>` |
+
+### Environment Examples
+
+**Conda with GPU for deep learning:**
+
+```toml
+[[rules]]
+name = "train_model"
+input = ["data/train.h5"]
+output = ["models/trained.pt"]
+threads = 8
+memory = "64G"
+environment = { conda = "envs/pytorch.yaml" }
+shell = "python train.py --input {input} --output {output} --gpus {resources.gpu}"
+
+[rules.resources]
+gpu = 2
+time_limit = "24h"
+```
+
+**Singularity with Modules (common on HPC):**
+
+```toml
+[[rules]]
+name = "variant_call"
+input = ["aligned/{sample}.bam"]
+output = ["variants/{sample}.vcf"]
+threads = 16
+memory = "32G"
+environment = { 
+    singularity = "docker://broadinstitute/gatk:4.4.0.0",
+    modules = ["cuda/11.8"]  # Load CUDA module first
+}
+shell = "gatk HaplotypeCaller -I {input} -O {output}"
+```
+
+**Pixi for reproducible environments:**
+
+```toml
+[[rules]]
+name = "qc_check"
+input = ["{sample}.fastq.gz"]
+output = ["qc/{sample}_fastqc.html"]
+threads = 4
+environment = { pixi = "pixi.toml" }
+shell = "fastqc -t {threads} -o qc/ {input}"
+```
+
+**Pure Module-based (traditional HPC):**
+
+```toml
+[[rules]]
+name = "align"
+input = ["reads/{sample}.fq"]
+output = ["aligned/{sample}.bam"]
+threads = 32
+memory = "64G"
+environment = { modules = ["bwa/0.7.17", "samtools/1.17", "gcc/11"] }
+shell = "bwa mem -t {threads} ref.fa {input} | samtools sort -o {output}"
+```
 
 !!! tip "Pre-build environments on cluster nodes"
     Ensure your conda environments, docker images, or singularity containers are available on all cluster nodes before submitting jobs. Use `--skip-env-setup` when environments are pre-built.
