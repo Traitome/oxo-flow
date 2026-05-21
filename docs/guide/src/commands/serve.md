@@ -56,7 +56,7 @@ POST /oxo-flow/api/workflows/validate
 ## Output
 
 ```
-oxo-flow 0.5.5 — Bioinformatics Pipeline Engine
+oxo-flow 0.6.0 — Bioinformatics Pipeline Engine
 Starting web server at 127.0.0.1:8080 ...
 ```
 
@@ -83,7 +83,7 @@ curl http://127.0.0.1:8080/api/health
 ```json
 {
   "status": "ok",
-  "version": "0.5.5"
+  "version": "0.6.0"
 }
 ```
 
