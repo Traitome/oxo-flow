@@ -292,9 +292,12 @@ pub struct LocalExecutor {
 impl LocalExecutor {
     pub fn new(config: ExecutorConfig) -> Self {
         let semaphore = Arc::new(Semaphore::new(config.max_jobs));
-        let env_resolver = match &config.cache_dir {
-            Some(cache_dir) => EnvironmentResolver::with_cache_dir(cache_dir),
-            None => EnvironmentResolver::new(),
+        let env_resolver = {
+            let cache_dir = config
+                .cache_dir
+                .clone()
+                .unwrap_or_else(|| config.workdir.join(".oxo-flow").join("env-cache"));
+            EnvironmentResolver::with_cache_dir(&cache_dir)
         };
         let (max_threads, max_memory_mb) = Self::detect_system_resources(&config);
         let mut resource_pool = ResourcePool::new(max_threads, max_memory_mb);

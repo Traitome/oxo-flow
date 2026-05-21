@@ -260,10 +260,26 @@ pub async fn run_command(
                     fail_count += 1;
                     checkpoint.mark_failed(rule_name);
                     let _ = checkpoint.save_to_file(&checkpoint_path);
+                    // Build detailed error message with stderr and exit code
+                    let mut err_msg = format!("rule '{}' failed", rule_name);
+                    if let Some(ref stderr) = record.stderr {
+                        let trimmed = stderr.trim();
+                        if !trimmed.is_empty() {
+                            err_msg.push_str(&format!("\nstderr: {}", trimmed));
+                        }
+                    }
+                    if let Some(code) = record.exit_code {
+                        err_msg.push_str(&format!("\nexit code: {}", code));
+                    }
+                    if let Some(ref cmd) = record.command {
+                        err_msg.push_str(&format!("\ncommand: {}", cmd));
+                    }
                     if !keep_going {
                         progress.finish_and_clear();
-                        return Err(anyhow::anyhow!("rule '{}' failed", rule_name));
+                        return Err(anyhow::anyhow!(err_msg));
                     }
+                    // In keep_going mode, still print the error
+                    eprintln!("  {} {}", "✗".red(), err_msg);
                 }
             }
             Err(e) => {
