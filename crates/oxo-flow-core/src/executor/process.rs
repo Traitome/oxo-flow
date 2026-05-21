@@ -832,6 +832,9 @@ pub fn render_shell_command(
         }
     }
     expanded = expanded.replace("{threads}", &rule.effective_threads().to_string());
+    if let Some(mem) = rule.effective_memory() {
+        expanded = expanded.replace("{memory}", mem);
+    }
     for (key, value) in &rule.params {
         let string_val = match value {
             toml::Value::String(s) => s.clone(),
