@@ -63,6 +63,73 @@ pub enum ReportContent {
         /// Unit label for values (e.g., "seconds", "MB").
         unit: String,
     },
+
+    /// QC metric with pass/fail/warn status.
+    QcStatus {
+        /// Metric name.
+        metric: String,
+        /// Current value.
+        value: String,
+        /// Status: "pass", "warn", or "fail".
+        status: String,
+        /// Acceptable threshold description.
+        threshold: String,
+    },
+
+    /// A group of QC status items rendered as colored indicators.
+    QcIndicatorGroup { items: Vec<QcIndicator> },
+
+    /// Hierarchical/nested data (for pathway, GO terms, taxonomy).
+    Hierarchy {
+        name: String,
+        value: f64,
+        children: Vec<HierarchyNode>,
+    },
+
+    /// Scatter plot data (for volcano plots, PCA, UMAP).
+    ScatterPlot {
+        title: String,
+        x_label: String,
+        y_label: String,
+        points: Vec<ScatterPoint>,
+    },
+}
+
+/// A single QC indicator with color-coded status.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QcIndicator {
+    pub label: String,
+    pub value: String,
+    pub status: QcStatusLevel,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QcStatusLevel {
+    Pass,
+    Warn,
+    Fail,
+    Info,
+}
+
+/// Hierarchical node for tree/treemap data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HierarchyNode {
+    pub name: String,
+    pub value: f64,
+    #[serde(default)]
+    pub children: Vec<HierarchyNode>,
+}
+
+/// A single point in a scatter plot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScatterPoint {
+    pub x: f64,
+    pub y: f64,
+    pub label: Option<String>,
+    pub group: Option<String>,
+    pub size: Option<f64>,
 }
 
 /// Complete report document.
@@ -526,6 +593,450 @@ pub fn execution_time_chart(records: &HashMap<String, JobRecord>) -> ReportSecti
 }
 
 // ---------------------------------------------------------------------------
+// Alignment statistics section
+// ---------------------------------------------------------------------------
+
+/// Alignment statistics for a single sample.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlignmentStats {
+    pub sample: String,
+    pub total_reads: u64,
+    pub mapped_reads: u64,
+    pub properly_paired: u64,
+    pub singletons: u64,
+    pub duplicates: u64,
+    pub mapping_rate: f64,
+    pub mean_coverage: Option<f64>,
+    pub mean_insert_size: Option<f64>,
+    pub gc_content: Option<f64>,
+}
+
+/// Create an alignment statistics section from per-sample alignment data.
+pub fn alignment_stats_section(stats: &[AlignmentStats]) -> ReportSection {
+    let headers = vec![
+        "Sample",
+        "Total Reads",
+        "Mapped Reads",
+        "Mapping Rate",
+        "Properly Paired",
+        "Duplicates",
+        "Mean Coverage",
+        "GC%",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+
+    let rows: Vec<Vec<String>> = stats
+        .iter()
+        .map(|s| {
+            vec![
+                s.sample.clone(),
+                s.total_reads.to_string(),
+                s.mapped_reads.to_string(),
+                format!("{:.2}%", s.mapping_rate * 100.0),
+                format!(
+                    "{:.2}%",
+                    s.properly_paired as f64 / s.total_reads as f64 * 100.0
+                ),
+                format!("{:.2}%", s.duplicates as f64 / s.total_reads as f64 * 100.0),
+                s.mean_coverage
+                    .map_or("N/A".into(), |c| format!("{:.1}x", c)),
+                s.gc_content
+                    .map_or("N/A".into(), |g| format!("{:.1}%", g * 100.0)),
+            ]
+        })
+        .collect();
+
+    ReportSection {
+        title: "Alignment Statistics".to_string(),
+        id: "alignment-stats".to_string(),
+        content: ReportContent::Table { headers, rows },
+        subsections: Vec::new(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RNA-seq expression summary section
+// ---------------------------------------------------------------------------
+
+/// Expression data for a single gene across samples.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExpressionRecord {
+    pub gene: String,
+    pub sample: String,
+    pub tpm: f64,
+    pub count: u64,
+}
+
+/// Create an RNA-seq expression summary with top expressed genes.
+pub fn expression_summary_section(records: &[ExpressionRecord], top_n: usize) -> ReportSection {
+    // Aggregate by gene: average TPM across samples
+    let mut gene_tpm: HashMap<String, (f64, u64)> = HashMap::new();
+    for r in records {
+        let entry = gene_tpm.entry(r.gene.clone()).or_insert((0.0, 0));
+        entry.0 += r.tpm;
+        entry.1 += 1;
+    }
+    let mut genes: Vec<(String, f64)> = gene_tpm
+        .into_iter()
+        .map(|(g, (sum, n))| (g, sum / n as f64))
+        .collect();
+    genes.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    genes.truncate(top_n);
+
+    let headers = vec!["Rank", "Gene", "Mean TPM"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    let rows: Vec<Vec<String>> = genes
+        .iter()
+        .enumerate()
+        .map(|(i, (gene, tpm))| vec![(i + 1).to_string(), gene.clone(), format!("{:.2}", tpm)])
+        .collect();
+
+    ReportSection {
+        title: format!("Top {} Expressed Genes", top_n),
+        id: "expression-summary".to_string(),
+        content: ReportContent::Table { headers, rows },
+        subsections: Vec::new(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Multi-sample comparison section
+// ---------------------------------------------------------------------------
+
+/// Create a multi-sample comparison table from any metric keyed by sample.
+pub fn multi_sample_comparison(
+    title: &str,
+    id: &str,
+    metric_name: &str,
+    data: &[(String, String)],
+) -> ReportSection {
+    let headers = vec!["Sample".into(), metric_name.into()];
+    let rows: Vec<Vec<String>> = data
+        .iter()
+        .map(|(sample, value)| vec![sample.clone(), value.clone()])
+        .collect();
+
+    ReportSection {
+        title: title.to_string(),
+        id: id.to_string(),
+        content: ReportContent::Table { headers, rows },
+        subsections: Vec::new(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Resource usage summary
+// ---------------------------------------------------------------------------
+
+/// Per-rule resource usage for reporting.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceUsage {
+    pub rule: String,
+    pub wall_time_secs: f64,
+    pub max_memory_mb: Option<u64>,
+    pub cpu_seconds: Option<f64>,
+    pub threads: u32,
+    pub status: String,
+}
+
+/// Create a resource usage summary section.
+pub fn resource_usage_section(usage: &[ResourceUsage]) -> ReportSection {
+    let headers = vec![
+        "Rule",
+        "Status",
+        "Wall Time",
+        "Max Memory",
+        "CPU Time",
+        "Threads",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+
+    let rows: Vec<Vec<String>> = usage
+        .iter()
+        .map(|u| {
+            vec![
+                u.rule.clone(),
+                u.status.clone(),
+                format!("{:.1}s", u.wall_time_secs),
+                u.max_memory_mb.map_or("N/A".into(), |m| format!("{}MB", m)),
+                u.cpu_seconds.map_or("N/A".into(), |c| format!("{:.1}s", c)),
+                u.threads.to_string(),
+            ]
+        })
+        .collect();
+
+    let total_time: f64 = usage.iter().map(|u| u.wall_time_secs).sum();
+    let total_cpu: f64 = usage.iter().filter_map(|u| u.cpu_seconds).sum();
+    let summary_pairs = vec![
+        ("Total Wall Time".into(), format!("{:.1}s", total_time)),
+        ("Total CPU Time".into(), format!("{:.1}s", total_cpu)),
+        ("Rules Executed".into(), usage.len().to_string()),
+        (
+            "Peak Memory".into(),
+            usage
+                .iter()
+                .filter_map(|u| u.max_memory_mb)
+                .max()
+                .map_or("N/A".into(), |m| format!("{}MB", m)),
+        ),
+    ];
+
+    let summary = ReportSection {
+        title: "Resource Summary".to_string(),
+        id: "resource-summary".to_string(),
+        content: ReportContent::KeyValue {
+            pairs: summary_pairs,
+        },
+        subsections: Vec::new(),
+    };
+
+    let table = ReportSection {
+        title: "Per-Rule Resources".to_string(),
+        id: "resource-table".to_string(),
+        content: ReportContent::Table { headers, rows },
+        subsections: Vec::new(),
+    };
+
+    ReportSection {
+        title: "Resource Usage".to_string(),
+        id: "resource-usage".to_string(),
+        content: ReportContent::Text {
+            text: String::new(),
+        },
+        subsections: vec![summary, table],
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard / overview section
+// ---------------------------------------------------------------------------
+
+/// Key metrics for the dashboard overview at the top of reports.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardMetrics {
+    pub pipeline_name: String,
+    pub total_samples: usize,
+    pub total_rules: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub total_reads_processed: Option<u64>,
+    pub mean_mapping_rate: Option<f64>,
+    pub variants_detected: Option<usize>,
+    pub actionable_variants: Option<usize>,
+    pub differentially_expressed_genes: Option<usize>,
+    pub total_runtime_secs: Option<f64>,
+}
+
+/// Create a dashboard overview section with key QC indicators.
+pub fn dashboard_section(metrics: &DashboardMetrics) -> ReportSection {
+    let mut status_items = Vec::new();
+
+    // Pipeline success status
+    let status = if metrics.failed == 0 {
+        QcStatusLevel::Pass
+    } else {
+        QcStatusLevel::Warn
+    };
+    let desc = if metrics.failed == 0 {
+        "All rules completed successfully".to_string()
+    } else {
+        format!("{} rule(s) failed", metrics.failed)
+    };
+    status_items.push(QcIndicator {
+        label: "Pipeline Status".into(),
+        value: format!("{}/{} succeeded", metrics.succeeded, metrics.total_rules),
+        status,
+        description: desc,
+    });
+
+    // Sample count
+    status_items.push(QcIndicator {
+        label: "Samples Processed".into(),
+        value: metrics.total_samples.to_string(),
+        status: QcStatusLevel::Info,
+        description: "Total samples in cohort".into(),
+    });
+
+    // Mapping rate
+    if let Some(rate) = metrics.mean_mapping_rate {
+        let (s, d) = if rate > 0.90 {
+            (QcStatusLevel::Pass, "Excellent mapping rate")
+        } else if rate > 0.70 {
+            (QcStatusLevel::Warn, "Below expected mapping rate")
+        } else {
+            (
+                QcStatusLevel::Fail,
+                "Poor mapping rate — check sample quality",
+            )
+        };
+        status_items.push(QcIndicator {
+            label: "Mean Mapping Rate".into(),
+            value: format!("{:.1}%", rate * 100.0),
+            status: s,
+            description: d.into(),
+        });
+    }
+
+    // Variants
+    if let Some(v) = metrics.variants_detected {
+        status_items.push(QcIndicator {
+            label: "Variants Detected".into(),
+            value: v.to_string(),
+            status: QcStatusLevel::Info,
+            description: "Total variants called".into(),
+        });
+    }
+    if let Some(av) = metrics.actionable_variants {
+        status_items.push(QcIndicator {
+            label: "Actionable Variants".into(),
+            value: av.to_string(),
+            status: if av > 0 {
+                QcStatusLevel::Warn
+            } else {
+                QcStatusLevel::Pass
+            },
+            description: "Clinically actionable findings".into(),
+        });
+    }
+
+    // DEGs
+    if let Some(deg) = metrics.differentially_expressed_genes {
+        status_items.push(QcIndicator {
+            label: "Differentially Expressed Genes".into(),
+            value: deg.to_string(),
+            status: QcStatusLevel::Info,
+            description: "Genes with |log2FC| > 1 and adj.p < 0.05".into(),
+        });
+    }
+
+    // Runtime
+    if let Some(runtime) = metrics.total_runtime_secs {
+        status_items.push(QcIndicator {
+            label: "Total Runtime".into(),
+            value: if runtime > 3600.0 {
+                format!("{:.1}h", runtime / 3600.0)
+            } else if runtime > 60.0 {
+                format!("{:.1}min", runtime / 60.0)
+            } else {
+                format!("{:.0}s", runtime)
+            },
+            status: QcStatusLevel::Info,
+            description: "Total wall clock time".into(),
+        });
+    }
+
+    ReportSection {
+        title: "Dashboard".to_string(),
+        id: "dashboard".to_string(),
+        content: ReportContent::QcIndicatorGroup {
+            items: status_items,
+        },
+        subsections: Vec::new(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Report builder (fluent API)
+// ---------------------------------------------------------------------------
+
+/// Fluent builder for constructing reports programmatically.
+pub struct ReportBuilder {
+    report: Report,
+}
+
+impl ReportBuilder {
+    pub fn new(title: &str, workflow_name: &str, workflow_version: &str) -> Self {
+        Self {
+            report: Report::new(title, workflow_name, workflow_version),
+        }
+    }
+
+    pub fn metadata(mut self, key: &str, value: &str) -> Self {
+        self.report.add_metadata(key, value);
+        self
+    }
+
+    pub fn section(mut self, section: ReportSection) -> Self {
+        self.report.add_section(section);
+        self
+    }
+
+    pub fn dashboard(mut self, metrics: &DashboardMetrics) -> Self {
+        self.report.add_section(dashboard_section(metrics));
+        self
+    }
+
+    pub fn qc_metrics(mut self, metrics: &[QcMetric]) -> Self {
+        self.report.add_section(qc_metrics_section(metrics));
+        self
+    }
+
+    pub fn alignment_stats(mut self, stats: &[AlignmentStats]) -> Self {
+        self.report.add_section(alignment_stats_section(stats));
+        self
+    }
+
+    pub fn expression(mut self, records: &[ExpressionRecord], top_n: usize) -> Self {
+        self.report
+            .add_section(expression_summary_section(records, top_n));
+        self
+    }
+
+    pub fn variants(mut self, variants: &[VariantSummary]) -> Self {
+        self.report.add_section(variant_summary_section(variants));
+        self
+    }
+
+    pub fn resource_usage(mut self, usage: &[ResourceUsage]) -> Self {
+        self.report.add_section(resource_usage_section(usage));
+        self
+    }
+
+    pub fn execution_chart(mut self, records: &HashMap<String, JobRecord>) -> Self {
+        self.report.add_section(execution_time_chart(records));
+        self
+    }
+
+    pub fn execution_summary_table(mut self, records: &HashMap<String, JobRecord>) -> Self {
+        self.report.add_section(Report::execution_summary(records));
+        self
+    }
+
+    pub fn provenance(
+        mut self,
+        wf_name: &str,
+        wf_version: &str,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        sw: &[(String, String)],
+    ) -> Self {
+        self.report
+            .add_section(provenance_section(wf_name, wf_version, start, end, sw));
+        self
+    }
+
+    pub fn clinical_disclaimer(mut self) -> Self {
+        self.report.add_section(clinical_disclaimer_section());
+        self
+    }
+
+    pub fn sample_info(mut self, info: &SampleInfo) -> Self {
+        self.report.add_section(sample_info_section(info));
+        self
+    }
+
+    pub fn build(self) -> Report {
+        self.report
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Default Tera template (embedded as a constant)
 // ---------------------------------------------------------------------------
 
@@ -837,6 +1348,80 @@ fn render_section_html(html: &mut String, section: &ReportSection, heading_level
                 ));
             }
             html.push_str("</svg>\n");
+        }
+        ReportContent::QcStatus {
+            metric,
+            value,
+            status,
+            threshold,
+        } => {
+            let (icon, color) = match status.as_str() {
+                "pass" => ("\u{2713}", "#10b981"),
+                "warn" => ("\u{26A0}", "#f59e0b"),
+                "fail" => ("\u{2717}", "#ef4444"),
+                _ => ("\u{2139}", "#3b82f6"),
+            };
+            html.push_str(&format!(
+                "<div style=\"display:flex;align-items:center;gap:0.5rem;padding:0.5rem;border-left:4px solid {color};margin:0.5rem 0;background:var(--card-bg)\">\n"
+            ));
+            html.push_str(&format!(
+                "  <span style=\"color:{color};font-size:1.2rem\">{icon}</span>\n"
+            ));
+            html.push_str(&format!(
+                "  <strong>{metric}:</strong> {value} <span style=\"color:#718096\">(threshold: {threshold})</span>\n"
+            ));
+            html.push_str("</div>\n");
+        }
+        ReportContent::QcIndicatorGroup { items } => {
+            html.push_str("<div style=\"display:flex;flex-wrap:wrap;gap:1rem;margin:1rem 0\">\n");
+            for item in items {
+                let (icon, bg, border) = match item.status {
+                    QcStatusLevel::Pass => ("\u{2713}", "#ecfdf5", "#10b981"),
+                    QcStatusLevel::Warn => ("\u{26A0}", "#fffbeb", "#f59e0b"),
+                    QcStatusLevel::Fail => ("\u{2717}", "#fef2f2", "#ef4444"),
+                    QcStatusLevel::Info => ("\u{2139}", "#eff6ff", "#3b82f6"),
+                };
+                html.push_str(&format!(
+                    "<div style=\"flex:1;min-width:200px;background:{bg};border:1px solid {border};border-radius:8px;padding:1rem\">\n"
+                ));
+                html.push_str(&format!(
+                    "  <div style=\"font-size:1.5rem;margin-bottom:0.25rem\">{icon}</div>\n"
+                ));
+                html.push_str(&format!(
+                    "  <div style=\"font-size:1.8rem;font-weight:700\">{}</div>\n",
+                    item.value
+                ));
+                html.push_str(&format!(
+                    "  <div style=\"color:#6b7280;font-size:0.85rem\">{}</div>\n",
+                    item.label
+                ));
+                html.push_str(&format!(
+                    "  <div style=\"color:#9ca3af;font-size:0.75rem;margin-top:0.25rem\">{}</div>\n",
+                    item.description
+                ));
+                html.push_str("</div>\n");
+            }
+            html.push_str("</div>\n");
+        }
+        ReportContent::Hierarchy {
+            name: _,
+            value: _,
+            children: _,
+        } => {
+            html.push_str(
+                "<p><em>(Hierarchical data — best viewed with interactive renderer)</em></p>\n",
+            );
+        }
+        ReportContent::ScatterPlot {
+            title,
+            x_label,
+            y_label,
+            points: _,
+        } => {
+            html.push_str(&format!(
+                "<p><em>Scatter plot: {}. X: {}, Y: {} — rendering requires interactive JS viewer</em></p>\n",
+                title, x_label, y_label
+            ));
         }
     }
 
