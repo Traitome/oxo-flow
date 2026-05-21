@@ -245,3 +245,19 @@ For workflows with many samples (>1,000):
   for known limitations
 - [Open an issue](https://github.com/Traitome/oxo-flow/issues) for bugs or
   feature requests
+
+### Reporting Real-World Issues
+
+We particularly value feedback from real-world deployments. If you encounter
+issues in your actual bioinformatics workflows (as opposed to test examples),
+please use the `[Real-World Testing]` prefix in your issue title:
+
+```
+[Real-World Testing] SLURM GPU job scheduling fails on cluster with multiple partitions
+[Real-World Testing] Conda environment detection issue with custom channels
+```
+
+Include details about your cluster type, oxo-flow version, and a description
+of what happened versus what you expected. See our
+[Contributing Guide](../development/contributing.md#we-need-your-real-world-feedback)
+for more guidance on providing effective feedback.

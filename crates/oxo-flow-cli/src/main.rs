@@ -365,6 +365,9 @@ pub enum ClusterAction {
         target: Vec<String>,
         #[arg(long)]
         dry_run: bool,
+        /// Generate job scripts with dependency support and a wrapper script
+        #[arg(long)]
+        with_dependencies: bool,
     },
     Status {
         #[arg(short = 'b', long)]
