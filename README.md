@@ -486,6 +486,14 @@ Before submitting a PR, ensure all checks pass:
 make ci
 ```
 
+## Citing
+
+If you use oxo-flow in academic research, please cite:
+
+> Jia Ding, Yun Peng, Ruochen Wei, Boquan Wang, Jian-Guo Zhou, **Shixiang Wang**, *BLIT: an R package for seamless integration of command-line bioinformatics tool universe*, Bioinformatics Advances, Volume 6, Issue 1, 2026, vbag088, [https://doi.org/10.1093/bioadv/vbag088](https://doi.org/10.1093/bioadv/vbag088)
+
+A dedicated oxo-flow manuscript is in preparation and will be announced when available.
+
 ## Community
 
 - 🐛 **Bug reports** — [GitHub Issues](https://github.com/Traitome/oxo-flow/issues) (use [bug report template](.github/ISSUE_TEMPLATE/bug_report.md))

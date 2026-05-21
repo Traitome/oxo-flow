@@ -178,6 +178,15 @@ oxo-flow is under active development. The current release (`v0.5.5`) includes th
 
 ---
 
+
+## How to Cite
+
+If you use oxo-flow in academic research, please cite:
+
+> Jia Ding, Yun Peng, Ruochen Wei, Boquan Wang, Jian-Guo Zhou, **Shixiang Wang**, *BLIT: an R package for seamless integration of command-line bioinformatics tool universe*, Bioinformatics Advances, Volume 6, Issue 1, 2026, vbag088, [https://doi.org/10.1093/bioadv/vbag088](https://doi.org/10.1093/bioadv/vbag088)
+
+A dedicated oxo-flow manuscript is in preparation.
+
 ## Join the Community
 
 oxo-flow is a **community-driven, open-source project** licensed under Apache 2.0. Bug reports, feature requests, and contributions are welcome.
