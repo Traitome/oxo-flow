@@ -141,6 +141,7 @@
       overflow-x: auto;
       max-width: 740px;
       margin: 0 auto;
+      white-space: pre;
     }
     .code-block .comment { color: #6a737d; }
     .code-block .cmd { color: #3dbfc9; }
@@ -169,7 +170,8 @@
       font-size: 0.85rem;
       color: #1a1a2e;
       overflow-x: auto;
-      white-space: pre;
+      white-space: pre-wrap;
+      word-break: break-all;
     }
 
     /* ── Tables ────────────────────────────────────────────────── */
@@ -291,9 +293,6 @@
         <a href="#license">
           <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License" />
         </a>
-        <img src="https://img.shields.io/badge/rust-2024_edition-orange" alt="Rust 2024" />
-        <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey" alt="Platform" />
-        <img src="https://img.shields.io/badge/unsafe-forbidden-red" alt="forbid(unsafe_code)" />
       </div>
       <div class="cta-group">
         <a class="btn btn-primary" href="documentation/">Read the Docs</a>
@@ -427,25 +426,25 @@
 <span class="cmd">cargo install oxo-flow-cli</span>
 
 <span class="comment"># 2. Scaffold a new project</span>
-<span class="cmd">oxo-flow init</span> <span class="str">my-pipeline</span>
-<span class="cmd">cd</span> my-pipeline
+<span class="cmd">oxo-flow init my-pipeline</span>
+<span class="cmd">cd my-pipeline</span>
 
 <span class="comment"># 3. Validate the workflow</span>
-<span class="cmd">oxo-flow validate</span> my-pipeline.oxoflow
+<span class="cmd">oxo-flow validate my-pipeline.oxoflow</span>
 <span class="output">✓ my-pipeline.oxoflow — valid</span>
 
 <span class="comment"># 4. Preview execution plan (dry-run)</span>
-<span class="cmd">oxo-flow dry-run</span> my-pipeline.oxoflow
+<span class="cmd">oxo-flow dry-run my-pipeline.oxoflow</span>
 
 <span class="comment"># 5. Execute with 8 parallel jobs</span>
-<span class="cmd">oxo-flow run</span> my-pipeline.oxoflow <span class="str">-j 8</span>
+<span class="cmd">oxo-flow run my-pipeline.oxoflow -j 8</span>
 
-<span class="comment"># 6. Visualise the DAG (macOS: brew install graphviz)</span>
-<span class="cmd">oxo-flow graph</span> my-pipeline.oxoflow <span class="str">&gt; dag.dot</span>
-<span class="cmd">dot -Tpng</span> dag.dot <span class="str">-o dag.png</span>
+<span class="comment"># 6. Visualise the DAG</span>
+<span class="cmd">oxo-flow graph my-pipeline.oxoflow &gt; dag.dot</span>
+<span class="cmd">dot -Tpng dag.dot -o dag.png</span>
 
 <span class="comment"># 7. Generate an HTML report</span>
-<span class="cmd">oxo-flow report</span> my-pipeline.oxoflow <span class="str">-f html -o report.html</span>
+<span class="cmd">oxo-flow report my-pipeline.oxoflow -f html -o report.html</span>
       </div>
     </div>
   </section>
@@ -496,7 +495,7 @@ docker = <span class="str">"biocontainers/bwa-mem2:2.2.1"</span>
     <div class="container">
       <h2>CLI Commands</h2>
       <p class="section-sub">
-        The <code>oxo-flow</code> binary provides 18 subcommands covering the complete workflow lifecycle.
+        The <code>oxo-flow</code> binary provides 30 subcommands covering the complete workflow lifecycle.
         Global flags: <code>-v</code> (verbose), <code>--quiet</code>, <code>--no-color</code>.
       </p>
       <table class="data-table">
