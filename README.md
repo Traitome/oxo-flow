@@ -288,7 +288,7 @@ shell = "process-dir {input} -o {output}"
 
 ## CLI Commands
 
-The `oxo-flow` binary provides 29 subcommands for the complete workflow lifecycle:
+The `oxo-flow` binary provides 30 subcommands for the complete workflow lifecycle:
 
 | Command | Description |
 |---------|-------------|
@@ -376,7 +376,7 @@ oxo-flow/
 ├── crates/
 │   ├── oxo-flow-core/     # Core library: DAG engine, executor, environment mgmt,
 │   │                      # config parsing, scheduler, wildcard expansion, reporting
-│   ├── oxo-flow-cli/      # CLI binary ("oxo-flow") — Clap-based, 29 subcommands
+│   ├── oxo-flow-cli/      # CLI binary ("oxo-flow") — Clap-based, 30 subcommands
 │   └── oxo-flow-web/      # Web server ("oxo-flow-web") — axum REST API + frontend
 ├── examples/              # Example .oxoflow workflows
 ├── tests/                 # Integration tests
