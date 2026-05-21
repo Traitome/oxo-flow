@@ -313,14 +313,8 @@ fn generate_slurm_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig
     // Create logs directory before execution
     lines.push("mkdir -p logs".to_string());
 
-    // Module loading for HPC environments
-    if !rule.environment.modules.is_empty() {
-        lines.push("module purge".to_string());
-        for module in &rule.environment.modules {
-            lines.push(format!("module load {}", module));
-        }
-    }
-
+    // Note: Module loading is handled by EnvironmentResolver.wrap_command()
+    // to avoid duplication with conda/docker/singularity environments
     lines.push(shell_cmd.to_string());
     lines.join("\n")
 }
@@ -399,14 +393,7 @@ fn generate_pbs_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
     // Create logs directory before execution
     lines.push("mkdir -p logs".to_string());
 
-    // Module loading for HPC environments
-    if !rule.environment.modules.is_empty() {
-        lines.push("module purge".to_string());
-        for module in &rule.environment.modules {
-            lines.push(format!("module load {}", module));
-        }
-    }
-
+    // Note: Module loading is handled by EnvironmentResolver.wrap_command()
     lines.push(shell_cmd.to_string());
     lines.join("\n")
 }
@@ -461,14 +448,7 @@ fn generate_sge_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
     // Create logs directory before execution
     lines.push("mkdir -p logs".to_string());
 
-    // Module loading for HPC environments
-    if !rule.environment.modules.is_empty() {
-        lines.push("module purge".to_string());
-        for module in &rule.environment.modules {
-            lines.push(format!("module load {}", module));
-        }
-    }
-
+    // Note: Module loading is handled by EnvironmentResolver.wrap_command()
     lines.push(shell_cmd.to_string());
     lines.join("\n")
 }
@@ -522,14 +502,7 @@ fn generate_lsf_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
     // Create logs directory before execution
     lines.push("mkdir -p logs".to_string());
 
-    // Module loading for HPC environments
-    if !rule.environment.modules.is_empty() {
-        lines.push("module purge".to_string());
-        for module in &rule.environment.modules {
-            lines.push(format!("module load {}", module));
-        }
-    }
-
+    // Note: Module loading is handled by EnvironmentResolver.wrap_command()
     lines.push(shell_cmd.to_string());
     lines.join("\n")
 }
@@ -1093,16 +1066,23 @@ mod tests {
             ..Default::default()
         };
         let config = make_config();
-        let script = generate_submit_script(
+        let env_resolver = crate::environment::EnvironmentResolver::new();
+        let script = generate_submit_script_with_env(
             &ClusterBackend::Slurm,
             &rule,
             "gatk HaplotypeCaller",
             &config,
-        );
+            &env_resolver,
+        )
+        .unwrap();
 
-        assert!(script.contains("module purge"));
-        assert!(script.contains("module load java/11"));
-        assert!(script.contains("module load gatk/4.2"));
+        // Module loading is now handled by EnvironmentResolver.wrap_command()
+        // Modules are loaded in a single line: "module load java/11 gatk/4.2"
+        assert!(
+            script.contains("module load java/11 gatk/4.2"),
+            "Expected 'module load java/11 gatk/4.2' in script, got:\n{}",
+            script
+        );
     }
 
     #[test]
@@ -1136,15 +1116,22 @@ mod tests {
             walltime: None,
             extra_args: vec![],
         };
-        let script = generate_submit_script(
+        let env_resolver = crate::environment::EnvironmentResolver::new();
+        let script = generate_submit_script_with_env(
             &ClusterBackend::Pbs,
             &rule,
             "bwa mem ref.fa reads.fq",
             &config,
-        );
+            &env_resolver,
+        )
+        .unwrap();
 
-        assert!(script.contains("module purge"));
-        assert!(script.contains("module load bwa/0.7.17"));
+        // Module loading is now handled by EnvironmentResolver.wrap_command()
+        assert!(
+            script.contains("module load bwa/0.7.17"),
+            "Expected 'module load bwa/0.7.17' in script, got:\n{}",
+            script
+        );
     }
 
     // -- Logs directory tests ------------------------------------------------
