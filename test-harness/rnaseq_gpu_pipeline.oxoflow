@@ -1,0 +1,171 @@
+# RNA-seq Pipeline with GPU Acceleration
+# Deep integration test: conda environments + GPU + SLURM
+
+[workflow]
+name = "rnaseq-gpu-pipeline"
+version = "1.0.0"
+description = "RNA-seq analysis with GPU-accelerated deep learning integration"
+author = "oxo-flow-test"
+
+[defaults]
+threads = 4
+memory = "16G"
+
+# Environment Groups for Different Analysis Stages
+[env_groups.qc]
+conda = "envs/qc.yaml"
+
+[env_groups.rnaseq]
+conda = "envs/rnaseq.yaml"
+
+[env_groups.deep_learning]
+conda = "envs/pytorch.yaml"
+modules = ["cuda/12.0", "cudnn/8.8"]
+
+[env_groups.visualization]
+conda = "envs/r_vis.yaml"
+
+# Step 1: Quality Control with FastQC (Shell)
+[[rules]]
+name = "fastqc_raw"
+input = ["data/{sample}_R1.fastq.gz", "data/{sample}_R2.fastq.gz"]
+output = ["qc/fastqc/{sample}_R1_fastqc.html", "qc/fastqc/{sample}_R2_fastqc.html"]
+threads = 2
+memory = "8G"
+env_group = "qc"
+shell = """
+mkdir -p qc/fastqc
+fastqc -t {threads} -o qc/fastqc/ {input}
+"""
+
+# Step 2: Adapter Trimming with Trimmomatic
+[[rules]]
+name = "trim_reads"
+input = ["data/{sample}_R1.fastq.gz", "data/{sample}_R2.fastq.gz"]
+output = ["trimmed/{sample}_R1_trimmed.fq.gz", "trimmed/{sample}_R2_trimmed.fq.gz"]
+threads = 4
+memory = "16G"
+env_group = "rnaseq"
+shell = """
+mkdir -p trimmed
+trimmomatic PE -threads {threads} {input[0]} {input[1]} {output[0]} /dev/null {output[1]} /dev/null ILLUMINACLIP:adapters.fa:2:30:10 LEADING:3 TRAILING:3 MINLEN:36
+"""
+
+# Step 3: STAR Alignment (High Memory)
+[[rules]]
+name = "star_align"
+input = ["trimmed/{sample}_R1_trimmed.fq.gz", "trimmed/{sample}_R2_trimmed.fq.gz"]
+output = ["aligned/{sample}.bam", "aligned/{sample}.bam.bai"]
+threads = 16
+memory = "64G"
+resources.time_limit = "4h"
+env_group = "rnaseq"
+shell = """
+mkdir -p aligned
+STAR --runThreadN {threads} --genomeDir reference/star_index --readFilesIn {input[0]} {input[1]} --readFilesCommand zcat --outFileNamePrefix aligned/{sample}_ --outSAMtype BAM SortedByCoordinate --outSAMunmapped Within --outStd BAM_SortedByCoordinate > {output[0]}
+samtools index {output[0]}
+"""
+
+# Step 4: Feature Counting with featureCounts
+[[rules]]
+name = "feature_counts"
+input = ["aligned/{sample}.bam"]
+output = ["counts/{sample}.counts.txt"]
+threads = 8
+memory = "16G"
+env_group = "rnaseq"
+shell = """
+mkdir -p counts
+featureCounts -T {threads} -a reference/genes.gtf -o {output[0]} {input[0]}
+"""
+
+# Step 5: Python-based Quality Analysis
+[[rules]]
+name = "qc_analysis_python"
+input = ["counts/{sample}.counts.txt"]
+output = ["qc/counts/{sample}_qc_stats.json"]
+threads = 4
+memory = "8G"
+env_group = "rnaseq"
+shell = """
+mkdir -p qc/counts
+python3 -c "
+import json
+sample = '{sample}'
+stats = {'sample': sample, 'total_reads': 1000000, 'assigned_reads': 850000, 'assignment_rate': 0.85}
+with open('{output[0]}', 'w') as f:
+    json.dump(stats, f)
+print(f'QC analysis complete for {sample}')
+"
+"""
+
+# Step 6: GPU-Accelerated Deep Learning Expression Analysis
+[[rules]]
+name = "deep_expression_analysis"
+input = ["counts/{sample}.counts.txt"]
+output = ["deep_learning/{sample}_embeddings.npy", "deep_learning/{sample}_model.pt"]
+threads = 8
+memory = "32G"
+resources.gpu = 2
+time_limit = "8h"
+env_group = "deep_learning"
+shell = """
+mkdir -p deep_learning
+nvidia-smi > deep_learning/{sample}_gpu_info.txt || echo "GPU info not available" > deep_learning/{sample}_gpu_info.txt
+
+python3 << 'PYEOF'
+import torch
+import numpy as np
+import sys
+
+sample = "{sample}"
+print(f"PyTorch version: {torch.__version__}")
+print(f"CUDA available: {torch.cuda.is_available()}")
+print(f"CUDA devices: {torch.cuda.device_count()}")
+
+# Mock embeddings (real analysis would process count data)
+embeddings = np.random.randn(64, 128)
+np.save("{output[0]}", embeddings)
+
+# Save mock model
+torch.save({'model': 'mock'}, "{output[1]}")
+
+print(f"Deep learning analysis complete for {sample}")
+PYEOF
+"""
+
+# Step 7: R-based Differential Expression Analysis
+[[rules]]
+name = "differential_expression_r"
+input = ["counts/{sample}.counts.txt"]
+output = ["de_analysis/{sample}_de_results.csv", "de_analysis/{sample}_volcano.pdf"]
+threads = 4
+memory = "16G"
+env_group = "visualization"
+shell = """
+mkdir -p de_analysis
+echo "gene,log2FoldChange,padj" > {output[0]}
+echo "BRCA1,1.5,0.001" >> {output[0]}
+echo "TP53,-0.8,0.05" >> {output[0]}
+echo "Volcano plot placeholder" > {output[1]}
+"""
+
+# Step 8: Generate Final Report
+[[rules]]
+name = "generate_final_report"
+input = ["qc/counts/{sample}_qc_stats.json", "deep_learning/{sample}_embeddings.npy", "de_analysis/{sample}_de_results.csv"]
+output = ["reports/{sample}_final_report.html"]
+threads = 2
+memory = "8G"
+env_group = "visualization"
+shell = """
+mkdir -p reports
+python3 -c "
+import json
+with open('{input[0]}') as f:
+    stats = json.load(f)
+html = f'<html><body><h1>RNA-seq Report - {stats[\"sample\"]}</h1><p>Assignment Rate: {stats[\"assignment_rate\"]:.1%}</p><p>Pipeline: FastQC, STAR, featureCounts, PyTorch GPU, DESeq2</p></body></html>'
+with open('{output[0]}', 'w') as f:
+    f.write(html)
+"
+"""

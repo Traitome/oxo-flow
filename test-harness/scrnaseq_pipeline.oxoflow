@@ -1,0 +1,579 @@
+# Single-cell RNA-seq Analysis Pipeline
+# Deep integration: Cell Ranger + Scanpy + Seurat + GPU-accelerated analysis + SLURM
+
+[workflow]
+name = "scrnaseq-analysis"
+version = "1.0.0"
+description = "Single-cell RNA-seq analysis with Cell Ranger, Scanpy, Seurat, and GPU-accelerated deep learning"
+author = "oxo-flow-test"
+
+[defaults]
+threads = 8
+memory = "64G"
+
+# ============================================
+# Environment Groups
+# ============================================
+
+# Cell Ranger environment (10x Genomics)
+[env_groups.cellranger]
+conda = "envs/cellranger.yaml"
+modules = ["cellranger/7.1.0"]
+
+# Python Scanpy environment
+[env_groups.scanpy]
+conda = "envs/scanpy.yaml"
+
+# R Seurat environment
+[env_groups.seurat]
+conda = "envs/seurat.yaml"
+
+# GPU-accelerated deep learning (scVI, scANVI)
+[env_groups.scvi]
+conda = "envs/scvi-tools.yaml"
+modules = ["cuda/12.0", "cudnn/8.8"]
+resources.gpu = 1
+
+# ============================================
+# Pipeline Rules
+# ============================================
+
+# Step 1: Cell Ranger Count (10x Genomics alignment)
+[[rules]]
+name = "cellranger_count"
+input = ["raw/{sample}_S1_L001_R1_001.fastq.gz", "raw/{sample}_S1_L001_R2_001.fastq.gz"]
+output = [
+    "cellranger/{sample}/outs/filtered_feature_bc_matrix.h5",
+    "cellranger/{sample}/outs/metrics_summary.csv",
+    "cellranger/{sample}/outs/cloupe.cloupe",
+    "cellranger/{sample}/outs/web_summary.html"
+]
+threads = 32
+memory = "128G"
+resources.time_limit = "48h"
+env_group = "cellranger"
+shell = """
+mkdir -p cellranger
+
+cellranger count \
+  --id={sample} \
+  --sample={sample} \
+  --fastqs=raw/ \
+  --transcriptome=reference/refdata-gex-GRCh38-2020-A \
+  --localcores={threads} \
+  --localmem=120 \
+  --output-dir=cellranger/{sample}
+
+# Verify outputs exist
+if [ ! -f "cellranger/{sample}/outs/filtered_feature_bc_matrix.h5" ]; then
+    echo "Error: Cell Ranger count failed for {sample}"
+    exit 1
+fi
+"""
+
+# Step 2: Scanpy Python Analysis - QC and Preprocessing
+[[rules]]
+name = "scanpy_qc"
+input = ["cellranger/{sample}/outs/filtered_feature_bc_matrix.h5"]
+output = [
+    "scanpy/{sample}_qc.h5ad",
+    "scanpy/{sample}_qc_plots.pdf",
+    "scanpy/{sample}_qc_stats.json"
+]
+threads = 8
+memory = "64G"
+env_group = "scanpy"
+shell = """
+mkdir -p scanpy
+
+python3 << 'PYEOF'
+import scanpy as sc
+import pandas as pd
+import json
+import warnings
+warnings.filterwarnings('ignore')
+
+sample = "{sample}"
+input_h5 = "{input[0]}"
+output_h5ad = "{output[0]}"
+output_plots = "{output[1]}"
+output_stats = "{output[2]}"
+
+# Read 10x data
+adata = sc.read_10x_h5(input_h5)
+adata.var_names_make_unique()
+
+# Add sample metadata
+adata.obs['sample'] = sample
+
+# Calculate QC metrics
+sc.pp.calculate_qc_metrics(adata, qc_vars=['MT'], percent_top=None, inplace=True)
+
+# QC Filtering
+n_cells_before = adata.n_obs
+n_genes_before = adata.n_vars
+
+# Filter cells
+adata = adata[adata.obs.n_genes_by_counts > 200, :]
+adata = adata[adata.obs.n_genes_by_counts < 5000, :]
+adata = adata[adata.obs.pct_counts_MT < 10, :]
+
+# Filter genes
+sc.pp.filter_genes(adata, min_cells=3)
+
+n_cells_after = adata.n_obs
+n_genes_after = adata.n_vars
+
+print(f"QC complete for {sample}:")
+print(f"  Cells: {n_cells_before} -> {n_cells_after}")
+print(f"  Genes: {n_genes_before} -> {n_genes_after}")
+
+# Save QC stats
+qc_stats = {
+    "sample": sample,
+    "cells_before": int(n_cells_before),
+    "cells_after": int(n_cells_after),
+    "genes_before": int(n_genes_before),
+    "genes_after": int(n_genes_after),
+    "median_genes_per_cell": float(adata.obs.n_genes_by_counts.median()),
+    "median_counts_per_cell": float(adata.obs.total_counts.median())
+}
+
+with open(output_stats, 'w') as f:
+    json.dump(qc_stats, f, indent=2)
+
+# Save processed data
+adata.write(output_h5ad)
+
+# Generate QC plots (placeholder - in real analysis would use matplotlib)
+with open(output_plots.replace('.pdf', '.txt'), 'w') as f:
+    f.write(f"QC plots for {sample}\n")
+    f.write(f"Total cells: {n_cells_after}\n")
+    f.write(f"Total genes: {n_genes_after}\n")
+
+print(f"Scanpy QC complete: {output_h5ad}")
+PYEOF
+"""
+
+# Step 3: Scanpy - Normalization and Clustering
+[[rules]]
+name = "scanpy_clustering"
+input = ["scanpy/{sample}_qc.h5ad"]
+output = [
+    "scanpy/{sample}_clustered.h5ad",
+    "scanpy/{sample}_umap.pdf",
+    "scanpy/{sample}_markers.csv"
+]
+threads = 16
+memory = "128G"
+env_group = "scanpy"
+shell = """
+mkdir -p scanpy
+
+python3 << 'PYEOF'
+import scanpy as sc
+import pandas as pd
+import numpy as np
+import warnings
+warnings.filterwarnings('ignore')
+
+sample = "{sample}"
+input_h5ad = "{input[0]}"
+output_h5ad = "{output[0]}"
+output_umap = "{output[1]}"
+output_markers = "{output[2]}"
+
+# Read QC'd data
+adata = sc.read(input_h5ad)
+
+# Normalization
+sc.pp.normalize_total(adata, target_sum=1e4)
+sc.pp.log1p(adata)
+
+# Feature selection
+sc.pp.highly_variable_genes(adata, min_mean=0.0125, max_mean=3, min_disp=0.5)
+adata_hvg = adata[:, adata.var.highly_variable]
+
+# Scaling
+sc.pp.scale(adata_hvg, max_value=10)
+
+# PCA
+sc.tl.pca(adata_hvg, svd_solver='arpack')
+
+# Neighbors and UMAP
+sc.pp.neighbors(adata_hvg, n_neighbors=10, n_pcs=40)
+sc.tl.umap(adata_hvg)
+
+# Clustering
+sc.tl.leiden(adata_hvg, resolution=0.5)
+
+# Find markers
+sc.tl.rank_genes_groups(adata_hvg, 'leiden', method='t-test')
+
+# Save results
+adata_hvg.write(output_h5ad)
+
+# Export markers
+markers = pd.DataFrame()
+for cluster in adata_hvg.obs['leiden'].cat.categories:
+    top_genes = sc.get.rank_genes_groups_df(adata_hvg, group=cluster).head(10)
+    top_genes['cluster'] = cluster
+    markers = pd.concat([markers, top_genes])
+
+markers.to_csv(output_markers, index=False)
+
+# Create UMAP text summary
+with open(output_umap.replace('.pdf', '.txt'), 'w') as f:
+    f.write(f"UMAP and clustering for {sample}\n")
+    f.write(f"Number of clusters: {adata_hvg.obs['leiden'].nunique()}\n")
+    f.write(f"Top clusters: {adata_hvg.obs['leiden'].value_counts().head()}\n")
+
+print(f"Scanpy clustering complete: {output_h5ad}")
+print(f"Found {adata_hvg.obs['leiden'].nunique()} clusters")
+PYEOF
+"""
+
+# Step 4: GPU-accelerated scVI Analysis
+[[rules]]
+name = "scvi_analysis"
+input = ["scanpy/{sample}_qc.h5ad"]
+output = [
+    "scvi/{sample}_scvi_model",
+    "scvi/{sample}_latent.h5ad",
+    "scvi/{sample}_scvi_plots.pdf"
+]
+threads = 16
+memory = "128G"
+resources.gpu = 2
+time_limit = "24h"
+env_group = "scvi"
+shell = """
+mkdir -p scvi
+
+# Check GPU availability
+nvidia-smi > scvi/{sample}_gpu_info.txt
+
+python3 << 'PYEOF'
+import scanpy as sc
+import scvi
+import torch
+import warnings
+warnings.filterwarnings('ignore')
+
+sample = "{sample}"
+input_h5ad = "{input[0]}"
+output_model = "{output[0]}"
+output_latent = "{output[1]}"
+
+print(f"PyTorch version: {torch.__version__}")
+print(f"CUDA available: {torch.cuda.is_available()}")
+print(f"CUDA devices: {torch.cuda.device_count()}")
+
+# Read data
+adata = sc.read(input_h5ad)
+
+# Setup for scVI
+scvi.model.SCVI.setup_anndata(adata)
+
+# Train scVI model with GPU
+model = scvi.model.SCVI(adata)
+
+# Use GPU if available
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+print(f"Training on device: {device}")
+
+model.train(max_epochs=100,
+            plan_kwargs={'lr': 1e-3},
+            use_gpu=device == 'cuda',
+            batch_size=256)
+
+# Get latent representation
+latent = model.get_latent_representation()
+adata.obsm['X_scVI'] = latent
+
+# Save model and data
+model.save(output_model, overwrite=True)
+adata.write(output_latent)
+
+# Create summary
+with open("{output[2]}".replace('.pdf', '.txt'), 'w') as f:
+    f.write(f"scVI analysis for {sample}\n")
+    f.write(f"Latent dimensions: {latent.shape[1]}\n")
+    f.write(f"Training device: {device}\n")
+    f.write(f"Model saved to: {output_model}\n")
+
+print(f"scVI analysis complete: {output_latent}")
+PYEOF
+"""
+
+# Step 5: R Seurat Analysis
+[[rules]]
+name = "seurat_analysis"
+input = ["scanpy/{sample}_qc.h5ad"]
+output = [
+    "seurat/{sample}_seurat.rds",
+    "seurat/{sample}_seurat_clusters.pdf",
+    "seurat/{sample}_de_genes.csv"
+]
+threads = 16
+memory = "128G"
+env_group = "seurat"
+shell = """
+mkdir -p seurat
+
+Rscript << 'REOF'
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(sceasy)
+  library(dplyr)
+})
+
+sample <- "{sample}"
+input_h5ad <- "{input[0]}"
+output_rds <- "{output[0]}"
+output_markers <- "{output[2]}"
+
+# Convert from Scanpy H5AD to Seurat
+cat("Converting Scanpy H5AD to Seurat...\n")
+adata <- readH5AD(input_h5ad)
+
+# Create Seurat object
+seurat_obj <- as.Seurat(adata, counts = "counts", data = NULL)
+
+# Standard Seurat workflow
+seurat_obj <- NormalizeData(seurat_obj)
+seurat_obj <- FindVariableFeatures(seurat_obj, selection.method = "vst", nfeatures = 2000)
+seurat_obj <- ScaleData(seurat_obj)
+seurat_obj <- RunPCA(seurat_obj, features = VariableFeatures(object = seurat_obj))
+seurat_obj <- FindNeighbors(seurat_obj, dims = 1:10)
+seurat_obj <- FindClusters(seurat_obj, resolution = 0.5)
+seurat_obj <- RunUMAP(seurat_obj, dims = 1:10)
+
+# Find all markers
+seurat_obj.markers <- FindAllMarkers(seurat_obj, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+top_markers <- seurat_obj.markers %>%
+  group_by(cluster) %>%
+  slice_max(n = 10, order_by = avg_log2FC)
+
+# Save results
+write.csv(top_markers, output_markers, row.names = FALSE)
+saveRDS(seurat_obj, output_rds)
+
+# Create summary
+with open("{output[1]}".replace('.pdf', '.txt'), 'w') as f:
+    writeLines(c(
+        paste("Seurat analysis for", sample),
+        paste("Cells:", ncol(seurat_obj)),
+        paste("Genes:", nrow(seurat_obj)),
+        paste("Clusters:", length(unique(seurat_obj$seurat_clusters))),
+        paste("Top DE genes saved to:", output_markers)
+    ), f)
+
+cat("Seurat analysis complete for", sample, "\n")
+REOF
+"""
+
+# Step 6: Integration Analysis (Multiple Samples)
+[[rules]]
+name = "integrate_samples"
+input = ["scvi/{sample}_latent.h5ad", "seurat/{sample}_seurat.rds"]
+output = [
+    "integration/{sample}_integrated.h5ad",
+    "integration/{sample}_batch_correction.pdf"
+]
+threads = 32
+memory = "256G"
+resources.gpu = 1
+time_limit = "48h"
+env_group = "scvi"
+shell = """
+mkdir -p integration
+
+python3 << 'PYEOF'
+import scanpy as sc
+import scvi
+import warnings
+warnings.filterwarnings('ignore')
+
+sample = "{sample}"
+input_scvi = "{input[0]}"
+output_integrated = "{output[0]}"
+
+# Read scVI output
+adata = sc.read(input_scvi)
+
+# Add integration metadata
+adata.obs['dataset'] = sample
+
+# If multiple samples exist, perform integration
+# (In real workflow, this would combine multiple samples)
+
+# Harmony integration (placeholder - would need multiple samples)
+sc.pp.neighbors(adata, use_rep='X_scVI')
+sc.tl.umap(adata)
+
+# Save integrated data
+adata.write(output_integrated)
+
+# Create summary
+with open("{output[1]}".replace('.pdf', '.txt'), 'w') as f:
+    f.write(f"Integration analysis for {sample}\n")
+    f.write(f"Cells after integration: {adata.n_obs}\n")
+    f.write(f"Note: Single-sample analysis (integration requires multiple samples)\n")
+
+print(f"Integration analysis complete: {output_integrated}")
+PYEOF
+"""
+
+# Step 7: Cell Type Annotation
+[[rules]]
+name = "celltype_annotation"
+input = [
+    "integration/{sample}_integrated.h5ad",
+    "seurat/{sample}_de_genes.csv"
+]
+output = [
+    "annotation/{sample}_annotated.h5ad",
+    "annotation/{sample}_celltypes.csv",
+    "annotation/{sample}_celltype_markers.pdf"
+]
+threads = 8
+memory = "64G"
+env_group = "scanpy"
+shell = """
+mkdir -p annotation
+
+python3 << 'PYEOF'
+import scanpy as sc
+import pandas as pd
+import numpy as np
+import warnings
+warnings.filterwarnings('ignore')
+
+sample = "{sample}"
+input_h5ad = "{input[0]}"
+output_h5ad = "{output[0]}"
+output_csv = "{output[1]}"
+
+# Read integrated data
+adata = sc.read(input_h5ad)
+
+# Simplified cell type annotation based on marker genes
+# In real analysis, would use SingleR, CellTypist, or manual curation
+
+cell_type_map = {
+    '0': 'T cells',
+    '1': 'B cells',
+    '2': 'Monocytes',
+    '3': 'NK cells',
+    '4': 'Dendritic cells'
+}
+
+# Map clusters to cell types (placeholder)
+adata.obs['cell_type'] = adata.obs['leiden'].map(cell_type_map).fillna('Unknown')
+
+# Save annotated data
+adata.write(output_h5ad)
+
+# Export cell type counts
+celltype_counts = adata.obs['cell_type'].value_counts().reset_index()
+celltype_counts.columns = ['cell_type', 'count']
+celltype_counts['sample'] = sample
+celltype_counts.to_csv(output_csv, index=False)
+
+print(f"Cell type annotation complete for {sample}")
+print(celltype_counts)
+
+# Create marker summary
+with open("{output[2]}".replace('.pdf', '.txt'), 'w') as f:
+    f.write(f"Cell type markers for {sample}\n")
+    f.write(f"Annotated cell types: {adata.obs['cell_type'].nunique()}\n")
+    f.write(str(celltype_counts))
+PYEOF
+"""
+
+# Step 8: Generate Final Report
+[[rules]]
+name = "final_sc_report"
+input = [
+    "annotation/{sample}_annotated.h5ad",
+    "cellranger/{sample}/outs/metrics_summary.csv",
+    "scanpy/{sample}_qc_stats.json"
+]
+output = ["reports/{sample}_scRNAseq_Report.html"]
+threads = 4
+memory = "16G"
+env_group = "seurat"
+shell = """
+mkdir -p reports
+
+Rscript << 'REOF'
+library(jsonlite)
+
+sample <- "{sample}"
+qc_stats_file <- "{input[2]}"
+output_report <- "{output[0]}"
+
+# Read QC stats
+qc_stats <- fromJSON(qc_stats_file)
+
+# Generate HTML report
+html_content <- paste0('
+<!DOCTYPE html>
+<html>
+<head>
+    <title>scRNA-seq Report - ', sample, '</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+        .container { max-width: 1000px; margin: 0 auto; background: white; padding: 30px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1 { color: #2c3e50; border-bottom: 3px solid #9b59b6; padding-bottom: 10px; }
+        h2 { color: #34495e; margin-top: 30px; }
+        .stat-box { display: inline-block; margin: 10px; padding: 20px; background: #9b59b6; color: white; border-radius: 5px; min-width: 150px; text-align: center; }
+        .stat-label { font-size: 12px; text-transform: uppercase; }
+        .stat-value { font-size: 24px; font-weight: bold; }
+        .pipeline-step { background: #ecf0f1; padding: 10px; margin: 5px 0; border-left: 4px solid #9b59b6; }
+        .tool { font-weight: bold; color: #9b59b6; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Single-cell RNA-seq Analysis Report</h1>
+
+        <h2>Sample Information</h2>
+        <p><strong>Sample ID:</strong> ', qc_stats$sample, '</p>
+
+        <h2>Cell Statistics</h2>
+        <div class="stat-box">
+            <div class="stat-label">Cells (After QC)</div>
+            <div class="stat-value">', format(qc_stats$cells_after, big.mark=","), '</div>
+        </div>
+
+        <div class="stat-box">
+            <div class="stat-label">Genes Detected</div>
+            <div class="stat-value">', format(qc_stats$genes_after, big.mark=","), '</div>
+        </div>
+
+        <div class="stat-box">
+            <div class="stat-label">Median Genes/Cell</div>
+            <div class="stat-value">', round(qc_stats$median_genes_per_cell, 0), '</div>
+        </div>
+
+        <h2>Analysis Pipeline</h2>
+        <div class="pipeline-step">1. Alignment: <span class="tool">Cell Ranger</span> (10x Genomics)</div>
+        <div class="pipeline-step">2. QC & Preprocessing: <span class="tool">Scanpy</span> (Python)</div>
+        <div class="pipeline-step">3. Normalization & Clustering: <span class="tool">Scanpy</span> (Python)</div>
+        <div class="pipeline-step">4. Deep Learning: <span class="tool">scVI</span> (GPU-accelerated)</div>
+        <div class="pipeline-step">5. Alternative Analysis: <span class="tool">Seurat</span> (R)</div>
+        <div class="pipeline-step">6. Batch Correction: <span class="tool">scVI/Harmony</span></div>
+        <div class="pipeline-step">7. Cell Type Annotation: <span class="tool">Marker-based</span></div>
+
+        <p><em>Generated by oxo-flow scRNA-seq Pipeline</em></p>
+    </div>
+</body>
+</html>
+')
+
+writeLines(html_content, output_report)
+cat("Final scRNA-seq report generated:", output_report, "\n")
+REOF
+"""

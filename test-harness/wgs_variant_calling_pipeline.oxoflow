@@ -1,0 +1,465 @@
+# WGS Germline Variant Calling Pipeline
+# Deep integration test: Singularity + Modules + GPU acceleration + SLURM
+
+[workflow]
+name = "wgs-germline-variant-calling"
+version = "2.0.0"
+description = "Whole Genome Sequencing germline variant detection with GPU-accelerated tools"
+author = "oxo-flow-test"
+
+[defaults]
+threads = 8
+memory = "32G"
+
+# ============================================
+# Environment Groups
+# ============================================
+
+# QC environment with fastQC and MultiQC
+[env_groups.qc]
+singularity = "docker://staphb/fastqc:0.12.1"
+
+# Alignment environment
+[env_groups.alignment]
+singularity = "docker://biocontainers/bwa:v0.7.17_cv1"
+
+# GATK environment for variant calling
+[env_groups.gatk]
+singularity = "docker://broadinstitute/gatk:4.4.0.0"
+environment.modules = ["cuda/11.8"]
+
+# DeepVariant environment (GPU-accelerated calling)
+[env_groups.deepvariant]
+singularity = "docker://google/deepvariant:1.5.0"
+resources.gpu = 1
+
+# Annotation environment
+[env_groups.annotation]
+singularity = "docker://ensemblorg/ensembl-vep:latest"
+
+# Visualization environment for reports
+[env_groups.visualization]
+conda = "envs/r_vis.yaml"
+
+# ============================================
+# Pipeline Rules
+# ============================================
+
+# Step 1: FastQC Quality Control
+[[rules]]
+name = "fastqc"
+input = ["raw/{sample}_R1.fq.gz", "raw/{sample}_R2.fq.gz"]
+output = ["qc/fastqc/{sample}_R1_fastqc.zip", "qc/fastqc/{sample}_R2_fastqc.zip"]
+threads = 4
+memory = "8G"
+env_group = "qc"
+shell = """
+mkdir -p qc/fastqc
+fastqc -t {threads} --noextract -o qc/fastqc/ {input}
+"""
+
+# Step 2: Adapter Trimming with fastp
+[[rules]]
+name = "trim_reads"
+input = ["raw/{sample}_R1.fq.gz", "raw/{sample}_R2.fq.gz"]
+output = [
+    "trimmed/{sample}_R1.fastq.gz",
+    "trimmed/{sample}_R2.fastq.gz",
+    "trimmed/{sample}_fastp.json",
+    "trimmed/{sample}_fastp.html"
+]
+threads = 8
+memory = "16G"
+environment.singularity = "docker://nanozoo/fastp:0.23.2--9b97622"
+shell = """
+mkdir -p trimmed
+fastp -i {input[0]} -I {input[1]} \
+  -o {output[0]} -O {output[1]} \
+  --detect_adapter_for_pe \
+  --cut_front --cut_tail \
+  -j {output[2]} -h {output[3]} \
+  -w {threads}
+"""
+
+# Step 3: BWA-MEM Alignment (High Memory)
+[[rules]]
+name = "bwa_align"
+input = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz"]
+output = ["aligned/{sample}.bam", "aligned/{sample}.bam.bai"]
+threads = 32
+memory = "64G"
+resources.time_limit = "24h"
+env_group = "alignment"
+shell = """
+mkdir -p aligned
+
+# BWA alignment with sorting
+bwa mem -t {threads} -R '@RG\tID:{sample}\tSM:{sample}\tPL:ILLUMINA' \
+  reference/hg38.fa {input[0]} {input[1]} | \
+  samtools sort -@ 4 -m 2G -o {output[0]} -
+
+# Index BAM file
+samtools index {output[0]}
+
+# Print alignment stats
+echo "Alignment stats for {sample}:"
+samtools flagstat {output[0]}
+"""
+
+# Step 4: Mark Duplicates with GATK
+[[rules]]
+name = "mark_duplicates"
+input = ["aligned/{sample}.bam"]
+output = ["dedup/{sample}.bam", "dedup/{sample}_metrics.txt"]
+threads = 8
+memory = "32G"
+env_group = "gatk"
+shell = """
+mkdir -p dedup
+
+gatk MarkDuplicates \
+  -I {input[0]} \
+  -O {output[0]} \
+  -M {output[1]} \
+  --REMOVE_DUPLICATES false \
+  --CREATE_INDEX true
+"""
+
+# Step 5: Base Quality Score Recalibration (BQSR) - Step 1
+[[rules]]
+name = "bqsr_base_recalibrator"
+input = ["dedup/{sample}.bam"]
+output = ["recal/{sample}_recal_data.table"]
+threads = 8
+memory = "32G"
+env_group = "gatk"
+shell = """
+mkdir -p recal
+
+gatk BaseRecalibrator \
+  -R reference/hg38.fa \
+  -I {input[0]} \
+  --known-sites reference/dbsnp_146.hg38.vcf.gz \
+  --known-sites reference/Mills_and_1000G_gold_standard.indels.hg38.vcf.gz \
+  -O {output[0]} \
+  --use-original-qualities
+"""
+
+# Step 6: Apply BQSR
+[[rules]]
+name = "apply_bqsr"
+input = ["dedup/{sample}.bam", "recal/{sample}_recal_data.table"]
+output = ["recalibrated/{sample}.bam", "recalibrated/{sample}.bai"]
+threads = 4
+memory = "16G"
+env_group = "gatk"
+shell = """
+mkdir -p recalibrated
+
+gatk ApplyBQSR \
+  -R reference/hg38.fa \
+  -I {input[0]} \
+  --bqsr-recal-file {input[1]} \
+  -O {output[0]} \
+  --create-output-bam-index true
+"""
+
+# Step 7: GPU-Accelerated HaplotypeCaller (GATK CNN)
+[[rules]]
+name = "variant_calling_gpu"
+input = ["recalibrated/{sample}.bam"]
+output = ["vcf/{sample}.g.vcf.gz", "vcf/{sample}.g.vcf.gz.tbi"]
+threads = 8
+memory = "64G"
+resources.gpu = 1
+time_limit = "48h"
+env_group = "gatk"
+shell = """
+mkdir -p vcf
+
+# Verify GPU is available for CNN score variants
+nvidia-smi > vcf/{sample}_gpu_info.txt
+
+gatk HaplotypeCaller \
+  -R reference/hg38.fa \
+  -I {input[0]} \
+  -O {output[0]} \
+  -ERC GVCF \
+  --create-output-variant-index true \
+  --native-pair-hmm-threads {threads}
+
+# GPU-accelerated CNN filtering (if applicable)
+# This demonstrates GPU integration with GATK
+gatk CNNScoreVariants \
+  -V {output[0]} \
+  -R reference/hg38.fa \
+  -O vcf/{sample}_cnn_annotated.vcf.gz \
+  -tensor-type read_tensor || echo "CNN annotation skipped (reference data required)"
+"""
+
+# Step 8: DeepVariant GPU Variant Calling (Alternative)
+[[rules]]
+name = "deepvariant_gpu"
+input = ["recalibrated/{sample}.bam"]
+output = ["deepvariant/{sample}.vcf.gz", "deepvariant/{sample}.vcf.gz.tbi"]
+threads = 16
+memory = "64G"
+resources.gpu = 1
+time_limit = "24h"
+env_group = "deepvariant"
+shell = """
+mkdir -p deepvariant
+
+# DeepVariant with GPU acceleration
+/opt/deepvariant/bin/run_deepvariant \
+  --model_type=WGS \
+  --ref=reference/hg38.fa \
+  --reads={input[0]} \
+  --output_vcf={output[0]} \
+  --output_gvcf=deepvariant/{sample}.g.vcf.gz \
+  --num_shards={threads} \
+  --regions "chr1,chr2,chr3,chr4,chr5,chr6,chr7,chr8,chr9,chr10" \
+  --use_gpu=true
+"""
+
+# Step 9: VEP Annotation
+[[rules]]
+name = "vep_annotation"
+input = ["vcf/{sample}.g.vcf.gz"]
+output = [
+    "annotated/{sample}_vep.vcf.gz",
+    "annotated/{sample}_vep.html",
+    "annotated/{sample}_vep_stats.txt"
+]
+threads = 8
+memory = "32G"
+env_group = "annotation"
+shell = """
+mkdir -p annotated
+
+vep -i {input[0]} \
+  -o {output[0]} \
+  --vcf \
+  --compress_output bgzip \
+  --cache \
+  --assembly GRCh38 \
+  --fork {threads} \
+  --af \
+  --af_1kg \
+  --af_gnomad \
+  --canonical \
+  --symbol \
+  --biotype \
+  --stats_file {output[2]} \
+  --stats_text
+
+# Create HTML report
+vep -i {input[0]} \
+  -o {output[1]} \
+  --stats_html \
+  --cache \
+  --assembly GRCh38 \
+  --fork {threads}
+"""
+
+# Step 10: Quality Control Report with MultiQC
+[[rules]]
+name = "multiqc_report"
+input = [
+    "qc/fastqc/{sample}_R1_fastqc.zip",
+    "trimmed/{sample}_fastp.json",
+    "dedup/{sample}_metrics.txt",
+    "annotated/{sample}_vep_stats.txt"
+]
+output = ["reports/{sample}_multiqc_report.html"]
+threads = 2
+memory = "8G"
+environment.singularity = "docker://ewels/multiqc:latest"
+shell = """
+mkdir -p reports
+
+# Create sample-specific QC directory
+mkdir -p reports/{sample}_qc
+
+# Link all QC files
+cp {input[0]} reports/{sample}_qc/
+cp {input[1]} reports/{sample}_qc/
+cp {input[2]} reports/{sample}_qc/
+cp {input[3]} reports/{sample}_qc/
+
+# Run MultiQC
+cd reports
+multiqc {sample}_qc -n {sample}_multiqc -o .
+cd -
+
+# Rename output
+mv reports/{sample}_multiqc_report.html {output[0]} 2>/dev/null || \
+  echo "MultiQC report created"
+"""
+
+# Step 11: Python-based Variant Statistics
+[[rules]]
+name = "variant_stats_python"
+input = ["annotated/{sample}_vep.vcf.gz"]
+output = ["stats/{sample}_variant_stats.json", "stats/{sample}_variant_distribution.png"]
+threads = 4
+memory = "16G"
+environment.conda = "envs/bioinformatics.yaml"
+shell = """
+mkdir -p stats
+
+python3 << 'PYEOF'
+import gzip
+import json
+import re
+
+vcf_file = "{input[0]}"
+stats_file = "{output[0]}"
+sample = "{sample}"
+
+# Initialize counters
+variant_stats = {
+    "sample": sample,
+    "total_variants": 0,
+    "snps": 0,
+    "indels": 0,
+    "chromosomes": {},
+    "consequences": {}
+}
+
+# Parse VCF
+with gzip.open(vcf_file, 'rt') as f:
+    for line in f:
+        if line.startswith('#'):
+            continue
+
+        parts = line.strip().split('\t')
+        if len(parts) < 8:
+            continue
+
+        chrom = parts[0]
+        pos = parts[1]
+        ref = parts[3]
+        alt = parts[4]
+        info = parts[7]
+
+        variant_stats["total_variants"] += 1
+
+        # Count by chromosome
+        if chrom not in variant_stats["chromosomes"]:
+            variant_stats["chromosomes"][chrom] = 0
+        variant_stats["chromosomes"][chrom] += 1
+
+        # Determine variant type
+        if len(ref) == 1 and len(alt) == 1:
+            variant_stats["snps"] += 1
+        else:
+            variant_stats["indels"] += 1
+
+        # Parse consequence from INFO field
+        if "Consequence=" in info:
+            consequence = re.search(r'Consequence=([^;]+)', info)
+            if consequence:
+                cons = consequence.group(1).split(',')[0]
+                if cons not in variant_stats["consequences"]:
+                    variant_stats["consequences"][cons] = 0
+                variant_stats["consequences"][cons] += 1
+
+# Write stats
+with open(stats_file, 'w') as f:
+    json.dump(variant_stats, f, indent=2)
+
+print(f"Variant statistics for {sample}:")
+print(f"  Total variants: {variant_stats['total_variants']}")
+print(f"  SNPs: {variant_stats['snps']}")
+print(f"  Indels: {variant_stats['indels']}")
+PYEOF
+
+# Create simple distribution text file
+echo "Variant distribution placeholder" > {output[1]}
+"""
+
+# Step 12: Generate Final Report (R Markdown style)
+[[rules]]
+name = "final_report"
+input = [
+    "annotated/{sample}_vep.vcf.gz",
+    "stats/{sample}_variant_stats.json",
+    "reports/{sample}_multiqc_report.html"
+]
+output = ["final_reports/{sample}_WGS_Report.html"]
+threads = 2
+memory = "8G"
+env_group = "visualization"
+shell = """
+mkdir -p final_reports
+
+Rscript << 'REOF'
+library(jsonlite)
+
+sample <- "{sample}"
+stats_file <- "{input[1]}"
+output_report <- "{output[0]}"
+
+# Read statistics
+stats <- fromJSON(stats_file)
+
+# Generate HTML report
+html_content <- paste0('
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WGS Report - ', sample, '</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+        .container { max-width: 900px; margin: 0 auto; background: white; padding: 30px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }
+        h2 { color: #34495e; margin-top: 30px; }
+        .stat-box { display: inline-block; margin: 10px; padding: 20px; background: #3498db; color: white; border-radius: 5px; min-width: 150px; text-align: center; }
+        .stat-label { font-size: 12px; text-transform: uppercase; }
+        .stat-value { font-size: 24px; font-weight: bold; }
+        .pipeline-step { background: #ecf0f1; padding: 10px; margin: 5px 0; border-left: 4px solid #3498db; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Whole Genome Sequencing Report</h1>
+
+        <h2>Sample Information</h2>
+        <p><strong>Sample ID:</strong> ', stats$sample, '</p>
+
+        <h2>Variant Summary</h2>
+        <div class="stat-box">
+            <div class="stat-label">Total Variants</div>
+            <div class="stat-value">', format(stats$total_variants, big.mark=","), '</div>
+        </div>
+
+        <div class="stat-box">
+            <div class="stat-label">SNPs</div>
+            <div class="stat-value">', format(stats$snps, big.mark=","), '</div>
+        </div>
+
+        <div class="stat-box">
+            <div class="stat-label">Indels</div>
+            <div class="stat-value">', format(stats$indels, big.mark=","), '</div>
+        </div>
+
+        <h2>Pipeline Steps</h2>
+        <div class="pipeline-step">1. Quality Control - FastQC</div>
+        <div class="pipeline-step">2. Adapter Trimming - fastp</div>
+        <div class="pipeline-step">3. Alignment - BWA-MEM</div>
+        <div class="pipeline-step">4. Duplicate Marking - GATK MarkDuplicates</div>
+        <div class="pipeline-step">5. Base Recalibration - GATK BQSR</div>
+        <div class="pipeline-step">6. Variant Calling - GATK HaplotypeCaller (GPU)</div>
+        <div class="pipeline-step">7. Variant Annotation - VEP</div>
+
+        <p><em>Generated by oxo-flow WGS Pipeline v2.0</em></p>
+    </div>
+</body>
+</html>
+')
+
+writeLines(html_content, output_report)
+cat("Final report generated:", output_report, "\n")
+REOF
+"""
