@@ -1,0 +1,28 @@
+# Alignment files
+*.bam
+*.bam.bai
+*.cram
+*.cram.crai
+*.sam
+
+# Variant files
+*.vcf.gz
+*.vcf.gz.tbi
+*.bcf
+
+# Index files
+*.fai
+*.dict
+
+# Workflow outputs
+logs/
+results/
+benchmarks/
+
+# oxo-flow internals
+.oxo-flow/
+.oxo-flow-cache/
+
+# OS files
+.DS_Store
+Thumbs.db

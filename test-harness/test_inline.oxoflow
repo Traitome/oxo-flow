@@ -1,0 +1,17 @@
+[workflow]
+name = "test"
+version = "1.0.0"
+
+[[rules]]
+name = "setup"
+output = ["data.txt"]
+shell = "echo test > data.txt"
+
+[[rules]]
+name = "gpu_task"
+input = ["data.txt"]
+output = ["gpu_output.txt"]
+threads = 4
+resources = { gpu = 1, memory = "32G" }
+environment = { modules = ["cuda"] }
+shell = "echo gpu > gpu_output.txt"

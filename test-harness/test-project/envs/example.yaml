@@ -1,0 +1,9 @@
+# Example Conda environment specification
+name: example-env
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies:
+  - fastp=0.23.4
+  - samtools=1.18

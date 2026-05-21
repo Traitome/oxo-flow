@@ -1,0 +1,15 @@
+[workflow]
+name = "optional-test"
+version = "1.0.0"
+
+[[rules]]
+name = "required_step"
+output = ["data/required.txt"]
+shell = "mkdir -p data && echo 'required' > data/required.txt"
+
+[[rules]]
+name = "optional_step"
+input = ["data/maybe_missing.txt"]
+output = ["data/optional_out.txt"]
+optional = true
+shell = "cat {input[0]} > {output[0]}"
