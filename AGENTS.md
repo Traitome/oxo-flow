@@ -39,3 +39,4 @@ make ci
 - **Documentation:** Public APIs in `oxo-flow-core` should have doc comments.
 - **Testing:** New features require corresponding unit or integration tests.
 - **Errors:** Return `Result` early; use context where helpful.
+- **Markdown lists:** Always insert a blank line between a text paragraph and a list (`-`/`*`). A paragraph followed immediately by `-` on the next line will NOT render as a list in many Markdown engines — the `-` is shown as literal text. Do NOT insert blank lines between items within the same list; only between a preceding paragraph and the list start.

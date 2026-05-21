@@ -203,6 +203,7 @@ When reporting real-world testing results, please use the `[Real-World Testing]`
 ```
 
 Include details about:
+
 - Your cluster type and version (e.g., "SLURM 22.05.3")
 - The workflow or command you ran
 - What happened vs. what you expected

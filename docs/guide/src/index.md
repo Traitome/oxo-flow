@@ -161,6 +161,7 @@ A **Workflow** is the entire pipeline definition (usually a `.oxoflow` file). It
 
 ### Rule
 A **Rule** is a single processing step. It defines:
+
 - **Input**: The files needed to run (e.g., raw reads).
 - **Output**: The files produced by the step (e.g., aligned BAM).
 - **Command**: The actual shell command to execute (e.g., `bwa mem`).

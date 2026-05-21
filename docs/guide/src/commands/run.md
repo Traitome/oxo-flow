@@ -152,6 +152,7 @@ Done: 5 succeeded, 0 failed
 ```
 
 A progress bar shows execution progress with:
+
 - Elapsed time
 - Current position / total rules
 - Success/Fail/Skip counts
