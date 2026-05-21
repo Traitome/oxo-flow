@@ -493,6 +493,27 @@ make ci
 - 📖 **Documentation** — [traitome.github.io/oxo-flow/documentation/](https://traitome.github.io/oxo-flow/documentation/)
 - ❓ **Questions** — [Ask DeepWiki](https://deepwiki.com/Traitome/oxo-flow)
 
+### 🧪 We Need Your Real-World Feedback
+
+oxo-flow aims to be a **production-ready bioinformatics pipeline engine** that works reliably across diverse computing environments — from laptops to institutional HPC clusters with SLURM/PBS/SGE/LSF schedulers, GPU nodes, and complex software ecosystems.
+
+**During development, we've encountered a fundamental challenge:** While we have comprehensive unit and integration tests, we cannot replicate the full diversity of real-world deployment scenarios in CI:
+
+- **Cluster configurations** vary widely (different schedulers, policies, module systems)
+- **Bioinformatics tools** have complex dependency chains and environment quirks
+- **GPU computing** setups differ significantly between sites
+- **Data scales** from gigabytes to petabytes introduce unique scaling challenges
+- **Workflow patterns** in real research are more diverse than any test suite can cover
+
+**Your feedback is critical.** If you use oxo-flow — whether it works perfectly or breaks — please share your experience:
+
+- ✅ **Success stories** — What worked? What hardware/software environment?
+- ❌ **Failures** — Error messages, cluster type, workflow snippet if possible
+- ⚠️ **Unexpected behavior** — Things that "worked" but seemed wrong or confusing
+- 🚀 **Feature requests** — What would make your life easier?
+
+📬 **Open a [GitHub Issue](https://github.com/Traitome/oxo-flow/issues)** with the prefix `[Real-World Testing]` — we actively monitor and respond to these reports. Your feedback directly shapes our priorities and helps us build a tool that truly serves the bioinformatics community.
+
 ## Additional Resources
 
 - [LIMITATIONS.md](LIMITATIONS.md) — Known limitations and constraints
