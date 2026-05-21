@@ -16,7 +16,7 @@ container builds, and dependency resolution.
 | Pixi | Multi-language environments | Tsinghua Tuna |
 | Docker | Container images | USTC / Tsinghua |
 | Cargo (Rust) | Rust crates index | RsProxy / Tsinghua |
-| Git (GitHub) | Advisory database, sources | ghfast.top / gh-proxy |
+| Git (GitHub) | Advisory database, sources | SSH first, then ghfast.top / gh-proxy |
 
 ---
 
@@ -136,6 +136,37 @@ git config --global url."https://ghfast.top/https://github.com/".insteadOf "http
 ```
 
 This also speeds up `cargo audit` advisory database updates.
+See the [Git (GitHub)](#git-github) section below for more proxy options and SSH fallback.
+
+---
+
+## Git (GitHub)
+
+When HTTPS-based GitHub proxies (like `ghfast.top`) are slow or unreliable,
+try using SSH to clone as a first alternative — SSH often bypasses the same
+network issues that affect HTTPS:
+
+```bash
+git clone git@github.com:oxoflow/oxo-flow.git
+```
+
+To convert an existing HTTPS remote to SSH:
+
+```bash
+git remote set-url origin git@github.com:oxoflow/oxo-flow.git
+```
+
+You can also configure Git to always rewrite HTTPS URLs to SSH globally:
+
+```bash
+git config --global url."git@github.com:".insteadOf "https://github.com/"
+```
+
+If SSH is blocked, fall back to HTTPS proxies:
+
+```bash
+git config --global url."https://ghfast.top/https://github.com/".insteadOf "https://github.com/"
+```
 
 Common GitHub proxies:
 
