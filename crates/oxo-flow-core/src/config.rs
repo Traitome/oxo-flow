@@ -1220,6 +1220,9 @@ impl WorkflowConfig {
             }
         }
 
+        // Derive standard reference paths from reference_dir (e.g., reference_fasta = reference_dir + "/genome.fa")
+        config = config.with_derived_references();
+
         config.validate()?;
         Ok(config)
     }
@@ -1290,7 +1293,12 @@ impl WorkflowConfig {
     ///
     /// Returns a map of derived paths for keys that are not explicitly set.
     pub fn derive_reference_paths(&self) -> HashMap<String, String> {
-        let Some(ref base) = self.reference_dir else {
+        // Support both top-level `reference_dir` and `[config]` reference_dir
+        let base = self
+            .reference_dir
+            .as_deref()
+            .or_else(|| self.config.get("reference_dir").and_then(|v| v.as_str()));
+        let Some(base) = base else {
             return HashMap::new();
         };
 
