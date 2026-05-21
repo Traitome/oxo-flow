@@ -23,6 +23,7 @@ pub async fn run_command(
     max_memory: u64,
     skip_env_setup: bool,
     cache_dir: Option<PathBuf>,
+    provenance: bool,
 ) -> Result<()> {
     print_banner();
     let workflow = resolve_workflow(workflow)?;
@@ -165,6 +166,9 @@ pub async fn run_command(
         CheckpointState::default()
     };
 
+    // Store workflow path in checkpoint for resume support
+    checkpoint.set_workflow_path(&workflow);
+
     // When --resume-failed is set, clear failed rules from checkpoint so they re-execute.
     if resume_failed && checkpoint_path.exists() {
         let failed_count = checkpoint.failed_rules.len();
@@ -235,6 +239,20 @@ pub async fn run_command(
                         cpu_seconds: None,
                     };
                     checkpoint.mark_completed(rule_name, benchmark);
+                    if provenance {
+                        for output in &rule.output {
+                            let output_path =
+                                workdir.as_ref().unwrap_or(&workflow_dir).join(output);
+                            if output_path.exists()
+                                && let Ok(checksum) =
+                                    oxo_flow_core::executor::checkpoint::compute_file_checksum(
+                                        &output_path,
+                                    )
+                            {
+                                checkpoint.record_checksum(output, checksum);
+                            }
+                        }
+                    }
                     let _ = checkpoint.save_to_file(&checkpoint_path);
                 } else if record.status == oxo_flow_core::executor::JobStatus::Skipped {
                     skipped_count += 1;
@@ -242,10 +260,26 @@ pub async fn run_command(
                     fail_count += 1;
                     checkpoint.mark_failed(rule_name);
                     let _ = checkpoint.save_to_file(&checkpoint_path);
+                    // Build detailed error message with stderr and exit code
+                    let mut err_msg = format!("rule '{}' failed", rule_name);
+                    if let Some(ref stderr) = record.stderr {
+                        let trimmed = stderr.trim();
+                        if !trimmed.is_empty() {
+                            err_msg.push_str(&format!("\nstderr: {}", trimmed));
+                        }
+                    }
+                    if let Some(code) = record.exit_code {
+                        err_msg.push_str(&format!("\nexit code: {}", code));
+                    }
+                    if let Some(ref cmd) = record.command {
+                        err_msg.push_str(&format!("\ncommand: {}", cmd));
+                    }
                     if !keep_going {
                         progress.finish_and_clear();
-                        return Err(anyhow::anyhow!("rule '{}' failed", rule_name));
+                        return Err(anyhow::anyhow!(err_msg));
                     }
+                    // In keep_going mode, still print the error
+                    eprintln!("  {} {}", "✗".red(), err_msg);
                 }
             }
             Err(e) => {
@@ -429,9 +463,32 @@ pub async fn debug_command(workflow: PathBuf, rule_name: Option<String>) -> Resu
 
 pub async fn handle_status(checkpoint_path: PathBuf) -> Result<()> {
     print_banner();
+
+    // Detect common mistake: user passes a .oxoflow file instead of checkpoint
+    if checkpoint_path
+        .extension()
+        .is_some_and(|ext| ext == "oxoflow")
+    {
+        eprintln!(
+            "{} '{}' appears to be a workflow file, not a checkpoint.",
+            "Warning:".bold().yellow(),
+            checkpoint_path.display()
+        );
+        eprintln!(
+            "  The 'status' command expects a checkpoint file (e.g., .oxo-flow/checkpoint.json)."
+        );
+        eprintln!(
+            "  Run 'oxo-flow run {}' first to generate a checkpoint.",
+            checkpoint_path.display()
+        );
+        anyhow::bail!("Cannot read workflow file as checkpoint");
+    }
+
     let state = CheckpointState::load_from_file(&checkpoint_path).with_context(|| {
         format!(
-            "failed to load checkpoint from {}",
+            "failed to load checkpoint from '{}'.\n  \
+             Check that the file exists and is a valid checkpoint (JSON format).\n  \
+             Checkpoint files are generated automatically by 'oxo-flow run' in .oxo-flow/checkpoint.json.",
             checkpoint_path.display()
         )
     })?;
@@ -461,16 +518,91 @@ pub async fn handle_status(checkpoint_path: PathBuf) -> Result<()> {
     Ok(())
 }
 
-pub async fn resume_command(checkpoint: Option<PathBuf>, jobs: usize) -> Result<()> {
+pub async fn resume_command(checkpoint: PathBuf, jobs: usize) -> Result<()> {
     print_banner();
-    eprintln!(
-        "{} The 'resume' command is not yet fully implemented as a standalone command.",
-        "Note:".bold().cyan()
-    );
-    eprintln!("  By default, 'oxo-flow run' will automatically resume if a checkpoint exists.");
 
-    if let Some(path) = checkpoint {
-        eprintln!("  Resuming from: {} with {} jobs", path.display(), jobs);
+    // Load checkpoint state
+    let state = CheckpointState::load_from_file(&checkpoint).with_context(|| {
+        format!(
+            "failed to load checkpoint from '{}'.\n  \
+             Check that the file exists and is a valid checkpoint (JSON format).",
+            checkpoint.display()
+        )
+    })?;
+
+    // Get workflow path from checkpoint
+    let workflow_path = match &state.workflow_path {
+        Some(p) => PathBuf::from(p),
+        None => {
+            anyhow::bail!(
+                "Checkpoint does not contain a workflow reference.\n  \
+                 The checkpoint at '{}' was generated by an older version of oxo-flow.\n  \
+                 To resume manually, run: oxo-flow run <workflow.oxoflow>\n  \
+                 (oxo-flow run automatically resumes from the checkpoint)",
+                checkpoint.display()
+            );
+        }
+    };
+
+    if !workflow_path.exists() {
+        anyhow::bail!(
+            "Workflow file '{}' referenced by checkpoint no longer exists.\n  \
+             The workflow may have been moved or deleted.",
+            workflow_path.display()
+        );
     }
-    Ok(())
+
+    let completed = state.completed_rules.len();
+    let failed = state.failed_rules.len();
+
+    eprintln!(
+        "{} Resuming workflow '{}'",
+        "Resume:".bold().cyan(),
+        workflow_path.display()
+    );
+    eprintln!("  Checkpoint: {}", checkpoint.display());
+    eprintln!(
+        "  State: {} completed, {} failed, {} remaining",
+        completed,
+        failed,
+        state
+            .completed_rules
+            .len()
+            .saturating_sub(completed.saturating_sub(failed))
+    );
+
+    if completed == 0 && failed == 0 {
+        eprintln!(
+            "  {} No rules have been executed yet. Use 'oxo-flow run' instead.",
+            "Note:".yellow()
+        );
+        return Ok(());
+    }
+
+    // Re-run the workflow — the checkpoint with completed rules will cause
+    // already-finished rules to be skipped automatically
+    eprintln!();
+    eprintln!(
+        "{} Launching executor with {} parallel job(s)...",
+        "Info:".bold().cyan(),
+        jobs
+    );
+
+    run_command(
+        Some(workflow_path),
+        jobs,
+        false,           // keep_going
+        None,            // workdir
+        Vec::new(),      // target
+        0,               // retry
+        "0".to_string(), // timeout
+        false,           // resume_failed (user can re-run with --resume-failed in 'run')
+        None,            // profile
+        0,               // max_threads
+        0,               // max_memory
+        false,           // skip_env_setup
+        None,            // cache_dir
+        false,           // provenance (checkpoint already has checksums)
+    )
+    .await
 }

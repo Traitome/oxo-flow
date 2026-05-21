@@ -84,6 +84,8 @@ pub enum Commands {
         skip_env_setup: bool,
         #[arg(long)]
         cache_dir: Option<PathBuf>,
+        #[arg(long)]
+        provenance: bool,
     },
     /// Resume an interrupted workflow from a checkpoint.
     Resume {
@@ -363,6 +365,9 @@ pub enum ClusterAction {
         target: Vec<String>,
         #[arg(long)]
         dry_run: bool,
+        /// Generate job scripts with dependency support and a wrapper script
+        #[arg(long)]
+        with_dependencies: bool,
     },
     Status {
         #[arg(short = 'b', long)]
@@ -431,6 +436,7 @@ async fn main() -> Result<()> {
             max_memory,
             skip_env_setup,
             cache_dir,
+            provenance,
         } => {
             run_command(
                 workflow,
@@ -446,10 +452,11 @@ async fn main() -> Result<()> {
                 max_memory,
                 skip_env_setup,
                 cache_dir,
+                provenance,
             )
             .await?
         }
-        Commands::Resume { checkpoint, jobs } => resume_command(Some(checkpoint), jobs).await?,
+        Commands::Resume { checkpoint, jobs } => resume_command(checkpoint, jobs).await?,
         Commands::DryRun { workflow, target } => {
             dry_run_command(workflow, target, cli.verbose).await?
         }
@@ -460,10 +467,7 @@ async fn main() -> Result<()> {
             validate_command(workflow, as_include)?;
         }
         Commands::Init { name, dir } => init_command(name, dir)?,
-        Commands::Template {
-            template,
-            output: _,
-        } => template_command(template)?,
+        Commands::Template { template, output } => template_command(template, output)?,
         Commands::Graph {
             workflow,
             format,

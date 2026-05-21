@@ -360,7 +360,10 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                     ),
                     rule: Some(rule.name.clone()),
                     code: "E009".to_string(),
-                    suggestion: Some("avoid using '..' in input paths".to_string()),
+                    suggestion: Some(
+                        "avoid using '..' in input paths; define the external directory in [config] and reference it as {{config.name}}"
+                            .to_string(),
+                    ),
                 });
             }
             // Check for absolute paths
@@ -400,7 +403,10 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                     ),
                     rule: Some(rule.name.clone()),
                     code: "E009".to_string(),
-                    suggestion: Some("avoid using '..' in output paths".to_string()),
+                    suggestion: Some(
+                        "avoid using '..' in output paths; keep all outputs within the workflow directory"
+                            .to_string(),
+                    ),
                 });
             }
             // Check for absolute paths

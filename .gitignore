@@ -51,3 +51,14 @@ oxo-flow-clindet/
 oxo-flow-circrna/
 oxo-flow-venus/
 .playwright-mcp/
+
+# Test harness generated files and directories
+test-harness/*-test/
+test-harness/*-jobs/
+test-harness/deep-test-*/
+test-harness/logs/
+test-harness/qc/
+test-harness/data/
+test-harness/.oxo-flow/
+test-harness/*.toml
+test-harness/*.txt

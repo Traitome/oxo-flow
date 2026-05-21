@@ -292,9 +292,12 @@ pub struct LocalExecutor {
 impl LocalExecutor {
     pub fn new(config: ExecutorConfig) -> Self {
         let semaphore = Arc::new(Semaphore::new(config.max_jobs));
-        let env_resolver = match &config.cache_dir {
-            Some(cache_dir) => EnvironmentResolver::with_cache_dir(cache_dir),
-            None => EnvironmentResolver::new(),
+        let env_resolver = {
+            let cache_dir = config
+                .cache_dir
+                .clone()
+                .unwrap_or_else(|| config.workdir.join(".oxo-flow").join("env-cache"));
+            EnvironmentResolver::with_cache_dir(&cache_dir)
         };
         let (max_threads, max_memory_mb) = Self::detect_system_resources(&config);
         let mut resource_pool = ResourcePool::new(max_threads, max_memory_mb);
@@ -494,13 +497,22 @@ impl LocalExecutor {
         for cmd in &resolved_commands {
             validate_shell_safety(cmd)?;
             for warning in sanitize_shell_command(cmd) {
-                tracing::warn!(rule = %rule.name, "{warning}");
+                tracing::info!(rule = %rule.name, "{warning} (common in bioinformatics scripts)");
             }
         }
 
         // Validate output paths for traversal safety
         for output_pattern in rule.output.to_vec() {
             validate_path_safety(&self.config.workdir, &output_pattern)?;
+        }
+
+        // Warn if GPU is requested but running on local executor (no GPU scheduling)
+        if rule.resources.gpu_spec.is_some() {
+            tracing::warn!(
+                rule = %rule.name,
+                "GPU spec declared but running on local executor — GPU resources will not be verified. \
+                 Use a cluster backend (slurm, pbs, sge, lsf) for GPU scheduling."
+            );
         }
 
         if self.config.dry_run {
@@ -724,7 +736,7 @@ impl LocalExecutor {
                         tracing::warn!(rule = %rule.name, error = %e, "dry-run: dangerous shell command detected");
                     }
                     for warning in sanitize_shell_command(cmd) {
-                        tracing::warn!(rule = %rule.name, "{warning}");
+                        tracing::info!(rule = %rule.name, "{warning} (common in bioinformatics scripts)");
                     }
                 }
                 // Also check the raw command if no wrapped version
@@ -733,7 +745,7 @@ impl LocalExecutor {
                         tracing::warn!(rule = %rule.name, error = %e, "dry-run: dangerous shell command detected");
                     }
                     for warning in sanitize_shell_command(raw_cmd) {
-                        tracing::warn!(rule = %rule.name, "{warning}");
+                        tracing::info!(rule = %rule.name, "{warning} (common in bioinformatics scripts)");
                     }
                 }
 
@@ -832,6 +844,9 @@ pub fn render_shell_command(
         }
     }
     expanded = expanded.replace("{threads}", &rule.effective_threads().to_string());
+    if let Some(mem) = rule.effective_memory() {
+        expanded = expanded.replace("{memory}", mem);
+    }
     for (key, value) in &rule.params {
         let string_val = match value {
             toml::Value::String(s) => s.clone(),

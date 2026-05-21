@@ -78,6 +78,7 @@ make ci
 ```
 
 All five checks must pass:
+
 - `cargo fmt -- --check`
 - `cargo clippy --workspace -- -D warnings`
 - `cargo build --workspace`

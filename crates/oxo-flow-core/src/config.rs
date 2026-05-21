@@ -177,6 +177,27 @@ pub struct WorkflowMeta {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pairs_pattern: Option<String>,
+
+    /// Wildcard pattern for auto-discovering samples from the filesystem.
+    ///
+    /// When specified, oxo-flow scans for files matching this pattern and extracts
+    /// `{sample}` values automatically, eliminating the need for explicit
+    /// `[[sample_groups]]` declaration.
+    ///
+    /// The pattern must contain the `{sample}` wildcard.
+    ///
+    /// # Example
+    ///
+    /// ```toml
+    /// [workflow]
+    /// sample_pattern = "raw/{sample}_R1.fastq.gz"
+    /// ```
+    ///
+    /// For files `raw/Pt01_R1.fastq.gz`, `raw/Pt02_R1.fastq.gz`, creates sample
+    /// group `auto-discovered` with samples ["Pt01", "Pt02"].
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_pattern: Option<String>,
 }
 
 fn default_version() -> String {
@@ -1046,6 +1067,19 @@ impl<S> WorkflowState<S> {
     }
 }
 
+/// Expand `{config.name}` placeholders in a path using provided config values.
+fn expand_config_vars_in_path(path: &str, config: &HashMap<String, toml::Value>) -> String {
+    let mut result = path.to_string();
+    for (key, value) in config {
+        let string_val = match value {
+            toml::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        result = result.replace(&format!("{{{{config.{key}}}}}"), &string_val);
+    }
+    result
+}
+
 impl WorkflowConfig {
     /// Parse a workflow configuration from a TOML string.
     #[must_use = "parsing a config returns a Result that must be used"]
@@ -1119,6 +1153,76 @@ impl WorkflowConfig {
             tracing::info!("Loaded {} sample groups from {}", count, groups_file);
         }
 
+        // Auto-discover samples from filesystem pattern
+        if let Some(ref sample_pattern) = config.workflow.sample_pattern {
+            // Expand config variables in the pattern (e.g. {config.data_dir}/.../{sample}_R1.fq.gz)
+            let expanded_pattern = expand_config_vars_in_path(sample_pattern, &config.config);
+
+            // Validate pattern contains {sample} wildcard
+            if !expanded_pattern.contains("{sample}") {
+                return Err(OxoFlowError::Config {
+                    message: format!(
+                        "sample_pattern must contain {{sample}} wildcard after expansion: '{}'",
+                        expanded_pattern
+                    ),
+                });
+            }
+
+            // Resolve the base directory and filename pattern.
+            let sp = std::path::Path::new(&expanded_pattern);
+            let (search_dir, file_pattern) = if sp.is_absolute() {
+                if let Some(file_name) = sp.file_name() {
+                    let dir = sp.parent().unwrap_or(std::path::Path::new("/"));
+                    (dir.to_path_buf(), file_name.to_string_lossy().to_string())
+                } else {
+                    (parent.to_path_buf(), expanded_pattern)
+                }
+            } else if let Some(file_name) = sp.file_name() {
+                let dir = sp.parent().unwrap_or(std::path::Path::new(""));
+                (parent.join(dir), file_name.to_string_lossy().to_string())
+            } else {
+                (parent.to_path_buf(), expanded_pattern)
+            };
+
+            let discovered =
+                crate::wildcard::discover_wildcards_from_pattern(&search_dir, &file_pattern)?;
+            if discovered.is_empty() {
+                tracing::warn!(
+                    "sample_pattern '{}' matched no files in {}",
+                    sample_pattern,
+                    search_dir.display()
+                );
+            } else {
+                // Extract sample values from discovered combinations
+                let auto_samples: Vec<String> = discovered
+                    .iter()
+                    .filter_map(|combo| combo.get("sample").cloned())
+                    .collect();
+
+                if !auto_samples.is_empty() {
+                    let auto_group = SampleGroup {
+                        name: "auto-discovered".to_string(),
+                        samples: auto_samples.clone(),
+                        metadata: HashMap::new(),
+                    };
+                    config.sample_groups.push(auto_group);
+                    tracing::info!(
+                        "Auto-discovered {} samples from pattern '{}'",
+                        auto_samples.len(),
+                        sample_pattern
+                    );
+                } else {
+                    tracing::warn!(
+                        "sample_pattern '{}' matched files but no {{sample}} values were extracted",
+                        sample_pattern
+                    );
+                }
+            }
+        }
+
+        // Derive standard reference paths from reference_dir (e.g., reference_fasta = reference_dir + "/genome.fa")
+        config = config.with_derived_references();
+
         config.validate()?;
         Ok(config)
     }
@@ -1189,7 +1293,12 @@ impl WorkflowConfig {
     ///
     /// Returns a map of derived paths for keys that are not explicitly set.
     pub fn derive_reference_paths(&self) -> HashMap<String, String> {
-        let Some(ref base) = self.reference_dir else {
+        // Support both top-level `reference_dir` and `[config]` reference_dir
+        let base = self
+            .reference_dir
+            .as_deref()
+            .or_else(|| self.config.get("reference_dir").and_then(|v| v.as_str()));
+        let Some(base) = base else {
             return HashMap::new();
         };
 

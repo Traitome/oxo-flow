@@ -71,11 +71,17 @@ impl EnvironmentBackend for CondaBackend {
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or(spec);
-        Ok(format!("conda run --no-banner -n {env_name} {command}"))
+        // Wrap the entire shell command so piped/chained commands all run in the env.
+        // conda run only executes a single binary; use bash -c for multi-command shells.
+        let escaped = escape_for_sh_single_quote(command);
+        Ok(format!("conda run -n {env_name} bash -c '{escaped}'"))
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
-        Ok(format!("conda env create -f {spec}"))
+        // Idempotent: try create first (for new envs), fall back to update (for existing)
+        Ok(format!(
+            "conda env create -f {spec} 2>/dev/null || conda env update -f {spec} --prune"
+        ))
     }
 
     fn teardown_command(&self, spec: &str) -> Result<Option<String>> {
@@ -358,7 +364,20 @@ impl EnvironmentBackend for ModulesBackend {
         _resources: Option<&crate::rule::Resources>,
     ) -> Result<String> {
         let modules = spec.replace(',', " ");
-        Ok(format!("module load {modules} && {command}"))
+        // Initialize module system before loading modules
+        // Different HPC sites use different module system installations
+        let module_init = r#"# Initialize module system
+if [ -f /etc/profile.d/modules.sh ]; then
+    source /etc/profile.d/modules.sh
+elif [ -f /usr/share/modules/init/bash ]; then
+    source /usr/share/modules/init/bash
+elif [ -f /usr/share/Modules/init/bash ]; then
+    source /usr/share/Modules/init/bash
+elif [ -f /opt/Modules/default/init/bash ]; then
+    source /opt/Modules/default/init/bash
+fi
+"#;
+        Ok(format!("{module_init}module load {modules} && {command}"))
     }
 
     fn setup_command(&self, _spec: &str) -> Result<String> {
@@ -723,7 +742,8 @@ mod tests {
     fn conda_setup_command() {
         let backend = CondaBackend;
         let cmd = backend.setup_command("envs/qc.yaml").unwrap();
-        assert_eq!(cmd, "conda env create -f envs/qc.yaml");
+        assert!(cmd.contains("conda env create -f envs/qc.yaml"));
+        assert!(cmd.contains("conda env update -f envs/qc.yaml --prune"));
     }
 
     #[test]

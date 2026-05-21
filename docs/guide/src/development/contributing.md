@@ -169,6 +169,50 @@ By contributing, you agree that your contributions will be licensed under the sa
 
 ---
 
+## We Need Your Real-World Feedback
+
+oxo-flow is designed for real-world bioinformatics workflows, but we need your help to make it truly robust across diverse deployment scenarios.
+
+### Why Your Feedback Matters
+
+Our CI pipeline validates basic functionality, but it cannot replicate the complexity of real-world deployments:
+
+- **Cluster configurations** vary widely (SLURM partitions, PBS queues, SGE complexes, LSF queues)
+- **Environment setups** differ (conda channels, module systems, Singularity versions)
+- **Bioinformatics tools** have version-specific quirks
+- **GPU scheduling** behavior varies by cluster
+- **Data scales** from single samples to population cohorts
+- **Workflow patterns** include complex dependencies, conditional execution, scatter-gather
+
+### How to Contribute Feedback
+
+**Success Stories**: Share your workflow that worked perfectly — helps us document proven patterns.
+
+**Problem Reports**: Even "small" issues matter — environment detection failures, unclear error messages, unexpected scheduling behavior.
+
+**Feature Requests**: Missing something? Tell us what would make oxo-flow better for your use case.
+
+### Opening an Issue
+
+When reporting real-world testing results, please use the `[Real-World Testing]` prefix in your issue title:
+
+```
+[Real-World Testing] SLURM GPU job scheduling fails on cluster with multiple partitions
+[Real-World Testing] Conda environment detection issue with custom channels
+[Real-World Testing] Success: Completed 500-sample WGS pipeline on PBS cluster
+```
+
+Include details about:
+
+- Your cluster type and version (e.g., "SLURM 22.05.3")
+- The workflow or command you ran
+- What happened vs. what you expected
+- Any error messages or logs (sanitized if needed)
+
+Your feedback directly shapes our roadmap. Thank you for helping make oxo-flow better!
+
+---
+
 ## Questions?
 
 Open an issue at [github.com/Traitome/oxo-flow/issues](https://github.com/Traitome/oxo-flow/issues) for questions, bug reports, or feature requests.

@@ -6,6 +6,26 @@ use std::path::{Path, PathBuf};
 
 use crate::commands::print_banner;
 
+/// Replace oxo-flow wildcards (`{name}`) with glob `*` for filesystem matching.
+fn replace_oxoflow_wildcards_with_glob(pattern: &str) -> String {
+    let mut result = String::new();
+    let mut in_wildcard = false;
+    for c in pattern.chars() {
+        match c {
+            '{' => {
+                in_wildcard = true;
+                result.push('*');
+            }
+            '}' => {
+                in_wildcard = false;
+            }
+            _ if !in_wildcard => result.push(c),
+            _ => {} // skip chars inside wildcard
+        }
+    }
+    result
+}
+
 pub fn clean_command(workflow: PathBuf, dry_run: bool, force: bool, orphans: bool) -> Result<()> {
     print_banner();
 
@@ -122,20 +142,61 @@ pub fn clean_command(workflow: PathBuf, dry_run: bool, force: bool, orphans: boo
             }
         }
     }
+
+    // Resolve wildcard patterns to actual files via glob
+    let mut resolved_paths: Vec<String> = Vec::new();
+    let mut unresolved_wildcards: Vec<String> = Vec::new();
+    for output in &outputs {
+        let has_wildcard = output.contains('{') && output.contains('}');
+        if has_wildcard {
+            // Convert oxo-flow wildcard {name} to glob * for matching
+            let glob_pattern = replace_oxoflow_wildcards_with_glob(output);
+            match glob::glob(&glob_pattern) {
+                Ok(paths) => {
+                    let mut found = false;
+                    for path in paths.flatten() {
+                        let s = path.to_string_lossy().to_string();
+                        if !resolved_paths.contains(&s) {
+                            resolved_paths.push(s);
+                            found = true;
+                        }
+                    }
+                    if !found {
+                        unresolved_wildcards.push(output.clone());
+                    }
+                }
+                Err(_) => {
+                    unresolved_wildcards.push(output.clone());
+                }
+            }
+        } else {
+            resolved_paths.push(output.clone());
+        }
+    }
+
     if is_dry_run {
         eprintln!("{}", "Would clean (dry-run):".bold().yellow());
-        for output in &outputs {
-            // After config expansion, only true wildcard patterns (e.g. {sample}) remain
-            let has_wildcard = output.contains('{') && output.contains('}');
-            if has_wildcard {
-                eprintln!("  {} (wildcard, skipped)", output.dimmed());
-            } else if Path::new(output).exists() {
-                eprintln!("  {} (exists)", output);
+        for path in &resolved_paths {
+            if Path::new(path).exists() {
+                eprintln!("  {} (exists)", path.dimmed());
             } else {
-                eprintln!("  {} (not found)", output.dimmed());
+                eprintln!("  {} (not found)", path.dimmed());
             }
         }
-        eprintln!("\n{} {} output patterns", "Total:".bold(), outputs.len());
+        for pattern in &unresolved_wildcards {
+            eprintln!("  {} (no files matched)", pattern.dimmed());
+        }
+        eprintln!(
+            "\n{} {} patterns → {} files{}",
+            "Total:".bold(),
+            outputs.len(),
+            resolved_paths.len(),
+            if unresolved_wildcards.is_empty() {
+                "".to_string()
+            } else {
+                format!(" (+ {} unresolved wildcards)", unresolved_wildcards.len())
+            }
+        );
         if !dry_run && !force {
             eprintln!(
                 "\n{}",
@@ -147,16 +208,12 @@ pub fn clean_command(workflow: PathBuf, dry_run: bool, force: bool, orphans: boo
     } else {
         // Determine which files are deletable
         let mut deletable: Vec<String> = Vec::new();
-        let mut skipped_wildcard = 0usize;
+        let skipped_wildcard = unresolved_wildcards.len();
         let mut not_found = 0usize;
         let mut rejected = 0usize;
 
-        for output in &outputs {
-            // After config expansion, only true wildcard patterns (e.g. {sample}) remain
-            let has_wildcard = output.contains('{') && output.contains('}');
-            if has_wildcard {
-                skipped_wildcard += 1;
-            } else if output.contains("..") || output.starts_with('/') || output.starts_with('~') {
+        for output in &resolved_paths {
+            if output.contains("..") || output.starts_with('/') || output.starts_with('~') {
                 eprintln!("  {} {} (rejected: unsafe path)", "✗".red().bold(), output);
                 rejected += 1;
             } else if Path::new(output).exists() {

@@ -307,7 +307,7 @@ fn list_templates(gallery_dir: &Path) -> Result<()> {
 // Apply a single template (copy + name substitution)
 // ---------------------------------------------------------------------------
 
-fn apply_template(gallery_dir: &Path, template_name: &str) -> Result<()> {
+fn apply_template(gallery_dir: &Path, template_name: &str, output: Option<PathBuf>) -> Result<()> {
     // Collect candidate files matching by full stem or descriptive suffix.
     let mut candidates: Vec<PathBuf> = Vec::new();
     for entry in std::fs::read_dir(gallery_dir)
@@ -362,10 +362,19 @@ fn apply_template(gallery_dir: &Path, template_name: &str) -> Result<()> {
     // Substitute the `name` field
     let new_content = substitute_workflow_name(&content, &new_name);
 
-    // Write to current directory
-    let output_path = std::env::current_dir()
-        .context("cannot determine current directory")?
-        .join(format!("{}.oxoflow", &new_name));
+    // Write to specified output path, or current directory with template name
+    let output_path = match output {
+        Some(p) => {
+            if p.is_dir() {
+                p.join(format!("{}.oxoflow", &new_name))
+            } else {
+                p
+            }
+        }
+        None => std::env::current_dir()
+            .context("cannot determine current directory")?
+            .join(format!("{}.oxoflow", &new_name)),
+    };
 
     if output_path.exists() {
         anyhow::bail!(
@@ -387,7 +396,7 @@ fn apply_template(gallery_dir: &Path, template_name: &str) -> Result<()> {
     eprintln!("  {}", output_path.display());
     eprintln!();
     eprintln!("{}  To run this workflow:", "Next steps:".bold().cyan());
-    eprintln!("    oxo-flow run {}.oxoflow", &new_name);
+    eprintln!("    oxo-flow run {}", output_path.display());
     eprintln!();
 
     Ok(())
@@ -397,13 +406,13 @@ fn apply_template(gallery_dir: &Path, template_name: &str) -> Result<()> {
 // Public entry point
 // ---------------------------------------------------------------------------
 
-pub fn template_command(name: Option<String>) -> Result<()> {
+pub fn template_command(name: Option<String>, output: Option<PathBuf>) -> Result<()> {
     print_banner();
 
     let gallery_dir = find_gallery_directory()?;
 
     match name {
         None => list_templates(&gallery_dir),
-        Some(template_name) => apply_template(&gallery_dir, &template_name),
+        Some(template_name) => apply_template(&gallery_dir, &template_name, output),
     }
 }

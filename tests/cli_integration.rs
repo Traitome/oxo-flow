@@ -551,12 +551,25 @@ fn cli_cluster_submit() {
 
 #[test]
 fn cli_cluster_status() {
-    // This will fail on systems without SLURM, which is expected
-    oxo_flow_cmd()
+    // Test that cluster status command executes squeue
+    // On systems with SLURM: command succeeds with squeue output
+    // On systems without SLURM: command fails with squeue error
+    let output = oxo_flow_cmd()
         .args(["cluster", "status", "-b", "slurm"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("squeue"));
+        .output()
+        .expect("Failed to execute command");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{}{}", stderr, stdout);
+
+    // Verify that squeue is mentioned in either stdout or stderr
+    assert!(
+        combined.contains("squeue"),
+        "Expected 'squeue' in output, got stdout: {}, stderr: {}",
+        stdout,
+        stderr
+    );
 }
 
 #[test]
@@ -1643,4 +1656,230 @@ shell = "echo data > out_{config.sample}.txt"
         !dir.path().join("out_CLEAN_SAMPLE.txt").exists(),
         "file should have been deleted by clean"
     );
+}
+
+// ---------------------------------------------------------------------------
+// batch command tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cli_batch_dry_run_items() {
+    oxo_flow_cmd()
+        .args(["batch", "echo {item}", "a", "b", "c", "-n"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn cli_batch_dry_run_from_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let items_file = dir.path().join("items.txt");
+    fs::write(&items_file, "sample1\nsample2\nsample3\n").unwrap();
+    oxo_flow_cmd()
+        .args([
+            "batch",
+            "process {item}",
+            "-f",
+            items_file.to_str().unwrap(),
+            "-n",
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
+fn cli_batch_empty_items_error() {
+    // batch with no items and no file should fail
+    oxo_flow_cmd()
+        .args(["batch", "echo {item}"])
+        .assert()
+        .failure();
+}
+
+// ---------------------------------------------------------------------------
+// publish command tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cli_publish_creates_bundle() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("pub_test.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"pub-test\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo done > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    oxo_flow_cmd()
+        .args(["publish", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    let bundle = dir.path().join("pub_test-bundle");
+    assert!(bundle.exists(), "bundle directory should exist");
+    assert!(
+        bundle.join("pub_test.oxoflow").exists(),
+        "workflow should be in bundle"
+    );
+    assert!(
+        bundle.join("manifest.json").exists(),
+        "manifest should exist"
+    );
+}
+
+#[test]
+fn cli_publish_nonexistent_workflow() {
+    oxo_flow_cmd()
+        .args(["publish", "/nonexistent/path/workflow.oxoflow"])
+        .assert()
+        .failure();
+}
+
+// ---------------------------------------------------------------------------
+// provenance verify tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cli_provenance_verify_no_checksums() {
+    let dir = tempfile::tempdir().unwrap();
+    let cp = dir.path().join("cp.json");
+    fs::write(
+        &cp,
+        r#"{"completed_rules":["step1","step2"],"failed_rules":[]}"#,
+    )
+    .unwrap();
+    oxo_flow_cmd()
+        .args(["provenance", "verify", cp.to_str().unwrap()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("No stored checksums found"));
+}
+
+#[test]
+fn cli_provenance_verify_embedded_checksums() {
+    let dir = tempfile::tempdir().unwrap();
+    // Create a test file with known content
+    let test_file = dir.path().join("verified_out.txt");
+    fs::write(&test_file, "test data for verification").unwrap();
+
+    // Compute SHA-256 manually without external crate
+    let checksum = {
+        use std::hash::Hasher;
+        // Use a simple hash for test purposes — the provenance command
+        // will compare against whatever we put in the checkpoint
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        h.write(b"test data for verification");
+        let hash = h.finish();
+        format!("sha256:{:x}", hash)
+    };
+
+    let cp = dir.path().join("checkpoint.json");
+    let cp_content = format!(
+        r#"{{"completed_rules":["gen"],"failed_rules":[],"checksums":{{"verified_out.txt":"{}"}}}}"#,
+        checksum
+    );
+    fs::write(&cp, &cp_content).unwrap();
+
+    // With a hash mismatch, the command exits with code 1 and reports mismatches
+    oxo_flow_cmd()
+        .args(["provenance", "verify", cp.to_str().unwrap()])
+        .current_dir(dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("mismatched"));
+}
+
+// ---------------------------------------------------------------------------
+// clean --orphans tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cli_clean_orphans_dry_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("orphan_test.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"orphan-test\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join(".oxo-flow/chunks/chunk_001")).unwrap();
+    fs::create_dir_all(dir.path().join(".oxo-flow/chunks/chunk_002")).unwrap();
+
+    oxo_flow_cmd()
+        .args(["clean", wf.to_str().unwrap(), "--orphans"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Would clean"));
+}
+
+#[test]
+fn cli_clean_orphans_force() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("orphan_f.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"orphan-force\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join(".oxo-flow/chunks/chunk_001")).unwrap();
+
+    oxo_flow_cmd()
+        .args(["clean", wf.to_str().unwrap(), "--orphans", "--force"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    assert!(
+        !dir.path().join(".oxo-flow/chunks/chunk_001").exists(),
+        "orphan chunk should be deleted"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// schema command tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cli_schema_outputs_valid_json() {
+    let output = oxo_flow_cmd().args(["schema"]).assert().success();
+
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("schema output should be valid JSON");
+    assert_eq!(
+        parsed["title"], "oxo-flow workflow definition",
+        "schema should have correct title"
+    );
+    assert!(
+        parsed["properties"].get("workflow").is_some(),
+        "schema should define workflow property"
+    );
+    assert!(
+        parsed["properties"].get("rules").is_some(),
+        "schema should define rules property"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// completions command tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cli_completions_all_shells() {
+    for shell in &["bash", "zsh", "fish"] {
+        oxo_flow_cmd()
+            .args(["completions", shell])
+            .assert()
+            .success();
+    }
+}
+
+#[test]
+fn cli_completions_invalid_shell() {
+    oxo_flow_cmd()
+        .args(["completions", "invalid_shell"])
+        .assert()
+        .failure();
 }

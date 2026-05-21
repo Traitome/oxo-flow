@@ -148,6 +148,7 @@ pairs_pattern = "aligned/{pair_id}/{experiment}_vs_{control}.bam"
 ```
 
 For a file `aligned/CASE_001/EXP_01_vs_CTRL_01.bam`, this creates:
+
 - `pair_id = CASE_001`
 - `experiment = EXP_01`
 - `control = CTRL_01`

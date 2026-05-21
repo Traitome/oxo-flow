@@ -92,7 +92,7 @@ Jump to the **How-to Guides**:
 
 ### If you need exact syntax and options
 
-See the **Command Reference** for all 22 CLI subcommands with usage, options, and examples.
+See the **Command Reference** for all 30 CLI subcommands with usage, options, and examples.
 
 ### If you want the full technical details
 
@@ -161,6 +161,7 @@ A **Workflow** is the entire pipeline definition (usually a `.oxoflow` file). It
 
 ### Rule
 A **Rule** is a single processing step. It defines:
+
 - **Input**: The files needed to run (e.g., raw reads).
 - **Output**: The files produced by the step (e.g., aligned BAM).
 - **Command**: The actual shell command to execute (e.g., `bwa mem`).

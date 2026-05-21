@@ -131,6 +131,7 @@ author = "Your Name"
 ### Custom Interpreters (`interpreter_map`)
 
 By default, oxo-flow auto-detects interpreters based on file extensions:
+
 - `.py` → `python3`
 - `.R`, `.r` → `Rscript`
 - `.sh` → `sh`
@@ -740,6 +741,7 @@ aligned/CASE_001/EXP_01_vs_CTRL_01.bam
 ```
 
 Creates pair:
+
 - `pair_id = CASE_001`
 - `experiment = EXP_01`
 - `control = CTRL_01`
@@ -1030,6 +1032,7 @@ cleanup = true
 ### Failure and Retry Logic
 
 In a scatter-gather process, failures are handled at the chunk (map) level:
+
 - If a single chunk fails, only that specific chunk is retried according to the rule's `retries` setting.
 - Sibling chunks continue to process in parallel.
 - The combine step will not execute until all chunks succeed. If any chunk fails exhaustively (after all retries), the combine step is cancelled.

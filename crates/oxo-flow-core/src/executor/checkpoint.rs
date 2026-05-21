@@ -29,6 +29,16 @@ pub struct CheckpointState {
     pub failed_rules: HashSet<String>,
     /// Benchmark records keyed by rule name.
     pub benchmarks: HashMap<String, BenchmarkRecord>,
+    /// Path to the workflow file that generated this checkpoint.
+    /// Enables the `resume` command to locate the original workflow.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow_path: Option<String>,
+    /// Output file checksums for provenance verification.
+    /// Maps relative output file path → "sha256:<hex>".
+    #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub checksums: HashMap<String, String>,
 }
 
 impl CheckpointState {
@@ -38,7 +48,19 @@ impl CheckpointState {
             completed_rules: HashSet::new(),
             failed_rules: HashSet::new(),
             benchmarks: HashMap::new(),
+            workflow_path: None,
+            checksums: HashMap::new(),
         }
+    }
+
+    /// Record a checksum for an output file (provenance tracking).
+    pub fn record_checksum(&mut self, path: &str, checksum: String) {
+        self.checksums.insert(path.to_string(), checksum);
+    }
+
+    /// Set the workflow path that generated this checkpoint.
+    pub fn set_workflow_path(&mut self, path: &Path) {
+        self.workflow_path = Some(path.to_string_lossy().to_string());
     }
 
     /// Mark a rule as successfully completed and store its benchmark.
@@ -191,15 +213,30 @@ pub fn file_is_newer(source: &Path, target: &Path) -> bool {
 /// or an error if the file cannot be read.
 pub fn compute_file_checksum(path: &Path) -> Result<String> {
     use sha2::{Digest, Sha256};
+    use std::io::Read;
 
-    let content = std::fs::read(path).map_err(|e| OxoFlowError::Execution {
+    let file = std::fs::File::open(path).map_err(|e| OxoFlowError::Execution {
         rule: String::new(),
-        message: format!("failed to read {} for checksum: {e}", path.display()),
+        message: format!("failed to open {} for checksum: {e}", path.display()),
     })?;
 
-    // SHA-256 for clinical-grade integrity verification (CLIA/CAP requirement)
+    // Streaming SHA-256 with 64KB buffer — avoids loading entire file into memory.
+    // Critical for large bioinformatics files (BAM, FASTQ can be >100GB).
+    let mut reader = std::io::BufReader::with_capacity(65536, file);
     let mut hasher = Sha256::new();
-    hasher.update(&content);
+    let mut buffer = [0u8; 65536];
+    loop {
+        let n = reader
+            .read(&mut buffer)
+            .map_err(|e| OxoFlowError::Execution {
+                rule: String::new(),
+                message: format!("failed to read {} for checksum: {e}", path.display()),
+            })?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
     let hash = hasher.finalize();
     Ok(format!("sha256:{:x}", hash))
 }
