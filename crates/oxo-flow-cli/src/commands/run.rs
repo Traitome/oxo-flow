@@ -362,6 +362,14 @@ pub async fn dry_run_command(
             eprintln!("     env={}", rule.environment.kind());
         }
 
+        if let Some(ref mem) = rule.effective_memory() {
+            eprintln!("     memory={}", mem);
+        }
+
+        if rule.checkpoint {
+            eprintln!("     checkpoint=true");
+        }
+
         if !rule.output.is_empty() {
             let expanded_outputs: Vec<String> = rule
                 .output

@@ -25,3 +25,24 @@ abstract: >-
   principles for performance, reproducibility, and clinical-grade rigor. It provides DAG-based workflow execution, multi-environment
   support (conda, pixi, docker, singularity, venv), resource-aware scheduling,
   clinical-grade reporting, and a REST API web interface.
+preferred-citation:
+  title: "BLIT: an R package for seamless integration of command-line bioinformatics tool universe"
+  type: article
+  authors:
+    - family-names: Ding
+      given-names: Jia
+    - family-names: Peng
+      given-names: Yun
+    - family-names: Wei
+      given-names: Ruochen
+    - family-names: Wang
+      given-names: Boquan
+    - family-names: Zhou
+      given-names: Jian-Guo
+    - family-names: Wang
+      given-names: Shixiang
+  doi: "10.1093/bioadv/vbag088"
+  journal: "Bioinformatics Advances"
+  volume: 6
+  issue: 1
+  year: 2026
