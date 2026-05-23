@@ -1781,3 +1781,171 @@ async fn execute_qc_trim_align_simulation() {
     assert!(report.contains("QC_PASS"));
     assert!(report.contains("MultiQC Summary Complete"));
 }
+
+// ---------------------------------------------------------------------------
+// [[include]] end-to-end tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn include_resolves_sub_workflow_rules() {
+    let d = tempfile::tempdir().unwrap();
+
+    std::fs::write(
+        d.path().join("qc_rules.oxoflow"),
+        r#"
+[workflow]
+name = "qc-sub"
+version = "1.0"
+
+[[rules]]
+name = "fastqc"
+output = ["qc_output.html"]
+shell = "echo 'QC done' > {output[0]}"
+
+[[rules]]
+name = "multiqc"
+input = ["qc_output.html"]
+output = ["multiqc_report.html"]
+shell = "cat {input[0]} > {output[0]}"
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        d.path().join("main.oxoflow"),
+        r#"
+[workflow]
+name = "main-pipeline"
+version = "1.0"
+
+[[include]]
+path = "qc_rules.oxoflow"
+namespace = "qc"
+
+[[include]]
+path = "qc_rules.oxoflow"
+namespace = "post"
+
+[[rules]]
+name = "final_report"
+input = ["qc_multiqc_report.html", "post_multiqc_report.html"]
+output = ["final.html"]
+shell = "cat {input} > {output[0]}"
+"#,
+    )
+    .unwrap();
+
+    let config =
+        oxo_flow_core::config::WorkflowConfig::from_file(&d.path().join("main.oxoflow")).unwrap();
+    assert_eq!(
+        config.rules.len(),
+        5,
+        "2 includes x 2 rules + 1 main rule = 5"
+    );
+    assert!(config.rules.iter().any(|r| r.name == "qc::fastqc"));
+    assert!(config.rules.iter().any(|r| r.name == "post::fastqc"));
+    assert!(config.rules.iter().any(|r| r.name == "final_report"));
+}
+
+#[test]
+fn include_supports_nesting() {
+    let d = tempfile::tempdir().unwrap();
+
+    std::fs::write(
+        d.path().join("deep.oxoflow"),
+        r#"
+[workflow]
+name = "deep"
+version = "1.0"
+[[rules]]
+name = "deep_task"
+output = ["deep_out.txt"]
+shell = "echo deep > {output[0]}"
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        d.path().join("mid.oxoflow"),
+        r#"
+[workflow]
+name = "mid"
+version = "1.0"
+[[include]]
+path = "deep.oxoflow"
+[[rules]]
+name = "mid_task"
+output = ["mid_out.txt"]
+shell = "echo mid > {output[0]}"
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        d.path().join("top.oxoflow"),
+        r#"
+[workflow]
+name = "top"
+version = "1.0"
+[[include]]
+path = "mid.oxoflow"
+[[rules]]
+name = "top_task"
+output = ["top_out.txt"]
+shell = "echo top > {output[0]}"
+"#,
+    )
+    .unwrap();
+
+    let config =
+        oxo_flow_core::config::WorkflowConfig::from_file(&d.path().join("top.oxoflow")).unwrap();
+    assert_eq!(config.rules.len(), 3, "top + mid + deep = 3 rules");
+    assert!(config.rules.iter().any(|r| r.name == "deep_task"));
+    assert!(config.rules.iter().any(|r| r.name == "mid_task"));
+    assert!(config.rules.iter().any(|r| r.name == "top_task"));
+}
+
+#[test]
+fn include_namespace_depends_on() {
+    let d = tempfile::tempdir().unwrap();
+
+    std::fs::write(
+        d.path().join("base.oxoflow"),
+        r#"
+[workflow]
+name = "base"
+version = "1.0"
+[[rules]]
+name = "setup"
+output = ["setup.txt"]
+shell = "echo setup > {output[0]}"
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        d.path().join("consumer.oxoflow"),
+        r#"
+[workflow]
+name = "consumer"
+version = "1.0"
+[[include]]
+path = "base.oxoflow"
+namespace = "pre"
+[[rules]]
+name = "process"
+input = ["pre_setup.txt"]
+output = ["process.txt"]
+shell = "cat {input[0]} > {output[0]}"
+depends_on = ["pre::setup"]
+"#,
+    )
+    .unwrap();
+
+    let config =
+        oxo_flow_core::config::WorkflowConfig::from_file(&d.path().join("consumer.oxoflow"))
+            .unwrap();
+    assert!(config.rules.iter().any(|r| r.name == "pre::setup"));
+    let process = config.rules.iter().find(|r| r.name == "process").unwrap();
+    assert_eq!(process.depends_on, vec!["pre::setup"]);
+}

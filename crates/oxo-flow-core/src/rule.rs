@@ -915,11 +915,11 @@ impl Rule {
         if !self
             .name
             .chars()
-            .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == ':')
         {
             return Err(crate::error::OxoFlowError::Validation {
                 message: format!(
-                    "rule name '{}' contains invalid characters (allowed: alphanumeric, _, -)",
+                    "rule name '{}' contains invalid characters (allowed: alphanumeric, _, -, :)",
                     self.name
                 ),
                 rule: Some(self.name.clone()),
