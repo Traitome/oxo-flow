@@ -99,7 +99,7 @@ pub async fn run_command(
     progress.set_style(
         indicatif::ProgressStyle::default_bar()
             .template(
-                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({msg})",
+                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ETA:{eta} ({msg})",
             )?
             .progress_chars("#>-"),
     );
@@ -421,6 +421,16 @@ pub async fn dry_run_command(
             let expanded =
                 oxo_flow_core::executor::process::render_shell_command(cmd, rule, &wildcard_values);
             eprintln!("     command: {}", expanded);
+        }
+
+        // Show input file status for concrete (non-wildcard) paths
+        for inp in &rule.input {
+            let s = inp.to_string();
+            if !s.contains('{') && !s.contains('*') && !s.starts_with('/') {
+                let exists = std::path::Path::new(&s).exists();
+                let icon = if exists { "✓" } else { "✗" };
+                eprintln!("     input {}: {}", icon, s);
+            }
         }
 
         if verbose {

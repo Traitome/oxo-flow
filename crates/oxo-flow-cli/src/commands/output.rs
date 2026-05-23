@@ -207,7 +207,18 @@ pub fn handle_diff(workflow_a: PathBuf, workflow_b: PathBuf) -> Result<()> {
             workflow_b.display()
         );
         for diff in &diffs {
-            eprintln!("  {} [{}] {}", "•".cyan(), diff.category, diff.description);
+            let cat_color = match diff.category.as_str() {
+                "added" | "rule added" => "✓".green(),
+                "removed" | "rule removed" => "✗".red(),
+                "changed" => "~".yellow(),
+                _ => "•".cyan(),
+            };
+            eprintln!(
+                "  {} [{}] {}",
+                cat_color,
+                diff.category.cyan(),
+                diff.description
+            );
         }
     }
     Ok(())

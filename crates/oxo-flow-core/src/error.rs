@@ -371,4 +371,71 @@ mod tests {
         assert!(suggestion.is_some());
         assert!(suggestion.unwrap().contains("conda"));
     }
+
+    #[test]
+    fn error_display_resource_exhausted() {
+        let err = OxoFlowError::ResourceExhausted {
+            rule: "heavy".into(),
+            required_threads: 64,
+            available_threads: 8,
+            required_memory_mb: 256000,
+            available_memory_mb: 32000,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("resource exhausted"));
+        assert!(msg.contains("heavy"));
+        assert!(msg.contains("64"));
+    }
+
+    #[test]
+    fn error_suggestion_resource_exhausted() {
+        let err = OxoFlowError::ResourceExhausted {
+            rule: "big".into(),
+            required_threads: 32,
+            available_threads: 4,
+            required_memory_mb: 128000,
+            available_memory_mb: 16000,
+        };
+        let s = err.suggestion();
+        assert!(s.is_some());
+        let s = s.unwrap();
+        assert!(s.contains("reduce") || s.contains("cluster") || s.contains("memory"));
+    }
+
+    #[test]
+    fn error_display_missing_input() {
+        let err = OxoFlowError::MissingInput {
+            rule: "align".into(),
+            path: "raw/reads.fq".into(),
+        };
+        assert!(err.to_string().contains("missing input"));
+        assert!(err.to_string().contains("align"));
+    }
+
+    #[test]
+    fn error_display_duplicate_rule() {
+        let err = OxoFlowError::DuplicateRule {
+            name: "step1".into(),
+        };
+        assert!(err.to_string().contains("duplicate"));
+    }
+
+    #[test]
+    fn error_display_execution() {
+        let err = OxoFlowError::Execution {
+            rule: "bwa".into(),
+            message: "permission denied".into(),
+        };
+        assert!(err.to_string().contains("permission denied"));
+    }
+
+    #[test]
+    fn error_display_wildcard() {
+        let err = OxoFlowError::Wildcard {
+            rule: "expand".into(),
+            message: "no files matched pattern".into(),
+        };
+        assert!(err.to_string().contains("wildcard"));
+        assert!(err.to_string().contains("no files matched"));
+    }
 }
