@@ -425,6 +425,9 @@ async fn main() -> Result<()> {
         .with_target(false)
         .init();
 
+    // Suppress banner in quiet mode
+    crate::commands::set_quiet_mode(cli.quiet);
+
     match cli.command {
         Commands::Run {
             workflow,

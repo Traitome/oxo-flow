@@ -49,7 +49,17 @@ pub fn resolve_workflow(provided: Option<PathBuf>) -> Result<PathBuf> {
     }
 }
 
+/// Global quiet mode flag — set by main.rs when --quiet is passed.
+static QUIET_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_quiet_mode(quiet: bool) {
+    QUIET_MODE.store(quiet, std::sync::atomic::Ordering::Relaxed);
+}
+
 pub fn print_banner() {
+    if QUIET_MODE.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
     eprintln!(
         "{} {} — {}",
         "oxo-flow".bold().cyan(),
