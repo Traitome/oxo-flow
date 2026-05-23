@@ -343,6 +343,50 @@ mod tests {
     }
 
     #[test]
+    fn run_model_default_status() {
+        let run = Run {
+            id: "r1".into(),
+            user_id: "u1".into(),
+            workflow_name: "wf".into(),
+            status: "pending".into(),
+            pid: None,
+            started_at: None,
+            finished_at: None,
+        };
+        assert_eq!(run.status, "pending");
+        assert!(run.started_at.is_none());
+        assert!(run.finished_at.is_none());
+    }
+
+    #[test]
+    fn run_model_with_pid() {
+        let run = Run {
+            id: "r2".into(),
+            user_id: "u2".into(),
+            workflow_name: "wf2".into(),
+            status: "running".into(),
+            pid: Some(12345),
+            started_at: Some(Utc::now()),
+            finished_at: None,
+        };
+        assert_eq!(run.pid, Some(12345));
+        assert_eq!(run.status, "running");
+    }
+
+    #[test]
+    fn session_model_expiry() {
+        let created = Utc::now();
+        let expires = created + chrono::Duration::hours(24);
+        let session = Session {
+            token: "tok".into(),
+            user_id: "admin".into(),
+            created_at: created,
+            expires_at: expires,
+        };
+        assert!(session.expires_at > session.created_at);
+    }
+
+    #[test]
     fn user_model_fields() {
         let user = User {
             id: "user-1".to_string(),

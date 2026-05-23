@@ -147,5 +147,30 @@ pub fn spawn_background_run(run_id: String, username: String, auth_type: String,
                         .await;
             }
         }
+
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sudo_username_regex_accepts_valid() {
+        let re = Regex::new(r"^[a-z_][a-z0-9_-]*[$]?$").unwrap();
+        assert!(re.is_match("admin"));
+        assert!(re.is_match("user_001"));
+        assert!(re.is_match("test-user"));
+        assert!(re.is_match("bioinfo$"));
+    }
+
+    #[test]
+    fn sudo_username_regex_rejects_injection() {
+        let re = Regex::new(r"^[a-z_][a-z0-9_-]*[$]?$").unwrap();
+        assert!(!re.is_match("admin; rm -rf /"));
+        assert!(!re.is_match("user$(whoami)"));
+        assert!(!re.is_match("root /etc/passwd"));
+        assert!(!re.is_match(""));
+        assert!(!re.is_match("UPPERCASE"));
+    }
 }

@@ -40,3 +40,35 @@ pub fn get_run_directory(username: &str, run_id: &str) -> PathBuf {
         .join("runs")
         .join(run_id)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn setup_run_directory_creates_path() {
+        let dir = setup_run_directory("testuser", "run-001").unwrap();
+        assert!(dir.exists());
+        assert!(dir.ends_with("workspace/users/testuser/runs/run-001"));
+        // Cleanup
+        let _ = fs::remove_dir_all("workspace");
+    }
+
+    #[test]
+    fn initialize_sandbox_writes_workflow() {
+        let toml = "[workflow]\nname = \"test\"\nversion = \"1.0\"\n";
+        let dir = initialize_sandbox("testuser", "run-002", toml).unwrap();
+        let wf = dir.join("workflow.oxoflow");
+        assert!(wf.exists());
+        let content = fs::read_to_string(&wf).unwrap();
+        assert!(content.contains("test"));
+        // Cleanup
+        let _ = fs::remove_dir_all("workspace");
+    }
+
+    #[test]
+    fn get_run_directory_returns_correct_path() {
+        let path = get_run_directory("alice", "run-abc");
+        assert!(path.ends_with("workspace/users/alice/runs/run-abc"));
+    }
+}

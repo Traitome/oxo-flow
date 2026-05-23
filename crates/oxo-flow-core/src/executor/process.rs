@@ -331,7 +331,70 @@ impl LocalExecutor {
         (max_threads, max_memory_mb)
     }
 
-    async fn ensure_environment_ready(&self, rule: &Rule) -> Result<()> {
+/// Provide helpful suggestions for common environment setup failures.
+    fn env_setup_hint(kind: &str, stderr: &str) -> Option<String> {
+        let stderr_lower = stderr.to_lowercase();
+        match kind {
+            "conda" => {
+                if stderr_lower.contains("command not found")
+                    || stderr_lower.contains("no such file")
+                {
+                    Some("conda is not installed or not in PATH. Install Miniconda: https://docs.conda.io/en/latest/miniconda.html".into())
+                } else if stderr_lower.contains("prefix already exists") {
+                    Some("environment already exists — this should have been caught by the cache. Try running with a clean cache directory.".into())
+                } else if stderr_lower.contains("solver") || stderr_lower.contains("conflict") {
+                    Some("dependency solver conflict. Try relaxing version pins in the environment YAML, or add 'conda-forge' channel.".into())
+                } else if stderr_lower.contains("environmentfilenotfound")
+                    || stderr_lower.contains("no such file")
+                {
+                    Some("environment YAML file not found. Check that the path is correct and relative to the workflow file.".into())
+                } else {
+                    None
+                }
+            }
+            "docker" => {
+                if stderr_lower.contains("command not found")
+                    || stderr_lower.contains("no such file")
+                {
+                    Some("Docker is not installed or not in PATH. Install Docker: https://docs.docker.com/engine/install/".into())
+                } else if stderr_lower.contains("permission denied") {
+                    Some("Docker requires permission. Add your user to the 'docker' group or use sudo.".into())
+                } else if stderr_lower.contains("pull") && stderr_lower.contains("error") {
+                    Some("Docker image pull failed. Check image name, network connectivity, or registry authentication.".into())
+                } else {
+                    None
+                }
+            }
+            "singularity" => {
+                if stderr_lower.contains("command not found")
+                    || stderr_lower.contains("no such file")
+                {
+                    Some("Singularity/Apptainer is not installed. Install: https://apptainer.org/docs/admin/main/installation.html".into())
+                } else {
+                    None
+                }
+            }
+            "pixi" => {
+                if stderr_lower.contains("command not found") {
+                    Some(
+                        "pixi is not installed. Install: https://pixi.sh/latest/#installation"
+                            .into(),
+                    )
+                } else {
+                    None
+                }
+            }
+            "venv" => {
+                if stderr_lower.contains("command not found") {
+                    Some("python3 is not installed. Install Python 3: https://www.python.org/downloads/".into())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+        async fn ensure_environment_ready(&self, rule: &Rule) -> Result<()> {
         if self.config.skip_env_setup {
             return Ok(());
         }
@@ -358,17 +421,32 @@ impl LocalExecutor {
             }
             Ok(o) => {
                 let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
+                let hint = Self::env_setup_hint(env_spec.kind(), &stderr);
                 Err(OxoFlowError::Environment {
                     kind: env_spec.kind().to_string(),
-                    message: format!("setup failed: {}", stderr),
+                    message: if let Some(h) = hint {
+                        format!("setup failed: {}\nHint: {}", stderr.trim(), h)
+                    } else {
+                        format!("setup failed: {}", stderr.trim())
+                    },
                 })
             }
-            Err(e) => Err(OxoFlowError::Environment {
-                kind: env_spec.kind().to_string(),
-                message: format!("setup command failed: {}", e),
-            }),
+            Err(e) => {
+                let err_msg = e.to_string();
+                let hint = Self::env_setup_hint(env_spec.kind(), &err_msg);
+                Err(OxoFlowError::Environment {
+                    kind: env_spec.kind().to_string(),
+                    message: if let Some(h) = hint {
+                        format!("setup command failed: {}\nHint: {}", err_msg, h)
+                    } else {
+                        format!("setup command failed: {}", err_msg)
+                    },
+                })
+            }
         }
     }
+
+    
 
     fn resolve_command(&self, command: &str, rule: &Rule) -> String {
         match self

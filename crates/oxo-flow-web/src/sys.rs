@@ -36,3 +36,27 @@ pub fn get_host_resources() -> HostResources {
         used_swap_mb,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_resources_returns_valid_values() {
+        let resources = get_host_resources();
+        assert!(resources.cpu_usage_percent >= 0.0);
+        assert!(resources.cpu_usage_percent <= 100.0);
+        assert!(resources.total_memory_mb > 0);
+        assert!(resources.used_memory_mb <= resources.total_memory_mb);
+    }
+
+    #[test]
+    fn host_resources_serialization() {
+        let resources = get_host_resources();
+        let json = serde_json::to_string(&resources).unwrap();
+        assert!(json.contains("cpu_usage_percent"));
+        assert!(json.contains("total_memory_mb"));
+        let parsed: HostResources = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.total_memory_mb, resources.total_memory_mb);
+    }
+}
