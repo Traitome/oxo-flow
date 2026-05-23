@@ -39,21 +39,43 @@ pub fn init_command(name: String, dir: Option<PathBuf>) -> Result<()> {
 name = "{name}"
 version = "0.1.0"
 description = "A new oxo-flow pipeline"
+author = ""
 
 [config]
-# Variables defined here can be used in shell commands as {{config.key}}
+# Variables defined here are used in shell commands as {{config.key}}
 sample_name = "example"
+greeting = "Hello from oxo-flow!"
 
 [defaults]
 threads = 1
 memory = "1G"
 
+# ── Rules ──────────────────────────────────────────────────────────────────
+# Each rule is a single processing step with inputs, outputs, and a shell command.
+#
+# Shell template reference:
+#   {{input[0]}}    — first input file    {{input}}  — all inputs (space-joined)
+#   {{output[0]}}   — first output file   {{output}} — all outputs
+#   {{threads}}     — CPU thread count    {{memory}} — memory limit
+#   {{config.key}}  — config variable     {{sample}} — wildcard value
+
 [[rules]]
 name = "hello_world"
-input = ["data/input.txt"]
+description = "A minimal rule that writes a greeting"
 output = ["results/{{config.sample_name}}_output.txt"]
-# Curly braces reference inputs, outputs, config variables, and wildcards
-shell = "cat {{input[0]}} > {{output[0]}} && echo 'Hello from oxo-flow!' >> {{output[0]}}"
+shell = "echo '{{config.greeting}}' > {{output[0]}}"
+
+# ── Adding a second rule with a dependency ─────────────────────────────────
+# Uncomment the block below to create a two-step pipeline:
+#
+# [[rules]]
+# name = "process_results"
+# description = "Transform the output from hello_world"
+# input = ["results/{{config.sample_name}}_output.txt"]
+# output = ["results/final_report.txt"]
+# shell = "wc -l {{input[0]}} > {{output[0]}}"
+# [rules.environment]
+# conda = "envs/example.yaml"
 "#
     );
 
@@ -76,17 +98,20 @@ shell = "cat {{input[0]}} > {{output[0]}} && echo 'Hello from oxo-flow!' >> {{ou
         "This is your starting input data.\n",
     )?;
 
-    // Create starter environment file
+    // Create starter environment file with China mirror channels
     let env_content = "\
 # Example Conda environment specification
+# For users in China, uncomment the mirror channels below for faster downloads
 name: example-env
 channels:
+  # - https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/bioconda
+  # - https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge
   - bioconda
   - conda-forge
   - defaults
 dependencies:
-  - fastp=0.23.4
-  - samtools=1.18
+  - fastp=0.24.0
+  - samtools=1.20
 ";
     std::fs::write(envs_dir.join("example.yaml"), env_content)?;
 
