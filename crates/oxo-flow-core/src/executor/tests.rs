@@ -11,8 +11,6 @@ fn make_rule(name: &str, shell: &str) -> Rule {
         output: vec![].into(),
         shell: Some(shell.to_string()),
         script: None,
-        threads: None,
-        memory: None,
         resources: Resources::default(),
         environment: EnvironmentSpec::default(),
         log: None,
@@ -181,7 +179,10 @@ fn render_shell_output_all() {
 fn render_shell_threads() {
     let rule = Rule {
         name: "test".to_string(),
-        threads: Some(8),
+        resources: Resources {
+            threads: 8,
+            ..Default::default()
+        },
         output: vec!["out.bam".to_string()].into(),
         ..Default::default()
     };

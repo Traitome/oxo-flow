@@ -304,6 +304,42 @@ pub async fn run_command(
         fail_count
     );
 
+    // Verify output files exist for completed rules
+    if success_count > 0 {
+        let workdir_actual = workdir.as_ref().unwrap_or(&workflow_dir);
+        let mut missing_outputs = Vec::new();
+        for rule_name in &order {
+            if checkpoint.is_completed(rule_name)
+                && let Some(rule) = config.get_rule(rule_name)
+            {
+                for output in &rule.output {
+                    if !output.contains('{') {
+                        // Check both relative and with config-expanded path
+                        let expanded = oxo_flow_core::executor::checkpoint::expand_config_in_path(
+                            output,
+                            &wildcard_values,
+                        );
+                        if !workdir_actual.join(&expanded).exists()
+                            && !workdir_actual.join(output).exists()
+                        {
+                            missing_outputs.push(format!("  {}: {}", rule_name, output));
+                        }
+                    }
+                }
+            }
+        }
+        if !missing_outputs.is_empty() {
+            eprintln!(
+                "\n{} {} output file(s) were not found:",
+                "Warning:".bold().yellow(),
+                missing_outputs.len()
+            );
+            for m in &missing_outputs {
+                eprintln!("{}", m.dimmed());
+            }
+        }
+    }
+
     if fail_count > 0 && !keep_going {
         return Err(anyhow::anyhow!("workflow execution failed"));
     }
@@ -390,6 +426,41 @@ pub async fn dry_run_command(
         if verbose {
             // Additional verbose info
         }
+    }
+
+    // Resource summary
+    let total_threads: u32 = config.rules.iter().map(|r| r.effective_threads()).sum();
+    let max_threads: u32 = config
+        .rules
+        .iter()
+        .map(|r| r.effective_threads())
+        .max()
+        .unwrap_or(1);
+    let memory_values: Vec<&str> = config
+        .rules
+        .iter()
+        .filter_map(|r| r.effective_memory())
+        .collect();
+    eprintln!();
+    eprintln!(
+        "{} {} rules, total {} threads declared, max {} threads/rule",
+        "Summary:".bold(),
+        order.len(),
+        total_threads,
+        max_threads,
+    );
+    if !memory_values.is_empty() {
+        eprintln!(
+            "         {} rule(s) with memory requirements",
+            memory_values.len()
+        );
+    }
+    if !config.sample_groups.is_empty() {
+        eprintln!(
+            "         {} sample group(s), {} pair(s)",
+            config.sample_groups.len(),
+            config.pairs.len()
+        );
     }
 
     Ok(())
