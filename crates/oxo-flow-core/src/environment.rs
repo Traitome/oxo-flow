@@ -43,6 +43,34 @@ pub trait EnvironmentBackend: Send + Sync {
     fn cache_key(&self, spec: &str) -> String;
 }
 
+/// Read a conda YAML spec and extract the `name:` field, falling back to file stem.
+fn conda_env_name_from_spec(spec: &str) -> String {
+    // Try reading the YAML file to extract `name:` field
+    if let Ok(content) = std::fs::read_to_string(spec) {
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("name:") || trimmed.starts_with("name :") {
+                let name = trimmed
+                    .split_once(':')
+                    .map(|(_, v)| v)
+                    .unwrap_or("")
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('\'');
+                if !name.is_empty() {
+                    return name.to_string();
+                }
+            }
+        }
+    }
+    // Fall back to file stem
+    std::path::Path::new(spec)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(spec)
+        .to_string()
+}
+
 /// Conda environment backend.
 #[derive(Debug, Default)]
 pub struct CondaBackend;
@@ -65,31 +93,19 @@ impl EnvironmentBackend for CondaBackend {
         spec: &str,
         _resources: Option<&crate::rule::Resources>,
     ) -> Result<String> {
-        // Derive the environment name from the YAML file stem
-        // (e.g., "envs/bwa_mem2.yaml" → "bwa_mem2", "my_env" → "my_env").
-        let env_name = std::path::Path::new(spec)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(spec);
-        // Wrap the entire shell command so piped/chained commands all run in the env.
-        // conda run only executes a single binary; use bash -c for multi-command shells.
+        let env_name = conda_env_name_from_spec(spec);
         let escaped = escape_for_sh_single_quote(command);
         Ok(format!("conda run -n {env_name} bash -c '{escaped}'"))
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
-        // Idempotent: try create first (for new envs), fall back to update (for existing)
         Ok(format!(
             "conda env create -f {spec} 2>/dev/null || conda env update -f {spec} --prune"
         ))
     }
 
     fn teardown_command(&self, spec: &str) -> Result<Option<String>> {
-        // Derive env name from the YAML filename (strip path & extension).
-        let env_name = std::path::Path::new(spec)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(spec);
+        let env_name = conda_env_name_from_spec(spec);
         Ok(Some(format!("conda env remove -n {env_name} -y")))
     }
 
