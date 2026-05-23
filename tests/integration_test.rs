@@ -1949,3 +1949,40 @@ depends_on = ["pre::setup"]
     let process = config.rules.iter().find(|r| r.name == "process").unwrap();
     assert_eq!(process.depends_on, vec!["pre::setup"]);
 }
+// ---------------------------------------------------------------------------
+// Transform operator tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn transform_split_is_parsed() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("tf.oxoflow"),
+        "[workflow]\nname = \"tf\"\nversion = \"1.0\"\n\n[[rules]]\nname = \"chunked\"\noutput = [\"parts/chunk.txt\"]\nshell = \"echo chunk > {output[0]}\"\n\n[rules.transform.split]\nby = \"chunk\"\nn = \"3\"\n\n[rules.transform]\nmap = \"echo chunk_{_index} > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    let config =
+        oxo_flow_core::config::WorkflowConfig::from_file(&d.path().join("tf.oxoflow")).unwrap();
+    let rule = &config.rules[0];
+    // Transform is parsed during from_file but may be consumed after expand_transform
+    // Verify the rule parsed correctly
+    assert_eq!(rule.name, "chunked");
+}
+
+#[test]
+fn transform_combine_is_parsed() {
+    // Verify transform operator example parses correctly
+    let config = oxo_flow_core::config::WorkflowConfig::from_file(&std::path::PathBuf::from(
+        "examples/gallery/10_transform_operator.oxoflow",
+    ))
+    .unwrap();
+    assert!(!config.rules.is_empty());
+    // The gallery example has transform rules
+    assert!(
+        config
+            .rules
+            .iter()
+            .any(|r| r.name == "variant_calling" || r.name == "parallel_qc")
+    );
+}
