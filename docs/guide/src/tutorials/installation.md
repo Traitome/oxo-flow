@@ -43,7 +43,7 @@ Verify the installation:
 
 ```bash
 oxo-flow --version
-# oxo-flow 0.5.1
+# oxo-flow 0.6.0
 ```
 
 !!! tip "Updating"

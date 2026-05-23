@@ -367,7 +367,7 @@ mod tests {
                 exit_code: None,
                 error: None,
             },
-            version: "0.5.1".to_string(),
+            version: "0.6.0".to_string(),
         };
 
         let json = serde_json::to_string(&payload).unwrap();
@@ -387,7 +387,7 @@ mod tests {
                 duration_ms: Some(1000),
                 ..Default::default()
             },
-            version: "0.5.1".to_string(),
+            version: "0.6.0".to_string(),
         };
 
         let slack = payload.to_slack_payload();
