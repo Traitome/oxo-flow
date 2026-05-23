@@ -331,7 +331,7 @@ impl LocalExecutor {
         (max_threads, max_memory_mb)
     }
 
-/// Provide helpful suggestions for common environment setup failures.
+    /// Provide helpful suggestions for common environment setup failures.
     fn env_setup_hint(kind: &str, stderr: &str) -> Option<String> {
         let stderr_lower = stderr.to_lowercase();
         match kind {
@@ -394,7 +394,7 @@ impl LocalExecutor {
             _ => None,
         }
     }
-        async fn ensure_environment_ready(&self, rule: &Rule) -> Result<()> {
+    async fn ensure_environment_ready(&self, rule: &Rule) -> Result<()> {
         if self.config.skip_env_setup {
             return Ok(());
         }
@@ -445,8 +445,6 @@ impl LocalExecutor {
             }
         }
     }
-
-    
 
     fn resolve_command(&self, command: &str, rule: &Rule) -> String {
         match self

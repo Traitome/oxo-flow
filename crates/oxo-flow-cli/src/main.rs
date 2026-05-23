@@ -293,6 +293,10 @@ pub enum Commands {
         workflow: PathBuf,
         #[arg(long)]
         output: Option<PathBuf>,
+        #[arg(long)]
+        run: bool,
+        #[arg(short = 'j', long, default_value = "1")]
+        jobs: usize,
     },
     /// Publish a workflow with its environment files into a bundle.
     Publish {
@@ -558,12 +562,49 @@ async fn main() -> Result<()> {
             let schema = include_str!("../schema/oxoflow-v1.schema.json");
             println!("{schema}");
         }
-        Commands::Test { workflow, output } => {
+        Commands::Test {
+            workflow,
+            output,
+            run,
+            jobs,
+        } => {
             use colored::Colorize;
-            // Test mode: validate + lint + dry-run + optional output verification
+            eprintln!(
+                "{} Running test suite for {}\n",
+                "🧪".bold(),
+                workflow.display()
+            );
+            // 1. Validate
+            eprintln!("{} Validation...", "1.".bold());
             validate_command(workflow.clone(), false)?;
+            // 2. Lint
+            eprintln!("{} Lint...", "2.".bold());
             lint_command(workflow.clone(), false)?;
-            dry_run_command(Some(workflow), vec![], cli.verbose).await?;
+            // 3. Dry-run
+            eprintln!("{} Dry-run...", "3.".bold());
+            dry_run_command(Some(workflow.clone()), vec![], cli.verbose).await?;
+            // 4. Optional: run with --run flag
+            if run {
+                eprintln!("{} Execution...", "4.".bold());
+                run_command(
+                    Some(workflow),
+                    jobs,
+                    false,           // keep_going
+                    None,            // workdir
+                    vec![],          // target
+                    0,               // retry
+                    "0".to_string(), // timeout
+                    false,           // resume_failed
+                    None,            // profile
+                    0,               // max_threads
+                    0,               // max_memory
+                    false,           // skip_env_setup
+                    None,            // cache_dir
+                    false,           // provenance
+                )
+                .await?;
+            }
+            // 5. Optional: verify output file existence
             if let Some(output_path) = output {
                 if output_path.exists() {
                     eprintln!(
@@ -580,6 +621,7 @@ async fn main() -> Result<()> {
                     std::process::exit(1);
                 }
             }
+            eprintln!("\n{} All checks passed.", "✓".green().bold());
         }
         Commands::Publish { workflow, output } => publish_command(workflow, output)?,
     }

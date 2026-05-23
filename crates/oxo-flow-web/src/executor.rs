@@ -147,7 +147,6 @@ pub fn spawn_background_run(run_id: String, username: String, auth_type: String,
                         .await;
             }
         }
-
     });
 }
 

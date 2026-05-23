@@ -225,6 +225,29 @@ impl OxoFlowError {
                     ))
                 }
             }
+            OxoFlowError::ResourceExhausted {
+                required_threads,
+                available_threads,
+                required_memory_mb,
+                available_memory_mb,
+                ..
+            } => {
+                let mut hints = Vec::new();
+                if *required_threads > *available_threads {
+                    hints.push(format!(
+                        "reduce threads from {} to {} or lower in the rule definition",
+                        required_threads, available_threads
+                    ));
+                }
+                if *required_memory_mb > *available_memory_mb {
+                    hints.push(format!(
+                        "reduce memory from {}MB to {}MB or lower, or use --max-memory to allow more",
+                        required_memory_mb, available_memory_mb
+                    ));
+                }
+                hints.push("use a cluster backend (--profile slurm) for larger resource allocations".into());
+                Some(hints.join(". "))
+            }
             _ => None,
         }
     }
