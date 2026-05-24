@@ -466,7 +466,7 @@ async function loadSavedWorkflows() {
       return '<tr><td>'+esc(w.name)+'</td><td>'+esc(w.version)+'</td><td>'+w.rules_count+'</td>'+
       '<td style="font-size:0.78rem;color:var(--text2)">'+fmtTime(w.updated_at)+'</td>'+
       '<td><button class="btn btn-sm btn-outline" onclick="loadWorkflowToEditor(\''+w.id+'\')">Load</button> '+
-      '<button class="btn btn-sm btn-danger" onclick="deleteWorkflow(\''+w.id+'\',\''+esc(w.name)+'\')" style="margin-left:0.25rem">Del</button></td></tr>';
+      '<button class="btn btn-sm btn-danger" onclick="deleteWorkflow(\''+w.id+'\',\''+jsStr(w.name)+'\')" style="margin-left:0.25rem">Del</button></td></tr>';
     }).join('') : '<tr><td colspan="5" style="color:var(--text3)">No saved workflows</td></tr>';
   } catch(e) {}
 }
@@ -545,6 +545,7 @@ async function refreshSystem() {
 }
 
 function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function jsStr(s) { return (s||'').replace(/\\\\/g,'\\\\\\\\').replace(/'/g,"\\\\'").replace(/"/g,'\\\\"').replace(/\\n/g,'\\\\n').replace(/\\r/g,'\\\\r'); }
 function fmtTime(t) { try { return new Date(t).toLocaleString(); } catch(e) { return t; } }
 function fmtDur(s) {
   if (!s || s < 0) return '--';
