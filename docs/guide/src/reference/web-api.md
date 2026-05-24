@@ -262,6 +262,13 @@ Authorization: Bearer <token>
 ```
 Returns full workflow detail including TOML content.
 
+#### Delete Saved Workflow
+```
+DELETE /api/workflows/saved/{id}
+Authorization: Bearer <token>
+```
+Deletes the workflow. Returns `{"status":"deleted"}`. Ownership verified.
+
 ---
 
 ### Reports
@@ -319,3 +326,27 @@ CORS is enabled for `localhost:8080` and `127.0.0.1:8080` by default. Configure 
 - [Architecture](architecture.md) — Server design and component overview
 - [Workflow Format](workflow-format.md) — `.oxoflow` TOML specification
 - [Environment System](environment-system.md) — Conda/Docker/Singularity backends
+
+---
+
+## Security Model
+
+### Workspace Isolation
+
+Each authenticated user gets an isolated workspace:
+
+- **Physical isolation**: Run directories scoped to `workspace/users/<username>/runs/<run_id>`
+- **Database isolation**: All queries scoped by `user_id` (runs, workflows, audit logs)
+- **Ownership verification**: Run detail, logs, cancel, and workflow get/delete all check `user_id` matches the authenticated session
+- **Defense in depth**: Even if a run ID is guessed, the workspace directory is always under the requesting user's tree
+
+### Authentication
+
+- Session tokens are hex-encoded UUIDv4, stored in SQLite with 24-hour expiry
+- Tokens accepted via `Authorization: Bearer <token>` header or `oxo_session` cookie
+- Passwords set via environment variables (never stored in database)
+- OS username validated against strict regex before sudo escalation
+
+### Rate Limiting
+
+Per-IP sliding window rate limiter (default: 100 requests/60s). Configurable via `RateLimiterConfig`.
