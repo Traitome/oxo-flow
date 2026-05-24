@@ -120,11 +120,7 @@ impl CondaBackend {
     /// When `prefix` is `Some`, uses `-p <prefix>` (install to the given
     /// directory). When `None`, uses the default name-based `-n <name>`
     /// (install to the system conda directory).
-    pub fn setup_command_with_opts(
-        &self,
-        spec: &str,
-        prefix: Option<&str>,
-    ) -> Result<String> {
+    pub fn setup_command_with_opts(&self, spec: &str, prefix: Option<&str>) -> Result<String> {
         if let Some(prefix) = prefix {
             Ok(format!(
                 "conda env create -p {prefix} -f {spec} 2>/dev/null || conda env update -p {prefix} -f {spec} --prune"
@@ -146,9 +142,7 @@ impl CondaBackend {
             Ok(format!("conda run -p {prefix} bash -c '{escaped}'"))
         } else {
             let env_name = conda_env_name_from_spec(spec);
-            Ok(format!(
-                "conda run -n {env_name} bash -c '{escaped}'"
-            ))
+            Ok(format!("conda run -n {env_name} bash -c '{escaped}'"))
         }
     }
 
@@ -672,9 +666,11 @@ impl EnvironmentResolver {
         resources: Option<&crate::rule::Resources>,
     ) -> Result<String> {
         if let Some(ref conda) = env_spec.conda {
-            return self
-                .conda
-                .wrap_command_with_opts(command, conda, env_spec.conda_prefix.as_deref());
+            return self.conda.wrap_command_with_opts(
+                command,
+                conda,
+                env_spec.conda_prefix.as_deref(),
+            );
         }
         if let Some(ref pixi) = env_spec.pixi {
             return self.pixi.wrap_command(command, pixi, resources);
@@ -1355,9 +1351,7 @@ mod tests {
     #[test]
     fn venv_setup_command_defaults_to_requirements_txt() {
         let backend = VenvBackend;
-        let cmd = backend
-            .setup_command_with_reqs(".venv", None)
-            .unwrap();
+        let cmd = backend.setup_command_with_reqs(".venv", None).unwrap();
         assert!(cmd.contains("pip install -r requirements.txt"));
     }
 
@@ -1366,9 +1360,7 @@ mod tests {
     #[test]
     fn modules_wrap_command_has_init_error_guard() {
         let backend = ModulesBackend;
-        let cmd = backend
-            .wrap_command("echo test", "gcc/11.2", None)
-            .unwrap();
+        let cmd = backend.wrap_command("echo test", "gcc/11.2", None).unwrap();
         assert!(
             cmd.contains("command -v module"),
             "expected init guard, got: {cmd}"

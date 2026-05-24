@@ -1357,18 +1357,20 @@ impl WorkflowConfig {
             let (content, inc_base_dir) = if inc.path.starts_with("http://")
                 || inc.path.starts_with("https://")
             {
-                // Fetch remote include
+                // Fetch remote include on a dedicated thread to avoid tokio runtime conflicts
                 tracing::info!(url = %inc.path, "fetching remote include");
-                let text = reqwest::blocking::get(&inc.path)
-                    .map_err(|e| OxoFlowError::Parse {
-                        path: PathBuf::from(&inc.path),
-                        message: format!("failed to fetch remote include: {}", e),
-                    })?
-                    .text()
-                    .map_err(|e| OxoFlowError::Parse {
-                        path: PathBuf::from(&inc.path),
-                        message: format!("failed to read remote include response: {}", e),
-                    })?;
+                let url = inc.path.clone();
+                let text =
+                    std::thread::spawn(move || reqwest::blocking::get(&url).and_then(|r| r.text()))
+                        .join()
+                        .map_err(|_| OxoFlowError::Parse {
+                            path: PathBuf::from(&inc.path),
+                            message: "remote include fetch panicked".to_string(),
+                        })?
+                        .map_err(|e| OxoFlowError::Parse {
+                            path: PathBuf::from(&inc.path),
+                            message: format!("failed to fetch remote include: {}", e),
+                        })?;
                 (text, base_dir.to_path_buf()) // Remote includes don't change base_dir for now
             } else {
                 let inc_path = base_dir.join(&inc.path);
@@ -1538,6 +1540,8 @@ impl WorkflowConfig {
 
         let mut expanded_rules: Vec<Rule> = Vec::new();
         let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // Track original → expanded name mapping for depends_on resolution
+        let mut name_map: HashMap<String, Vec<String>> = HashMap::new();
 
         for rule in &self.rules {
             // Collect all text fields that might contain wildcards
@@ -1562,6 +1566,8 @@ impl WorkflowConfig {
                 });
 
             if uses_pair_wildcard {
+                let orig_name = rule.name.clone();
+                let mut expanded_names = Vec::new();
                 // Expand for each pair
                 for combo in &pair_combos {
                     // Validate constraints
@@ -1572,6 +1578,7 @@ impl WorkflowConfig {
                         .cloned()
                         .unwrap_or_else(|| combo.values().cloned().collect::<Vec<_>>().join("_"));
                     let new_name = format!("{}_{}", rule.name, suffix);
+                    expanded_names.push(new_name.clone());
 
                     if !seen_names.insert(new_name.clone()) {
                         return Err(OxoFlowError::DuplicateRule { name: new_name });
@@ -1668,7 +1675,10 @@ impl WorkflowConfig {
 
                     expanded_rules.push(expanded);
                 }
+                name_map.insert(orig_name, expanded_names);
             } else if uses_group_wildcard {
+                let orig_name = rule.name.clone();
+                let mut expanded_names = Vec::new();
                 // Expand for each (group, sample) combination
                 for combo in &group_combos {
                     // Validate constraints
@@ -1677,6 +1687,7 @@ impl WorkflowConfig {
                     let group = combo.get("group").map(String::as_str).unwrap_or("group");
                     let sample = combo.get("sample").map(String::as_str).unwrap_or("sample");
                     let new_name = format!("{}_{}_{}", rule.name, group, sample);
+                    expanded_names.push(new_name.clone());
 
                     if !seen_names.insert(new_name.clone()) {
                         return Err(OxoFlowError::DuplicateRule { name: new_name });
@@ -1716,6 +1727,7 @@ impl WorkflowConfig {
 
                     expanded_rules.push(expanded);
                 }
+                name_map.insert(orig_name, expanded_names);
             } else {
                 // No expansion needed — keep rule as-is
                 if !seen_names.insert(rule.name.clone()) {
@@ -1724,6 +1736,24 @@ impl WorkflowConfig {
                     });
                 }
                 expanded_rules.push(rule.clone());
+            }
+        }
+
+        // Resolve depends_on references: replace template names with expanded names
+        if !name_map.is_empty() {
+            for rule in &mut expanded_rules {
+                if rule.depends_on.is_empty() {
+                    continue;
+                }
+                let mut resolved_deps = Vec::new();
+                for dep in &rule.depends_on {
+                    if let Some(expanded_names) = name_map.get(dep.as_str()) {
+                        resolved_deps.extend(expanded_names.clone());
+                    } else {
+                        resolved_deps.push(dep.clone());
+                    }
+                }
+                rule.depends_on = resolved_deps;
             }
         }
 

@@ -303,10 +303,10 @@ fn detect_total_memory_mb() -> u64 {
         let mut sys = System::new_all();
         sys.refresh_memory();
         sys.total_memory() / 1024 / 1024
-    }) {
-        if mb > 0 {
-            return mb;
-        }
+    })
+        && mb > 0
+    {
+        return mb;
     }
 
     // Fallback for Linux: read /proc/meminfo directly
@@ -542,14 +542,8 @@ impl LocalExecutor {
     }
 
     async fn release_resources(&self, rule: &Rule) {
-        let max_threads = self
-            .config
-            .max_threads
-            .unwrap_or(self.system_threads);
-        let max_memory_mb = self
-            .config
-            .max_memory_mb
-            .unwrap_or(self.system_memory_mb);
+        let max_threads = self.config.max_threads.unwrap_or(self.system_threads);
+        let max_memory_mb = self.config.max_memory_mb.unwrap_or(self.system_memory_mb);
         let mut pool = self.resource_pool.lock().await;
         pool.release(
             rule,

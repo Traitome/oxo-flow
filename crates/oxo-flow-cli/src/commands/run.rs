@@ -155,6 +155,7 @@ pub async fn run_command(
     let mut fail_count = 0;
     let mut skipped_count = 0;
     let mut completed_rules = std::collections::HashSet::new();
+    let mut failed_rules_set = std::collections::HashSet::new();
 
     let checkpoint_path = workdir
         .as_ref()
@@ -244,6 +245,43 @@ pub async fn run_command(
             }
         }
 
+        // Check if any upstream dependency failed — skip with clear message
+        if !failed_rules_set.is_empty()
+            && let Ok(deps) = dag.dependencies(rule_name)
+            && deps.iter().any(|d| failed_rules_set.contains(d.as_str()))
+        {
+            let failed_deps: Vec<_> = deps
+                .iter()
+                .filter(|d| failed_rules_set.contains(d.as_str()))
+                .collect();
+            skipped_count += 1;
+            progress.set_message(format!(
+                "skipping {} (dependency failed: {})",
+                rule_name,
+                failed_deps
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            progress.inc(1);
+            if !keep_going {
+                // Build a clear error about the cascade
+                progress.finish_and_clear();
+                return Err(anyhow::anyhow!(
+                    "Stopping: rule '{}' depends on failed rule '{}'",
+                    rule_name,
+                    failed_deps[0]
+                ));
+            }
+            tracing::warn!(
+                rule = rule_name,
+                failed_deps = ?failed_deps,
+                "Skipping rule because upstream dependency failed"
+            );
+            continue;
+        }
+
         let rule = config.get_rule(rule_name).unwrap().clone();
         progress.set_message(format!("executing {}", rule_name));
 
@@ -284,6 +322,7 @@ pub async fn run_command(
                     skipped_count += 1;
                 } else {
                     fail_count += 1;
+                    failed_rules_set.insert(rule_name.clone());
                     checkpoint.mark_failed(rule_name);
                     let _ = checkpoint.save_to_file(&checkpoint_path);
                     // Build detailed error message with stderr and exit code
@@ -310,6 +349,7 @@ pub async fn run_command(
             }
             Err(e) => {
                 fail_count += 1;
+                failed_rules_set.insert(rule_name.clone());
                 checkpoint.mark_failed(rule_name);
                 let _ = checkpoint.save_to_file(&checkpoint_path);
                 if !keep_going {
