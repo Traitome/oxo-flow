@@ -1870,6 +1870,49 @@ async fn get_saved_workflow(
     }))
 }
 
+/// Delete a saved workflow by ID (owner only).
+async fn delete_saved_workflow(
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(wf_id): axum::extract::Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = extract_session(&headers).await.ok_or_else(|| ApiError {
+        status: StatusCode::UNAUTHORIZED,
+        body: ErrorResponse {
+            error: "Authentication required".to_string(),
+            detail: None,
+        },
+    })?;
+
+    let user = db::get_user_by_id(&session.user_id)
+        .await
+        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
+        .ok_or_else(|| ApiError::bad_request("User not found", None))?;
+
+    let result = sqlx::query("DELETE FROM workflows WHERE id = ? AND user_id = ?")
+        .bind(&wf_id)
+        .bind(&user.id)
+        .execute(db::pool())
+        .await
+        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            body: ErrorResponse {
+                error: "Workflow not found".to_string(),
+                detail: None,
+            },
+        });
+    }
+
+    let _ = db::log_action(&user.id, "delete_workflow", &wf_id).await;
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({"status": "deleted"})),
+    ))
+}
+
 async fn cancel_run(
     headers: axum::http::HeaderMap,
     axum::extract::Path(run_id): axum::extract::Path<String>,
@@ -2026,6 +2069,7 @@ fn build_router_inner(limiter: Option<RateLimiter>) -> Router {
         .route("/api/runs/{id}/logs", get(get_run_logs))
         .route("/api/workflows/saved", get(list_saved_workflows))
         .route("/api/workflows/saved/{id}", get(get_saved_workflow))
+        .route("/api/workflows/saved/{id}", delete(delete_saved_workflow))
         .route("/api/workflows/save", post(save_workflow))
         // Authentication & license
         .route("/api/auth/login", post(login))

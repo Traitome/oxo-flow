@@ -141,6 +141,18 @@ input { font-family:var(--font); }
             <button class="btn btn-outline" onclick="lintEditor()" style="width:100%;margin-bottom:0.35rem">Lint</button>
             <button class="btn btn-outline" onclick="showDag()" style="width:100%;margin-bottom:0.35rem">View DAG</button>
           </div>
+          <div class="card"><div class="card-header">Templates</div>
+            <select id="template-select" onchange="loadTemplate()" style="width:100%;padding:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);margin-bottom:0.5rem;font-family:var(--font)">
+              <option value="">-- Quick template --</option>
+              <option value="hello">Hello World</option>
+              <option value="wgs">WGS Germline</option>
+              <option value="rnaseq">RNA-seq</option>
+              <option value="paired">Tumor-Normal Paired</option>
+              <option value="cohort">Multi-Sample Cohort</option>
+              <option value="scatter">Scatter-Gather</option>
+              <option value="conditional">Conditional Rules</option>
+            </select>
+          </div>
           <div class="card"><div class="card-header">Save to Library</div>
             <input id="save-name" placeholder="Workflow name" style="width:100%;padding:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);margin-bottom:0.5rem">
             <button class="btn btn-outline" onclick="saveWorkflow()" style="width:100%">Save Workflow</button>
@@ -402,9 +414,36 @@ async function loadSavedWorkflows() {
     document.getElementById('saved-wf-tbody').innerHTML = Array.isArray(r.data) ? r.data.map(function(w) {
       return '<tr><td>'+esc(w.name)+'</td><td>'+esc(w.version)+'</td><td>'+w.rules_count+'</td>'+
       '<td style="font-size:0.78rem;color:var(--text2)">'+fmtTime(w.updated_at)+'</td>'+
-      '<td><button class="btn btn-sm btn-outline" onclick="loadWorkflowToEditor(\''+w.id+'\')">Load</button></td></tr>';
+      '<td><button class="btn btn-sm btn-outline" onclick="loadWorkflowToEditor(\''+w.id+'\')">Load</button> '+
+      '<button class="btn btn-sm btn-danger" onclick="deleteWorkflow(\''+w.id+'\',\''+esc(w.name)+'\')" style="margin-left:0.25rem">Del</button></td></tr>';
     }).join('') : '<tr><td colspan="5" style="color:var(--text3)">No saved workflows</td></tr>';
   } catch(e) {}
+}
+
+async function deleteWorkflow(wfId, name) {
+  if (!confirm('Delete workflow "' + name + '"?')) return;
+  var resp = await fetch(API + '/api/workflows/saved/' + wfId, { method: 'DELETE', headers: token ? {'Authorization':'Bearer '+token} : {} });
+  if (resp.status === 200) loadSavedWorkflows();
+  else alert('Delete failed');
+}
+
+var templates = {
+  hello: '[workflow]\nname = "hello-world"\nversion = "1.0.0"\ndescription = "My first workflow"\n\n[[rules]]\nname = "greet"\noutput = ["hello.txt"]\nshell = "echo Hello, oxo-flow! > {output[0]}"\n',
+  wgs: '[workflow]\nname = "wgs-germline"\nversion = "1.0.0"\ndescription = "Basic germline WGS pipeline"\n\n[config]\nref = "/path/to/reference.fa"\ndata = "/path/to/fastq"\nout = "results"\nsample = "SAMPLE01"\n\n[defaults]\nthreads = 4\nmemory = "8G"\n\n[[rules]]\nname = "fastp_trim"\ninput = ["{config.data}/{config.sample}_R1.fastq.gz", "{config.data}/{config.sample}_R2.fastq.gz"]\noutput = ["{config.out}/trimmed_R1.fq.gz", "{config.out}/trimmed_R2.fq.gz"]\nshell = "mkdir -p {config.out}\\nfastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]} --thread {threads}"\nthreads = 4\n[rules.environment]\nconda = "envs/qc.yaml"\n\n[[rules]]\nname = "bwa_align"\ninput = ["{config.out}/trimmed_R1.fq.gz", "{config.out}/trimmed_R2.fq.gz"]\noutput = ["{config.out}/aligned.sam"]\nshell = "bwa-mem2 mem -t {threads} {config.ref} {input[0]} {input[1]} > {output[0]}"\nthreads = 8\nmemory = "16G"\ncheckpoint = true\n[rules.environment]\nconda = "envs/alignment.yaml"\n\n[[rules]]\nname = "call_variants"\ninput = ["{config.out}/aligned.sam"]\noutput = ["{config.out}/variants.vcf.gz"]\nshell = "samtools sort -@ 4 {input[0]} | bcftools mpileup -f {config.ref} - | bcftools call -mv -Oz -o {output[0]}"\nthreads = 4\n[rules.environment]\nconda = "envs/variant_calling.yaml"\n',
+  rnaseq: '[workflow]\nname = "rnaseq-quantification"\nversion = "1.0.0"\ndescription = "RNA-seq quantification pipeline"\n\n[config]\ndata = "/path/to/fastq"\nout = "results"\nsample = "SAMPLE01"\n\n[defaults]\nthreads = 4\nmemory = "8G"\n\n[[rules]]\nname = "fastp_trim"\ninput = ["{config.data}/{config.sample}_R1.fastq.gz", "{config.data}/{config.sample}_R2.fastq.gz"]\noutput = ["{config.out}/trimmed_R1.fq.gz", "{config.out}/trimmed_R2.fq.gz"]\nshell = "mkdir -p {config.out}\\nfastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]} --thread {threads}"\nthreads = 4\n[rules.environment]\nconda = "envs/qc.yaml"\n\n[[rules]]\nname = "salmon_quant"\ninput = ["{config.out}/trimmed_R1.fq.gz", "{config.out}/trimmed_R2.fq.gz"]\noutput = ["{config.out}/quant.sf"]\nshell = "salmon quant -i /path/to/salmon_index -l A -1 {input[0]} -2 {input[1]} -o {config.out}/salmon -p {threads}\\ncp {config.out}/salmon/quant.sf {output[0]}"\nthreads = 8\nmemory = "16G"\n[rules.environment]\nconda = "envs/rnaseq.yaml"\n',
+  paired: '[workflow]\nname = "somatic-tumor-normal"\nversion = "1.0.0"\ndescription = "Somatic variant calling with matched tumor-normal pairs"\n\n[config]\nref = "/path/to/reference.fa"\ndata = "/path/to/fastq"\nout = "results"\n\n[defaults]\nthreads = 4\nmemory = "8G"\n\n[[pairs]]\npair_id = "CASE001"\nexperiment = "TUMOR01"\ncontrol = "NORMAL01"\nexperiment_type = "lung"\n\n[[rules]]\nname = "trim_experiment"\ninput = ["{config.data}/{experiment}_R1.fastq.gz", "{config.data}/{experiment}_R2.fastq.gz"]\noutput = ["{config.out}/{pair_id}/trim_T_R1.fq.gz", "{config.out}/{pair_id}/trim_T_R2.fq.gz"]\nshell = "mkdir -p {config.out}/{pair_id}\\nfastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]} --thread {threads}"\nthreads = 4\n[rules.environment]\nconda = "envs/qc.yaml"\n\n[[rules]]\nname = "trim_control"\ninput = ["{config.data}/{control}_R1.fastq.gz", "{config.data}/{control}_R2.fastq.gz"]\noutput = ["{config.out}/{pair_id}/trim_N_R1.fq.gz", "{config.out}/{pair_id}/trim_N_R2.fq.gz"]\nshell = "fastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]} --thread {threads}"\nthreads = 4\n[rules.environment]\nconda = "envs/qc.yaml"\n\n[[rules]]\nname = "somatic_call"\ninput = ["{config.out}/{pair_id}/trim_T_R1.fq.gz", "{config.out}/{pair_id}/trim_N_R1.fq.gz"]\noutput = ["{config.out}/{pair_id}/somatic.vcf.gz"]\nshell = "bcftools mpileup -f {config.ref} {input[0]} {input[1]} | bcftools call -mv -Oz -o {output[0]}"\nthreads = 4\n[rules.environment]\nconda = "envs/variant_calling.yaml"\n',
+  cohort: '[workflow]\nname = "cohort-analysis"\nversion = "1.0.0"\ndescription = "Joint variant calling across multiple samples"\n\n[config]\ndata = "/path/to/fastq"\nout = "results"\n\n[[sample_groups]]\nname = "control"\nsamples = ["CTRL01", "CTRL02", "CTRL03"]\n\n[[sample_groups]]\nname = "case"\nsamples = ["CASE01", "CASE02"]\n\n[[rules]]\nname = "qc_per_sample"\ninput = ["{config.data}/{sample}_R1.fastq.gz"]\noutput = ["{config.out}/{sample}/qc.html"]\nshell = "mkdir -p {config.out}/{sample}\\nfastqc {input[0]} -o {config.out}/{sample}"\nthreads = 2\n[rules.environment]\nconda = "envs/qc.yaml"\n\n[[rules]]\nname = "cohort_summary"\ninput = ["{config.out}/CTRL01/qc.html", "{config.out}/CTRL02/qc.html"]\noutput = ["{config.out}/summary.txt"]\nshell = "echo Cohort QC complete > {output[0]}"\n',
+  scatter: '[workflow]\nname = "scatter-gather"\nversion = "1.0.0"\ndescription = "Scatter-gather parallel processing by chromosome"\n\n[config]\nref = "/path/to/reference.fa"\n\n[[rules]]\nname = "call_by_chromosome"\ninput = ["aligned.bam"]\noutput = ["variants.vcf.gz"]\nshell = "bcftools mpileup -f {config.ref} -r {_chrom} {input[0]} | bcftools call -mv -Oz -o {output[0]}"\nthreads = 4\n\n[rules.transform]\nmap = "bcftools mpileup -f {config.ref} -r {_chrom} {input[0]} | bcftools call -mv -Oz -o {output[0]}"\n\n[rules.transform.split]\nby = "_chrom"\nvalues = ["chr1","chr2","chr3","chr4","chr5","chr6","chr7","chr8","chr9","chr10","chr11","chr12","chr13","chr14","chr15","chr16","chr17","chr18","chr19","chr20","chr21","chr22","chrX","chrY"]\n\n[rules.transform.combine]\naggregate = true\nmethod = "concat"\n\n[rules.environment]\nconda = "envs/variant_calling.yaml"\n',
+  conditional: '[workflow]\nname = "conditional-pipeline"\nversion = "1.0.0"\ndescription = "Conditional execution based on config flags"\n\n[config]\nrun_expensive_analysis = false\ndo_qc = true\nmin_quality = 30\n\n[[rules]]\nname = "basic_qc"\noutput = ["qc_report.txt"]\nshell = "echo QC Report > {output[0]}"\nwhen = "config.do_qc"\n\n[[rules]]\nname = "expensive_analysis"\ninput = ["qc_report.txt"]\noutput = ["deep_analysis.txt"]\nshell = "echo Deep analysis > {output[0]}"\nwhen = "config.run_expensive_analysis && config.min_quality >= 20"\n\n[[rules]]\nname = "always_run"\noutput = ["summary.txt"]\nshell = "echo Pipeline summary > {output[0]}"\n'
+};
+
+function loadTemplate() {
+  var sel = document.getElementById('template-select').value;
+  if (sel && templates[sel]) {
+    document.getElementById('editor-text').value = templates[sel];
+    document.getElementById('save-name').value = sel;
+    document.getElementById('template-select').value = '';
+  }
 }
 
 async function loadWorkflowToEditor(wfId) {
@@ -454,6 +493,19 @@ checkSession();
 refreshDashboard();
 updateTopbar();
 setInterval(refreshDashboard, 30000);
+// SSE-based live event stream for run status updates
+try {
+  var evtSource = new EventSource(API + '/api/events');
+  evtSource.onmessage = function(e) {
+    try {
+      var msg = JSON.parse(e.data);
+      if (msg.type && (msg.type === 'run_cancelled' || msg.type === 'workflow_completed' || msg.type === 'workflow_started')) {
+        refreshRuns();
+      }
+    } catch(ex) {}
+  };
+  evtSource.onerror = function() { /* silently retry */ };
+} catch(ex) {}
 document.getElementById('avatar').addEventListener('click', login);
 </script>
 </body>
