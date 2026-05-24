@@ -237,6 +237,7 @@ pub async fn run_command(
                         wall_time_secs: duration,
                         max_memory_mb: None,
                         cpu_seconds: None,
+                        retries: record.retries,
                     };
                     checkpoint.mark_completed(rule_name, benchmark);
                     if provenance {

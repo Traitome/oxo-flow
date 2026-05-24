@@ -1249,6 +1249,13 @@ impl ReportBuilder {
         self
     }
 
+    /// Add a language-appropriate clinical disclaimer.
+    pub fn clinical_disclaimer_lang(mut self, lang: ReportLanguage) -> Self {
+        self.report
+            .add_section(clinical_disclaimer_for_language(lang));
+        self
+    }
+
     pub fn sample_info(mut self, info: &SampleInfo) -> Self {
         self.report.add_section(sample_info_section(info));
         self
@@ -1427,6 +1434,50 @@ pub fn clinical_disclaimer_section() -> ReportSection {
                 .to_string(),
         },
         subsections: Vec::new(),
+    }
+}
+
+/// Report language for internationalized sections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportLanguage {
+    English,
+    Chinese,
+}
+
+impl ReportLanguage {
+    pub fn parse(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "zh" | "cn" | "chinese" | "zh-cn" | "zh_cn" => Self::Chinese,
+            _ => Self::English,
+        }
+    }
+}
+
+/// Generate a Chinese clinical disclaimer section.
+pub fn clinical_disclaimer_section_zh() -> ReportSection {
+    ReportSection {
+        title: "临床声明".to_string(),
+        id: "clinical-disclaimer".to_string(),
+        content: ReportContent::Html {
+            html: "<div class=\"disclaimer\">\
+                <p><strong>重要提示：</strong> 本报告由自动化生物信息学流程生成，\
+                仅供研究和临床决策支持使用。所有发现结果应由具备资质的医疗专业人员\
+                进行审查和解读。变异分类基于当前知识和数据库，可能随着新证据的出现\
+                而更新。</p>\
+                <p>本报告不构成医学诊断。在做出治疗决策前，可能需要临床相关性和\
+                确认性检测（如 Sanger 测序）。</p>\
+                </div>"
+                .to_string(),
+        },
+        subsections: Vec::new(),
+    }
+}
+
+/// Generate a language-appropriate clinical disclaimer.
+pub fn clinical_disclaimer_for_language(lang: ReportLanguage) -> ReportSection {
+    match lang {
+        ReportLanguage::Chinese => clinical_disclaimer_section_zh(),
+        ReportLanguage::English => clinical_disclaimer_section(),
     }
 }
 

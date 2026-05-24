@@ -241,6 +241,7 @@ fn benchmark_record_creation() {
         rule: "fastqc".to_string(),
         wall_time_secs: 42.5,
         max_memory_mb: Some(1024),
+        retries: 0,
         cpu_seconds: Some(38.0),
     };
     assert_eq!(b.rule, "fastqc");
@@ -256,6 +257,7 @@ fn checkpoint_mark_completed() {
         rule: "step1".to_string(),
         wall_time_secs: 5.0,
         max_memory_mb: None,
+        retries: 0,
         cpu_seconds: None,
     };
     state.mark_completed("step1", bench);
@@ -282,6 +284,7 @@ fn checkpoint_json_round_trip() {
             rule: "align".to_string(),
             wall_time_secs: 120.0,
             max_memory_mb: Some(8192),
+            retries: 0,
             cpu_seconds: Some(110.0),
         },
     );

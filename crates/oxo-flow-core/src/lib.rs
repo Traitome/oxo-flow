@@ -50,6 +50,7 @@ pub mod environment;
 pub mod error;
 pub mod executor;
 pub mod format;
+pub mod plugin;
 
 #[cfg(feature = "report")]
 pub mod report;

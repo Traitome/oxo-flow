@@ -1153,6 +1153,7 @@ fn checkpoint_state_json_roundtrip() {
             rule: "align_sample".to_string(),
             wall_time_secs: 42.5,
             max_memory_mb: Some(1024),
+            retries: 0,
             cpu_seconds: Some(38.0),
         },
     );
@@ -1188,6 +1189,7 @@ fn checkpoint_state_file_persistence() {
             rule: "qc_step".to_string(),
             wall_time_secs: 5.0,
             max_memory_mb: Some(512),
+            retries: 0,
             cpu_seconds: Some(4.2),
         },
     );
@@ -1197,6 +1199,7 @@ fn checkpoint_state_file_persistence() {
             rule: "align_step".to_string(),
             wall_time_secs: 120.3,
             max_memory_mb: Some(4096),
+            retries: 0,
             cpu_seconds: Some(115.0),
         },
     );
@@ -1226,6 +1229,7 @@ fn checkpoint_should_skip_logic() {
             rule: "done_rule".to_string(),
             wall_time_secs: 1.0,
             max_memory_mb: None,
+            retries: 0,
             cpu_seconds: Some(0.9),
         },
     );
@@ -1248,6 +1252,7 @@ fn checkpoint_prometheus_metrics() {
             rule: "step1".to_string(),
             wall_time_secs: 10.0,
             max_memory_mb: None,
+            retries: 0,
             cpu_seconds: None,
         },
     );
@@ -1985,4 +1990,63 @@ fn transform_combine_is_parsed() {
             .iter()
             .any(|r| r.name == "variant_calling" || r.name == "parallel_qc")
     );
+}
+
+// ---------------------------------------------------------------------------
+// input_function tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn input_function_is_parsed() {
+    let toml = r#"
+[workflow]
+name = "input-func-test"
+version = "1.0"
+
+[[rules]]
+name = "dynamic_input"
+input_function = "get_sample_files"
+output = ["results/out.txt"]
+shell = "process {input[0]} > {output[0]}"
+"#;
+    let config = oxo_flow_core::config::WorkflowConfig::parse(toml).unwrap();
+    let rule = &config.rules[0];
+    assert_eq!(rule.input_function.as_deref(), Some("get_sample_files"));
+    assert!(
+        rule.input.is_empty(),
+        "input_function replaces static input"
+    );
+}
+
+#[test]
+fn input_function_with_static_input() {
+    let toml = r#"
+[workflow]
+name = "mixed-input-test"
+version = "1.0"
+
+[[rules]]
+name = "mixed"
+input_function = "discover_reads"
+input = ["static_file.txt"]
+output = ["out.txt"]
+shell = "process {input} > {output[0]}"
+"#;
+    let config = oxo_flow_core::config::WorkflowConfig::parse(toml).unwrap();
+    let rule = &config.rules[0];
+    assert_eq!(rule.input_function.as_deref(), Some("discover_reads"));
+    assert!(
+        !rule.input.is_empty(),
+        "static input coexists with input_function"
+    );
+}
+
+#[test]
+fn input_function_via_rule_builder() {
+    use oxo_flow_core::rule::RuleBuilder;
+    let mut rule = RuleBuilder::new("dynamic")
+        .input_function("find_fastq_pairs")
+        .build();
+    rule.output = vec!["result.txt".to_string()].into();
+    assert_eq!(rule.input_function.as_deref(), Some("find_fastq_pairs"));
 }

@@ -15,6 +15,9 @@ pub struct BenchmarkRecord {
     pub max_memory_mb: Option<u64>,
     /// Total CPU seconds consumed (placeholder — not yet measured).
     pub cpu_seconds: Option<f64>,
+    /// Number of retry attempts before success (0 = first attempt succeeded).
+    #[serde(default)]
+    pub retries: u32,
 }
 
 /// Persistent checkpoint state for resumable workflow execution.
