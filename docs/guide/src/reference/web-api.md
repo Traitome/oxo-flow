@@ -1,6 +1,6 @@
 # Web API
 
-oxo-flow includes a built-in REST API server for remotely building, validating, and monitoring workflows. The server is built with [axum](https://github.com/tokio-rs/axum) and runs on the tokio async runtime.
+oxo-flow includes a built-in REST API server for remotely building, validating, running, and monitoring bioinformatics workflows. The server is built with [axum](https://github.com/tokio-rs/axum) and runs on the tokio async runtime.
 
 ---
 
@@ -9,300 +9,313 @@ oxo-flow includes a built-in REST API server for remotely building, validating, 
 ```bash
 oxo-flow serve                         # localhost:8080
 oxo-flow serve --host 0.0.0.0 -p 3000 # all interfaces, port 3000
+oxo-flow serve --base-path /oxo-flow   # mount under sub-path
+
+# Or via the standalone binary:
+oxo-flow-web --host 127.0.0.1 -p 3000
 ```
+
+Environment variables: `OXO_FLOW_HOST`, `OXO_FLOW_PORT`, `OXO_FLOW_ADMIN_PASSWORD`.
 
 ---
 
 ## Endpoints
 
-### Health Check
+### System & Monitoring
 
+#### Health Check
 ```
 GET /api/health
 ```
+Returns `{"status":"ok","version":"0.6.1"}`.
 
-Returns server status and version.
-
-**Response:**
-
-```json
-{
-  "status": "ok",
-  "version": "0.6.1"
-}
+#### Version
 ```
+GET /api/version
+```
+Returns crate version, name, and Rust version.
+
+#### System Info
+```
+GET /api/system
+```
+Returns OS, architecture, PID, uptime, and version info.
+
+#### Runtime Metrics
+```
+GET /api/metrics
+```
+Returns real-time resource metrics: CPU usage, memory (used/total/swap), active workflows, total requests, CPU count.
+
+#### Server-Sent Events
+```
+GET /api/events
+```
+SSE stream for real-time workflow execution events. Includes 5-second heartbeat.
 
 ---
 
-### List Workflows
+### Authentication & Authorization
 
+#### Login
 ```
-GET /api/workflows
-```
-
-Returns a list of loaded workflows.
-
-**Response:**
-
-```json
-{
-  "workflows": [
-    {
-      "name": "my-pipeline",
-      "version": "0.6.1",
-      "rules_count": 5
-    }
-  ]
-}
-```
-
----
-
-### Validate Workflow
-
-```
-POST /api/workflows/validate
-Content-Type: application/json
-```
-
-Validates TOML workflow content and returns parse/DAG results.
-
-**Request:**
-
-```json
-{
-  "toml_content": "[workflow]\nname = \"test\"\n\n[[rules]]\nname = \"s1\"\ninput = []\noutput = [\"out.txt\"]\nshell = \"echo hi > out.txt\""
-}
-```
-
-**Response (valid):**
-
-```json
-{
-  "valid": true,
-  "errors": [],
-  "rules_count": 1,
-  "edges_count": 0
-}
-```
-
-**Response (invalid):**
-
-```json
-{
-  "valid": false,
-  "errors": ["expected `=`, found newline at line 5 column 1"],
-  "rules_count": null,
-  "edges_count": null
-}
-```
-
----
-
-### Get Workflow Graph
-
-```
-POST /api/workflows/graph
-Content-Type: application/json
-```
-
-Returns the DAG in DOT format for a given workflow.
-
-**Request:**
-
-```json
-{
-  "toml_content": "..."
-}
-```
-
-**Response:**
-
-```json
-{
-  "dot": "digraph workflow { ... }"
-}
-```
-
----
-
-### List Environments
-
-```
-GET /api/environments
-```
-
-Returns available environment backends.
-
-**Response:**
-
-```json
-{
-  "available": ["conda", "docker", "singularity", "venv"]
-}
-```
-
----
-
-## Data Types
-
-### WorkflowSummary
-
-```json
-{
-  "name": "string",
-  "version": "string",
-  "rules_count": 0
-}
-```
-
-### WorkflowDetail
-
-```json
-{
-  "name": "string",
-  "version": "string",
-  "description": "string | null",
-  "author": "string | null",
-  "rules_count": 0,
-  "rules": [
-    {
-      "name": "string",
-      "inputs": ["string"],
-      "outputs": ["string"],
-      "environment": "string",
-      "threads": 0
-    }
-  ]
-}
-```
-
-### ValidateRequest
-
-```json
-{
-  "toml_content": "string"
-}
-```
-
-### ValidateResponse
-
-```json
-{
-  "valid": true,
-  "errors": ["string"],
-  "rules_count": 0,
-  "edges_count": 0
-}
-```
-
----
-
-## Authentication
-
-oxo-flow uses a session-based authentication system. To access protected endpoints, you must first log in to obtain a session token.
-
-### Login
-
-```http
 POST /api/auth/login
 Content-Type: application/json
 
-{
-  "username": "admin",
-  "password": "your-password"
-}
+{"username": "admin", "password": "admin"}
 ```
+Returns session token, username, and role. Sets `oxo_session` HttpOnly cookie.
 
 **Response:**
-
-If successful, the server returns a JSON response containing the token and user info, and sets a **Secure, HttpOnly** cookie named `oxo_session`.
-
 ```json
 {
-  "token": "...",
+  "token": "a1b2c3...",
   "username": "admin",
   "role": "admin"
 }
 ```
 
-### Authorization
+Authentication: Bearer token in `Authorization` header or `oxo_session` cookie.
 
-All protected endpoints require either:
-1.  The `oxo_session` cookie (automatically sent by browsers).
-2.  An `Authorization: Bearer <token>` HTTP header.
-
----
-
-## OpenAPI Specification
-
-A complete OpenAPI 3.0 specification for the Web API is available in the repository at `docs/schema/openapi.yaml`. You can use this file to generate client libraries or explore the API using tools like Swagger UI or Postman.
-
----
-
-## CORS
-
-By default, CORS is restricted to `localhost:8080` and `127.0.0.1:8080` to protect against cross-site request forgery.
-
-To allow access from other origins (e.g., a production frontend), set the `OXO_FLOW_ALLOWED_ORIGINS` environment variable:
-
-```bash
-export OXO_FLOW_ALLOWED_ORIGINS="https://my-frontend.com,https://dashboard.internal.org"
-oxo-flow serve
+#### Check Session
 ```
+GET /api/auth/me
+```
+Returns `{"authenticated":true,"username":"admin","role":"admin"}` or `{"authenticated":false}`.
+
+#### License Status
+```
+GET /api/license
+```
+Returns license validity, type, and issued-to information.
+
+---
+
+### Workflow CRUD
+
+#### Validate
+```
+POST /api/workflows/validate
+Content-Type: application/json
+
+{"toml_content": "<workflow TOML>"}
+```
+Returns `{"valid":true,"errors":[],"rules_count":N,"edges_count":N}`.
+
+#### Parse
+```
+POST /api/workflows/parse
+Content-Type: application/json
+
+{"toml_content": "<workflow TOML>"}
+```
+Returns full workflow detail with name, version, description, author, and per-rule summary (inputs, outputs, environment, threads).
+
+#### Build DAG
+```
+POST /api/workflows/dag
+Content-Type: application/json
+
+{"toml_content": "<workflow TOML>"}
+```
+Returns DOT graph representation with node/edge counts.
+
+#### Dry Run
+```
+POST /api/workflows/dry-run
+Content-Type: application/json
+
+{"toml_content": "<workflow TOML>", "config": {"max_jobs": 4, "dry_run": true}}
+```
+Returns execution order, rule summaries, and run configuration.
+
+#### Format
+```
+POST /api/workflows/format
+Content-Type: application/json
+
+{"toml_content": "<workflow TOML>"}
+```
+Returns `{"formatted": "<canonical TOML>"}`.
+
+#### Lint
+```
+POST /api/workflows/lint
+Content-Type: application/json
+
+{"toml_content": "<workflow TOML>"}
+```
+Returns diagnostics with error/warning/info counts.
+
+#### Paginated Lint
+```
+POST /api/workflows/lint/paginated?page=1&per_page=20
+Content-Type: application/json
+
+{"toml_content": "<workflow TOML>"}
+```
+Returns paginated diagnostics with summary counts.
+
+#### Statistics
+```
+POST /api/workflows/stats
+Content-Type: application/json
+
+{"toml_content": "<workflow TOML>"}
+```
+Returns rule counts, shell/script breakdown, dependency count, parallel groups, thread totals, environments, and wildcard info.
+
+#### Diff
+```
+POST /api/workflows/diff
+Content-Type: application/json
+
+{"toml_a": "<TOML A>", "toml_b": "<TOML B>"}
+```
+Returns `{"diff_count":N,"diffs":[{"category":"...","description":"..."}]}`.
+
+#### Export
+```
+POST /api/workflows/export
+Content-Type: application/json
+
+{"toml_content": "<workflow TOML>", "format": "docker|singularity"}
+```
+Returns `{"format":"docker","content":"<Dockerfile or Singularity def>"}`.
+
+#### Clean
+```
+POST /api/workflows/clean
+Content-Type: application/json
+
+{"toml_content": "<workflow TOML>"}
+```
+Returns list of output files that would be cleaned.
+
+---
+
+### Workflow Execution & Runs
+
+#### Launch Run [Auth Required]
+```
+POST /api/workflows/run
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"toml_content": "<workflow TOML>"}
+```
+Creates an isolated workspace, inserts a run record, and spawns background execution. Returns run ID, status, execution order, and rule count.
+
+#### List Runs [Auth Required]
+```
+GET /api/runs
+Authorization: Bearer <token>
+```
+Returns all runs for the authenticated user, ordered by start time.
+
+#### Run Detail [Auth Required]
+```
+GET /api/runs/{id}
+Authorization: Bearer <token>
+```
+Returns run status, timestamps, PID, output file listing, and last 50 lines of execution log.
+
+#### Run Logs [Auth Required]
+```
+GET /api/runs/{id}/logs
+Authorization: Bearer <token>
+```
+Returns the full execution log content.
+
+#### Cancel Run [Auth Required]
+```
+DELETE /api/runs/{id}
+Authorization: Bearer <token>
+```
+Cancels a running/pending run. Kills the process if active.
+
+---
+
+### Workflow Library [Auth Required]
+
+#### Save Workflow
+```
+POST /api/workflows/save
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"name": "my-pipeline", "version": "1.0.0", "toml_content": "<TOML>"}
+```
+Validates TOML and persists to database. Returns `{"id":"<uuid>","status":"saved"}` (HTTP 201).
+
+#### List Saved Workflows
+```
+GET /api/workflows/saved
+Authorization: Bearer <token>
+```
+Returns array of `{"id","name","version","rules_count","created_at","updated_at"}`.
+
+#### Get Saved Workflow
+```
+GET /api/workflows/saved/{id}
+Authorization: Bearer <token>
+```
+Returns full workflow detail including TOML content.
+
+---
+
+### Reports
+
+#### Generate Report
+```
+POST /api/reports/generate
+Content-Type: application/json
+
+{"toml_content": "<TOML>", "format": "html|json"}
+```
+Returns HTML or JSON report with workflow overview and execution order.
+
+---
+
+### Environments
+
+#### List Environments
+```
+GET /api/environments
+```
+Returns available environment backends (conda, docker, singularity, venv, pixi).
+
+---
+
+## Authentication
+
+All `/api/runs/*`, `/api/workflows/save*`, and `/api/workflows/saved*` endpoints require authentication via Bearer token or session cookie.
+
+Default users (seeded on first run): `admin` (role: admin).
+
+Passwords are set via environment variables: `OXO_FLOW_ADMIN_PASSWORD`, `OXO_FLOW_USER_PASSWORD`, `OXO_FLOW_VIEWER_PASSWORD`.
 
 ---
 
 ## Error Handling
 
-All endpoints return standard HTTP status codes:
-
-| Status | Meaning |
-|---|---|
-| `200` | Success |
-| `400` | Bad request (invalid TOML, missing fields) |
-| `404` | Resource not found |
-| `500` | Internal server error |
-
-Error responses include a JSON body with an `error` field and an optional `detail` field:
-
+All errors return JSON with `error` and optional `detail` fields:
 ```json
-{
-  "error": "description of what went wrong",
-  "detail": "more specific context or internal error message"
-}
+{"error": "Authentication required", "detail": null}
 ```
+
+HTTP status codes: 200 (success), 201 (created), 400 (bad request), 401 (unauthorized), 404 (not found), 422 (unprocessable), 429 (rate limited).
 
 ---
 
-## Metrics
+## CORS
 
-### Runtime Metrics
-
-```
-GET /api/metrics
-```
-
-Returns current system usage, request counts, and execution metrics.
-
-**Response:**
-
-```json
-{
-  "uptime_secs": 86400.5,
-  "version": "0.6.1",
-  "pid": 1234,
-  "os": "linux",
-  "arch": "x86_64",
-  "cpu_count": 16,
-  "total_requests": 1542,
-  "active_workflows": 3
-}
-```
+CORS is enabled for `localhost:8080` and `127.0.0.1:8080` by default. Configure via `OXO_FLOW_ALLOWED_ORIGINS` (comma-separated).
 
 ---
 
 ## See Also
 
-- [`serve` command](../commands/serve.md) — CLI reference
-- [System Architecture](./architecture.md) — how the web layer fits in
+- [Architecture](architecture.md) — Server design and component overview
+- [Workflow Format](workflow-format.md) — `.oxoflow` TOML specification
+- [Environment System](environment-system.md) — Conda/Docker/Singularity backends

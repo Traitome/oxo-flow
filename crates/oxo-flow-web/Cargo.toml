@@ -33,6 +33,7 @@ sqlx = { version = "0.8.3", features = ["sqlite", "runtime-tokio", "uuid", "chro
 sysinfo = { workspace = true }
 futures = "0.3.32"
 regex.workspace = true
+clap = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
