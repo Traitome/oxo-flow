@@ -55,7 +55,7 @@ oxo-flow profile current
 ## Output
 
 ```
-oxo-flow 0.6.0 — Bioinformatics Pipeline Engine
+oxo-flow 0.6.1 — Bioinformatics Pipeline Engine
 Available execution profiles:
   • local — Local execution (default)
   • slurm — SLURM cluster scheduler
