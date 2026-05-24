@@ -305,6 +305,168 @@ pub struct PluginsConfig {
     pub trusted_keys_file: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Subprocess Plugin Executor (dynamic loading without unsafe code)
+// ---------------------------------------------------------------------------
+
+/// Input sent to a plugin subprocess via stdin (JSON).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginInput {
+    /// Rule name being executed.
+    pub rule: String,
+    /// Input files.
+    pub inputs: Vec<String>,
+    /// Output files.
+    pub outputs: Vec<String>,
+    /// Shell command to execute (for simple plugins, oxo-flow builds it).
+    pub command: Option<String>,
+    /// Configuration variables from the workflow.
+    pub config: HashMap<String, String>,
+    /// Extra plugin-specific parameters.
+    pub params: HashMap<String, String>,
+}
+
+/// Output received from a plugin subprocess via stdout (JSON).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginOutput {
+    /// Whether execution succeeded.
+    pub success: bool,
+    /// Modified or final shell command (if plugin transforms the command).
+    pub command: Option<String>,
+    /// Validation errors (if any).
+    pub errors: Vec<String>,
+    /// Log messages.
+    pub logs: Vec<String>,
+    /// Exit code suggestion (0 = success).
+    pub exit_code: i32,
+}
+
+impl Default for PluginOutput {
+    fn default() -> Self {
+        Self {
+            success: true,
+            command: None,
+            errors: Vec::new(),
+            logs: Vec::new(),
+            exit_code: 0,
+        }
+    }
+}
+
+/// Execute a plugin subprocess and collect its output.
+///
+/// The plugin executable receives JSON input on stdin and must
+/// write JSON output to stdout within the given timeout.
+///
+/// This is the safe, portable alternative to `libloading`-based
+/// dynamic loading — plugins are standalone executables that
+/// communicate via a simple JSON protocol.
+pub async fn execute_plugin_subprocess(
+    executable: &Path,
+    input: &PluginInput,
+    timeout_secs: u64,
+) -> Result<PluginOutput> {
+    let input_json = serde_json::to_string(input)?;
+
+    let mut child = tokio::process::Command::new(executable)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| OxoFlowError::Execution {
+            rule: input.rule.clone(),
+            message: format!("failed to spawn plugin '{}': {}", executable.display(), e),
+        })?;
+
+    // Write input to stdin
+    if let Some(mut stdin) = child.stdin.take() {
+        use tokio::io::AsyncWriteExt;
+        stdin
+            .write_all(input_json.as_bytes())
+            .await
+            .map_err(|e| OxoFlowError::Execution {
+                rule: input.rule.clone(),
+                message: format!("failed to write plugin input: {}", e),
+            })?;
+        drop(stdin);
+    }
+
+    // Wait for output with timeout
+    let output = if timeout_secs > 0 {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_secs),
+            child.wait_with_output(),
+        )
+        .await
+        .map_err(|_| OxoFlowError::Execution {
+            rule: input.rule.clone(),
+            message: format!(
+                "plugin '{}' timed out after {}s",
+                executable.display(),
+                timeout_secs
+            ),
+        })?
+        .map_err(|e| OxoFlowError::Execution {
+            rule: input.rule.clone(),
+            message: format!("plugin '{}' failed: {}", executable.display(), e),
+        })?
+    } else {
+        child
+            .wait_with_output()
+            .await
+            .map_err(|e| OxoFlowError::Execution {
+                rule: input.rule.clone(),
+                message: format!("plugin '{}' failed: {}", executable.display(), e),
+            })?
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Ok(PluginOutput {
+            success: false,
+            command: None,
+            errors: vec![format!(
+                "plugin exited with code {:?}: {}",
+                output.status.code(),
+                stderr.trim()
+            )],
+            logs: Vec::new(),
+            exit_code: output.status.code().unwrap_or(1),
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<PluginOutput>(stdout.trim()).map_err(|e| OxoFlowError::Execution {
+        rule: input.rule.clone(),
+        message: format!(
+            "failed to parse plugin output from '{}': {}",
+            executable.display(),
+            e
+        ),
+    })
+}
+
+/// Build a plugin executable path from a manifest.
+pub fn resolve_plugin_executable(manifest: &PluginManifest) -> Option<PathBuf> {
+    // Priority: command_template, then search PATH for plugin name
+    if let Some(ref tmpl) = manifest.command_template {
+        let exe = tmpl.split_whitespace().next().unwrap_or(tmpl);
+        return Some(PathBuf::from(exe));
+    }
+    // Search PATH
+    find_in_path(&manifest.name)
+}
+
+/// Search for an executable in PATH.
+fn find_in_path(name: &str) -> Option<PathBuf> {
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path).find_map(|dir| {
+            let exe = dir.join(name);
+            if exe.exists() { Some(exe) } else { None }
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -111,6 +111,77 @@ pub struct PluginsConfig {
 }
 ```
 
+
+## Dynamic Loading (Subprocess Protocol)
+
+oxo-flow uses a **subprocess-based plugin protocol** — the safe, portable
+alternative to shared-library loading. Plugins are standalone executables
+that communicate via JSON over stdin/stdout.
+
+### Protocol
+
+**Input** (stdin, JSON):
+```json
+{
+  "rule": "my_analysis",
+  "inputs": ["raw/sample.fq"],
+  "outputs": ["results/output.txt"],
+  "command": "custom_tool --input raw/sample.fq > results/output.txt",
+  "config": {"reference": "/data/ref.fa"},
+  "params": {}
+}
+```
+
+**Output** (stdout, JSON):
+```json
+{
+  "success": true,
+  "command": "custom_tool --input raw/sample.fq --threads 8 > results/output.txt",
+  "errors": [],
+  "logs": ["Processing sample..."],
+  "exit_code": 0
+}
+```
+
+### Executing a plugin
+
+```rust
+use oxo_flow_core::plugin::{execute_plugin_subprocess, PluginInput};
+
+let input = PluginInput {
+    rule: "my_rule".into(),
+    inputs: vec!["in.txt".into()],
+    outputs: vec!["out.txt".into()],
+    command: Some("custom_tool {input} > {output}".into()),
+    config: HashMap::new(),
+    params: HashMap::new(),
+};
+
+let output = execute_plugin_subprocess(
+    Path::new("/path/to/plugin"),
+    &input,
+    30, // timeout seconds
+).await?;
+```
+
+### Writing a plugin
+
+Plugins can be written in any language. A minimal Python plugin:
+
+```python
+#!/usr/bin/env python3
+import sys, json
+
+input_data = json.load(sys.stdin)
+# Transform the command
+command = input_data.get("command", "").replace("{input}", input_data["inputs"][0])
+command = command.replace("{output}", input_data["outputs"][0])
+
+output = {"success": True, "command": command, "errors": [], "logs": [], "exit_code": 0}
+json.dump(output, sys.stdout)
+```
+
+
 ## See Also
 
 - [Plugin module source](https://github.com/Traitome/oxo-flow/blob/main/crates/oxo-flow-core/src/plugin.rs)
