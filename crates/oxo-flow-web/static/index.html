@@ -143,7 +143,8 @@ input { font-family:var(--font); }
             <button class="btn btn-outline" onclick="exportWorkflow()" style="width:100%;margin-bottom:0.35rem">Export Dockerfile</button>
           </div>
           <div class="card"><div class="card-header">Templates</div>
-            <select id="template-select" onchange="loadTemplate()" style="width:100%;padding:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);margin-bottom:0.5rem;font-family:var(--font)">
+            <button class="btn btn-sm btn-outline" onclick="newWorkflow()" style="width:100%;margin-bottom:0.5rem">+ New Workflow</button>
+            <select id="template-select" onchange="loadTemplate()" style="width:100%;padding:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);margin-bottom:0.35rem;font-family:var(--font)">
               <option value="">-- Quick template --</option>
               <option value="hello">Hello World</option>
               <option value="wgs">WGS Germline</option>
@@ -406,8 +407,10 @@ async function runWorkflow() {
 async function saveWorkflow() {
   var name = document.getElementById('save-name').value.trim() || 'untitled';
   var r = await api('POST', '/api/workflows/save', { name: name, version: '1.0.0', toml_content: getToml() });
-  if (r.status === 201) showOutput('Saved "' + name + '" (ID: ' + r.data.id + ')', false);
-  else showOutput('Save failed: ' + (r.data.error || ''), true);
+  if (r.status === 201) {
+    showOutput('Saved "' + name + '" to library (ID: ' + r.data.id.substring(0,8) + '...)', false);
+    document.getElementById('save-name').value = '';
+  } else showOutput('Save failed: ' + (r.data.error || ''), true);
 }
 
 async function updateEditorStats() {
@@ -484,6 +487,18 @@ var templates = {
   scatter: '[workflow]\nname = "scatter-gather"\nversion = "1.0.0"\ndescription = "Scatter-gather parallel processing by chromosome"\n\n[config]\nref = "/path/to/reference.fa"\n\n[[rules]]\nname = "call_by_chromosome"\ninput = ["aligned.bam"]\noutput = ["variants.vcf.gz"]\nshell = "bcftools mpileup -f {config.ref} -r {_chrom} {input[0]} | bcftools call -mv -Oz -o {output[0]}"\nthreads = 4\n\n[rules.transform]\nmap = "bcftools mpileup -f {config.ref} -r {_chrom} {input[0]} | bcftools call -mv -Oz -o {output[0]}"\n\n[rules.transform.split]\nby = "_chrom"\nvalues = ["chr1","chr2","chr3","chr4","chr5","chr6","chr7","chr8","chr9","chr10","chr11","chr12","chr13","chr14","chr15","chr16","chr17","chr18","chr19","chr20","chr21","chr22","chrX","chrY"]\n\n[rules.transform.combine]\naggregate = true\nmethod = "concat"\n\n[rules.environment]\nconda = "envs/variant_calling.yaml"\n',
   conditional: '[workflow]\nname = "conditional-pipeline"\nversion = "1.0.0"\ndescription = "Conditional execution based on config flags"\n\n[config]\nrun_expensive_analysis = false\ndo_qc = true\nmin_quality = 30\n\n[[rules]]\nname = "basic_qc"\noutput = ["qc_report.txt"]\nshell = "echo QC Report > {output[0]}"\nwhen = "config.do_qc"\n\n[[rules]]\nname = "expensive_analysis"\ninput = ["qc_report.txt"]\noutput = ["deep_analysis.txt"]\nshell = "echo Deep analysis > {output[0]}"\nwhen = "config.run_expensive_analysis && config.min_quality >= 20"\n\n[[rules]]\nname = "always_run"\noutput = ["summary.txt"]\nshell = "echo Pipeline summary > {output[0]}"\n'
 };
+
+function newWorkflow() {
+  document.getElementById('editor-text').value = '';
+  document.getElementById('save-name').value = '';
+  document.getElementById('editor-output').classList.add('hidden');
+  document.querySelectorAll('.sidebar-nav button').forEach(function(b) { b.classList.remove('active'); });
+  document.querySelector('[data-view="editor"]').classList.add('active');
+  document.querySelectorAll('.view').forEach(function(v) { v.classList.remove('active'); });
+  document.getElementById('view-editor').classList.add('active');
+  document.getElementById('view-title').textContent = 'Workflow Editor';
+  document.getElementById('editor-text').focus();
+}
 
 function loadTemplate() {
   var sel = document.getElementById('template-select').value;
