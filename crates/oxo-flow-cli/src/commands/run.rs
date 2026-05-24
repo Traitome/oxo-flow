@@ -317,14 +317,18 @@ pub async fn run_command(
                             }
                         }
                     }
-                    let _ = checkpoint.save_to_file(&checkpoint_path);
+                    if let Err(e) = checkpoint.save_to_file(&checkpoint_path) {
+                        tracing::warn!("Failed to save checkpoint: {e}");
+                    }
                 } else if record.status == oxo_flow_core::executor::JobStatus::Skipped {
                     skipped_count += 1;
                 } else {
                     fail_count += 1;
                     failed_rules_set.insert(rule_name.clone());
                     checkpoint.mark_failed(rule_name);
-                    let _ = checkpoint.save_to_file(&checkpoint_path);
+                    if let Err(e) = checkpoint.save_to_file(&checkpoint_path) {
+                        tracing::warn!("Failed to save checkpoint: {e}");
+                    }
                     // Build detailed error message with stderr and exit code
                     let mut err_msg = format!("rule '{}' failed", rule_name);
                     if let Some(ref stderr) = record.stderr {
@@ -351,7 +355,9 @@ pub async fn run_command(
                 fail_count += 1;
                 failed_rules_set.insert(rule_name.clone());
                 checkpoint.mark_failed(rule_name);
-                let _ = checkpoint.save_to_file(&checkpoint_path);
+                if let Err(e) = checkpoint.save_to_file(&checkpoint_path) {
+                    tracing::warn!("Failed to save checkpoint: {e}");
+                }
                 if !keep_going {
                     progress.finish_and_clear();
                     return Err(e.into());
