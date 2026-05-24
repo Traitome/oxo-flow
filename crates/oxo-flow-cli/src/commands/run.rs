@@ -473,6 +473,16 @@ pub async fn dry_run_command(
         );
     }
 
+    let suggested_jobs = std::thread::available_parallelism()
+        .map(|n| n.get().min(16).to_string())
+        .unwrap_or_else(|_| "4".to_string());
+    eprintln!(
+        "\n{}  oxo-flow run {} -j {}",
+        "To execute:".bold().cyan(),
+        workflow.display(),
+        suggested_jobs
+    );
+
     Ok(())
 }
 

@@ -110,10 +110,18 @@ impl SchedulerState {
                     }
                 }
 
+                let rule_list: Vec<String> = pending.iter().take(5).cloned().collect();
+                let suffix = if pending.len() > 5 {
+                    format!(" (and {} more)", pending.len() - 5)
+                } else {
+                    String::new()
+                };
                 return Err(crate::OxoFlowError::Config {
                     message: format!(
-                        "Deadlock detected: {} rules are pending but none can start. Check resource constraints and dependencies.",
-                        pending.len()
+                        "Deadlock detected: {} rules stuck{}. Stuck rules: {}. Check resource constraints (threads/memory) and dependencies.",
+                        pending.len(),
+                        suffix,
+                        rule_list.join(", ")
                     ),
                 });
             }
