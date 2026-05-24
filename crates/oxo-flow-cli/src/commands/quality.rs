@@ -309,7 +309,7 @@ pub fn touch_command(workflow: PathBuf, rules: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-pub async fn watch_command(workflow: PathBuf) -> Result<()> {
+pub async fn watch_command(workflow: PathBuf, auto_run: bool, jobs: usize) -> Result<()> {
     print_banner();
 
     let workflow_path =
@@ -353,17 +353,38 @@ pub async fn watch_command(workflow: PathBuf) -> Result<()> {
                 "Change detected:".bold().green()
             );
 
-            // Run validate + dry-run for quick feedback
+            // Run validate + optional dry-run/run for quick feedback
             match validate_command(workflow_path.clone(), false) {
                 Ok(()) => {
-                    // Also run dry-run to show execution plan
-                    eprintln!();
-                    let _ = crate::commands::run::dry_run_command(
-                        Some(workflow_path.clone()),
-                        vec![],
-                        false,
-                    )
-                    .await;
+                    if auto_run {
+                        eprintln!();
+                        let _ = crate::commands::run::run_command(
+                            Some(workflow_path.clone()),
+                            jobs,
+                            false,           // keep_going
+                            None,            // workdir
+                            vec![],          // target
+                            0,               // retry
+                            "0".to_string(), // timeout
+                            false,           // resume_failed
+                            None,            // profile
+                            0,               // max_threads
+                            0,               // max_memory
+                            false,           // skip_env_setup
+                            None,            // cache_dir
+                            false,           // provenance
+                        )
+                        .await;
+                    } else {
+                        // Dry-run to show execution plan
+                        eprintln!();
+                        let _ = crate::commands::run::dry_run_command(
+                            Some(workflow_path.clone()),
+                            vec![],
+                            false,
+                        )
+                        .await;
+                    }
                     eprintln!();
                 }
                 Err(e) => {

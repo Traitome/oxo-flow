@@ -308,30 +308,52 @@ pub async fn run_command(
     if success_count > 0 {
         let workdir_actual = workdir.as_ref().unwrap_or(&workflow_dir);
         let mut missing_outputs = Vec::new();
+        let mut verified = 0usize;
+        let mut total_size: u64 = 0;
         for rule_name in &order {
             if checkpoint.is_completed(rule_name)
                 && let Some(rule) = config.get_rule(rule_name)
             {
                 for output in &rule.output {
                     if !output.contains('{') {
-                        // Check both relative and with config-expanded path
                         let expanded = oxo_flow_core::executor::checkpoint::expand_config_in_path(
                             output,
                             &wildcard_values,
                         );
-                        if !workdir_actual.join(&expanded).exists()
-                            && !workdir_actual.join(output).exists()
-                        {
+                        let resolved = workdir_actual.join(&expanded);
+                        if resolved.exists() {
+                            verified += 1;
+                            if let Ok(meta) = std::fs::metadata(&resolved) {
+                                total_size += meta.len();
+                            }
+                        } else if !workdir_actual.join(output).exists() {
                             missing_outputs.push(format!("  {}: {}", rule_name, output));
+                        } else {
+                            verified += 1;
                         }
                     }
                 }
             }
         }
+        if verified > 0 {
+            let size_str = if total_size > 1_073_741_824 {
+                format!("{:.1}GB", total_size as f64 / 1_073_741_824.0)
+            } else if total_size > 1_048_576 {
+                format!("{:.1}MB", total_size as f64 / 1_048_576.0)
+            } else {
+                format!("{}B", total_size)
+            };
+            eprintln!(
+                "{} {} output files verified ({} total)",
+                "✓".green(),
+                verified,
+                size_str
+            );
+        }
         if !missing_outputs.is_empty() {
             eprintln!(
-                "\n{} {} output file(s) were not found:",
-                "Warning:".bold().yellow(),
+                "{} {} output file(s) were not found:",
+                "⚠".yellow(),
                 missing_outputs.len()
             );
             for m in &missing_outputs {

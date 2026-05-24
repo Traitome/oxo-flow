@@ -194,6 +194,10 @@ pub enum Commands {
     Watch {
         #[arg(value_name = "WORKFLOW")]
         workflow: PathBuf,
+        #[arg(long)]
+        run: bool,
+        #[arg(short = 'j', long, default_value = "1")]
+        jobs: usize,
     },
     /// Mark workflow outputs as up-to-date without re-executing rules.
     Touch {
@@ -510,7 +514,11 @@ async fn main() -> Result<()> {
             check,
         } => format_command(workflow, output, check)?,
         Commands::Lint { workflow, strict } => lint_command(workflow, strict)?,
-        Commands::Watch { workflow } => watch_command(workflow).await?,
+        Commands::Watch {
+            workflow,
+            run,
+            jobs,
+        } => watch_command(workflow, run, jobs).await?,
         Commands::Touch { workflow, rules } => touch_command(workflow, rules)?,
         Commands::Report {
             workflow,

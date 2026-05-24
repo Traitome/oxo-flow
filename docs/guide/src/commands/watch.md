@@ -35,3 +35,16 @@ oxo-flow watch my_pipeline.oxoflow
 
 - [oxo-flow validate](validate.md) — one-time validation
 - [oxo-flow test](test.md) — comprehensive pre-flight check
+
+## Auto-Run Mode
+
+With `--run`, watch automatically re-executes the workflow when changes
+are detected, enabling rapid development cycles:
+
+```bash
+# Edit-and-run loop: each save triggers validation + execution
+oxo-flow watch my_pipeline.oxoflow --run -j 4
+```
+
+Without `--run` (default), watch validates and shows a dry-run preview
+after each change.
