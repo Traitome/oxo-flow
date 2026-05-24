@@ -2587,6 +2587,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "sysinfo",
+ "tempfile",
  "tokio",
  "tokio-stream",
  "tower",

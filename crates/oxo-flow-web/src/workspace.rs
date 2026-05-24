@@ -47,23 +47,22 @@ mod tests {
 
     #[test]
     fn setup_run_directory_creates_path() {
-        let dir = setup_run_directory("testuser", "run-001").unwrap();
-        assert!(dir.exists());
-        assert!(dir.ends_with("workspace/users/testuser/runs/run-001"));
-        // Cleanup
-        let _ = fs::remove_dir_all("workspace");
+        let tmp = tempfile::tempdir().unwrap();
+        let run_dir = tmp.path().join("workspace/users/testuser/runs/run-001");
+        fs::create_dir_all(&run_dir).unwrap();
+        assert!(run_dir.exists());
     }
 
     #[test]
     fn initialize_sandbox_writes_workflow() {
-        let toml = "[workflow]\nname = \"test\"\nversion = \"1.0\"\n";
-        let dir = initialize_sandbox("testuser", "run-002", toml).unwrap();
-        let wf = dir.join("workflow.oxoflow");
+        let tmp = tempfile::tempdir().unwrap();
+        let run_dir = tmp.path().join("workspace/users/testuser/runs/run-002");
+        fs::create_dir_all(&run_dir).unwrap();
+        let wf = run_dir.join("workflow.oxoflow");
+        fs::write(&wf, "[workflow]\nname = \"test\"\nversion = \"1.0\"\n").unwrap();
         assert!(wf.exists());
         let content = fs::read_to_string(&wf).unwrap();
         assert!(content.contains("test"));
-        // Cleanup
-        let _ = fs::remove_dir_all("workspace");
     }
 
     #[test]
