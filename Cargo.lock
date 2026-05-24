@@ -2578,6 +2578,7 @@ dependencies = [
  "async-stream",
  "axum",
  "chrono",
+ "clap",
  "dashmap",
  "futures",
  "oxo-flow-core",
