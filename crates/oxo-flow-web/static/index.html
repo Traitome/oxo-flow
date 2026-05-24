@@ -402,9 +402,28 @@ async function loadSavedWorkflows() {
     document.getElementById('saved-wf-tbody').innerHTML = Array.isArray(r.data) ? r.data.map(function(w) {
       return '<tr><td>'+esc(w.name)+'</td><td>'+esc(w.version)+'</td><td>'+w.rules_count+'</td>'+
       '<td style="font-size:0.78rem;color:var(--text2)">'+fmtTime(w.updated_at)+'</td>'+
-      '<td><button class="btn btn-sm btn-outline">Load</button></td></tr>';
+      '<td><button class="btn btn-sm btn-outline" onclick="loadWorkflowToEditor(\''+w.id+'\')">Load</button></td></tr>';
     }).join('') : '<tr><td colspan="5" style="color:var(--text3)">No saved workflows</td></tr>';
   } catch(e) {}
+}
+
+async function loadWorkflowToEditor(wfId) {
+  try {
+    var r = await api('GET', '/api/workflows/saved/' + wfId);
+    if (r.status === 200 && r.data.toml_content) {
+      document.getElementById('editor-text').value = r.data.toml_content;
+      // Navigate to editor
+      document.querySelectorAll('.sidebar-nav button').forEach(function(b) { b.classList.remove('active'); });
+      document.querySelector('[data-view="editor"]').classList.add('active');
+      document.querySelectorAll('.view').forEach(function(v) { v.classList.remove('active'); });
+      document.getElementById('view-editor').classList.add('active');
+      document.getElementById('view-title').textContent = 'Workflow Editor';
+      document.getElementById('save-name').value = r.data.name;
+      showOutput('Loaded: ' + r.data.name + ' (v' + r.data.version + ', ' + r.data.rules_count + ' rules)', false);
+    } else {
+      alert('Failed to load workflow: ' + (r.data.error || 'Not found'));
+    }
+  } catch(e) { alert('Error loading workflow'); }
 }
 
 async function refreshSystem() {

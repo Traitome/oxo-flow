@@ -1809,6 +1809,67 @@ async fn list_saved_workflows(
     Ok(Json(workflows))
 }
 
+/// Retrieve a single saved workflow by ID, including full TOML content.
+#[derive(Serialize, Deserialize)]
+pub struct SavedWorkflowDetail {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub toml_content: String,
+    pub rules_count: usize,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+async fn get_saved_workflow(
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(wf_id): axum::extract::Path<String>,
+) -> Result<Json<SavedWorkflowDetail>, ApiError> {
+    let session = extract_session(&headers).await.ok_or_else(|| ApiError {
+        status: StatusCode::UNAUTHORIZED,
+        body: ErrorResponse {
+            error: "Authentication required".to_string(),
+            detail: None,
+        },
+    })?;
+
+    let user = db::get_user_by_id(&session.user_id)
+        .await
+        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
+        .ok_or_else(|| ApiError::bad_request("User not found", None))?;
+
+    let row = sqlx::query_as::<_, (String, String, String, String, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
+        "SELECT id, name, version, toml_content, created_at, updated_at FROM workflows WHERE id = ? AND user_id = ?"
+    )
+    .bind(&wf_id)
+    .bind(&user.id)
+    .fetch_optional(db::pool())
+    .await
+    .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
+    .ok_or_else(|| ApiError {
+        status: StatusCode::NOT_FOUND,
+        body: ErrorResponse {
+            error: "Workflow not found".to_string(),
+            detail: None,
+        },
+    })?;
+
+    let (id, name, version, toml, created, updated) = row;
+    let rules_count = oxo_flow_core::WorkflowConfig::parse(&toml)
+        .map(|c| c.rules.len())
+        .unwrap_or(0);
+
+    Ok(Json(SavedWorkflowDetail {
+        id,
+        name,
+        version,
+        toml_content: toml,
+        rules_count,
+        created_at: created.to_rfc3339(),
+        updated_at: updated.to_rfc3339(),
+    }))
+}
+
 async fn cancel_run(
     headers: axum::http::HeaderMap,
     axum::extract::Path(run_id): axum::extract::Path<String>,
@@ -1964,6 +2025,7 @@ fn build_router_inner(limiter: Option<RateLimiter>) -> Router {
         .route("/api/runs/{id}", delete(cancel_run))
         .route("/api/runs/{id}/logs", get(get_run_logs))
         .route("/api/workflows/saved", get(list_saved_workflows))
+        .route("/api/workflows/saved/{id}", get(get_saved_workflow))
         .route("/api/workflows/save", post(save_workflow))
         // Authentication & license
         .route("/api/auth/login", post(login))
