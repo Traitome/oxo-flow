@@ -140,6 +140,7 @@ input { font-family:var(--font); }
             <button class="btn btn-outline" onclick="formatEditor()" style="width:100%;margin-bottom:0.35rem">Format</button>
             <button class="btn btn-outline" onclick="lintEditor()" style="width:100%;margin-bottom:0.35rem">Lint</button>
             <button class="btn btn-outline" onclick="showDag()" style="width:100%;margin-bottom:0.35rem">View DAG</button>
+            <button class="btn btn-outline" onclick="exportWorkflow()" style="width:100%;margin-bottom:0.35rem">Export Dockerfile</button>
           </div>
           <div class="card"><div class="card-header">Templates</div>
             <select id="template-select" onchange="loadTemplate()" style="width:100%;padding:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);margin-bottom:0.5rem;font-family:var(--font)">
@@ -208,6 +209,13 @@ input { font-family:var(--font); }
       <button class="btn btn-primary" onclick="doLogin()" style="width:100%">Sign In</button>
       <div id="login-error" style="color:var(--error);font-size:0.78rem;margin-top:0.5rem;display:none"></div>
     </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="export-modal">
+  <div class="modal" style="max-width:800px">
+    <div class="modal-header"><h3>Dockerfile Export</h3><button class="btn btn-outline btn-sm" onclick="closeExportModal()">Close</button></div>
+    <div class="modal-body"><pre id="export-content" style="font-family:var(--mono);font-size:0.75rem;color:var(--text2);white-space:pre-wrap;max-height:60vh;overflow-y:auto;background:var(--bg);padding:1rem;border-radius:var(--radius)"></pre></div>
   </div>
 </div>
 
@@ -431,8 +439,16 @@ async function viewRunLogs(runId) {
   document.getElementById('log-content').textContent = typeof r.data === 'string' ? (r.data || '(empty)') : 'Log not available';
 }
 
+async function exportWorkflow() {
+  var r = await api('POST', '/api/workflows/export', { toml_content: getToml(), format: 'docker' });
+  if (r.status === 200 && r.data.content) {
+    document.getElementById('export-content').textContent = r.data.content;
+    document.getElementById('export-modal').classList.remove('hidden');
+  } else { showOutput('Export failed: ' + (r.data.error || ''), true); }
+}
 function closeLogModal() { document.getElementById('log-modal').classList.add('hidden'); }
 function closeDagModal() { document.getElementById('dag-modal').classList.add('hidden'); }
+function closeExportModal() { document.getElementById('export-modal').classList.add('hidden'); }
 
 async function cancelRun(runId) {
   if (!confirm('Cancel run ' + runId + '?')) return;
