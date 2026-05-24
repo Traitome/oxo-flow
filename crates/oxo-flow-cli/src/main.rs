@@ -287,6 +287,13 @@ pub enum Commands {
     },
     /// Output the JSON Schema for the .oxoflow format.
     Schema,
+    /// Show execution history from checkpoints.
+    History {
+        #[arg(value_name = "DIR")]
+        dir: Option<PathBuf>,
+        #[arg(short = 'n', long, default_value = "10")]
+        limit: usize,
+    },
     /// Run a workflow in test mode, validating and verifying outputs.
     Test {
         #[arg(value_name = "WORKFLOW")]
@@ -564,6 +571,46 @@ async fn main() -> Result<()> {
         Commands::Schema => {
             let schema = include_str!("../schema/oxoflow-v1.schema.json");
             println!("{schema}");
+        }
+        Commands::History { dir, limit } => {
+            use colored::Colorize;
+            let base = dir.unwrap_or_else(|| PathBuf::from("."));
+            let checkpoint_path = base.join(".oxo-flow").join("checkpoint.json");
+
+            if checkpoint_path.exists() {
+                if let Ok(state) =
+                    oxo_flow_core::executor::CheckpointState::load_from_file(&checkpoint_path)
+                {
+                    eprintln!("{} {}", "History:".bold().cyan(), checkpoint_path.display());
+                    eprintln!(
+                        "  Workflow: {}",
+                        state.workflow_path.as_deref().unwrap_or("unknown")
+                    );
+                    eprintln!("  Completed: {}", state.completed_rules.len());
+                    eprintln!("  Failed:    {}", state.failed_rules.len());
+                    if !state.benchmarks.is_empty() {
+                        let total: f64 = state.benchmarks.values().map(|b| b.wall_time_secs).sum();
+                        eprintln!("  Total time: {:.1}s", total);
+                    }
+                    if !state.completed_rules.is_empty() {
+                        eprintln!("\n  {} (showing up to {})", "Recent rules:".bold(), limit);
+                        for rule in state.completed_rules.iter().take(limit) {
+                            let bench = state.benchmarks.get(rule);
+                            let time =
+                                bench.map_or("-".into(), |b| format!("{:.1}s", b.wall_time_secs));
+                            eprintln!("    ✓ {} ({})", rule, time);
+                        }
+                    }
+                } else {
+                    eprintln!("  {} failed to parse checkpoint", "✗".red());
+                }
+            } else {
+                eprintln!(
+                    "{} No checkpoint found at {}. Run a workflow first.",
+                    "Note:".yellow(),
+                    checkpoint_path.display()
+                );
+            }
         }
         Commands::Test {
             workflow,

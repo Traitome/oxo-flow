@@ -232,6 +232,21 @@ pub fn clean_command(workflow: PathBuf, dry_run: bool, force: bool, orphans: boo
                 rejected
             );
         } else {
+            // Confirmation prompt before destructive action (interactive only)
+            if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                eprintln!(
+                    "\n{} {} file(s) will be deleted. Continue? [y/N]",
+                    "⚠".yellow(),
+                    deletable.len()
+                );
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input).ok();
+                if !input.trim().eq_ignore_ascii_case("y") {
+                    eprintln!("  Cancelled.");
+                    return Ok(());
+                }
+            }
+
             let mut deleted = 0usize;
             let mut failed = 0usize;
 
