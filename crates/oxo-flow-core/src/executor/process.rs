@@ -877,6 +877,26 @@ pub fn build_execution_command(
         (None, None) => unreachable!(),
     };
 
+    // Auto-create output directories to eliminate mkdir -p boilerplate in shells
+    let mut dirs_to_create: Vec<String> = Vec::new();
+    for output in &rule.output {
+        let expanded = render_shell_command(output, rule, wildcard_values);
+        // Only create dirs for paths with directory separators, skip wildcards
+        if expanded.contains('/')
+            && !expanded.contains('{')
+            && let Some(parent) = std::path::Path::new(&expanded).parent()
+        {
+            let dir = parent.to_string_lossy().to_string();
+            if !dir.is_empty() && dir != "." && !dirs_to_create.contains(&dir) {
+                dirs_to_create.push(dir);
+            }
+        }
+    }
+    if !dirs_to_create.is_empty() {
+        let mkdir_cmd = format!("mkdir -p {}", dirs_to_create.join(" "));
+        base_cmd = format!("{}\n{}", mkdir_cmd, base_cmd);
+    }
+
     if !rule.envvars.is_empty() {
         let mut env_prefix = String::new();
         for (k, v) in &rule.envvars {

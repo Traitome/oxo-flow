@@ -353,9 +353,17 @@ pub async fn watch_command(workflow: PathBuf) -> Result<()> {
                 "Change detected:".bold().green()
             );
 
-            // Run validate
+            // Run validate + dry-run for quick feedback
             match validate_command(workflow_path.clone(), false) {
                 Ok(()) => {
+                    // Also run dry-run to show execution plan
+                    eprintln!();
+                    let _ = crate::commands::run::dry_run_command(
+                        Some(workflow_path.clone()),
+                        vec![],
+                        false,
+                    )
+                    .await;
                     eprintln!();
                 }
                 Err(e) => {
