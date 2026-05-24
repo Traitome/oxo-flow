@@ -533,8 +533,8 @@ async fn main() -> Result<()> {
         Commands::Serve {
             host,
             port,
-            base_path: _,
-        } => crate::commands::web::handle_serve(host, port).await?,
+            base_path,
+        } => crate::commands::web::handle_serve(host, port, base_path).await?,
         Commands::Completions { shell } => handle_completions(shell)?,
         Commands::Profile { action } => profile_command(action)?,
         Commands::Export {

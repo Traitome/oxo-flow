@@ -34,9 +34,9 @@ oxo-flow is a high-performance, modular bioinformatics pipeline engine built fro
 - 📦 **Environment management** — First-class support for conda, pixi, docker, singularity, and venv
 - 🧬 **Bioinformatics-first** — Purpose-built for genomics workflows and clinical-grade pipelines
 - 📊 **Clinical-grade reporting** — Modular HTML/PDF/JSON report generation with variant classification, biomarker tracking, and compliance audit trails
-- 🌐 **Command Center** — Multi-user Web UI with real-time resource sensing, physical workspace isolation, and on-demand log retrieval
-- 🗄️ **Persistent State** — SQLite-backed execution history and audit logs; automatic recovery of orphaned runs after server restart
-- 🔒 **OS Identity Binding** — Secure task execution via Sudo, leveraging host POSIX user permissions for data isolation
+- 🌐 **Web Interface** — REST API server with real-time resource sensing, workspace management, and on-demand log retrieval
+- 🗄️ **Persistent State** — Checkpoint-based execution history with JSON persistence; resume interrupted workflows from the last completed rule
+- 🔒 **Security Hardened** — Shell injection prevention, path traversal protection, and command sanitization for secure task execution
 - 🐳 **Container packaging** — Multi-stage Docker builds, rootless containers, and HEALTHCHECK support
 - ⚡ **Rust performance** — Fearless concurrency, zero-cost abstractions, `#![forbid(unsafe_code)]` across all crates
 - 🔧 **Resource-aware scheduling** — Jobs declare CPU, memory, GPU, and disk; the scheduler respects constraints across local and cluster backends (SLURM, PBS, SGE, LSF)
@@ -198,7 +198,7 @@ oxo-flow uses a TOML-based workflow format that is human-readable, composable, a
 ```toml
 [workflow]
 name = "variant-calling"
-version = "1.0.0"
+version = "0.6.0"
 
 [config]
 reference = "/data/ref/GRCh38.fa"

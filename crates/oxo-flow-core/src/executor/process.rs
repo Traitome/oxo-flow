@@ -303,8 +303,7 @@ fn detect_total_memory_mb() -> u64 {
         let mut sys = System::new_all();
         sys.refresh_memory();
         sys.total_memory() / 1024 / 1024
-    })
-        && mb > 0
+    }) && mb > 0
     {
         return mb;
     }
