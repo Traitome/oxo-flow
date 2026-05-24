@@ -931,6 +931,11 @@ pub struct WorkflowConfig {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<Rule>,
 
+    /// Plugin configuration for extending oxo-flow with custom types.
+    #[serde(default, rename = "plugins")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<crate::plugin::PluginsConfig>,
+
     /// Include directives for importing rules from other workflow files.
     #[serde(default, rename = "include")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
