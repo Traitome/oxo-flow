@@ -230,6 +230,21 @@ pub struct EnvironmentSpec {
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub modules: Vec<String>,
+
+    /// Optional project-local prefix for the conda environment.
+    ///
+    /// When set, `conda env create -p <prefix>` is used instead of the
+    /// default name-based (`-n`) install to the system conda directory.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conda_prefix: Option<String>,
+
+    /// Optional custom requirements file path for Python venv.
+    ///
+    /// Defaults to `requirements.txt` in the working directory.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub venv_requirements: Option<String>,
 }
 
 impl EnvironmentSpec {

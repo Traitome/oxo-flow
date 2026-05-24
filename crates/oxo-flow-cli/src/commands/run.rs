@@ -213,10 +213,35 @@ pub async fn run_command(
         }
 
         if checkpoint.is_completed(rule_name) {
-            skipped_count += 1;
-            progress.set_message("skipping already completed");
-            progress.inc(1);
-            continue;
+            // Verify output files still exist before skipping — user may have
+            // cleaned the output directory since the last run.
+            let mut outputs_exist = true;
+            if let Some(rule) = config.get_rule(rule_name) {
+                let workdir_actual = workdir.as_ref().unwrap_or(&workflow_dir);
+                for output in &rule.output {
+                    if !output.contains('{') {
+                        let expanded = oxo_flow_core::executor::checkpoint::expand_config_in_path(
+                            output,
+                            &wildcard_values,
+                        );
+                        if !workdir_actual.join(&expanded).exists() {
+                            outputs_exist = false;
+                            tracing::info!(
+                                rule = rule_name,
+                                output = expanded,
+                                "Output file missing, will re-execute rule"
+                            );
+                            break;
+                        }
+                    }
+                }
+            }
+            if outputs_exist {
+                skipped_count += 1;
+                progress.set_message("skipping already completed");
+                progress.inc(1);
+                continue;
+            }
         }
 
         let rule = config.get_rule(rule_name).unwrap().clone();

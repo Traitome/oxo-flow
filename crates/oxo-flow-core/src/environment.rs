@@ -114,6 +114,67 @@ impl EnvironmentBackend for CondaBackend {
     }
 }
 
+impl CondaBackend {
+    /// Setup command with optional project-local prefix.
+    ///
+    /// When `prefix` is `Some`, uses `-p <prefix>` (install to the given
+    /// directory). When `None`, uses the default name-based `-n <name>`
+    /// (install to the system conda directory).
+    pub fn setup_command_with_opts(
+        &self,
+        spec: &str,
+        prefix: Option<&str>,
+    ) -> Result<String> {
+        if let Some(prefix) = prefix {
+            Ok(format!(
+                "conda env create -p {prefix} -f {spec} 2>/dev/null || conda env update -p {prefix} -f {spec} --prune"
+            ))
+        } else {
+            self.setup_command(spec)
+        }
+    }
+
+    /// Wrap command with optional project-local prefix.
+    pub fn wrap_command_with_opts(
+        &self,
+        command: &str,
+        spec: &str,
+        prefix: Option<&str>,
+    ) -> Result<String> {
+        let escaped = escape_for_sh_single_quote(command);
+        if let Some(prefix) = prefix {
+            Ok(format!("conda run -p {prefix} bash -c '{escaped}'"))
+        } else {
+            let env_name = conda_env_name_from_spec(spec);
+            Ok(format!(
+                "conda run -n {env_name} bash -c '{escaped}'"
+            ))
+        }
+    }
+
+    /// Teardown command with optional project-local prefix.
+    pub fn teardown_command_with_opts(
+        &self,
+        spec: &str,
+        prefix: Option<&str>,
+    ) -> Result<Option<String>> {
+        if let Some(prefix) = prefix {
+            Ok(Some(format!("conda env remove -p {prefix} -y")))
+        } else {
+            self.teardown_command(spec)
+        }
+    }
+
+    /// Cache key with optional project-local prefix.
+    pub fn cache_key_with_opts(&self, spec: &str, prefix: Option<&str>) -> String {
+        if let Some(prefix) = prefix {
+            format!("conda:{spec}:{prefix}")
+        } else {
+            self.cache_key(spec)
+        }
+    }
+}
+
 /// Escape a string for safe embedding inside a `sh -c '...'` invocation.
 ///
 /// Replaces every `'` with `'\''` (close quote, escaped literal quote, reopen quote)
@@ -158,7 +219,7 @@ impl EnvironmentBackend for DockerBackend {
         }
 
         Ok(format!(
-            "docker run --rm{mem_arg} -v {workdir}:{workdir} -w {workdir} {spec} sh -c '{escaped_cmd}'"
+            "docker run --rm --user $(id -u):$(id -g){mem_arg} -v {workdir}:{workdir} -w {workdir} {spec} sh -c '{escaped_cmd}'"
         ))
     }
 
@@ -176,8 +237,37 @@ impl EnvironmentBackend for DockerBackend {
 }
 
 /// Singularity/Apptainer environment backend.
-#[derive(Debug, Default)]
-pub struct SingularityBackend;
+///
+/// Auto-detects the installed binary (preferring `apptainer` over
+/// `singularity`) and uses it for all operations.
+#[derive(Debug)]
+pub struct SingularityBackend {
+    binary: String,
+}
+
+impl Default for SingularityBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SingularityBackend {
+    /// Create a new backend, auto-detecting the available binary.
+    pub fn new() -> Self {
+        let binary = if std::process::Command::new("apptainer")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+        {
+            "apptainer"
+        } else {
+            "singularity"
+        };
+        Self {
+            binary: binary.to_string(),
+        }
+    }
+}
 
 impl EnvironmentBackend for SingularityBackend {
     fn name(&self) -> &str {
@@ -185,21 +275,17 @@ impl EnvironmentBackend for SingularityBackend {
     }
 
     fn is_available(&self) -> bool {
-        std::process::Command::new("singularity")
+        std::process::Command::new(&self.binary)
             .arg("--version")
             .output()
             .is_ok_and(|o| o.status.success())
-            || std::process::Command::new("apptainer")
-                .arg("--version")
-                .output()
-                .is_ok_and(|o| o.status.success())
     }
 
     fn wrap_command(
         &self,
         command: &str,
         spec: &str,
-        resources: Option<&crate::rule::Resources>,
+        _resources: Option<&crate::rule::Resources>,
     ) -> Result<String> {
         let workdir = std::env::current_dir()
             .unwrap_or_default()
@@ -207,20 +293,14 @@ impl EnvironmentBackend for SingularityBackend {
             .to_string();
         let escaped_cmd = escape_for_sh_single_quote(command);
 
-        let mut mem_arg = String::new();
-        if let Some(res) = resources
-            && let Some(mem) = &res.memory
-        {
-            mem_arg = format!(" --memory {mem}");
-        }
-
         Ok(format!(
-            "singularity exec{mem_arg} --bind {workdir}:{workdir} {spec} sh -c '{escaped_cmd}'"
+            "{} exec --bind {workdir}:{workdir} {spec} sh -c '{escaped_cmd}'",
+            self.binary
         ))
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
-        Ok(format!("singularity pull {spec}"))
+        Ok(format!("{} pull {spec}", self.binary))
     }
 
     fn teardown_command(&self, _spec: &str) -> Result<Option<String>> {
@@ -276,6 +356,23 @@ impl EnvironmentBackend for VenvBackend {
 
     fn cache_key(&self, spec: &str) -> String {
         format!("venv:{spec}")
+    }
+}
+
+impl VenvBackend {
+    /// Setup command with configurable requirements file.
+    ///
+    /// `requirements` is a path to the pip requirements file. Defaults to
+    /// `requirements.txt` when `None`.
+    pub fn setup_command_with_reqs(
+        &self,
+        spec: &str,
+        requirements: Option<&str>,
+    ) -> Result<String> {
+        let reqs = requirements.unwrap_or("requirements.txt");
+        Ok(format!(
+            "python3 -m venv {spec} && source {spec}/bin/activate && pip install -r {reqs}"
+        ))
     }
 }
 
@@ -393,7 +490,9 @@ elif [ -f /opt/Modules/default/init/bash ]; then
     source /opt/Modules/default/init/bash
 fi
 "#;
-        Ok(format!("{module_init}module load {modules} && {command}"))
+        Ok(format!(
+            "{module_init}if ! command -v module >/dev/null 2>&1; then echo \"oxo-flow: module command not found — is environment-modules or Lmod installed?\" >&2; exit 1; fi\nmodule load {modules} && {command}"
+        ))
     }
 
     fn setup_command(&self, _spec: &str) -> Result<String> {
@@ -530,7 +629,7 @@ impl EnvironmentResolver {
         Self {
             conda: CondaBackend,
             docker: DockerBackend,
-            singularity: SingularityBackend,
+            singularity: SingularityBackend::new(),
             venv: VenvBackend,
             pixi: PixiBackend,
             modules: ModulesBackend,
@@ -544,7 +643,7 @@ impl EnvironmentResolver {
         Self {
             conda: CondaBackend,
             docker: DockerBackend,
-            singularity: SingularityBackend,
+            singularity: SingularityBackend::new(),
             venv: VenvBackend,
             pixi: PixiBackend,
             modules: ModulesBackend,
@@ -573,7 +672,9 @@ impl EnvironmentResolver {
         resources: Option<&crate::rule::Resources>,
     ) -> Result<String> {
         if let Some(ref conda) = env_spec.conda {
-            return self.conda.wrap_command(command, conda, resources);
+            return self
+                .conda
+                .wrap_command_with_opts(command, conda, env_spec.conda_prefix.as_deref());
         }
         if let Some(ref pixi) = env_spec.pixi {
             return self.pixi.wrap_command(command, pixi, resources);
@@ -600,7 +701,9 @@ impl EnvironmentResolver {
     /// Used to track whether an environment has already been set up.
     pub fn cache_key(&self, env_spec: &EnvironmentSpec) -> String {
         if let Some(ref conda) = env_spec.conda {
-            return self.conda.cache_key(conda);
+            return self
+                .conda
+                .cache_key_with_opts(conda, env_spec.conda_prefix.as_deref());
         }
         if let Some(ref pixi) = env_spec.pixi {
             return self.pixi.cache_key(pixi);
@@ -624,7 +727,9 @@ impl EnvironmentResolver {
     /// This command creates/pulls the environment before first use.
     pub fn setup_command(&self, env_spec: &EnvironmentSpec) -> Result<String> {
         if let Some(ref conda) = env_spec.conda {
-            return self.conda.setup_command(conda);
+            return self
+                .conda
+                .setup_command_with_opts(conda, env_spec.conda_prefix.as_deref());
         }
         if let Some(ref pixi) = env_spec.pixi {
             return self.pixi.setup_command(pixi);
@@ -636,7 +741,9 @@ impl EnvironmentResolver {
             return self.singularity.setup_command(singularity);
         }
         if let Some(ref venv) = env_spec.venv {
-            return self.venv.setup_command(venv);
+            return self
+                .venv
+                .setup_command_with_reqs(venv, env_spec.venv_requirements.as_deref());
         }
         if !env_spec.modules.is_empty() {
             return self.modules.setup_command(&env_spec.modules.join(","));
@@ -685,11 +792,21 @@ impl EnvironmentResolver {
                 message: "conda is not installed or not in PATH".to_string(),
             });
         }
-        if env_spec.pixi.is_some() && !self.pixi.is_available() {
-            return Err(OxoFlowError::Environment {
-                kind: "pixi".to_string(),
-                message: "pixi is not installed or not in PATH".to_string(),
-            });
+        if env_spec.pixi.is_some() {
+            if !self.pixi.is_available() {
+                return Err(OxoFlowError::Environment {
+                    kind: "pixi".to_string(),
+                    message: "pixi is not installed or not in PATH".to_string(),
+                });
+            }
+            if !std::path::Path::new("pixi.toml").exists() {
+                return Err(OxoFlowError::Environment {
+                    kind: "pixi".to_string(),
+                    message:
+                        "pixi.toml not found in current directory — required for pixi environments"
+                            .to_string(),
+                });
+            }
         }
         if env_spec.docker.is_some() && !self.docker.is_available() {
             return Err(OxoFlowError::Environment {
@@ -791,6 +908,7 @@ mod tests {
             .wrap_command("bwa mem ref.fa reads.fq", "biocontainers/bwa:0.7.17", None)
             .unwrap();
         assert!(result.contains("docker run"));
+        assert!(result.contains("--user $(id -u):$(id -g)"));
         assert!(result.contains("biocontainers/bwa:0.7.17"));
     }
 
@@ -825,30 +943,31 @@ mod tests {
 
     #[test]
     fn singularity_wrap_command() {
-        let backend = SingularityBackend;
+        let backend = SingularityBackend::new();
         let result = backend
             .wrap_command("samtools sort input.bam", "image.sif", None)
             .unwrap();
-        assert!(result.contains("singularity exec"));
+        assert!(result.contains(" exec "));
+        assert!(!result.contains("--memory"));
         assert!(result.contains("image.sif"));
     }
 
     #[test]
     fn singularity_setup_command() {
-        let backend = SingularityBackend;
+        let backend = SingularityBackend::new();
         let cmd = backend.setup_command("docker://ubuntu:22.04").unwrap();
-        assert_eq!(cmd, "singularity pull docker://ubuntu:22.04");
+        assert!(cmd.contains(" pull docker://ubuntu:22.04"));
     }
 
     #[test]
     fn singularity_teardown_is_noop() {
-        let backend = SingularityBackend;
+        let backend = SingularityBackend::new();
         assert!(backend.teardown_command("image.sif").unwrap().is_none());
     }
 
     #[test]
     fn singularity_cache_key() {
-        let backend = SingularityBackend;
+        let backend = SingularityBackend::new();
         assert_eq!(backend.cache_key("image.sif"), "singularity:image.sif");
     }
 
@@ -1136,5 +1255,166 @@ mod tests {
         assert!(!cache.is_ready("conda:envs/qc.yaml"));
         cache.mark_ready("conda:envs/qc.yaml");
         assert!(cache.is_ready("conda:envs/qc.yaml"));
+    }
+
+    // --- conda prefix tests ---------------------------------------------------
+
+    #[test]
+    fn conda_setup_command_with_prefix() {
+        let backend = CondaBackend;
+        let cmd = backend
+            .setup_command_with_opts("envs/qc.yaml", Some(".oxo-conda"))
+            .unwrap();
+        assert!(
+            cmd.contains("conda env create -p .oxo-conda -f envs/qc.yaml"),
+            "expected -p prefix form, got: {cmd}"
+        );
+        assert!(cmd.contains("conda env update -p .oxo-conda -f envs/qc.yaml --prune"));
+    }
+
+    #[test]
+    fn conda_setup_command_without_prefix() {
+        let backend = CondaBackend;
+        let cmd = backend
+            .setup_command_with_opts("envs/qc.yaml", None)
+            .unwrap();
+        assert!(cmd.contains("conda env create -f envs/qc.yaml"));
+        // Should NOT contain -p
+        assert!(!cmd.contains(" -p "));
+    }
+
+    #[test]
+    fn conda_wrap_command_with_prefix() {
+        let backend = CondaBackend;
+        let result = backend
+            .wrap_command_with_opts("echo hi", "envs/qc.yaml", Some(".oxo-conda"))
+            .unwrap();
+        assert!(
+            result.contains("conda run -p .oxo-conda"),
+            "expected -p prefix form, got: {result}"
+        );
+        assert!(result.contains("echo hi"));
+    }
+
+    #[test]
+    fn conda_wrap_command_without_prefix() {
+        let backend = CondaBackend;
+        let result = backend
+            .wrap_command_with_opts("echo hi", "envs/qc.yaml", None)
+            .unwrap();
+        assert!(result.contains("conda run -n qc"));
+        assert!(!result.contains(" -p "));
+    }
+
+    #[test]
+    fn conda_teardown_command_with_prefix() {
+        let backend = CondaBackend;
+        let cmd = backend
+            .teardown_command_with_opts("envs/qc.yaml", Some(".oxo-conda"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(cmd, "conda env remove -p .oxo-conda -y");
+    }
+
+    #[test]
+    fn conda_teardown_command_without_prefix() {
+        let backend = CondaBackend;
+        let cmd = backend
+            .teardown_command_with_opts("envs/qc.yaml", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(cmd, "conda env remove -n qc -y");
+    }
+
+    #[test]
+    fn conda_cache_key_with_prefix() {
+        let backend = CondaBackend;
+        let key = backend.cache_key_with_opts("envs/qc.yaml", Some(".oxo-conda"));
+        assert_eq!(key, "conda:envs/qc.yaml:.oxo-conda");
+    }
+
+    #[test]
+    fn conda_cache_key_without_prefix() {
+        let backend = CondaBackend;
+        let key = backend.cache_key_with_opts("envs/qc.yaml", None);
+        assert_eq!(key, "conda:envs/qc.yaml");
+    }
+
+    // --- venv custom requirements tests ---------------------------------------
+
+    #[test]
+    fn venv_setup_command_with_custom_requirements() {
+        let backend = VenvBackend;
+        let cmd = backend
+            .setup_command_with_reqs(".venv", Some("requirements-dev.txt"))
+            .unwrap();
+        assert!(cmd.contains("python3 -m venv .venv"));
+        assert!(cmd.contains("pip install -r requirements-dev.txt"));
+    }
+
+    #[test]
+    fn venv_setup_command_defaults_to_requirements_txt() {
+        let backend = VenvBackend;
+        let cmd = backend
+            .setup_command_with_reqs(".venv", None)
+            .unwrap();
+        assert!(cmd.contains("pip install -r requirements.txt"));
+    }
+
+    // --- modules init guard test ----------------------------------------------
+
+    #[test]
+    fn modules_wrap_command_has_init_error_guard() {
+        let backend = ModulesBackend;
+        let cmd = backend
+            .wrap_command("echo test", "gcc/11.2", None)
+            .unwrap();
+        assert!(
+            cmd.contains("command -v module"),
+            "expected init guard, got: {cmd}"
+        );
+        assert!(cmd.contains("module load gcc/11.2"));
+    }
+
+    // --- resolver integration tests -------------------------------------------
+
+    #[test]
+    fn resolver_conda_prefix_integration() {
+        let resolver = EnvironmentResolver::new();
+        let spec = EnvironmentSpec {
+            conda: Some("envs/qc.yaml".to_string()),
+            conda_prefix: Some(".oxo-conda".to_string()),
+            ..Default::default()
+        };
+        let result = resolver
+            .wrap_command("fastqc reads.fq", &spec, None)
+            .unwrap();
+        assert!(result.contains("conda run -p .oxo-conda"));
+        assert!(!result.contains(" -n "));
+    }
+
+    #[test]
+    fn resolver_venv_custom_requirements_integration() {
+        let resolver = EnvironmentResolver::new();
+        let spec = EnvironmentSpec {
+            venv: Some(".venv".to_string()),
+            venv_requirements: Some("requirements-test.txt".to_string()),
+            ..Default::default()
+        };
+        let cmd = resolver.setup_command(&spec).unwrap();
+        assert!(cmd.contains("pip install -r requirements-test.txt"));
+    }
+
+    #[test]
+    fn singularity_no_memory_flag() {
+        let backend = SingularityBackend::new();
+        let resources = crate::rule::Resources {
+            memory: Some("32g".to_string()),
+            ..Default::default()
+        };
+        let result = backend
+            .wrap_command("bwa mem ref.fa reads.fq", "image.sif", Some(&resources))
+            .unwrap();
+        assert!(!result.contains("--memory"));
     }
 }

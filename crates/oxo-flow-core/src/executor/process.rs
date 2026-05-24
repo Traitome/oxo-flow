@@ -287,6 +287,48 @@ pub struct LocalExecutor {
     semaphore: Arc<Semaphore>,
     env_resolver: EnvironmentResolver,
     resource_pool: Arc<Mutex<ResourcePool>>,
+    /// Detected system thread count (respects cgroup limits on Linux).
+    system_threads: u32,
+    /// Detected system total memory in MB (respects cgroup limits on Linux).
+    system_memory_mb: u64,
+}
+
+/// Detect total system memory in MB using the most reliable method available
+/// on the current platform. On Linux, falls back to parsing `/proc/meminfo`
+/// if the sysinfo crate returns unexpected results.
+fn detect_total_memory_mb() -> u64 {
+    // Primary: sysinfo crate (cross-platform)
+    if let Ok(mb) = std::panic::catch_unwind(|| {
+        use sysinfo::System;
+        let mut sys = System::new_all();
+        sys.refresh_memory();
+        sys.total_memory() / 1024 / 1024
+    }) {
+        if mb > 0 {
+            return mb;
+        }
+    }
+
+    // Fallback for Linux: read /proc/meminfo directly
+    if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
+        for line in content.lines() {
+            if line.starts_with("MemTotal:") {
+                // Format: "MemTotal:       1056640524 kB"
+                if let Some(kb_str) = line
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|s| s.parse::<u64>().ok())
+                {
+                    let mb = kb_str / 1024;
+                    if mb > 0 {
+                        return mb;
+                    }
+                }
+            }
+        }
+    }
+
+    0
 }
 
 impl LocalExecutor {
@@ -300,6 +342,11 @@ impl LocalExecutor {
             EnvironmentResolver::with_cache_dir(&cache_dir)
         };
         let (max_threads, max_memory_mb) = Self::detect_system_resources(&config);
+        tracing::info!(
+            threads = max_threads,
+            memory_mb = max_memory_mb,
+            "Detected system resources"
+        );
         let mut resource_pool = ResourcePool::new(max_threads, max_memory_mb);
         resource_pool.set_groups(config.resource_groups.clone());
         let resource_pool = Arc::new(Mutex::new(resource_pool));
@@ -309,23 +356,26 @@ impl LocalExecutor {
             semaphore,
             env_resolver,
             resource_pool,
+            system_threads: max_threads,
+            system_memory_mb: max_memory_mb,
         }
     }
 
     fn detect_system_resources(config: &ExecutorConfig) -> (u32, u64) {
-        // R8: Fix num_cpus in Docker.
-        // On Linux, we should respect cgroup limits if available.
-        // num_cpus::get() usually handles this on Linux, but sysinfo can also help.
-        let max_threads = config.max_threads.unwrap_or_else(|| num_cpus::get() as u32);
+        let max_threads = config.max_threads.unwrap_or_else(|| {
+            // Respect cgroup CPU limits on Linux via num_cpus
+            num_cpus::get() as u32
+        });
 
-        // R7: Cross-platform memory detection (already uses sysinfo)
+        // Cross-platform memory detection with Linux /proc/meminfo fallback
         let max_memory_mb = config.max_memory_mb.unwrap_or_else(|| {
-            use sysinfo::System;
-            let mut sys = System::new_all();
-            sys.refresh_memory();
-            let total_bytes = sys.total_memory();
-            let detected_mb = total_bytes / 1024 / 1024;
-            if detected_mb > 0 { detected_mb } else { 8192 }
+            let detected = detect_total_memory_mb();
+            if detected > 0 {
+                detected
+            } else {
+                tracing::warn!("Could not detect system memory; defaulting to 8192MB. Set --max-memory to override.");
+                8192
+            }
         });
 
         (max_threads, max_memory_mb)
@@ -348,6 +398,13 @@ impl LocalExecutor {
                     || stderr_lower.contains("no such file")
                 {
                     Some("environment YAML file not found. Check that the path is correct and relative to the workflow file.".into())
+                } else if stderr_lower.contains("permission denied")
+                    || stderr_lower.contains("operation not permitted")
+                {
+                    Some(
+                        "permission denied creating conda environment. If using a project-local prefix, check that the parent directory is writable."
+                            .into(),
+                    )
                 } else {
                     None
                 }
@@ -488,8 +545,11 @@ impl LocalExecutor {
         let max_threads = self
             .config
             .max_threads
-            .unwrap_or_else(|| num_cpus::get() as u32);
-        let max_memory_mb = self.config.max_memory_mb.unwrap_or(8192);
+            .unwrap_or(self.system_threads);
+        let max_memory_mb = self
+            .config
+            .max_memory_mb
+            .unwrap_or(self.system_memory_mb);
         let mut pool = self.resource_pool.lock().await;
         pool.release(
             rule,
