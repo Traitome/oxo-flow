@@ -2,59 +2,56 @@ use chrono::Utc;
 use regex::Regex;
 use std::process::Stdio;
 use tokio::process::Command;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::db;
 use crate::workspace::get_run_directory;
 
-/// Spawns a background task to execute the workflow sandbox.
+/// Spawns a background task to execute the workflow in a sandboxed workspace.
 pub fn spawn_background_run(run_id: String, username: String, auth_type: String, os_user: String) {
     tokio::spawn(async move {
         info!("Starting background run {} for user {}", run_id, username);
 
         // Update status to running
         let now = Utc::now();
-        let _ = sqlx::query("UPDATE runs SET status = 'running', started_at = ? WHERE id = ?")
-            .bind(now)
-            .bind(&run_id)
-            .execute(db::pool())
-            .await;
+        if let Err(e) =
+            sqlx::query("UPDATE runs SET status = 'running', started_at = ? WHERE id = ?")
+                .bind(now)
+                .bind(&run_id)
+                .execute(db::pool())
+                .await
+        {
+            error!("Failed to update run {run_id} to running: {e}");
+            return;
+        }
 
         let run_dir = get_run_directory(&username, &run_id);
         let workflow_file = run_dir.join("workflow.oxoflow");
 
-        // Validate OS User to prevent injection in sudo
-        // Static regex pattern that will never fail to compile
+        // Validate OS username to prevent injection in sudo mode
         let os_user_regex = Regex::new(r"^[a-z_][a-z0-9_-]*[$]?$")
             .expect("Static regex pattern should always compile");
         if auth_type == "sudo" && !os_user_regex.is_match(&os_user) {
-            error!("Invalid OS username format: {}", os_user);
-            let end = Utc::now();
-            let _ = sqlx::query("UPDATE runs SET status = 'failed', finished_at = ? WHERE id = ?")
-                .bind(end)
-                .bind(&run_id)
-                .execute(db::pool())
-                .await;
+            error!("Invalid OS username format: {os_user}");
+            mark_run_failed(&run_id).await;
             return;
         }
 
         let mut cmd = if auth_type == "sudo" && os_user != "oxo-flow" {
-            // Sudo mode
             let mut c = Command::new("sudo");
-            c.arg("-n") // non-interactive
+            c.arg("-n")
                 .arg("-u")
                 .arg(&os_user)
                 .arg("oxo-flow")
                 .arg("run")
-                .arg(workflow_file)
+                .arg(&workflow_file)
                 .arg("--workdir")
                 .arg(&run_dir);
             c
         } else {
-            // Local mode
             let mut c = Command::new("oxo-flow");
             c.arg("run")
-                .arg(workflow_file)
+                .arg(&workflow_file)
                 .arg("--workdir")
                 .arg(&run_dir);
             c
@@ -65,28 +62,16 @@ pub fn spawn_background_run(run_id: String, username: String, auth_type: String,
         let log_file = match std::fs::File::create(&log_file_path) {
             Ok(f) => f,
             Err(e) => {
-                error!("Failed to create log file: {}", e);
-                let end = Utc::now();
-                let _ =
-                    sqlx::query("UPDATE runs SET status = 'failed', finished_at = ? WHERE id = ?")
-                        .bind(end)
-                        .bind(&run_id)
-                        .execute(db::pool())
-                        .await;
+                error!("Failed to create log file for run {run_id}: {e}");
+                mark_run_failed(&run_id).await;
                 return;
             }
         };
         let err_file = match log_file.try_clone() {
             Ok(f) => f,
             Err(e) => {
-                error!("Failed to clone log file handle: {}", e);
-                let end = Utc::now();
-                let _ =
-                    sqlx::query("UPDATE runs SET status = 'failed', finished_at = ? WHERE id = ?")
-                        .bind(end)
-                        .bind(&run_id)
-                        .execute(db::pool())
-                        .await;
+                error!("Failed to clone log file handle for run {run_id}: {e}");
+                mark_run_failed(&run_id).await;
                 return;
             }
         };
@@ -96,16 +81,18 @@ pub fn spawn_background_run(run_id: String, username: String, auth_type: String,
 
         match cmd.spawn() {
             Ok(mut child) => {
-                // Record PID
-                if let Some(pid) = child.id() {
-                    let _ = sqlx::query("UPDATE runs SET pid = ? WHERE id = ?")
+                // Record PID for cancellation support
+                if let Some(pid) = child.id()
+                    && let Err(e) = sqlx::query("UPDATE runs SET pid = ? WHERE id = ?")
                         .bind(pid as i64)
                         .bind(&run_id)
                         .execute(db::pool())
-                        .await;
+                        .await
+                {
+                    warn!("Failed to record PID for run {run_id}: {e}");
                 }
 
-                // Wait for completion
+                // Wait for process completion
                 match child.wait().await {
                     Ok(status) => {
                         let final_state = if status.success() {
@@ -114,40 +101,43 @@ pub fn spawn_background_run(run_id: String, username: String, auth_type: String,
                             "failed"
                         };
                         let end = Utc::now();
-                        let _ =
+                        if let Err(e) =
                             sqlx::query("UPDATE runs SET status = ?, finished_at = ? WHERE id = ?")
                                 .bind(final_state)
                                 .bind(end)
                                 .bind(&run_id)
                                 .execute(db::pool())
-                                .await;
-                        info!("Run {} finished with status: {}", run_id, final_state);
+                                .await
+                        {
+                            error!("Failed to update final status for run {run_id}: {e}");
+                        }
+                        info!("Run {run_id} finished: {final_state}");
                     }
                     Err(e) => {
-                        error!("Failed to wait on child process for run {}: {}", run_id, e);
-                        let end = Utc::now();
-                        let _ = sqlx::query(
-                            "UPDATE runs SET status = 'failed', finished_at = ? WHERE id = ?",
-                        )
-                        .bind(end)
-                        .bind(&run_id)
-                        .execute(db::pool())
-                        .await;
+                        error!("Failed to wait on child process for run {run_id}: {e}");
+                        mark_run_failed(&run_id).await;
                     }
                 }
             }
             Err(e) => {
-                error!("Failed to spawn child process for run {}: {}", run_id, e);
-                let end = Utc::now();
-                let _ =
-                    sqlx::query("UPDATE runs SET status = 'failed', finished_at = ? WHERE id = ?")
-                        .bind(end)
-                        .bind(&run_id)
-                        .execute(db::pool())
-                        .await;
+                error!("Failed to spawn child process for run {run_id}: {e}");
+                mark_run_failed(&run_id).await;
             }
         }
     });
+}
+
+/// Mark a run as failed with the current timestamp.
+async fn mark_run_failed(run_id: &str) {
+    let end = Utc::now();
+    if let Err(e) = sqlx::query("UPDATE runs SET status = 'failed', finished_at = ? WHERE id = ?")
+        .bind(end)
+        .bind(run_id)
+        .execute(db::pool())
+        .await
+    {
+        error!("Failed to mark run {run_id} as failed: {e}");
+    }
 }
 
 #[cfg(test)]

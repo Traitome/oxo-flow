@@ -1612,6 +1612,203 @@ async fn get_run_logs(
     Ok(content)
 }
 
+/// Detailed run status response with log preview.
+#[derive(Serialize, Deserialize)]
+pub struct RunDetail {
+    pub id: String,
+    pub user_id: String,
+    pub workflow_name: String,
+    pub status: String,
+    pub pid: Option<i64>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub log_tail: Option<String>,
+    pub output_files: Vec<String>,
+}
+
+async fn get_run_detail(
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(run_id): axum::extract::Path<String>,
+) -> Result<Json<RunDetail>, ApiError> {
+    let session = extract_session(&headers).await.ok_or_else(|| ApiError {
+        status: StatusCode::UNAUTHORIZED,
+        body: ErrorResponse {
+            error: "Authentication required".to_string(),
+            detail: None,
+        },
+    })?;
+
+    let user = db::get_user_by_id(&session.user_id)
+        .await
+        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
+        .ok_or_else(|| ApiError::bad_request("User not found", None))?;
+
+    let run = sqlx::query_as::<_, db::Run>("SELECT * FROM runs WHERE id = ? AND user_id = ?")
+        .bind(&run_id)
+        .bind(&user.id)
+        .fetch_optional(db::pool())
+        .await
+        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
+        .ok_or_else(|| ApiError {
+            status: StatusCode::NOT_FOUND,
+            body: ErrorResponse {
+                error: "Run not found".to_string(),
+                detail: None,
+            },
+        })?;
+
+    let run_dir = workspace::get_run_directory(&user.username, &run_id);
+    let log_path = run_dir.join("execution.log");
+
+    let log_tail = if log_path.exists()
+        && let Ok(content) = std::fs::read_to_string(&log_path)
+    {
+        // Return last 50 lines for preview
+        let lines: Vec<&str> = content.lines().collect();
+        let start = lines.len().saturating_sub(50);
+        Some(lines[start..].join("\n"))
+    } else {
+        None
+    };
+
+    let mut output_files = Vec::new();
+    if run_dir.exists()
+        && let Ok(entries) = std::fs::read_dir(&run_dir)
+    {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file()
+                && path.file_name().and_then(|n| n.to_str()) != Some("workflow.oxoflow")
+                && path.file_name().and_then(|n| n.to_str()) != Some("execution.log")
+                && let Some(name) = path.file_name().and_then(|n| n.to_str())
+            {
+                output_files.push(name.to_string());
+            }
+        }
+    }
+
+    Ok(Json(RunDetail {
+        id: run.id,
+        user_id: run.user_id,
+        workflow_name: run.workflow_name,
+        status: run.status,
+        pid: run.pid,
+        started_at: run.started_at.map(|t| t.to_rfc3339()),
+        finished_at: run.finished_at.map(|t| t.to_rfc3339()),
+        log_tail,
+        output_files,
+    }))
+}
+
+/// Request body for saving a workflow.
+#[derive(Serialize, Deserialize)]
+pub struct SaveWorkflowRequest {
+    pub name: String,
+    pub version: String,
+    pub toml_content: String,
+}
+
+/// Paginated workflow list response.
+#[derive(Serialize, Deserialize)]
+pub struct SavedWorkflowResponse {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub rules_count: usize,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+async fn save_workflow(
+    headers: axum::http::HeaderMap,
+    Json(req): Json<SaveWorkflowRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = extract_session(&headers).await.ok_or_else(|| ApiError {
+        status: StatusCode::UNAUTHORIZED,
+        body: ErrorResponse {
+            error: "Authentication required".to_string(),
+            detail: None,
+        },
+    })?;
+
+    let user = db::get_user_by_id(&session.user_id)
+        .await
+        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
+        .ok_or_else(|| ApiError::bad_request("User not found", None))?;
+
+    // Validate TOML before saving
+    let _config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
+        .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now();
+
+    sqlx::query(
+        "INSERT INTO workflows (id, user_id, name, version, toml_content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(&id)
+    .bind(&user.id)
+    .bind(&req.name)
+    .bind(&req.version)
+    .bind(&req.toml_content)
+    .bind(now)
+    .bind(now)
+    .execute(db::pool())
+    .await
+    .map_err(|e| ApiError::bad_request("Failed to save workflow", Some(e.to_string())))?;
+
+    let _ = db::log_action(&user.id, "save_workflow", &req.name).await;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({"id": id, "status": "saved"})),
+    ))
+}
+
+async fn list_saved_workflows(
+    headers: axum::http::HeaderMap,
+) -> Result<Json<Vec<SavedWorkflowResponse>>, ApiError> {
+    let session = extract_session(&headers).await.ok_or_else(|| ApiError {
+        status: StatusCode::UNAUTHORIZED,
+        body: ErrorResponse {
+            error: "Authentication required".to_string(),
+            detail: None,
+        },
+    })?;
+
+    let user = db::get_user_by_id(&session.user_id)
+        .await
+        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
+        .ok_or_else(|| ApiError::bad_request("User not found", None))?;
+
+    let rows = sqlx::query_as::<_, (String, String, String, String, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
+        "SELECT id, name, version, toml_content, created_at, updated_at FROM workflows WHERE user_id = ? ORDER BY updated_at DESC"
+    )
+    .bind(&user.id)
+    .fetch_all(db::pool())
+    .await
+    .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?;
+
+    let workflows = rows
+        .into_iter()
+        .map(|(id, name, version, toml, created, updated)| {
+            let rules_count = oxo_flow_core::WorkflowConfig::parse(&toml)
+                .map(|c| c.rules.len())
+                .unwrap_or(0);
+            SavedWorkflowResponse {
+                id,
+                name,
+                version,
+                rules_count,
+                created_at: created.to_rfc3339(),
+                updated_at: updated.to_rfc3339(),
+            }
+        })
+        .collect();
+
+    Ok(Json(workflows))
+}
+
 async fn cancel_run(
     headers: axum::http::HeaderMap,
     axum::extract::Path(run_id): axum::extract::Path<String>,
@@ -1763,8 +1960,11 @@ fn build_router_inner(limiter: Option<RateLimiter>) -> Router {
         .route("/api/reports/generate", post(generate_report))
         .route("/api/events", get(sse_events))
         .route("/api/runs", get(list_runs))
+        .route("/api/runs/{id}", get(get_run_detail))
         .route("/api/runs/{id}", delete(cancel_run))
         .route("/api/runs/{id}/logs", get(get_run_logs))
+        .route("/api/workflows/saved", get(list_saved_workflows))
+        .route("/api/workflows/save", post(save_workflow))
         // Authentication & license
         .route("/api/auth/login", post(login))
         .route("/api/auth/me", get(auth_me))
