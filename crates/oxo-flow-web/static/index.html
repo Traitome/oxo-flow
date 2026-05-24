@@ -199,6 +199,18 @@ input { font-family:var(--font); }
   </div>
 </div>
 
+<div class="modal-overlay hidden" id="login-modal">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-header"><h3>Sign In</h3><button class="btn btn-outline btn-sm" onclick="closeLoginModal()">Cancel</button></div>
+    <div class="modal-body">
+      <input id="login-username" placeholder="Username" style="width:100%;padding:0.6rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);margin-bottom:0.5rem;font-family:var(--font)" value="admin">
+      <input id="login-password" type="password" placeholder="Password" style="width:100%;padding:0.6rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);margin-bottom:0.75rem;font-family:var(--font)" value="admin">
+      <button class="btn btn-primary" onclick="doLogin()" style="width:100%">Sign In</button>
+      <div id="login-error" style="color:var(--error);font-size:0.78rem;margin-top:0.5rem;display:none"></div>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay hidden" id="dag-modal">
   <div class="modal">
     <div class="modal-header"><h3>Workflow DAG</h3><button class="btn btn-outline btn-sm" onclick="closeDagModal()">Close</button></div>
@@ -235,9 +247,18 @@ async function api(method, path, body) {
   try { return { status: resp.status, data: JSON.parse(text) }; } catch(e) { return { status: resp.status, data: text }; }
 }
 
-async function login() {
-  var u = prompt('Username:', 'admin') || 'admin';
-  var p = prompt('Password:', 'admin') || 'admin';
+function showLogin() {
+  document.getElementById('login-modal').classList.remove('hidden');
+  document.getElementById('login-username').focus();
+}
+function closeLoginModal() {
+  document.getElementById('login-modal').classList.add('hidden');
+  document.getElementById('login-error').style.display = 'none';
+}
+async function doLogin() {
+  var u = document.getElementById('login-username').value.trim();
+  var p = document.getElementById('login-password').value;
+  if (!u || !p) return;
   var r = await api('POST', '/api/auth/login', { username: u, password: p });
   if (r.status === 200) {
     token = r.data.token;
@@ -245,8 +266,19 @@ async function login() {
     document.getElementById('user-name').textContent = user.name;
     document.getElementById('avatar').textContent = user.name[0].toUpperCase();
     document.getElementById('conn-dot').className = 'status-dot ok';
-  } else { alert('Login failed: ' + (r.data.error || '')); }
+    closeLoginModal();
+  } else {
+    var el = document.getElementById('login-error');
+    el.textContent = r.data.error || 'Login failed';
+    el.style.display = 'block';
+  }
 }
+// Support Enter key in login form
+document.addEventListener('DOMContentLoaded', function() {
+  document.getElementById('login-password').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') doLogin();
+  });
+});
 
 async function checkSession() {
   var r = await api('GET', '/api/auth/me');
@@ -357,7 +389,7 @@ async function showDag() {
 }
 
 async function runWorkflow() {
-  if (!token) { alert('Please login first (click your avatar)'); return; }
+  if (!token) { showLogin(); return; }
   var r = await api('POST', '/api/workflows/run', { toml_content: getToml() });
   if (r.status === 200) { showOutput('Launched! Run ID: ' + r.data.run_id + '\nStatus: ' + r.data.status + '\nRules: ' + r.data.rules_total, false); refreshRuns(); }
   else { showOutput('Launch failed: ' + (r.data.error || JSON.stringify(r.data)), true); }
@@ -506,7 +538,7 @@ try {
   };
   evtSource.onerror = function() { /* silently retry */ };
 } catch(ex) {}
-document.getElementById('avatar').addEventListener('click', login);
+document.getElementById('avatar').addEventListener('click', function() { if (user) { if (confirm('Logout?')) { token=''; user=null; document.getElementById('user-name').textContent='Guest'; document.getElementById('avatar').textContent='G'; } } else { showLogin(); } });
 </script>
 </body>
 </html>
