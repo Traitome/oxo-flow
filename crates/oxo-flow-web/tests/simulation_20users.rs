@@ -481,3 +481,180 @@ async fn u20_concurrent_multi_user_operations() {
     assert_eq!(r2.unwrap(), 200);
     assert_eq!(r3.unwrap(), 200);
 }
+
+// ── E2E: Full workflow lifecycle ─────────────────────────────────
+
+#[tokio::test]
+async fn e2e_save_load_validate_delete_cycle() {
+    let token = login("admin", "admin").await;
+
+    // 1. Save a workflow
+    let (status, body) = post_auth(
+        "/api/workflows/save",
+        json!({"name":"e2e-test","version":"1.0","toml_content": MINIMAL_TOML}),
+        &token,
+    )
+    .await;
+    assert_eq!(status, 201);
+    let wf_id = body["id"].as_str().unwrap().to_string();
+
+    // 2. List saved workflows — should include our new one
+    let (status, body) = get_auth("/api/workflows/saved", &token).await;
+    assert_eq!(status, 200);
+    assert!(body.as_array().unwrap().iter().any(|w| w["id"] == wf_id));
+
+    // 3. Get the saved workflow by ID — should return full TOML
+    let (status, body) = get_auth(&format!("/api/workflows/saved/{wf_id}"), &token).await;
+    assert_eq!(status, 200);
+    assert_eq!(body["name"], "e2e-test");
+    assert!(
+        body["toml_content"]
+            .as_str()
+            .unwrap()
+            .contains("[workflow]")
+    );
+
+    // 4. Validate the loaded workflow
+    let (status, body) = post_auth(
+        "/api/workflows/validate",
+        json!({"toml_content": body["toml_content"]}),
+        &token,
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert!(body["valid"].as_bool().unwrap());
+
+    // 5. Delete the workflow
+    let req = axum::http::Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/workflows/saved/{wf_id}"))
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app().oneshot(req).await.unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+
+    // 6. Verify deletion — should be 404
+    let (status, _) = get_auth(&format!("/api/workflows/saved/{wf_id}"), &token).await;
+    assert_eq!(status, 404);
+}
+
+#[tokio::test]
+async fn e2e_full_run_lifecycle() {
+    let token = login("admin", "admin").await;
+
+    // Launch
+    let (status, body) = post_auth(
+        "/api/workflows/run",
+        json!({"toml_content": MINIMAL_TOML}),
+        &token,
+    )
+    .await;
+    assert_eq!(status, 200);
+    let run_id = body["run_id"].as_str().unwrap().to_string();
+    assert_eq!(body["status"], "started");
+
+    // Check detail
+    let (status, body) = get_auth(&format!("/api/runs/{run_id}"), &token).await;
+    assert_eq!(status, 200);
+    assert_eq!(body["id"], run_id);
+    assert!(
+        body["status"].as_str().unwrap() == "running"
+            || body["status"].as_str().unwrap() == "pending"
+            || body["status"].as_str().unwrap() == "success"
+    );
+
+    // Check run list includes this run
+    let (status, runs) = get_auth("/api/runs", &token).await;
+    assert_eq!(status, 200);
+    assert!(runs.as_array().unwrap().iter().any(|r| r["id"] == run_id));
+}
+
+#[tokio::test]
+async fn e2e_validation_errors_caught() {
+    let token = login("admin", "admin").await;
+
+    // Invalid TOML
+    let (status, body) = post_auth(
+        "/api/workflows/validate",
+        json!({"toml_content": "this is not valid {{{{"}),
+        &token,
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert!(!body["valid"].as_bool().unwrap());
+    assert!(!body["errors"].as_array().unwrap().is_empty());
+
+    // Circular dependency
+    let (status, body) = post_auth(
+        "/api/workflows/validate",
+        json!({"toml_content": "[workflow]\nname=\"circ\"\nversion=\"1.0\"\n\n[[rules]]\nname=\"a\"\ninput=[\"b.txt\"]\noutput=[\"a.txt\"]\nshell=\"echo a\"\n\n[[rules]]\nname=\"b\"\ninput=[\"a.txt\"]\noutput=[\"b.txt\"]\nshell=\"echo b\""}),
+        &token,
+    ).await;
+    assert!(!body["valid"].as_bool().unwrap());
+}
+
+#[tokio::test]
+async fn e2e_multiple_formats_work() {
+    let token = login("admin", "admin").await;
+
+    // Format
+    let (s, b) = post_auth(
+        "/api/workflows/format",
+        json!({"toml_content":MINIMAL_TOML}),
+        &token,
+    )
+    .await;
+    assert_eq!(s, 200);
+    assert!(b["formatted"].as_str().unwrap().contains("[workflow]"));
+
+    // Lint
+    let (s, b) = post_auth(
+        "/api/workflows/lint",
+        json!({"toml_content":MINIMAL_TOML}),
+        &token,
+    )
+    .await;
+    assert_eq!(s, 200);
+    assert_eq!(b["error_count"], 0);
+
+    // Stats
+    let (s, b) = post_auth(
+        "/api/workflows/stats",
+        json!({"toml_content":MINIMAL_TOML}),
+        &token,
+    )
+    .await;
+    assert_eq!(s, 200);
+    assert!(b["rule_count"].as_u64().unwrap() >= 1);
+
+    // DAG
+    let (s, b) = post_auth(
+        "/api/workflows/dag",
+        json!({"toml_content":MINIMAL_TOML}),
+        &token,
+    )
+    .await;
+    assert_eq!(s, 200);
+    assert!(b["dot"].as_str().unwrap().contains("digraph"));
+
+    // Export
+    let (s, b) = post_auth(
+        "/api/workflows/export",
+        json!({"toml_content":MINIMAL_TOML,"format":"docker"}),
+        &token,
+    )
+    .await;
+    assert_eq!(s, 200);
+    assert!(b["content"].as_str().unwrap().contains("FROM"));
+
+    // Diff
+    let (s, b) = post_auth(
+        "/api/workflows/diff",
+        json!({"toml_a":MINIMAL_TOML,"toml_b":MINIMAL_TOML}),
+        &token,
+    )
+    .await;
+    assert_eq!(s, 200);
+    assert_eq!(b["diff_count"], 0);
+}
