@@ -26,6 +26,7 @@ oxo-flow report [OPTIONS] <WORKFLOW>
 |---|---|---|---|
 | `--format` | `-f` | `html` | Output format: `html` or `json` |
 | `--output` | `-o` | stdout | Output file path |
+| `--checkpoint` | — | `.oxo-flow/checkpoint.json` | Path to checkpoint file for execution metrics |
 | `--verbose` | `-v` | — | Enable debug-level logging |
 
 ---

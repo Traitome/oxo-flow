@@ -45,6 +45,9 @@ Workflow files must use the `.oxoflow` extension (e.g., `qc_pipeline.oxoflow`).
 [[pairs]]           # Optional: experiment-control pairs (WC-01)
 [[sample_groups]]   # Optional: multi-sample groups (WC-02)
 [resource_budget]   # Optional: resource limits
+[env_groups]        # Optional: named reusable environment specs
+[citation]          # Optional: citation metadata (DOI, authors, etc.)
+[plugins]           # Optional: plugin configuration
 ```
 
 ---
@@ -127,6 +130,9 @@ author = "Your Name"
 | `description` | String | No | — | Human-readable description |
 | `author` | String | No | — | Author name or email |
 | `interpreter_map` | Table | No | `{}` | Custom interpreter mapping for script extensions |
+| `genome_build` | String | No | — | Genome reference build identifier (e.g., `"GRCh38"`, `"hg38"`) |
+| `min_version` | String | No | — | Minimum oxo-flow version required to run this workflow |
+| `format_version` | String | No | — | .oxoflow format specification version for compatibility checking |
 
 ### Custom Interpreters (`interpreter_map`)
 
@@ -243,6 +249,19 @@ shell = "bwa mem -t {threads} {config.reference} {input} | samtools sort -o {out
 | `retries` | Integer | No | Number of retry attempts on failure (default: 0) |
 | `interpreter` | String | No | Explicit interpreter for script execution |
 | `checkpoint` | Boolean | No | Rebuild DAG after this rule completes |
+| `scatter` | Table | No | Fan-out parallel execution over a variable with optional gather |
+| `expand_inputs` | Table | No | Cartesian product expansion of input patterns |
+| `priority` | Integer | No | Execution priority (higher = runs first; default: 0) |
+| `target` | Boolean | No | Mark as default target (built when no explicit `-t` given) |
+| `required` | Boolean | No | Pipeline fails if this rule fails, even without downstream deps |
+| `optional` | Boolean | No | Rule is skipped if its inputs don't exist (no error) |
+| `benchmark` | String | No | Benchmark output path for performance data |
+| `log` | String | No | Log file path for rule execution output |
+| `group` | String | No | Job group label for cluster submission grouping |
+| `cache_key` | String | No | Content-based cache key for output reuse |
+| `input_function` | String | No | Dynamic input resolver function name |
+| `rule_metadata` | Table | No | Arbitrary domain-specific metadata (assay, organism, etc.) |
+| `env_group` | String | No | Reference to a named environment in `[env_groups]` |
 
 **Note:** At least one of `shell` or `script` must be provided. If both are defined, they execute sequentially: shell first, then script.
 
@@ -263,7 +282,35 @@ environment = { singularity = "docker://biocontainers/bwa:0.7.17" }
 
 # Python venv
 environment = { venv = "envs/requirements.txt" }
+
+# Reference a named environment group (defined in [env_groups])
+env_group = "qc_env"
 ```
+
+#### Named Environment Groups (`[env_groups]`)
+
+Instead of repeating the same environment spec across multiple rules, define
+named groups once in `[env_groups]` and reference them via `env_group`:
+
+```toml
+[env_groups.qc_env]
+conda = "envs/qc.yaml"
+
+[env_groups.align_env]
+conda = "envs/alignment.yaml"
+docker = "biocontainers/bwa:0.7.17"  # fallback
+
+[[rules]]
+name = "fastqc"
+env_group = "qc_env"
+input = ["raw/{sample}.fastq.gz"]
+output = ["qc/{sample}_fastqc.html"]
+shell = "fastqc {input} -o qc/"
+```
+
+Rules using `env_group` inherit the full environment specification from the
+named group. If a rule also defines an inline `[rules.environment]`, the
+inline spec takes precedence.
 
 ### Environment Variables (`envvars`)
 
@@ -599,6 +646,120 @@ tags = ["alignment", "production"]
 name = "align_fast"
 extends = "align_default"  # Inherits threads, memory, tags
 threads = 16  # Override inherited value
+```
+
+### Priority and Targeting
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `priority` | Integer | Execution priority (higher runs first; default: 0) |
+| `target` | Boolean | Mark as default target — built when no explicit `-t` given |
+
+```toml
+[[rules]]
+name = "critical_step"
+priority = 10   # Runs ahead of lower-priority rules
+target = true   # Included when running without -t
+```
+
+### Optional and Required Rules
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `optional` | Boolean | If `true`, missing inputs become warnings instead of errors |
+| `required` | Boolean | If `true`, pipeline fails if this rule fails even without dependents |
+
+```toml
+[[rules]]
+name = "experimental"
+optional = true    # Skip if input data is absent
+required = true    # But if it runs, failure stops the pipeline
+```
+
+### Logging and Benchmarking
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `log` | String | File path for capturing rule stdout/stderr |
+| `benchmark` | String | File path for performance metrics (wall-time, memory, CPU) |
+
+```toml
+[[rules]]
+name = "align"
+log = "logs/align_{sample}.log"
+benchmark = "benchmarks/align_{sample}.tsv"
+```
+
+### Job Grouping and Caching
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `group` | String | Job group label for cluster submission grouping |
+| `cache_key` | String | Content-based cache key for reusing previous outputs |
+
+```toml
+[[rules]]
+name = "variant_call"
+group = "variant_calling"       # Submit as a group on cluster
+cache_key = "vc_v2.0"           # Cache key for output reuse
+```
+
+### Dynamic Input Resolution
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `input_function` | String | Name of a dynamic input resolver function called at runtime |
+
+### Arbitrary Metadata
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `rule_metadata` | Table | Domain-specific metadata (assay type, organism, protocol, etc.) |
+
+```toml
+[[rules]]
+name = "wgs_align"
+[rules.rule_metadata]
+assay = "WGS"
+organism = "Homo sapiens"
+protocol = "Illumina_NovaSeq_6000"
+```
+
+### Scatter-Gather (Legacy)
+
+The `scatter` field provides fan-out parallelism over a variable with optional
+gather. For new workflows, prefer the unified [`transform`](#transform-operator)
+operator.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `scatter.variable` | String | Variable to scatter over (e.g., `"chr"`) |
+| `scatter.values` | Array | Values to scatter across |
+| `scatter.values_from` | String | Config variable reference for values |
+| `scatter.gather` | String | Name of the gather rule |
+
+```toml
+[[rules]]
+name = "per_chr"
+scatter = { variable = "chr", values = ["chr1", "chr2", "chr3"] }
+```
+
+### Expand Inputs
+
+The `expand_inputs` field generates additional input combinations via Cartesian
+product expansion.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `expand_inputs[].pattern` | String | Input pattern with variables |
+| `expand_inputs[].variables` | Table | Variable name → list of values or config reference |
+
+```toml
+[[rules]]
+name = "multi_ref_align"
+expand_inputs = [
+  { pattern = "refs/{ref_genome}.fa", variables = { ref_genome = ["hg38", "t2t"] } }
+]
 ```
 
 ---

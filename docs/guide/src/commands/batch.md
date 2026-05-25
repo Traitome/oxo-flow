@@ -28,7 +28,7 @@ oxo-flow batch [OPTIONS] <TEMPLATE> [ITEMS...]
 | `--jobs` | `-j` | 1 | Number of parallel workers |
 | `--stop-on-error` | `-x` | — | Stop after first failure |
 | `--file` | `-f` | — | Read items from file |
-| `--json` | — | — | Output results as JSON |
+| `--json-output` | — | — | Output results as formatted JSON (`--json` also accepted) |
 | `--dry-run` | `-n` | — | Preview without executing |
 | `--workdir` | `-d` | . | Working directory |
 | `--environment` | `-e` | — | Environment spec |
@@ -92,7 +92,7 @@ oxo-flow batch --generate-workflow "bwa mem ref.fa {item}" *.bam -o align.oxoflo
 ### JSON output
 
 ```bash
-oxo-flow batch --json "samtools flagstat {item}" *.bam > results.json
+oxo-flow batch --json-output "samtools flagstat {item}" *.bam > results.json
 ```
 
 ### Dry-run preview

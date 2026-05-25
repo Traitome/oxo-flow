@@ -34,6 +34,9 @@ oxo-flow run [OPTIONS] [WORKFLOW]
 | `--max-memory` | — | `0` (auto-detect) | Maximum memory in MB available for execution |
 | `--skip-env-setup` | — | — | Skip environment setup (assume environments are ready) |
 | `--cache-dir` | — | — | Directory for caching environment setup state |
+| `--resume-failed` | — | — | Resume only failed rules from a previous run |
+| `--profile` | — | `local` | Execution profile: `local`, `slurm`, `pbs`, `sge`, or `lsf` |
+| `--provenance` | — | — | Track output file checksums for later verification |
 | `--verbose` | `-v` | — | Enable debug-level logging |
 
 ---
