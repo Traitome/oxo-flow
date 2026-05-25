@@ -206,16 +206,22 @@ pub fn pool() -> &'static SqlitePool {
 /// Recover runs left in the 'running' state after a server crash.
 pub async fn recover_orphaned_runs() -> Result<()> {
     let now = Utc::now();
-    let result =
-        sqlx::query("UPDATE runs SET status = 'failed', finished_at = ? WHERE status = 'running'")
-            .bind(now)
-            .execute(pool())
-            .await?;
+    // Only mark runs as orphaned if they were started more than 60 seconds ago.
+    // This avoids killing runs that are still initialising after a quick restart.
+    let cutoff = now - chrono::Duration::seconds(60);
+    let result = sqlx::query(
+        "UPDATE runs SET status = 'failed', finished_at = ? WHERE status = 'running' AND started_at < ?",
+    )
+    .bind(now)
+    .bind(cutoff)
+    .execute(pool())
+    .await?;
 
     if result.rows_affected() > 0 {
         tracing::warn!(
-            "Recovered {} orphaned runs and marked them as failed.",
-            result.rows_affected()
+            "Recovered {} orphaned run(s) (started before {}). Runs started within the last 60s were left untouched.",
+            result.rows_affected(),
+            cutoff.format("%Y-%m-%d %H:%M:%S")
         );
     }
     Ok(())

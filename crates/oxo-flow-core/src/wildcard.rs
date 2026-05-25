@@ -392,7 +392,17 @@ pub fn cartesian_product(wildcard_lists: &HashMap<String, Vec<String>>) -> Wildc
         .product::<usize>()
         .max(1);
 
-    let mut combinations: WildcardCombinations = Vec::with_capacity(total);
+    // Guard against combinatorial explosion (e.g., 5 wildcards × 1000 values = 10^15)
+    const MAX_COMBINATIONS: usize = 100_000;
+    if total > MAX_COMBINATIONS {
+        tracing::warn!(
+            "wildcard expansion would produce {total} combinations (exceeds limit of {MAX_COMBINATIONS}). \
+             This may cause high memory usage. Consider reducing wildcard values or splitting the workflow."
+        );
+    }
+    let alloc_size = total.min(MAX_COMBINATIONS);
+
+    let mut combinations: WildcardCombinations = Vec::with_capacity(alloc_size);
     combinations.push(HashMap::with_capacity(keys.len()));
 
     for key in &keys {

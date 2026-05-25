@@ -5,10 +5,26 @@ use std::path::{Path, PathBuf};
 /// Base workspace directory for the Web UI.
 const BASE_WORKSPACE: &str = "workspace";
 
+/// Validate that a path component does not contain traversal sequences.
+fn validate_path_component(name: &str, field: &str) -> Result<()> {
+    if name.is_empty()
+        || name.contains("..")
+        || name.contains('/')
+        || name.contains('\\')
+        || name.starts_with('~')
+    {
+        anyhow::bail!("Invalid {field}: '{name}' contains path traversal or invalid characters");
+    }
+    Ok(())
+}
+
 /// Setup the directory structure for a specific run.
 ///
 /// Ensures `workspace/users/<username>/runs/<run_id>` exists.
 pub fn setup_run_directory(username: &str, run_id: &str) -> Result<PathBuf> {
+    validate_path_component(username, "username")?;
+    validate_path_component(run_id, "run_id")?;
+
     let run_dir = Path::new(BASE_WORKSPACE)
         .join("users")
         .join(username)

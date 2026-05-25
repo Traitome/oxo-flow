@@ -130,14 +130,19 @@ impl PluginManifest {
             })?;
 
         let payload = self.signing_payload();
-        let expected = compute_hmac_sha256(key, &payload);
+        let expected = compute_keyed_sha256(key, &payload);
 
         Ok(expected == sig.value)
     }
 }
 
-/// Compute HMAC-SHA256 hex digest.
-fn compute_hmac_sha256(key: &str, message: &str) -> String {
+/// Compute a keyed SHA-256 hex digest: SHA256(key || message).
+///
+/// NOTE: This is NOT a true HMAC (RFC 2104). It uses simple concatenation
+/// instead of the ipad/opad construction. It provides integrity checking
+/// against accidental corruption but NOT cryptographic authentication.
+/// For production deployments, use a proper HMAC implementation.
+fn compute_keyed_sha256(key: &str, message: &str) -> String {
     use sha2::Digest;
     let mut hasher = Sha256::new();
     hasher.update(key.as_bytes());
@@ -249,16 +254,26 @@ impl PluginRegistry {
         let mut loaded = 0;
 
         for manifest in manifests {
-            // Verify signature if present
-            if manifest.signature.is_some()
-                && !self.trusted_keys.is_empty()
-                && !manifest.verify_signature(&self.trusted_keys)?
-            {
+            // Verify signature if present and trusted keys are configured
+            if manifest.signature.is_some() {
+                if self.trusted_keys.is_empty() {
+                    tracing::warn!(
+                        plugin = %manifest.name,
+                        "plugin has a signature but no trusted keys are configured — \
+                         signature verification skipped. Configure trusted_keys_file in [plugins]."
+                    );
+                } else if !manifest.verify_signature(&self.trusted_keys)? {
+                    tracing::warn!(
+                        plugin = %manifest.name,
+                        "plugin signature verification failed — skipping"
+                    );
+                    continue;
+                }
+            } else {
                 tracing::warn!(
                     plugin = %manifest.name,
-                    "plugin signature verification failed — skipping"
+                    "plugin has no signature — loaded without integrity verification"
                 );
-                continue;
             }
 
             self.manifests.push(manifest);
@@ -531,7 +546,7 @@ mod tests {
         };
 
         let payload = manifest.signing_payload();
-        let sig_value = compute_hmac_sha256(key, &payload);
+        let sig_value = compute_keyed_sha256(key, &payload);
 
         let mut manifest_signed = manifest.clone();
         manifest_signed.signature = Some(PluginSignature {

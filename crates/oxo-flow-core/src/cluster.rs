@@ -220,13 +220,30 @@ pub fn status_command(backend: &ClusterBackend) -> &'static str {
 /// Convert duration string ("24h", "30m", "2d") to scheduler format ("DD-HH:MM:SS" or "HH:MM:SS")
 fn format_walltime_for_scheduler(time_str: &str) -> String {
     let time_str = time_str.trim();
-    // If already in scheduler format, return as-is
+    // If already in scheduler format (HH:MM:SS or D-HH:MM:SS), validate and return
     if time_str.contains(':') {
-        return time_str.to_string();
+        // Basic validation: count colons and check characters
+        let colon_count = time_str.chars().filter(|&c| c == ':').count();
+        let valid_chars = time_str
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == ':' || c == '-');
+        if (colon_count == 2 || colon_count == 3) && valid_chars {
+            return time_str.to_string();
+        }
+        // Invalid format - fall through to parse as duration
     }
 
     // Parse duration like "24h", "30m", "2d"
-    let total_secs = crate::rule::parse_duration_secs(time_str).unwrap_or(3600);
+    let total_secs = match crate::rule::parse_duration_secs(time_str) {
+        Some(secs) => secs,
+        None => {
+            tracing::warn!(
+                "Invalid walltime '{}', defaulting to 1h. Use format like '24h', '2d', or '01:00:00'.",
+                time_str
+            );
+            3600
+        }
+    };
     let days = total_secs / 86400;
     let hours = (total_secs % 86400) / 3600;
     let mins = (total_secs % 3600) / 60;

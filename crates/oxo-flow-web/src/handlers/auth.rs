@@ -44,9 +44,14 @@ pub async fn login(Json(req): Json<LoginRequest>) -> Result<impl IntoResponse, A
         },
     })?;
 
+    let secure_flag = if std::env::var("OXO_FLOW_DEV_MODE").is_ok() {
+        ""
+    } else {
+        "; Secure"
+    };
     let cookie = format!(
-        "oxo_session={}; HttpOnly; Path=/; Max-Age=86400; SameSite=Strict; Secure",
-        token
+        "oxo_session={}; HttpOnly; Path=/; Max-Age=86400; SameSite=Strict{}",
+        token, secure_flag
     );
 
     Ok((

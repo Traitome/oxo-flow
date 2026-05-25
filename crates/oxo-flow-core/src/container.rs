@@ -506,7 +506,8 @@ pub fn generate_singularity_def(
         workflow.workflow.name
     ));
     def.push_str("Bootstrap: docker\n");
-    def.push_str(&format!("From: {}\n\n", config.base_image));
+    let base_image = select_base_image(workflow, config);
+    def.push_str(&format!("From: {base_image}\n\n"));
 
     def.push_str("%labels\n");
     def.push_str(&format!(

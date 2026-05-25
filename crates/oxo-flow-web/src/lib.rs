@@ -774,11 +774,25 @@ async fn list_workflows(
         },
     })?;
 
-    let user = db::get_user_by_id(&session.user_id)
-        .await
-        .ok()
-        .flatten()
-        .unwrap();
+    let user = match db::get_user_by_id(&session.user_id).await.ok().flatten() {
+        Some(u) => u,
+        None => {
+            tracing::warn!(
+                "User not found for valid session {} (user_id: {})",
+                session.token,
+                session.user_id
+            );
+            return Err(ApiError {
+                status: StatusCode::UNAUTHORIZED,
+                body: ErrorResponse {
+                    error: "User account not found".to_string(),
+                    detail: Some(
+                        "The user associated with this session no longer exists".to_string(),
+                    ),
+                },
+            });
+        }
+    };
 
     let user_dir = std::path::Path::new("workspace")
         .join("users")
