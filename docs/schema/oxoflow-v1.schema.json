@@ -2,159 +2,344 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://traitome.github.io/oxo-flow/schema/oxoflow-v1.schema.json",
   "title": "oxo-flow workflow definition",
-  "description": "Schema for .oxoflow workflow files",
+  "description": "Schema for .oxoflow workflow files (v1.0)",
   "type": "object",
   "required": ["workflow", "rules"],
   "properties": {
     "workflow": {
       "type": "object",
-      "required": ["name", "version"],
+      "required": ["name"],
       "properties": {
-        "name": {
-          "type": "string",
-          "description": "Name of the workflow"
-        },
-        "version": {
-          "type": "string",
-          "description": "Version of the workflow (e.g., 1.0.0)"
-        },
-        "format_version": {
-          "type": "string",
-          "description": "Format specification version for compatibility checking"
-        },
-        "description": {
-          "type": "string",
-          "description": "Description of the workflow"
-        },
-        "author": {
-          "type": "string",
-          "description": "Author of the workflow"
-        },
-        "min_version": {
-          "type": "string",
-          "description": "Minimum oxo-flow version required"
-        },
-        "genome_build": {
-          "type": "string",
-          "description": "Genome build (e.g., GRCh38, hg38)"
-        },
+        "name": { "type": "string", "description": "Name of the workflow" },
+        "version": { "type": "string", "description": "Version of the workflow (e.g., 1.0.0)", "default": "0.1.0" },
+        "description": { "type": "string", "description": "Description of the workflow" },
+        "author": { "type": "string", "description": "Author name or email" },
+        "min_version": { "type": "string", "description": "Minimum oxo-flow version required" },
+        "format_version": { "type": "string", "description": "Format specification version" },
+        "genome_build": { "type": "string", "description": "Genome build identifier (e.g., GRCh38, hg38)" },
         "interpreter_map": {
           "type": "object",
           "additionalProperties": { "type": "string" },
           "description": "Custom interpreter mappings for script file extensions"
         },
-        "pairs_file": {
-          "type": "string",
-          "description": "Path to an external file containing experiment-control pairs"
-        },
-        "sample_groups_file": {
-          "type": "string",
-          "description": "Path to an external file containing cohort sample groups"
-        }
+        "pairs_file": { "type": "string", "description": "External TSV/CSV/JSON file with experiment-control pairs" },
+        "sample_groups_file": { "type": "string", "description": "External TSV/JSON file with sample groups" },
+        "pairs_pattern": { "type": "string", "description": "File glob for auto-discovering pairs" },
+        "sample_pattern": { "type": "string", "description": "File glob for auto-discovering samples" }
       }
     },
     "config": {
       "type": "object",
-      "description": "Default configuration variables for wildcard expansion",
+      "description": "User-defined configuration variables for wildcard expansion",
       "additionalProperties": true
+    },
+    "defaults": {
+      "type": "object",
+      "description": "Default settings applied to all rules",
+      "properties": {
+        "threads": { "type": "integer" },
+        "memory": { "type": "string" },
+        "environment": { "$ref": "#/$defs/environmentSpec" }
+      }
+    },
+    "report": {
+      "type": "object",
+      "description": "Report configuration",
+      "properties": {
+        "template": { "type": "string" },
+        "format": { "type": "array", "items": { "type": "string" } },
+        "sections": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "include": {
+      "type": "array",
+      "description": "Include external workflow files",
+      "items": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "path": { "type": "string", "description": "Path to the included .oxoflow file" },
+          "namespace": { "type": "string", "description": "Optional namespace prefix for included rules" }
+        }
+      }
+    },
+    "execution_group": {
+      "type": "array",
+      "description": "Explicit sequential/parallel rule ordering",
+      "items": {
+        "type": "object",
+        "required": ["name", "rules"],
+        "properties": {
+          "name": { "type": "string" },
+          "rules": { "type": "array", "items": { "type": "string" } },
+          "mode": { "type": "string", "enum": ["sequential", "parallel"] }
+        }
+      }
+    },
+    "pairs": {
+      "type": "array",
+      "description": "Experiment-control sample pairs",
+      "items": {
+        "type": "object",
+        "required": ["pair_id", "experiment", "control"],
+        "properties": {
+          "pair_id": { "type": "string" },
+          "experiment": { "type": "string" },
+          "tumor": { "type": "string", "description": "Alias for experiment" },
+          "control": { "type": "string" },
+          "normal": { "type": "string", "description": "Alias for control" },
+          "experiment_type": { "type": "string" },
+          "tumor_type": { "type": "string", "description": "Alias for experiment_type" },
+          "metadata": { "type": "object", "additionalProperties": { "type": "string" } }
+        }
+      }
+    },
+    "sample_groups": {
+      "type": "array",
+      "description": "Named sample groups for cohort-level analysis",
+      "items": {
+        "type": "object",
+        "required": ["name", "samples"],
+        "properties": {
+          "name": { "type": "string" },
+          "samples": { "type": "array", "items": { "type": "string" } },
+          "metadata": { "type": "object", "additionalProperties": { "type": "string" } }
+        }
+      }
+    },
+    "resource_budget": {
+      "type": "object",
+      "description": "Global resource limits",
+      "properties": {
+        "max_threads": { "type": "integer" },
+        "max_memory": { "type": "string" },
+        "max_jobs": { "type": "integer" }
+      }
+    },
+    "env_groups": {
+      "type": "object",
+      "description": "Named reusable environment specifications",
+      "additionalProperties": { "$ref": "#/$defs/environmentSpec" }
+    },
+    "resource_groups": {
+      "type": "object",
+      "description": "Shared resource pools (API rate limits, DB connections)",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "max": { "type": "integer" },
+          "wait": { "type": "string", "enum": ["queue", "fail"] }
+        }
+      }
+    },
+    "reference_db": {
+      "type": "array",
+      "description": "Tracked reference database versions",
+      "items": {
+        "type": "object",
+        "required": ["name", "version"],
+        "properties": {
+          "name": { "type": "string" },
+          "version": { "type": "string" },
+          "source": { "type": "string" },
+          "checksum": { "type": "string" },
+          "accessed_date": { "type": "string" }
+        }
+      }
+    },
+    "wildcard_constraints": {
+      "type": "object",
+      "description": "Regex patterns constraining wildcard values",
+      "additionalProperties": { "type": "string" }
     },
     "cluster": {
       "type": "object",
-      "description": "Cluster execution profile configurations",
-      "additionalProperties": {
-        "type": "object"
+      "description": "HPC cluster execution profile",
+      "properties": {
+        "backend": { "type": "string", "enum": ["slurm", "pbs", "sge", "lsf"] },
+        "partition": { "type": "string" },
+        "account": { "type": "string" },
+        "extra_args": { "type": "array", "items": { "type": "string" } }
       }
     },
-    "webhooks": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["url"],
-        "properties": {
-          "url": { "type": "string" },
-          "events": {
-            "type": "array",
-            "items": { "type": "string" }
-          },
-          "format": { "type": "string" },
-          "secret": { "type": "string" }
-        }
+    "citation": {
+      "type": "object",
+      "description": "Citation metadata for reproducibility",
+      "properties": {
+        "doi": { "type": "string" },
+        "url": { "type": "string" },
+        "authors": { "type": "array", "items": { "type": "string" } },
+        "title": { "type": "string" }
+      }
+    },
+    "plugins": {
+      "type": "object",
+      "description": "Plugin configuration",
+      "properties": {
+        "rules": { "type": "array", "items": { "type": "string" } },
+        "executor": { "type": "string" },
+        "reports": { "type": "array", "items": { "type": "string" } },
+        "trusted_keys_file": { "type": "string" }
       }
     },
     "rules": {
       "type": "array",
       "description": "Workflow execution rules",
-      "items": {
-        "type": "object",
-        "required": ["name"],
-        "properties": {
-          "name": {
-            "type": "string",
-            "description": "Unique identifier for the rule"
-          },
-          "description": {
-            "type": "string"
-          },
-          "input": {
-            "oneOf": [
-              { "type": "array", "items": { "type": "string" } },
-              { "type": "object", "additionalProperties": { "type": "string" } }
-            ]
-          },
-          "output": {
-            "oneOf": [
-              { "type": "array", "items": { "type": "string" } },
-              { "type": "object", "additionalProperties": { "type": "string" } }
-            ]
-          },
-          "shell": {
-            "type": "string",
-            "description": "Shell command template to execute"
-          },
-          "script": {
-            "type": "string",
-            "description": "Path to a script to execute"
-          },
-          "threads": {
-            "oneOf": [
-              { "type": "integer" },
-              { "type": "string" }
-            ]
-          },
-          "memory": {
-            "type": "string",
-            "description": "Memory requirement (e.g., '16G', '8000M')"
-          },
-          "envvars": {
-            "type": "object",
-            "additionalProperties": { "type": "string" }
-          },
-          "when": {
-            "type": "string"
-          },
-          "depends_on": {
-            "type": "array",
-            "items": { "type": "string" }
-          },
-          "checkpoint": {
-            "type": "boolean"
-          },
-          "localrule": {
-            "type": "boolean"
-          },
-          "retries": {
-            "type": "integer"
-          },
-          "retry_delay": {
-            "type": "string"
-          },
-          "on_success": {
-            "type": "string"
-          },
-          "on_failure": {
-            "type": "string"
+      "items": { "$ref": "#/$defs/rule" }
+    }
+  },
+  "$defs": {
+    "environmentSpec": {
+      "type": "object",
+      "properties": {
+        "conda": { "type": "string" },
+        "pixi": { "type": "string" },
+        "docker": { "type": "string" },
+        "singularity": { "type": "string" },
+        "venv": { "type": "string" },
+        "modules": { "type": "array", "items": { "type": "string" } },
+        "conda_prefix": { "type": "string" },
+        "venv_requirements": { "type": "string" }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "properties": {
+        "threads": { "type": "integer", "default": 1 },
+        "memory": { "type": "string" },
+        "gpu": { "type": "integer" },
+        "gpu_spec": { "$ref": "#/$defs/gpuSpec" },
+        "disk": { "type": "string" },
+        "time_limit": { "type": "string" },
+        "partition": { "type": "string" },
+        "groups": { "type": "object", "additionalProperties": { "type": "integer" } }
+      }
+    },
+    "gpuSpec": {
+      "type": "object",
+      "properties": {
+        "count": { "type": "integer" },
+        "model": { "type": "string" },
+        "memory_gb": { "type": "integer" },
+        "compute_capability": { "type": "string" }
+      }
+    },
+    "scatterConfig": {
+      "type": "object",
+      "required": ["variable", "values"],
+      "properties": {
+        "variable": { "type": "string" },
+        "values": { "type": "array", "items": { "type": "string" } },
+        "values_from": { "type": "string" },
+        "gather": { "type": "string" }
+      }
+    },
+    "transformConfig": {
+      "type": "object",
+      "required": ["split", "map"],
+      "properties": {
+        "split": {
+          "type": "object",
+          "properties": {
+            "by": { "type": "string" },
+            "values": { "type": "array", "items": { "type": "string" } },
+            "values_from": { "type": "string" },
+            "n": { "type": "integer" },
+            "glob": { "type": "string" }
           }
-        }
+        },
+        "map": { "type": "string" },
+        "combine": {
+          "type": "object",
+          "properties": {
+            "shell": { "type": "string" },
+            "aggregate": { "type": "boolean" },
+            "method": { "type": "string", "enum": ["concat", "json_merge"] },
+            "header": { "type": "string" }
+          }
+        },
+        "cleanup": { "type": "boolean" }
+      }
+    },
+    "resourceHint": {
+      "type": "object",
+      "properties": {
+        "input_size": { "type": "string", "enum": ["small", "medium", "large"] },
+        "memory_scale": { "type": "number" },
+        "runtime": { "type": "string", "enum": ["fast", "medium", "slow"] },
+        "io_bound": { "type": "boolean" }
+      }
+    },
+    "expandConfig": {
+      "type": "object",
+      "properties": {
+        "pattern": { "type": "string" },
+        "variables": { "type": "object", "additionalProperties": { "type": "array", "items": { "type": "string" } } }
+      }
+    },
+    "rule": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "description": "Unique rule identifier" },
+        "description": { "type": "string", "description": "Human-readable description of this rule" },
+        "input": {
+          "oneOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "type": "object", "additionalProperties": { "type": "string" } }
+          ],
+          "description": "Input file patterns (list or named map)"
+        },
+        "output": {
+          "oneOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "type": "object", "additionalProperties": { "type": "string" } }
+          ],
+          "description": "Output file patterns (list or named map)"
+        },
+        "shell": { "type": "string", "description": "Shell command template to execute" },
+        "script": { "type": "string", "description": "Path to a script file to execute" },
+        "threads": { "type": "integer", "description": "(Deprecated) Use resources.threads instead" },
+        "memory": { "type": "string", "description": "(Deprecated) Use resources.memory instead" },
+        "resources": { "$ref": "#/$defs/resources" },
+        "environment": { "$ref": "#/$defs/environmentSpec" },
+        "env_group": { "type": "string", "description": "Reference to a named environment in [env_groups]" },
+        "when": { "type": "string", "description": "Conditional expression — skip rule when false" },
+        "envvars": { "type": "object", "additionalProperties": { "type": "string" } },
+        "params": { "type": "object", "additionalProperties": true, "description": "User-defined parameters for shell templates" },
+        "tags": { "type": "array", "items": { "type": "string" }, "description": "Categorization tags" },
+        "depends_on": { "type": "array", "items": { "type": "string" }, "description": "Explicit rule-level dependencies" },
+        "extends": { "type": "string", "description": "Inherit settings from a base rule" },
+        "priority": { "type": "integer", "default": 0, "description": "Execution priority (higher = runs first)" },
+        "target": { "type": "boolean", "default": false, "description": "Mark as default target" },
+        "required": { "type": "boolean", "default": false, "description": "Pipeline fails if this rule fails" },
+        "optional": { "type": "boolean", "default": false, "description": "Skip rule if inputs don't exist" },
+        "localrule": { "type": "boolean", "default": false, "description": "Always run locally" },
+        "checkpoint": { "type": "boolean", "default": false, "description": "Allow DAG rebuild after this rule" },
+        "retries": { "type": "integer", "default": 0, "description": "Number of retry attempts on failure" },
+        "retry_delay": { "type": "string", "description": "Delay between retries (e.g., '5s', '30s')" },
+        "interpreter": { "type": "string", "description": "Explicit interpreter for script execution" },
+        "workdir": { "type": "string", "description": "Per-rule working directory override" },
+        "pre_exec": { "type": "string", "description": "Command to run before the main shell command" },
+        "on_success": { "type": "string", "description": "Command to run after rule succeeds" },
+        "on_failure": { "type": "string", "description": "Command to run after rule fails" },
+        "temp_output": { "type": "array", "items": { "type": "string" }, "description": "Temporary outputs cleaned up after downstream rules complete" },
+        "protected_output": { "type": "array", "items": { "type": "string" }, "description": "Outputs that must never be overwritten" },
+        "shadow": { "type": "string", "enum": ["minimal", "shallow", "full"], "description": "Shadow directory mode" },
+        "ancient": { "type": "array", "items": { "type": "string" }, "description": "Inputs that never trigger re-execution" },
+        "format_hint": { "type": "array", "items": { "type": "string" }, "description": "File format hints (e.g., 'bam', 'vcf')" },
+        "pipe": { "type": "boolean", "default": false, "description": "Enable FIFO streaming mode" },
+        "checksum": { "type": "string", "enum": ["md5", "sha256"], "description": "Output integrity verification algorithm" },
+        "cache_key": { "type": "string", "description": "Content-based cache key for output reuse" },
+        "input_function": { "type": "string", "description": "Dynamic input resolver function name" },
+        "benchmark": { "type": "string", "description": "Benchmark output path for performance data" },
+        "log": { "type": "string", "description": "Log file path for execution output" },
+        "group": { "type": "string", "description": "Job group label for cluster submission" },
+        "scatter": { "$ref": "#/$defs/scatterConfig" },
+        "transform": { "$ref": "#/$defs/transformConfig" },
+        "expand_inputs": { "type": "array", "items": { "$ref": "#/$defs/expandConfig" } },
+        "resource_hint": { "$ref": "#/$defs/resourceHint" },
+        "rule_metadata": { "type": "object", "additionalProperties": true, "description": "Arbitrary domain-specific metadata" }
       }
     }
   }

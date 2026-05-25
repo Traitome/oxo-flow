@@ -15,10 +15,18 @@ When a change is detected, the workflow is re-validated and any errors or
 warnings are displayed. This provides a fast edit-check cycle during
 workflow development.
 
+---
+
+## Options
+
+| Option | Short | Default | Description |
+|---|---|---|---|
+| `--run` | — | — | Automatically execute the workflow on each detected change |
+| `--jobs` | `-j` | `1` | Number of parallel jobs (only with `--run`) |
+
 ## Notes
 
-- `watch` only validates — it does not automatically re-execute the workflow.
-  Use `oxo-flow run` to execute after changes are validated.
+- Without `--run`, `watch` only validates and dry-runs — it does not re-execute.
 - The polling interval is approximately 2 seconds.
 - Press `Ctrl+C` to stop watching.
 
@@ -27,6 +35,9 @@ workflow development.
 ```bash
 # Watch a workflow during development
 oxo-flow watch my_pipeline.oxoflow
+
+# Auto-execute on each change
+oxo-flow watch my_pipeline.oxoflow --run -j 4
 
 # In another terminal, edit the workflow and save to trigger re-validation
 ```

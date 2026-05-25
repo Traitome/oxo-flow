@@ -19,6 +19,32 @@ Performs a comprehensive pre-flight check on a workflow:
 This is the recommended command to run before executing a workflow to
 catch issues early.
 
+---
+
+## Options
+
+| Option | Short | Default | Description |
+|---|---|---|---|
+| `--output` | — | — | Output directory for test run results |
+| `--run` | — | — | Execute the workflow after validation and lint (runs for real) |
+| `--jobs` | `-j` | `1` | Number of parallel jobs (only with `--run`) |
+
+---
+
+## Examples
+
+### Quick pre-flight check
+
+```bash
+oxo-flow test pipeline.oxoflow
+```
+
+### Run the full test suite including execution
+
+```bash
+oxo-flow test pipeline.oxoflow --run -j 4 --output test_results/
+```
+
 ## Examples
 
 ```bash

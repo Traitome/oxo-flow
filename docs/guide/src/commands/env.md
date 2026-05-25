@@ -16,11 +16,14 @@ oxo-flow env <SUBCOMMAND>
 
 ### `env list`
 
-List all environment backends available on the current system.
+List available environment backends, or list environments defined in a workflow.
 
 ```bash
-oxo-flow env list
+oxo-flow env list [WORKFLOW]
 ```
+
+When called without arguments, lists all backends detected on the system.
+When given a workflow file, lists the environments used by each rule.
 
 **Output:**
 
@@ -43,7 +46,7 @@ oxo-flow env check <WORKFLOW>
 
 | Argument | Description |
 |---|---|
-| `<WORKFLOW>` | Path to the `.oxoflow` workflow file |
+| `[WORKFLOW]` | Optional path to the `.oxoflow` workflow file. If omitted, checks system-wide backend availability instead. |
 
 **Output (all valid):**
 
@@ -51,6 +54,22 @@ oxo-flow env check <WORKFLOW>
   ✓ align (conda)
   ✓ call_variants (docker)
   ✓ annotate (singularity)
+
+### `env create`
+
+Create a new environment from a specification file.
+
+```bash
+oxo-flow env create <SPEC> [-n <NAME>]
+```
+
+| Argument | Description |
+|---|---|
+| `<SPEC>` | Path to the environment specification file (`.yaml`, `.toml`, `.lock`) |
+
+| Option | Short | Description |
+|---|---|---|
+| `--name` | `-n` | Custom name for the created environment (default: derived from the spec filename) |
 ```
 
 **Output (missing backend):**

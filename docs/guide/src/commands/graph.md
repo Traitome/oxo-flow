@@ -24,7 +24,7 @@ oxo-flow graph [OPTIONS] <WORKFLOW>
 
 | Option | Short | Description |
 |---|---|---|
-| `--format <FORMAT>` | `-f` | Output format: `ascii` (terminal), `dot` (Graphviz), `dot-clustered` (enhanced). Default: `ascii` |
+| `--format <FORMAT>` | `-f` | Output format: `ascii` (terminal), `dot` (Graphviz), `dot-clustered` (level-grouped), `tree` (indented tree). Default: `ascii` |
 | `--output <FILE>` | `-o` | Save output to a file (useful for dot/svg generation) |
 | `--verbose` | `-v` | Enable debug-level logging |
 | `--quiet` | | Suppress non-essential output (errors only) |

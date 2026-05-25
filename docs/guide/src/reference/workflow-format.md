@@ -46,6 +46,11 @@ Workflow files must use the `.oxoflow` extension (e.g., `qc_pipeline.oxoflow`).
 [[sample_groups]]   # Optional: multi-sample groups (WC-02)
 [resource_budget]   # Optional: resource limits
 [env_groups]        # Optional: named reusable environment specs
+[resource_groups]   # Optional: shared resource pools (API limits, DB connections)
+[wildcard_constraints] # Optional: regex patterns to constrain wildcard values
+[[execution_group]] # Optional: explicit sequential/parallel rule ordering
+[cluster]           # Optional: HPC cluster profile (SLURM, PBS, SGE, LSF)
+[[reference_db]]    # Optional: tracked reference database versions
 [citation]          # Optional: citation metadata (DOI, authors, etc.)
 [plugins]           # Optional: plugin configuration
 ```
@@ -132,6 +137,11 @@ author = "Your Name"
 | `interpreter_map` | Table | No | `{}` | Custom interpreter mapping for script extensions |
 | `genome_build` | String | No | — | Genome reference build identifier (e.g., `"GRCh38"`, `"hg38"`) |
 | `min_version` | String | No | — | Minimum oxo-flow version required to run this workflow |
+| `format_version` | String | No | — | Format specification version for compatibility |
+| `pairs_file` | String | No | — | External TSV/CSV/JSON file defining experiment-control pairs |
+| `sample_groups_file` | String | No | — | External TSV/JSON file defining sample groups |
+| `pairs_pattern` | String | No | — | File glob pattern for auto-discovering pairs (e.g., `"aligned/{pair_id}/{exp}_vs_{ctrl}.bam"`) |
+| `sample_pattern` | String | No | — | File glob pattern for auto-discovering samples (e.g., `"raw/{sample}_R1.fastq.gz"`) |
 | `format_version` | String | No | — | .oxoflow format specification version for compatibility checking |
 
 ### Custom Interpreters (`interpreter_map`)
@@ -237,9 +247,12 @@ shell = "bwa mem -t {threads} {config.reference} {input} | samtools sort -o {out
 | `output` | Array of strings | **Yes** | Output file paths |
 | `shell` | String | No | Shell command to execute |
 | `script` | String | No | Script file path (auto-detects interpreter) |
-| `threads` | Integer | No | CPU threads (overrides defaults) |
-| `memory` | String | No | Memory allocation (overrides defaults) |
+| `description` | String | No | Human-readable description of what this rule does |
+| `threads` | Integer | No | *(Deprecated)* CPU threads — use `resources.threads` instead |
+| `memory` | String | No | *(Deprecated)* Memory allocation — use `resources.memory` instead |
+| `resources` | Table | No | Full resource specification (threads, memory, gpu, disk, time_limit, partition, groups) |
 | `environment` | Table | No | Environment specification |
+| `transform` | Table | No | Unified scatter-gather operator (split → map → combine) |
 | `when` | String | No | Conditional expression — skip rule when `false` |
 | `envvars` | Table | No | Dictionary of environment variables to inject |
 | `params` | Table | No | User-defined parameters for shell templates |
@@ -262,6 +275,20 @@ shell = "bwa mem -t {threads} {config.reference} {input} | samtools sort -o {out
 | `input_function` | String | No | Dynamic input resolver function name |
 | `rule_metadata` | Table | No | Arbitrary domain-specific metadata (assay, organism, etc.) |
 | `env_group` | String | No | Reference to a named environment in `[env_groups]` |
+| `depends_on` | Array | No | Explicit rule-level dependencies (by rule name) |
+| `extends` | String | No | Inherit settings from a base rule |
+| `retry_delay` | String | No | Delay between retries (e.g., `"5s"`, `"30s"`, `"2m"`) |
+| `workdir` | String | No | Per-rule working directory override |
+| `temp_output` | Array | No | Temporary outputs cleaned up after downstream rules complete |
+| `protected_output` | Array | No | Outputs that must never be overwritten or deleted |
+| `tags` | Array | No | Categorization tags (e.g., `["qc", "alignment"]`) |
+| `shadow` | String | No | Shadow directory mode: `"minimal"`, `"shallow"`, or `"full"` |
+| `ancient` | Array | No | Inputs that never trigger re-execution (e.g., reference files) |
+| `localrule` | Boolean | No | Always run locally — never submit to a cluster scheduler |
+| `format_hint` | Array | No | File format hints for I/O optimization (`"bam"`, `"vcf"`, `"fastq.gz"`) |
+| `pipe` | Boolean | No | Enable FIFO streaming mode for input/output |
+| `checksum` | String | No | Output integrity verification (`"md5"` or `"sha256"`) |
+| `resource_hint` | Table | No | Resource estimation hints for dynamic scheduling |
 
 **Note:** At least one of `shell` or `script` must be provided. If both are defined, they execute sequentially: shell first, then script.
 
@@ -282,6 +309,15 @@ environment = { singularity = "docker://biocontainers/bwa:0.7.17" }
 
 # Python venv
 environment = { venv = "envs/requirements.txt" }
+
+# HPC modules
+environment = { modules = ["gcc/11.2.0", "openmpi/4.1.1"] }
+
+# Conda with custom prefix
+environment = { conda = "envs/qc.yaml", conda_prefix = ".oxo-flow/envs" }
+
+# venv with custom requirements file
+environment = { venv = ".venv/", venv_requirements = "envs/dev-requirements.txt" }
 
 # Reference a named environment group (defined in [env_groups])
 env_group = "qc_env"
@@ -399,9 +435,13 @@ time_limit = "48h"
 
 | Field | Type | Example | Description |
 |---|---|---|---|
+| `threads` | Integer | `8` | Number of CPU threads |
+| `memory` | String | `"16G"` | Memory allocation |
 | `gpu` | Integer | `1` | Number of GPUs |
 | `disk` | String | `"200G"` | Local disk space |
 | `time_limit` | String | `"48h"` | Wall-time limit |
+| `partition` | String | `"gpu"` | HPC partition/queue to submit to |
+| `groups` | Table | `{db_conn = 1}` | Resource group consumption tracking |
 
 ---
 
