@@ -586,7 +586,7 @@ async fn e2e_validation_errors_caught() {
     assert!(!body["errors"].as_array().unwrap().is_empty());
 
     // Circular dependency
-    let (status, body) = post_auth(
+    let (_, body) = post_auth(
         "/api/workflows/validate",
         json!({"toml_content": "[workflow]\nname=\"circ\"\nversion=\"1.0\"\n\n[[rules]]\nname=\"a\"\ninput=[\"b.txt\"]\noutput=[\"a.txt\"]\nshell=\"echo a\"\n\n[[rules]]\nname=\"b\"\ninput=[\"a.txt\"]\noutput=[\"b.txt\"]\nshell=\"echo b\""}),
         &token,
@@ -1236,7 +1236,7 @@ conda = "envs/rnaseq.yaml"
     assert_eq!(s, 200);
     assert!(b["valid"].as_bool().unwrap());
     assert_eq!(b["rules_count"], 2);
-    let (s, b) = post_auth(
+    let (_, b) = post_auth(
         "/api/workflows/stats",
         json!({"toml_content": rna_toml}),
         &token,
@@ -1303,7 +1303,7 @@ name = "inject_attempt"
 output = ["safe.txt"]
 shell = "echo '{config.evil}' > {output[0]}"
 "#;
-    let (s, b) = post_auth(
+    let (s, _b) = post_auth(
         "/api/workflows/validate",
         json!({"toml_content": inject_toml}),
         &token,
@@ -1328,8 +1328,8 @@ shell = "echo test > {output[0]}"
     )
     .await;
     // Path traversal detection: may be caught as error or warning depending on context
-    let valid = b["valid"].as_bool().unwrap_or(true);
-    let has_errors = b["errors"]
+    let _valid = b["valid"].as_bool().unwrap_or(true);
+    let _has_errors = b["errors"]
         .as_array()
         .map(|a| !a.is_empty())
         .unwrap_or(false);
@@ -1351,7 +1351,7 @@ version = "1.0.0"
 name = "bad"
 output = ["out.txt"]
 "#;
-    let (s, b) = post_auth(
+    let (_s, b) = post_auth(
         "/api/workflows/validate",
         json!({"toml_content": bad1}),
         &token,
@@ -1368,7 +1368,7 @@ output = ["out.txt"]
 name = "empty"
 version = "1.0.0"
 "#;
-    let (s, b) = post_auth(
+    let (_, b) = post_auth(
         "/api/workflows/validate",
         json!({"toml_content": empty}),
         &token,
@@ -1393,7 +1393,7 @@ name = "same"
 output = ["b.txt"]
 shell = "echo b"
 "#;
-    let (s, b) = post_auth(
+    let (_, b) = post_auth(
         "/api/workflows/validate",
         json!({"toml_content": dup}),
         &token,
@@ -1412,7 +1412,7 @@ async fn scenario_u16_facility_manager_batch_save_list() {
     let token = login("admin", "admin").await;
     // Save 3 workflows in batch
     for i in 1..=3 {
-        let (s, b) = post_auth(
+        let (s, _b) = post_auth(
             "/api/workflows/save",
             json!({
                 "name": format!("batch-wf-{i}"),
@@ -1561,7 +1561,7 @@ input = ["a.txt"]
 output = ["b.txt"]
 shell = "echo b"
 "#;
-    let (s, b) = post_auth(
+    let (_s, b) = post_auth(
         "/api/workflows/validate",
         json!({"toml_content": circular}),
         &token,
@@ -1573,7 +1573,7 @@ shell = "echo b"
     );
 
     // Test 2: Invalid TOML gracefully handled
-    let (s, b) = post_auth(
+    let (s, _) = post_auth(
         "/api/workflows/parse",
         json!({"toml_content": "this is not toml {{{{"}),
         &token,
@@ -1586,7 +1586,7 @@ shell = "echo b"
     assert_eq!(s, 404, "non-existent run should return 404");
 
     // Test 4: Save with invalid TOML
-    let (s, b) = post_auth(
+    let (s, _) = post_auth(
         "/api/workflows/save",
         json!({
             "name": "bad-save",
