@@ -244,7 +244,7 @@ POST /api/workflows/save
 Authorization: Bearer <token>
 Content-Type: application/json
 
-{"name": "my-pipeline", "version": "1.0.0", "toml_content": "<TOML>"}
+{"name": "my-pipeline", "version": "0.7.0", "toml_content": "<TOML>"}
 ```
 Validates TOML and persists to database. Returns `{"id":"<uuid>","status":"saved"}` (HTTP 201).
 

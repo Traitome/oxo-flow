@@ -47,7 +47,7 @@ oxo-flow lint pipeline.oxoflow --strict
 ## Output
 
 ```
-oxo-flow 0.6.1 — Bioinformatics Pipeline Engine
+oxo-flow 0.7.0 — Bioinformatics Pipeline Engine
   warning [W003]: rule has no description (rule: bwa_align)
   warning [W004]: rule has a shell command but no log file specified (rule: bwa_align)
   info [W007]: leaf rule (no dependents) could be marked as target = true (rule: fastqc)
