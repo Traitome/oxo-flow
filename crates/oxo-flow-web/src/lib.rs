@@ -730,7 +730,6 @@ impl IntoResponse for ApiError {
     }
 }
 
-
 async fn list_workflows(
     headers: axum::http::HeaderMap,
 ) -> Result<Json<WorkflowListResponse>, ApiError> {
@@ -862,10 +861,6 @@ async fn frontend_js() -> impl IntoResponse {
 /// `POST /api/workflows/stats` — Return workflow statistics.
 
 /// `POST /api/workflows/diff` — Compare two workflow configurations.
-
-
-
-
 
 // Authentication & license endpoints
 

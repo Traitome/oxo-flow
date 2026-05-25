@@ -173,7 +173,10 @@ Thumbs.db
     eprintln!("    cd {}", project_dir.display());
     eprintln!(
         "    oxo-flow run {}",
-        workflow_path.file_name().unwrap().to_str().unwrap()
+        workflow_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("workflow.oxoflow")
     );
 
     Ok(())
@@ -416,7 +419,10 @@ fn apply_template(gallery_dir: &Path, template_name: &str, output: Option<PathBu
     eprintln!(
         "{} Created workflow from template: {}",
         "\u{2713}".green().bold(),
-        template_path.file_name().unwrap().to_string_lossy()
+        template_path
+            .file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or(std::borrow::Cow::Borrowed("workflow.oxoflow"))
     );
     eprintln!("  {}", output_path.display());
     eprintln!();

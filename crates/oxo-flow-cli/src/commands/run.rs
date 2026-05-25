@@ -282,7 +282,10 @@ pub async fn run_command(
             continue;
         }
 
-        let rule = config.get_rule(rule_name).unwrap().clone();
+        let rule = config
+            .get_rule(rule_name)
+            .ok_or_else(|| anyhow::anyhow!("rule '{}' not found in workflow", rule_name))?
+            .clone();
         progress.set_message(format!("executing {}", rule_name));
 
         match executor.execute_rule(&rule, &wildcard_values).await {
@@ -482,7 +485,9 @@ pub async fn dry_run_command(
     }
 
     for (i, rule_name) in order.iter().enumerate() {
-        let rule = config.get_rule(rule_name).unwrap();
+        let rule = config
+            .get_rule(rule_name)
+            .ok_or_else(|| anyhow::anyhow!("rule '{}' not found", rule_name))?;
         eprintln!("  {}. {}", i + 1, rule_name.bold().cyan());
 
         let threads = rule.effective_threads();

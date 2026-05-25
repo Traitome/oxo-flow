@@ -1882,7 +1882,10 @@ impl WorkflowConfig {
                             .unwrap()
                             .replace(&format!("{{{split_var}}}"), value)
                     } else {
-                        let base = rule.output.get_index(0).unwrap();
+                        let base = rule
+                            .output
+                            .get_index(0)
+                            .expect("output non-empty: guarded by is_empty() check");
                         let ext = base.rsplit('.').next().unwrap_or("out");
                         format!(".oxo-flow/chunks/{split_var}/{value}.{ext}")
                     };
@@ -2073,11 +2076,19 @@ impl WorkflowConfig {
                         .map(|o| o.contains(&format!("{{{split_var}}}")))
                         .unwrap_or(false)
                     {
-                        expand_pattern(rule.output.get_index(0).unwrap(), &combo)
-                            .unwrap_or_else(|_| rule.output.get_index(0).unwrap().to_string())
+                        expand_pattern(rule.output.get_index(0).expect("output non-empty"), &combo)
+                            .unwrap_or_else(|_| {
+                                rule.output
+                                    .get_index(0)
+                                    .expect("output non-empty")
+                                    .to_string()
+                            })
                     } else {
                         // Append split value to output
-                        let base = rule.output.get_index(0).unwrap();
+                        let base = rule
+                            .output
+                            .get_index(0)
+                            .expect("output non-empty: guarded by is_empty() check");
                         let ext = base.rsplit('.').next().unwrap_or("out");
                         format!(".oxo-flow/chunks/{split_var}/{value}.{ext}")
                     };

@@ -86,7 +86,11 @@ pub async fn batch_command(
             break;
         }
 
-        let permit = semaphore.clone().acquire_owned().await.unwrap();
+        let permit = semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("semaphore should remain open during batch execution");
         let cmd = expand_batch_template(&template, item, nr + 1);
 
         let item_clone = item.clone();

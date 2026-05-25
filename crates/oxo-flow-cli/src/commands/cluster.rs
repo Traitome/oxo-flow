@@ -194,7 +194,9 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
             }
 
             for rule_name in &order {
-                let rule = config.get_rule(rule_name).unwrap();
+                let rule = config
+                    .get_rule(rule_name)
+                    .ok_or_else(|| anyhow::anyhow!("rule '{}' not found in workflow", rule_name))?;
 
                 let shell_cmd = match oxo_flow_core::executor::process::build_execution_command(
                     rule,
