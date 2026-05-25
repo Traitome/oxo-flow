@@ -11,7 +11,7 @@ pub mod users;
 pub mod workflow;
 
 // Re-export all handlers for convenient access from lib.rs
-pub use auth::{auth_me, license_status, login};
+pub use auth::{auth_me, license_status, login, upload_license};
 pub use reports::generate_report;
 pub use runs::{cancel_run, get_run_detail, get_run_logs, hpc_submit_run, list_runs};
 pub use saved::{delete_saved_workflow, get_saved_workflow, list_saved_workflows, save_workflow};

@@ -2552,6 +2552,7 @@ dependencies = [
  "indicatif",
  "oxo-flow-core",
  "oxo-flow-web",
+ "oxo-license",
  "serde",
  "serde_json",
  "tempfile",

@@ -3,10 +3,12 @@
 //! Handles login, session validation, and license status checking.
 
 use axum::{extract::Json, http::StatusCode, response::IntoResponse};
+use serde::Deserialize;
 
 use crate::{
     ApiError, AuthMeResponse, ErrorResponse, LicenseStatus, LoginRequest, LoginResponse,
-    check_credentials_db, check_license, db, extract_session, generate_session_token,
+    OXO_FLOW_CONFIG, check_credentials_db, check_license, db, extract_session,
+    generate_session_token,
 };
 
 /// `POST /api/auth/login` — Authenticate and obtain a session token.
@@ -87,4 +89,43 @@ pub async fn auth_me(headers: axum::http::HeaderMap) -> Json<AuthMeResponse> {
 /// `GET /api/license` — Return current license status.
 pub async fn license_status() -> Json<LicenseStatus> {
     Json(check_license())
+}
+
+/// Request body for license upload.
+#[derive(Debug, Deserialize)]
+pub struct LicenseUploadRequest {
+    pub license_json: String,
+}
+
+/// `POST /api/license/upload` — Upload and verify a license file.
+pub async fn upload_license(
+    Json(req): Json<LicenseUploadRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    // Parse the license JSON
+    let license_file: oxo_license::LicenseFile = serde_json::from_str(&req.license_json)
+        .map_err(|e| ApiError::bad_request("Invalid license JSON", Some(e.to_string())))?;
+
+    // Verify the license
+    oxo_license::verify_license(&license_file, &OXO_FLOW_CONFIG)
+        .map_err(|e| ApiError::bad_request("License verification failed", Some(e.to_string())))?;
+
+    // Save license to ~/.config/oxo-flow/
+    let config_dir = std::env::var("HOME")
+        .map(|h| std::path::PathBuf::from(h).join(".config").join("oxo-flow"))
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+    let _ = std::fs::create_dir_all(&config_dir);
+    let license_path = config_dir.join(OXO_FLOW_CONFIG.license_filename);
+    std::fs::write(&license_path, &req.license_json)
+        .map_err(|e| ApiError::unprocessable("Failed to save license file", Some(e.to_string())))?;
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "verified",
+            "license_type": license_file.payload.license_type,
+            "issued_to": license_file.payload.issued_to_org,
+            "message": "License verified and installed to ~/.config/oxo-flow/. Restart to apply."
+        })),
+    ))
 }

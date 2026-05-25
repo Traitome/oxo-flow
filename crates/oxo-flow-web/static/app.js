@@ -701,6 +701,22 @@ async function deleteTemplate(tplId, name) {
   if (r.status === 200) loadTemplates(); else alert('Delete failed: '+(r.data.error||''));
 }
 
+// License upload
+function showLicenseUpload() { document.getElementById('license-modal').classList.remove('hidden'); }
+function closeLicenseModal() { document.getElementById('license-modal').classList.add('hidden'); }
+async function doUploadLicense() {
+  var content = document.getElementById('license-content').value.trim();
+  if (!content) { alert('Paste license JSON content'); return; }
+  var r = await api('POST', '/api/license/upload', { license_json: content });
+  var el = document.getElementById('license-result');
+  if (r.status === 200) {
+    el.innerHTML = '<div style="color:var(--success);font-weight:600">License verified: ' + esc(r.data.license_type) + ' for ' + esc(r.data.issued_to) + '</div><div style="color:var(--text2);font-size:0.75rem">' + esc(r.data.message) + '</div>';
+    setTimeout(function() { closeLicenseModal(); refreshSystem(); }, 2000);
+  } else {
+    el.innerHTML = '<div style="color:var(--error)">' + esc(r.data.error || 'Upload failed') + '</div>';
+  }
+}
+
 function updateTemplateDropdown(templates) {
   var sel = document.getElementById('template-select');
   if (!sel) return;

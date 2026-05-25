@@ -316,6 +316,12 @@ pub enum Commands {
         #[arg(short = 'o', long)]
         output: Option<PathBuf>,
     },
+    /// Verify or display license status.
+    License {
+        /// Path to license file to verify (optional; checks current status if omitted)
+        #[arg(value_name = "LICENSE_PATH")]
+        path: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -682,6 +688,40 @@ async fn main() -> Result<()> {
             eprintln!("\n{} All checks passed.", "✓".green().bold());
         }
         Commands::Publish { workflow, output } => publish_command(workflow, output)?,
+        Commands::License { path } => {
+            use colored::Colorize;
+            let status = oxo_flow_web::check_license();
+            if let Some(p) = path {
+                match oxo_license::load_and_verify(Some(&p), &oxo_flow_web::OXO_FLOW_CONFIG) {
+                    Ok(license) => {
+                        println!("{} License verified successfully", "✓".green().bold());
+                        println!("  Type:    {}", license.payload.license_type);
+                        println!("  Issued:  {}", license.payload.issued_to_org);
+                        println!("  Schema:  {}", license.payload.schema);
+                        println!("  ID:      {}", license.payload.license_id);
+                    }
+                    Err(e) => {
+                        eprintln!("{} License verification failed: {e}", "✗".red().bold());
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                println!("License status:");
+                if status.valid {
+                    println!(
+                        "  Status:  {} ({})",
+                        "Valid".green().bold(),
+                        status.license_type.as_deref().unwrap_or("unknown")
+                    );
+                    if let Some(org) = &status.issued_to {
+                        println!("  Issued:  {org}");
+                    }
+                } else {
+                    println!("  Status:  {}", "Invalid".red().bold());
+                }
+                println!("  Message: {}", status.message);
+            }
+        }
     }
 
     Ok(())

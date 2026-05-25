@@ -32,8 +32,8 @@ use handlers::{
     get_template, health, hpc_status, hpc_submit_run, license_status, lint_workflow,
     lint_workflow_paginated, list_environments, list_runs, list_saved_workflows,
     list_scheduled_runs, list_templates, list_users, login, parse_workflow, run_workflow,
-    runtime_metrics, save_template, save_workflow, sse_events, system_info, validate_workflow,
-    version, workflow_stats_endpoint,
+    runtime_metrics, save_template, save_workflow, sse_events, system_info, upload_license,
+    validate_workflow, version, workflow_stats_endpoint,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -333,7 +333,7 @@ async fn extract_session(headers: &axum::http::HeaderMap) -> Option<db::Session>
 ///
 /// Tries to load a license file first (env var, config dir, or legacy path).
 /// Falls back to the embedded academic license if no external license is found.
-fn check_license() -> LicenseStatus {
+pub fn check_license() -> LicenseStatus {
     // 1. Try external license file first (commercial or custom)
     match oxo_license::load_and_verify(None, &OXO_FLOW_CONFIG) {
         Ok(license) => {
@@ -1026,6 +1026,7 @@ fn build_router_inner(limiter: Option<RateLimiter>) -> Router {
         .route("/api/auth/login", post(login))
         .route("/api/auth/me", get(auth_me))
         .route("/api/license", get(license_status))
+        .route("/api/license/upload", post(upload_license))
         .fallback(not_found)
         .layer(middleware::from_fn(add_request_id))
         .layer(middleware::from_fn(rate_limit_middleware));
