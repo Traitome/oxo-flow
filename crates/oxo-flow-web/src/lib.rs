@@ -24,6 +24,9 @@ use axum::{
     response::IntoResponse,
     routing::{delete, get, post},
 };
+use handlers::{
+    cancel_scheduled_run, create_scheduled_run, get_scheduled_run, list_scheduled_runs,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
@@ -2143,6 +2146,11 @@ fn build_router_inner(limiter: Option<RateLimiter>) -> Router {
         .route("/api/workflows/saved/{id}", get(get_saved_workflow))
         .route("/api/workflows/saved/{id}", delete(delete_saved_workflow))
         .route("/api/workflows/save", post(save_workflow))
+        // Scheduled runs
+        .route("/api/scheduled", get(list_scheduled_runs))
+        .route("/api/scheduled", post(create_scheduled_run))
+        .route("/api/scheduled/{id}", get(get_scheduled_run))
+        .route("/api/scheduled/{id}", delete(cancel_scheduled_run))
         // Authentication & license
         .route("/api/auth/login", post(login))
         .route("/api/auth/me", get(auth_me))

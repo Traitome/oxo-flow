@@ -90,6 +90,7 @@ input { font-family:var(--font); }
     <button data-view="editor"><span class="nav-icon">&#9998;</span> Workflow Editor</button>
     <button data-view="runs"><span class="nav-icon">&#9678;</span> Run History</button>
     <button data-view="workflows"><span class="nav-icon">&#9644;</span> Saved Workflows</button>
+    <button data-view="scheduled"><span class="nav-icon">&#128340;</span> Scheduled</button>
     <button data-view="templates"><span class="nav-icon">&#9733;</span> Template Library</button>
     <button data-view="system"><span class="nav-icon">&#9881;</span> System</button>
   </nav>
@@ -181,6 +182,24 @@ input { font-family:var(--font); }
       </div>
     </div>
 
+    <div class="view" id="view-scheduled">
+      <div class="card">
+        <div class="card-header">Scheduled Runs <button class="btn btn-sm btn-outline" onclick="refreshScheduledRuns()">Refresh</button></div>
+        <div id="schedule-create-form" style="display:flex;gap:0.5rem;padding:0.75rem;flex-wrap:wrap">
+          <select id="schedule-wf-select" style="padding:0.4rem;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:var(--radius)"><option value="">-- Select workflow --</option></select>
+          <select id="schedule-cron" style="padding:0.4rem;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:var(--radius)">
+            <option value="hourly">Hourly</option>
+            <option value="daily">Daily</option>
+            <option value="daily-6am">Daily at 6 AM</option>
+            <option value="daily-9pm">Daily at 9 PM</option>
+            <option value="weekly">Weekly</option>
+          </select>
+          <button class="btn btn-primary btn-sm" onclick="createSchedule()">Schedule</button>
+        </div>
+        <table><thead><tr><th>Workflow</th><th>Schedule</th><th>Next Run</th><th>Last Run</th><th>Status</th><th>Actions</th></tr></thead><tbody id="scheduled-tbody"></tbody></table>
+      </div>
+    </div>
+
     <div class="view" id="view-templates">
       <div class="card">
         <div class="card-header">Workflow Templates <input type="text" id="template-search" placeholder="Search templates..." onkeyup="filterTemplates()" style="margin-left:0.5rem;padding:0.4rem;width:200px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:var(--radius)"></div>
@@ -267,6 +286,7 @@ document.querySelectorAll('.sidebar-nav button').forEach(btn => {
     if (btn.dataset.view === 'dashboard') refreshDashboard();
     if (btn.dataset.view === 'runs') refreshRuns();
     if (btn.dataset.view === 'workflows') loadSavedWorkflows();
+    if (btn.dataset.view === 'scheduled') refreshScheduledRuns();
     if (btn.dataset.view === 'system') refreshSystem();
   });
 });
@@ -676,6 +696,66 @@ async function refreshAuditLogs() {
       }
     }
   } catch(e) {}
+}
+
+async function refreshScheduledRuns() {
+  try {
+    // Load saved workflows into schedule select
+    var wfR = await api('GET', '/api/workflows/saved');
+    var sel = document.getElementById('schedule-wf-select');
+    sel.innerHTML = '<option value="">-- Select workflow --</option>';
+    if (Array.isArray(wfR.data)) {
+      wfR.data.forEach(function(w) {
+        sel.innerHTML += '<option value="' + w.id + '">' + esc(w.name) + ' (v' + esc(w.version) + ')</option>';
+      });
+    }
+
+    // Load scheduled runs
+    var r = await api('GET', '/api/scheduled');
+    var tbody = document.getElementById('scheduled-tbody');
+    tbody.innerHTML = '';
+    if (Array.isArray(r.data)) {
+      r.data.forEach(function(s) {
+        var badge = s.status === 'active' ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-cancelled">Cancelled</span>';
+        var tr = document.createElement('tr');
+        tr.innerHTML = '<td>' + esc(s.workflow_name) + '</td><td>' + esc(s.cron_expression) + '</td>' +
+          '<td style="font-size:0.78rem;color:var(--text2)">' + fmtTime(s.next_run_at) + '</td>' +
+          '<td style="font-size:0.78rem;color:var(--text2)">' + (s.last_run_at ? fmtTime(s.last_run_at) : '--') + '</td>' +
+          '<td>' + badge + '</td>' +
+          '<td><button class="btn btn-sm btn-danger" onclick="cancelSchedule(\'' + s.id + '\')">Cancel</button></td>';
+        tbody.appendChild(tr);
+      });
+      if (r.data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text2)">No scheduled runs</td></tr>';
+      }
+    }
+  } catch(e) {}
+}
+
+async function createSchedule() {
+  var wfId = document.getElementById('schedule-wf-select').value;
+  var cron = document.getElementById('schedule-cron').value;
+  if (!wfId) { alert('Select a workflow first'); return; }
+  try {
+    var r = await api('POST', '/api/scheduled', { workflow_id: wfId, cron_expression: cron });
+    if (r.status === 200) {
+      refreshScheduledRuns();
+    } else {
+      alert('Schedule failed: ' + (r.data.error || r.status));
+    }
+  } catch(e) { alert('Error scheduling workflow'); }
+}
+
+async function cancelSchedule(scheduleId) {
+  if (!confirm('Cancel this scheduled run?')) return;
+  try {
+    var r = await api('DELETE', '/api/scheduled/' + scheduleId);
+    if (r.status === 200) {
+      refreshScheduledRuns();
+    } else {
+      alert('Cancel failed: ' + (r.data.error || r.status));
+    }
+  } catch(e) { alert('Error cancelling schedule'); }
 }
 
 function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }

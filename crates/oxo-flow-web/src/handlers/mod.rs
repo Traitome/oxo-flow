@@ -7,6 +7,7 @@
 //! - `reports`: Workflow report generation
 //! - `auth`: Authentication and license status
 //! - `saved`: Saved workflow CRUD operations
+//! - `scheduled`: Scheduled workflow runs
 //! - `partials`: HTMX partial handlers (placeholder)
 
 pub mod auth;
@@ -14,6 +15,7 @@ pub mod partials;
 pub mod reports;
 pub mod runs;
 pub mod saved;
+pub mod scheduled;
 pub mod system;
 pub mod workflow;
 
@@ -22,6 +24,9 @@ pub use auth::{auth_me, license_status, login};
 pub use reports::generate_report;
 pub use runs::{cancel_run, get_run_detail, get_run_logs, list_runs};
 pub use saved::{delete_saved_workflow, get_saved_workflow, list_saved_workflows, save_workflow};
+pub use scheduled::{
+    cancel_scheduled_run, create_scheduled_run, get_scheduled_run, list_scheduled_runs,
+};
 pub use system::{
     get_audit_logs, health, list_environments, runtime_metrics, sse_events, system_info, version,
 };

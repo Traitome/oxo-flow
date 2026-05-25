@@ -108,6 +108,23 @@ pub async fn init_db(database_url: &str) -> Result<()> {
             expires_at DATETIME NOT NULL,
             FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS scheduled_runs (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            workflow_id TEXT NOT NULL,
+            workflow_name TEXT NOT NULL,
+            cron_expression TEXT NOT NULL,
+            next_run_at DATETIME NOT NULL,
+            last_run_at DATETIME,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at DATETIME NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY(workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_scheduled_runs_next_run ON scheduled_runs(next_run_at);
+        CREATE INDEX IF NOT EXISTS idx_scheduled_runs_status ON scheduled_runs(status);
         "#,
     )
     .execute(&pool)
@@ -199,6 +216,19 @@ pub struct AuditLog {
     pub action: String,
     pub target: String,
     pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct ScheduledRun {
+    pub id: String,
+    pub user_id: String,
+    pub workflow_id: String,
+    pub workflow_name: String,
+    pub cron_expression: String,
+    pub next_run_at: DateTime<Utc>,
+    pub last_run_at: Option<DateTime<Utc>>,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
