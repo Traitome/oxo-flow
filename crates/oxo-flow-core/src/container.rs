@@ -50,6 +50,13 @@ pub struct PackageConfig {
 
     /// Custom HEALTHCHECK command for the container.
     pub healthcheck: Option<String>,
+
+    /// Version of oxo-flow to install in the container image.
+    /// Defaults to the current crate version.
+    pub oxo_flow_version: String,
+
+    /// Override the oxo-flow binary download URL (for custom registries).
+    pub oxo_flow_download_url: Option<String>,
 }
 
 impl Default for PackageConfig {
@@ -63,6 +70,8 @@ impl Default for PackageConfig {
             multi_stage: false,
             rootless: true,
             healthcheck: None,
+            oxo_flow_version: env!("CARGO_PKG_VERSION").to_string(),
+            oxo_flow_download_url: None,
         }
     }
 }
@@ -155,6 +164,27 @@ fn write_env_setup(
             }
         }
     }
+}
+
+/// Write the oxo-flow installation step to the Dockerfile.
+fn write_oxo_flow_install(dockerfile: &mut String, config: &PackageConfig) {
+    dockerfile.push_str("# Install oxo-flow\n");
+    if let Some(ref url) = config.oxo_flow_download_url {
+        dockerfile.push_str(&format!(
+            "RUN curl -fsSL {url} -o /usr/local/bin/oxo-flow && chmod +x /usr/local/bin/oxo-flow\n"
+        ));
+    } else {
+        // Default: download from GitHub releases
+        let version = &config.oxo_flow_version;
+        dockerfile.push_str(&format!(
+            "RUN curl -fsSL https://github.com/Traitome/oxo-flow/releases/download/v{version}/oxo-flow-cli-x86_64-unknown-linux-gnu.tar.gz \\\n"
+        ));
+        dockerfile.push_str("    -o /tmp/oxo-flow.tar.gz \\\n");
+        dockerfile.push_str("    && tar -xzf /tmp/oxo-flow.tar.gz -C /usr/local/bin/ \\\n");
+        dockerfile.push_str("    && chmod +x /usr/local/bin/oxo-flow \\\n");
+        dockerfile.push_str("    && rm /tmp/oxo-flow.tar.gz\n");
+    }
+    dockerfile.push('\n');
 }
 
 /// Collect which environment managers the workflow rules require.
@@ -273,6 +303,9 @@ fn generate_singlestage_dockerfile(
     let (needs_conda, needs_pixi, _docker_images) = collect_env_requirements(workflow);
     write_env_setup(&mut dockerfile, workflow, needs_conda, needs_pixi);
 
+    // Install oxo-flow binary
+    write_oxo_flow_install(&mut dockerfile, config);
+
     // Copy workflow files
     dockerfile.push_str("# Copy workflow\n");
     dockerfile.push_str("WORKDIR /workflow\n");
@@ -367,6 +400,9 @@ fn generate_multistage_dockerfile(
     dockerfile.push_str("# Copy workflow from builder\n");
     dockerfile.push_str("COPY --from=builder /workflow /workflow\n");
     dockerfile.push_str("WORKDIR /workflow\n\n");
+
+    // Install oxo-flow binary in runtime stage
+    write_oxo_flow_install(&mut dockerfile, config);
 
     // Include reference data if configured
     if config.include_data {
@@ -533,6 +569,23 @@ pub fn generate_singularity_def(
                 ));
             }
         }
+    }
+
+    // Install oxo-flow
+    def.push_str("\n    # Install oxo-flow\n");
+    if let Some(ref url) = config.oxo_flow_download_url {
+        def.push_str(&format!(
+            "    curl -fsSL {url} -o /usr/local/bin/oxo-flow\n"
+        ));
+        def.push_str("    chmod +x /usr/local/bin/oxo-flow\n");
+    } else {
+        let version = &config.oxo_flow_version;
+        def.push_str(&format!(
+            "    curl -fsSL https://github.com/Traitome/oxo-flow/releases/download/v{version}/oxo-flow-cli-x86_64-unknown-linux-gnu.tar.gz -o /tmp/oxo-flow.tar.gz\n"
+        ));
+        def.push_str("    tar -xzf /tmp/oxo-flow.tar.gz -C /usr/local/bin/\n");
+        def.push_str("    chmod +x /usr/local/bin/oxo-flow\n");
+        def.push_str("    rm /tmp/oxo-flow.tar.gz\n");
     }
 
     def.push('\n');
