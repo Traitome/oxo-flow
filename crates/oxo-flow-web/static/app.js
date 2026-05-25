@@ -455,7 +455,21 @@ async function refreshSystem() {
     var sys = await api('GET', '/api/system');
     document.getElementById('sys-info-json').textContent = JSON.stringify(sys.data, null, 2);
     var lic = await api('GET', '/api/license');
-    document.getElementById('license-json').textContent = JSON.stringify(lic.data, null, 2);
+    var licJson = lic.data || {};
+    var licHtml = '<div style="margin-bottom:0.5rem">';
+    if (licJson.valid) {
+      licHtml += '<span style="color:var(--success);font-weight:600">Valid</span> ';
+      licHtml += '<span style="color:var(--text)">' + esc(licJson.license_type || 'unknown') + '</span>';
+      if (licJson.issued_to) licHtml += ' <span style="font-size:0.75rem;color:var(--text3)"> - ' + esc(licJson.issued_to) + '</span>';
+      licHtml += '</div>';
+      if (licJson.license_type === 'academic') {
+        licHtml += '<div style="background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.3);border-radius:var(--radius);padding:0.5rem;font-size:0.75rem;color:var(--warning)">Commercial use requires a paid license. Contact sales for pricing.</div>';
+      }
+    } else {
+      licHtml += '<span style="color:var(--error)">Invalid</span></div>';
+      licHtml += '<div style="font-size:0.75rem;color:var(--text2)">' + esc(licJson.message || '') + '</div>';
+    }
+    document.getElementById('license-json').innerHTML = licHtml;
     refreshAuditLogs();
     refreshHpcStatus();
   } catch(e) {}

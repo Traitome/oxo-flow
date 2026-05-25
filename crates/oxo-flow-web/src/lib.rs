@@ -58,6 +58,7 @@ static ACTIVE_WORKFLOWS: AtomicI64 = AtomicI64::new(0);
 ///   1. `OXO_FLOW_LICENSE` env var
 ///   2. Platform config directory (`io.traitome.oxo-flow/license.oxo.json`)
 ///   3. Legacy `~/.config/oxo-flow/license.oxo.json`
+///   4. Embedded academic license (fallback)
 pub static OXO_FLOW_CONFIG: oxo_license::LicenseConfig = oxo_license::LicenseConfig {
     schema_version: "oxo-flow-license-v1",
     public_key_base64: "SOTbyPWS8fSF+XS9dqEg9cFyag0wPO/YMA5LhI4PXw4=",
@@ -67,6 +68,18 @@ pub static OXO_FLOW_CONFIG: oxo_license::LicenseConfig = oxo_license::LicenseCon
     app_name: "oxo-flow",
     license_filename: "license.oxo.json",
 };
+
+/// Embedded academic license for default non-commercial use.
+const EMBEDDED_ACADEMIC_LICENSE: &str = r#"{
+  "schema": "oxo-flow-license-v1",
+  "license_id": "6548e181-e352-402a-ab72-4da51f49e7b5",
+  "issued_to_org": "Public Academic Test License (any academic user)",
+  "license_type": "academic",
+  "scope": "org",
+  "perpetual": true,
+  "issued_at": "2026-03-12",
+  "signature": "duKJcISYPdyZkw1PbyVil5zTjvLhAYsmbzRpH0n6eRYJET90p1b0rYiHO0cJ7IGR6NLEJWqkY1wBXUkfvUvECw=="
+}"#;
 
 // ---------------------------------------------------------------------------
 // Embedded frontend
@@ -317,21 +330,41 @@ async fn extract_session(headers: &axum::http::HeaderMap) -> Option<db::Session>
 }
 
 /// Check the oxo-flow license status.
+///
+/// Tries to load a license file first (env var, config dir, or legacy path).
+/// Falls back to the embedded academic license if no external license is found.
 fn check_license() -> LicenseStatus {
+    // 1. Try external license file first (commercial or custom)
     match oxo_license::load_and_verify(None, &OXO_FLOW_CONFIG) {
-        Ok(license) => LicenseStatus {
+        Ok(license) => {
+            return LicenseStatus {
+                valid: true,
+                license_type: Some(license.payload.license_type.clone()),
+                issued_to: Some(license.payload.issued_to_org.clone()),
+                schema: Some(license.payload.schema.clone()),
+                message: format!("License verified: {}", license.payload.license_type),
+            };
+        }
+        Err(_) => {
+            // 2. Fallback: try embedded academic license
+        }
+    }
+
+    // 2. Fallback: embedded academic license (trusted, not signature-verified)
+    match serde_json::from_str::<oxo_license::LicenseFile>(EMBEDDED_ACADEMIC_LICENSE) {
+        Ok(embedded) => LicenseStatus {
             valid: true,
-            license_type: Some(license.payload.license_type.clone()),
-            issued_to: Some(license.payload.issued_to_org.clone()),
-            schema: Some(license.payload.schema.clone()),
-            message: "License verified successfully".to_string(),
+            license_type: Some(embedded.payload.license_type.clone()),
+            issued_to: Some(embedded.payload.issued_to_org.clone()),
+            schema: Some(embedded.payload.schema.clone()),
+            message: "Academic license active - free for non-commercial use. Commercial use requires a paid license file.".to_string(),
         },
         Err(e) => LicenseStatus {
             valid: false,
             license_type: None,
             issued_to: None,
             schema: None,
-            message: format!("No valid license: {e}"),
+            message: format!("License system error: {e}"),
         },
     }
 }
@@ -1973,8 +2006,10 @@ shell = "echo b"
             .await
             .unwrap();
         let status: LicenseStatus = serde_json::from_slice(&body).unwrap();
-        // No license file installed in test environment
-        assert!(!status.valid);
+        // Embedded academic license should be active
+        assert!(status.valid);
+        assert_eq!(status.license_type.as_deref(), Some("academic"));
+        assert!(status.message.contains("non-commercial"));
         assert!(!status.message.is_empty());
     }
 
