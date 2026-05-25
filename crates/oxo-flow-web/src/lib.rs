@@ -18,7 +18,7 @@ pub mod workspace;
 
 use axum::{
     Router,
-    extract::Json,
+    extract::{Json, Query},
     http::StatusCode,
     middleware,
     response::IntoResponse,
@@ -1449,6 +1449,39 @@ async fn sse_events() -> impl IntoResponse {
     )
 }
 
+/// Query parameters for audit log requests.
+#[derive(Debug, Deserialize)]
+pub struct AuditLogQuery {
+    /// Number of days to look back (1-30, default 7).
+    #[serde(default = "default_audit_days")]
+    pub days: u8,
+}
+
+fn default_audit_days() -> u8 {
+    7
+}
+
+/// Response from the audit log endpoint.
+#[derive(Serialize, Deserialize)]
+pub struct AuditLogResponse {
+    pub entries: Vec<audit::AuditEntry>,
+    pub days: u8,
+}
+
+/// `GET /api/audit` — Audit log viewer for enterprise governance.
+async fn get_audit_logs(Query(query): Query<AuditLogQuery>) -> Json<AuditLogResponse> {
+    let days = query.days.clamp(1, 30);
+
+    // Get raw JSON lines and parse them into entries
+    let raw_lines = audit::get_recent_audit_logs(days).unwrap_or_default();
+    let entries: Vec<audit::AuditEntry> = raw_lines
+        .into_iter()
+        .filter_map(|line| serde_json::from_str::<audit::AuditEntry>(&line).ok())
+        .collect();
+
+    Json(AuditLogResponse { entries, days })
+}
+
 // ---------------------------------------------------------------------------
 // Authentication & license endpoints
 // ---------------------------------------------------------------------------
@@ -2101,6 +2134,7 @@ fn build_router_inner(limiter: Option<RateLimiter>) -> Router {
         .route("/api/environments", get(list_environments))
         .route("/api/reports/generate", post(generate_report))
         .route("/api/events", get(sse_events))
+        .route("/api/audit", get(get_audit_logs))
         .route("/api/runs", get(list_runs))
         .route("/api/runs/{id}", get(get_run_detail))
         .route("/api/runs/{id}", delete(cancel_run))

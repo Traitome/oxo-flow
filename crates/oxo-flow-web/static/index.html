@@ -90,6 +90,7 @@ input { font-family:var(--font); }
     <button data-view="editor"><span class="nav-icon">&#9998;</span> Workflow Editor</button>
     <button data-view="runs"><span class="nav-icon">&#9678;</span> Run History</button>
     <button data-view="workflows"><span class="nav-icon">&#9644;</span> Saved Workflows</button>
+    <button data-view="templates"><span class="nav-icon">&#9733;</span> Template Library</button>
     <button data-view="system"><span class="nav-icon">&#9881;</span> System</button>
   </nav>
   <div class="sidebar-footer">
@@ -180,6 +181,14 @@ input { font-family:var(--font); }
       </div>
     </div>
 
+    <div class="view" id="view-templates">
+      <div class="card">
+        <div class="card-header">Workflow Templates <input type="text" id="template-search" placeholder="Search templates..." onkeyup="filterTemplates()" style="margin-left:0.5rem;padding:0.4rem;width:200px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:var(--radius)"></div>
+        <div id="templates-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:1rem;padding:1rem">
+        </div>
+      </div>
+    </div>
+
     <div class="view" id="view-system">
       <div class="stats-grid">
         <div class="stat-card"><div class="value" id="s-cpu">--</div><div class="label">CPU Cores</div></div>
@@ -189,6 +198,7 @@ input { font-family:var(--font); }
       </div>
       <div class="card"><div class="card-header">Server Info</div><pre id="sys-info-json" style="font-family:var(--mono);font-size:0.78rem;color:var(--text2);white-space:pre-wrap"></pre></div>
       <div class="card"><div class="card-header">License Status</div><pre id="license-json" style="font-family:var(--mono);font-size:0.78rem;color:var(--text2);white-space:pre-wrap"></pre></div>
+      <div class="card"><div class="card-header">Audit Logs <button class="btn btn-sm btn-outline" onclick="refreshAuditLogs()">Refresh</button> <select id="audit-days" onchange="refreshAuditLogs()" style="margin-left:0.5rem;padding:0.3rem;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:var(--radius)"><option value="1">1 day</option><option value="7" selected>7 days</option><option value="14">14 days</option><option value="30">30 days</option></select></div><table id="audit-table" style="width:100%;font-size:0.78rem"><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Resource</th></tr></thead><tbody id="audit-tbody"></tbody></table></div>
     </div>
 
   </div>
@@ -227,10 +237,25 @@ input { font-family:var(--font); }
   </div>
 </div>
 
+<div class="modal-overlay hidden" id="template-preview-modal">
+  <div class="modal">
+    <div class="modal-header"><h3 id="template-preview-title">Template Preview</h3><button class="btn btn-outline btn-sm" onclick="closeTemplatePreview()">Close</button></div>
+    <div class="modal-body">
+      <div style="margin-bottom:1rem">
+        <div style="font-size:0.85rem;color:var(--text2);margin-bottom:0.5rem" id="template-preview-desc"></div>
+        <div style="font-size:0.75rem;color:var(--text3)"><span style="color:var(--accent)" id="template-preview-category"></span> | Tags: <span id="template-preview-tags"></span></div>
+      </div>
+      <pre id="template-preview-content" style="font-family:var(--mono);font-size:0.75rem;color:var(--text2);white-space:pre-wrap;max-height:50vh;overflow-y:auto;background:var(--bg);padding:1rem;border-radius:var(--radius);border:1px solid var(--border)"></pre>
+      <button class="btn btn-primary" onclick="loadTemplateById(currentPreviewTemplate)" style="margin-top:0.5rem">Use This Template</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const API = '';
 let token = '';
 let user = null;
+let currentPreviewTemplate = '';
 
 document.querySelectorAll('.sidebar-nav button').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -488,6 +513,17 @@ var templates = {
   conditional: '[workflow]\nname = "conditional-pipeline"\nversion = "1.0.0"\ndescription = "Conditional execution based on config flags"\n\n[config]\nrun_expensive_analysis = false\ndo_qc = true\nmin_quality = 30\n\n[[rules]]\nname = "basic_qc"\noutput = ["qc_report.txt"]\nshell = "echo QC Report > {output[0]}"\nwhen = "config.do_qc"\n\n[[rules]]\nname = "expensive_analysis"\ninput = ["qc_report.txt"]\noutput = ["deep_analysis.txt"]\nshell = "echo Deep analysis > {output[0]}"\nwhen = "config.run_expensive_analysis && config.min_quality >= 20"\n\n[[rules]]\nname = "always_run"\noutput = ["summary.txt"]\nshell = "echo Pipeline summary > {output[0]}"\n'
 };
 
+// Template metadata for the template library
+var templateMeta = {
+  hello: { name: 'Hello World', category: 'Basic', tags: ['demo', 'simple'], description: 'Simple starter workflow demonstrating basic rule syntax' },
+  wgs: { name: 'WGS Germline', category: 'Genomics', tags: ['wgs', 'variant-calling', 'germline'], description: 'Whole-genome sequencing germline variant calling pipeline (fastp → bwa-mem2 → bcftools)' },
+  rnaseq: { name: 'RNA-seq', category: 'Genomics', tags: ['rnaseq', 'quantification', 'salmon'], description: 'RNA-seq quantification pipeline with fastp trimming and Salmon alignment-free quantification' },
+  paired: { name: 'Tumor-Normal', category: 'Genomics', tags: ['somatic', 'paired', 'tumor-normal'], description: 'Somatic variant calling for tumor-normal paired analysis with paired samples feature' },
+  cohort: { name: 'Multi-Sample Cohort', category: 'Genomics', tags: ['cohort', 'multi-sample', 'joint-calling'], description: 'Multi-sample cohort analysis with sample groups and per-sample QC aggregation' },
+  scatter: { name: 'Scatter-Gather', category: 'Advanced', tags: ['parallel', 'scatter-gather', 'transform'], description: 'Parallel processing example using transform.split for chromosome-wise variant calling' },
+  conditional: { name: 'Conditional Rules', category: 'Advanced', tags: ['conditional', 'when', 'logic'], description: 'Demonstrates conditional rule execution using when expressions' }
+};
+
 function newWorkflow() {
   document.getElementById('editor-text').value = '';
   document.getElementById('save-name').value = '';
@@ -508,6 +544,84 @@ function loadTemplate() {
     document.getElementById('template-select').value = '';
   }
 }
+
+function loadTemplateById(templateId) {
+  if (templates[templateId]) {
+    document.getElementById('editor-text').value = templates[templateId];
+    document.getElementById('save-name').value = templateMeta[templateId].name;
+    // Navigate to editor
+    document.querySelectorAll('.sidebar-nav button').forEach(function(b) { b.classList.remove('active'); });
+    document.querySelector('[data-view="editor"]').classList.add('active');
+    document.querySelectorAll('.view').forEach(function(v) { v.classList.remove('active'); });
+    document.getElementById('view-editor').classList.add('active');
+    document.getElementById('view-title').textContent = 'Workflow Editor';
+  }
+}
+
+function showTemplatePreview(templateId) {
+  currentPreviewTemplate = templateId;
+  var meta = templateMeta[templateId];
+  var content = templates[templateId];
+  document.getElementById('template-preview-title').textContent = meta.name;
+  document.getElementById('template-preview-desc').textContent = meta.description;
+  document.getElementById('template-preview-category').textContent = meta.category;
+  document.getElementById('template-preview-tags').textContent = meta.tags.join(', ');
+  document.getElementById('template-preview-content').textContent = content;
+  document.getElementById('template-preview-modal').classList.remove('hidden');
+}
+
+function closeTemplatePreview() {
+  document.getElementById('template-preview-modal').classList.add('hidden');
+}
+
+function renderTemplatesGrid() {
+  var grid = document.getElementById('templates-grid');
+  grid.innerHTML = '';
+  Object.keys(templateMeta).forEach(function(id) {
+    var meta = templateMeta[id];
+    var card = document.createElement('div');
+    card.className = 'template-card';
+    card.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;';
+    card.innerHTML = '<div style="font-weight:600;font-size:0.9rem;margin-bottom:0.3rem">' + esc(meta.name) + '</div>' +
+      '<div style="font-size:0.75rem;color:var(--accent);margin-bottom:0.5rem">' + esc(meta.category) + '</div>' +
+      '<div style="font-size:0.78rem;color:var(--text2);margin-bottom:0.75rem">' + esc(meta.description) + '</div>' +
+      '<div style="font-size:0.7rem;color:var(--text3);margin-bottom:0.75rem">Tags: ' + meta.tags.map(function(t) { return esc(t); }).join(', ') + '</div>' +
+      '<button class="btn btn-sm btn-outline" onclick="showTemplatePreview(\'' + id + '\')" style="margin-right:0.25rem">Preview</button>' +
+      '<button class="btn btn-sm btn-primary" onclick="loadTemplateById(\'' + id + '\')">Use</button>';
+    grid.appendChild(card);
+  });
+}
+
+function filterTemplates() {
+  var search = document.getElementById('template-search').value.toLowerCase();
+  var grid = document.getElementById('templates-grid');
+  grid.innerHTML = '';
+  Object.keys(templateMeta).forEach(function(id) {
+    var meta = templateMeta[id];
+    var matches = !search ||
+      meta.name.toLowerCase().includes(search) ||
+      meta.category.toLowerCase().includes(search) ||
+      meta.description.toLowerCase().includes(search) ||
+      meta.tags.some(function(t) { return t.toLowerCase().includes(search); });
+    if (matches) {
+      var card = document.createElement('div');
+      card.className = 'template-card';
+      card.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;';
+      card.innerHTML = '<div style="font-weight:600;font-size:0.9rem;margin-bottom:0.3rem">' + esc(meta.name) + '</div>' +
+        '<div style="font-size:0.75rem;color:var(--accent);margin-bottom:0.5rem">' + esc(meta.category) + '</div>' +
+        '<div style="font-size:0.78rem;color:var(--text2);margin-bottom:0.75rem">' + esc(meta.description) + '</div>' +
+        '<div style="font-size:0.7rem;color:var(--text3);margin-bottom:0.75rem">Tags: ' + meta.tags.map(function(t) { return esc(t); }).join(', ') + '</div>' +
+        '<button class="btn btn-sm btn-outline" onclick="showTemplatePreview(\'' + id + '\')" style="margin-right:0.25rem">Preview</button>' +
+        '<button class="btn btn-sm btn-primary" onclick="loadTemplateById(\'' + id + '\')">Use</button>';
+      grid.appendChild(card);
+    }
+  });
+}
+
+// Initialize template grid when templates view is shown
+document.querySelector('[data-view="templates"]').addEventListener('click', function() {
+  renderTemplatesGrid();
+});
 
 async function loadWorkflowToEditor(wfId) {
   try {
@@ -541,6 +655,26 @@ async function refreshSystem() {
     document.getElementById('sys-info-json').textContent = JSON.stringify(sys.data, null, 2);
     var lic = await api('GET', '/api/license');
     document.getElementById('license-json').textContent = JSON.stringify(lic.data, null, 2);
+    refreshAuditLogs();
+  } catch(e) {}
+}
+
+async function refreshAuditLogs() {
+  try {
+    var days = document.getElementById('audit-days').value;
+    var r = await api('GET', '/api/audit?days=' + days);
+    var tbody = document.getElementById('audit-tbody');
+    tbody.innerHTML = '';
+    if (r.data && r.data.entries) {
+      r.data.entries.forEach(function(e) {
+        var tr = document.createElement('tr');
+        tr.innerHTML = '<td>' + fmtTime(e.timestamp) + '</td><td>' + esc(e.user) + '</td><td>' + esc(e.action) + '</td><td>' + esc(e.resource) + '</td>';
+        tbody.appendChild(tr);
+      });
+      if (r.data.entries.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text2)">No audit logs found</td></tr>';
+      }
+    }
   } catch(e) {}
 }
 

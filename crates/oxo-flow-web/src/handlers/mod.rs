@@ -22,7 +22,9 @@ pub use auth::{auth_me, license_status, login};
 pub use reports::generate_report;
 pub use runs::{cancel_run, get_run_detail, get_run_logs, list_runs};
 pub use saved::{delete_saved_workflow, get_saved_workflow, list_saved_workflows, save_workflow};
-pub use system::{health, list_environments, runtime_metrics, sse_events, system_info, version};
+pub use system::{
+    get_audit_logs, health, list_environments, runtime_metrics, sse_events, system_info, version,
+};
 pub use workflow::{
     build_dag, clean_workflow, diff_workflows_endpoint, dry_run, export_workflow,
     format_workflow_endpoint, lint_workflow, lint_workflow_paginated, parse_workflow, run_workflow,

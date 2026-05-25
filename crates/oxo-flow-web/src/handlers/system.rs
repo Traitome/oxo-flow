@@ -1,21 +1,40 @@
 //! System handlers.
 //!
 //! Handles health checks, version info, system metrics, environment listing,
-//! and Server-Sent Events (SSE) for real-time updates.
+//! Server-Sent Events (SSE) for real-time updates, and audit logs.
 
-use axum::{extract::Json, response::IntoResponse};
+use axum::{extract::Json, extract::Query, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 
 use crate::{
     ACTIVE_WORKFLOWS, HealthResponse, RuntimeMetrics, SystemInfo, TOTAL_REQUESTS, VersionResponse,
-    event_tx, get_start_time, sys,
+    audit, event_tx, get_start_time, sys,
 };
 
 /// Environment backend info.
 #[derive(Serialize, Deserialize)]
 pub struct EnvInfo {
     pub available: Vec<String>,
+}
+
+/// Query parameters for audit log requests.
+#[derive(Debug, Deserialize)]
+pub struct AuditLogQuery {
+    /// Number of days to look back (1-30, default 7).
+    #[serde(default = "default_audit_days")]
+    pub days: u8,
+}
+
+fn default_audit_days() -> u8 {
+    7
+}
+
+/// Response from the audit log endpoint.
+#[derive(Serialize, Deserialize)]
+pub struct AuditLogResponse {
+    pub entries: Vec<audit::AuditEntry>,
+    pub days: u8,
 }
 
 /// `GET /api/health` — Health check endpoint.
@@ -128,4 +147,20 @@ pub async fn sse_events() -> impl IntoResponse {
             .interval(std::time::Duration::from_secs(15))
             .text("ping"),
     )
+}
+
+/// `GET /api/audit` — Audit log viewer for enterprise governance.
+///
+/// Returns audit log entries from the last `days` days.
+pub async fn get_audit_logs(Query(query): Query<AuditLogQuery>) -> Json<AuditLogResponse> {
+    let days = query.days.clamp(1, 30);
+
+    // Get raw JSON lines and parse them into entries
+    let raw_lines = audit::get_recent_audit_logs(days).unwrap_or_default();
+    let entries: Vec<audit::AuditEntry> = raw_lines
+        .into_iter()
+        .filter_map(|line| serde_json::from_str::<audit::AuditEntry>(&line).ok())
+        .collect();
+
+    Json(AuditLogResponse { entries, days })
 }
