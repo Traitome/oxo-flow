@@ -371,13 +371,27 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                     .any(|r| r.output.to_vec().iter().any(|o| o == input));
                 if !generated_by_upstream {
                     let is_absolute = input.starts_with('/');
+                    // Optional rules treat missing inputs as warnings, not errors
+                    let severity = if rule.optional {
+                        Severity::Warning
+                    } else if is_absolute {
+                        Severity::Error
+                    } else {
+                        Severity::Warning
+                    };
                     diagnostics.push(Diagnostic {
-                        severity: if is_absolute { Severity::Error } else { Severity::Warning },
+                        severity,
                         message: format!("input file '{}' does not exist", input),
                         rule: Some(rule.name.clone()),
-                        code: if is_absolute { "E010".to_string() } else { "W020".to_string() },
+                        code: if severity == Severity::Error {
+                            "E010".to_string()
+                        } else {
+                            "W020".to_string()
+                        },
                         suggestion: Some(
-                            if is_absolute {
+                            if rule.optional {
+                                "this rule is optional — missing input will cause it to be skipped at execution time"
+                            } else if is_absolute {
                                 "verify the absolute file path; this file must exist before workflow execution"
                             } else {
                                 "verify the file path relative to the workflow directory or ensure it is generated upstream"

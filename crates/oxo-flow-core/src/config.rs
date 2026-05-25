@@ -1570,8 +1570,11 @@ impl WorkflowConfig {
                 let mut expanded_names = Vec::new();
                 // Expand for each pair
                 for combo in &pair_combos {
-                    // Validate constraints
-                    validate_wildcard_constraints_compiled(combo, &compiled_constraints)?;
+                    // Filter by constraints (non-matching combos are skipped, per docs)
+                    if validate_wildcard_constraints_compiled(combo, &compiled_constraints).is_err()
+                    {
+                        continue;
+                    }
 
                     let suffix = combo
                         .get("pair_id")
@@ -1681,8 +1684,11 @@ impl WorkflowConfig {
                 let mut expanded_names = Vec::new();
                 // Expand for each (group, sample) combination
                 for combo in &group_combos {
-                    // Validate constraints
-                    validate_wildcard_constraints_compiled(combo, &compiled_constraints)?;
+                    // Filter by constraints (non-matching combos are skipped, per docs)
+                    if validate_wildcard_constraints_compiled(combo, &compiled_constraints).is_err()
+                    {
+                        continue;
+                    }
 
                     let group = combo.get("group").map(String::as_str).unwrap_or("group");
                     let sample = combo.get("sample").map(String::as_str).unwrap_or("sample");
