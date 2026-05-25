@@ -712,7 +712,7 @@ impl LocalExecutor {
             }
         }
 
-        let max_attempts = 1 + self.config.retry_count;
+        let max_attempts = 1 + std::cmp::max(self.config.retry_count, rule.retries);
         let mut all_commands_succeeded = false;
         let mut combined_stdout = String::new();
         let mut combined_stderr = String::new();
