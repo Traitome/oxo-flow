@@ -254,6 +254,11 @@ pub fn handle_export(workflow: PathBuf, format: String, output: Option<PathBuf>)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
     let content = match format.as_str() {
+        "docker" => {
+            let pkg = oxo_flow_core::container::PackageConfig::default();
+            oxo_flow_core::container::generate_dockerfile(&config, &pkg)
+                .map_err(|e| anyhow::anyhow!(e))?
+        }
         "singularity" => {
             let pkg = oxo_flow_core::container::PackageConfig {
                 format: oxo_flow_core::container::ContainerFormat::Singularity,
@@ -263,11 +268,10 @@ pub fn handle_export(workflow: PathBuf, format: String, output: Option<PathBuf>)
                 .map_err(|e| anyhow::anyhow!(e))?
         }
         "toml" => oxo_flow_core::format::format_workflow(&config),
-        _ => {
-            let pkg = oxo_flow_core::container::PackageConfig::default();
-            oxo_flow_core::container::generate_dockerfile(&config, &pkg)
-                .map_err(|e| anyhow::anyhow!(e))?
-        }
+        other => anyhow::bail!(
+            "unsupported export format '{}'. Supported formats: docker, singularity, toml",
+            other
+        ),
     };
 
     match output {

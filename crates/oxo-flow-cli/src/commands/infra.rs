@@ -292,8 +292,12 @@ pub fn package_command(workflow: PathBuf, format: String, output: Option<PathBuf
 
     let pkg_config = oxo_flow_core::container::PackageConfig {
         format: match format.as_str() {
+            "docker" => oxo_flow_core::container::ContainerFormat::Docker,
             "singularity" => oxo_flow_core::container::ContainerFormat::Singularity,
-            _ => oxo_flow_core::container::ContainerFormat::Docker,
+            other => anyhow::bail!(
+                "unsupported package format '{}'. Supported formats: docker, singularity",
+                other
+            ),
         },
         ..Default::default()
     };

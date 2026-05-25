@@ -364,6 +364,11 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                     "dangerous recursive deletion of root/home",
                 ),
                 (
+                    r"rm\s+-r\s+(?:--\S+\s+)*/",
+                    "RECURSIVE_DELETION",
+                    "recursive deletion of root without force flag",
+                ),
+                (
                     r"mkfs\.?\w*",
                     "FILESYSTEM_DESTRUCTION",
                     "filesystem creation command",
@@ -373,6 +378,11 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                     r"dd\s+if=.*of=/dev/sd",
                     "FILESYSTEM_DESTRUCTION",
                     "dd write to block device",
+                ),
+                (
+                    r"dd\s+if=/dev/(?:zero|random|urandom)",
+                    "DATA_DESTRUCTION",
+                    "data destruction via dd from /dev",
                 ),
                 (
                     r"chmod\s+.*777\s+/",
