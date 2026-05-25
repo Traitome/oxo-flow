@@ -168,21 +168,41 @@ fn write_env_setup(
 
 /// Write the oxo-flow installation step to the Dockerfile.
 fn write_oxo_flow_install(dockerfile: &mut String, config: &PackageConfig) {
+    let version = &config.oxo_flow_version;
     dockerfile.push_str("# Install oxo-flow\n");
     if let Some(ref url) = config.oxo_flow_download_url {
-        dockerfile.push_str(&format!(
-            "RUN curl -fsSL {url} -o /usr/local/bin/oxo-flow && chmod +x /usr/local/bin/oxo-flow\n"
-        ));
+        if url == "COPY" || url == "copy" {
+            dockerfile.push_str(
+                "COPY oxo-flow /usr/local/bin/oxo-flow\nRUN chmod +x /usr/local/bin/oxo-flow\n",
+            );
+        } else {
+            let install_line = format!(
+                "RUN curl -fsSL {url} -o /usr/local/bin/oxo-flow && chmod +x /usr/local/bin/oxo-flow\n"
+            );
+            dockerfile.push_str(&install_line);
+        }
     } else {
-        // Default: download from GitHub releases
-        let version = &config.oxo_flow_version;
-        dockerfile.push_str(&format!(
-            "RUN curl -fsSL https://github.com/Traitome/oxo-flow/releases/download/v{version}/oxo-flow-cli-x86_64-unknown-linux-gnu.tar.gz \\\n"
-        ));
-        dockerfile.push_str("    -o /tmp/oxo-flow.tar.gz \\\n");
-        dockerfile.push_str("    && tar -xzf /tmp/oxo-flow.tar.gz -C /usr/local/bin/ \\\n");
-        dockerfile.push_str("    && chmod +x /usr/local/bin/oxo-flow \\\n");
-        dockerfile.push_str("    && rm /tmp/oxo-flow.tar.gz\n");
+        // Default: cargo install from git tag + GitHub release fallback
+        let cargo_install = format!(
+            "RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \\\n\
+             && . $HOME/.cargo/env \\\n\
+             && cargo install --git https://github.com/Traitome/oxo-flow.git --tag v{version} oxo-flow-cli \\\n\
+             && cp $HOME/.cargo/bin/oxo-flow /usr/local/bin/oxo-flow \\\n\
+             && rm -rf $HOME/.cargo\n"
+        );
+        dockerfile.push_str(&cargo_install);
+        // Fallback: GitHub release download if cargo install failed
+        let release_fallback = format!(
+            "# Fallback: if cargo install failed, try GitHub release\n\
+             RUN if [ ! -f /usr/local/bin/oxo-flow ]; then \\\n\
+             \x20   curl -fsSL https://github.com/Traitome/oxo-flow/releases/download/v{version}/oxo-flow-cli-x86_64-unknown-linux-gnu.tar.gz \\\n\
+             \x20       -o /tmp/oxo-flow.tar.gz \\\n\
+             \x20       && tar -xzf /tmp/oxo-flow.tar.gz -C /usr/local/bin/ \\\n\
+             \x20       && chmod +x /usr/local/bin/oxo-flow \\\n\
+             \x20       && rm /tmp/oxo-flow.tar.gz; \\\n\
+             \x20   fi\n"
+        );
+        dockerfile.push_str(&release_fallback);
     }
     dockerfile.push('\n');
 }
