@@ -37,7 +37,7 @@ use handlers::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64};
 use tower_http::cors::CorsLayer;
 
 // ---------------------------------------------------------------------------
@@ -822,51 +822,6 @@ async fn not_found() -> (StatusCode, Json<ErrorResponse>) {
 // New endpoints
 // ---------------------------------------------------------------------------
 
-/// `POST /api/workflows/validate` — Parse + validate a workflow TOML.
-
-/// `POST /api/workflows/parse` — Parse a workflow and return full detail.
-
-/// `POST /api/workflows/dag` — Build a DAG and return its DOT representation.
-
-/// `POST /api/workflows/dry-run` — Simulate execution and return the plan.
-
-/// `POST /api/reports/generate` — Generate a report from a workflow.
-
-/// `POST /api/workflows/run` — Initialize a run and start it in the background.
-
-/// `GET /api/version` — Return crate version and build info.
-
-/// `POST /api/workflows/clean` — List output files that would be cleaned.
-
-// ---------------------------------------------------------------------------
-// Request ID middleware
-// ---------------------------------------------------------------------------
-
-/// Middleware that attaches a unique `x-request-id` header to every response.
-async fn add_request_id(
-    request: axum::http::Request<axum::body::Body>,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    TOTAL_REQUESTS.fetch_add(1, Ordering::Relaxed);
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let mut response = next.run(request).await;
-    response.headers_mut().insert(
-        axum::http::HeaderName::from_static("x-request-id"),
-        axum::http::HeaderValue::from_str(&request_id).unwrap(),
-    );
-    response
-}
-
-// ---------------------------------------------------------------------------
-// Export endpoint
-// ---------------------------------------------------------------------------
-
-/// `POST /api/workflows/export` — Generate a Dockerfile or Singularity def.
-
-// ---------------------------------------------------------------------------
-// Frontend & new endpoints
-// ---------------------------------------------------------------------------
-
 /// Serve the embedded frontend HTML.
 async fn frontend() -> impl IntoResponse {
     (
@@ -885,21 +840,20 @@ async fn frontend_js() -> impl IntoResponse {
     )
 }
 
-/// `POST /api/workflows/format` — Format a workflow TOML into canonical form.
-
-/// `POST /api/workflows/lint` — Lint a workflow for best practices.
-
-/// `POST /api/workflows/lint/paginated` — Lint with paginated results.
-
-/// `POST /api/workflows/stats` — Return workflow statistics.
-
-/// `POST /api/workflows/diff` — Compare two workflow configurations.
-
-// Authentication & license endpoints
-
-// ---------------------------------------------------------------------------
-// Router
-// ---------------------------------------------------------------------------
+/// Middleware that attaches a unique `x-request-id` header to every response.
+async fn add_request_id(
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        "x-request-id",
+        axum::http::HeaderValue::from_str(&request_id)
+            .unwrap_or_else(|_| axum::http::HeaderValue::from_static("unknown")),
+    );
+    response
+}
 
 /// Build the web application router.
 pub fn build_router() -> Router {

@@ -8,6 +8,20 @@ use uuid::Uuid;
 
 use crate::{ApiError, ErrorResponse, db, extract_session};
 
+// Type alias for template row from database
+type TemplateRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    Option<String>,
+    chrono::DateTime<chrono::Utc>,
+    chrono::DateTime<chrono::Utc>,
+);
+
 /// Request body for creating/updating a template.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SaveTemplateRequest {
@@ -43,7 +57,7 @@ pub struct TemplateResponse {
 
 /// `GET /api/templates` — List all templates.
 pub async fn list_templates() -> Result<Json<Vec<TemplateResponse>>, ApiError> {
-    let rows: Vec<(String, String, String, String, String, String, i64, Option<String>, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> =
+    let rows: Vec<TemplateRow> =
         sqlx::query_as(
             "SELECT id, name, category, description, tags, toml_content, is_system, created_by, created_at, updated_at FROM templates ORDER BY category, name",
         )
@@ -88,7 +102,7 @@ pub async fn list_templates() -> Result<Json<Vec<TemplateResponse>>, ApiError> {
 pub async fn get_template(
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let row: Option<(String, String, String, String, String, String, i64, Option<String>, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> =
+    let row: Option<TemplateRow> =
         sqlx::query_as(
             "SELECT id, name, category, description, tags, toml_content, is_system, created_by, created_at, updated_at FROM templates WHERE id = ?",
         )
@@ -161,12 +175,10 @@ pub async fn save_template(
             .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?;
 
         match is_sys {
-            Some((1,)) => {
-                return Err(ApiError::bad_request(
-                    "Cannot modify system templates",
-                    None,
-                ));
-            }
+            Some((1,)) => Err(ApiError::bad_request(
+                "Cannot modify system templates",
+                None,
+            )),
             Some(_) => {
                 sqlx::query(
                     "UPDATE templates SET name=?, category=?, description=?, tags=?, toml_content=?, updated_at=? WHERE id=?",
