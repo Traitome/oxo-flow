@@ -1,0 +1,16 @@
+{
+  "name": "oxo-flow-e2e",
+  "version": "0.6.1",
+  "description": "Playwright E2E tests for oxo-flow multi-user web system",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "test:debug": "playwright test --debug",
+    "report": "playwright show-report",
+    "codegen": "playwright codegen http://localhost:8080"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0"
+  }
+}

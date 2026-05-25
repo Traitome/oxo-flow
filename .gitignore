@@ -62,3 +62,8 @@ test-harness/data/
 test-harness/.oxo-flow/
 test-harness/*.toml
 test-harness/*.txt
+
+# E2E Playwright tests (Node.js)
+tests/e2e-playwright/node_modules/
+tests/e2e-playwright/test-results/
+tests/e2e-playwright/playwright-report/
