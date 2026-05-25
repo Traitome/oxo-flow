@@ -28,7 +28,8 @@ pub use scheduled::{
     cancel_scheduled_run, create_scheduled_run, get_scheduled_run, list_scheduled_runs,
 };
 pub use system::{
-    get_audit_logs, health, list_environments, runtime_metrics, sse_events, system_info, version,
+    get_audit_logs, health, hpc_status, list_environments, runtime_metrics, sse_events,
+    system_info, version,
 };
 pub use workflow::{
     build_dag, clean_workflow, diff_workflows_endpoint, dry_run, export_workflow,

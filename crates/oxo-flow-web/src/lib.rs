@@ -10,6 +10,7 @@ pub mod audit;
 pub mod db;
 pub mod executor;
 pub mod handlers;
+pub mod hpc;
 pub mod rate_limit;
 pub mod sse;
 pub mod sys;
@@ -25,7 +26,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use handlers::{
-    cancel_scheduled_run, create_scheduled_run, get_scheduled_run, list_scheduled_runs,
+    cancel_scheduled_run, create_scheduled_run, get_scheduled_run, hpc_status, list_scheduled_runs,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -2151,6 +2152,7 @@ fn build_router_inner(limiter: Option<RateLimiter>) -> Router {
         .route("/api/scheduled", post(create_scheduled_run))
         .route("/api/scheduled/{id}", get(get_scheduled_run))
         .route("/api/scheduled/{id}", delete(cancel_scheduled_run))
+        .route("/api/hpc", get(hpc_status))
         // Authentication & license
         .route("/api/auth/login", post(login))
         .route("/api/auth/me", get(auth_me))

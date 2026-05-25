@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 
 use crate::{
     ACTIVE_WORKFLOWS, HealthResponse, RuntimeMetrics, SystemInfo, TOTAL_REQUESTS, VersionResponse,
-    audit, event_tx, get_start_time, sys,
+    audit, event_tx, get_start_time, hpc, sys,
 };
 
 /// Environment backend info.
@@ -163,4 +163,11 @@ pub async fn get_audit_logs(Query(query): Query<AuditLogQuery>) -> Json<AuditLog
         .collect();
 
     Json(AuditLogResponse { entries, days })
+}
+
+/// `GET /api/hpc` — HPC scheduler status for cluster monitoring.
+///
+/// Detects the local scheduler and returns queue, node, and job status.
+pub async fn hpc_status() -> Json<crate::hpc::HpcStatus> {
+    Json(hpc::get_hpc_status())
 }
