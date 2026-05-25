@@ -28,7 +28,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'cd ../.. && cargo run -p oxo-flow-web --bin oxo-flow-web-server -- --port 8080',
+    command: 'cd ../.. && OXO_FLOW_DEV_MODE=1 cargo run -p oxo-flow-web -- --port 8080',
     url: 'http://localhost:8080',
     reuseExistingServer: !process.env.CI,
     timeout: 120000,

@@ -1528,6 +1528,9 @@ async fn login(Json(req): Json<LoginRequest>) -> Result<impl IntoResponse, ApiEr
         token
     );
 
+    // Record login in audit log
+    let _ = audit::write_audit_log(&user.id, "auth.login", &format!("user:{}", req.username));
+
     Ok((
         StatusCode::OK,
         [("set-cookie", cookie)],
@@ -1746,10 +1749,16 @@ async fn get_run_detail(
 #[derive(Serialize, Deserialize)]
 pub struct SaveWorkflowRequest {
     pub name: String,
+    /// Workflow version; defaults to "1.0.0" if omitted.
+    #[serde(default = "default_version_str")]
     pub version: String,
     pub toml_content: String,
     /// Optional workflow ID for updating existing workflows.
     pub id: Option<String>,
+}
+
+fn default_version_str() -> String {
+    "1.0.0".to_string()
 }
 
 /// Paginated workflow list response.

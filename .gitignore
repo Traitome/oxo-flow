@@ -67,3 +67,4 @@ test-harness/*.txt
 tests/e2e-playwright/node_modules/
 tests/e2e-playwright/test-results/
 tests/e2e-playwright/playwright-report/
+logs/

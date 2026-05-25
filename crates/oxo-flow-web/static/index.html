@@ -289,6 +289,7 @@ document.querySelectorAll('.sidebar-nav button').forEach(btn => {
     if (btn.dataset.view === 'dashboard') refreshDashboard();
     if (btn.dataset.view === 'runs') refreshRuns();
     if (btn.dataset.view === 'workflows') loadSavedWorkflows();
+    if (btn.dataset.view === 'templates') renderTemplatesGrid();
     if (btn.dataset.view === 'scheduled') refreshScheduledRuns();
     if (btn.dataset.view === 'system') refreshSystem();
   });
