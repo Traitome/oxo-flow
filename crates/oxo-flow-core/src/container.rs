@@ -343,8 +343,9 @@ fn generate_singlestage_dockerfile(
     }
 
     // Entry point
-    dockerfile.push_str("# Default entrypoint\n");
-    dockerfile.push_str("ENTRYPOINT [\"oxo-flow\", \"run\"]\n\n");
+    dockerfile.push_str("# Entrypoint + default CMD\n");
+    dockerfile.push_str("ENTRYPOINT [\"oxo-flow\", \"run\"]\n");
+    dockerfile.push_str("CMD [\"--help\"]\n\n");
 
     // Health check
     write_healthcheck(&mut dockerfile, config);
@@ -436,8 +437,9 @@ fn generate_multistage_dockerfile(
     }
 
     // Entry point
-    dockerfile.push_str("# Default entrypoint\n");
-    dockerfile.push_str("ENTRYPOINT [\"oxo-flow\", \"run\"]\n\n");
+    dockerfile.push_str("# Entrypoint + default CMD\n");
+    dockerfile.push_str("ENTRYPOINT [\"oxo-flow\", \"run\"]\n");
+    dockerfile.push_str("CMD [\"--help\"]\n\n");
 
     // Health check
     write_healthcheck(&mut dockerfile, config);
