@@ -591,8 +591,9 @@ pub async fn debug_command(workflow: PathBuf, rule_name: Option<String>) -> Resu
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
     config.apply_defaults();
-    oxo_flow_core::config::resolve_rule_templates(&mut config.rules)
-        .context("failed to resolve rule templates")?;
+    config
+        .expand_wildcards()
+        .context("failed to expand wildcard rules")?;
 
     let dag = WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;
 

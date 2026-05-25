@@ -351,6 +351,143 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
         }
     }
 
+    // E011 + W023: Shell command security checks (dangerous patterns detected at lint time)
+    {
+        use regex::Regex;
+        use std::sync::LazyLock;
+
+        static BLOCKING_PATTERNS: LazyLock<Vec<(Regex, &str, &str)>> = LazyLock::new(|| {
+            let patterns: &[(&str, &str, &str)] = &[
+                (
+                    r"rm\s+-rf\s+(?:--\S+\s+)*[/~]",
+                    "RECURSIVE_DELETION",
+                    "dangerous recursive deletion of root/home",
+                ),
+                (
+                    r"mkfs\.?\w*",
+                    "FILESYSTEM_DESTRUCTION",
+                    "filesystem creation command",
+                ),
+                (r"mkswap", "FILESYSTEM_DESTRUCTION", "swap creation command"),
+                (
+                    r"dd\s+if=.*of=/dev/sd",
+                    "FILESYSTEM_DESTRUCTION",
+                    "dd write to block device",
+                ),
+                (
+                    r"chmod\s+.*777\s+/",
+                    "PERMISSION_ESCALATION",
+                    "world-writable root permission",
+                ),
+                (
+                    r"chmod\s+-R\s+777",
+                    "PERMISSION_ESCALATION",
+                    "recursive world-writable permission",
+                ),
+                (
+                    r">\s*/dev/sd[a-z]",
+                    "BLOCK_DEVICE_WRITE",
+                    "redirect to block device",
+                ),
+                (
+                    r">>\s*/dev/sd[a-z]",
+                    "BLOCK_DEVICE_WRITE",
+                    "append to block device",
+                ),
+                (
+                    r"(?:wget|curl).*\|\s*(?:sh|bash|dash)",
+                    "REMOTE_EXECUTION",
+                    "remote script piped to shell",
+                ),
+                (r"\(\)\s*\{.*:.*\|.*&.*\}", "FORK_BOMB", "fork bomb pattern"),
+                (r":\(\)\s*\{", "FORK_BOMB", "fork bomb variant"),
+            ];
+            patterns
+                .iter()
+                .filter_map(|(re, name, desc)| Regex::new(re).ok().map(|r| (r, *name, *desc)))
+                .collect()
+        });
+
+        static WARNING_PATTERNS: LazyLock<Vec<(Regex, &str)>> = LazyLock::new(|| {
+            let patterns: &[(&str, &str)] = &[
+                (r"\$\([^)]*\)", "command substitution via $()"),
+                (r"`[^`]*`", "command substitution via backticks"),
+                (
+                    r"rm\s+-rf\s",
+                    "recursive force removal (may be legitimate in bioinformatics)",
+                ),
+                (r"chmod\s+777\b", "world-writable permission change"),
+                (r"\beval\s+", "eval usage"),
+                (
+                    r"(?:wget|curl).*?(?:\||&&).*?(?:sh|bash)",
+                    "remote fetch with shell execution",
+                ),
+            ];
+            patterns
+                .iter()
+                .filter_map(|(re, desc)| Regex::new(re).ok().map(|r| (r, *desc)))
+                .collect()
+        });
+
+        for rule in &config.rules {
+            // Collect all shell commands to check
+            let mut commands: Vec<(&str, &str)> = Vec::new(); // (command, source_label)
+            if let Some(ref shell) = rule.shell {
+                commands.push((shell, "shell"));
+            }
+            if let Some(ref pre) = rule.pre_exec {
+                commands.push((pre, "pre_exec"));
+            }
+            if let Some(ref on_ok) = rule.on_success {
+                commands.push((on_ok, "on_success"));
+            }
+            if let Some(ref on_fail) = rule.on_failure {
+                commands.push((on_fail, "on_failure"));
+            }
+
+            for (cmd, source) in &commands {
+                // Blocking patterns → E011 Error
+                for (re, category, description) in BLOCKING_PATTERNS.iter() {
+                    if re.is_match(cmd) {
+                        diagnostics.push(Diagnostic {
+                            severity: Severity::Error,
+                            message: format!(
+                                "{} command in rule '{}' matches dangerous pattern [{}]: {}",
+                                source, rule.name, category, description
+                            ),
+                            rule: Some(rule.name.clone()),
+                            code: "E011".to_string(),
+                            suggestion: Some(
+                                "remove dangerous shell constructs or use a script file instead"
+                                    .to_string(),
+                            ),
+                        });
+                        break; // One error per command is enough
+                    }
+                }
+
+                // Warning patterns → W023 Warning
+                for (re, description) in WARNING_PATTERNS.iter() {
+                    if re.is_match(cmd) {
+                        diagnostics.push(Diagnostic {
+                            severity: Severity::Warning,
+                            message: format!(
+                                "{} command in rule '{}' contains {}",
+                                source, rule.name, description
+                            ),
+                            rule: Some(rule.name.clone()),
+                            code: "W023".to_string(),
+                            suggestion: Some(
+                                "common in bioinformatics scripts; verify this is intentional"
+                                    .to_string(),
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     // E009 + W020: Path safety + input existence validation
     for rule in &config.rules {
         // Check for path traversal (..) in inputs

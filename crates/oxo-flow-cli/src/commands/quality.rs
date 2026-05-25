@@ -230,8 +230,18 @@ pub fn format_command(workflow: PathBuf, output: Option<PathBuf>, check: bool) -
 
 pub fn touch_command(workflow: PathBuf, rules: Vec<String>) -> Result<()> {
     print_banner();
-    let config = WorkflowConfig::from_file(&workflow)
+    let mut config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
+
+    config.apply_defaults();
+    // Expand wildcards so output patterns are concrete paths
+    if let Err(e) = config.expand_wildcards() {
+        eprintln!("  {} Could not expand wildcards: {}", "Note:".yellow(), e);
+        eprintln!(
+            "  {} Wildcard patterns in outputs will be skipped.",
+            "Info:".dimmed()
+        );
+    }
 
     let rules_to_touch: Vec<&oxo_flow_core::rule::Rule> = if rules.is_empty() {
         config.rules.iter().collect()
@@ -245,6 +255,7 @@ pub fn touch_command(workflow: PathBuf, rules: Vec<String>) -> Result<()> {
 
     let mut touched = 0usize;
     let mut skipped = 0usize;
+    let mut skipped_patterns: Vec<(String, String)> = Vec::new(); // (rule_name, pattern)
 
     let base_dir = std::env::current_dir().unwrap_or_default();
 
@@ -253,6 +264,7 @@ pub fn touch_command(workflow: PathBuf, rules: Vec<String>) -> Result<()> {
             let has_wildcard = output.contains('{') && output.contains('}');
             if has_wildcard {
                 skipped += 1;
+                skipped_patterns.push((rule.name.clone(), output.clone()));
                 continue;
             }
 
@@ -301,11 +313,39 @@ pub fn touch_command(workflow: PathBuf, rules: Vec<String>) -> Result<()> {
     }
 
     eprintln!(
-        "\n{} {} file(s) touched, {} wildcard patterns skipped",
+        "\n{} {} file(s) touched, {} wildcard pattern(s) skipped",
         "Done:".bold(),
         touched,
         skipped
     );
+
+    if !skipped_patterns.is_empty() {
+        eprintln!();
+        for (rule_name, pattern) in &skipped_patterns {
+            eprintln!(
+                "  {} {} → {} (wildcard pattern — not expanded)",
+                "Skipped:".yellow(),
+                rule_name,
+                pattern.dimmed()
+            );
+        }
+        eprintln!();
+        eprintln!(
+            "  {} To touch expanded rules, use specific rule names after wildcard expansion.",
+            "Tip:".bold().cyan()
+        );
+        eprintln!(
+            "  {} Run 'oxo-flow dry-run {}' to see expanded rule names, then use:",
+            "   ".dimmed(),
+            workflow.display()
+        );
+        eprintln!(
+            "  {}   oxo-flow touch {} --rule <expanded_name>",
+            "   ".dimmed(),
+            workflow.display()
+        );
+    }
+
     Ok(())
 }
 

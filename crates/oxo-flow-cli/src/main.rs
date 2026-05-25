@@ -214,6 +214,12 @@ pub enum Commands {
         format: String,
         #[arg(short = 'o', long)]
         output: Option<PathBuf>,
+        #[arg(
+            long = "checkpoint",
+            value_name = "PATH",
+            help = "Path to checkpoint file (default: .oxo-flow/checkpoint.json)"
+        )]
+        checkpoint_path: Option<PathBuf>,
     },
     /// Package a workflow into a container image.
     Package {
@@ -269,8 +275,12 @@ pub enum Commands {
         stop_on_error: bool,
         #[arg(short = 'f', long)]
         file: Option<PathBuf>,
-        #[arg(long)]
-        json: bool,
+        #[arg(
+            long = "json-output",
+            alias = "json",
+            help = "Output results as formatted JSON"
+        )]
+        json_output: bool,
         #[arg(short = 'n', long)]
         dry_run: bool,
         #[arg(short = 'd', long)]
@@ -533,7 +543,8 @@ async fn main() -> Result<()> {
             workflow,
             format,
             output,
-        } => handle_report(workflow, format, output)?,
+            checkpoint_path,
+        } => handle_report(workflow, format, output, checkpoint_path)?,
         Commands::Package {
             workflow,
             format,
@@ -558,7 +569,7 @@ async fn main() -> Result<()> {
             jobs,
             stop_on_error,
             file,
-            json,
+            json_output: json,
             dry_run,
             workdir,
             environment,

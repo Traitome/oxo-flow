@@ -33,17 +33,40 @@ pub fn handle_graph(workflow: PathBuf, format: String, output: Option<PathBuf>) 
     Ok(())
 }
 
-pub fn handle_report(workflow: PathBuf, format: String, output: Option<PathBuf>) -> Result<()> {
+pub fn handle_report(
+    workflow: PathBuf,
+    format: String,
+    output: Option<PathBuf>,
+    checkpoint_path: Option<PathBuf>,
+) -> Result<()> {
     use oxo_flow_core::{executor::CheckpointState, report::ReportBuilder};
 
     print_banner();
     let workflow = resolve_workflow(Some(workflow))?;
     let config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
-    let workflow_dir = oxo_flow_core::parent_dir(&workflow).to_path_buf();
-    let checkpoint_path = workflow_dir.join(".oxo-flow").join("checkpoint.json");
 
-    let checkpoint = CheckpointState::load_from_file(&checkpoint_path).ok();
+    // Determine checkpoint path: explicit > workflow-relative > warn
+    let checkpoint_path = checkpoint_path.unwrap_or_else(|| {
+        let workflow_dir = oxo_flow_core::parent_dir(&workflow).to_path_buf();
+        workflow_dir.join(".oxo-flow").join("checkpoint.json")
+    });
+
+    let checkpoint = match CheckpointState::load_from_file(&checkpoint_path) {
+        Ok(cp) => Some(cp),
+        Err(_) => {
+            eprintln!(
+                "  {} No checkpoint found at {}",
+                "Note:".yellow(),
+                checkpoint_path.display()
+            );
+            eprintln!(
+                "  {} Report will show template-level data only. Run the workflow first for execution metrics.",
+                "Info:".dimmed()
+            );
+            None
+        }
+    };
 
     let completed = checkpoint
         .as_ref()
