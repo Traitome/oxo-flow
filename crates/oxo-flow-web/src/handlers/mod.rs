@@ -1,7 +1,6 @@
 //! Handler modules for oxo-flow-web API endpoints.
 
 pub mod auth;
-pub mod partials;
 pub mod reports;
 pub mod runs;
 pub mod saved;

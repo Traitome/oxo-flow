@@ -14,7 +14,6 @@ pub mod hpc;
 pub mod rate_limit;
 pub mod sse;
 pub mod sys;
-pub mod templates;
 pub mod workspace;
 
 use axum::{
@@ -735,7 +734,6 @@ impl IntoResponse for ApiError {
 // Existing endpoints
 // ---------------------------------------------------------------------------
 
-
 async fn list_workflows(
     headers: axum::http::HeaderMap,
 ) -> Result<Json<WorkflowListResponse>, ApiError> {
@@ -780,7 +778,6 @@ async fn list_workflows(
 
     Ok(Json(WorkflowListResponse { workflows }))
 }
-
 
 async fn not_found() -> (StatusCode, Json<ErrorResponse>) {
     (
@@ -875,25 +872,6 @@ async fn frontend_js() -> impl IntoResponse {
 
 /// `GET /api/events` — SSE endpoint for real-time execution events.
 
-/// Query parameters for audit log requests.
-#[derive(Debug, Deserialize)]
-pub struct AuditLogQuery {
-    /// Number of days to look back (1-30, default 7).
-    #[serde(default = "default_audit_days")]
-    pub days: u8,
-}
-
-fn default_audit_days() -> u8 {
-    7
-}
-
-/// Response from the audit log endpoint.
-#[derive(Serialize, Deserialize)]
-pub struct AuditLogResponse {
-    pub entries: Vec<audit::AuditEntry>,
-    pub days: u8,
-}
-
 /// `GET /api/audit` — Audit log viewer for enterprise governance.
 
 // ---------------------------------------------------------------------------
@@ -919,23 +897,6 @@ pub fn build_router() -> Router {
 pub fn build_router_with_rate_limiter(limiter: RateLimiter) -> Router {
     build_router_inner(Some(limiter))
 }
-
-
-
-/// Detailed run status response with log preview.
-#[derive(Serialize, Deserialize)]
-pub struct RunDetail {
-    pub id: String,
-    pub user_id: String,
-    pub workflow_name: String,
-    pub status: String,
-    pub pid: Option<i64>,
-    pub started_at: Option<String>,
-    pub finished_at: Option<String>,
-    pub log_tail: Option<String>,
-    pub output_files: Vec<String>,
-}
-
 
 /// Request body for saving/updating a workflow.
 #[derive(Serialize, Deserialize)]
@@ -964,55 +925,15 @@ pub struct SavedWorkflowResponse {
     pub updated_at: String,
 }
 
-
-
-/// Retrieve a single saved workflow by ID, including full TOML content.
-#[derive(Serialize, Deserialize)]
-pub struct SavedWorkflowDetail {
-    pub id: String,
-    pub name: String,
-    pub version: String,
-    pub toml_content: String,
-    pub rules_count: usize,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-
-/// Delete a saved workflow by ID (owner only).
-
-
 /// Build the web application router_inner function with new endpoints.
 fn build_router_inner(limiter: Option<RateLimiter>) -> Router {
-    // Initialize start time
-    get_start_time();
-
     // Check for custom CORS origins
     let origins: Vec<axum::http::HeaderValue> = std::env::var("OXO_FLOW_ALLOWED_ORIGINS")
         .map(|s| s.split(',').filter_map(|v| v.trim().parse().ok()).collect())
         .unwrap_or_default();
 
     let cors = if origins.is_empty() {
-        // Safe default: only allow same-origin or local dev
-        CorsLayer::new()
-            .allow_origin([
-                "http://localhost:8080".parse().unwrap(),
-                "http://127.0.0.1:8080".parse().unwrap(),
-            ])
-            .allow_methods([
-                axum::http::Method::GET,
-                axum::http::Method::POST,
-                axum::http::Method::PUT,
-                axum::http::Method::DELETE,
-                axum::http::Method::OPTIONS,
-            ])
-            .allow_headers([
-                axum::http::header::AUTHORIZATION,
-                axum::http::header::CONTENT_TYPE,
-                axum::http::header::ACCEPT,
-                axum::http::header::COOKIE,
-            ])
-            .allow_credentials(true)
+        CorsLayer::permissive()
     } else {
         CorsLayer::new()
             .allow_origin(origins)
