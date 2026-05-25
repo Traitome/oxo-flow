@@ -67,6 +67,8 @@ pub static OXO_FLOW_CONFIG: oxo_license::LicenseConfig = oxo_license::LicenseCon
 
 /// Embedded single-page web application.
 const FRONTEND_HTML: &str = include_str!("../static/index.html");
+/// Embedded JavaScript for the frontend.
+const FRONTEND_JS: &str = include_str!("../static/app.js");
 
 // Store server start time for uptime calculation.
 static START_TIME: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
@@ -1207,6 +1209,15 @@ async fn frontend() -> impl IntoResponse {
     )
 }
 
+/// Serve the embedded frontend JavaScript.
+async fn frontend_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [("content-type", "application/javascript; charset=utf-8")],
+        FRONTEND_JS,
+    )
+}
+
 /// `POST /api/workflows/format` — Format a workflow TOML into canonical form.
 async fn format_workflow_endpoint(
     Json(req): Json<ValidateRequest>,
@@ -2123,6 +2134,7 @@ fn build_router_inner(limiter: Option<RateLimiter>) -> Router {
     let mut router = Router::new()
         // Frontend
         .route("/", get(frontend))
+        .route("/app.js", get(frontend_js))
         // API endpoints
         .route("/api/health", get(health))
         .route("/api/version", get(version))
