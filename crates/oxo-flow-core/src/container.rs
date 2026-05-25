@@ -89,12 +89,8 @@ pub fn generate_docker_run_command(
     }
     cmd.push_str(&format!(" --cpus={}", resources.threads));
 
-    // GPU support - add --gpus flag if GPU resources specified
-    if let Some(gpu_count) = resources.gpu {
-        cmd.push_str(&format!(" --gpus {}", gpu_count));
-    }
+    // GPU support - use gpu_spec if available (more specific), fall back to gpu count
     if let Some(ref spec) = resources.gpu_spec {
-        // Use gpu_spec if available (more specific)
         match &spec.model {
             Some(model) => {
                 cmd.push_str(&format!(
@@ -106,6 +102,8 @@ pub fn generate_docker_run_command(
                 cmd.push_str(&format!(" --gpus {}", spec.count));
             }
         }
+    } else if let Some(gpu_count) = resources.gpu {
+        cmd.push_str(&format!(" --gpus {}", gpu_count));
     }
 
     cmd.push_str(&format!(" -v {workdir}:/data -w /data"));

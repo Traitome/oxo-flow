@@ -1524,6 +1524,15 @@ pub fn sample_info_section(info: &SampleInfo) -> ReportSection {
     }
 }
 
+/// Escape special HTML characters in user-controlled text to prevent XSS.
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
 fn render_section_html(html: &mut String, section: &ReportSection, heading_level: u8) {
     let h = heading_level.min(6);
     html.push_str(&format!(
@@ -1533,7 +1542,7 @@ fn render_section_html(html: &mut String, section: &ReportSection, heading_level
 
     match &section.content {
         ReportContent::Text { text } => {
-            html.push_str(&format!("<p>{text}</p>\n"));
+            html.push_str(&format!("<p>{}</p>\n", escape_html(text)));
         }
         ReportContent::Markdown { markdown } => {
             // Simple markdown rendering (just wrap in pre for now)
@@ -1663,15 +1672,15 @@ fn render_section_html(html: &mut String, section: &ReportSection, heading_level
                 ));
                 html.push_str(&format!(
                     "  <div style=\"font-size:1.8rem;font-weight:700\">{}</div>\n",
-                    item.value
+                    escape_html(&item.value)
                 ));
                 html.push_str(&format!(
                     "  <div style=\"color:#6b7280;font-size:0.85rem\">{}</div>\n",
-                    item.label
+                    escape_html(&item.label)
                 ));
                 html.push_str(&format!(
                     "  <div style=\"color:#9ca3af;font-size:0.75rem;margin-top:0.25rem\">{}</div>\n",
-                    item.description
+                    escape_html(&item.description)
                 ));
                 html.push_str("</div>\n");
             }

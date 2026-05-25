@@ -25,6 +25,11 @@ pub fn validate_command(workflow: PathBuf, as_include: bool) -> Result<()> {
 
             for d in &validation.diagnostics {
                 if d.severity == oxo_flow_core::format::Severity::Error {
+                    // --as-include skips input-existence checks (E010, W020) since
+                    // sub-workflow fragments may reference files not yet present
+                    if as_include && (d.code == "E010" || d.code == "W020") {
+                        continue;
+                    }
                     error_count += 1;
                     eprintln!("  {} [{}]: {}", "error".red().bold(), d.code, d.message);
                     if let Some(ref rule) = d.rule {
