@@ -1700,12 +1700,14 @@ async fn get_run_detail(
     }))
 }
 
-/// Request body for saving a workflow.
+/// Request body for saving/updating a workflow.
 #[derive(Serialize, Deserialize)]
 pub struct SaveWorkflowRequest {
     pub name: String,
     pub version: String,
     pub toml_content: String,
+    /// Optional workflow ID for updating existing workflows.
+    pub id: Option<String>,
 }
 
 /// Paginated workflow list response.
@@ -1740,29 +1742,60 @@ async fn save_workflow(
     let _config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
         .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
 
-    let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now();
 
-    sqlx::query(
-        "INSERT INTO workflows (id, user_id, name, version, toml_content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-    )
-    .bind(&id)
-    .bind(&user.id)
-    .bind(&req.name)
-    .bind(&req.version)
-    .bind(&req.toml_content)
-    .bind(now)
-    .bind(now)
-    .execute(db::pool())
-    .await
-    .map_err(|e| ApiError::bad_request("Failed to save workflow", Some(e.to_string())))?;
+    if let Some(ref wf_id) = req.id {
+        // Update existing workflow if owned by user
+        let result = sqlx::query(
+            "UPDATE workflows SET name = ?, version = ?, toml_content = ?, updated_at = ? WHERE id = ? AND user_id = ?"
+        )
+        .bind(&req.name)
+        .bind(&req.version)
+        .bind(&req.toml_content)
+        .bind(now)
+        .bind(wf_id)
+        .bind(&user.id)
+        .execute(db::pool())
+        .await
+        .map_err(|e| ApiError::bad_request("Failed to update workflow", Some(e.to_string())))?;
 
-    let _ = db::log_action(&user.id, "save_workflow", &req.name).await;
+        if result.rows_affected() == 0 {
+            return Err(ApiError {
+                status: StatusCode::NOT_FOUND,
+                body: ErrorResponse {
+                    error: "Workflow not found or not owned by user".to_string(),
+                    detail: None,
+                },
+            });
+        }
+        let _ = db::log_action(&user.id, "update_workflow", wf_id).await;
+        Ok((
+            StatusCode::OK,
+            Json(serde_json::json!({"id": wf_id, "status": "updated"})),
+        ))
+    } else {
+        // Create new workflow
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO workflows (id, user_id, name, version, toml_content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(&id)
+        .bind(&user.id)
+        .bind(&req.name)
+        .bind(&req.version)
+        .bind(&req.toml_content)
+        .bind(now)
+        .bind(now)
+        .execute(db::pool())
+        .await
+        .map_err(|e| ApiError::bad_request("Failed to save workflow", Some(e.to_string())))?;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(serde_json::json!({"id": id, "status": "saved"})),
-    ))
+        let _ = db::log_action(&user.id, "save_workflow", &req.name).await;
+        Ok((
+            StatusCode::CREATED,
+            Json(serde_json::json!({"id": id, "status": "saved"})),
+        ))
+    }
 }
 
 async fn list_saved_workflows(
