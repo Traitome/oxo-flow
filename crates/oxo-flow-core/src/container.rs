@@ -821,6 +821,107 @@ mod tests {
     }
 
     #[test]
+    fn generate_dockerfile_has_oxo_flow_install() {
+        let workflow = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "install-test"
+            version = "1.0.0"
+            [[rules]]
+            name = "step1"
+            shell = "echo hi"
+        "#,
+        )
+        .unwrap();
+
+        let config = PackageConfig::default();
+        let dockerfile = generate_dockerfile(&workflow, &config).unwrap();
+        assert!(
+            dockerfile.contains("Install oxo-flow"),
+            "Dockerfile should contain oxo-flow installation step"
+        );
+        assert!(
+            dockerfile.contains("cargo install") || dockerfile.contains("oxo-flow-cli"),
+            "Dockerfile should install oxo-flow binary"
+        );
+    }
+
+    #[test]
+    fn generate_singularity_def_has_oxo_flow_install() {
+        let workflow = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "sing-install-test"
+            version = "1.0.0"
+            [[rules]]
+            name = "step1"
+            shell = "echo hi"
+        "#,
+        )
+        .unwrap();
+
+        let config = PackageConfig {
+            format: ContainerFormat::Singularity,
+            rootless: false,
+            ..Default::default()
+        };
+        let def = generate_singularity_def(&workflow, &config).unwrap();
+        assert!(
+            def.contains("Install oxo-flow"),
+            "Singularity def should contain oxo-flow installation step"
+        );
+    }
+
+    #[test]
+    fn generate_dockerfile_with_copy_mode() {
+        let workflow = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "copy-test"
+            version = "1.0.0"
+            [[rules]]
+            name = "step1"
+            shell = "echo hi"
+        "#,
+        )
+        .unwrap();
+
+        let config = PackageConfig {
+            oxo_flow_download_url: Some("COPY".to_string()),
+            ..Default::default()
+        };
+        let dockerfile = generate_dockerfile(&workflow, &config).unwrap();
+        assert!(
+            dockerfile.contains("COPY oxo-flow /usr/local/bin/oxo-flow"),
+            "COPY mode should copy local binary"
+        );
+    }
+
+    #[test]
+    fn generate_dockerfile_with_custom_download_url() {
+        let workflow = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "url-test"
+            version = "1.0.0"
+            [[rules]]
+            name = "step1"
+            shell = "echo hi"
+        "#,
+        )
+        .unwrap();
+
+        let config = PackageConfig {
+            oxo_flow_download_url: Some(
+                "https://custom.registry/oxo-flow/v0.6.1/oxo-flow".to_string(),
+            ),
+            ..Default::default()
+        };
+        let dockerfile = generate_dockerfile(&workflow, &config).unwrap();
+        assert!(dockerfile.contains("custom.registry"));
+    }
+
+    #[test]
     fn generate_singularity_def_basic() {
         let workflow = WorkflowConfig::parse(
             r#"
