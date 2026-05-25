@@ -151,7 +151,7 @@ input { font-family:var(--font); }
               <button class="btn btn-outline btn-sm" onclick="exportWorkflowSingularity()" style="flex:1">Singularity</button>
             </div>
             <button class="btn btn-outline btn-sm" onclick="generateReport()" style="width:100%;margin-top:0.35rem">Generate Report</button>
-            <button class="btn btn-outline btn-sm" onclick="listOutputs()" style="width:100%;margin-top:0.25rem">List Outputs</button>
+            <button class="btn btn-outline btn-sm" onclick="listOutputs()" style="width:100%;margin-top:0.25rem">List Clean</button>
           </div>
           <div class="card"><div class="card-header">Environments</div>
             <div id="env-list" style="font-size:0.75rem;color:var(--text2)">Loading...</div>
@@ -263,6 +263,13 @@ input { font-family:var(--font); }
       <button class="btn btn-primary" onclick="doLogin()" style="width:100%">Sign In</button>
       <div id="login-error" style="color:var(--error);font-size:0.78rem;margin-top:0.5rem;display:none"></div>
     </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="rundetail-modal">
+  <div class="modal" style="max-width:700px">
+    <div class="modal-header"><h3>Run Detail - <span id="rundetail-id"></span></h3><button class="btn btn-outline btn-sm" onclick="closeRunDetail()">Close</button></div>
+    <div class="modal-body"><pre id="rundetail-content" style="font-family:var(--mono);font-size:0.78rem;color:var(--text2);white-space:pre-wrap;max-height:60vh;overflow-y:auto;background:var(--bg);padding:1rem;border-radius:var(--radius)"></pre></div>
   </div>
 </div>
 

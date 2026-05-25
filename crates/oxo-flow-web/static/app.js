@@ -125,7 +125,7 @@ async function refreshRuns() {
     var tbody = document.getElementById('all-runs-tbody');
     if (Array.isArray(r.data)) {
       tbody.innerHTML = r.data.map(function(run) {
-        return '<tr><td style="font-family:var(--mono);font-size:0.72rem">'+run.id.substring(0,12)+'...</td>'+
+        return '<tr data-run-id="'+run.id+'"><td style="font-family:var(--mono);font-size:0.72rem">'+run.id.substring(0,12)+'...</td>'+
         '<td>'+esc(run.workflow_name)+'</td>'+
         '<td><span class="badge badge-'+run.status+'">'+run.status+'</span></td>'+
         '<td style="font-size:0.78rem;color:var(--text2)">'+(run.started_at?fmtTime(run.started_at):'--')+'</td>'+
@@ -230,10 +230,6 @@ async function saveWorkflow() {
     showOutput((currentEditingWfId ? 'Updated' : 'Saved') + ' "' + name + '" (ID: ' + (r.data.id||'').substring(0,8) + '...)', false);
     document.getElementById('save-name').value = '';
     currentEditingWfId = null;
-  } else if (r.status === 200 && r.data.status === 'updated') {
-    showOutput('Updated "' + name + '"', false);
-    document.getElementById('save-name').value = '';
-    currentEditingWfId = null;
   } else { showOutput('Save failed: ' + (r.data.error || ''), true); }
 }
 
@@ -247,15 +243,17 @@ async function updateEditorStats() {
   } catch(e) {}
 }
 
+function closeRunDetail() { document.getElementById('rundetail-modal').classList.add('hidden'); }
 async function viewRunDetail(runId) {
   var r = await api('GET', '/api/runs/' + runId);
-  showOutput(
+  document.getElementById('rundetail-id').textContent = runId.substring(0,8)+'...';
+  document.getElementById('rundetail-content').textContent =
     'Run: ' + r.data.id + '\nWorkflow: ' + r.data.workflow_name + '\nStatus: ' + r.data.status +
     '\nStarted: ' + (r.data.started_at||'--') + '\nFinished: ' + (r.data.finished_at||'--') +
     '\nPID: ' + (r.data.pid||'--') +
     (r.data.output_files ? '\n\nOutputs:\n' + r.data.output_files.map(function(f){return '  '+f;}).join('\n') : '') +
-    (r.data.log_tail ? '\n\n--- Log Tail ---\n' + r.data.log_tail : '')
-  , false);
+    (r.data.log_tail ? '\n\n--- Log Tail ---\n' + r.data.log_tail : '');
+  document.getElementById('rundetail-modal').classList.remove('hidden');
 }
 
 async function viewRunLogs(runId) {
@@ -833,14 +831,16 @@ function downloadLog() {
   var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
   a.download = 'execution_'+currentLogRunId+'.log'; a.click();
 }
-// Override viewRunLogs to support new features
+// Override viewRunLogs to support filter/download
 var origViewRunLogs = viewRunLogs;
 viewRunLogs = function(runId) {
   currentLogRunId = runId;
-  origViewRunLogs(runId);
-  // Also store full text for filter/download
+  document.getElementById('log-run-id').textContent = runId;
+  document.getElementById('log-content').textContent = 'Loading...';
+  document.getElementById('log-modal').classList.remove('hidden');
   api('GET', '/api/runs/'+runId+'/logs').then(function(r){
-    if (typeof r.data === 'string') logFullText = r.data;
+    logFullText = typeof r.data === 'string' ? (r.data || '(empty)') : 'Log not available';
+    document.getElementById('log-content').textContent = logFullText;
   });
 };
 
@@ -851,15 +851,12 @@ refreshRuns = function() {
   origRefreshRuns();
   // After rendering, add HPC submit buttons
   setTimeout(function() {
-    document.querySelectorAll('#all-runs-tbody tr').forEach(function(row) {
+    document.querySelectorAll('#all-runs-tbody tr[data-run-id]').forEach(function(row) {
       var actions = row.querySelector('td:last-child');
       if (actions && actions.innerHTML.indexOf('HPC') < 0) {
-        var runIdEl = row.querySelector('td:first-child');
-        if (runIdEl) {
-          var rid = runIdEl.textContent.replace('...','').trim();
-          if (rid.length > 8) {
-            actions.innerHTML += ' <button class="btn btn-sm btn-outline" onclick="showHpcSubmit(\''+rid+'\')">HPC</button>';
-          }
+        var rid = row.getAttribute('data-run-id');
+        if (rid) {
+          actions.innerHTML += ' <button class="btn btn-sm btn-outline" onclick="showHpcSubmit(\''+rid+'\')">HPC</button>';
         }
       }
     });
