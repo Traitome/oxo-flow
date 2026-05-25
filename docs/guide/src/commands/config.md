@@ -18,8 +18,8 @@ oxo-flow config <ACTION> [WORKFLOW] [KEY] [VALUE]
 |---|---|
 | `show` | Show all configuration variables from a workflow |
 | `stats` | Show workflow statistics (rules, dependencies, etc.) |
+| `check` | Alias for `stats` |
 | `get <KEY>` | Get a specific configuration variable value |
-| `set <KEY> <VALUE>` | Set a configuration variable (modifies the workflow file) |
 
 ---
 
@@ -28,8 +28,7 @@ oxo-flow config <ACTION> [WORKFLOW] [KEY] [VALUE]
 | Argument | Description |
 |---|---|
 | `<WORKFLOW>` | Path to the `.oxoflow` workflow file |
-| `<KEY>` | Configuration variable key (for `get`/`set`) |
-| `<VALUE>` | Configuration variable value (for `set`) |
+| `<KEY>` | Configuration variable key (for `get`) |
 
 ---
 
@@ -52,13 +51,6 @@ oxo-flow config stats pipeline.oxoflow
 ```bash
 oxo-flow config get pipeline.oxoflow reference
 # Output: /data/references/GRCh38/genome.fa
-```
-
-### Set a config value
-
-```bash
-oxo-flow config set pipeline.oxoflow reference /data/references/GRCh38/genome.fa
-# Output: ✓ Set reference = /data/references/GRCh38/genome.fa in pipeline.oxoflow
 ```
 
 ---
@@ -117,4 +109,4 @@ Some rules depend on multiple upstream outputs (e.g., a merge rule that combines
 - `config show` displays metadata, configuration variables, includes, and execution groups
 - `config stats` provides a high-level overview of the workflow's complexity
 - `config get` exits with code 1 if the key is not found
-- `config set` intelligently parses values as boolean, integer, float, or string
+- `config get` returns values in their native TOML type representation

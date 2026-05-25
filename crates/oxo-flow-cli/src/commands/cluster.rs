@@ -134,7 +134,7 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
             queue,
             account,
             output,
-            target: _,
+            target,
             dry_run,
             with_dependencies,
         } => {
@@ -144,7 +144,13 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
             let dag =
                 WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;
 
-            let order = dag.execution_order()?;
+            let order = if target.is_empty() {
+                dag.execution_order()?
+            } else {
+                let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
+                dag.execution_order_for_targets(&target_refs)
+                    .with_context(|| "failed to resolve target rules")?
+            };
 
             let cluster_backend = match backend.as_str() {
                 "pbs" => oxo_flow_core::cluster::ClusterBackend::Pbs,

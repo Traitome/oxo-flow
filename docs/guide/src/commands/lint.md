@@ -48,10 +48,11 @@ oxo-flow lint pipeline.oxoflow --strict
 
 ```
 oxo-flow 0.6.1 — Bioinformatics Pipeline Engine
-  warning [W001]: rule 'bwa_align' missing resources block
-  info [I002]: rule 'fastqc' could use more threads
+  warning [W003]: rule has no description (rule: bwa_align)
+  warning [W004]: rule has a shell command but no log file specified (rule: bwa_align)
+  info [W007]: leaf rule (no dependents) could be marked as target = true (rule: fastqc)
 
-Summary: 0 error(s), 1 warning(s), 1 info
+Summary: 0 error(s), 2 warning(s), 1 info
 ```
 
 ---

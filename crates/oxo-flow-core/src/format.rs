@@ -1145,6 +1145,13 @@ pub fn verify_schema(toml_content: &str) -> ValidationResult {
         "citation",
         "cluster",
         "resource_budget",
+        "pairs",
+        "sample_groups",
+        "plugins",
+        "env_groups",
+        "resource_groups",
+        "reference_db",
+        "wildcard_constraints",
     ];
     for key in table.keys() {
         if !known_keys.contains(&key.as_str()) {

@@ -19,6 +19,7 @@ oxo-flow cluster <ACTION> [OPTIONS] [WORKFLOW/JOB_IDS]
 | `submit` | Submit a workflow to a cluster scheduler |
 | `status` | Show the status of submitted cluster jobs |
 | `cancel` | Cancel submitted cluster jobs |
+| `logs` | Fetch logs for a submitted cluster job |
 
 ---
 
@@ -35,7 +36,7 @@ oxo-flow cluster <ACTION> [OPTIONS] [WORKFLOW/JOB_IDS]
 
 | Option | Short | Default | Description |
 |---|---|---|---|
-| `--backend` | `-b` | `slurm` | Cluster backend (`slurm`, `pbs`, `sge`, `lsf`) |
+| `--backend` | `-b` | *(required)* | Cluster backend (`slurm`, `pbs`, `sge`, `lsf`) |
 | `--queue` | `-q` | — | Partition / queue name |
 | `--account` | `-a` | — | Account / project name |
 | `--output` | `-o` | `cluster_scripts` | Directory for generated scripts |
@@ -75,8 +76,8 @@ oxo-flow cluster submit pipeline.oxoflow -b lsf -q normal
 
 ```bash
 # Abort submission if jobs stay in PENDING state for more than 1 hour
-# Useful when cluster resources may be unavailable
-oxo-flow cluster submit pipeline.oxoflow -b slurm -q work --pending-timeout 1h
+# Submit with queue and account
+oxo-flow cluster submit pipeline.oxoflow -b slurm -q work -a lab-account
 ```
 
 ### Submit with environment support
