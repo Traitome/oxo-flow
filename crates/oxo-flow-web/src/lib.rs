@@ -730,9 +730,6 @@ impl IntoResponse for ApiError {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Existing endpoints
-// ---------------------------------------------------------------------------
 
 async fn list_workflows(
     headers: axum::http::HeaderMap,
@@ -866,23 +863,11 @@ async fn frontend_js() -> impl IntoResponse {
 
 /// `POST /api/workflows/diff` — Compare two workflow configurations.
 
-/// `GET /api/system` — Return system information.
 
-/// `GET /api/metrics` — Runtime metrics for monitoring and observability.
 
-/// `GET /api/events` — SSE endpoint for real-time execution events.
 
-/// `GET /api/audit` — Audit log viewer for enterprise governance.
 
-// ---------------------------------------------------------------------------
 // Authentication & license endpoints
-// ---------------------------------------------------------------------------
-
-/// `POST /api/auth/login` — Authenticate and obtain a session token.
-
-/// `GET /api/auth/me` — Return the identity of the current session.
-
-/// `GET /api/license` — Return current license status.
 
 // ---------------------------------------------------------------------------
 // Router
