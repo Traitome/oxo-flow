@@ -1,6 +1,3 @@
-# Paired Experiment-Control Variant Calling Pipeline
-# Demonstrates experiment-control paired analysis for general use
-
 [workflow]
 name = "paired-experiment-control"
 version = "1.0.0"
@@ -16,11 +13,32 @@ genome_build = "GRCh38"
 threads = 8
 memory = "16G"
 
-# ── Quality Control ─────────────────────────────────────────────
+[report]
+template = "report/clinical_template.html"
+format = [
+    "html",
+    "json",
+]
+sections = [
+    "sample_info",
+    "qc",
+    "variants",
+    "clinical",
+    "provenance",
+    "disclaimer",
+]
+
 [[rules]]
 name = "fastp_experiment"
-input = ["raw/EXP_01_R1.fq.gz", "raw/EXP_01_R2.fq.gz"]
-output = ["trimmed/EXP_01_R1.fq.gz", "trimmed/EXP_01_R2.fq.gz", "qc/EXP_01_fastp.json"]
+input = [
+    "raw/EXP_01_R1.fq.gz",
+    "raw/EXP_01_R2.fq.gz",
+]
+output = [
+    "trimmed/EXP_01_R1.fq.gz",
+    "trimmed/EXP_01_R2.fq.gz",
+    "qc/EXP_01_fastp.json",
+]
 shell = "fastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]} --json {output[2]} --thread {threads}"
 threads = 8
 
@@ -29,18 +47,27 @@ conda = "envs/fastp.yaml"
 
 [[rules]]
 name = "fastp_control"
-input = ["raw/CTRL_01_R1.fq.gz", "raw/CTRL_01_R2.fq.gz"]
-output = ["trimmed/CTRL_01_R1.fq.gz", "trimmed/CTRL_01_R2.fq.gz", "qc/CTRL_01_fastp.json"]
+input = [
+    "raw/CTRL_01_R1.fq.gz",
+    "raw/CTRL_01_R2.fq.gz",
+]
+output = [
+    "trimmed/CTRL_01_R1.fq.gz",
+    "trimmed/CTRL_01_R2.fq.gz",
+    "qc/CTRL_01_fastp.json",
+]
 shell = "fastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]} --json {output[2]} --thread {threads}"
 threads = 8
 
 [rules.environment]
 conda = "envs/fastp.yaml"
 
-# ── Alignment ───────────────────────────────────────────────────
 [[rules]]
 name = "bwa_mem2_experiment"
-input = ["trimmed/EXP_01_R1.fq.gz", "trimmed/EXP_01_R2.fq.gz"]
+input = [
+    "trimmed/EXP_01_R1.fq.gz",
+    "trimmed/EXP_01_R2.fq.gz",
+]
 output = ["aligned/EXP_01.sorted.bam"]
 shell = "bwa-mem2 mem -t {threads} /data/references/GRCh38/genome.fa {input[0]} {input[1]} | samtools sort -@ {threads} -o {output[0]}"
 threads = 16
@@ -51,7 +78,10 @@ conda = "envs/bwa_mem2.yaml"
 
 [[rules]]
 name = "bwa_mem2_control"
-input = ["trimmed/CTRL_01_R1.fq.gz", "trimmed/CTRL_01_R2.fq.gz"]
+input = [
+    "trimmed/CTRL_01_R1.fq.gz",
+    "trimmed/CTRL_01_R2.fq.gz",
+]
 output = ["aligned/CTRL_01.sorted.bam"]
 shell = "bwa-mem2 mem -t {threads} /data/references/GRCh38/genome.fa {input[0]} {input[1]} | samtools sort -@ {threads} -o {output[0]}"
 threads = 16
@@ -60,11 +90,13 @@ memory = "32G"
 [rules.environment]
 conda = "envs/bwa_mem2.yaml"
 
-# ── Deduplication ───────────────────────────────────────────────
 [[rules]]
 name = "markdup_experiment"
 input = ["aligned/EXP_01.sorted.bam"]
-output = ["dedup/EXP_01.dedup.bam", "dedup/EXP_01.metrics.txt"]
+output = [
+    "dedup/EXP_01.dedup.bam",
+    "dedup/EXP_01.metrics.txt",
+]
 shell = "gatk MarkDuplicates -I {input[0]} -O {output[0]} -M {output[1]}"
 threads = 4
 memory = "16G"
@@ -75,7 +107,10 @@ conda = "envs/gatk.yaml"
 [[rules]]
 name = "markdup_control"
 input = ["aligned/CTRL_01.sorted.bam"]
-output = ["dedup/CTRL_01.dedup.bam", "dedup/CTRL_01.metrics.txt"]
+output = [
+    "dedup/CTRL_01.dedup.bam",
+    "dedup/CTRL_01.metrics.txt",
+]
 shell = "gatk MarkDuplicates -I {input[0]} -O {output[0]} -M {output[1]}"
 threads = 4
 memory = "16G"
@@ -83,7 +118,6 @@ memory = "16G"
 [rules.environment]
 conda = "envs/gatk.yaml"
 
-# ── BQSR ────────────────────────────────────────────────────────
 [[rules]]
 name = "bqsr_experiment"
 input = ["dedup/EXP_01.dedup.bam"]
@@ -106,10 +140,12 @@ memory = "16G"
 [rules.environment]
 conda = "envs/gatk.yaml"
 
-# ── Variant Calling ─────────────────────────────────────
 [[rules]]
 name = "mutect2"
-input = ["recal/EXP_01.recal.bam", "recal/CTRL_01.recal.bam"]
+input = [
+    "recal/EXP_01.recal.bam",
+    "recal/CTRL_01.recal.bam",
+]
 output = ["variants/EXP_01.mutect2.vcf.gz"]
 shell = "gatk Mutect2 -I {input[0]} -I {input[1]} -normal CTRL_01 -R /data/references/GRCh38/genome.fa -O {output[0]}"
 threads = 4
@@ -118,7 +154,6 @@ memory = "16G"
 [rules.environment]
 conda = "envs/gatk.yaml"
 
-# ── Filter Calls ────────────────────────────────────────
 [[rules]]
 name = "filter_mutect_calls"
 input = ["variants/EXP_01.mutect2.vcf.gz"]
@@ -131,7 +166,6 @@ description = "Filter raw Mutect2 calls"
 [rules.environment]
 conda = "envs/gatk.yaml"
 
-# ── Control Sample Calling ────────────────────────────────────────────
 [[rules]]
 name = "haplotype_caller"
 input = ["recal/CTRL_01.recal.bam"]
@@ -144,7 +178,6 @@ description = "Variant calling for control sample"
 [rules.environment]
 conda = "envs/gatk.yaml"
 
-# ── Annotation ──────────────────────────────────────────────────
 [[rules]]
 name = "annotate_variants"
 input = ["variants/EXP_01.mutect2.filtered.vcf.gz"]
@@ -156,7 +189,6 @@ memory = "8G"
 [rules.environment]
 conda = "envs/vep.yaml"
 
-# ── Report ─────────────────────────────────────────────
 [[rules]]
 name = "clinical_report"
 input = ["annotated/EXP_01.annotated.vcf.gz"]
@@ -168,8 +200,3 @@ description = "Generate variant report"
 
 [rules.environment]
 conda = "envs/report.yaml"
-
-[report]
-template = "report/clinical_template.html"
-format = ["html", "json"]
-sections = ["sample_info", "qc", "variants", "clinical", "provenance", "disclaimer"]
