@@ -594,18 +594,44 @@ pub fn generate_singularity_def(
     // Install oxo-flow
     def.push_str("\n    # Install oxo-flow\n");
     if let Some(ref url) = config.oxo_flow_download_url {
-        def.push_str(&format!(
-            "    curl -fsSL {url} -o /usr/local/bin/oxo-flow\n"
-        ));
-        def.push_str("    chmod +x /usr/local/bin/oxo-flow\n");
+        if url == "COPY" || url == "copy" {
+            def.push_str("    # Copy local binary into container\n");
+            def.push_str("    cp /workflow/oxo-flow /usr/local/bin/oxo-flow\n");
+            def.push_str("    chmod +x /usr/local/bin/oxo-flow\n");
+        } else {
+            def.push_str(&format!(
+                "    curl -fsSL {url} -o /usr/local/bin/oxo-flow\n"
+            ));
+            def.push_str("    chmod +x /usr/local/bin/oxo-flow\n");
+        }
     } else {
+        // Default: try cargo install first, fall back to GitHub releases
         let version = &config.oxo_flow_version;
         def.push_str(&format!(
-            "    curl -fsSL https://github.com/Traitome/oxo-flow/releases/download/v{version}/oxo-flow-cli-x86_64-unknown-linux-gnu.tar.gz -o /tmp/oxo-flow.tar.gz\n"
+            "    # Primary: install via cargo from git tag v{version}\n"
         ));
-        def.push_str("    tar -xzf /tmp/oxo-flow.tar.gz -C /usr/local/bin/\n");
-        def.push_str("    chmod +x /usr/local/bin/oxo-flow\n");
-        def.push_str("    rm /tmp/oxo-flow.tar.gz\n");
+        def.push_str(
+            "    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y\n",
+        );
+        def.push_str("    . $HOME/.cargo/env\n");
+        def.push_str(&format!(
+            "    cargo install --git https://github.com/Traitome/oxo-flow.git --tag v{version} oxo-flow-cli\n"
+        ));
+        def.push_str(
+            "    cp $HOME/.cargo/bin/oxo-flow /usr/local/bin/oxo-flow 2>/dev/null || true\n",
+        );
+        def.push_str("    rm -rf $HOME/.cargo $HOME/.rustup\n");
+        def.push_str(
+            "    # Fallback: download from GitHub releases if cargo install not available\n",
+        );
+        def.push_str("    if [ ! -f /usr/local/bin/oxo-flow ]; then\n");
+        def.push_str(&format!(
+            "        curl -fsSL https://github.com/Traitome/oxo-flow/releases/download/v{version}/oxo-flow-cli-x86_64-unknown-linux-gnu.tar.gz -o /tmp/oxo-flow.tar.gz\n"
+        ));
+        def.push_str("        tar -xzf /tmp/oxo-flow.tar.gz -C /usr/local/bin/\n");
+        def.push_str("        chmod +x /usr/local/bin/oxo-flow\n");
+        def.push_str("        rm /tmp/oxo-flow.tar.gz\n");
+        def.push_str("    fi\n");
     }
 
     def.push('\n');
