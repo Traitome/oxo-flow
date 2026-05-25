@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>oxo-flow — Command Center</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/vis-network.min.js"></script>
 <style>
 :root {
   --bg: #0f172a; --surface: #1e293b; --surface2: #334155;
@@ -214,7 +215,7 @@ input { font-family:var(--font); }
 
     <div class="view" id="view-templates">
       <div class="card">
-        <div class="card-header">Workflow Templates <input type="text" id="template-search" placeholder="Search templates..." onkeyup="filterTemplates()" style="margin-left:0.5rem;padding:0.4rem;width:200px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:var(--radius)"></div>
+        <div class="card-header">Workflow Templates <button class="btn btn-sm btn-primary" onclick="showCreateTemplate()">+ Create</button> <input type="text" id="template-search" placeholder="Search..." onkeyup="filterTemplates()" style="margin-left:0.5rem;padding:0.4rem;width:200px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:var(--radius)"></div>
         <div id="templates-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:1rem;padding:1rem">
         </div>
       </div>
@@ -273,9 +274,12 @@ input { font-family:var(--font); }
 </div>
 
 <div class="modal-overlay hidden" id="dag-modal">
-  <div class="modal">
-    <div class="modal-header"><h3>Workflow DAG</h3><button class="btn btn-outline btn-sm" onclick="closeDagModal()">Close</button></div>
-    <div class="modal-body"><pre id="dag-content" style="font-family:var(--mono);font-size:0.75rem;color:var(--text2);white-space:pre-wrap;max-height:60vh;overflow-y:auto"></pre></div>
+  <div class="modal" style="max-width:900px">
+    <div class="modal-header"><h3>Workflow DAG</h3><div><button class="btn btn-sm btn-outline" onclick="toggleDagView()" style="margin-right:0.5rem">Show DOT</button><button class="btn btn-outline btn-sm" onclick="closeDagModal()">Close</button></div></div>
+    <div class="modal-body">
+      <div id="dag-viz" style="height:500px;border:1px solid var(--border);border-radius:var(--radius);background:#0f172a"></div>
+      <pre id="dag-content" style="font-family:var(--mono);font-size:0.75rem;color:var(--text2);white-space:pre-wrap;max-height:60vh;overflow-y:auto;display:none"></pre>
+    </div>
   </div>
 </div>
 
@@ -335,6 +339,19 @@ input { font-family:var(--font); }
       <div style="display:flex;gap:0.5rem"><input id="hpc-cpus" placeholder="CPUs" value="4" style="flex:1;padding:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text)"><input id="hpc-mem" placeholder="Memory e.g. 16G" style="flex:1;padding:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text)"></div>
       <button class="btn btn-primary" onclick="doHpcSubmit()" style="width:100%;margin-top:0.5rem">Submit Job</button>
       <div id="hpc-result" style="margin-top:0.5rem;font-size:0.8rem"></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="template-create-modal">
+  <div class="modal" style="max-width:700px">
+    <div class="modal-header"><h3>Create Template</h3><button class="btn btn-outline btn-sm" onclick="closeCreateTemplate()">Cancel</button></div>
+    <div class="modal-body">
+      <input id="tpl-name" placeholder="Template name" style="width:100%;padding:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);margin-bottom:0.5rem">
+      <div style="display:flex;gap:0.5rem"><input id="tpl-category" placeholder="Category" value="general" style="flex:1;padding:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);margin-bottom:0.5rem"><input id="tpl-tags" placeholder="Tags (comma-separated)" style="flex:1;padding:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);margin-bottom:0.5rem"></div>
+      <input id="tpl-desc" placeholder="Description" style="width:100%;padding:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);margin-bottom:0.5rem">
+      <textarea id="tpl-content" placeholder="TOML workflow content..." style="width:100%;height:250px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);font-family:var(--mono);font-size:0.75rem;padding:0.5rem;resize:vertical"></textarea>
+      <button class="btn btn-primary" onclick="doCreateTemplate()" style="width:100%;margin-top:0.5rem">Save Template</button>
     </div>
   </div>
 </div>

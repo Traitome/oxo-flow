@@ -19,16 +19,22 @@ pub mod workspace;
 
 use axum::{
     Router,
-    extract::{Json, Query},
+    extract::Json,
     http::StatusCode,
     middleware,
     response::IntoResponse,
     routing::{delete, get, post},
 };
 use handlers::{
-    build_dag_json, cancel_scheduled_run, create_scheduled_run, create_user, delete_template,
-    delete_user, get_scheduled_run, get_template, hpc_status, hpc_submit_run, list_scheduled_runs,
-    list_templates, list_users, save_template,
+    auth_me, build_dag, build_dag_json, cancel_run, cancel_scheduled_run, clean_workflow,
+    create_scheduled_run, create_user, delete_saved_workflow, delete_template, delete_user,
+    diff_workflows_endpoint, dry_run, export_workflow, format_workflow_endpoint, generate_report,
+    get_audit_logs, get_run_detail, get_run_logs, get_saved_workflow, get_scheduled_run,
+    get_template, health, hpc_status, hpc_submit_run, license_status, lint_workflow,
+    lint_workflow_paginated, list_environments, list_runs, list_saved_workflows,
+    list_scheduled_runs, list_templates, list_users, login, parse_workflow, run_workflow,
+    runtime_metrics, save_template, save_workflow, sse_events, system_info, validate_workflow,
+    version, workflow_stats_endpoint,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -403,12 +409,6 @@ pub struct RuleSummary {
     pub threads: u32,
 }
 
-/// Environment backend info.
-#[derive(Serialize, Deserialize)]
-struct EnvInfo {
-    available: Vec<String>,
-}
-
 /// Request body for endpoints that accept TOML workflow content.
 #[derive(Serialize, Deserialize)]
 pub struct ValidateRequest {
@@ -735,12 +735,6 @@ impl IntoResponse for ApiError {
 // Existing endpoints
 // ---------------------------------------------------------------------------
 
-async fn health() -> Json<HealthResponse> {
-    Json(HealthResponse {
-        status: "ok".to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-    })
-}
 
 async fn list_workflows(
     headers: axum::http::HeaderMap,
@@ -787,16 +781,6 @@ async fn list_workflows(
     Ok(Json(WorkflowListResponse { workflows }))
 }
 
-async fn list_environments() -> Json<EnvInfo> {
-    let resolver = oxo_flow_core::environment::EnvironmentResolver::new();
-    Json(EnvInfo {
-        available: resolver
-            .available_backends()
-            .into_iter()
-            .map(String::from)
-            .collect(),
-    })
-}
 
 async fn not_found() -> (StatusCode, Json<ErrorResponse>) {
     (
@@ -813,338 +797,20 @@ async fn not_found() -> (StatusCode, Json<ErrorResponse>) {
 // ---------------------------------------------------------------------------
 
 /// `POST /api/workflows/validate` — Parse + validate a workflow TOML.
-async fn validate_workflow(
-    Json(req): Json<ValidateRequest>,
-) -> Result<Json<ValidateResponse>, ApiError> {
-    let config = match oxo_flow_core::WorkflowConfig::parse(&req.toml_content) {
-        Ok(c) => c,
-        Err(e) => {
-            return Ok(Json(ValidateResponse {
-                valid: false,
-                errors: vec![e.to_string()],
-                rules_count: None,
-                edges_count: None,
-            }));
-        }
-    };
-
-    let dag = match oxo_flow_core::WorkflowDag::from_rules(&config.rules) {
-        Ok(d) => d,
-        Err(e) => {
-            return Ok(Json(ValidateResponse {
-                valid: false,
-                errors: vec![e.to_string()],
-                rules_count: Some(config.rules.len()),
-                edges_count: None,
-            }));
-        }
-    };
-
-    if let Err(e) = dag.validate() {
-        return Ok(Json(ValidateResponse {
-            valid: false,
-            errors: vec![e.to_string()],
-            rules_count: Some(dag.node_count()),
-            edges_count: Some(dag.edge_count()),
-        }));
-    }
-
-    Ok(Json(ValidateResponse {
-        valid: true,
-        errors: vec![],
-        rules_count: Some(dag.node_count()),
-        edges_count: Some(dag.edge_count()),
-    }))
-}
 
 /// `POST /api/workflows/parse` — Parse a workflow and return full detail.
-async fn parse_workflow(
-    Json(req): Json<ValidateRequest>,
-) -> Result<Json<WorkflowDetail>, ApiError> {
-    let config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
-        .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
-
-    let rules: Vec<RuleSummary> = config
-        .rules
-        .iter()
-        .map(|r| RuleSummary {
-            name: r.name.clone(),
-            inputs: r.input.to_vec(),
-            outputs: r.output.to_vec(),
-            environment: r.environment.kind().to_string(),
-            threads: r.effective_threads(),
-        })
-        .collect();
-
-    Ok(Json(WorkflowDetail {
-        name: config.workflow.name.clone(),
-        version: config.workflow.version.clone(),
-        description: config.workflow.description.clone(),
-        author: config.workflow.author.clone(),
-        rules_count: rules.len(),
-        rules,
-    }))
-}
 
 /// `POST /api/workflows/dag` — Build a DAG and return its DOT representation.
-async fn build_dag(Json(req): Json<ValidateRequest>) -> Result<Json<DagResponse>, ApiError> {
-    let config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
-        .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
-
-    let dag = oxo_flow_core::WorkflowDag::from_rules(&config.rules)
-        .map_err(|e| ApiError::unprocessable("DAG construction failed", Some(e.to_string())))?;
-
-    Ok(Json(DagResponse {
-        dot: dag.to_dot(),
-        nodes: dag.node_count(),
-        edges: dag.edge_count(),
-    }))
-}
 
 /// `POST /api/workflows/dry-run` — Simulate execution and return the plan.
-async fn dry_run(Json(req): Json<DryRunRequest>) -> Result<impl IntoResponse, ApiError> {
-    let config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
-        .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
-
-    let dag = oxo_flow_core::WorkflowDag::from_rules(&config.rules)
-        .map_err(|e| ApiError::unprocessable("DAG construction failed", Some(e.to_string())))?;
-
-    let order = dag.execution_order().map_err(|e| {
-        ApiError::unprocessable("Cannot determine execution order", Some(e.to_string()))
-    })?;
-
-    let rules: Vec<RuleSummary> = order
-        .iter()
-        .filter_map(|name| config.get_rule(name))
-        .map(|r| RuleSummary {
-            name: r.name.clone(),
-            inputs: r.input.to_vec(),
-            outputs: r.output.to_vec(),
-            environment: r.environment.kind().to_string(),
-            threads: r.effective_threads(),
-        })
-        .collect();
-
-    let run_config = req.config.unwrap_or(RunConfig {
-        max_jobs: None,
-        dry_run: None,
-        keep_going: None,
-    });
-
-    let status = RunStatus {
-        id: uuid::Uuid::new_v4().to_string(),
-        status: "dry-run".to_string(),
-        rules_total: rules.len(),
-        rules_completed: 0,
-        started_at: Some(chrono::Utc::now().to_rfc3339()),
-    };
-
-    #[derive(Serialize)]
-    struct DryRunResponse {
-        status: RunStatus,
-        execution_order: Vec<String>,
-        rules: Vec<RuleSummary>,
-        config: RunConfig,
-    }
-
-    Ok(Json(DryRunResponse {
-        status,
-        execution_order: order,
-        rules,
-        config: run_config,
-    }))
-}
 
 /// `POST /api/reports/generate` — Generate a report from a workflow.
-async fn generate_report(Json(req): Json<ReportRequest>) -> Result<impl IntoResponse, ApiError> {
-    let config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
-        .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
-
-    let dag = oxo_flow_core::WorkflowDag::from_rules(&config.rules)
-        .map_err(|e| ApiError::unprocessable("DAG construction failed", Some(e.to_string())))?;
-
-    let order = dag.execution_order().map_err(|e| {
-        ApiError::unprocessable("Cannot determine execution order", Some(e.to_string()))
-    })?;
-
-    // Build a report with workflow overview and rule details.
-    let mut report = oxo_flow_core::report::Report::new(
-        &format!("{} — Workflow Report", config.workflow.name),
-        &config.workflow.name,
-        &config.workflow.version,
-    );
-
-    report.add_metadata("rules_count", &config.rules.len().to_string());
-    report.add_metadata("edges_count", &dag.edge_count().to_string());
-
-    // Overview section
-    let overview = oxo_flow_core::report::ReportSection {
-        title: "Workflow Overview".to_string(),
-        id: "overview".to_string(),
-        content: oxo_flow_core::report::ReportContent::KeyValue {
-            pairs: vec![
-                ("Name".to_string(), config.workflow.name.clone()),
-                ("Version".to_string(), config.workflow.version.clone()),
-                (
-                    "Description".to_string(),
-                    config
-                        .workflow
-                        .description
-                        .clone()
-                        .unwrap_or_else(|| "N/A".to_string()),
-                ),
-                ("Rules".to_string(), config.rules.len().to_string()),
-                ("DAG edges".to_string(), dag.edge_count().to_string()),
-            ],
-        },
-        subsections: vec![],
-    };
-    report.add_section(overview);
-
-    // Execution order section
-    let exec_section = oxo_flow_core::report::ReportSection {
-        title: "Execution Order".to_string(),
-        id: "execution-order".to_string(),
-        content: oxo_flow_core::report::ReportContent::Table {
-            headers: vec![
-                "Step".to_string(),
-                "Rule".to_string(),
-                "Threads".to_string(),
-                "Environment".to_string(),
-            ],
-            rows: order
-                .iter()
-                .enumerate()
-                .filter_map(|(i, name)| {
-                    config.get_rule(name).map(|r| {
-                        vec![
-                            (i + 1).to_string(),
-                            r.name.clone(),
-                            r.effective_threads().to_string(),
-                            r.environment.kind().to_string(),
-                        ]
-                    })
-                })
-                .collect(),
-        },
-        subsections: vec![],
-    };
-    report.add_section(exec_section);
-
-    let format = req.format.unwrap_or_else(|| "html".to_string());
-
-    match format.as_str() {
-        "json" => {
-            let json = report.to_json().map_err(|e| {
-                ApiError::unprocessable("Report generation failed", Some(e.to_string()))
-            })?;
-            Ok((StatusCode::OK, [("content-type", "application/json")], json))
-        }
-        _ => {
-            let html = report.to_html();
-            Ok((StatusCode::OK, [("content-type", "text/html")], html))
-        }
-    }
-}
 
 /// `POST /api/workflows/run` — Initialize a run and start it in the background.
-async fn run_workflow(
-    headers: axum::http::HeaderMap,
-    Json(req): Json<DryRunRequest>,
-) -> Result<impl IntoResponse, ApiError> {
-    let session = extract_session(&headers).await.ok_or_else(|| ApiError {
-        status: StatusCode::UNAUTHORIZED,
-        body: ErrorResponse {
-            error: "Authentication required".to_string(),
-            detail: None,
-        },
-    })?;
-
-    // Fetch full user details for auth_type and os_user
-    let user = db::get_user_by_id(&session.user_id)
-        .await
-        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
-        .ok_or_else(|| ApiError::bad_request("User not found in DB", None))?;
-
-    let config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
-        .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
-
-    let dag = oxo_flow_core::WorkflowDag::from_rules(&config.rules)
-        .map_err(|e| ApiError::unprocessable("DAG construction failed", Some(e.to_string())))?;
-
-    let order = dag.execution_order().map_err(|e| {
-        ApiError::unprocessable("Cannot determine execution order", Some(e.to_string()))
-    })?;
-
-    let run_id = uuid::Uuid::new_v4().to_string();
-
-    // 1. Initialize physical sandbox
-    workspace::initialize_sandbox(&user.username, &run_id, &req.toml_content)
-        .map_err(|e| ApiError::unprocessable("Failed to setup sandbox", Some(e.to_string())))?;
-
-    // 2. Insert run record into DB
-    let run = db::Run {
-        id: run_id.clone(),
-        user_id: user.id.clone(),
-        workflow_name: config.workflow.name.clone(),
-        status: "pending".to_string(),
-        pid: None,
-        started_at: None,
-        finished_at: None,
-    };
-    db::insert_run(&run)
-        .await
-        .map_err(|e| ApiError::unprocessable("Failed to save run record", Some(e.to_string())))?;
-
-    // 3. Log the action
-    let _ = db::log_action(&user.id, "run", &config.workflow.name).await;
-
-    // 4. Spawn background executor
-    executor::spawn_background_run(
-        run_id.clone(),
-        user.username.clone(),
-        user.auth_type.clone(),
-        user.os_user.clone(),
-    );
-
-    ACTIVE_WORKFLOWS.fetch_add(1, Ordering::Relaxed);
-
-    Ok(Json(RunResponse {
-        run_id,
-        status: "started".to_string(),
-        execution_order: order,
-        rules_total: config.rules.len(),
-    }))
-}
 
 /// `GET /api/version` — Return crate version and build info.
-async fn version() -> Json<VersionResponse> {
-    Json(VersionResponse {
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        crate_name: env!("CARGO_PKG_NAME").to_string(),
-        rust_version: option_env!("CARGO_PKG_RUST_VERSION")
-            .unwrap_or("unknown")
-            .to_string(),
-    })
-}
 
 /// `POST /api/workflows/clean` — List output files that would be cleaned.
-async fn clean_workflow(Json(req): Json<ValidateRequest>) -> Result<Json<CleanResponse>, ApiError> {
-    let config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
-        .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
-
-    let files_to_clean: Vec<String> = config
-        .rules
-        .iter()
-        .flat_map(|r| r.output.to_vec())
-        .collect();
-
-    Ok(Json(CleanResponse {
-        workflow_name: config.workflow.name.clone(),
-        total_files: files_to_clean.len(),
-        files_to_clean,
-    }))
-}
 
 // ---------------------------------------------------------------------------
 // Request ID middleware
@@ -1170,33 +836,6 @@ async fn add_request_id(
 // ---------------------------------------------------------------------------
 
 /// `POST /api/workflows/export` — Generate a Dockerfile or Singularity def.
-async fn export_workflow(Json(req): Json<ExportRequest>) -> Result<Json<ExportResponse>, ApiError> {
-    let config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
-        .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
-
-    let format = req.format.unwrap_or_else(|| "docker".to_string());
-    let pkg_config = oxo_flow_core::container::PackageConfig::default();
-
-    let content = match format.as_str() {
-        "singularity" => oxo_flow_core::container::generate_singularity_def(&config, &pkg_config)
-            .map_err(|e| {
-            ApiError::unprocessable("Singularity def generation failed", Some(e.to_string()))
-        })?,
-        _ => oxo_flow_core::container::generate_dockerfile(&config, &pkg_config).map_err(|e| {
-            ApiError::unprocessable("Dockerfile generation failed", Some(e.to_string()))
-        })?,
-    };
-
-    let actual_format = match format.as_str() {
-        "singularity" => "singularity".to_string(),
-        _ => "docker".to_string(),
-    };
-
-    Ok(Json(ExportResponse {
-        format: actual_format,
-        content,
-    }))
-}
 
 // ---------------------------------------------------------------------------
 // Frontend & new endpoints
@@ -1221,250 +860,20 @@ async fn frontend_js() -> impl IntoResponse {
 }
 
 /// `POST /api/workflows/format` — Format a workflow TOML into canonical form.
-async fn format_workflow_endpoint(
-    Json(req): Json<ValidateRequest>,
-) -> Result<Json<FormatResponse>, ApiError> {
-    let config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
-        .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
-
-    let formatted = oxo_flow_core::format::format_workflow(&config);
-
-    Ok(Json(FormatResponse { formatted }))
-}
 
 /// `POST /api/workflows/lint` — Lint a workflow for best practices.
-async fn lint_workflow(Json(req): Json<LintRequest>) -> Result<Json<LintResponse>, ApiError> {
-    let config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
-        .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
-
-    let validation = oxo_flow_core::format::validate_format(&config);
-    let lint_diags = oxo_flow_core::format::lint_format(&config);
-
-    let mut diagnostics = Vec::new();
-    let mut error_count = 0;
-    let mut warning_count = 0;
-    let mut info_count = 0;
-
-    for d in validation.diagnostics.iter().chain(lint_diags.iter()) {
-        let severity = match d.severity {
-            oxo_flow_core::format::Severity::Error => {
-                error_count += 1;
-                "error"
-            }
-            oxo_flow_core::format::Severity::Warning => {
-                warning_count += 1;
-                "warning"
-            }
-            oxo_flow_core::format::Severity::Info => {
-                info_count += 1;
-                "info"
-            }
-        };
-        diagnostics.push(DiagnosticItem {
-            severity: severity.to_string(),
-            code: d.code.clone(),
-            message: d.message.clone(),
-            rule: d.rule.clone(),
-        });
-    }
-
-    Ok(Json(LintResponse {
-        diagnostics,
-        error_count,
-        warning_count,
-        info_count,
-    }))
-}
 
 /// `POST /api/workflows/lint/paginated` — Lint with paginated results.
-async fn lint_workflow_paginated(
-    pagination: axum::extract::Query<PaginationParams>,
-    Json(req): Json<LintRequest>,
-) -> Result<Json<PaginatedLintResponse>, ApiError> {
-    let config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
-        .map_err(|e| ApiError::bad_request("parse error", Some(e.to_string())))?;
-
-    let validation = oxo_flow_core::format::validate_format(&config);
-    let lint = oxo_flow_core::format::lint_format(&config);
-
-    let mut all_diagnostics: Vec<DiagnosticItem> = Vec::new();
-    for d in &validation.diagnostics {
-        all_diagnostics.push(DiagnosticItem {
-            severity: d.severity.to_string(),
-            code: d.code.clone(),
-            message: d.message.clone(),
-            rule: d.rule.clone(),
-        });
-    }
-    for d in &lint {
-        all_diagnostics.push(DiagnosticItem {
-            severity: d.severity.to_string(),
-            code: d.code.clone(),
-            message: d.message.clone(),
-            rule: d.rule.clone(),
-        });
-    }
-
-    let error_count = all_diagnostics
-        .iter()
-        .filter(|d| d.severity == "error")
-        .count();
-    let warning_count = all_diagnostics
-        .iter()
-        .filter(|d| d.severity == "warning")
-        .count();
-    let info_count = all_diagnostics
-        .iter()
-        .filter(|d| d.severity == "info")
-        .count();
-
-    let total = all_diagnostics.len();
-    let per_page = pagination.clamped_per_page();
-    let offset = pagination.offset();
-
-    let page_items: Vec<DiagnosticItem> = all_diagnostics
-        .into_iter()
-        .skip(offset)
-        .take(per_page)
-        .collect();
-
-    Ok(Json(PaginatedLintResponse {
-        diagnostics: page_items,
-        pagination: PaginationMeta::new(pagination.page, per_page, total),
-        summary: LintSummary {
-            error_count,
-            warning_count,
-            info_count,
-        },
-    }))
-}
 
 /// `POST /api/workflows/stats` — Return workflow statistics.
-async fn workflow_stats_endpoint(
-    Json(req): Json<ValidateRequest>,
-) -> Result<Json<StatsResponse>, ApiError> {
-    let config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
-        .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
-
-    let stats = oxo_flow_core::format::workflow_stats(&config);
-
-    Ok(Json(StatsResponse {
-        rule_count: stats.rule_count,
-        shell_rules: stats.shell_rules,
-        script_rules: stats.script_rules,
-        dependency_count: stats.dependency_count,
-        parallel_groups: stats.parallel_groups,
-        max_depth: stats.max_depth,
-        environments: stats.environments,
-        total_threads: stats.total_threads,
-        wildcard_count: stats.wildcard_count,
-        wildcard_names: stats.wildcard_names,
-    }))
-}
 
 /// `POST /api/workflows/diff` — Compare two workflow configurations.
-async fn diff_workflows_endpoint(
-    Json(req): Json<DiffRequest>,
-) -> Result<Json<DiffResponse>, ApiError> {
-    let config_a = oxo_flow_core::WorkflowConfig::parse(&req.toml_a)
-        .map_err(|e| ApiError::bad_request("Invalid first workflow TOML", Some(e.to_string())))?;
-    let config_b = oxo_flow_core::WorkflowConfig::parse(&req.toml_b)
-        .map_err(|e| ApiError::bad_request("Invalid second workflow TOML", Some(e.to_string())))?;
-
-    let diffs = oxo_flow_core::format::diff_workflows(&config_a, &config_b);
-
-    Ok(Json(DiffResponse {
-        diff_count: diffs.len(),
-        diffs: diffs
-            .into_iter()
-            .map(|d| DiffEntry {
-                category: d.category,
-                description: d.description,
-            })
-            .collect(),
-    }))
-}
 
 /// `GET /api/system` — Return system information.
-async fn system_info() -> Json<SystemInfo> {
-    let uptime = get_start_time().elapsed().as_secs_f64();
-    Json(SystemInfo {
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        rust_version: option_env!("CARGO_PKG_RUST_VERSION")
-            .unwrap_or("unknown")
-            .to_string(),
-        os: std::env::consts::OS.to_string(),
-        arch: std::env::consts::ARCH.to_string(),
-        pid: std::process::id(),
-        uptime_secs: uptime,
-    })
-}
 
 /// `GET /api/metrics` — Runtime metrics for monitoring and observability.
-async fn runtime_metrics() -> Json<RuntimeMetrics> {
-    let resources = sys::get_host_resources();
-    let uptime = get_start_time().elapsed().as_secs_f64();
-    Json(RuntimeMetrics {
-        uptime_secs: uptime,
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        pid: std::process::id(),
-        os: std::env::consts::OS.to_string(),
-        arch: std::env::consts::ARCH.to_string(),
-        cpu_count: std::thread::available_parallelism()
-            .map(|p| p.get())
-            .unwrap_or(1),
-        total_requests: TOTAL_REQUESTS.load(Ordering::Relaxed),
-        active_workflows: ACTIVE_WORKFLOWS.load(Ordering::Relaxed),
-        host: resources,
-    })
-}
 
 /// `GET /api/events` — SSE endpoint for real-time execution events.
-async fn sse_events() -> impl IntoResponse {
-    use axum::response::sse::{Event, Sse};
-    use tokio_stream::StreamExt as _;
-
-    let mut rx = event_tx().subscribe();
-
-    // Stream that yields events from the broadcast channel
-    let event_stream = async_stream::stream! {
-        loop {
-            match rx.recv().await {
-                Ok(msg) => {
-                    yield Ok::<_, std::convert::Infallible>(Event::default().data(msg));
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    // Skip lagged messages
-                    continue;
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    break;
-                }
-            }
-        }
-    };
-
-    // Heartbeat stream every 5 seconds
-    let heartbeat_stream = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(
-        std::time::Duration::from_secs(5),
-    ))
-    .map(|_| {
-        let msg = format!(
-            r#"{{"type":"heartbeat","time":"{}"}}"#,
-            chrono::Utc::now().to_rfc3339()
-        );
-        Ok::<_, std::convert::Infallible>(Event::default().data(msg))
-    });
-
-    // Merge the streams
-    let stream = tokio_stream::StreamExt::merge(event_stream, heartbeat_stream);
-
-    Sse::new(stream).keep_alive(
-        axum::response::sse::KeepAlive::new()
-            .interval(std::time::Duration::from_secs(15))
-            .text("ping"),
-    )
-}
 
 /// Query parameters for audit log requests.
 #[derive(Debug, Deserialize)]
@@ -1486,105 +895,16 @@ pub struct AuditLogResponse {
 }
 
 /// `GET /api/audit` — Audit log viewer for enterprise governance.
-async fn get_audit_logs(Query(query): Query<AuditLogQuery>) -> Json<AuditLogResponse> {
-    let days = query.days.clamp(1, 30);
-
-    // Get raw JSON lines and parse them into entries
-    let raw_lines = audit::get_recent_audit_logs(days).unwrap_or_default();
-    let entries: Vec<audit::AuditEntry> = raw_lines
-        .into_iter()
-        .filter_map(|line| serde_json::from_str::<audit::AuditEntry>(&line).ok())
-        .collect();
-
-    Json(AuditLogResponse { entries, days })
-}
 
 // ---------------------------------------------------------------------------
 // Authentication & license endpoints
 // ---------------------------------------------------------------------------
 
 /// `POST /api/auth/login` — Authenticate and obtain a session token.
-async fn login(Json(req): Json<LoginRequest>) -> Result<impl IntoResponse, ApiError> {
-    let user = check_credentials_db(&req.username, &req.password)
-        .await
-        .ok_or_else(|| ApiError {
-            status: StatusCode::UNAUTHORIZED,
-            body: ErrorResponse {
-                error: "Invalid credentials".to_string(),
-                detail: Some("The username or password provided is incorrect.".to_string()),
-            },
-        })?;
-
-    let role = user.role.clone();
-    let token = generate_session_token();
-
-    // Set expiration to 24 hours from now
-    let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
-
-    let session = db::Session {
-        token: token.clone(),
-        user_id: user.id.clone(),
-        created_at: chrono::Utc::now(),
-        expires_at,
-    };
-
-    db::create_session(&session).await.map_err(|e| ApiError {
-        status: StatusCode::INTERNAL_SERVER_ERROR,
-        body: ErrorResponse {
-            error: "Failed to create session".to_string(),
-            detail: Some(e.to_string()),
-        },
-    })?;
-
-    let cookie = format!(
-        "oxo_session={}; HttpOnly; Path=/; Max-Age=86400; SameSite=Strict; Secure",
-        token
-    );
-
-    // Record login in audit log
-    let _ = audit::write_audit_log(&user.id, "auth.login", &format!("user:{}", req.username));
-
-    Ok((
-        StatusCode::OK,
-        [("set-cookie", cookie)],
-        Json(LoginResponse {
-            token,
-            username: user.username,
-            role,
-        }),
-    ))
-}
 
 /// `GET /api/auth/me` — Return the identity of the current session.
-async fn auth_me(headers: axum::http::HeaderMap) -> Json<AuthMeResponse> {
-    match extract_session(&headers).await {
-        Some(session) => {
-            if let Ok(Some(user)) = db::get_user_by_id(&session.user_id).await {
-                Json(AuthMeResponse {
-                    authenticated: true,
-                    username: Some(user.username),
-                    role: Some(user.role),
-                })
-            } else {
-                Json(AuthMeResponse {
-                    authenticated: false,
-                    username: None,
-                    role: None,
-                })
-            }
-        }
-        None => Json(AuthMeResponse {
-            authenticated: false,
-            username: None,
-            role: None,
-        }),
-    }
-}
 
 /// `GET /api/license` — Return current license status.
-async fn license_status() -> Json<LicenseStatus> {
-    Json(check_license())
-}
 
 // ---------------------------------------------------------------------------
 // Router
@@ -1600,75 +920,7 @@ pub fn build_router_with_rate_limiter(limiter: RateLimiter) -> Router {
     build_router_inner(Some(limiter))
 }
 
-async fn list_runs(headers: axum::http::HeaderMap) -> Result<Json<Vec<db::Run>>, ApiError> {
-    let session = extract_session(&headers).await.ok_or_else(|| ApiError {
-        status: StatusCode::UNAUTHORIZED,
-        body: ErrorResponse {
-            error: "Authentication required".to_string(),
-            detail: None,
-        },
-    })?;
 
-    let user = db::get_user_by_id(&session.user_id)
-        .await
-        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
-        .ok_or_else(|| ApiError::bad_request("User not found", None))?;
-
-    let runs = sqlx::query_as::<_, db::Run>(
-        "SELECT * FROM runs WHERE user_id = ? ORDER BY started_at DESC",
-    )
-    .bind(&user.id)
-    .fetch_all(db::pool())
-    .await
-    .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?;
-
-    Ok(Json(runs))
-}
-
-async fn get_run_logs(
-    headers: axum::http::HeaderMap,
-    axum::extract::Path(run_id): axum::extract::Path<String>,
-) -> Result<impl IntoResponse, ApiError> {
-    let session = extract_session(&headers).await.ok_or_else(|| ApiError {
-        status: StatusCode::UNAUTHORIZED,
-        body: ErrorResponse {
-            error: "Authentication required".to_string(),
-            detail: None,
-        },
-    })?;
-
-    let user = db::get_user_by_id(&session.user_id)
-        .await
-        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
-        .ok_or_else(|| ApiError::bad_request("User not found", None))?;
-
-    // Verify ownership
-    let _run = sqlx::query_as::<_, db::Run>("SELECT * FROM runs WHERE id = ? AND user_id = ?")
-        .bind(&run_id)
-        .bind(&user.id)
-        .fetch_optional(db::pool())
-        .await
-        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
-        .ok_or_else(|| ApiError {
-            status: StatusCode::NOT_FOUND,
-            body: ErrorResponse {
-                error: "Run not found".to_string(),
-                detail: None,
-            },
-        })?;
-
-    let run_dir = workspace::get_run_directory(&user.username, &run_id);
-    let log_path = run_dir.join("execution.log");
-
-    if !log_path.exists() {
-        return Err(ApiError::bad_request("Log file not found", None));
-    }
-
-    let content = std::fs::read_to_string(log_path)
-        .map_err(|e| ApiError::unprocessable("Failed to read log", Some(e.to_string())))?;
-
-    Ok(content)
-}
 
 /// Detailed run status response with log preview.
 #[derive(Serialize, Deserialize)]
@@ -1684,79 +936,6 @@ pub struct RunDetail {
     pub output_files: Vec<String>,
 }
 
-async fn get_run_detail(
-    headers: axum::http::HeaderMap,
-    axum::extract::Path(run_id): axum::extract::Path<String>,
-) -> Result<Json<RunDetail>, ApiError> {
-    let session = extract_session(&headers).await.ok_or_else(|| ApiError {
-        status: StatusCode::UNAUTHORIZED,
-        body: ErrorResponse {
-            error: "Authentication required".to_string(),
-            detail: None,
-        },
-    })?;
-
-    let user = db::get_user_by_id(&session.user_id)
-        .await
-        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
-        .ok_or_else(|| ApiError::bad_request("User not found", None))?;
-
-    let run = sqlx::query_as::<_, db::Run>("SELECT * FROM runs WHERE id = ? AND user_id = ?")
-        .bind(&run_id)
-        .bind(&user.id)
-        .fetch_optional(db::pool())
-        .await
-        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
-        .ok_or_else(|| ApiError {
-            status: StatusCode::NOT_FOUND,
-            body: ErrorResponse {
-                error: "Run not found".to_string(),
-                detail: None,
-            },
-        })?;
-
-    let run_dir = workspace::get_run_directory(&user.username, &run_id);
-    let log_path = run_dir.join("execution.log");
-
-    let log_tail = if log_path.exists()
-        && let Ok(content) = std::fs::read_to_string(&log_path)
-    {
-        // Return last 50 lines for preview
-        let lines: Vec<&str> = content.lines().collect();
-        let start = lines.len().saturating_sub(50);
-        Some(lines[start..].join("\n"))
-    } else {
-        None
-    };
-
-    let mut output_files = Vec::new();
-    if run_dir.exists()
-        && let Ok(entries) = std::fs::read_dir(&run_dir)
-    {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file()
-                && path.file_name().and_then(|n| n.to_str()) != Some("workflow.oxoflow")
-                && path.file_name().and_then(|n| n.to_str()) != Some("execution.log")
-                && let Some(name) = path.file_name().and_then(|n| n.to_str())
-            {
-                output_files.push(name.to_string());
-            }
-        }
-    }
-
-    Ok(Json(RunDetail {
-        id: run.id,
-        user_id: run.user_id,
-        workflow_name: run.workflow_name,
-        status: run.status,
-        pid: run.pid,
-        started_at: run.started_at.map(|t| t.to_rfc3339()),
-        finished_at: run.finished_at.map(|t| t.to_rfc3339()),
-        log_tail,
-        output_files,
-    }))
-}
 
 /// Request body for saving/updating a workflow.
 #[derive(Serialize, Deserialize)]
@@ -1785,126 +964,7 @@ pub struct SavedWorkflowResponse {
     pub updated_at: String,
 }
 
-async fn save_workflow(
-    headers: axum::http::HeaderMap,
-    Json(req): Json<SaveWorkflowRequest>,
-) -> Result<impl IntoResponse, ApiError> {
-    let session = extract_session(&headers).await.ok_or_else(|| ApiError {
-        status: StatusCode::UNAUTHORIZED,
-        body: ErrorResponse {
-            error: "Authentication required".to_string(),
-            detail: None,
-        },
-    })?;
 
-    let user = db::get_user_by_id(&session.user_id)
-        .await
-        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
-        .ok_or_else(|| ApiError::bad_request("User not found", None))?;
-
-    // Validate TOML before saving
-    let _config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
-        .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
-
-    let now = chrono::Utc::now();
-
-    if let Some(ref wf_id) = req.id {
-        // Update existing workflow if owned by user
-        let result = sqlx::query(
-            "UPDATE workflows SET name = ?, version = ?, toml_content = ?, updated_at = ? WHERE id = ? AND user_id = ?"
-        )
-        .bind(&req.name)
-        .bind(&req.version)
-        .bind(&req.toml_content)
-        .bind(now)
-        .bind(wf_id)
-        .bind(&user.id)
-        .execute(db::pool())
-        .await
-        .map_err(|e| ApiError::bad_request("Failed to update workflow", Some(e.to_string())))?;
-
-        if result.rows_affected() == 0 {
-            return Err(ApiError {
-                status: StatusCode::NOT_FOUND,
-                body: ErrorResponse {
-                    error: "Workflow not found or not owned by user".to_string(),
-                    detail: None,
-                },
-            });
-        }
-        let _ = db::log_action(&user.id, "update_workflow", wf_id).await;
-        Ok((
-            StatusCode::OK,
-            Json(serde_json::json!({"id": wf_id, "status": "updated"})),
-        ))
-    } else {
-        // Create new workflow
-        let id = uuid::Uuid::new_v4().to_string();
-        sqlx::query(
-            "INSERT INTO workflows (id, user_id, name, version, toml_content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-        )
-        .bind(&id)
-        .bind(&user.id)
-        .bind(&req.name)
-        .bind(&req.version)
-        .bind(&req.toml_content)
-        .bind(now)
-        .bind(now)
-        .execute(db::pool())
-        .await
-        .map_err(|e| ApiError::bad_request("Failed to save workflow", Some(e.to_string())))?;
-
-        let _ = db::log_action(&user.id, "save_workflow", &req.name).await;
-        Ok((
-            StatusCode::CREATED,
-            Json(serde_json::json!({"id": id, "status": "saved"})),
-        ))
-    }
-}
-
-async fn list_saved_workflows(
-    headers: axum::http::HeaderMap,
-) -> Result<Json<Vec<SavedWorkflowResponse>>, ApiError> {
-    let session = extract_session(&headers).await.ok_or_else(|| ApiError {
-        status: StatusCode::UNAUTHORIZED,
-        body: ErrorResponse {
-            error: "Authentication required".to_string(),
-            detail: None,
-        },
-    })?;
-
-    let user = db::get_user_by_id(&session.user_id)
-        .await
-        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
-        .ok_or_else(|| ApiError::bad_request("User not found", None))?;
-
-    let rows = sqlx::query_as::<_, (String, String, String, String, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, name, version, toml_content, created_at, updated_at FROM workflows WHERE user_id = ? ORDER BY updated_at DESC"
-    )
-    .bind(&user.id)
-    .fetch_all(db::pool())
-    .await
-    .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?;
-
-    let workflows = rows
-        .into_iter()
-        .map(|(id, name, version, toml, created, updated)| {
-            let rules_count = oxo_flow_core::WorkflowConfig::parse(&toml)
-                .map(|c| c.rules.len())
-                .unwrap_or(0);
-            SavedWorkflowResponse {
-                id,
-                name,
-                version,
-                rules_count,
-                created_at: created.to_rfc3339(),
-                updated_at: updated.to_rfc3339(),
-            }
-        })
-        .collect();
-
-    Ok(Json(workflows))
-}
 
 /// Retrieve a single saved workflow by ID, including full TOML content.
 #[derive(Serialize, Deserialize)]
@@ -1918,170 +978,9 @@ pub struct SavedWorkflowDetail {
     pub updated_at: String,
 }
 
-async fn get_saved_workflow(
-    headers: axum::http::HeaderMap,
-    axum::extract::Path(wf_id): axum::extract::Path<String>,
-) -> Result<Json<SavedWorkflowDetail>, ApiError> {
-    let session = extract_session(&headers).await.ok_or_else(|| ApiError {
-        status: StatusCode::UNAUTHORIZED,
-        body: ErrorResponse {
-            error: "Authentication required".to_string(),
-            detail: None,
-        },
-    })?;
-
-    let user = db::get_user_by_id(&session.user_id)
-        .await
-        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
-        .ok_or_else(|| ApiError::bad_request("User not found", None))?;
-
-    let row = sqlx::query_as::<_, (String, String, String, String, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, name, version, toml_content, created_at, updated_at FROM workflows WHERE id = ? AND user_id = ?"
-    )
-    .bind(&wf_id)
-    .bind(&user.id)
-    .fetch_optional(db::pool())
-    .await
-    .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
-    .ok_or_else(|| ApiError {
-        status: StatusCode::NOT_FOUND,
-        body: ErrorResponse {
-            error: "Workflow not found".to_string(),
-            detail: None,
-        },
-    })?;
-
-    let (id, name, version, toml, created, updated) = row;
-    let rules_count = oxo_flow_core::WorkflowConfig::parse(&toml)
-        .map(|c| c.rules.len())
-        .unwrap_or(0);
-
-    Ok(Json(SavedWorkflowDetail {
-        id,
-        name,
-        version,
-        toml_content: toml,
-        rules_count,
-        created_at: created.to_rfc3339(),
-        updated_at: updated.to_rfc3339(),
-    }))
-}
 
 /// Delete a saved workflow by ID (owner only).
-async fn delete_saved_workflow(
-    headers: axum::http::HeaderMap,
-    axum::extract::Path(wf_id): axum::extract::Path<String>,
-) -> Result<impl IntoResponse, ApiError> {
-    let session = extract_session(&headers).await.ok_or_else(|| ApiError {
-        status: StatusCode::UNAUTHORIZED,
-        body: ErrorResponse {
-            error: "Authentication required".to_string(),
-            detail: None,
-        },
-    })?;
 
-    let user = db::get_user_by_id(&session.user_id)
-        .await
-        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
-        .ok_or_else(|| ApiError::bad_request("User not found", None))?;
-
-    let result = sqlx::query("DELETE FROM workflows WHERE id = ? AND user_id = ?")
-        .bind(&wf_id)
-        .bind(&user.id)
-        .execute(db::pool())
-        .await
-        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?;
-
-    if result.rows_affected() == 0 {
-        return Err(ApiError {
-            status: StatusCode::NOT_FOUND,
-            body: ErrorResponse {
-                error: "Workflow not found".to_string(),
-                detail: None,
-            },
-        });
-    }
-
-    let _ = db::log_action(&user.id, "delete_workflow", &wf_id).await;
-
-    Ok((
-        StatusCode::OK,
-        Json(serde_json::json!({"status": "deleted"})),
-    ))
-}
-
-async fn cancel_run(
-    headers: axum::http::HeaderMap,
-    axum::extract::Path(run_id): axum::extract::Path<String>,
-) -> Result<impl IntoResponse, ApiError> {
-    let session = extract_session(&headers).await.ok_or_else(|| ApiError {
-        status: StatusCode::UNAUTHORIZED,
-        body: ErrorResponse {
-            error: "Authentication required".to_string(),
-            detail: None,
-        },
-    })?;
-
-    let user = db::get_user_by_id(&session.user_id)
-        .await
-        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
-        .ok_or_else(|| ApiError::bad_request("User not found", None))?;
-
-    // Verify ownership
-    let run = sqlx::query_as::<_, db::Run>("SELECT * FROM runs WHERE id = ? AND user_id = ?")
-        .bind(&run_id)
-        .bind(&user.id)
-        .fetch_optional(db::pool())
-        .await
-        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
-        .ok_or_else(|| ApiError {
-            status: StatusCode::NOT_FOUND,
-            body: ErrorResponse {
-                error: "Run not found".to_string(),
-                detail: None,
-            },
-        })?;
-
-    if run.status != "running" && run.status != "pending" {
-        return Err(ApiError::bad_request(
-            "Run is not in a cancellable state",
-            Some(run.status),
-        ));
-    }
-
-    // Cancel the run (kill the process if it exists)
-    if let Some(pid) = run.pid {
-        use sysinfo::System;
-        let mut sys = System::new();
-        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-        if let Some(process) = sys.process(sysinfo::Pid::from_u32(pid as u32)) {
-            process.kill();
-        }
-    }
-
-    sqlx::query("UPDATE runs SET status = 'cancelled', finished_at = ? WHERE id = ?")
-        .bind(chrono::Utc::now())
-        .bind(&run_id)
-        .execute(db::pool())
-        .await
-        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?;
-
-    let _ = db::log_action(&user.id, "cancel_run", &run_id).await;
-
-    // Broadcast cancellation event
-    broadcast_event(
-        "run_cancelled",
-        &serde_json::json!({
-            "run_id": run_id,
-            "status": "cancelled"
-        }),
-    );
-
-    Ok((
-        axum::http::StatusCode::OK,
-        Json(serde_json::json!({ "status": "cancelled" })),
-    ))
-}
 
 /// Build the web application router_inner function with new endpoints.
 fn build_router_inner(limiter: Option<RateLimiter>) -> Router {

@@ -170,9 +170,46 @@ async function lintEditor() {
 }
 
 async function showDag() {
-  var r = await api('POST', '/api/workflows/dag', { toml_content: getToml() });
-  document.getElementById('dag-content').textContent = r.data.dot || 'No DAG generated';
   document.getElementById('dag-modal').classList.remove('hidden');
+  document.getElementById('dag-viz').style.display = 'block';
+  document.getElementById('dag-content').style.display = 'none';
+  // Fetch JSON DAG data for visualization
+  var r = await api('POST', '/api/workflows/dag-json', { toml_content: getToml() });
+  // Also fetch DOT text as fallback
+  var dotR = await api('POST', '/api/workflows/dag', { toml_content: getToml() });
+  document.getElementById('dag-content').textContent = dotR.data.dot || 'No DAG generated';
+
+  if (r.data && r.data.nodes && r.data.nodes.length > 0) {
+    // Color map for environment types
+    var nodes = (r.data.nodes||[]).map(function(n) {
+      return { id: n.id, label: n.label, color: { background: n.color, border: '#1e293b' }, font: { color: '#e2e8f0', size: 13 } };
+    });
+    var edges = (r.data.edges||[]).map(function(e) { return { from: e.from, to: e.to, arrows: 'to', color: { color: '#475569' } }; });
+    var container = document.getElementById('dag-viz');
+    // Clear previous network
+    container.innerHTML = '';
+    var data = { nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) };
+    var options = {
+      layout: { hierarchical: { direction: 'LR', sortMethod: 'directed', nodeSpacing: 150, levelSeparation: 200 } },
+      physics: { hierarchicalRepulsion: { nodeDistance: 150 } },
+      edges: { smooth: { type: 'cubicBezier', forceDirection: 'horizontal' } }
+    };
+    if (typeof vis !== 'undefined') { new vis.Network(container, data, options); }
+    else { container.innerHTML = '<div style="color:var(--text2);padding:2rem;text-align:center">vis-network CDN loading...</div>'; }
+  } else {
+    document.getElementById('dag-viz').innerHTML = '<div style="color:var(--text2);padding:2rem;text-align:center">No DAG structure found</div>';
+  }
+}
+
+function toggleDagView() {
+  var viz = document.getElementById('dag-viz');
+  var dot = document.getElementById('dag-content');
+  var btn = document.querySelector('#dag-modal .btn-sm');
+  if (viz.style.display === 'none') {
+    viz.style.display = 'block'; dot.style.display = 'none'; btn.textContent = 'Show DOT';
+  } else {
+    viz.style.display = 'none'; dot.style.display = 'block'; btn.textContent = 'Show Graph';
+  }
 }
 
 async function runWorkflow() {
@@ -619,7 +656,8 @@ async function loadTemplates() {
           '<div style="font-size:0.78rem;color:var(--text2);margin-bottom:0.75rem">'+esc(t.description)+'</div>'+
           '<div style="font-size:0.7rem;color:var(--text3);margin-bottom:0.75rem">Tags: '+(tags.length?tags.join(', '):'none')+'</div>'+
           '<button class="btn btn-sm btn-outline" onclick="previewTemplate(\''+t.id+'\')">Preview</button> '+
-          '<button class="btn btn-sm btn-primary" onclick="useTemplate(\''+t.id+'\')">Use</button>';
+          '<button class="btn btn-sm btn-primary" onclick="useTemplate(\''+t.id+'\')">Use</button>'+
+          (t.is_system ? '' : ' <button class="btn btn-sm btn-danger" onclick="deleteTemplate(\''+t.id+'\',\''+jsStr(t.name)+'\')">Del</button>');
         grid.appendChild(card);
       });
       if (r.data.length === 0) grid.innerHTML = '<div style="color:var(--text3);padding:2rem;text-align:center">No templates</div>';
@@ -627,6 +665,26 @@ async function loadTemplates() {
     // Also update quick template dropdown
     updateTemplateDropdown(r.data);
   } catch(e) {}
+}
+
+function showCreateTemplate() { document.getElementById('template-create-modal').classList.remove('hidden'); }
+function closeCreateTemplate() { document.getElementById('template-create-modal').classList.add('hidden'); }
+async function doCreateTemplate() {
+  var name = document.getElementById('tpl-name').value.trim();
+  var content = document.getElementById('tpl-content').value.trim();
+  if (!name || !content) { alert('Name and TOML content required'); return; }
+  var req = { name: name, toml_content: content,
+    category: document.getElementById('tpl-category').value.trim() || 'general',
+    description: document.getElementById('tpl-desc').value.trim() || '',
+    tags: document.getElementById('tpl-tags').value.trim() || ''
+  };
+  var r = await api('POST', '/api/templates', req);
+  if (r.status === 201) { closeCreateTemplate(); loadTemplates(); } else alert('Failed: '+(r.data.error||''));
+}
+async function deleteTemplate(tplId, name) {
+  if (!confirm('Delete template "'+name+'"?')) return;
+  var r = await api('DELETE', '/api/templates/'+tplId);
+  if (r.status === 200) loadTemplates(); else alert('Delete failed: '+(r.data.error||''));
 }
 
 function updateTemplateDropdown(templates) {
