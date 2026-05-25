@@ -37,12 +37,8 @@ pub async fn batch_command(
 ) -> Result<()> {
     print_banner();
 
-    // Collect items from command line or file
+    // Collect items from command line or file (validates non-empty)
     let items = collect_batch_items(&items, file.as_ref())?;
-
-    if items.is_empty() {
-        return Err(anyhow::anyhow!("no items provided for batch execution"));
-    }
 
     // Generate workflow instead of executing
     if generate_workflow {

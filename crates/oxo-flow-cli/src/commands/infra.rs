@@ -10,14 +10,38 @@ use crate::{ConfigAction, EnvAction, ProfileAction};
 pub fn env_command(action: EnvAction) -> Result<()> {
     print_banner();
     match action {
-        EnvAction::List => {
-            let resolver = oxo_flow_core::environment::EnvironmentResolver::new();
-            let available = resolver.available_backends();
-            eprintln!("{}", "Available environment backends:".bold());
-            for backend in available {
-                eprintln!("  {} {}", "✓".green(), backend);
+        EnvAction::List { workflow } => match workflow {
+            Some(wf_path) => {
+                let config = WorkflowConfig::from_file(&wf_path)
+                    .with_context(|| format!("failed to parse {}", wf_path.display()))?;
+                eprintln!(
+                    "{} {}",
+                    "Environments in".bold(),
+                    wf_path.display().to_string().dimmed()
+                );
+                let mut seen = std::collections::HashSet::new();
+                for rule in &config.rules {
+                    let kind = rule.environment.kind();
+                    let spec = kind.to_string();
+                    if seen.insert(format!("{}:{spec}", rule.name)) {
+                        eprintln!("  {} {} [{}]", "✓".green(), rule.name, spec);
+                    }
+                }
+                if seen.is_empty() {
+                    eprintln!(
+                        "  (no environment specifications found — rules will use system environment)"
+                    );
+                }
             }
-        }
+            None => {
+                let resolver = oxo_flow_core::environment::EnvironmentResolver::new();
+                let available = resolver.available_backends();
+                eprintln!("{}", "Available environment backends:".bold());
+                for backend in available {
+                    eprintln!("  {} {}", "✓".green(), backend);
+                }
+            }
+        },
         EnvAction::Check { workflow } => {
             let resolver = oxo_flow_core::environment::EnvironmentResolver::new();
 

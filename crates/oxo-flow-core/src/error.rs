@@ -35,7 +35,11 @@ pub enum OxoFlowError {
 
     /// A requested rule was not found.
     #[error("rule not found: '{name}'")]
-    RuleNotFound { name: String },
+    RuleNotFound {
+        name: String,
+        #[allow(dead_code)]
+        available_rules: Vec<String>,
+    },
 
     /// Error executing a task.
     #[error("execution error in rule '{rule}': {message}")]
@@ -161,10 +165,27 @@ impl OxoFlowError {
                 "rename one of the rules named '{}' to a unique name",
                 name
             )),
-            OxoFlowError::RuleNotFound { name } => Some(format!(
-                "check for typos in '{}' or run 'oxo-flow show' to list available rules",
-                name
-            )),
+            OxoFlowError::RuleNotFound {
+                name,
+                available_rules,
+            } => {
+                if available_rules.len() <= 10 {
+                    Some(format!(
+                        "available rules: {}. Use 'oxo-flow graph -f tree' to list all rules",
+                        available_rules.join(", ")
+                    ))
+                } else if !available_rules.is_empty() {
+                    Some(format!(
+                        "{} rules available (use 'oxo-flow graph -f tree' to list all)",
+                        available_rules.len()
+                    ))
+                } else {
+                    Some(format!(
+                        "check for typos in '{}'",
+                        name
+                    ))
+                }
+            }
             OxoFlowError::Execution { rule, message } => {
                 if message.contains("permission") {
                     Some(format!("check file permissions for rule '{}'", rule))

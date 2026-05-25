@@ -190,7 +190,9 @@ jobs:
         run: cargo build --workspace
 
       - name: Test
-        run: cargo test --workspace
+        run: |
+          export PATH="$PWD/target/debug:$PATH"
+          cargo test --workspace
         env:
           RUST_BACKTRACE: "1"
 

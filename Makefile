@@ -14,7 +14,7 @@ build:
 	cargo build --workspace
 
 test:
-	cargo test --workspace
+	PATH="$$(pwd)/target/debug:$$PATH" cargo test --workspace
 
 audit:
 	cargo audit

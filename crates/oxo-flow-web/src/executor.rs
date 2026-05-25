@@ -1,11 +1,48 @@
 use chrono::Utc;
 use regex::Regex;
+use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::process::Command;
 use tracing::{error, info, warn};
 
 use crate::db;
 use crate::workspace::get_run_directory;
+
+/// Locate the `oxo-flow` CLI binary.
+///
+/// Search order:
+///   1. `OXO_FLOW_BIN` environment variable (explicit override)
+///   2. `CARGO_BIN_EXE_oxo-flow` (set by cargo test when oxo-flow-cli is a dependency)
+///   3. Next to the current executable (same target dir)
+///   4. One level above the current executable (cargo test places test binaries in `deps/`)
+///   5. Fall back to `"oxo-flow"` (PATH lookup)
+fn find_oxo_flow_binary() -> PathBuf {
+    if let Ok(path) = std::env::var("OXO_FLOW_BIN") {
+        return PathBuf::from(path);
+    }
+    if let Ok(path) = std::env::var("CARGO_BIN_EXE_oxo-flow")
+        && std::path::Path::new(&path).exists()
+    {
+        return PathBuf::from(path);
+    }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(exe_dir) = exe.parent()
+    {
+        let sibling = exe_dir.join("oxo-flow");
+        if sibling.exists() {
+            return sibling;
+        }
+        // When running under `cargo test`, the test binary lives in
+        // `target/debug/deps/`, so the actual binary is one level up.
+        if let Some(parent) = exe_dir.parent() {
+            let in_parent = parent.join("oxo-flow");
+            if in_parent.exists() {
+                return in_parent;
+            }
+        }
+    }
+    PathBuf::from("oxo-flow")
+}
 
 /// Spawns a background task to execute the workflow in a sandboxed workspace.
 pub fn spawn_background_run(run_id: String, username: String, auth_type: String, os_user: String) {
@@ -37,19 +74,21 @@ pub fn spawn_background_run(run_id: String, username: String, auth_type: String,
             return;
         }
 
+        let oxo_bin = find_oxo_flow_binary();
+
         let mut cmd = if auth_type == "sudo" && os_user != "oxo-flow" {
             let mut c = Command::new("sudo");
             c.arg("-n")
                 .arg("-u")
                 .arg(&os_user)
-                .arg("oxo-flow")
+                .arg(&oxo_bin)
                 .arg("run")
                 .arg(&workflow_file)
                 .arg("--workdir")
                 .arg(&run_dir);
             c
         } else {
-            let mut c = Command::new("oxo-flow");
+            let mut c = Command::new(&oxo_bin);
             c.arg("run")
                 .arg(&workflow_file)
                 .arg("--workdir")

@@ -221,18 +221,39 @@ impl WorkflowDag {
             return self.execution_order();
         }
 
-        // Validate all target names first
+        // Validate all target names first, with prefix matching for convenience
+        let mut resolved_targets: Vec<String> = Vec::new();
         for &target in targets {
-            if !self.name_to_node.contains_key(target) {
-                return Err(OxoFlowError::RuleNotFound {
-                    name: target.to_string(),
-                });
+            if self.name_to_node.contains_key(target) {
+                resolved_targets.push(target.to_string());
+            } else {
+                // Try prefix matching: find all rules whose names start with the target
+                let matches: Vec<&String> = self
+                    .name_to_node
+                    .keys()
+                    .filter(|name| name.starts_with(target))
+                    .collect();
+                if matches.is_empty() {
+                    // Collect available rule base names (before _expansion suffix)
+                    let base_names: Vec<&str> =
+                        self.name_to_node.keys().map(|s| s.as_str()).collect();
+                    return Err(OxoFlowError::RuleNotFound {
+                        name: target.to_string(),
+                        available_rules: base_names.into_iter().map(String::from).collect(),
+                    });
+                }
+                for m in matches {
+                    resolved_targets.push(m.clone());
+                }
             }
         }
 
         // Transitive dependency collection using BFS/DFS
         let mut included: HashSet<NodeIndex> = HashSet::new();
-        let mut stack: Vec<NodeIndex> = targets.iter().map(|&t| self.name_to_node[t]).collect();
+        let mut stack: Vec<NodeIndex> = resolved_targets
+            .iter()
+            .map(|t| self.name_to_node.get(t.as_str()).copied().unwrap())
+            .collect();
 
         while let Some(node) = stack.pop() {
             if included.insert(node) {
@@ -271,6 +292,7 @@ impl WorkflowDag {
             .get(rule_name)
             .ok_or(OxoFlowError::RuleNotFound {
                 name: rule_name.to_string(),
+                available_rules: self.name_to_node.keys().cloned().collect(),
             })?;
 
         Ok(self
@@ -288,6 +310,7 @@ impl WorkflowDag {
             .get(rule_name)
             .ok_or(OxoFlowError::RuleNotFound {
                 name: rule_name.to_string(),
+                available_rules: self.name_to_node.keys().cloned().collect(),
             })?;
 
         Ok(self

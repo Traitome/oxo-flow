@@ -326,7 +326,10 @@ pub enum Commands {
 
 #[derive(Subcommand, Debug)]
 pub enum EnvAction {
-    List,
+    List {
+        #[arg(value_name = "WORKFLOW")]
+        workflow: Option<PathBuf>,
+    },
     Check {
         #[arg(value_name = "WORKFLOW")]
         workflow: Option<PathBuf>,
