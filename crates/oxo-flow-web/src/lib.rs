@@ -6,9 +6,14 @@
 //! role-based access control, and dual-license verification via
 //! [`oxo_license`].
 
+pub mod audit;
 pub mod db;
 pub mod executor;
+pub mod handlers;
+pub mod rate_limit;
+pub mod sse;
 pub mod sys;
+pub mod templates;
 pub mod workspace;
 
 use axum::{
@@ -350,9 +355,9 @@ pub fn broadcast_event(event_type: &str, data: &serde_json::Value) {
 
 /// Health check response.
 #[derive(Serialize, Deserialize)]
-struct HealthResponse {
-    status: String,
-    version: String,
+pub struct HealthResponse {
+    pub status: String,
+    pub version: String,
 }
 
 /// Workflow list response.
@@ -431,10 +436,10 @@ pub struct RunStatus {
 
 /// Request body for the dry-run endpoint.
 #[derive(Serialize, Deserialize)]
-struct DryRunRequest {
-    toml_content: String,
+pub struct DryRunRequest {
+    pub toml_content: String,
     #[serde(default)]
-    config: Option<RunConfig>,
+    pub config: Option<RunConfig>,
 }
 
 /// DAG visualisation response.
@@ -685,9 +690,9 @@ pub struct DiffEntry {
 
 /// Wrap an `ErrorResponse` with an HTTP status code so it can be returned from
 /// any handler via `Result<impl IntoResponse, ApiError>`.
-struct ApiError {
-    status: StatusCode,
-    body: ErrorResponse,
+pub struct ApiError {
+    pub status: StatusCode,
+    pub body: ErrorResponse,
 }
 
 impl ApiError {

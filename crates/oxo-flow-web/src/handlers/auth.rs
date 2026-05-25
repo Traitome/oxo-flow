@@ -1,0 +1,90 @@
+//! Authentication handlers.
+//!
+//! Handles login, session validation, and license status checking.
+
+use axum::{extract::Json, http::StatusCode, response::IntoResponse};
+
+use crate::{
+    ApiError, AuthMeResponse, ErrorResponse, LicenseStatus, LoginRequest, LoginResponse,
+    check_credentials_db, check_license, db, extract_session, generate_session_token,
+};
+
+/// `POST /api/auth/login` — Authenticate and obtain a session token.
+pub async fn login(Json(req): Json<LoginRequest>) -> Result<impl IntoResponse, ApiError> {
+    let user = check_credentials_db(&req.username, &req.password)
+        .await
+        .ok_or_else(|| ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            body: ErrorResponse {
+                error: "Invalid credentials".to_string(),
+                detail: Some("The username or password provided is incorrect.".to_string()),
+            },
+        })?;
+
+    let role = user.role.clone();
+    let token = generate_session_token();
+
+    // Set expiration to 24 hours from now
+    let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
+
+    let session = db::Session {
+        token: token.clone(),
+        user_id: user.id.clone(),
+        created_at: chrono::Utc::now(),
+        expires_at,
+    };
+
+    db::create_session(&session).await.map_err(|e| ApiError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        body: ErrorResponse {
+            error: "Failed to create session".to_string(),
+            detail: Some(e.to_string()),
+        },
+    })?;
+
+    let cookie = format!(
+        "oxo_session={}; HttpOnly; Path=/; Max-Age=86400; SameSite=Strict; Secure",
+        token
+    );
+
+    Ok((
+        StatusCode::OK,
+        [("set-cookie", cookie)],
+        Json(LoginResponse {
+            token,
+            username: user.username,
+            role,
+        }),
+    ))
+}
+
+/// `GET /api/auth/me` — Return the identity of the current session.
+pub async fn auth_me(headers: axum::http::HeaderMap) -> Json<AuthMeResponse> {
+    match extract_session(&headers).await {
+        Some(session) => {
+            if let Ok(Some(user)) = db::get_user_by_id(&session.user_id).await {
+                Json(AuthMeResponse {
+                    authenticated: true,
+                    username: Some(user.username),
+                    role: Some(user.role),
+                })
+            } else {
+                Json(AuthMeResponse {
+                    authenticated: false,
+                    username: None,
+                    role: None,
+                })
+            }
+        }
+        None => Json(AuthMeResponse {
+            authenticated: false,
+            username: None,
+            role: None,
+        }),
+    }
+}
+
+/// `GET /api/license` — Return current license status.
+pub async fn license_status() -> Json<LicenseStatus> {
+    Json(check_license())
+}

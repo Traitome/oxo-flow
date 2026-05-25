@@ -34,6 +34,7 @@ sysinfo = { workspace = true }
 futures = "0.3.32"
 regex.workspace = true
 clap = { workspace = true }
+maud = { version = "0.27", features = ["axum"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
