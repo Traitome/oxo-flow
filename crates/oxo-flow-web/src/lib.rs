@@ -26,7 +26,9 @@ use axum::{
     routing::{delete, get, post},
 };
 use handlers::{
-    cancel_scheduled_run, create_scheduled_run, get_scheduled_run, hpc_status, list_scheduled_runs,
+    build_dag_json, cancel_scheduled_run, create_scheduled_run, create_user, delete_template,
+    delete_user, get_scheduled_run, get_template, hpc_status, hpc_submit_run, list_scheduled_runs,
+    list_templates, list_users, save_template,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -2174,6 +2176,19 @@ fn build_router_inner(limiter: Option<RateLimiter>) -> Router {
         .route("/api/scheduled/{id}", get(get_scheduled_run))
         .route("/api/scheduled/{id}", delete(cancel_scheduled_run))
         .route("/api/hpc", get(hpc_status))
+        // User management
+        .route("/api/users", get(list_users))
+        .route("/api/users", post(create_user))
+        .route("/api/users/{id}", delete(delete_user))
+        // Template library
+        .route("/api/templates", get(list_templates))
+        .route("/api/templates/{id}", get(get_template))
+        .route("/api/templates", post(save_template))
+        .route("/api/templates/{id}", delete(delete_template))
+        // DAG JSON
+        .route("/api/workflows/dag-json", post(build_dag_json))
+        // HPC submission
+        .route("/api/runs/{id}/hpc-submit", post(hpc_submit_run))
         // Authentication & license
         .route("/api/auth/login", post(login))
         .route("/api/auth/me", get(auth_me))

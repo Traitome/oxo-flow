@@ -5,7 +5,7 @@
 use axum::{extract::Json, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 
-use crate::{ApiError, ErrorResponse, broadcast_event, db, extract_session, workspace};
+use crate::{ApiError, ErrorResponse, broadcast_event, db, extract_session, hpc, workspace};
 
 /// Detailed run status response with log preview.
 #[derive(Serialize, Deserialize)]
@@ -239,5 +239,140 @@ pub async fn cancel_run(
     Ok((
         axum::http::StatusCode::OK,
         Json(serde_json::json!({ "status": "cancelled" })),
+    ))
+}
+
+/// Request body for HPC cluster submission.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HpcSubmitRequest {
+    pub scheduler: String,
+    #[serde(default)]
+    pub partition: Option<String>,
+    #[serde(default)]
+    pub cpus: Option<u32>,
+    #[serde(default)]
+    pub memory: Option<String>,
+    #[serde(default)]
+    pub walltime: Option<String>,
+}
+
+/// `POST /api/runs/{id}/hpc-submit` — Submit a run to an HPC cluster.
+pub async fn hpc_submit_run(
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(run_id): axum::extract::Path<String>,
+    Json(req): Json<HpcSubmitRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = extract_session(&headers).await.ok_or_else(|| ApiError {
+        status: StatusCode::UNAUTHORIZED,
+        body: ErrorResponse {
+            error: "Authentication required".to_string(),
+            detail: None,
+        },
+    })?;
+
+    let user = db::get_user_by_id(&session.user_id)
+        .await
+        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
+        .ok_or_else(|| ApiError::bad_request("User not found", None))?;
+
+    // Verify run exists and user owns it
+    let run = sqlx::query_as::<_, db::Run>("SELECT * FROM runs WHERE id = ? AND user_id = ?")
+        .bind(&run_id)
+        .bind(&user.id)
+        .fetch_optional(db::pool())
+        .await
+        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
+        .ok_or_else(|| ApiError {
+            status: StatusCode::NOT_FOUND,
+            body: ErrorResponse {
+                error: "Run not found".to_string(),
+                detail: None,
+            },
+        })?;
+
+    // Only submit if run is running or pending
+    if run.status != "running" && run.status != "pending" && run.status != "success" {
+        return Err(ApiError::bad_request(
+            "Run is not in a submittable state",
+            Some(run.status),
+        ));
+    }
+
+    // Try to submit to the HPC scheduler
+    let (hpc_job_id, job_status) = match req.scheduler.as_str() {
+        "slurm" => {
+            let cpus = req.cpus.unwrap_or(4);
+            // Write a minimal sbatch script from the workflow
+            let script = format!(
+                "#!/bin/bash\n#SBATCH --job-name={}\n#SBATCH --cpus-per-task={}\n{}\n{}\noxo-flow run workflow.oxoflow --workdir \"{}\"",
+                run.workflow_name,
+                cpus,
+                req.partition
+                    .as_ref()
+                    .map(|p| format!("#SBATCH --partition={}", p))
+                    .unwrap_or_default(),
+                req.memory
+                    .as_ref()
+                    .map(|m| format!("#SBATCH --mem={}", m))
+                    .unwrap_or_default(),
+                crate::workspace::get_run_directory(&user.username, &run_id).display(),
+            );
+            let script_path =
+                workspace::get_run_directory(&user.username, &run_id).join("sbatch.sh");
+            std::fs::write(&script_path, &script).map_err(|e| {
+                ApiError::unprocessable("Failed to write sbatch script", Some(e.to_string()))
+            })?;
+
+            hpc::submit_slurm_job(&script_path.to_string_lossy(), &run.workflow_name, cpus)
+                .map(|jid| (jid, "submitted"))
+                .unwrap_or_else(|_e| (String::new(), "failed"))
+        }
+        "pbs" => {
+            // PBS submission would go here
+            return Err(ApiError::bad_request(
+                "PBS submission not yet implemented",
+                None,
+            ));
+        }
+        _ => {
+            return Err(ApiError::bad_request(
+                "Unsupported scheduler",
+                Some("Use 'slurm' or 'pbs'".to_string()),
+            ));
+        }
+    };
+
+    if job_status == "failed" {
+        return Err(ApiError::unprocessable("HPC submission failed", None));
+    }
+
+    // Record the HPC job
+    let hpc_id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now();
+    sqlx::query(
+        "INSERT INTO hpc_jobs (id, run_id, user_id, scheduler, job_id, partition_name, status, submitted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&hpc_id)
+    .bind(&run_id)
+    .bind(&user.id)
+    .bind(&req.scheduler)
+    .bind(&hpc_job_id)
+    .bind(&req.partition)
+    .bind(job_status)
+    .bind(now)
+    .execute(db::pool())
+    .await
+    .map_err(|e| ApiError::bad_request("Failed to record HPC job", Some(e.to_string())))?;
+
+    let _ = db::log_action(&user.id, "hpc_submit", &run_id).await;
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "hpc_job_id": hpc_job_id,
+            "scheduler": req.scheduler,
+            "run_id": run_id,
+            "status": "submitted"
+        })),
     ))
 }

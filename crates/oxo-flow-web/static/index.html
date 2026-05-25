@@ -92,6 +92,7 @@ input { font-family:var(--font); }
     <button data-view="workflows"><span class="nav-icon">&#9644;</span> Saved Workflows</button>
     <button data-view="scheduled"><span class="nav-icon">&#128340;</span> Scheduled</button>
     <button data-view="templates"><span class="nav-icon">&#9733;</span> Template Library</button>
+    <button data-view="users"><span class="nav-icon">&#128101;</span> Users</button>
     <button data-view="system"><span class="nav-icon">&#9881;</span> System</button>
   </nav>
   <div class="sidebar-footer">
@@ -138,11 +139,21 @@ input { font-family:var(--font); }
           <div class="card"><div class="card-header">Actions</div>
             <button class="btn btn-primary" onclick="runWorkflow()" style="width:100%;margin-bottom:0.5rem">Launch Workflow</button>
             <button class="btn btn-outline" onclick="validateEditor()" style="width:100%;margin-bottom:0.35rem">Validate</button>
+            <button class="btn btn-outline" onclick="parseWorkflow()" style="width:100%;margin-bottom:0.35rem">Parse</button>
             <button class="btn btn-outline" onclick="dryRunEditor()" style="width:100%;margin-bottom:0.35rem">Dry Run</button>
             <button class="btn btn-outline" onclick="formatEditor()" style="width:100%;margin-bottom:0.35rem">Format</button>
             <button class="btn btn-outline" onclick="lintEditor()" style="width:100%;margin-bottom:0.35rem">Lint</button>
             <button class="btn btn-outline" onclick="showDag()" style="width:100%;margin-bottom:0.35rem">View DAG</button>
-            <button class="btn btn-outline" onclick="exportWorkflow()" style="width:100%;margin-bottom:0.35rem">Export Dockerfile</button>
+            <button class="btn btn-outline" onclick="showDiff()" style="width:100%;margin-bottom:0.35rem">Diff Workflow</button>
+            <div style="display:flex;gap:0.25rem;margin-top:0.35rem">
+              <button class="btn btn-outline btn-sm" onclick="exportWorkflow()" style="flex:1">Export Docker</button>
+              <button class="btn btn-outline btn-sm" onclick="exportWorkflowSingularity()" style="flex:1">Singularity</button>
+            </div>
+            <button class="btn btn-outline btn-sm" onclick="generateReport()" style="width:100%;margin-top:0.35rem">Generate Report</button>
+            <button class="btn btn-outline btn-sm" onclick="listOutputs()" style="width:100%;margin-top:0.25rem">List Outputs</button>
+          </div>
+          <div class="card"><div class="card-header">Environments</div>
+            <div id="env-list" style="font-size:0.75rem;color:var(--text2)">Loading...</div>
           </div>
           <div class="card"><div class="card-header">Templates</div>
             <button class="btn btn-sm btn-outline" onclick="newWorkflow()" style="width:100%;margin-bottom:0.5rem">+ New Workflow</button>
@@ -158,7 +169,8 @@ input { font-family:var(--font); }
             </select>
           </div>
           <div class="card"><div class="card-header">Save to Library</div>
-            <input id="save-name" placeholder="Workflow name" style="width:100%;padding:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);margin-bottom:0.5rem">
+            <input id="save-name" placeholder="Workflow name" style="width:100%;padding:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);margin-bottom:0.35rem">
+            <input id="save-version" placeholder="Version" value="1.0.0" style="width:100%;padding:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);margin-bottom:0.35rem">
             <button class="btn btn-outline" onclick="saveWorkflow()" style="width:100%">Save Workflow</button>
           </div>
           <div class="card"><div class="card-header">Statistics</div>
@@ -208,6 +220,13 @@ input { font-family:var(--font); }
       </div>
     </div>
 
+    <div class="view" id="view-users">
+      <div class="card">
+        <div class="card-header">User Management <button class="btn btn-sm btn-primary" onclick="showAddUser()">+ Add User</button> <button class="btn btn-sm btn-outline" onclick="refreshUsers()">Refresh</button></div>
+        <table><thead><tr><th>Username</th><th>Role</th><th>Auth Type</th><th>Created</th><th>Actions</th></tr></thead><tbody id="users-tbody"></tbody></table>
+      </div>
+    </div>
+
     <div class="view" id="view-system">
       <div class="stats-grid">
         <div class="stat-card"><div class="value" id="s-cpu">--</div><div class="label">CPU Cores</div></div>
@@ -228,7 +247,8 @@ input { font-family:var(--font); }
 
 <div class="modal-overlay hidden" id="log-modal">
   <div class="modal">
-    <div class="modal-header"><h3>Run Logs - <span id="log-run-id"></span></h3><button class="btn btn-outline btn-sm" onclick="closeLogModal()">Close</button></div>
+    <div class="modal-header"><h3>Run Logs - <span id="log-run-id"></span></h3>
+      <div><input type="text" id="log-search" placeholder="Search..." onkeyup="filterLogs()" style="padding:0.3rem;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:var(--radius);margin-right:0.5rem"><label style="font-size:0.75rem;color:var(--text2);margin-right:0.5rem"><input type="checkbox" id="log-autorefresh" onchange="toggleLogAutoRefresh()"> Auto-refresh</label><button class="btn btn-outline btn-sm" onclick="downloadLog()">Download</button><button class="btn btn-outline btn-sm" onclick="closeLogModal()" style="margin-left:0.5rem">Close</button></div></div>
     <div class="modal-body"><div class="log-viewer" id="log-content">Loading...</div></div>
   </div>
 </div>
@@ -273,6 +293,51 @@ input { font-family:var(--font); }
   </div>
 </div>
 
+<div class="modal-overlay hidden" id="diff-modal">
+  <div class="modal" style="max-width:900px">
+    <div class="modal-header"><h3>Workflow Diff</h3><button class="btn btn-outline btn-sm" onclick="closeDiffModal()">Close</button></div>
+    <div class="modal-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+        <textarea id="diff-ta" placeholder="Workflow A TOML..." style="height:300px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);font-family:var(--mono);font-size:0.75rem;padding:0.5rem;resize:vertical"></textarea>
+        <textarea id="diff-tb" placeholder="Workflow B TOML..." style="height:300px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);font-family:var(--mono);font-size:0.75rem;padding:0.5rem;resize:vertical"></textarea>
+      </div>
+      <button class="btn btn-primary" onclick="doDiff()" style="margin-top:0.5rem">Compare</button>
+      <pre id="diff-result" style="margin-top:0.5rem;font-family:var(--mono);font-size:0.75rem;color:var(--text2);white-space:pre-wrap;max-height:300px;overflow-y:auto;background:var(--bg);padding:0.5rem;border-radius:var(--radius)"></pre>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="report-modal">
+  <div class="modal" style="max-width:900px">
+    <div class="modal-header"><h3>Workflow Report</h3><button class="btn btn-outline btn-sm" onclick="closeReportModal()">Close</button></div>
+    <div class="modal-body"><div id="report-content" style="max-height:70vh;overflow-y:auto"></div></div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="user-add-modal">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-header"><h3>Add User</h3><button class="btn btn-outline btn-sm" onclick="closeAddUser()">Cancel</button></div>
+    <div class="modal-body">
+      <input id="new-username" placeholder="Username" style="width:100%;padding:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);margin-bottom:0.5rem">
+      <select id="new-role" style="width:100%;padding:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);margin-bottom:0.5rem"><option value="user">User</option><option value="admin">Admin</option><option value="viewer">Viewer</option></select>
+      <input id="new-password" type="password" placeholder="Password" style="width:100%;padding:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);margin-bottom:0.5rem">
+      <button class="btn btn-primary" onclick="doAddUser()" style="width:100%">Create User</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="hpc-modal">
+  <div class="modal" style="max-width:500px">
+    <div class="modal-header"><h3>Submit to HPC Cluster</h3><button class="btn btn-outline btn-sm" onclick="closeHpcModal()">Cancel</button></div>
+    <div class="modal-body">
+      <select id="hpc-scheduler" style="width:100%;padding:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);margin-bottom:0.5rem"><option value="slurm">SLURM</option><option value="pbs">PBS/Torque</option></select>
+      <input id="hpc-partition" placeholder="Partition/Queue (optional)" style="width:100%;padding:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);margin-bottom:0.5rem">
+      <div style="display:flex;gap:0.5rem"><input id="hpc-cpus" placeholder="CPUs" value="4" style="flex:1;padding:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text)"><input id="hpc-mem" placeholder="Memory e.g. 16G" style="flex:1;padding:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text)"></div>
+      <button class="btn btn-primary" onclick="doHpcSubmit()" style="width:100%;margin-top:0.5rem">Submit Job</button>
+      <div id="hpc-result" style="margin-top:0.5rem;font-size:0.8rem"></div>
+    </div>
+  </div>
+</div>
 
 <script src="app.js"></script>
 </body>

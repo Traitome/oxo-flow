@@ -443,3 +443,84 @@ pub async fn diff_workflows_endpoint(
             .collect(),
     }))
 }
+
+#[derive(Serialize)]
+pub struct DagJsonNode {
+    pub id: String,
+    pub label: String,
+    pub color: String,
+}
+
+#[derive(Serialize)]
+pub struct DagJsonEdge {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Serialize)]
+pub struct DagJsonResponse {
+    pub nodes: Vec<DagJsonNode>,
+    pub edges: Vec<DagJsonEdge>,
+}
+
+/// `POST /api/workflows/dag-json` — Return DAG as structured JSON for visualization.
+pub async fn build_dag_json(
+    Json(req): Json<crate::ValidateRequest>,
+) -> Result<Json<DagJsonResponse>, ApiError> {
+    let config = oxo_flow_core::WorkflowConfig::parse(&req.toml_content)
+        .map_err(|e| ApiError::bad_request("Invalid workflow TOML", Some(e.to_string())))?;
+
+    let dag = oxo_flow_core::WorkflowDag::from_rules(&config.rules)
+        .map_err(|e| ApiError::unprocessable("DAG construction failed", Some(e.to_string())))?;
+
+    let mut nodes: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut edges = Vec::new();
+
+    for rule in &config.rules {
+        nodes.insert(rule.name.clone());
+    }
+
+    // Use the DAG's petgraph for edges
+    let order = dag.execution_order().map_err(|e| {
+        ApiError::unprocessable("Cannot determine execution order", Some(e.to_string()))
+    })?;
+
+    // Build edges from execution order dependencies
+    for (i, name) in order.iter().enumerate() {
+        for j in 0..i {
+            if let Some(prev) = order.get(j) {
+                edges.push(DagJsonEdge {
+                    from: prev.clone(),
+                    to: name.clone(),
+                });
+            }
+        }
+    }
+
+    let dag_nodes: Vec<DagJsonNode> = nodes
+        .into_iter()
+        .map(|name| {
+            let env_kind = config
+                .get_rule(&name)
+                .map(|r| r.environment.kind())
+                .unwrap_or("unknown");
+            let color = match env_kind {
+                "conda" => "#4ade80",
+                "docker" | "singularity" => "#38bdf8",
+                "venv" => "#818cf8",
+                "system" | "modules" => "#fbbf24",
+                _ => "#94a3b8",
+            };
+            DagJsonNode {
+                id: name.clone(),
+                label: name,
+                color: color.to_string(),
+            }
+        })
+        .collect();
+
+    Ok(Json(DagJsonResponse {
+        nodes: dag_nodes,
+        edges,
+    }))
+}

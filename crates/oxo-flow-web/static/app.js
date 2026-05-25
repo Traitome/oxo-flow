@@ -2,6 +2,10 @@ const API = '';
 let token = '';
 let user = null;
 let currentPreviewTemplate = '';
+let currentEditingWfId = null; // For upsert support
+let logAutoRefreshTimer = null;
+let currentLogRunId = null;
+let currentHpcRunId = null;
 
 document.querySelectorAll('.sidebar-nav button').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -13,8 +17,9 @@ document.querySelectorAll('.sidebar-nav button').forEach(btn => {
     if (btn.dataset.view === 'dashboard') refreshDashboard();
     if (btn.dataset.view === 'runs') refreshRuns();
     if (btn.dataset.view === 'workflows') loadSavedWorkflows();
-    if (btn.dataset.view === 'templates') renderTemplatesGrid();
+    if (btn.dataset.view === 'templates') loadTemplates();
     if (btn.dataset.view === 'scheduled') refreshScheduledRuns();
+    if (btn.dataset.view === 'users') refreshUsers();
     if (btn.dataset.view === 'system') refreshSystem();
   });
 });
@@ -179,11 +184,20 @@ async function runWorkflow() {
 
 async function saveWorkflow() {
   var name = document.getElementById('save-name').value.trim() || 'untitled';
-  var r = await api('POST', '/api/workflows/save', { name: name, version: '1.0.0', toml_content: getToml() });
-  if (r.status === 201) {
-    showOutput('Saved "' + name + '" to library (ID: ' + r.data.id.substring(0,8) + '...)', false);
+  var version = document.getElementById('save-version') ? document.getElementById('save-version').value.trim() || '1.0.0' : '1.0.0';
+  var body = { name: name, version: version, toml_content: getToml() };
+  // Upsert: if we loaded an existing workflow, update it
+  if (currentEditingWfId) { body.id = currentEditingWfId; }
+  var r = await api('POST', '/api/workflows/save', body);
+  if (r.status === 201 || r.status === 200) {
+    showOutput((currentEditingWfId ? 'Updated' : 'Saved') + ' "' + name + '" (ID: ' + (r.data.id||'').substring(0,8) + '...)', false);
     document.getElementById('save-name').value = '';
-  } else showOutput('Save failed: ' + (r.data.error || ''), true);
+    currentEditingWfId = null;
+  } else if (r.status === 200 && r.data.status === 'updated') {
+    showOutput('Updated "' + name + '"', false);
+    document.getElementById('save-name').value = '';
+    currentEditingWfId = null;
+  } else { showOutput('Save failed: ' + (r.data.error || ''), true); }
 }
 
 async function updateEditorStats() {
@@ -383,6 +397,8 @@ async function loadWorkflowToEditor(wfId) {
       document.getElementById('view-editor').classList.add('active');
       document.getElementById('view-title').textContent = 'Workflow Editor';
       document.getElementById('save-name').value = r.data.name;
+      document.getElementById('save-version').value = r.data.version;
+      currentEditingWfId = wfId; // Enable upsert on save
       showOutput('Loaded: ' + r.data.name + ' (v' + r.data.version + ', ' + r.data.rules_count + ' rules)', false);
     } else {
       alert('Failed to load workflow: ' + (r.data.error || 'Not found'));
@@ -529,6 +545,263 @@ function fmtDur(s) {
   var h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = Math.floor(s%60);
   return h>0 ? h+'h '+m+'m' : m>0 ? m+'m '+sec+'s' : sec+'s';
 }
+
+// --- New: Parse Workflow ---
+async function parseWorkflow() {
+  var r = await api('POST', '/api/workflows/parse', { toml_content: getToml() });
+  var e = document.getElementById('editor-output');
+  e.classList.remove('hidden','error','success');
+  if (r.status === 200 && r.data) {
+    e.textContent = 'Name: ' + (r.data.name||'') + '\nVersion: ' + (r.data.version||'') +
+      '\nDescription: ' + (r.data.description||'N/A') + '\nAuthor: ' + (r.data.author||'N/A') +
+      '\n\nRules:\n' + (r.data.rules||[]).map(function(r){return '  - '+r.name+' ('+r.threads+' threads, '+r.environment+')';}).join('\n');
+    e.classList.add('success');
+  } else { e.textContent = 'Parse failed'; e.classList.add('error'); }
+}
+
+// --- New: Diff ---
+function showDiff() {
+  document.getElementById('diff-ta').value = getToml();
+  document.getElementById('diff-tb').value = '';
+  document.getElementById('diff-result').textContent = '';
+  document.getElementById('diff-modal').classList.remove('hidden');
+}
+function closeDiffModal() { document.getElementById('diff-modal').classList.add('hidden'); }
+async function doDiff() {
+  var a = document.getElementById('diff-ta').value;
+  var b = document.getElementById('diff-tb').value;
+  var r = await api('POST', '/api/workflows/diff', { toml_a: a, toml_b: b });
+  if (r.data && r.data.diffs) {
+    document.getElementById('diff-result').textContent = r.data.diff_count + ' differences:\n' +
+      r.data.diffs.map(function(d){return '['+d.category+'] '+d.description;}).join('\n');
+  } else { document.getElementById('diff-result').textContent = 'Diff failed: ' + (r.data.error||''); }
+}
+
+// --- New: Report ---
+function closeReportModal() { document.getElementById('report-modal').classList.add('hidden'); }
+async function generateReport() {
+  var r = await api('POST', '/api/reports/generate', { toml_content: getToml(), format: 'html' });
+  document.getElementById('report-content').innerHTML = typeof r.data === 'string' ? r.data : '<pre>'+JSON.stringify(r.data,null,2)+'</pre>';
+  document.getElementById('report-modal').classList.remove('hidden');
+}
+
+// --- New: List Outputs ---
+async function listOutputs() {
+  var r = await api('POST', '/api/workflows/clean', { toml_content: getToml() });
+  if (r.data && r.data.files_to_clean) {
+    showOutput('Files to clean (' + r.data.total_files + '):\n' + r.data.files_to_clean.join('\n'), false);
+  } else { showOutput('No output files detected', false); }
+}
+
+// --- New: Singularity Export ---
+async function exportWorkflowSingularity() {
+  var r = await api('POST', '/api/workflows/export', { toml_content: getToml(), format: 'singularity' });
+  if (r.status === 200 && r.data.content) {
+    document.getElementById('export-content').textContent = r.data.content;
+    document.getElementById('export-modal').classList.remove('hidden');
+  } else { showOutput('Export failed: ' + (r.data.error || ''), true); }
+}
+
+// --- Updated: Template CRUD from API ---
+async function loadTemplates() {
+  try {
+    var r = await api('GET', '/api/templates');
+    var grid = document.getElementById('templates-grid');
+    grid.innerHTML = '';
+    if (Array.isArray(r.data)) {
+      r.data.forEach(function(t) {
+        var tags = (t.tags||'').split(',').filter(Boolean);
+        var card = document.createElement('div');
+        card.className = 'template-card';
+        card.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;';
+        card.innerHTML = '<div style="font-weight:600;font-size:0.9rem;margin-bottom:0.3rem">'+esc(t.name)+(t.is_system?' <span style="font-size:0.6rem;color:var(--text3)">[system]</span>':'')+'</div>'+
+          '<div style="font-size:0.75rem;color:var(--accent);margin-bottom:0.5rem">'+esc(t.category)+'</div>'+
+          '<div style="font-size:0.78rem;color:var(--text2);margin-bottom:0.75rem">'+esc(t.description)+'</div>'+
+          '<div style="font-size:0.7rem;color:var(--text3);margin-bottom:0.75rem">Tags: '+(tags.length?tags.join(', '):'none')+'</div>'+
+          '<button class="btn btn-sm btn-outline" onclick="previewTemplate(\''+t.id+'\')">Preview</button> '+
+          '<button class="btn btn-sm btn-primary" onclick="useTemplate(\''+t.id+'\')">Use</button>';
+        grid.appendChild(card);
+      });
+      if (r.data.length === 0) grid.innerHTML = '<div style="color:var(--text3);padding:2rem;text-align:center">No templates</div>';
+    }
+    // Also update quick template dropdown
+    updateTemplateDropdown(r.data);
+  } catch(e) {}
+}
+
+function updateTemplateDropdown(templates) {
+  var sel = document.getElementById('template-select');
+  if (!sel) return;
+  var cur = sel.value;
+  sel.innerHTML = '<option value="">-- Quick template --</option>';
+  if (Array.isArray(templates)) {
+    templates.forEach(function(t) {
+      sel.innerHTML += '<option value="tpl:'+t.id+'">'+esc(t.name)+'</option>';
+    });
+  }
+  sel.value = cur;
+}
+
+async function previewTemplate(id) {
+  var r = await api('GET', '/api/templates/' + id);
+  if (r.data) {
+    currentPreviewTemplate = id;
+    document.getElementById('template-preview-title').textContent = r.data.name;
+    document.getElementById('template-preview-desc').textContent = r.data.description;
+    document.getElementById('template-preview-category').textContent = r.data.category;
+    document.getElementById('template-preview-tags').textContent = r.data.tags || 'none';
+    document.getElementById('template-preview-content').textContent = r.data.toml_content;
+    document.getElementById('template-preview-modal').classList.remove('hidden');
+  }
+}
+
+async function useTemplate(id) {
+  var r = await api('GET', '/api/templates/' + id);
+  if (r.data && r.data.toml_content) {
+    document.getElementById('editor-text').value = r.data.toml_content;
+    document.getElementById('save-name').value = r.data.name;
+    navigateTo('editor');
+  }
+}
+
+// Hook old loadTemplate to handle template IDs from API
+var origLoadTemplate = loadTemplate;
+loadTemplate = function() {
+  var sel = document.getElementById('template-select').value;
+  if (sel && sel.startsWith('tpl:')) {
+    useTemplate(sel.substring(4));
+    document.getElementById('template-select').value = '';
+  } else if (sel && templates[sel]) {
+    origLoadTemplate();
+  }
+};
+
+// --- Users ---
+async function refreshUsers() {
+  var r = await api('GET', '/api/users');
+  var tbody = document.getElementById('users-tbody');
+  if (Array.isArray(r.data)) {
+    tbody.innerHTML = r.data.map(function(u) {
+      return '<tr><td>'+esc(u.username)+'</td><td>'+esc(u.role)+'</td><td>'+esc(u.auth_type)+'</td>'+
+        '<td style="font-size:0.78rem;color:var(--text2)">'+fmtTime(u.created_at)+'</td>'+
+        '<td><button class="btn btn-sm btn-danger" onclick="deleteUser(\''+u.id+'\',\''+jsStr(u.username)+'\')">Del</button></td></tr>';
+    }).join('');
+    if (r.data.length === 0) tbody.innerHTML = '<tr><td colspan="5" style="color:var(--text3)">No users</td></tr>';
+  }
+}
+function showAddUser() { document.getElementById('user-add-modal').classList.remove('hidden'); }
+function closeAddUser() { document.getElementById('user-add-modal').classList.add('hidden'); }
+async function doAddUser() {
+  var uname = document.getElementById('new-username').value.trim();
+  var role = document.getElementById('new-role').value;
+  var pass = document.getElementById('new-password').value;
+  if (!uname || !pass) { alert('Username and password required'); return; }
+  var r = await api('POST', '/api/users', { username: uname, role: role, password: pass });
+  if (r.status === 201) { closeAddUser(); refreshUsers(); }
+  else { alert('Failed: ' + (r.data.error||r.status)); }
+}
+async function deleteUser(uid, name) {
+  if (!confirm('Delete user "'+name+'"?')) return;
+  var r = await api('DELETE', '/api/users/'+uid);
+  if (r.status === 200) refreshUsers();
+  else alert('Delete failed: '+(r.data.error||''));
+}
+
+// --- HPC Submit ---
+function showHpcSubmit(runId) { currentHpcRunId = runId; document.getElementById('hpc-modal').classList.remove('hidden'); }
+function closeHpcModal() { document.getElementById('hpc-modal').classList.add('hidden'); }
+async function doHpcSubmit() {
+  var sched = document.getElementById('hpc-scheduler').value;
+  var req = { scheduler: sched };
+  var partition = document.getElementById('hpc-partition').value.trim();
+  if (partition) req.partition = partition;
+  var cpus = parseInt(document.getElementById('hpc-cpus').value) || 4;
+  req.cpus = cpus;
+  var mem = document.getElementById('hpc-mem').value.trim();
+  if (mem) req.memory = mem;
+  var r = await api('POST', '/api/runs/'+currentHpcRunId+'/hpc-submit', req);
+  var el = document.getElementById('hpc-result');
+  if (r.status === 200) {
+    el.innerHTML = '<div style="color:var(--success)">Submitted! HPC Job ID: '+esc(r.data.hpc_job_id)+'</div>';
+    setTimeout(closeHpcModal, 2000);
+  } else { el.innerHTML = '<div style="color:var(--error)">Failed: '+esc(r.data.error||'')+'</div>'; }
+}
+
+// --- Enhanced Log ---
+var logFullText = '';
+function filterLogs() {
+  var q = document.getElementById('log-search').value.toLowerCase();
+  var el = document.getElementById('log-content');
+  if (!q) { el.textContent = logFullText; return; }
+  el.textContent = logFullText.split('\n').filter(function(l){return l.toLowerCase().indexOf(q)>=0;}).join('\n');
+}
+function toggleLogAutoRefresh() {
+  if (document.getElementById('log-autorefresh').checked) {
+    logAutoRefreshTimer = setInterval(function(){ if (currentLogRunId) viewRunLogs(currentLogRunId); }, 3000);
+  } else { clearInterval(logAutoRefreshTimer); }
+}
+function downloadLog() {
+  var blob = new Blob([logFullText], {type:'text/plain'});
+  var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'execution_'+currentLogRunId+'.log'; a.click();
+}
+// Override viewRunLogs to support new features
+var origViewRunLogs = viewRunLogs;
+viewRunLogs = function(runId) {
+  currentLogRunId = runId;
+  origViewRunLogs(runId);
+  // Also store full text for filter/download
+  api('GET', '/api/runs/'+runId+'/logs').then(function(r){
+    if (typeof r.data === 'string') logFullText = r.data;
+  });
+};
+
+// --- HPC button in runs table ---
+// Override refreshRuns to add HPC submit button
+var origRefreshRuns = refreshRuns;
+refreshRuns = function() {
+  origRefreshRuns();
+  // After rendering, add HPC submit buttons
+  setTimeout(function() {
+    document.querySelectorAll('#all-runs-tbody tr').forEach(function(row) {
+      var actions = row.querySelector('td:last-child');
+      if (actions && actions.innerHTML.indexOf('HPC') < 0) {
+        var runIdEl = row.querySelector('td:first-child');
+        if (runIdEl) {
+          var rid = runIdEl.textContent.replace('...','').trim();
+          if (rid.length > 8) {
+            actions.innerHTML += ' <button class="btn btn-sm btn-outline" onclick="showHpcSubmit(\''+rid+'\')">HPC</button>';
+          }
+        }
+      }
+    });
+  }, 200);
+};
+
+// --- Environments ---
+function refreshEnvironments() {
+  api('GET', '/api/environments').then(function(r) {
+    var el = document.getElementById('env-list');
+    if (r.data && r.data.available) {
+      el.innerHTML = r.data.available.map(function(e){return '<span class="badge badge-running">'+esc(e)+'</span>';}).join(' ');
+    }
+  });
+}
+// Call on page load
+document.addEventListener('DOMContentLoaded', function() { refreshEnvironments(); });
+
+// --- Navigation helper ---
+function navigateTo(view) {
+  document.querySelectorAll('.sidebar-nav button').forEach(function(b) { b.classList.remove('active'); });
+  var btn = document.querySelector('[data-view="'+view+'"]');
+  if (btn) btn.classList.add('active');
+  document.querySelectorAll('.view').forEach(function(v) { v.classList.remove('active'); });
+  document.getElementById('view-'+view).classList.add('active');
+  document.getElementById('view-title').textContent = btn ? btn.textContent.trim().replace(/^\S+\s*/, '') : view;
+}
+// Clear currentEditingWfId when starting new workflow
+var origNewWorkflow = newWorkflow;
+newWorkflow = function() { currentEditingWfId = null; origNewWorkflow(); };
 
 checkSession();
 refreshDashboard();
