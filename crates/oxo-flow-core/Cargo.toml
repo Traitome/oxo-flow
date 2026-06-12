@@ -61,5 +61,14 @@ name = "wildcard_bench"
 harness = false
 
 [[bench]]
-name = "core_bench"
+name = "dag_bench"
 harness = false
+
+[[bench]]
+name = "parsing_bench"
+harness = false
+
+[[bench]]
+name = "scheduling_bench"
+harness = false
+
