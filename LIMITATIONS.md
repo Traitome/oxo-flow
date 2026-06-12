@@ -35,9 +35,10 @@ WDL, and no importers for those formats are currently available.
   Workflow Language or Workflow Description Language files.
 - **No native Nextflow/Snakemake import** — There is no automatic conversion
   from Nextflow or Snakemake workflow definitions.
-- **No built-in cloud object storage streaming** — oxo-flow does not natively
-  stream data from S3, GCS, or Azure Blob Storage. Users must stage data
-  locally or use FUSE-based mounts.
+- **No built-in cloud object storage streaming** — oxo-flow supports
+  `s3://` and `gs://` URIs via feature flags (`s3-storage`, `gcs-storage`),
+  but data is fully downloaded before execution rather than streamed.
+  Streaming support is on the roadmap.
 - **No GUI workflow editor** — The web interface provides monitoring and
   management but does not include a visual drag-and-drop workflow editor.
 - **No Kubernetes operator** — Cloud-native orchestration via Kubernetes

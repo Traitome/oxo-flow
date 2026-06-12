@@ -165,6 +165,7 @@ nav:
       - Reporting System: reference/reporting-system.md
       - Webhooks: reference/webhook.md
       - Web API: reference/web-api.md
+      - Cloud Storage: reference/cloud-storage.md
   - Development:
       - Contributing: development/contributing.md
       - Changelog: development/changelog.md
