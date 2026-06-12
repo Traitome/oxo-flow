@@ -1,0 +1,168 @@
+{
+  "suite": "oxo-flow macro benchmarks",
+  "version": "0.1.0",
+  "oxo_flow_binary": "/Users/wsx/Documents/GitHub/oxo-flow/target/debug/oxo-flow",
+  "host": "ShixiangWang-WorkSpacedeMacBook-Pro.local",
+  "os": "Darwin 25.5.0",
+  "date": "2026-06-13T01:05:08+0800",
+  "results": {
+    "lifecycle": [
+      {
+        "command": "validate",
+        "rule_count": 10,
+        "wall_time_sec": 0.0808,
+        "exit_code": 0
+      },
+      {
+        "command": "dry-run",
+        "rule_count": 10,
+        "wall_time_sec": 0.037,
+        "exit_code": 0
+      },
+      {
+        "command": "lint",
+        "rule_count": 10,
+        "wall_time_sec": 0.0898,
+        "exit_code": 0
+      },
+      {
+        "command": "validate",
+        "rule_count": 50,
+        "wall_time_sec": 0.0911,
+        "exit_code": 0
+      },
+      {
+        "command": "dry-run",
+        "rule_count": 50,
+        "wall_time_sec": 0.0398,
+        "exit_code": 0
+      },
+      {
+        "command": "lint",
+        "rule_count": 50,
+        "wall_time_sec": 0.0925,
+        "exit_code": 0
+      },
+      {
+        "command": "validate",
+        "rule_count": 100,
+        "wall_time_sec": 0.0889,
+        "exit_code": 0
+      },
+      {
+        "command": "dry-run",
+        "rule_count": 100,
+        "wall_time_sec": 0.0368,
+        "exit_code": 0
+      },
+      {
+        "command": "lint",
+        "rule_count": 100,
+        "wall_time_sec": 0.0945,
+        "exit_code": 0
+      },
+      {
+        "command": "validate",
+        "rule_count": 500,
+        "wall_time_sec": 0.152,
+        "exit_code": 0
+      },
+      {
+        "command": "dry-run",
+        "rule_count": 500,
+        "wall_time_sec": 0.0664,
+        "exit_code": 0
+      },
+      {
+        "command": "lint",
+        "rule_count": 500,
+        "wall_time_sec": 0.1693,
+        "exit_code": 0
+      },
+      {
+        "command": "validate",
+        "rule_count": 1000,
+        "wall_time_sec": 0.3401,
+        "exit_code": 0
+      },
+      {
+        "command": "dry-run",
+        "rule_count": 1000,
+        "wall_time_sec": 0.104,
+        "exit_code": 0
+      },
+      {
+        "command": "lint",
+        "rule_count": 1000,
+        "wall_time_sec": 0.3333,
+        "exit_code": 0
+      }
+    ],
+    "scaling": [
+      {
+        "command": "validate",
+        "sample_count": 10,
+        "wall_time_sec": 0.0831,
+        "exit_code": 0
+      },
+      {
+        "command": "dry-run",
+        "sample_count": 10,
+        "wall_time_sec": 0.0309,
+        "exit_code": 0
+      },
+      {
+        "command": "validate",
+        "sample_count": 50,
+        "wall_time_sec": 0.0846,
+        "exit_code": 0
+      },
+      {
+        "command": "dry-run",
+        "sample_count": 50,
+        "wall_time_sec": 0.0371,
+        "exit_code": 0
+      },
+      {
+        "command": "validate",
+        "sample_count": 100,
+        "wall_time_sec": 0.0989,
+        "exit_code": 0
+      },
+      {
+        "command": "dry-run",
+        "sample_count": 100,
+        "wall_time_sec": 0.0379,
+        "exit_code": 0
+      },
+      {
+        "command": "validate_scatter_gather",
+        "sample_count": 10,
+        "wall_time_sec": 0.0809,
+        "exit_code": 0
+      },
+      {
+        "command": "validate_scatter_gather",
+        "sample_count": 50,
+        "wall_time_sec": 0.0844,
+        "exit_code": 0
+      }
+    ],
+    "reliability": [
+      {
+        "test": "execution_time_stability",
+        "run_times_sec": [
+          0.0871,
+          0.0849,
+          0.0842
+        ],
+        "stable": true
+      },
+      {
+        "test": "duplicate_rule_detection",
+        "detected": true,
+        "exit_code": 1
+      }
+    ]
+  }
+}

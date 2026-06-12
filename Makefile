@@ -26,4 +26,12 @@ coverage:
 
 ## Run benchmarks for performance regression tracking.
 bench:
+
+## Run macro-benchmarks (CLI-driven lifecycle, scaling, reliability).
+bench-macro:
+tpython3 benches/macro/suite.py --oxo-flow target/debug/oxo-flow --output benches/macro/results
+
+## Run comparative benchmarks against Nextflow/Snakemake (requires tools).
+bench-compare:
+t./benches/comparative/run_comparison.sh
 	cargo bench --workspace --save-baseline baseline
