@@ -63,6 +63,10 @@ fs2 = "0.4"
 
 # Crypto
 sha2 = "0.10"
+sha1 = "0.10"
+hmac = "0.12"
+base64 = "0.22"
+md-5 = "0.10"
 
 # Benchmarking
 criterion = { version = "0.5", features = ["html_reports"] }

@@ -594,4 +594,199 @@ reports = ["native-pdf"]
         assert_eq!(config.executor.as_deref(), Some("aws-batch"));
         assert_eq!(config.reports, vec!["native-pdf"]);
     }
+
+    // ── ExecutorPlugin trait ────────────────────────────────────────────
+
+    struct StubExecutorPlugin;
+    impl ExecutorPlugin for StubExecutorPlugin {
+        fn backend_name(&self) -> &str {
+            "stub-exec"
+        }
+        fn submit(
+            &self,
+            _rule: &Rule,
+            _workdir: &Path,
+        ) -> std::result::Result<crate::executor::checkpoint::BenchmarkRecord, OxoFlowError>
+        {
+            Err(OxoFlowError::Config {
+                message: "stub".into(),
+            })
+        }
+        fn status(
+            &self,
+            _job_id: &str,
+        ) -> std::result::Result<crate::executor::JobStatus, OxoFlowError> {
+            Err(OxoFlowError::Config {
+                message: "stub".into(),
+            })
+        }
+        fn cancel(&self, _job_id: &str) -> std::result::Result<(), OxoFlowError> {
+            Err(OxoFlowError::Config {
+                message: "stub".into(),
+            })
+        }
+    }
+
+    #[test]
+    fn executor_plugin_register_and_find() {
+        let mut registry = PluginRegistry::default();
+        registry.register_executor(Box::new(StubExecutorPlugin));
+        assert!(registry.find_executor("stub-exec").is_some());
+        assert!(registry.find_executor("missing").is_none());
+    }
+
+    // ── ReportPlugin trait ──────────────────────────────────────────────
+
+    struct StubReportPlugin;
+    impl ReportPlugin for StubReportPlugin {
+        fn renderer_name(&self) -> &str {
+            "stub-report"
+        }
+        fn output_format(&self) -> &str {
+            "txt"
+        }
+        fn render(
+            &self,
+            _report: &crate::report::Report,
+        ) -> std::result::Result<Vec<u8>, OxoFlowError> {
+            Ok(b"report".to_vec())
+        }
+    }
+
+    #[test]
+    fn report_plugin_register_and_find() {
+        let mut registry = PluginRegistry::default();
+        registry.register_report(Box::new(StubReportPlugin));
+        assert!(registry.find_report("stub-report").is_some());
+        assert!(registry.find_report("missing").is_none());
+    }
+
+    // ── PluginManifest deserialization ──────────────────────────────────
+
+    #[test]
+    fn manifest_minimal_toml() {
+        let toml_str = r#"
+name = "minimal"
+version = "1.0"
+plugin_type = "rule"
+"#;
+        let manifest: PluginManifest = toml::from_str(toml_str).unwrap();
+        assert_eq!(manifest.name, "minimal");
+        assert_eq!(manifest.plugin_type, "rule");
+        assert!(manifest.description.is_none());
+        assert!(manifest.signature.is_none());
+    }
+
+    #[test]
+    fn manifest_with_all_fields() {
+        let toml_str = r#"
+name = "full"
+version = "2.0"
+plugin_type = "executor"
+description = "A full plugin"
+author = "Test Author"
+command_template = "/usr/bin/full-plugin"
+environment = "conda: env.yaml"
+
+[signature]
+key_id = "kp1"
+value = "abc123def"
+"#;
+        let manifest: PluginManifest = toml::from_str(toml_str).unwrap();
+        assert_eq!(manifest.name, "full");
+        assert_eq!(manifest.plugin_type, "executor");
+        assert_eq!(manifest.description.as_deref(), Some("A full plugin"));
+        let sig = manifest.signature.unwrap();
+        assert_eq!(sig.key_id, "kp1");
+        assert_eq!(sig.value, "abc123def");
+    }
+
+    // ── Signature edge cases ────────────────────────────────────────────
+
+    #[test]
+    fn verify_signature_missing_signature_returns_error() {
+        let manifest = PluginManifest {
+            name: "test".into(),
+            version: "1".into(),
+            plugin_type: "rule".into(),
+            description: None,
+            author: None,
+            command_template: None,
+            environment: None,
+            signature: None,
+        };
+        let trusted = std::collections::HashMap::new();
+        let result = manifest.verify_signature(&trusted);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn verify_signature_unknown_key_id_returns_error() {
+        let manifest = PluginManifest {
+            name: "test".into(),
+            version: "1".into(),
+            plugin_type: "rule".into(),
+            description: None,
+            author: None,
+            command_template: None,
+            environment: None,
+            signature: Some(PluginSignature {
+                key_id: "unknown".into(),
+                value: "deadbeef".into(),
+            }),
+        };
+        let mut trusted = std::collections::HashMap::new();
+        trusted.insert("key-001".into(), "secret".into());
+        assert!(manifest.verify_signature(&trusted).is_err());
+    }
+
+    #[test]
+    fn verify_signature_tampered_payload() {
+        let key = "my-key";
+        let mut manifest = PluginManifest {
+            name: "original".into(),
+            version: "1.0".into(),
+            plugin_type: "rule".into(),
+            description: None,
+            author: None,
+            command_template: None,
+            environment: None,
+            signature: None,
+        };
+        let payload = manifest.signing_payload();
+        let sig_value = compute_keyed_sha256(key, &payload);
+
+        manifest.signature = Some(PluginSignature {
+            key_id: "k1".into(),
+            value: sig_value,
+        });
+
+        // Tamper with the name
+        manifest.name = "tampered".into();
+
+        let mut trusted = std::collections::HashMap::new();
+        trusted.insert("k1".into(), key.to_string());
+        let result = manifest.verify_signature(&trusted).unwrap();
+        assert!(!result, "tampered payload should not verify");
+    }
+
+    // ── PluginsConfig ───────────────────────────────────────────────────
+
+    #[test]
+    fn plugins_config_executor_only() {
+        let toml_str = r#"
+executor = "custom-exec"
+"#;
+        let config: PluginsConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.rules.is_empty());
+        assert_eq!(config.executor.as_deref(), Some("custom-exec"));
+        assert!(config.reports.is_empty());
+    }
+
+    #[test]
+    fn plugins_config_empty() {
+        let config: PluginsConfig = toml::from_str("").unwrap_or_default();
+        assert!(config.rules.is_empty());
+        assert!(config.executor.is_none());
+    }
 }

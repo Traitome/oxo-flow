@@ -412,4 +412,149 @@ mod tests {
         assert!(sig.starts_with("sha256="));
         assert_eq!(sig.len(), 71); // sha256= + 64 hex chars
     }
+
+    // ── HTTP method variants ───────────────────────────────────────────
+
+    #[test]
+    fn http_method_post_default() {
+        let config: WebhookConfig =
+            serde_json::from_str(r#"{"url": "https://hooks.slack.com/hook"}"#).unwrap();
+        assert_eq!(config.method, HttpMethod::Post);
+    }
+
+    #[test]
+    fn http_method_explicit_get() {
+        let config: WebhookConfig =
+            serde_json::from_str(r#"{"url": "https://example.com", "method": "get"}"#).unwrap();
+        assert_eq!(config.method, HttpMethod::Get);
+    }
+
+    #[test]
+    fn http_method_explicit_put() {
+        let config: WebhookConfig =
+            serde_json::from_str(r#"{"url": "https://example.com", "method": "put"}"#).unwrap();
+        assert_eq!(config.method, HttpMethod::Put);
+    }
+
+    // ── Event filtering ─────────────────────────────────────────────────
+
+    #[test]
+    fn event_not_configured_returns_ok() {
+        let config = WebhookConfig {
+            url: "https://example.com".to_string(),
+            method: HttpMethod::Post,
+            headers: std::collections::HashMap::new(),
+            events: vec![WebhookEvent::WorkflowCompleted],
+            secret: None,
+            timeout_secs: 5,
+            max_retries: 0,
+        };
+        let client = WebhookClient::new(config);
+        let payload = WebhookPayload {
+            event: WebhookEvent::WorkflowStarted,
+            workflow_name: "test".to_string(),
+            timestamp: "now".to_string(),
+            data: WebhookData::default(),
+            version: "1.0".to_string(),
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        assert!(rt.block_on(client.send(&payload)).is_ok());
+    }
+
+    // ── HMAC edge cases ─────────────────────────────────────────────────
+
+    #[test]
+    fn hmac_empty_secret() {
+        let client = WebhookClient::new(WebhookConfig {
+            url: "https://example.com".to_string(),
+            method: HttpMethod::Post,
+            headers: std::collections::HashMap::new(),
+            events: vec![WebhookEvent::WorkflowCompleted],
+            secret: Some("".to_string()),
+            timeout_secs: 5,
+            max_retries: 0,
+        });
+        let sig = client.compute_hmac("body", "");
+        assert!(sig.starts_with("sha256="));
+    }
+
+    #[test]
+    fn hmac_empty_body() {
+        let client = WebhookClient::new(WebhookConfig {
+            url: "https://example.com".to_string(),
+            method: HttpMethod::Post,
+            headers: std::collections::HashMap::new(),
+            events: vec![WebhookEvent::WorkflowCompleted],
+            secret: Some("key".to_string()),
+            timeout_secs: 5,
+            max_retries: 0,
+        });
+        let sig = client.compute_hmac("", "key");
+        assert!(sig.starts_with("sha256="));
+    }
+
+    // ── Slack payload conversion variants ────────────────────────────────
+
+    #[test]
+    fn slack_payload_started() {
+        let payload = WebhookPayload {
+            event: WebhookEvent::WorkflowStarted,
+            workflow_name: "w".to_string(),
+            timestamp: "t".to_string(),
+            data: WebhookData::default(),
+            version: "1".to_string(),
+        };
+        let slack = payload.to_slack_payload();
+        assert!(slack.text.contains("🚀"));
+    }
+
+    #[test]
+    fn slack_payload_failed() {
+        let payload = WebhookPayload {
+            event: WebhookEvent::WorkflowFailed,
+            workflow_name: "w".to_string(),
+            timestamp: "t".to_string(),
+            data: WebhookData {
+                error: Some("oops".into()),
+                ..Default::default()
+            },
+            version: "1".to_string(),
+        };
+        let slack = payload.to_slack_payload();
+        assert!(slack.text.contains("❌"));
+    }
+
+    // ── Event Display ───────────────────────────────────────────────────
+
+    #[test]
+    fn event_display_all() {
+        assert_eq!(
+            WebhookEvent::WorkflowStarted.to_string(),
+            "workflow_started"
+        );
+        assert_eq!(
+            WebhookEvent::WorkflowCompleted.to_string(),
+            "workflow_completed"
+        );
+        assert_eq!(WebhookEvent::WorkflowFailed.to_string(), "workflow_failed");
+        assert_eq!(WebhookEvent::RuleCompleted.to_string(), "rule_completed");
+        assert_eq!(WebhookEvent::RuleFailed.to_string(), "rule_failed");
+    }
+
+    // ── WebhookData defaults ────────────────────────────────────────────
+
+    #[test]
+    fn webhook_data_all_none() {
+        let data = WebhookData::default();
+        assert!(data.total_rules.is_none());
+        assert!(data.succeeded.is_none());
+        assert!(data.error.is_none());
+    }
+
+    #[test]
+    fn webhook_data_serialization_omits_none() {
+        let data = WebhookData::default();
+        let json = serde_json::to_string(&data).unwrap();
+        assert_eq!(json, "{}");
+    }
 }

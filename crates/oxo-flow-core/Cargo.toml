@@ -11,8 +11,8 @@ description = "Core library for the oxo-flow bioinformatics pipeline engine"
 [features]
 default = ["container", "webhook", "report", "cluster"]
 # Cloud storage backends (opt-in)
-s3-storage = ["aws-sdk-s3"]
-gcs-storage = []
+s3-storage = ["aws-sdk-s3", "dep:aws-config"]
+gcs-storage = ["dep:hmac", "dep:sha1", "dep:base64", "dep:md-5"]
 # Optional modules - compile-time feature gates for minimal builds
 container = []
 webhook = []
@@ -42,6 +42,11 @@ tempfile = { workspace = true }
 csv = "1.4.0"
 async-trait = { workspace = true }
 aws-sdk-s3 = { version = "1", optional = true }
+aws-config = { version = "1", optional = true }
+hmac = { workspace = true, optional = true }
+sha1 = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
+md-5 = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true }
@@ -53,4 +58,8 @@ criterion = { workspace = true }
 
 [[bench]]
 name = "wildcard_bench"
+harness = false
+
+[[bench]]
+name = "core_bench"
 harness = false

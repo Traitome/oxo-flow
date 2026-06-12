@@ -20,6 +20,8 @@ pub mod local;
 #[cfg(feature = "s3-storage")]
 pub mod s3;
 
+#[cfg(feature = "gcs-storage")]
+pub mod gcs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
