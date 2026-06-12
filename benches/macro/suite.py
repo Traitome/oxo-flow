@@ -147,7 +147,7 @@ def _format_duration(seconds: float) -> str:
     return f"{seconds / 60:.2f} min"
 
 
-def benchmark_lifecycle(oxo_bin: str, counts: list[int], output: dict[str, Any]):
+def benchmark_lifecycle(oxo_bin: str, counts: list[int], output: dict[str, Any], iterations: int = 1):
     """测量 validate / dry-run / lint 在不同管线规模下的性能。"""
     print("\n  ── 生命周期基准 ──")
     for count in counts:
@@ -174,11 +174,10 @@ def benchmark_lifecycle(oxo_bin: str, counts: list[int], output: dict[str, Any])
         tmp.unlink()
 
 
-def benchmark_scaling(oxo_bin: str, sample_counts: list[int],
-                       output: dict[str, Any]):
+def benchmark_scaling(oxo_bin: str, sample_counts: list[int], output: dict[str, Any],
+                       iterations: int = 1):
     """测量并行管线中随样本数增加的扩展性。"""
     print("\n  ── 扩展性基准 ──")
-    oxo_flow_bin = oxo_bin  # 保持变量名一致
     for sc in sample_counts:
         toml = generate_parallel(sc)
         tmp = Path(f"/tmp/oxo_bench_parallel_{sc}.oxoflow")
@@ -186,7 +185,7 @@ def benchmark_scaling(oxo_bin: str, sample_counts: list[int],
 
         for cmd_name, args in [("validate", ["validate", str(tmp)]),
                                 ("dry-run", ["dry-run", str(tmp)])]:
-            full_cmd = [oxo_flow_bin] + args
+            full_cmd = [oxo_bin] + args
             elapsed, rc, _, _ = _run_command(full_cmd)
             status = "OK" if rc == 0 else "FAIL"
             print(f"    {cmd_name:10s}  {sc:5d} samples  {_format_duration(elapsed):>10s}  [{status}]")
@@ -204,7 +203,7 @@ def benchmark_scaling(oxo_bin: str, sample_counts: list[int],
         toml = generate_scatter_gather(sc)
         tmp = Path(f"/tmp/oxo_bench_scatter_{sc}.oxoflow")
         tmp.write_text(toml)
-        elapsed, rc, _, _ = _run_command([oxo_flow_bin, "validate", str(tmp)])
+        elapsed, rc, _, _ = _run_command([oxo_bin, "validate", str(tmp)])
         status = "OK" if rc == 0 else "FAIL"
         print(f"    scatter    {sc:5d} chunks  {_format_duration(elapsed):>10s}  [{status}]")
         output.setdefault("scaling", []).append({
@@ -216,7 +215,7 @@ def benchmark_scaling(oxo_bin: str, sample_counts: list[int],
         tmp.unlink()
 
 
-def benchmark_reliability(oxo_bin: str, output: dict[str, Any]):
+def benchmark_reliability(oxo_bin: str, output: dict[str, Any], iterations: int = 1):
     """验证基准可靠性:
     1. 管线定义 checksum 确定性
     2. lint 诊断一致性
@@ -292,7 +291,7 @@ def main():
     output: dict[str, Any] = {
         "suite": "oxo-flow macro benchmarks",
         "version": "0.1.0",
-        "oxo_flow_binary": str(oxo_bin.resolve()),
+        "oxo_binary": str(oxo_bin.resolve()),
         "host": platform.node(),
         "os": f"{platform.system()} {platform.release()}",
         "date": time.strftime("%Y-%m-%dT%H:%M:%S%z"),

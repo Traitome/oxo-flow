@@ -26,7 +26,9 @@ Requires: [Nextflow](https://www.nextflow.io/),
 ./benches/comparative/run_comparison.sh
 
 # Individual runs
-hyperfine -n "oxo-flow" "oxo-flow validate hello_100.oxoflow"
+# Generate a 100-rule workflow with:
+#   python3 -c "from benches.macro.suite import generate_hello; open('/tmp/wf.oxoflow', 'w').write(generate_hello(100))"
+# hyperfine -n "oxo-flow" "oxo-flow validate /tmp/wf.oxoflow"
 hyperfine -n "nextflow" "nextflow run hello.nf"
 hyperfine -n "snakemake" "snakemake --cores 1"
 ```

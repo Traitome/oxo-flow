@@ -5,27 +5,24 @@ oxo-flow 对比基准 — Snakemake 等效管线
 管线等价: N 步顺序链。
 
 用法:
-    snakemake --cores 1 -j 1
+    snakemake --cores 1
 """
 
 COUNT = 10
 
 rule all:
     input:
-        expand("step_{i}_output.txt", i=range(1))[-1] if COUNT == 1
-        else f"step_{COUNT - 1}_output.txt"
-
+        f"step_{COUNT - 1}_output.txt"
 
 rule step_0:
     output: "step_0_output.txt"
     shell: "echo 0 > {output}"
 
-
 rule step_i:
     input:
-        prev = "step_{wildcards.i - 1}_output.txt",
+        f"step_{{wildcards.i - 1}}_output.txt"
     output:
-        "step_{i}_output.txt",
+        "step_{i}_output.txt"
     wildcard_constraints:
-        i = "|".join(str(x) for x in range(1, COUNT))
+        i = "[1-9][0-9]*"
     shell: "echo {wildcards.i} > {output}"

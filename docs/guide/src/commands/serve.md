@@ -83,7 +83,7 @@ curl http://127.0.0.1:8080/api/health
 ```json
 {
   "status": "ok",
-  "version": "0.7.0"
+  "version": "0.8.0"
 }
 ```
 
