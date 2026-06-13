@@ -1,0 +1,24 @@
+[workflow]
+name = "generic-pipeline"
+version = "1.0.0"
+description = "Generic data processing pipeline template"
+
+[[rules]]
+name = "setup"
+output = ["processed"]
+shell = "mkdir -p processed"
+threads = 1
+
+[[rules]]
+name = "process"
+input = ["input.txt"]
+output = ["processed/output.txt"]
+shell = "cat {input} > {output}"
+threads = 1
+
+[[rules]]
+name = "report"
+input = ["processed/output.txt"]
+output = ["report.html"]
+shell = "echo '<h1>Pipeline Complete</h1>' > {output}"
+threads = 1

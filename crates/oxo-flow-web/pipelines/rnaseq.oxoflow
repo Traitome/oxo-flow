@@ -1,0 +1,28 @@
+[workflow]
+name = "rnaseq-pipeline"
+version = "1.0.0"
+description = "RNA-seq quantification pipeline"
+
+[variables]
+samples = ["sample1", "sample2"]
+
+[[rules]]
+name = "fastqc"
+input = ["{sample}.fastq.gz"]
+output = ["qc/{sample}_fastqc.html"]
+shell = "fastqc {input} -o qc/"
+threads = 2
+
+[[rules]]
+name = "star_align"
+input = ["{sample}.fastq.gz"]
+output = ["star/{sample}_Aligned.sortedByCoord.out.bam"]
+shell = "STAR --genomeDir ref/star --readFilesIn {input} --runThreadN {threads} --outFileNamePrefix star/{sample}_"
+threads = 8
+
+[[rules]]
+name = "featurecounts"
+input = ["star/{sample}_Aligned.sortedByCoord.out.bam"]
+output = ["counts/{sample}_counts.txt"]
+shell = "featureCounts -a ref/genes.gtf -o counts/{sample}_counts.txt {input}"
+threads = 2

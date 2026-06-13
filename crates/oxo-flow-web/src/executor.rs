@@ -5,8 +5,8 @@ use std::process::Stdio;
 use tokio::process::Command;
 use tracing::{error, info, warn};
 
-use crate::db;
 use crate::workspace::get_run_directory;
+use crate::{broadcast_event, db};
 
 /// Locate the `oxo-flow` CLI binary.
 ///
@@ -61,6 +61,17 @@ pub fn spawn_background_run(run_id: String, username: String, auth_type: String,
             error!("Failed to update run {run_id} to running: {e}");
             return;
         }
+
+        // Broadcast run start event
+        broadcast_event(
+            "run_started",
+            &serde_json::json!({
+                "run_id": run_id,
+                "username": username,
+                "status": "running",
+                "started_at": now.to_rfc3339(),
+            }),
+        );
 
         let run_dir = get_run_directory(&username, &run_id);
         let workflow_file = run_dir.join("workflow.oxoflow");
@@ -177,6 +188,16 @@ async fn mark_run_failed(run_id: &str) {
     {
         error!("Failed to mark run {run_id} as failed: {e}");
     }
+
+    // Broadcast run failure event
+    broadcast_event(
+        "run_failed",
+        &serde_json::json!({
+            "run_id": run_id,
+            "status": "failed",
+            "finished_at": end.to_rfc3339(),
+        }),
+    );
 }
 
 #[cfg(test)]

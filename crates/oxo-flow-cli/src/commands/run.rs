@@ -24,6 +24,7 @@ pub async fn run_command(
     skip_env_setup: bool,
     cache_dir: Option<PathBuf>,
     provenance: bool,
+    json: bool,
 ) -> Result<()> {
     print_banner();
     let workflow = resolve_workflow(workflow)?;
@@ -437,6 +438,22 @@ pub async fn run_command(
         }
     }
 
+    // JSON output mode
+    if json {
+        let wf_path = Some(workflow.to_string_lossy().to_string());
+        let output = serde_json::json!({
+            "command": "run",
+            "status": if fail_count > 0 { "failed" } else { "completed" },
+            "workflow": wf_path,
+            "results": serde_json::json!({
+                "succeeded": success_count,
+                "skipped": skipped_count,
+                "failed": fail_count,
+            }),
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    }
+
     if fail_count > 0 && !keep_going {
         return Err(anyhow::anyhow!("workflow execution failed"));
     }
@@ -448,6 +465,7 @@ pub async fn dry_run_command(
     workflow: Option<PathBuf>,
     target: Vec<String>,
     verbose: bool,
+    json: bool,
 ) -> Result<()> {
     print_banner();
     let workflow = resolve_workflow(workflow)?;
@@ -582,6 +600,39 @@ pub async fn dry_run_command(
         suggested_jobs
     );
 
+    // JSON output mode
+    if json {
+        let order_list = order.clone();
+        let rule_list: Vec<serde_json::Value> = order
+            .iter()
+            .filter_map(|name| config.get_rule(name))
+            .map(|r| {
+                serde_json::json!({
+                    "name": r.name,
+                    "threads": r.effective_threads(),
+                    "environment": r.environment.kind(),
+                    "memory": r.effective_memory(),
+                    "checkpoint": r.checkpoint,
+                })
+            })
+            .collect();
+
+        let output = serde_json::json!({
+            "command": "dry-run",
+            "workflow": workflow.display().to_string(),
+            "total_rules": order.len(),
+            "execution_order": order_list,
+            "rules": rule_list,
+            "summary": {
+                "total_threads": total_threads,
+                "max_threads_per_rule": max_threads,
+                "memory_rules": memory_values.len(),
+            },
+            "suggested_jobs": suggested_jobs,
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    }
+
     Ok(())
 }
 
@@ -660,7 +711,8 @@ pub async fn debug_command(workflow: PathBuf, rule_name: Option<String>) -> Resu
     Ok(())
 }
 
-pub async fn handle_status(checkpoint_path: PathBuf) -> Result<()> {
+pub async fn handle_status(checkpoint_path: PathBuf, json: bool) -> Result<()> {
+    let _ = &json;
     print_banner();
 
     // Detect common mistake: user passes a .oxoflow file instead of checkpoint
@@ -718,6 +770,7 @@ pub async fn handle_status(checkpoint_path: PathBuf) -> Result<()> {
 }
 
 pub async fn resume_command(checkpoint: PathBuf, jobs: usize) -> Result<()> {
+    // resume does not produce structured JSON output
     print_banner();
 
     // Load checkpoint state
@@ -802,6 +855,7 @@ pub async fn resume_command(checkpoint: PathBuf, jobs: usize) -> Result<()> {
         false,           // skip_env_setup
         None,            // cache_dir
         false,           // provenance (checkpoint already has checksums)
+        false,           // json (resume defaults to human-readable)
     )
     .await
 }

@@ -473,6 +473,97 @@ pub async fn log_action(user_id: &str, action: &str, target: &str) -> Result<()>
 // Tests
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// OutputRecord CRUD
+// ---------------------------------------------------------------------------
+
+/// An output record row stored in SQLite.
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize)]
+pub struct OutputRecordRow {
+    pub id: String,
+    pub run_id: String,
+    pub rule: String,
+    pub sample: Option<String>,
+    pub file_path: String,
+    pub file_size: i64,
+    pub checksum: Option<String>,
+    pub metrics: String,
+    pub created_at: String,
+}
+
+impl OutputRecordRow {
+    /// Convert from a core OutputRecord to a database row.
+    pub fn from_core(record: &oxo_flow_core::result::OutputRecord, id: &str) -> Self {
+        Self {
+            id: id.to_string(),
+            run_id: record.run_id.clone(),
+            rule: record.rule.clone(),
+            sample: record.sample.clone(),
+            file_path: record.file_path.clone(),
+            file_size: record.file_size as i64,
+            checksum: record.checksum.clone(),
+            metrics: serde_json::to_string(&record.metrics).unwrap_or_else(|_| "{}".to_string()),
+            created_at: record.created_at.clone(),
+        }
+    }
+
+    /// Convert to a core OutputRecord.
+    pub fn to_core(&self) -> oxo_flow_core::result::OutputRecord {
+        let metrics: std::collections::HashMap<String, serde_json::Value> =
+            serde_json::from_str(&self.metrics).unwrap_or_default();
+        oxo_flow_core::result::OutputRecord {
+            rule: self.rule.clone(),
+            run_id: self.run_id.clone(),
+            sample: self.sample.clone(),
+            file_path: self.file_path.clone(),
+            file_size: self.file_size as u64,
+            checksum: self.checksum.clone(),
+            metrics,
+            created_at: self.created_at.clone(),
+        }
+    }
+}
+
+/// Insert a batch of output records into the database.
+pub async fn insert_output_records(records: &[OutputRecordRow]) -> anyhow::Result<()> {
+    for record in records {
+        sqlx::query(
+            "INSERT OR IGNORE INTO output_records (id, run_id, rule, sample, file_path, file_size, checksum, metrics, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(&record.id)
+        .bind(&record.run_id)
+        .bind(&record.rule)
+        .bind(&record.sample)
+        .bind(&record.file_path)
+        .bind(record.file_size)
+        .bind(&record.checksum)
+        .bind(&record.metrics)
+        .bind(&record.created_at)
+        .execute(pool())
+        .await?;
+    }
+    Ok(())
+}
+
+/// Get all output records for a given run.
+pub async fn get_output_records(run_id: &str) -> anyhow::Result<Vec<OutputRecordRow>> {
+    let rows = sqlx::query_as::<_, OutputRecordRow>(
+        "SELECT * FROM output_records WHERE run_id = ? ORDER BY created_at ASC",
+    )
+    .bind(run_id)
+    .fetch_all(pool())
+    .await?;
+    Ok(rows)
+}
+
+/// List all templates from the database.
+pub async fn list_templates() -> anyhow::Result<Vec<Template>> {
+    let rows = sqlx::query_as::<_, Template>("SELECT * FROM templates ORDER BY category, name ASC")
+        .fetch_all(pool())
+        .await?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

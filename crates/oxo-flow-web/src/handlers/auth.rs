@@ -18,8 +18,10 @@ pub async fn login(Json(req): Json<LoginRequest>) -> Result<impl IntoResponse, A
         .ok_or_else(|| ApiError {
             status: StatusCode::UNAUTHORIZED,
             body: ErrorResponse {
-                error: "Invalid credentials".to_string(),
+                code: "AUTH_REQUIRED".to_string(),
+                message: "Invalid credentials".to_string(),
                 detail: Some("The username or password provided is incorrect.".to_string()),
+                suggestion: None,
             },
         })?;
 
@@ -39,8 +41,10 @@ pub async fn login(Json(req): Json<LoginRequest>) -> Result<impl IntoResponse, A
     db::create_session(&session).await.map_err(|e| ApiError {
         status: StatusCode::INTERNAL_SERVER_ERROR,
         body: ErrorResponse {
-            error: "Failed to create session".to_string(),
+            code: "INTERNAL_ERROR".to_string(),
+            message: "Failed to create session".to_string(),
             detail: Some(e.to_string()),
+            suggestion: None,
         },
     })?;
 

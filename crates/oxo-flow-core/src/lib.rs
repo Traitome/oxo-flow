@@ -51,6 +51,7 @@ pub mod error;
 pub mod executor;
 pub mod format;
 pub mod plugin;
+pub mod result;
 
 #[cfg(feature = "report")]
 pub mod report;
@@ -76,10 +77,15 @@ pub use error::{OxoFlowError, Result};
 pub use executor::{
     CheckpointState, ExecutionEvent, ExecutionProvenance, ExecutionStats, JobStatus,
 };
+#[cfg(feature = "webhook")]
+// Re-export result types
+pub use result::{
+    FastQcExtractor, GenericTextExtractor, MultiQcExtractor, OutputRecord, ResultExtractor,
+    ResultExtractorRegistry, scan_run_outputs,
+};
 pub use rule::Rule;
 pub use rule::{CombineConfig, SplitConfig, TransformConfig};
 pub use rule::{EnvironmentSpec, GpuSpec, ResourceHint, Resources, RuleBuilder};
-#[cfg(feature = "webhook")]
 pub use webhook::{WebhookClient, WebhookConfig, WebhookData, WebhookEvent, WebhookPayload};
 pub use wildcard::{wildcard_combinations_from_groups, wildcard_combinations_from_pairs};
 

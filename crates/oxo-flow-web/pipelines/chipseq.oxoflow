@@ -1,0 +1,25 @@
+[workflow]
+name = "chipseq-pipeline"
+version = "1.0.0"
+description = "ChIP-seq peak calling pipeline"
+
+[[rules]]
+name = "bowtie2_align"
+input = ["{sample}_R1.fastq.gz"]
+output = ["bam/{sample}.bam"]
+shell = "bowtie2 -x ref/genome -U {input} | samtools sort -o {output}"
+threads = 8
+
+[[rules]]
+name = "macs2_peakcall"
+input = ["bam/{sample}.bam"]
+output = ["peaks/{sample}_peaks.narrowPeak"]
+shell = "macs2 callpeak -t {input} -n {sample} --outdir peaks/"
+threads = 2
+
+[[rules]]
+name = "annotation"
+input = ["peaks/{sample}_peaks.narrowPeak"]
+output = ["peaks/{sample}_annotated_peaks.txt"]
+shell = "annotatePeaks.pl {input} ref/genome.fa > {output}"
+threads = 1

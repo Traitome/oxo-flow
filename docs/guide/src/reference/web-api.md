@@ -4,6 +4,91 @@ oxo-flow includes a built-in REST API server for remotely building, validating, 
 
 ---
 
+
+## AI-Native API Design
+
+oxo-flow-web is designed as an **AI-native API** — all endpoints are consumable by both browsers and AI agents.
+
+### Structured Error Format
+
+All errors return a unified JSON format:
+
+```json
+{
+  "code": "AUTH_REQUIRED",
+  "message": "Authentication is required for this endpoint",
+  "detail": "The request did not include a valid session token or Bearer token",
+  "suggestion": "Please login at POST /api/auth/login to obtain a session token"
+}
+```
+
+### Error Codes
+
+| Code | HTTP Status | Description |
+|------|-----------|-------|
+| `BAD_REQUEST` | 400 | Input validation failed |
+| `INVALID_WORKFLOW` | 400 | Workflow TOML parsing failed |
+| `AUTH_REQUIRED` | 401 | Authentication required |
+| `INVALID_CREDENTIALS` | 401 | Invalid login credentials |
+| `NOT_FOUND` | 404 | Resource not found |
+| `ACCESS_DENIED` | 403 | Permission denied |
+| `UNPROCESSABLE_ENTITY` | 422 | Entity unprocessable |
+| `RATE_LIMITED` | 429 | Request rate exceeded |
+| `INTERNAL_ERROR` | 500 | Internal server error |
+
+### API Discovery
+
+```
+GET /api/openapi.json
+```
+
+Returns the full OpenAPI 3.0 schema. An AI agent can discover the complete API surface from this endpoint.
+
+### Pagination Envelope
+
+List endpoints use a consistent pagination format:
+
+```json
+{
+  "data": [...],
+  "meta": {
+    "page": 1,
+    "per_page": 20,
+    "total_items": 142,
+    "total_pages": 8,
+    "has_next": true,
+    "has_prev": false
+  }
+}
+```
+
+### SSE Streaming Events
+
+Long-running operations provide real-time progress via Server-Sent Events:
+
+```
+GET /api/events
+Accept: text/event-stream
+```
+
+The stream includes workflow execution events and a 5-second heartbeat.
+
+### AI Agent Navigation Sequence
+
+The following sequence is designed for AI agents:
+
+1. `GET /api/health` — Check server availability
+2. `POST /api/auth/login` — Authenticate
+3. `POST /api/workflows/generate` — Generate a pipeline from intent
+4. `POST /api/workflows/run` — Execute the pipeline
+5. `GET  /api/runs/{id}` — Monitor run progress
+6. `GET  /api/events` — Stream real-time events
+
+The `GET /api/openapi.json` endpoint includes an `x-ai-navigation` field providing the same navigation sequence.
+
+---
+
+
 ## Starting the Server
 
 ```bash
@@ -191,6 +276,40 @@ Content-Type: application/json
 {"toml_content": "<workflow TOML>"}
 ```
 Returns list of output files that would be cleaned.
+
+
+
+#### Generate Pipeline from Intent [AI]
+```
+POST /api/workflows/generate
+Content-Type: application/json
+
+{"intent": "Run a standard RNA-seq differential expression pipeline"}
+```
+
+Maps a natural-language intent description to a pre-built pipeline template. Supported keywords:
+
+- `rna-seq`, `rnaseq`, `transcriptome` → RNA-seq quantification pipeline
+- `variant`, `wgs`, `germline`, `somatic` → Variant calling pipeline
+- `qc`, `fastqc`, `multiqc` → Quality control pipeline
+- `single-cell`, `10x`, `scrna` → Single-cell RNA-seq pipeline
+- `chipseq`, `chip-seq` → ChIP-seq pipeline
+- `scatter`, `gather`, `parallel` → Scatter-gather template
+- `multiomics`, `multi-omics` → Multi-omics integration template
+
+**Response:**
+```json
+{
+  "toml_content": "[workflow]...",
+  "workflow_name": "rnaseq-pipeline",
+  "rules_count": 3,
+  "execution_order": ["fastqc", "star_align", "featurecounts"],
+  "description": "RNA-seq quantification pipeline...",
+  "valid": true
+}
+```
+
+This is the entry point for intent-driven pipeline authoring. The returned TOML can be sent directly to `/api/workflows/run` for execution.
 
 ---
 

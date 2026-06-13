@@ -166,8 +166,10 @@ pub async fn run_workflow(
     let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
-            error: "Authentication required".to_string(),
+            code: "AUTH_REQUIRED".to_string(),
+            message: "Authentication required".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 

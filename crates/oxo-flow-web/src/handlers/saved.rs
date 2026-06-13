@@ -29,8 +29,10 @@ pub async fn save_workflow(
     let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
-            error: "Authentication required".to_string(),
+            code: "AUTH_REQUIRED".to_string(),
+            message: "Authentication required".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 
@@ -64,8 +66,10 @@ pub async fn save_workflow(
             return Err(ApiError {
                 status: StatusCode::NOT_FOUND,
                 body: ErrorResponse {
-                    error: "Workflow not found or not owned by user".to_string(),
+                    code: "NOT_FOUND".to_string(),
+                    message: "Workflow not found or not owned by user".to_string(),
                     detail: None,
+                    suggestion: None,
                 },
             });
         }
@@ -106,8 +110,10 @@ pub async fn list_saved_workflows(
     let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
-            error: "Authentication required".to_string(),
+            code: "AUTH_REQUIRED".to_string(),
+            message: "Authentication required".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 
@@ -152,8 +158,10 @@ pub async fn get_saved_workflow(
     let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
-            error: "Authentication required".to_string(),
+            code: "AUTH_REQUIRED".to_string(),
+            message: "Authentication required".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 
@@ -173,8 +181,10 @@ pub async fn get_saved_workflow(
     .ok_or_else(|| ApiError {
         status: StatusCode::NOT_FOUND,
         body: ErrorResponse {
-            error: "Workflow not found".to_string(),
+            code: "NOT_FOUND".to_string(),
+            message: "Workflow not found".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 
@@ -202,8 +212,10 @@ pub async fn delete_saved_workflow(
     let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
-            error: "Authentication required".to_string(),
+            code: "AUTH_REQUIRED".to_string(),
+            message: "Authentication required".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 
@@ -223,8 +235,10 @@ pub async fn delete_saved_workflow(
         return Err(ApiError {
             status: StatusCode::NOT_FOUND,
             body: ErrorResponse {
-                error: "Workflow not found".to_string(),
+                code: "NOT_FOUND".to_string(),
+                message: "Workflow not found".to_string(),
                 detail: None,
+                suggestion: None,
             },
         });
     }

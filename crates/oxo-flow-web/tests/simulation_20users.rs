@@ -153,7 +153,7 @@ async fn u3_invalid_credentials_rejected() {
     )
     .await;
     assert_eq!(status, 401);
-    assert!(body["error"].as_str().unwrap().contains("Invalid"));
+    assert!(body["message"].as_str().unwrap().contains("Invalid"));
 }
 
 #[tokio::test]

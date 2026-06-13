@@ -68,3 +68,8 @@ tests/e2e-playwright/node_modules/
 tests/e2e-playwright/test-results/
 tests/e2e-playwright/playwright-report/
 logs/
+
+# Node.js
+node_modules/
+frontend/node_modules/
+frontend/dist/

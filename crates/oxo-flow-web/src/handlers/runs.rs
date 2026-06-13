@@ -26,8 +26,10 @@ pub async fn list_runs(headers: axum::http::HeaderMap) -> Result<Json<Vec<db::Ru
     let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
-            error: "Authentication required".to_string(),
+            code: "AUTH_REQUIRED".to_string(),
+            message: "Authentication required".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 
@@ -55,8 +57,10 @@ pub async fn get_run_detail(
     let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
-            error: "Authentication required".to_string(),
+            code: "AUTH_REQUIRED".to_string(),
+            message: "Authentication required".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 
@@ -74,8 +78,10 @@ pub async fn get_run_detail(
         .ok_or_else(|| ApiError {
             status: StatusCode::NOT_FOUND,
             body: ErrorResponse {
-                error: "Run not found".to_string(),
+                code: "NOT_FOUND".to_string(),
+                message: "Run not found".to_string(),
                 detail: None,
+                suggestion: None,
             },
         })?;
 
@@ -130,8 +136,10 @@ pub async fn get_run_logs(
     let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
-            error: "Authentication required".to_string(),
+            code: "AUTH_REQUIRED".to_string(),
+            message: "Authentication required".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 
@@ -150,8 +158,10 @@ pub async fn get_run_logs(
         .ok_or_else(|| ApiError {
             status: StatusCode::NOT_FOUND,
             body: ErrorResponse {
-                error: "Run not found".to_string(),
+                code: "NOT_FOUND".to_string(),
+                message: "Run not found".to_string(),
                 detail: None,
+                suggestion: None,
             },
         })?;
 
@@ -176,8 +186,10 @@ pub async fn cancel_run(
     let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
-            error: "Authentication required".to_string(),
+            code: "AUTH_REQUIRED".to_string(),
+            message: "Authentication required".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 
@@ -196,8 +208,10 @@ pub async fn cancel_run(
         .ok_or_else(|| ApiError {
             status: StatusCode::NOT_FOUND,
             body: ErrorResponse {
-                error: "Run not found".to_string(),
+                code: "NOT_FOUND".to_string(),
+                message: "Run not found".to_string(),
                 detail: None,
+                suggestion: None,
             },
         })?;
 
@@ -242,6 +256,54 @@ pub async fn cancel_run(
     ))
 }
 
+/// `GET /api/runs/{id}/results` — Get structured output records for a run.
+pub async fn get_run_results(
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(run_id): axum::extract::Path<String>,
+) -> Result<Json<Vec<oxo_flow_core::result::OutputRecord>>, ApiError> {
+    let session = crate::extract_session(&headers)
+        .await
+        .ok_or_else(|| ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            body: ErrorResponse {
+                code: "AUTH_REQUIRED".to_string(),
+                message: "Authentication required".to_string(),
+                detail: None,
+                suggestion: None,
+            },
+        })?;
+
+    let user = db::get_user_by_id(&session.user_id)
+        .await
+        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
+        .ok_or_else(|| ApiError::bad_request("User not found", None))?;
+
+    // Verify the run belongs to the user
+    sqlx::query_as::<_, db::Run>("SELECT * FROM runs WHERE id = ? AND user_id = ?")
+        .bind(&run_id)
+        .bind(&user.id)
+        .fetch_optional(db::pool())
+        .await
+        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?
+        .ok_or_else(|| ApiError {
+            status: StatusCode::NOT_FOUND,
+            body: ErrorResponse {
+                code: "NOT_FOUND".to_string(),
+                message: "Run not found or not owned by user".to_string(),
+                detail: None,
+                suggestion: None,
+            },
+        })?;
+
+    let rows = db::get_output_records(&run_id)
+        .await
+        .map_err(|e| ApiError::bad_request("Database error", Some(e.to_string())))?;
+
+    let records: Vec<oxo_flow_core::result::OutputRecord> =
+        rows.iter().map(|r| r.to_core()).collect();
+
+    Ok(Json(records))
+}
 /// Request body for HPC cluster submission.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HpcSubmitRequest {
@@ -265,8 +327,10 @@ pub async fn hpc_submit_run(
     let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
-            error: "Authentication required".to_string(),
+            code: "AUTH_REQUIRED".to_string(),
+            message: "Authentication required".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 
@@ -285,8 +349,10 @@ pub async fn hpc_submit_run(
         .ok_or_else(|| ApiError {
             status: StatusCode::NOT_FOUND,
             body: ErrorResponse {
-                error: "Run not found".to_string(),
+                code: "NOT_FOUND".to_string(),
+                message: "Run not found".to_string(),
                 detail: None,
+                suggestion: None,
             },
         })?;
 

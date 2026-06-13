@@ -33,3 +33,17 @@ bench-macro:
 ## Run comparative benchmarks against Nextflow/Snakemake (requires tools).
 bench-compare:
 	./benches/comparative/run_comparison.sh
+
+## Build the frontend SPA from source.
+frontend-build:
+	cd frontend && npm install && npm run build
+
+## Start the frontend dev server (port 5173) with API proxy to localhost:3000.
+frontend-dev:
+	cd frontend && npm run dev
+
+## Start both the API server and frontend dev server.
+dev: frontend-build
+	@echo "Starting oxo-flow-web on :3000 and frontend on :5173..."
+	@cd frontend && npm run dev & \
+	cd crates/oxo-flow-web && cargo run -- --port 3000

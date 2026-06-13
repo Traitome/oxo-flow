@@ -1,0 +1,32 @@
+[workflow]
+name = "multiomics-pipeline"
+version = "1.0.0"
+description = "Multi-omics integration pipeline"
+
+[[rules]]
+name = "rna_seq_processing"
+input = ["{sample}_rna.fastq.gz"]
+output = ["rnaseq/{sample}_expr.csv"]
+shell = "salmon quant -i ref/salmon_index -l A -r {input} -o rnaseq/{sample}"
+threads = 8
+
+[[rules]]
+name = "atac_seq_processing"
+input = ["{sample}_atac.fastq.gz"]
+output = ["atacseq/{sample}_peaks.bed"]
+shell = "macs2 callpeak -t {input} -n {sample} --outdir atacseq/"
+threads = 4
+
+[[rules]]
+name = "methylation_processing"
+input = ["{sample}_bisulfite.fastq.gz"]
+output = ["methyl/{sample}_cpg.bedGraph"]
+shell = "bismark --genome ref/genome -o methyl/ {input}"
+threads = 4
+
+[[rules]]
+name = "integration"
+input = ["rnaseq/{sample}_expr.csv", "atacseq/{sample}_peaks.bed", "methyl/{sample}_cpg.bedGraph"]
+output = ["integration/{sample}_multiomics_results.txt"]
+shell = "python scripts/integrate_multiomics.py --rna {rnaseq/{sample}_expr.csv} --atac {atacseq/{sample}_peaks.bed} --methyl {methyl/{sample}_cpg.bedGraph} > {output}"
+threads = 2

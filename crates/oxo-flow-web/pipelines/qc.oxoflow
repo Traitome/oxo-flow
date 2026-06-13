@@ -1,0 +1,18 @@
+[workflow]
+name = "qc-pipeline"
+version = "1.0.0"
+description = "Sequencing data quality control pipeline"
+
+[[rules]]
+name = "fastqc"
+input = ["{sample}.fastq.gz"]
+output = ["qc/{sample}_fastqc.html", "qc/{sample}_fastqc.zip"]
+shell = "fastqc {input} -o qc/"
+threads = 2
+
+[[rules]]
+name = "multiqc"
+input = ["qc/{sample}_fastqc.zip"]
+output = ["qc/multiqc_report.html"]
+shell = "multiqc qc/ -o qc/"
+threads = 1

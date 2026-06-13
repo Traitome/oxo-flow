@@ -26,14 +26,15 @@ use axum::{
 };
 use handlers::{
     auth_me, build_dag, build_dag_json, cancel_run, cancel_scheduled_run, clean_workflow,
-    create_scheduled_run, create_user, delete_saved_workflow, delete_template, delete_user,
-    diff_workflows_endpoint, dry_run, export_workflow, format_workflow_endpoint, generate_report,
-    get_audit_logs, get_run_detail, get_run_logs, get_saved_workflow, get_scheduled_run,
-    get_template, health, hpc_status, hpc_submit_run, license_status, lint_workflow,
-    lint_workflow_paginated, list_environments, list_runs, list_saved_workflows,
-    list_scheduled_runs, list_templates, list_users, login, parse_workflow, run_workflow,
-    runtime_metrics, save_template, save_workflow, sse_events, system_info, upload_license,
-    validate_workflow, version, workflow_stats_endpoint,
+    create_scheduled_run, create_user, debug_run, delete_saved_workflow, delete_template,
+    delete_user, diff_workflows_endpoint, dry_run, export_workflow, format_workflow_endpoint,
+    generate_report, get_audit_logs, get_run_detail, get_run_logs, get_run_results,
+    get_saved_workflow, get_scheduled_run, get_template, health, hpc_status, hpc_submit_run,
+    license_status, lint_workflow, lint_workflow_paginated, list_environments, list_runs,
+    list_saved_workflows, list_scheduled_runs, list_templates, list_users, login, parse_workflow,
+    run_workflow, runtime_metrics, save_template, save_workflow, search_workflows, sse_events,
+    suggest_pipeline, system_info, upload_license, validate_workflow, version,
+    workflow_stats_endpoint,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -500,8 +501,10 @@ pub struct ReportRequest {
 /// Uniform JSON error body.
 #[derive(Serialize, Deserialize)]
 pub struct ErrorResponse {
-    pub error: String,
+    pub code: String,
+    pub message: String,
     pub detail: Option<String>,
+    pub suggestion: Option<String>,
 }
 
 /// Response from the run endpoint.
@@ -735,28 +738,100 @@ pub struct ApiError {
     pub body: ErrorResponse,
 }
 
+#[allow(dead_code)]
 impl ApiError {
+    /// Map an HTTP status code to a machine-readable error code.
+    fn code_for_status(status: StatusCode) -> &'static str {
+        match status {
+            StatusCode::BAD_REQUEST => "BAD_REQUEST",
+            StatusCode::UNAUTHORIZED => "AUTH_REQUIRED",
+            StatusCode::NOT_FOUND => "NOT_FOUND",
+            StatusCode::UNPROCESSABLE_ENTITY => "UNPROCESSABLE_ENTITY",
+            StatusCode::TOO_MANY_REQUESTS => "RATE_LIMITED",
+            StatusCode::INTERNAL_SERVER_ERROR => "INTERNAL_ERROR",
+            StatusCode::CONFLICT => "CONFLICT",
+            _ => "UNKNOWN_ERROR",
+        }
+    }
+
+    /// Create an ApiError with an inferred code from the HTTP status.
+    fn new(status: StatusCode, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            body: ErrorResponse {
+                code: Self::code_for_status(status).to_string(),
+                message: message.into(),
+                detail: None,
+                suggestion: None,
+            },
+        }
+    }
+
+    /// Create a BAD_REQUEST error.
     fn bad_request(error: impl Into<String>, detail: impl Into<Option<String>>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
             body: ErrorResponse {
-                error: error.into(),
+                code: "BAD_REQUEST".to_string(),
+                message: error.into(),
                 detail: detail.into(),
+                suggestion: None,
             },
         }
     }
 
+    /// Create an UNPROCESSABLE_ENTITY error.
     fn unprocessable(error: impl Into<String>, detail: impl Into<Option<String>>) -> Self {
         Self {
             status: StatusCode::UNPROCESSABLE_ENTITY,
             body: ErrorResponse {
-                error: error.into(),
+                code: "UNPROCESSABLE_ENTITY".to_string(),
+                message: error.into(),
                 detail: detail.into(),
+                suggestion: None,
+            },
+        }
+    }
+
+    /// Create an UNAUTHORIZED error.
+    fn unauthorized(error: impl Into<String>, detail: impl Into<Option<String>>) -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
+            body: ErrorResponse {
+                code: "AUTH_REQUIRED".to_string(),
+                message: error.into(),
+                detail: detail.into(),
+                suggestion: None,
+            },
+        }
+    }
+
+    /// Create a NOT_FOUND error.
+    fn not_found(error: impl Into<String>, detail: impl Into<Option<String>>) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            body: ErrorResponse {
+                code: "NOT_FOUND".to_string(),
+                message: error.into(),
+                detail: detail.into(),
+                suggestion: None,
+            },
+        }
+    }
+
+    /// Create an INTERNAL_SERVER_ERROR.
+    fn internal_error(error: impl Into<String>, detail: impl Into<Option<String>>) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            body: ErrorResponse {
+                code: "INTERNAL_ERROR".to_string(),
+                message: error.into(),
+                detail: detail.into(),
+                suggestion: None,
             },
         }
     }
 }
-
 impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
         (self.status, Json(self.body)).into_response()
@@ -766,13 +841,9 @@ impl IntoResponse for ApiError {
 async fn list_workflows(
     headers: axum::http::HeaderMap,
 ) -> Result<Json<WorkflowListResponse>, ApiError> {
-    let session = extract_session(&headers).await.ok_or_else(|| ApiError {
-        status: StatusCode::UNAUTHORIZED,
-        body: ErrorResponse {
-            error: "Authentication required".to_string(),
-            detail: None,
-        },
-    })?;
+    let session = extract_session(&headers)
+        .await
+        .ok_or_else(|| ApiError::unauthorized("Authentication required", None))?;
 
     let user = match db::get_user_by_id(&session.user_id).await.ok().flatten() {
         Some(u) => u,
@@ -782,15 +853,10 @@ async fn list_workflows(
                 session.token,
                 session.user_id
             );
-            return Err(ApiError {
-                status: StatusCode::UNAUTHORIZED,
-                body: ErrorResponse {
-                    error: "User account not found".to_string(),
-                    detail: Some(
-                        "The user associated with this session no longer exists".to_string(),
-                    ),
-                },
-            });
+            return Err(ApiError::unauthorized(
+                "User account not found",
+                Some("The user associated with this session no longer exists".to_string()),
+            ));
         }
     };
 
@@ -826,8 +892,10 @@ async fn not_found() -> (StatusCode, Json<ErrorResponse>) {
     (
         StatusCode::NOT_FOUND,
         Json(ErrorResponse {
-            error: "Not found".to_string(),
+            code: "NOT_FOUND".to_string(),
+            message: "Not found".to_string(),
             detail: None,
+            suggestion: None,
         }),
     )
 }
@@ -867,6 +935,241 @@ async fn add_request_id(
             .unwrap_or_else(|_| axum::http::HeaderValue::from_static("unknown")),
     );
     response
+}
+
+// ---------------------------------------------------------------------------
+// OpenAPI schema endpoint
+// ---------------------------------------------------------------------------
+
+/// `GET /api/openapi.json` — Return the OpenAPI 3.0 schema for this server.
+///
+/// This endpoint enables AI agents and API clients to discover the full
+/// API surface programmatically without static documentation.
+async fn openapi_schema() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "openapi": "3.0.0",
+        "info": {
+            "title": "oxo-flow REST API",
+            "description": "AI-native API for building, validating, executing, and monitoring bioinformatics pipelines",
+            "version": env!("CARGO_PKG_VERSION"),
+            "x-ai-native": true,
+            "x-streaming-endpoints": ["/api/events"],
+            "x-structured-errors": true
+        },
+        "servers": [
+            {"url": "/", "description": "oxo-flow web server"}
+        ],
+        "paths": {
+            "/api/health": {"get": {"summary": "Health check", "tags": ["system"]}},
+            "/api/version": {"get": {"summary": "Engine version", "tags": ["system"]}},
+            "/api/system": {"get": {"summary": "System information", "tags": ["system"]}},
+            "/api/metrics": {"get": {"summary": "Runtime metrics", "tags": ["system"]}},
+            "/api/openapi.json": {"get": {"summary": "OpenAPI schema", "tags": ["system"]}},
+            "/api/events": {"get": {"summary": "SSE event stream", "tags": ["system"]}},
+            "/api/environments": {"get": {"summary": "Available environment backends", "tags": ["system"]}},
+            "/api/audit": {"get": {"summary": "Audit log entries", "tags": ["system"]}},
+            "/api/hpc": {"get": {"summary": "HPC scheduler status", "tags": ["hpc"]}},
+            "/api/auth/login": {"post": {"summary": "Login", "tags": ["auth"]}},
+            "/api/auth/me": {"get": {"summary": "Current session info", "tags": ["auth"]}},
+            "/api/license": {"get": {"summary": "License status", "tags": ["auth"]}},
+            "/api/workflows": {"get": {"summary": "List user workflows (local)", "tags": ["workflows"]}},
+            "/api/workflows/validate": {"post": {"summary": "Validate a workflow TOML", "tags": ["workflows"]}},
+            "/api/workflows/parse": {"post": {"summary": "Parse a workflow TOML into detail", "tags": ["workflows"]}},
+            "/api/workflows/dag": {"post": {"summary": "Build DAG as DOT", "tags": ["workflows"]}},
+            "/api/workflows/dag-json": {"post": {"summary": "Build DAG as JSON", "tags": ["workflows"]}},
+            "/api/workflows/dry-run": {"post": {"summary": "Simulate execution dry-run", "tags": ["workflows"]}},
+            "/api/workflows/run": {"post": {"summary": "Launch a workflow run", "tags": ["workflows"]}},
+            "/api/workflows/generate": {"post": {"summary": "Generate a pipeline from intent [AI]", "tags": ["workflows", "ai"]}},
+            "/api/workflows/clean": {"post": {"summary": "List files that would be cleaned", "tags": ["workflows"]}},
+            "/api/workflows/export": {"post": {"summary": "Export as Dockerfile/Singularity def", "tags": ["workflows"]}},
+            "/api/workflows/format": {"post": {"summary": "Format workflow TOML", "tags": ["workflows"]}},
+            "/api/workflows/lint": {"post": {"summary": "Lint workflow best practices", "tags": ["workflows"]}},
+            "/api/workflows/stats": {"post": {"summary": "Workflow statistics", "tags": ["workflows"]}},
+            "/api/workflows/diff": {"post": {"summary": "Compare two workflows", "tags": ["workflows"]}},
+            "/api/workflows/saved": {"get": {"summary": "List saved workflows", "tags": ["workflows"]}},
+            "/api/workflows/save": {"post": {"summary": "Save a workflow", "tags": ["workflows"]}},
+            "/api/runs": {"get": {"summary": "List runs", "tags": ["runs"]}},
+            "/api/users": {"get": {"summary": "List users", "tags": ["admin"]}},
+            "/api/templates": {"get": {"summary": "List templates", "tags": ["templates"]}},
+            "/api/scheduled": {"get": {"summary": "List scheduled runs", "tags": ["scheduled"]}}
+        },
+        "x-streaming-endpoints": ["/api/events", "/api/workflows/generate"],
+        "x-sse-event-types": [
+            {"event": "heartbeat", "description": "Keep-alive signal every 5 seconds"},
+            {"event": "run_started", "description": "Background workflow execution has started"},
+            {"event": "run_completed", "description": "Workflow execution completed successfully"},
+            {"event": "run_failed", "description": "Workflow execution failed"},
+            {"event": "run_cancelled", "description": "Workflow execution was cancelled by user"}
+        ],
+        "x-ai-navigation": [
+            {"step": 1, "endpoint": "/api/health", "description": "Check server availability"},
+            {"step": 2, "endpoint": "/api/auth/login", "description": "Authenticate"},
+            {"step": 3, "endpoint": "/api/workflows/generate", "description": "Generate a pipeline from intent"},
+            {"step": 4, "endpoint": "/api/workflows/run", "description": "Execute the pipeline"},
+            {"step": 5, "endpoint": "/api/runs/{id}", "description": "Monitor run progress"},
+            {"step": 6, "endpoint": "/api/events", "description": "Stream real-time events"}
+        ],
+        "x-error-format": {
+            "code": "Machine-readable error code (e.g., BAD_REQUEST, AUTH_REQUIRED)",
+            "message": "Human-readable error summary",
+            "detail": "Detailed explanation of the error",
+            "suggestion": "Suggested fix or next step"
+        }
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline generation endpoint
+// ---------------------------------------------------------------------------
+
+/// Request to generate a pipeline from a natural-language intent description.
+#[derive(Serialize, Deserialize)]
+pub struct GenerateRequest {
+    /// Natural-language description of the desired pipeline.
+    pub intent: String,
+    /// Optional sample metadata (e.g., organism, data type).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub organism: Option<String>,
+    /// Comma-separated list of desired tools or steps.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<String>,
+}
+
+/// Response from the pipeline generation endpoint.
+#[derive(Serialize, Deserialize)]
+pub struct GenerateResponse {
+    /// The generated workflow as TOML content.
+    pub toml_content: String,
+    /// The assigned workflow name.
+    pub workflow_name: String,
+    /// Number of rules in the generated pipeline.
+    pub rules_count: usize,
+    /// Execution order of rules (topological order).
+    pub execution_order: Vec<String>,
+    /// Human-readable summary of what was generated.
+    pub description: String,
+    /// Whether the pipeline was validated successfully.
+    pub valid: bool,
+}
+
+/// `POST /api/workflows/generate` — Generate a pipeline from intent.
+///
+/// This is the entry point for intent-driven pipeline authoring. It maps
+/// intent keywords to pre-built pipeline templates and returns a validated
+/// workflow TOML that can be further customized or directly executed.
+async fn generate_workflow(
+    Json(req): Json<GenerateRequest>,
+) -> Result<Json<GenerateResponse>, ApiError> {
+    let intent = req.intent.trim().to_lowercase();
+    if intent.is_empty() {
+        return Err(ApiError::bad_request(
+            "Intent description cannot be empty",
+            None,
+        ));
+    }
+
+    // Template matching: map intent keywords to pipeline template names
+    let (toml_template, default_name, description) = match () {
+        _ if intent.contains("rna-seq")
+            || intent.contains("rna seq")
+            || intent.contains("transcriptome") =>
+        {
+            (
+                include_str!("../pipelines/rnaseq.oxoflow"),
+                "rnaseq-pipeline",
+                "RNA-seq quantification and differential expression pipeline using STAR + featureCounts + DESeq2",
+            )
+        }
+        _ if intent.contains("variant")
+            || intent.contains("wgs")
+            || intent.contains("germline")
+            || intent.contains("somatic") =>
+        {
+            (
+                include_str!("../pipelines/variant.oxoflow"),
+                "variant-calling-pipeline",
+                "Variant calling pipeline using BWA + GATK best practices or Mutect2 for somatic calls",
+            )
+        }
+        _ if intent.contains("qc")
+            || intent.contains("quality")
+            || intent.contains("fastqc")
+            || intent.contains("multiqc") =>
+        {
+            (
+                include_str!("../pipelines/qc.oxoflow"),
+                "qc-pipeline",
+                "Quality control pipeline using FastQC + MultiQC",
+            )
+        }
+        _ if intent.contains("scatter")
+            || intent.contains("gather")
+            || intent.contains("parallel") =>
+        {
+            (
+                include_str!("../pipelines/scatter-gather.oxoflow"),
+                "scatter-gather-pipeline",
+                "Scatter-gather pipeline template for parallel data processing",
+            )
+        }
+        _ if intent.contains("single-cell")
+            || intent.contains("10x")
+            || intent.contains("scrna")
+            || intent.contains("sc-rna") =>
+        {
+            (
+                include_str!("../pipelines/single-cell.oxoflow"),
+                "single-cell-pipeline",
+                "Single-cell RNA-seq pipeline using 10x Genomics + CellRanger + Seurat",
+            )
+        }
+        _ if intent.contains("chipseq")
+            || intent.contains("chip-seq")
+            || intent.contains("chip") =>
+        {
+            (
+                include_str!("../pipelines/chipseq.oxoflow"),
+                "chipseq-pipeline",
+                "ChIP-seq peak calling pipeline using Bowtie2 + MACS2",
+            )
+        }
+        _ if intent.contains("multiomics")
+            || intent.contains("multi-omics")
+            || intent.contains("integrate") =>
+        {
+            (
+                include_str!("../pipelines/multiomics.oxoflow"),
+                "multiomics-pipeline",
+                "Multi-omics integration pipeline with RNA-seq + ATAC-seq + methylation",
+            )
+        }
+        _ => (
+            include_str!("../pipelines/generic.oxoflow"),
+            "generic-pipeline",
+            "Generic data processing pipeline template",
+        ),
+    };
+
+    let config = oxo_flow_core::WorkflowConfig::parse(toml_template)
+        .map_err(|e| ApiError::unprocessable("Pipeline generation failed", Some(e.to_string())))?;
+
+    let dag = oxo_flow_core::WorkflowDag::from_rules(&config.rules)
+        .map_err(|e| ApiError::unprocessable("DAG construction failed", Some(e.to_string())))?;
+
+    let execution_order = dag.execution_order().map_err(|e| {
+        ApiError::unprocessable("Cannot determine execution order", Some(e.to_string()))
+    })?;
+
+    Ok(Json(GenerateResponse {
+        toml_content: toml_template.to_string(),
+        workflow_name: default_name.to_string(),
+        rules_count: config.rules.len(),
+        execution_order,
+        description: description.to_string(),
+        valid: true,
+    }))
 }
 
 /// Build the web application router.
@@ -952,13 +1255,17 @@ fn build_router_inner(limiter: Option<RateLimiter>) -> Router {
         .route("/api/workflows/clean", post(clean_workflow))
         .route("/api/workflows/export", post(export_workflow))
         .route("/api/workflows/format", post(format_workflow_endpoint))
+        .route("/api/workflows/generate", post(generate_workflow))
         .route("/api/workflows/lint", post(lint_workflow))
+        .route("/api/workflows/search", post(search_workflows))
+        .route("/api/workflows/suggest", post(suggest_pipeline))
         .route(
             "/api/workflows/lint/paginated",
             post(lint_workflow_paginated),
         )
         .route("/api/workflows/stats", post(workflow_stats_endpoint))
         .route("/api/workflows/diff", post(diff_workflows_endpoint))
+        .route("/api/openapi.json", get(openapi_schema))
         .route("/api/environments", get(list_environments))
         .route("/api/reports/generate", post(generate_report))
         .route("/api/events", get(sse_events))
@@ -967,6 +1274,8 @@ fn build_router_inner(limiter: Option<RateLimiter>) -> Router {
         .route("/api/runs/{id}", get(get_run_detail))
         .route("/api/runs/{id}", delete(cancel_run))
         .route("/api/runs/{id}/logs", get(get_run_logs))
+        .route("/api/runs/{id}/results", get(get_run_results))
+        .route("/api/runs/{id}/debug", post(debug_run))
         .route("/api/workflows/saved", get(list_saved_workflows))
         .route("/api/workflows/saved/{id}", get(get_saved_workflow))
         .route("/api/workflows/saved/{id}", delete(delete_saved_workflow))
@@ -1259,7 +1568,7 @@ docker = "biocontainers/bwa:0.7.17"
             .await
             .unwrap();
         let parsed: ErrorResponse = serde_json::from_slice(&body).unwrap();
-        assert_eq!(parsed.error, "Not found");
+        assert_eq!(parsed.message, "Not found");
     }
 
     // -- Validate endpoint -------------------------------------------------------
@@ -1346,7 +1655,7 @@ docker = "biocontainers/bwa:0.7.17"
             .await
             .unwrap();
         let err: ErrorResponse = serde_json::from_slice(&body).unwrap();
-        assert!(!err.error.is_empty());
+        assert!(!err.message.is_empty());
     }
 
     // -- DAG endpoint ------------------------------------------------------------
@@ -1598,7 +1907,7 @@ docker = "biocontainers/bwa:0.7.17"
             .await
             .unwrap();
         let err: ErrorResponse = serde_json::from_slice(&body).unwrap();
-        assert!(!err.error.is_empty());
+        assert!(!err.message.is_empty());
     }
 
     #[tokio::test]
@@ -1616,7 +1925,7 @@ docker = "biocontainers/bwa:0.7.17"
             .await
             .unwrap();
         let err: ErrorResponse = serde_json::from_slice(&body).unwrap();
-        assert!(!err.error.is_empty());
+        assert!(!err.message.is_empty());
     }
 
     #[tokio::test]
@@ -1676,7 +1985,7 @@ shell = "echo b"
             .await
             .unwrap();
         let err: ErrorResponse = serde_json::from_slice(&body).unwrap();
-        assert!(!err.error.is_empty());
+        assert!(!err.message.is_empty());
     }
 
     #[tokio::test]
@@ -1930,7 +2239,7 @@ shell = "echo b"
             .await
             .unwrap();
         let err: ErrorResponse = serde_json::from_slice(&body).unwrap();
-        assert!(err.error.contains("Invalid"));
+        assert!(err.message.contains("Invalid"));
     }
 
     #[tokio::test]

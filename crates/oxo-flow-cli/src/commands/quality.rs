@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 
 use crate::commands::print_banner;
 
-pub fn validate_command(workflow: PathBuf, as_include: bool) -> Result<()> {
+pub fn validate_command(workflow: PathBuf, as_include: bool, json: bool) -> Result<()> {
+    let _ = &json;
     let config_res = WorkflowConfig::from_file(&workflow);
     match config_res {
         Ok(cfg) => {
@@ -136,7 +137,7 @@ pub fn validate_command(workflow: PathBuf, as_include: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn lint_command(workflow: PathBuf, strict: bool) -> Result<()> {
+pub fn lint_command(workflow: PathBuf, strict: bool, json: bool) -> Result<()> {
     print_banner();
     let config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
@@ -190,6 +191,41 @@ pub fn lint_command(workflow: PathBuf, strict: bool) -> Result<()> {
         warning_count,
         info_count
     );
+
+    // JSON output mode
+    if json {
+        let diagnostics: Vec<serde_json::Value> = validation
+            .diagnostics
+            .iter()
+            .chain(lint_diags.iter())
+            .chain(secret_diags.iter())
+            .map(|d| {
+                serde_json::json!({
+                    "severity": format!("{:?}", d.severity).to_lowercase(),
+                    "code": d.code,
+                    "message": d.message,
+                    "rule": d.rule,
+                    "suggestion": d.suggestion,
+                })
+            })
+            .collect();
+
+        let output = serde_json::json!({
+            "command": "lint",
+            "workflow": workflow.display().to_string(),
+            "strict": strict,
+            "diagnostics": diagnostics,
+            "error_count": error_count,
+            "warning_count": warning_count,
+            "info_count": info_count,
+            "passed": error_count == 0 && (!strict || warning_count == 0),
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+        if error_count > 0 || (strict && warning_count > 0) {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
 
     if error_count > 0 || (strict && warning_count > 0) {
         std::process::exit(1);
@@ -399,7 +435,7 @@ pub async fn watch_command(workflow: PathBuf, auto_run: bool, jobs: usize) -> Re
             );
 
             // Run validate + optional dry-run/run for quick feedback
-            match validate_command(workflow_path.clone(), false) {
+            match validate_command(workflow_path.clone(), false, false) {
                 Ok(()) => {
                     if auto_run {
                         eprintln!();
@@ -418,6 +454,7 @@ pub async fn watch_command(workflow: PathBuf, auto_run: bool, jobs: usize) -> Re
                             false,           // skip_env_setup
                             None,            // cache_dir
                             false,           // provenance
+                            false,           // json (watch mode = human-readable)
                         )
                         .await;
                     } else {
@@ -427,6 +464,7 @@ pub async fn watch_command(workflow: PathBuf, auto_run: bool, jobs: usize) -> Re
                             Some(workflow_path.clone()),
                             vec![],
                             false,
+                            false, // json (watch mode = human-readable)
                         )
                         .await;
                     }
@@ -438,7 +476,7 @@ pub async fn watch_command(workflow: PathBuf, auto_run: bool, jobs: usize) -> Re
             }
 
             // Run lint
-            match lint_command(workflow_path.clone(), false) {
+            match lint_command(workflow_path.clone(), false, false) {
                 Ok(()) => {
                     eprintln!();
                 }

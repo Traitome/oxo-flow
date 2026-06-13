@@ -138,8 +138,10 @@ pub async fn get_template(
         None => Err(ApiError {
             status: StatusCode::NOT_FOUND,
             body: ErrorResponse {
-                error: "Template not found".to_string(),
+                code: "NOT_FOUND".to_string(),
+                message: "Template not found".to_string(),
                 detail: None,
+                suggestion: None,
             },
         }),
     }
@@ -153,8 +155,10 @@ pub async fn save_template(
     let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
-            error: "Authentication required".to_string(),
+            code: "AUTH_REQUIRED".to_string(),
+            message: "Authentication required".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 
@@ -203,8 +207,10 @@ pub async fn save_template(
             None => Err(ApiError {
                 status: StatusCode::NOT_FOUND,
                 body: ErrorResponse {
-                    error: "Template not found".to_string(),
+                    code: "NOT_FOUND".to_string(),
+                    message: "Template not found".to_string(),
                     detail: None,
+                    suggestion: None,
                 },
             }),
         }
@@ -243,8 +249,10 @@ pub async fn delete_template(
     let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
-            error: "Authentication required".to_string(),
+            code: "AUTH_REQUIRED".to_string(),
+            message: "Authentication required".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 
@@ -271,8 +279,10 @@ pub async fn delete_template(
             return Err(ApiError {
                 status: StatusCode::NOT_FOUND,
                 body: ErrorResponse {
-                    error: "Template not found".to_string(),
+                    code: "NOT_FOUND".to_string(),
+                    message: "Template not found".to_string(),
                     detail: None,
+                    suggestion: None,
                 },
             });
         }

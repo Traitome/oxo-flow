@@ -40,8 +40,10 @@ pub async fn list_users(
     let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
-            error: "Authentication required".to_string(),
+            code: "AUTH_REQUIRED".to_string(),
+            message: "Authentication required".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 
@@ -55,8 +57,10 @@ pub async fn list_users(
         return Err(ApiError {
             status: StatusCode::FORBIDDEN,
             body: ErrorResponse {
-                error: "Admin access required".to_string(),
+                code: "ACCESS_DENIED".to_string(),
+                message: "Admin access required".to_string(),
                 detail: None,
+                suggestion: None,
             },
         });
     }
@@ -94,8 +98,10 @@ pub async fn create_user(
     let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
-            error: "Authentication required".to_string(),
+            code: "AUTH_REQUIRED".to_string(),
+            message: "Authentication required".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 
@@ -108,8 +114,10 @@ pub async fn create_user(
         return Err(ApiError {
             status: StatusCode::FORBIDDEN,
             body: ErrorResponse {
-                error: "Admin access required".to_string(),
+                code: "ACCESS_DENIED".to_string(),
+                message: "Admin access required".to_string(),
                 detail: None,
+                suggestion: None,
             },
         });
     }
@@ -128,8 +136,10 @@ pub async fn create_user(
         return Err(ApiError {
             status: StatusCode::CONFLICT,
             body: ErrorResponse {
-                error: "Username already exists".to_string(),
+                code: "CONFLICT".to_string(),
+                message: "Username already exists".to_string(),
                 detail: None,
+                suggestion: None,
             },
         });
     }
@@ -174,8 +184,10 @@ pub async fn delete_user(
     let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
-            error: "Authentication required".to_string(),
+            code: "AUTH_REQUIRED".to_string(),
+            message: "Authentication required".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 
@@ -188,8 +200,10 @@ pub async fn delete_user(
         return Err(ApiError {
             status: StatusCode::FORBIDDEN,
             body: ErrorResponse {
-                error: "Admin access required".to_string(),
+                code: "ACCESS_DENIED".to_string(),
+                message: "Admin access required".to_string(),
                 detail: None,
+                suggestion: None,
             },
         });
     }
@@ -212,8 +226,10 @@ pub async fn delete_user(
         return Err(ApiError {
             status: StatusCode::NOT_FOUND,
             body: ErrorResponse {
-                error: "User not found".to_string(),
+                code: "NOT_FOUND".to_string(),
+                message: "User not found".to_string(),
                 detail: None,
+                suggestion: None,
             },
         });
     }

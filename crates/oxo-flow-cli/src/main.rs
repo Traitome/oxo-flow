@@ -52,6 +52,10 @@ pub struct Cli {
     /// Disable colored output. Also respects the NO_COLOR environment variable.
     #[arg(global = true, long)]
     no_color: bool,
+
+    /// Output machine-readable JSON to stdout (suppresses human-readable stderr output).
+    #[arg(global = true, long)]
+    json: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -275,11 +279,7 @@ pub enum Commands {
         stop_on_error: bool,
         #[arg(short = 'f', long)]
         file: Option<PathBuf>,
-        #[arg(
-            long = "json-output",
-            alias = "json",
-            help = "Output results as formatted JSON"
-        )]
+        #[arg(long = "json-output", help = "Output results as formatted JSON")]
         json_output: bool,
         #[arg(short = 'n', long)]
         dry_run: bool,
@@ -490,18 +490,19 @@ async fn main() -> Result<()> {
                 skip_env_setup,
                 cache_dir,
                 provenance,
+                cli.json,
             )
             .await?
         }
         Commands::Resume { checkpoint, jobs } => resume_command(checkpoint, jobs).await?,
         Commands::DryRun { workflow, target } => {
-            dry_run_command(workflow, target, cli.verbose).await?
+            dry_run_command(workflow, target, cli.verbose, cli.json).await?
         }
         Commands::Validate {
             workflow,
             as_include,
         } => {
-            validate_command(workflow, as_include)?;
+            validate_command(workflow, as_include, cli.json)?;
         }
         Commands::Init { name, dir } => init_command(name, dir)?,
         Commands::Template { template, output } => template_command(template, output)?,
@@ -510,7 +511,7 @@ async fn main() -> Result<()> {
             format,
             output,
         } => handle_graph(workflow, format, output)?,
-        Commands::Status { checkpoint } => handle_status(checkpoint).await?,
+        Commands::Status { checkpoint } => handle_status(checkpoint, cli.json).await?,
         Commands::Config { action } => crate::commands::infra::handle_config(action)?,
         Commands::Diff {
             workflow_a,
@@ -532,7 +533,7 @@ async fn main() -> Result<()> {
             output,
             check,
         } => format_command(workflow, output, check)?,
-        Commands::Lint { workflow, strict } => lint_command(workflow, strict)?,
+        Commands::Lint { workflow, strict } => lint_command(workflow, strict, cli.json)?,
         Commands::Watch {
             workflow,
             run,
@@ -654,13 +655,13 @@ async fn main() -> Result<()> {
             );
             // 1. Validate
             eprintln!("{} Validation...", "1.".bold());
-            validate_command(workflow.clone(), false)?;
+            validate_command(workflow.clone(), false, cli.json)?;
             // 2. Lint
             eprintln!("{} Lint...", "2.".bold());
-            lint_command(workflow.clone(), false)?;
+            lint_command(workflow.clone(), false, cli.json)?;
             // 3. Dry-run
             eprintln!("{} Dry-run...", "3.".bold());
-            dry_run_command(Some(workflow.clone()), vec![], cli.verbose).await?;
+            dry_run_command(Some(workflow.clone()), vec![], cli.verbose, cli.json).await?;
             // 4. Optional: run with --run flag
             if run {
                 eprintln!("{} Execution...", "4.".bold());
@@ -679,6 +680,7 @@ async fn main() -> Result<()> {
                     false,           // skip_env_setup
                     None,            // cache_dir
                     false,           // provenance
+                    cli.json,
                 )
                 .await?;
             }

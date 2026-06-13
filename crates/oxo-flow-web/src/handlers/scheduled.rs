@@ -73,8 +73,10 @@ pub async fn create_scheduled_run(
     let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
-            error: "Authentication required".to_string(),
+            code: "AUTH_REQUIRED".to_string(),
+            message: "Authentication required".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 
@@ -96,8 +98,10 @@ pub async fn create_scheduled_run(
     let (wf_id, wf_name, _wf_version, _wf_toml) = workflow.ok_or_else(|| ApiError {
         status: StatusCode::NOT_FOUND,
         body: ErrorResponse {
-            error: "Workflow not found".to_string(),
+            code: "NOT_FOUND".to_string(),
+            message: "Workflow not found".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 
@@ -141,8 +145,10 @@ pub async fn list_scheduled_runs(
     let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
-            error: "Authentication required".to_string(),
+            code: "AUTH_REQUIRED".to_string(),
+            message: "Authentication required".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 
@@ -170,8 +176,10 @@ pub async fn cancel_scheduled_run(
     let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
-            error: "Authentication required".to_string(),
+            code: "AUTH_REQUIRED".to_string(),
+            message: "Authentication required".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 
@@ -192,8 +200,10 @@ pub async fn cancel_scheduled_run(
     .ok_or_else(|| ApiError {
         status: StatusCode::NOT_FOUND,
         body: ErrorResponse {
-            error: "Scheduled run not found".to_string(),
+            code: "NOT_FOUND".to_string(),
+            message: "Scheduled run not found".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 
@@ -226,8 +236,10 @@ pub async fn get_scheduled_run(
     let session = extract_session(&headers).await.ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
-            error: "Authentication required".to_string(),
+            code: "AUTH_REQUIRED".to_string(),
+            message: "Authentication required".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 
@@ -247,8 +259,10 @@ pub async fn get_scheduled_run(
     .ok_or_else(|| ApiError {
         status: StatusCode::NOT_FOUND,
         body: ErrorResponse {
-            error: "Scheduled run not found".to_string(),
+            code: "NOT_FOUND".to_string(),
+            message: "Scheduled run not found".to_string(),
             detail: None,
+            suggestion: None,
         },
     })?;
 

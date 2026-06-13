@@ -1,0 +1,28 @@
+[workflow]
+name = "scatter-gather-pipeline"
+version = "1.0.0"
+description = "Parallel scatter-gather processing pipeline"
+
+[variables]
+chunks = ["chunk1", "chunk2", "chunk3", "chunk4"]
+
+[[rules]]
+name = "split"
+input = ["input.txt"]
+output = ["split/{chunk}.txt"]
+shell = "split -n l/4 input.txt split/chunk_"
+threads = 1
+
+[[rules]]
+name = "process_chunk"
+input = ["split/{chunk}.txt"]
+output = ["processed/{chunk}.out.txt"]
+shell = "process_tool {input} > {output}"
+threads = 2
+
+[[rules]]
+name = "gather"
+input = ["processed/{chunk}.out.txt"]
+output = ["results/combined.txt"]
+shell = "cat processed/*.out.txt > results/combined.txt"
+threads = 1

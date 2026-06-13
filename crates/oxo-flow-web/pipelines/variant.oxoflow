@@ -1,0 +1,25 @@
+[workflow]
+name = "variant-calling-pipeline"
+version = "1.0.0"
+description = "Variant calling using GATK best practices"
+
+[[rules]]
+name = "bwa_align"
+input = ["{sample}_R1.fastq.gz", "{sample}_R2.fastq.gz"]
+output = ["bam/{sample}.sorted.bam"]
+shell = "bwa mem -t {threads} ref/genome.fa {input} | samtools sort -o {output}"
+threads = 8
+
+[[rules]]
+name = "mark_duplicates"
+input = ["bam/{sample}.sorted.bam"]
+output = ["bam/{sample}.dedup.bam"]
+shell = "gatk MarkDuplicates -I {input} -O {output} -M bam/{sample}_metrics.txt"
+threads = 2
+
+[[rules]]
+name = "variant_call"
+input = ["bam/{sample}.dedup.bam"]
+output = ["vcf/{sample}.raw.vcf.gz"]
+shell = "gatk HaplotypeCaller -R ref/genome.fa -I {input} -O {output}"
+threads = 4

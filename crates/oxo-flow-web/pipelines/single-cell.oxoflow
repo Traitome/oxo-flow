@@ -1,0 +1,18 @@
+[workflow]
+name = "single-cell-pipeline"
+version = "1.0.0"
+description = "Single-cell RNA-seq analysis pipeline"
+
+[[rules]]
+name = "cellranger_count"
+input = ["{sample}_R1.fastq.gz", "{sample}_R2.fastq.gz"]
+output = ["cellranger/{sample}/outs/filtered_feature_bc_matrix.h5"]
+shell = "cellranger count --id={sample} --transcriptome=ref/refdata-gex-GRCh38 --fastqs=. --sample={sample}"
+threads = 16
+
+[[rules]]
+name = "seurat_analysis"
+input = ["cellranger/{sample}/outs/filtered_feature_bc_matrix.h5"]
+output = ["results/{sample}_analysis.rds"]
+shell = "Rscript scripts/seurat_analysis.R {input} {output}"
+threads = 4

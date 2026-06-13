@@ -1,5 +1,6 @@
 //! Handler modules for oxo-flow-web API endpoints.
 
+pub mod ai;
 pub mod auth;
 pub mod reports;
 pub mod runs;
@@ -11,9 +12,12 @@ pub mod users;
 pub mod workflow;
 
 // Re-export all handlers for convenient access from lib.rs
+pub use ai::{debug_run, search_workflows, suggest_pipeline};
 pub use auth::{auth_me, license_status, login, upload_license};
 pub use reports::generate_report;
-pub use runs::{cancel_run, get_run_detail, get_run_logs, hpc_submit_run, list_runs};
+pub use runs::{
+    cancel_run, get_run_detail, get_run_logs, get_run_results, hpc_submit_run, list_runs,
+};
 pub use saved::{delete_saved_workflow, get_saved_workflow, list_saved_workflows, save_workflow};
 pub use scheduled::{
     cancel_scheduled_run, create_scheduled_run, get_scheduled_run, list_scheduled_runs,
