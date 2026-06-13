@@ -192,6 +192,27 @@ pub fn build_router(mode: &str) -> Router {
         .route(
             "/api/runs/{id}/cancel",
             post(execution::handlers::cancel_run),
+        )
+        .route("/api/runs/{id}/pause", post(execution::handlers::pause_run))
+        .route(
+            "/api/runs/{id}/resume",
+            post(execution::handlers::resume_run),
+        )
+        .route(
+            "/api/runs/{id}/ai-status",
+            get(execution::handlers::get_ai_status),
+        )
+        .route(
+            "/api/runs/{id}/report",
+            get(execution::handlers::get_run_report),
+        )
+        .route(
+            "/api/runs/{id}/report/ask",
+            post(execution::handlers::ask_report_question),
+        )
+        .route(
+            "/api/runs/{id}/report/visualize",
+            post(execution::handlers::visualize_report),
         );
 
     // ---- Data routes ----
@@ -200,6 +221,18 @@ pub fn build_router(mode: &str) -> Router {
         .route(
             "/api/data/reference",
             post(workflow::handlers::discover_reference),
+        )
+        .route(
+            "/api/data/perceive",
+            post(workflow::handlers::perceive_data),
+        )
+        .route(
+            "/api/data/reference/status",
+            get(workflow::handlers::reference_status),
+        )
+        .route(
+            "/api/data/samplesheet/parse",
+            post(workflow::handlers::parse_samplesheet),
         );
 
     // ---- Template routes ----
@@ -239,6 +272,15 @@ pub fn build_router(mode: &str) -> Router {
         .route("/api/chat/send/json", post(chat::handlers::chat_send_json))
         .route("/api/chat/sessions", get(chat::handlers::list_sessions));
 
+    // ---- DAG Edit routes (v0.9) ----
+    let dag_edit_routes = Router::new()
+        .route(
+            "/api/pipeline/{id}/command",
+            post(dag::handlers::edit_command),
+        )
+        .route("/api/pipeline/{id}/undo", post(dag::handlers::undo_command))
+        .route("/api/pipeline/{id}/redo", post(dag::handlers::redo_command));
+
     // ---- AI routes ----
     let ai_routes = Router::new()
         .route("/api/ai/translate", post(ai::handlers::translate))
@@ -251,7 +293,24 @@ pub fn build_router(mode: &str) -> Router {
         .route("/api/ai/optimize", post(ai::handlers::optimize))
         .route("/api/ai/config", get(ai::handlers::get_ai_config))
         .route("/api/ai/config", post(ai::handlers::update_ai_config))
-        .route("/api/ai/test", post(ai::handlers::test_ai_config));
+        .route("/api/ai/test", post(ai::handlers::test_ai_config))
+        .route("/api/ai/config/user", get(ai::handlers::get_user_ai_config))
+        .route(
+            "/api/ai/config/user",
+            put(ai::handlers::update_user_ai_config),
+        )
+        .route(
+            "/api/ai/config/server",
+            get(ai::handlers::get_server_ai_config),
+        )
+        .route(
+            "/api/ai/config/server",
+            put(ai::handlers::update_server_ai_config),
+        )
+        .route(
+            "/api/ai/config/effective",
+            get(ai::handlers::get_ai_config_effective),
+        );
 
     // ---- Collaboration routes ----
     let collaboration_routes = Router::new()
@@ -306,6 +365,7 @@ pub fn build_router(mode: &str) -> Router {
         .merge(auth_routes)
         .merge(license_routes)
         .merge(chat_routes)
+        .merge(dag_edit_routes)
         .merge(ai_routes)
         .merge(collaboration_routes)
         .merge(obs_routes);

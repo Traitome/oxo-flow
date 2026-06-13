@@ -6,6 +6,7 @@ import Pipelines from './pages/Pipelines';
 import Runs from './pages/Runs';
 import Settings from './pages/Settings';
 import ApiDocs from './pages/ApiDocs';
+import MonitorReport from './pages/MonitorReport';
 
 export default function App() {
   return (
@@ -17,6 +18,7 @@ export default function App() {
           <Route path="/pipelines" element={<Pipelines />} />
           <Route path="/runs" element={<Runs />} />
           <Route path="/runs/:id" element={<Runs />} />
+          <Route path="/monitor" element={<MonitorReport />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/docs" element={<ApiDocs />} />
         </Route>

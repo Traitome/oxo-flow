@@ -3,6 +3,9 @@
 //! Thin adapters: parse HTTP request → call service → serialize response.
 //! Zero business logic here — all logic lives in `service.rs`.
 
+use crate::domains::ai::agents::monitor_agent::{self, NodeExecutionStatus, ResourceUsage};
+use crate::domains::ai::agents::report_agent;
+use crate::domains::ai::agents::types::ReportFile;
 use axum::{Json, extract::Path, http::StatusCode};
 
 use super::service;
@@ -618,4 +621,301 @@ pub async fn cancel_run(Path(id): Path<String>) -> ApiResult<serde_json::Value> 
             format!("Run {id} not found"),
         )),
     }
+}
+
+/// POST /api/runs/{id}/pause
+pub async fn pause_run(
+    Path(id): Path<String>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<serde_json::Value> {
+    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+
+    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+
+    let _run = run.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Run {id} not found"),
+        )
+    })?;
+    let reason = req
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .unwrap_or("user_request");
+
+    let now = now_iso();
+    sqlx::query("UPDATE runs SET status = 'paused', phase = ? WHERE id = ?")
+        .bind(format!("paused: {reason}"))
+        .bind(&id)
+        .execute(pool)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+
+    crate::broadcast_event(
+        "run_paused",
+        &serde_json::json!({"run_id": id, "reason": reason}),
+    );
+
+    Ok(Json(serde_json::json!({
+        "run_id": id,
+        "status": "paused",
+        "reason": reason,
+        "paused_at": now,
+    })))
+}
+
+/// POST /api/runs/{id}/resume
+pub async fn resume_run(
+    Path(id): Path<String>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<serde_json::Value> {
+    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+
+    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+
+    let _run = run.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Run {id} not found"),
+        )
+    })?;
+    let from_rule = req.get("from_rule").and_then(|v| v.as_str());
+
+    let _now = now_iso();
+    sqlx::query("UPDATE runs SET status = 'running', phase = 'executing' WHERE id = ?")
+        .bind(&id)
+        .execute(pool)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+
+    crate::broadcast_event(
+        "run_resumed",
+        &serde_json::json!({"run_id": id, "from_rule": from_rule}),
+    );
+
+    Ok(Json(serde_json::json!({
+        "run_id": id,
+        "status": "running",
+        "from_rule": from_rule,
+    })))
+}
+
+/// GET /api/runs/{id}/ai-status
+pub async fn get_ai_status(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
+    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+
+    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+
+    let _run = run.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Run {id} not found"),
+        )
+    })?;
+
+    let nodes: Vec<models::RunNodeRow> =
+        sqlx::query_as("SELECT * FROM run_nodes WHERE run_id = ? ORDER BY attempt ASC")
+            .bind(&id)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+
+    let exec_nodes: Vec<NodeExecutionStatus> = nodes
+        .iter()
+        .map(|n| NodeExecutionStatus {
+            rule: n.rule_name.clone(),
+            status: n.status.clone(),
+            duration_ms: n.finished_at.as_ref().and_then(|f| {
+                n.started_at.as_ref().and_then(|s| {
+                    let sf = chrono::NaiveDateTime::parse_from_str(s, "%+").ok()?;
+                    let ff = chrono::NaiveDateTime::parse_from_str(f, "%+").ok()?;
+                    Some((ff - sf).num_milliseconds())
+                })
+            }),
+            exit_code: n.exit_code,
+            started_at: n.started_at.clone(),
+        })
+        .collect();
+
+    let resources = ResourceUsage::default();
+    let status = monitor_agent::analyze_run_status(&exec_nodes, &resources);
+
+    Ok(Json(serde_json::json!(status)))
+}
+
+/// GET /api/runs/{id}/report
+pub async fn get_run_report(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
+    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+
+    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+
+    let run = run.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Run {id} not found"),
+        )
+    })?;
+
+    let pipeline_name = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
+        .ok()
+        .map(|c| c.workflow.name.clone())
+        .unwrap_or_else(|| "pipeline".into());
+
+    let files: Vec<ReportFile> = run
+        .workdir
+        .as_ref()
+        .and_then(|wd| std::fs::read_dir(wd).ok())
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .map(|e| {
+                    let path = e.path();
+                    let meta = path.metadata().ok();
+                    ReportFile {
+                        path: path.to_string_lossy().to_string(),
+                        name: e.file_name().to_string_lossy().to_string(),
+                        size_bytes: meta.as_ref().map(|m| m.len() as i64).unwrap_or(0),
+                        is_dir: meta.map(|m| m.is_dir()).unwrap_or(false),
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let log_summary = run
+        .workdir
+        .as_ref()
+        .and_then(|wd| std::fs::read_to_string(format!("{wd}/execution.log")).ok())
+        .unwrap_or_default();
+
+    let report = report_agent::generate_report(&pipeline_name, &files, &log_summary, &[]);
+
+    Ok(Json(serde_json::json!(report)))
+}
+
+/// POST /api/runs/{id}/report/ask
+pub async fn ask_report_question(
+    Path(id): Path<String>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<String> {
+    let question = req
+        .get("question")
+        .and_then(|v| v.as_str())
+        .unwrap_or("what are the results");
+    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+
+    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+    let _run = run.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Run {id} not found"),
+        )
+    })?;
+
+    let pipeline_name = "pipeline";
+    let files = vec![];
+    let report = report_agent::generate_report(pipeline_name, &files, "", &[]);
+    let answer = report_agent::answer_question(&report, question);
+    Ok(Json(answer))
+}
+
+/// POST /api/runs/{id}/report/visualize
+pub async fn visualize_report(
+    Path(id): Path<String>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<serde_json::Value> {
+    let chart_type = req
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("volcano");
+    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+
+    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+    let _run = run.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Run {id} not found"),
+        )
+    })?;
+
+    let plot_json = serde_json::json!({
+        "chart_type": chart_type,
+        "title": format!("{chart_type} plot"),
+        "spec": {
+            "mark": if chart_type == "bar" { "bar" } else { "point" },
+            "encoding": {
+                "x": {"field": "x", "type": "quantitative", "title": "X Axis"},
+                "y": {"field": "y", "type": "quantitative", "title": "Y Axis"},
+            }
+        },
+        "data": []
+    });
+
+    Ok(Json(plot_json))
 }

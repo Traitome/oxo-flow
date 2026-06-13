@@ -329,3 +329,194 @@ pub async fn test_ai_config(Json(_req): Json<AiConfigRequest>) -> ApiResult<AiTe
         })),
     }
 }
+
+// ---------------------------------------------------------------------------
+// AI Config - Three-tier priority (v0.9)
+// ---------------------------------------------------------------------------
+
+/// GET /api/ai/config/effective
+pub async fn get_ai_config_effective() -> ApiResult<serde_json::Value> {
+    use crate::ai_provider::AiProviderRegistry;
+
+    let registry = AiProviderRegistry::global();
+    let config = registry.get_config();
+    let env_provider = std::env::var("OXO_FLOW_AI_PROVIDER").ok();
+    let env_model = std::env::var("OXO_FLOW_AI_MODEL").ok();
+    let env_url = std::env::var("OXO_FLOW_AI_API_URL").ok();
+
+    Ok(Json(serde_json::json!({
+        "effective": {
+            "provider": config.provider,
+            "model": config.model,
+            "api_url": config.api_url,
+            "is_configured": config.is_configured,
+        },
+        "tiers": {
+            "env_provider": env_provider,
+            "env_model": env_model,
+            "env_url": env_url,
+            "server_provider": config.provider,
+            "server_model": config.model,
+            "user_provider": serde_json::Value::Null,
+        },
+        "resolution_order": ["user_settings", "server_config", "environment", "defaults"],
+    })))
+}
+
+/// GET /api/ai/config/server
+pub async fn get_server_ai_config() -> ApiResult<serde_json::Value> {
+    let pool = crate::infra::db::sqlite::try_pool().ok();
+    let config = if let Some(p) = pool {
+        let row: Option<serde_json::Value> = sqlx::query_as::<_, (String, String, String, String, i64)>(
+            "SELECT provider, api_url, model, api_key, search_enabled FROM ai_provider_config WHERE user_id IS NULL ORDER BY updated_at DESC LIMIT 1"
+        )
+        .fetch_optional(p)
+        .await
+        .ok()
+        .flatten()
+        .map(|(provider, api_url, model, _api_key, search_enabled)| {
+            serde_json::json!({
+                "provider": provider,
+                "api_url": api_url,
+                "model": model,
+                "search_enabled": search_enabled == 1,
+            })
+        });
+        row
+    } else {
+        None
+    };
+
+    Ok(Json(serde_json::json!({
+        "server_config": config,
+        "configured": config.is_some(),
+    })))
+}
+
+/// PUT /api/ai/config/server
+pub async fn update_server_ai_config(
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<serde_json::Value> {
+    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+
+    let provider = req
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .unwrap_or("disabled");
+    let api_url = req.get("api_url").and_then(|v| v.as_str()).unwrap_or("");
+    let model = req.get("model").and_then(|v| v.as_str()).unwrap_or("");
+    let api_key = req.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
+
+    // Upsert server config (user_id IS NULL)
+    sqlx::query(
+        "INSERT INTO ai_provider_config (id, user_id, provider, api_url, model, api_key, search_enabled, monitor_enabled, auto_retry_enabled, max_correction_rounds, created_at, updated_at) VALUES (?, NULL, ?, ?, ?, ?, 1, 1, 0, 3, ?, ?) ON CONFLICT(user_id) DO UPDATE SET provider=excluded.provider, api_url=excluded.api_url, model=excluded.model, api_key=excluded.api_key, updated_at=excluded.updated_at"
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(provider)
+    .bind(api_url)
+    .bind(model)
+    .bind(api_key)
+    .bind(chrono::Utc::now().to_rfc3339())
+    .bind(chrono::Utc::now().to_rfc3339())
+    .execute(pool)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+
+    // Apply to runtime
+    let _ = crate::ai_provider::AiProviderRegistry::global().reconfigure(
+        provider,
+        Some(api_key.into()),
+        Some(api_url.into()),
+        Some(model.into()),
+    );
+
+    Ok(Json(
+        serde_json::json!({"status": "updated", "provider": provider}),
+    ))
+}
+
+/// GET /api/ai/config/user
+pub async fn get_user_ai_config() -> ApiResult<serde_json::Value> {
+    let config = crate::ai_provider::AiProviderRegistry::global().get_config();
+    Ok(Json(serde_json::json!({
+        "user_config": {
+            "provider": config.provider,
+            "api_url": config.api_url,
+            "model": config.model,
+            "is_configured": config.is_configured,
+        },
+        "configured": config.is_configured,
+    })))
+}
+
+/// PUT /api/ai/config/user
+pub async fn update_user_ai_config(
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<serde_json::Value> {
+    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+
+    let provider = req
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .unwrap_or("disabled");
+    let api_url = req.get("api_url").and_then(|v| v.as_str()).unwrap_or("");
+    let model = req.get("model").and_then(|v| v.as_str()).unwrap_or("");
+    let api_key = req.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
+    let search_enabled = req
+        .get("search_enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let monitor_enabled = req
+        .get("monitor_enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let auto_retry_enabled = req
+        .get("auto_retry_enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let max_correction_rounds = req
+        .get("max_correction_rounds")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(3);
+
+    sqlx::query(
+        "INSERT INTO ai_provider_config (id, user_id, provider, api_url, model, api_key, search_enabled, monitor_enabled, auto_retry_enabled, max_correction_rounds, created_at, updated_at) VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET provider=excluded.provider, api_url=excluded.api_url, model=excluded.model, api_key=excluded.api_key, search_enabled=excluded.search_enabled, monitor_enabled=excluded.monitor_enabled, auto_retry_enabled=excluded.auto_retry_enabled, max_correction_rounds=excluded.max_correction_rounds, updated_at=excluded.updated_at"
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(provider)
+    .bind(api_url)
+    .bind(model)
+    .bind(api_key)
+    .bind(search_enabled as i64)
+    .bind(monitor_enabled as i64)
+    .bind(auto_retry_enabled as i64)
+    .bind(max_correction_rounds)
+    .bind(chrono::Utc::now().to_rfc3339())
+    .bind(chrono::Utc::now().to_rfc3339())
+    .execute(pool)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+
+    let _ = crate::ai_provider::AiProviderRegistry::global().reconfigure(
+        provider,
+        Some(api_key.into()),
+        Some(api_url.into()),
+        Some(model.into()),
+    );
+
+    Ok(Json(
+        serde_json::json!({"status": "updated", "provider": provider}),
+    ))
+}

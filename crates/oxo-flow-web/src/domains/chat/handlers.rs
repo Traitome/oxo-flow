@@ -48,7 +48,10 @@ pub async fn chat_send(
 
     let message = req.message.clone();
     let context = req.context.clone();
-    let session_id = req.session_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let session_id = req
+        .session_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     let stream = async_stream::stream! {
         // Event: processing started
@@ -176,9 +179,7 @@ pub async fn chat_send(
 }
 
 /// POST /api/chat/send/json — non-streaming JSON response.
-pub async fn chat_send_json(
-    Json(req): Json<ChatRequest>,
-) -> ApiResult<serde_json::Value> {
+pub async fn chat_send_json(Json(req): Json<ChatRequest>) -> ApiResult<serde_json::Value> {
     let templates: Vec<String> = if let Ok(pool) = get_pool() {
         sqlx::query_as::<_, models::TemplateRow>(
             "SELECT * FROM templates ORDER BY usage_count DESC LIMIT 20",
@@ -193,9 +194,18 @@ pub async fn chat_send_json(
         vec![]
     };
 
-    let session_id = req.session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let session_id = req
+        .session_id
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    match service::process_chat(&req.message, Some(&session_id), req.context.as_ref(), &templates).await {
+    match service::process_chat(
+        &req.message,
+        Some(&session_id),
+        req.context.as_ref(),
+        &templates,
+    )
+    .await
+    {
         Ok((_text, data)) => Ok(Json(data)),
         Err(e) => Err(err(StatusCode::BAD_REQUEST, "CHAT_ERROR", e)),
     }

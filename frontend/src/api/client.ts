@@ -7,6 +7,8 @@ import type {
   DataAnalysis, ReferenceResult, AuditLogResponse, SearchResponse,
   GenerateResponse, WorkflowDetail, RunResponse,
 } from './types';
+import type { DagEditCommand, DagEditResponse, DataPerceptionReport, MonitorStatus, ReportData, AiConfigFull, ServerAiConfig, UserAiConfig, AiConfigUpdate } from './types';
+
 
 class ApiError extends Error {
   code: string; detail?: string; suggestion?: string;
@@ -118,3 +120,39 @@ export function createEventSource(): EventSource {
   return new EventSource('/api/events');
 }
 export { ApiError };
+
+// ── v0.9 AI Companion API endpoints ──
+
+export const apiV2 = {
+  // Chat
+  chatSessions: () => get<Array<{ id: string; title: string; updated_at: string }>>('/api/chat/sessions'),
+  chatSendJson: (message: string, context?: any) => post<any>('/api/chat/send/json', { message, context }),
+
+  // DAG Edit
+  dagCommand: (id: string, cmd: DagEditCommand) => post<DagEditResponse>(`/api/pipeline/${id}/command`, { source: cmd.source, operation: cmd.operation, payload: cmd.payload }),
+  dagUndo: (id: string) => post<{ toml_content: string }>(`/api/pipeline/${id}/undo`, {}),
+  dagRedo: (id: string) => post<{ toml_content: string }>(`/api/pipeline/${id}/redo`, {}),
+
+  // Data Perception
+  perceiveData: (paths?: string[], description?: string) => post<DataPerceptionReport>('/api/data/perceive', { paths, description }),
+  referenceStatus: () => get<{ installed: any[]; missing: string[]; download_commands: string[] }>('/api/data/reference/status'),
+  parseSamplesheet: (content: string) => post<{ format: string; samples_count: number; samples: any[] }>('/api/data/samplesheet/parse', { content }),
+
+  // Monitor
+  pauseRun: (id: string, reason?: string) => post<{ run_id: string; status: string }>(`/api/runs/${id}/pause`, { reason: reason || 'user_request' }),
+  resumeRun: (id: string, from_rule?: string) => post<{ run_id: string; status: string }>(`/api/runs/${id}/resume`, { from_rule }),
+  aiStatus: (id: string) => get<MonitorStatus>(`/api/runs/${id}/ai-status`),
+
+  // Report
+  runReport: (id: string) => get<ReportData>(`/api/runs/${id}/report`),
+  askReport: (id: string, question: string) => post<string>(`/api/runs/${id}/report/ask`, { question }),
+  visualizeReport: (id: string, type: string) => post<any>(`/api/runs/${id}/report/visualize`, { type }),
+
+  // AI Config (three-tier)
+  aiConfigEffective: () => get<AiConfigFull>('/api/ai/config/effective'),
+  aiConfigServer: () => get<ServerAiConfig>('/api/ai/config/server'),
+  aiConfigUser: () => get<UserAiConfig>('/api/ai/config/user'),
+  updateAiConfigServer: (cfg: AiConfigUpdate) => put<{ status: string }>('/api/ai/config/server', cfg),
+  updateAiConfigUser: (cfg: AiConfigUpdate) => put<{ status: string }>('/api/ai/config/user', cfg),
+};
+

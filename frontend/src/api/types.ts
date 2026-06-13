@@ -106,3 +106,174 @@ export interface RunResponse { run_id: string; status: string; execution_order: 
 export interface RunDetail extends RunItem { workflow_name?: string; log_tail?: string; output_files?: string[]; }
 export interface TemplateSummary { id: string; name: string; category: string; description: string; tags: string; is_system: boolean; created_at: string; }
 export interface DagData { dot: string; nodes: number; edges: number; }
+
+// ── v0.9 AI Companion Types ──
+
+// Chat Events (SSE)
+export interface ChatEventV2 {
+  type: 'text' | 'agent' | 'action' | 'error' | 'done';
+  chunk?: string;
+  agent?: string;
+  status?: string;
+  progress?: number;
+  action_type?: string;
+  data?: any;
+  code?: string;
+  message?: string;
+  session_id?: string;
+  pipeline_id?: string;
+}
+
+export interface ChatRequestV2 {
+  session_id?: string;
+  message: string;
+  context?: {
+    data_paths?: string[];
+    samplesheet?: string;
+    intent?: string;
+  };
+}
+
+// Data Perception
+export interface DataFindings {
+  field: string;
+  value: any;
+  confidence: number;
+  source: string;
+  evidence: string;
+}
+
+export interface DataPerceptionReport {
+  data_level: number;
+  findings: DataFindings[];
+  warnings: string[];
+  suggestions: string[];
+}
+
+// DAG Edit
+export interface DagEditCommand {
+  source: 'dag_editor' | 'chat' | 'proposal';
+  operation: 'add_rule' | 'remove_rule' | 'connect' | 'disconnect' | 'update_params' | 'replace_tool' | 'reorder';
+  payload: any;
+}
+
+export interface DagEditResponse {
+  success: boolean;
+  toml_content: string;
+  dag_json: DagJson;
+  validation: Array<{ code: string; message: string; severity: string; rule: string | null }>;
+}
+
+// Monitor
+export interface MonitorAlert {
+  level: 'info' | 'warn' | 'alert' | 'critical';
+  rule_name: string | null;
+  prediction: string;
+  suggestion: string;
+  auto_fixable: boolean;
+  needs_approval: boolean;
+  timestamp: string;
+}
+
+export interface MonitorStatus {
+  overall: string;
+  alerts: MonitorAlert[];
+  resource_forecast: {
+    cpu_trend: string;
+    memory_trend: string;
+    disk_trend: string;
+    oom_risk: number;
+    timeout_risk: number;
+  };
+  estimated_completion: string | null;
+}
+
+export interface PauseRequest {
+  reason: string;
+}
+
+export interface ResumeRequest {
+  from_rule?: string;
+  memory_adjust?: string;
+  thread_adjust?: number;
+}
+
+// Report
+export interface ReportFile {
+  path: string;
+  name: string;
+  size_bytes: number;
+  is_dir: boolean;
+}
+
+export interface ReportFinding {
+  finding: string;
+  significance: string;
+  evidence: string;
+}
+
+export interface ChartConfig {
+  chart_type: string;
+  title: string;
+  spec: any;
+}
+
+export interface ReportData {
+  qc_summary: any;
+  key_findings: ReportFinding[];
+  narrative_md: string;
+  caveats: string[];
+  suggested_next: string[];
+  file_tree: ReportFile[];
+  charts: ChartConfig[];
+}
+
+// AI Config (three-tier)
+export interface AiConfigFull {
+  effective: {
+    provider: string;
+    model: string | null;
+    api_url: string | null;
+    is_configured: boolean;
+  };
+  tiers: {
+    env_provider: string | null;
+    env_model: string | null;
+    env_url: string | null;
+    server_provider: string | null;
+    server_model: string | null;
+    user_provider: string | null;
+  };
+  resolution_order: string[];
+}
+
+export interface ServerAiConfig {
+  server_config: {
+    provider: string;
+    api_url: string;
+    model: string;
+    search_enabled: boolean;
+  } | null;
+  configured: boolean;
+}
+
+export interface UserAiConfig {
+  user_config: {
+    provider: string;
+    api_url: string;
+    model: string;
+    is_configured: boolean;
+  } | null;
+  configured: boolean;
+}
+
+export interface AiConfigUpdate {
+  provider?: string;
+  api_key?: string;
+  api_url?: string;
+  model?: string;
+  search_enabled?: boolean;
+  monitor_enabled?: boolean;
+  auto_retry_enabled?: boolean;
+  max_correction_rounds?: number;
+}

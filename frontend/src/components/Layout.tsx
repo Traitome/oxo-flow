@@ -8,6 +8,7 @@ const nav = [
   { to: '/editor', icon: GitBranch, label: 'Pipeline Editor' },
   { to: '/pipelines', icon: Library, label: 'Pipelines' },
   { to: '/runs', icon: PlayCircle, label: 'Runs' },
+  { to: '/monitor', icon: PlayCircle, label: 'Monitor' },
   { to: '/docs', icon: BookOpen, label: 'API Docs' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];

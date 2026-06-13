@@ -653,3 +653,149 @@ pub async fn validate_plugin(
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "PLUGIN_ERROR", e))
 }
+
+// ---------------------------------------------------------------------------
+// Data Perception API (v0.9 AI Companion)
+// ---------------------------------------------------------------------------
+
+/// POST /api/data/perceive
+pub async fn perceive_data(Json(req): Json<serde_json::Value>) -> ApiResult<serde_json::Value> {
+    use crate::domains::ai::agents::data_agent;
+
+    let paths = req.get("paths").and_then(|v| v.as_array()).map(|a| {
+        a.iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect::<Vec<_>>()
+    });
+    let description = req
+        .get("description")
+        .and_then(|v| v.as_str().map(String::from));
+
+    let report = if let Some(ref p) = paths {
+        if !p.is_empty() {
+            data_agent::analyze_paths(p)
+        } else if let Some(ref desc) = description {
+            data_agent::analyze_description(desc)
+        } else {
+            data_agent::analyze_paths(&[])
+        }
+    } else if let Some(ref desc) = description {
+        data_agent::analyze_description(desc)
+    } else {
+        data_agent::analyze_paths(&[])
+    };
+
+    Ok(Json(serde_json::json!(report)))
+}
+
+/// GET /api/data/reference/status
+pub async fn reference_status() -> ApiResult<serde_json::Value> {
+    let common_refs: Vec<(&str, Vec<&str>)> = vec![
+        (
+            "hg38",
+            vec![
+                "/data/references/hg38/genome.fa",
+                "/data/references/hg38/star",
+                "/data/references/hg38/genes.gtf",
+            ],
+        ),
+        (
+            "mm10",
+            vec![
+                "/data/references/mm10/genome.fa",
+                "/data/references/mm10/star",
+                "/data/references/mm10/genes.gtf",
+            ],
+        ),
+        (
+            "mm39",
+            vec![
+                "/data/references/mm39/genome.fa",
+                "/data/references/mm39/star",
+            ],
+        ),
+    ];
+
+    let mut installed = Vec::new();
+    let mut missing = Vec::new();
+    let mut download_commands = Vec::new();
+
+    for (genome, required_paths) in common_refs {
+        let mut found = Vec::new();
+        let mut not_found = Vec::new();
+
+        for p in required_paths {
+            if std::path::Path::new(p).exists() {
+                found.push(p.to_string());
+            } else {
+                not_found.push(p.to_string());
+            }
+        }
+
+        if !found.is_empty() || !not_found.is_empty() {
+            installed.push(serde_json::json!({
+                "genome": genome,
+                "found": found,
+                "missing": not_found,
+            }));
+        }
+        for m in &not_found {
+            missing.push(m.clone());
+        }
+        if !not_found.is_empty() {
+            download_commands.push(format!(
+                "wget -P /data/references/{genome} https://genome-idx.example.com/{genome}.tar.gz"
+            ));
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "installed": installed,
+        "missing": missing,
+        "download_commands": download_commands,
+    })))
+}
+
+/// POST /api/data/samplesheet/parse
+pub async fn parse_samplesheet(Json(req): Json<serde_json::Value>) -> ApiResult<serde_json::Value> {
+    let content = req.get("content").and_then(|v| v.as_str()).unwrap_or("");
+    let mut samples = Vec::new();
+    let mut format = "unknown";
+
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.len() >= 2 {
+        let header = lines[0].to_lowercase();
+        if header.contains("sample") || header.contains("sample_name") {
+            format = "standard";
+            for line in &lines[1..] {
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    continue;
+                }
+                let parts: Vec<&str> = trimmed.split(',').collect();
+                if !parts.is_empty() {
+                    let mut entry = serde_json::json!({"sample": parts[0].trim()});
+                    if parts.len() >= 2 {
+                        entry["fastq_r1"] = serde_json::json!(parts[1].trim());
+                    }
+                    if parts.len() >= 3 {
+                        entry["fastq_r2"] = serde_json::json!(parts[2].trim());
+                    }
+                    if parts.len() >= 4 {
+                        entry["condition"] = serde_json::json!(parts[3].trim());
+                    }
+                    samples.push(entry);
+                }
+            }
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "format": format,
+        "samples_count": samples.len(),
+        "samples": samples,
+        "detected_headers": if lines.is_empty() { Vec::<String>::new() } else {
+            lines[0].split(',').map(|s| s.trim().to_string()).collect::<Vec<_>>()
+        }
+    })))
+}

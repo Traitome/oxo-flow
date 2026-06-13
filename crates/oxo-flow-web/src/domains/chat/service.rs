@@ -52,8 +52,8 @@ pub async fn process_chat(
         .map_err(|e| format!("AI generation failed: {e}"))?;
 
     // Phase 4: Extract TOML and validate
-    let toml_content = extract_toml_from_response(&ai_response)
-        .unwrap_or_else(|| ai_response.clone());
+    let toml_content =
+        extract_toml_from_response(&ai_response).unwrap_or_else(|| ai_response.clone());
 
     let validation = workflow_svc::validate_pipeline(&toml_content)?;
 
@@ -158,24 +158,37 @@ fn build_system_prompt(
         if let Some(summary) = report.get("summary") {
             prompt.push_str(&format!(
                 "\nData summary: Formats={}, Paired-end={}\n",
-                summary.get("formats_detected")
+                summary
+                    .get("formats_detected")
                     .and_then(|f| f.as_array())
-                    .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "))
+                    .map(|a| a
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "))
                     .unwrap_or_default(),
-                summary.get("paired_end_detected").and_then(|v| v.as_bool()).unwrap_or(false)
+                summary
+                    .get("paired_end_detected")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
             ));
         }
         if let Some(sw) = report.get("suggested_workflow")
             && let Some(template) = sw.get("template").and_then(|v| v.as_str())
         {
-                prompt.push_str(&format!("Suggested template: {template}\n"));
+            prompt.push_str(&format!("Suggested template: {template}\n"));
         }
     }
 
     if !templates.is_empty() {
         prompt.push_str(&format!(
             "\nAvailable templates for reference: {}\n",
-            templates.iter().take(5).cloned().collect::<Vec<_>>().join(", ")
+            templates
+                .iter()
+                .take(5)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
 
