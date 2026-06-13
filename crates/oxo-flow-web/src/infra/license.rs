@@ -15,7 +15,7 @@ pub const VERSION_WITH_LICENSE: &str = concat!(
     "\n",
     "oxo-flow-core, oxo-flow-cli: Apache 2.0\n",
     "oxo-flow-web: Dual license (LICENSE-ACADEMIC / LICENSE-COMMERCIAL)\n",
-    "Contact: Shixiang Wang <wangsx@traitome.com>"
+    "Contact: Shixiang Wang <w_shixiang@163.com>"
 );
 
 const LICENSE_NOTICE: &str = concat!(
@@ -25,7 +25,7 @@ const LICENSE_NOTICE: &str = concat!(
     "oxo-flow-core, oxo-flow-cli: Apache 2.0. ",
     "oxo-flow-web: Dual license (LICENSE-ACADEMIC / LICENSE-COMMERCIAL). ",
     "Free for academic use. Commercial use requires authorization. ",
-    "Contact: Shixiang Wang <wangsx@traitome.com>."
+    "Contact: Shixiang Wang <w_shixiang@163.com>."
 );
 
 pub fn license_header_value() -> HeaderValue {
@@ -37,7 +37,7 @@ pub fn license_banner_text() -> String {
         "\n  oxo-flow v{} — Academic License\n\
            Free for academic & research use.\n\
            Commercial use requires authorization.\n\
-           Contact: Shixiang Wang <wangsx@traitome.com>\n",
+           Contact: Shixiang Wang <w_shixiang@163.com>\n",
         env!("CARGO_PKG_VERSION")
     )
 }
@@ -49,7 +49,7 @@ pub fn license_notice_text() -> String {
          oxo-flow-core, oxo-flow-cli: Apache 2.0\n\
          oxo-flow-web: Dual license — LICENSE-ACADEMIC (free for academic use) /\n\
          LICENSE-COMMERCIAL (commercial use requires paid authorization)\n\
-         Contact: Shixiang Wang <wangsx@traitome.com>\n\
+         Contact: Shixiang Wang <w_shixiang@163.com>\n\
          By contributing, you agree that your contributions will be licensed under these terms.",
         env!("CARGO_PKG_VERSION")
     )
@@ -70,7 +70,7 @@ pub fn version_with_license() -> String {
     format!(
         "oxo-flow v{}\noxo-flow-core, oxo-flow-cli: Apache 2.0\n\
          oxo-flow-web: Dual license (LICENSE-ACADEMIC / LICENSE-COMMERCIAL)\n\
-         Contact: Shixiang Wang <wangsx@traitome.com>",
+         Contact: Shixiang Wang <w_shixiang@163.com>",
         env!("CARGO_PKG_VERSION")
     )
 }

@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
-import type { TemplateSummary } from '../api/types';
+import type { Template } from '../api/types';
 
 export default function Pipelines() {
-  const [templates, setTemplates] = useState<TemplateSummary[]>([]);
+  const [templates, setTemplates] = useState<Template[]>([]);
 
   useEffect(() => {
     api.listTemplates().then(setTemplates).catch(() => {});

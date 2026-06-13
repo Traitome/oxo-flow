@@ -111,7 +111,7 @@ pub struct ExecutionPlan {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunStatusResponse {
     pub status: RunStatus,
-    pub phase: RunPhase,
+    pub phase: String,
     pub nodes: Vec<NodeStatusItem>,
     pub timeline: Vec<TimelineEvent>,
     pub resources: ResourceSnapshot,
@@ -142,36 +142,50 @@ pub struct ResourceSnapshot {
     pub disk_mb: u64,
 }
 
+impl Default for ResourceSnapshot {
+    fn default() -> Self {
+        Self {
+            cpu_pct: 0.0,
+            memory_mb: 0,
+            disk_mb: 0,
+        }
+    }
+}
+
 // DAG status types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DagStatusResponse {
-    pub nodes: Vec<DagStatusNode>,
-    pub edges: Vec<super::super::workflow::types::DagJsonEdge>,
-    pub timeline: RunTimeline,
+    pub nodes: Vec<DagNode>,
+    pub edges: Vec<DagEdge>,
+    pub parallel_groups: Vec<Vec<String>>,
+    pub critical_path: Vec<String>,
+    pub metrics: DagMetrics,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DagStatusNode {
+pub struct DagNode {
     pub id: String,
     pub label: String,
     pub status: String,
+    pub color: String,
     pub duration_ms: Option<u64>,
-    pub progress: Option<u8>,
-    pub metrics: Option<NodeMetrics>,
+    pub exit_code: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NodeMetrics {
-    pub cpu_pct: Option<f64>,
-    pub memory_used_mb: Option<u64>,
-    pub memory_limit_mb: Option<u64>,
+pub struct DagEdge {
+    pub source: String,
+    pub target: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RunTimeline {
-    pub estimated_total_secs: Option<u64>,
-    pub elapsed_secs: u64,
-    pub eta_secs: Option<u64>,
+pub struct DagMetrics {
+    pub total_nodes: usize,
+    pub completed_nodes: usize,
+    pub failed_nodes: usize,
+    pub running_nodes: usize,
+    pub pending_nodes: usize,
+    pub eta_ms: Option<u64>,
 }
 
 // Diagnostics types
@@ -273,7 +287,7 @@ mod tests {
     fn test_run_status_response_roundtrip() {
         let resp = RunStatusResponse {
             status: RunStatus::Running,
-            phase: RunPhase::Executing,
+            phase: "executing".to_string(),
             nodes: vec![NodeStatusItem {
                 rule: "rule1".into(),
                 status: NodeStatus::Running,

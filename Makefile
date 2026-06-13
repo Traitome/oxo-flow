@@ -13,7 +13,7 @@ build:
 	cargo build --workspace
 
 test:
-	PATH="$$(pwd)/target/debug:$$PATH" cargo test --workspace
+	PATH="$$(pwd)/target/debug:$$PATH" cargo test --workspace -- --test-threads=1
 
 audit:
 	cargo audit

@@ -4,9 +4,6 @@
 //! modules.  Each domain (workflow, execution, auth, observability,
 //! collaboration) contributes its own route group, keeping the router definition close to
 //! the domain code it serves.
-//!
-//! This is the v0.8 forward-looking router.  The existing `build_router()`
-//! in `lib.rs` remains the current active router used by `main.rs`.
 
 use axum::{
     Router,
@@ -19,19 +16,16 @@ use crate::domains::*;
 use crate::infra::license::LicenseHeaderLayer;
 
 // ---------------------------------------------------------------------------
-// Embedded frontend (same as lib.rs)
+// Embedded SPA frontend
 // ---------------------------------------------------------------------------
 
-/// Serve the embedded frontend HTML with license footer injected.
-async fn frontend_index() -> impl IntoResponse {
+/// Serve the React SPA index.html with license footer injected.
+async fn spa_index() -> impl IntoResponse {
     let html = include_str!("../static/index.html");
-    // Inject license footer before </body> if not already present
     let footer = crate::infra::license::license_footer_html();
-    let html_with_footer = if html.contains("oxo-flow-license-footer") {
-        html.to_string()
-    } else if let Some(pos) = html.rfind("</body>") {
+    let html_with_footer = if let Some(pos) = html.rfind("</body>") {
         format!(
-            "{}<div class=\"oxo-flow-license-footer\">{}</div>\n</body>",
+            "{}<div class=\"oxo-flow-license-footer\" style=\"position:fixed;bottom:0;left:0;right:0;text-align:center;padding:4px 0;font-size:11px;color:#94A3B8;background:#F8FAFC;border-top:1px solid #E2E8F0;z-index:999\">{}</div>\n</body>",
             &html[..pos],
             footer
         )
@@ -43,18 +37,53 @@ async fn frontend_index() -> impl IntoResponse {
     };
     (
         StatusCode::OK,
-        [("content-type", "text/html; charset=utf-8")],
+        [
+            ("content-type", "text/html; charset=utf-8"),
+            ("cache-control", "no-cache"),
+        ],
         html_with_footer,
     )
 }
 
-/// Serve the embedded frontend JavaScript.
-async fn frontend_js() -> impl IntoResponse {
+/// Serve embedded favicon
+async fn favicon() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [("content-type", "image/svg+xml")],
+        include_str!("../static/favicon.svg"),
+    )
+}
+
+/// Serve embedded icons sprite
+async fn icons() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [("content-type", "image/svg+xml")],
+        include_str!("../static/icons.svg"),
+    )
+}
+
+/// Serve embedded JS bundle
+async fn app_js() -> impl IntoResponse {
     (
         StatusCode::OK,
         [("content-type", "application/javascript; charset=utf-8")],
-        include_str!("../static/app.js"),
+        include_str!("../static/assets/index-Djer6wbM.js"),
     )
+}
+
+/// Serve embedded CSS
+async fn app_css() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [("content-type", "text/css; charset=utf-8")],
+        include_str!("../static/assets/index-CCVc6OLr.css"),
+    )
+}
+
+/// SPA fallback: serve index.html for any non-API route.
+async fn spa_fallback() -> impl IntoResponse {
+    spa_index().await
 }
 
 /// Build the full application router for the given serve mode.
@@ -65,10 +94,13 @@ async fn frontend_js() -> impl IntoResponse {
 pub fn build_router(mode: &str) -> Router {
     tracing::info!("Building router for mode: {mode}");
 
-    // ---- Frontend routes ----
+    // ---- Frontend / SPA routes ----
     let frontend_routes = Router::new()
-        .route("/", get(frontend_index))
-        .route("/app.js", get(frontend_js));
+        .route("/favicon.svg", get(favicon))
+        .route("/icons.svg", get(icons))
+        .route("/assets/index-Djer6wbM.js", get(app_js))
+        .route("/assets/index-CCVc6OLr.css", get(app_css))
+        .route("/", get(spa_index));
 
     // ---- Workflow routes ----
     let workflow_routes = Router::new()
@@ -109,6 +141,7 @@ pub fn build_router(mode: &str) -> Router {
             "/api/pipelines/search",
             post(workflow::handlers::search_pipelines),
         )
+        .route("/api/pipelines", post(workflow::handlers::save_pipeline))
         .route("/api/pipelines", get(workflow::handlers::list_pipelines))
         .route("/api/pipelines/{id}", get(workflow::handlers::get_pipeline))
         .route(
@@ -221,6 +254,9 @@ pub fn build_router(mode: &str) -> Router {
     // ---- HPC routes ----
     let hpc_routes = Router::new().route("/api/hpc", get(crate::handlers::system::hpc_status));
 
+    // ---- SPA fallback: any unknown route serves index.html ----
+    let spa_fallback = Router::new().fallback(spa_fallback);
+
     // ---- Assemble ----
     Router::new()
         .merge(frontend_routes)
@@ -234,6 +270,7 @@ pub fn build_router(mode: &str) -> Router {
         .merge(collaboration_routes)
         .merge(obs_routes)
         .merge(hpc_routes)
+        .merge(spa_fallback)
         .layer(LicenseHeaderLayer)
         .layer(tower_http::cors::CorsLayer::permissive())
 }

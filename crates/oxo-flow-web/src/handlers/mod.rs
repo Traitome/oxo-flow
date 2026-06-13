@@ -1,7 +1,14 @@
-//! Handler modules for oxo-flow-web API endpoints.
+//! Legacy handler modules (deprecated in v0.8).
+//!
+//! These endpoints are preserved for backward compatibility.
+//! New code should use the domain-driven modules in `crate::domains::*`.
+//! Removed no earlier than v0.10.0.
 
+#[deprecated(since = "0.8.0", note = "use `crate::domains::ai`")]
 pub mod ai;
+#[deprecated(since = "0.8.0", note = "use `crate::domains::auth`")]
 pub mod auth;
+#[deprecated(since = "0.8.0", note = "use `crate::domains::observability`")]
 pub mod reports;
 pub mod runs;
 pub mod saved;

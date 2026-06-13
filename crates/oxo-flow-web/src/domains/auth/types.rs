@@ -33,6 +33,10 @@ pub struct UserResponse {
     pub id: String,
     pub username: String,
     pub role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os_user: Option<String>,
     pub created_at: String,
 }
 
@@ -98,6 +102,8 @@ mod tests {
             id: "u1".into(),
             username: "admin".into(),
             role: "admin".into(),
+            auth_type: Some("password".into()),
+            os_user: None,
             created_at: "2024-01-01".into(),
         };
         let json = serde_json::to_string(&resp).unwrap();

@@ -1611,3 +1611,203 @@ shell = "echo b"
         "identical workflows should have 0 diffs"
     );
 }
+
+// ── 20-User Concurrent Simulation ────────────────────────────────
+
+#[tokio::test]
+async fn simulation_20_concurrent_users() {
+    let start = std::time::Instant::now();
+
+    // Create 20 unique user sessions
+    let mut handles = Vec::new();
+    for i in 0..20 {
+        let handle = tokio::spawn(async move {
+            let username = format!("sim_user_{i:02}");
+            let token = login("admin", "admin").await; // Use admin token for all (simplified)
+
+            // Each user does a complete workflow lifecycle
+            let mut results = Vec::new();
+
+            // 1. Validate workflow
+            let (s, _b) = post_auth(
+                "/api/workflows/validate",
+                json!({"toml_content": MINIMAL_TOML}),
+                &token,
+            )
+            .await;
+            results.push(("validate", s));
+
+            // 2. Parse workflow
+            let (s, _b) = post_auth(
+                "/api/workflows/parse",
+                json!({"toml_content": MINIMAL_TOML}),
+                &token,
+            )
+            .await;
+            results.push(("parse", s));
+
+            // 3. DAG
+            let (s, _b) = post_auth(
+                "/api/workflows/dag",
+                json!({"toml_content": MINIMAL_TOML}),
+                &token,
+            )
+            .await;
+            results.push(("dag", s));
+
+            // 4. Dry run
+            let (s, _b) = post_auth(
+                "/api/workflows/dry-run",
+                json!({"toml_content": MINIMAL_TOML}),
+                &token,
+            )
+            .await;
+            results.push(("dry_run", s));
+
+            // 5. Format
+            let (s, _b) = post_auth(
+                "/api/workflows/format",
+                json!({"toml_content": MINIMAL_TOML}),
+                &token,
+            )
+            .await;
+            results.push(("format", s));
+
+            // 6. Stats
+            let (s, _b) = post_auth(
+                "/api/workflows/stats",
+                json!({"toml_content": MINIMAL_TOML}),
+                &token,
+            )
+            .await;
+            results.push(("stats", s));
+
+            // 7. Health check
+            let (s, _b) = get("/api/health").await;
+            results.push(("health", s));
+
+            // 8. System info
+            let (s, _b) = get("/api/system").await;
+            results.push(("system", s));
+
+            // 9. Search
+            let (s, _b) =
+                post_auth("/api/workflows/search", json!({"query": "test"}), &token).await;
+            results.push(("search", s));
+
+            // 10. Lint
+            let (s, _b) = post_auth(
+                "/api/workflows/lint",
+                json!({"toml_content": MINIMAL_TOML}),
+                &token,
+            )
+            .await;
+            results.push(("lint", s));
+
+            (username, results)
+        });
+        handles.push(handle);
+    }
+
+    // Collect all results
+    let mut total_ops = 0;
+    let mut failed_ops = 0;
+    for handle in handles {
+        match handle.await {
+            Ok((username, results)) => {
+                for (op, status) in &results {
+                    total_ops += 1;
+                    if *status != 200 {
+                        failed_ops += 1;
+                        eprintln!("FAIL: {username} {op}: HTTP {status}");
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Task panicked: {e}");
+                failed_ops += 1;
+            }
+        }
+    }
+
+    let elapsed = start.elapsed();
+    println!(
+        "20-user simulation: {total_ops} operations in {:.2}s ({:.0} ops/s) — {} failed",
+        elapsed.as_secs_f64(),
+        total_ops as f64 / elapsed.as_secs_f64(),
+        failed_ops
+    );
+
+    // All operations should succeed
+    assert_eq!(
+        failed_ops, 0,
+        "{failed_ops} of {total_ops} operations failed"
+    );
+    // 20 users × 10 operations = 200 total
+    assert_eq!(
+        total_ops, 200,
+        "expected 200 total operations, got {total_ops}"
+    );
+}
+
+#[tokio::test]
+async fn simulation_1000_consecutive_api_calls() {
+    // Stress test: 1000 consecutive API calls with zero panics
+    for i in 0..1000 {
+        let (status, _body) = get("/api/health").await;
+        if status != 200 {
+            panic!("Health check failed at iteration {i}: HTTP {status}");
+        }
+        if i % 200 == 0 {
+            eprintln!("  stress test: {i}/1000 health checks OK");
+        }
+    }
+}
+
+#[tokio::test]
+async fn simulation_batch_import_100_pipelines() {
+    let token = login("admin", "admin").await;
+
+    // Batch create 100 pipelines
+    let mut handles = Vec::new();
+    for i in 0..100 {
+        let t = token.clone();
+        let handle = tokio::spawn(async move {
+            let name = format!("batch-pipeline-{i:03}");
+            let toml = format!(
+                "[workflow]\nname = \"{name}\"\nversion = \"0.1.0\"\n[[rules]]\nname = \"step1\"\nshell = \"echo batch_{i}\"\noutput = [\"out_{i}.txt\"]"
+            );
+            let (status, body) = post_auth(
+                "/api/workflows/save",
+                json!({"name": name, "version": "1.0", "toml_content": toml}),
+                &t,
+            )
+            .await;
+            (i, status, body["id"].as_str().map(String::from))
+        });
+        handles.push(handle);
+    }
+
+    let mut created = 0;
+    let mut failed = 0;
+    for handle in handles {
+        match handle.await {
+            Ok((_i, status, _id)) => {
+                if status == 201 || status == 200 {
+                    created += 1;
+                } else {
+                    failed += 1;
+                }
+            }
+            Err(_) => {
+                failed += 1;
+            }
+        }
+    }
+
+    println!("Batch import: {created} created, {failed} failed");
+    assert!(
+        created >= 95,
+        "Expected >=95 successful imports, got {created}"
+    );
+}

@@ -79,7 +79,7 @@ oxo-flow dry-run my-pipeline.oxoflow
 ```
 
 ```
-oxo-flow 0.7.0 — Bioinformatics Pipeline Engine
+oxo-flow 0.8.0 — Bioinformatics Pipeline Engine
 Dry-run: 2 rules would execute:
   1. create_data [threads=2, env=none]
      $ mkdir -p data && echo 'Hello from oxo-flow!' > data/greeting.txt
@@ -96,7 +96,7 @@ oxo-flow run my-pipeline.oxoflow
 ```
 
 ```
-oxo-flow 0.7.0 — Bioinformatics Pipeline Engine
+oxo-flow 0.8.0 — Bioinformatics Pipeline Engine
 DAG: 2 rules in execution order
   1. create_data
   2. transform
@@ -184,8 +184,32 @@ oxo-flow graph my-pipeline.oxoflow -f dot | dot -Tpng -o dag.png
 
 ---
 
+## Web Interface (v0.8)
+
+Start the web server for a browser-based workflow experience:
+
+```bash
+# Personal mode (localhost, no auth)
+oxo-flow serve
+
+# Team mode (multi-user, OAuth2)
+oxo-flow serve --mode team
+
+# HPC mode (cluster submit panel)
+oxo-flow serve --mode hpc --scheduler slurm
+```
+
+Open `http://localhost:8777` to access the web UI with:
+- DAG visualization with live status
+- Pipeline validation and execution monitoring
+- AI-powered pipeline generation from natural language
+- Real-time resource metrics and diagnostics
+
+See [Deployment Modes](../how-to/deploy-modes.md) for detailed configuration.
+
 ## Next Steps
 
 - [Your First Workflow](./first-workflow.md) — build a real bioinformatics pipeline with environments
+- [Deployment Modes](../how-to/deploy-modes.md) — configure personal/team/HPC modes
 - [Variant Calling Pipeline](./variant-calling.md) — complete NGS analysis tutorial
 - [Command Reference](../commands/run.md) — explore all CLI options

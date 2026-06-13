@@ -34,6 +34,13 @@ pub fn pool() -> &'static SqlitePool {
         .expect("DB pool not initialized — call init_pool() first")
 }
 
+/// Try to obtain a reference to the global pool, returning None if not initialized.
+pub fn try_pool() -> Result<&'static SqlitePool, String> {
+    DB_POOL
+        .get()
+        .ok_or_else(|| "DB pool not initialized — call init_pool() first".to_string())
+}
+
 /// SQLite-backed implementation of [`StorageBackend`].
 #[derive(Debug, Clone)]
 pub struct SqliteBackend {
@@ -235,6 +242,25 @@ impl StorageBackend for SqliteBackend {
         .execute(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
+
+        // Migrations for v0.8: add columns that may be missing from old schema
+        for col in [
+            "pipeline_id TEXT NOT NULL DEFAULT ''",
+            "pipeline_snapshot TEXT NOT NULL DEFAULT ''",
+            "phase TEXT NOT NULL DEFAULT 'parsing'",
+            "workdir TEXT",
+            "created_at TEXT NOT NULL DEFAULT ''",
+        ] {
+            sqlx::query(&format!("ALTER TABLE runs ADD COLUMN {col}"))
+                .execute(&self.pool)
+                .await
+                .ok();
+        }
+        // Migration: add usage_count to templates if missing
+        sqlx::query("ALTER TABLE templates ADD COLUMN usage_count INTEGER NOT NULL DEFAULT 0")
+            .execute(&self.pool)
+            .await
+            .ok();
 
         // Seed admin user if users table is empty
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")

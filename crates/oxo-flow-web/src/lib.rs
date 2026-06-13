@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![allow(deprecated)] // Legacy handlers preserved for backward compat; removed v0.10.0
 //! oxo-flow-web — Web interface for the oxo-flow pipeline engine.
 //!
 //! Provides a REST API and web UI for building, running, and monitoring
@@ -93,7 +94,7 @@ const EMBEDDED_ACADEMIC_LICENSE: &str = r#"{
 /// Embedded single-page web application.
 const FRONTEND_HTML: &str = include_str!("../static/index.html");
 /// Embedded JavaScript for the frontend.
-const FRONTEND_JS: &str = include_str!("../static/app.js");
+const FRONTEND_JS: &str = include_str!("../static/assets/index-Djer6wbM.js");
 
 // Store server start time for uptime calculation.
 static START_TIME: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
@@ -2130,8 +2131,8 @@ shell = "echo b"
             .await
             .unwrap();
         let html = String::from_utf8_lossy(&body);
-        assert!(html.contains("oxo-flow"));
-        assert!(html.contains("Command Center"));
+        assert!(html.contains("root")); // React SPA mount point
+        assert!(html.contains("<div id=\"root\">"));
     }
 
     // -- System info endpoint ----------------------------------------------------

@@ -88,7 +88,7 @@ pub fn license_status() -> LicenseResponse {
         license_type: Some("academic".into()),
         issued_to: Some("Public Academic Test License (any academic user)".into()),
         commercial_use: "requires_authorization".into(),
-        contact: "wangsx@traitome.com".into(),
+        contact: "w_shixiang@163.com".into(),
         message: "Free for academic use. Commercial use requires authorization.".into(),
     }
 }

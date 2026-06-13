@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard';
 import PipelineEditor from './pages/PipelineEditor';
 import Pipelines from './pages/Pipelines';
 import Runs from './pages/Runs';
+import Settings from './pages/Settings';
 
 export default function App() {
   return (
@@ -15,6 +16,7 @@ export default function App() {
           <Route path="/pipelines" element={<Pipelines />} />
           <Route path="/runs" element={<Runs />} />
           <Route path="/runs/:id" element={<Runs />} />
+          <Route path="/settings" element={<Settings />} />
         </Route>
       </Routes>
     </BrowserRouter>

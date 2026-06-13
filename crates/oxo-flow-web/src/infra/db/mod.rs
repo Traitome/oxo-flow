@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 
 pub mod models;
+#[cfg(feature = "postgres")]
+pub mod postgres;
 pub mod sqlite;
 
 #[derive(Debug, Clone)]

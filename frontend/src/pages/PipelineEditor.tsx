@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { Play, CheckCircle, AlertCircle, Wand2 } from 'lucide-react';
 import { api } from '../api/client';
 import DagView from '../components/DagView';
-import type { DagJson, GenerateResponse } from '../api/types';
+import type { DagJson } from '../api/types';
 
 const DEFAULT_TOML = `[workflow]
 name = "my-pipeline"
@@ -34,7 +34,7 @@ threads = 4
 export default function PipelineEditor() {
   const [toml, setToml] = useState(DEFAULT_TOML);
   const [dagJson, setDagJson] = useState<DagJson | null>(null);
-  const [validation, setValidation] = useState<{ valid: boolean; errors: string[] } | null>(null);
+  const [validation, setValidation] = useState<{ valid: boolean; errors: Array<{ code: string; message: string; rule: string | null; suggestion: string | null }> } | null>(null);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<{ runId?: string; message: string } | null>(null);
   const [intent, setIntent] = useState('');
@@ -42,14 +42,14 @@ export default function PipelineEditor() {
   const updateDag = useCallback(async (content: string) => {
     try {
       const [dag, val] = await Promise.all([
-        api.buildDagJson(content),
+        api.buildDag(content),
         api.validate(content),
       ]);
       setDagJson(dag);
       setValidation(val);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
-      setValidation({ valid: false, errors: [msg] });
+      setValidation({ valid: false, errors: [{ code: 'ERROR', message: msg, rule: null, suggestion: null }] });
     }
   }, []);
 
@@ -62,7 +62,7 @@ export default function PipelineEditor() {
     setRunning(true);
     setResult(null);
     try {
-      const res = await api.run(toml);
+      const res = await api.createRun(toml);
       setResult({ runId: res.run_id, message: `Run started: ${res.run_id.slice(0, 8)}...` });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to start run';
@@ -75,9 +75,9 @@ export default function PipelineEditor() {
     if (!intent.trim()) return;
     setRunning(true);
     try {
-      const gen: GenerateResponse = await api.generate(intent);
+      const gen = await api.aiTranslate(intent);
       setToml(gen.toml_content);
-      setResult({ message: `Generated: ${gen.workflow_name} (${gen.rules_count} rules)` });
+      setResult({ message: `Generated pipeline (${gen.confidence * 100}% confidence)` });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Generation failed';
       setResult({ message: `Error: ${msg}` });

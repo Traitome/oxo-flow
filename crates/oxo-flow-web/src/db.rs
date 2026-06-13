@@ -135,6 +135,7 @@ pub async fn init_db(database_url: &str) -> Result<()> {
             toml_content TEXT NOT NULL,
             is_system INTEGER NOT NULL DEFAULT 0,
             created_by TEXT,
+            usage_count INTEGER NOT NULL DEFAULT 0,
             created_at DATETIME NOT NULL,
             updated_at DATETIME NOT NULL
         );

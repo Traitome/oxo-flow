@@ -93,6 +93,7 @@ mod internal {
                 .client
                 .post(&self.api_url)
                 .header("x-api-key", &self.api_key)
+                .header("Authorization", format!("Bearer {}", &self.api_key))
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
                 .json(&body)
@@ -112,12 +113,30 @@ mod internal {
                     .unwrap_or("unknown");
                 return Err(anyhow!("Claude API error ({status}): {err_msg}"));
             }
-            let text = json["content"]
+            // Try Anthropic format: find content block with type="text"
+            // (Skip "thinking" blocks that some providers like DeepSeek insert first)
+            if let Some(arr) = json["content"].as_array() {
+                for block in arr {
+                    if block["type"].as_str() == Some("text")
+                        && let Some(text) = block["text"].as_str()
+                    {
+                        return Ok(text.to_string());
+                    }
+                }
+                // Fallback: try first block's text field (legacy format)
+                if let Some(text) = arr.first().and_then(|b| b["text"].as_str()) {
+                    return Ok(text.to_string());
+                }
+            }
+            // Fallback: OpenAI format (used by DeepSeek Anthropic endpoint)
+            if let Some(text) = json["choices"]
                 .as_array()
                 .and_then(|a| a.first())
-                .and_then(|b| b["text"].as_str())
-                .ok_or_else(|| anyhow!("Claude unexpected response format"))?;
-            Ok(text.to_string())
+                .and_then(|c| c["message"]["content"].as_str())
+            {
+                return Ok(text.to_string());
+            }
+            Err(anyhow!("Claude unexpected response format"))
         }
     }
 
@@ -340,31 +359,114 @@ pub fn create_provider(
     }
 }
 
-/// Create an AI provider from environment variables alone.
+/// Path where AI config is persisted for survival across restarts.
+fn ai_config_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    std::path::PathBuf::from(home)
+        .join(".config")
+        .join("oxo-flow")
+        .join("ai_config.json")
+}
+
+/// Save AI config to disk so it survives restarts without env vars.
+pub fn save_ai_config(
+    kind: &str,
+    api_key: Option<&str>,
+    api_url: Option<&str>,
+    model: Option<&str>,
+) {
+    let path = ai_config_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let config = serde_json::json!({
+        "provider": kind,
+        "api_key": api_key.unwrap_or(""),
+        "api_url": api_url.unwrap_or(""),
+        "model": model.unwrap_or(""),
+    });
+    if let Ok(json) = serde_json::to_string_pretty(&config) {
+        std::fs::write(&path, json).ok();
+        tracing::info!("AI config saved to {}", path.display());
+    }
+}
+
+/// Load persisted AI config from disk.
+fn load_ai_config() -> Option<(String, String, String, String)> {
+    let path = ai_config_path();
+    if !path.exists() {
+        return None;
+    }
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
+    Some((
+        json["provider"].as_str().unwrap_or("").to_string(),
+        json["api_key"].as_str().unwrap_or("").to_string(),
+        json["api_url"].as_str().unwrap_or("").to_string(),
+        json["model"].as_str().unwrap_or("").to_string(),
+    ))
+}
+
+/// Create an AI provider from environment variables or persisted config.
 ///
-/// Reads `OXO_FLOW_AI_PROVIDER` to determine the kind. Returns a no-op
-/// provider if the env var is unset or `"disabled"`.
+/// Reads `OXO_FLOW_AI_PROVIDER` first; falls back to persisted config file.
+/// Returns a no-op provider if neither is configured.
 pub fn create_provider_from_env() -> AiProvider {
     let provider_str = std::env::var("OXO_FLOW_AI_PROVIDER").unwrap_or_default();
-    if provider_str.is_empty() || provider_str.eq_ignore_ascii_case("disabled") {
-        tracing::info!("AI provider disabled (set OXO_FLOW_AI_PROVIDER to enable)");
-        return AiProvider::Noop(internal::Noop);
-    }
-    match provider_str.parse::<AiProviderKind>() {
-        Ok(kind) => {
-            let provider = create_provider(kind, None, None, None);
-            tracing::info!(
-                "AI provider: {} (model: {})",
-                provider.name(),
-                std::env::var("OXO_FLOW_AI_MODEL").unwrap_or_else(|_| "default".into())
-            );
-            provider
+
+    // If env var is set, use it (env takes priority)
+    if !provider_str.is_empty() && !provider_str.eq_ignore_ascii_case("disabled") {
+        match provider_str.parse::<AiProviderKind>() {
+            Ok(kind) => {
+                let provider = create_provider(kind, None, None, None);
+                tracing::info!(
+                    "AI provider from env: {} (model: {})",
+                    provider.name(),
+                    std::env::var("OXO_FLOW_AI_MODEL").unwrap_or_else(|_| "default".into())
+                );
+                return provider;
+            }
+            Err(e) => {
+                tracing::warn!("Invalid AI provider '{provider_str}': {e}");
+            }
         }
-        Err(e) => {
-            tracing::warn!("Invalid AI provider '{provider_str}': {e}. Falling back to disabled.");
-            AiProvider::Noop(internal::Noop)
-        }
     }
+
+    // Fall back to persisted config file
+    if let Some((kind_str, api_key, api_url, model)) = load_ai_config()
+        && !kind_str.is_empty()
+        && kind_str != "disabled"
+        && let Ok(kind) = kind_str.parse::<AiProviderKind>()
+    {
+        let key = if api_key.is_empty() {
+            None
+        } else {
+            Some(api_key.as_str())
+        };
+        let url = if api_url.is_empty() {
+            None
+        } else {
+            Some(api_url.as_str())
+        };
+        let mdl = if model.is_empty() {
+            None
+        } else {
+            Some(model.as_str())
+        };
+        let provider = create_provider(
+            kind,
+            key.map(String::from),
+            url.map(String::from),
+            mdl.map(String::from),
+        );
+        tracing::info!("AI provider from saved config: {}", provider.name());
+        return provider;
+    }
+
+    tracing::info!(
+        "AI provider disabled (set OXO_FLOW_AI_PROVIDER or configure via Settings page)"
+    );
+    AiProvider::Noop(internal::Noop)
 }
 
 /// Runtime configuration snapshot of the AI provider (without secrets).
@@ -464,8 +566,16 @@ impl AiProviderRegistry {
         model: Option<String>,
     ) -> Result<(), String> {
         let kind_parsed: AiProviderKind = kind.parse().map_err(|e: anyhow::Error| e.to_string())?;
-        let provider = create_provider(kind_parsed, api_key, api_url, model);
+        let provider =
+            create_provider(kind_parsed, api_key.clone(), api_url.clone(), model.clone());
         *self.provider.write().unwrap() = Some(provider);
+        // Persist to disk for survival across restarts
+        save_ai_config(
+            kind,
+            api_key.as_deref(),
+            api_url.as_deref(),
+            model.as_deref(),
+        );
         Ok(())
     }
 }

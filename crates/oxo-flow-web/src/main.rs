@@ -107,6 +107,17 @@ async fn main() -> Result<()> {
 
     oxo_flow_web::db::init_db("sqlite://oxo-flow.db").await?;
     oxo_flow_web::db::recover_orphaned_runs().await?;
+    // Also initialize the new v0.8 domain-driven DB pool for domain handlers
+    oxo_flow_web::infra::db::sqlite::init_pool("sqlite://oxo-flow.db").await;
+
+    // Initialize AI provider from environment variables
+    oxo_flow_web::ai_provider::AiProviderRegistry::global().init_from_env();
+    tracing::info!(
+        "AI provider: {}",
+        oxo_flow_web::ai_provider::AiProviderRegistry::global()
+            .get_config()
+            .provider
+    );
 
     let addr = SocketAddr::new(effective_host.parse()?, cli.port);
     tracing::info!("Starting oxo-flow-web server on {}", addr);
