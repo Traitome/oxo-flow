@@ -147,9 +147,7 @@ pub async fn pipeline_stats(Json(req): Json<ParseRequest>) -> ApiResult<Workflow
 
 /// POST /api/pipelines/diff
 pub async fn diff_pipelines(Json(req): Json<DiffRequest>) -> ApiResult<DiffResponse> {
-    let a = req.pipeline_a_id.as_deref().unwrap_or("");
-    let b = req.pipeline_b_id.as_deref().unwrap_or("");
-    service::diff_workflows(a, b)
+    service::diff_workflows(&req.toml_a, &req.toml_b)
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "DIFF_ERROR", e))
 }
@@ -641,4 +639,17 @@ pub async fn discover_reference(Json(req): Json<ReferenceRequest>) -> ApiResult<
     super::data::discover_reference(&req.genome, &req.components)
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "REF_ERROR", e))
+}
+
+// ---------------------------------------------------------------------------
+// Plugin validation
+// ---------------------------------------------------------------------------
+
+/// POST /api/plugins/validate
+pub async fn validate_plugin(
+    Json(req): Json<ValidatePluginRequest>,
+) -> ApiResult<ValidatePluginResponse> {
+    service::validate_plugin_manifest(&req.manifest, req.trusted_keys.as_ref())
+        .map(Json)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, "PLUGIN_ERROR", e))
 }

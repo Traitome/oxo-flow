@@ -37,7 +37,12 @@ The execution backend is a dropdown — local, HPC queue, Docker, cloud batch. E
 
 ---
 
-## Architecture Overview
+## Architecture Overview (v0.8+)
+
+The web crate follows a **domain-driven modular monolith** pattern. Each domain has:
+- `types.rs` — request/response structs
+- `service.rs` — pure logic (zero HTTP dependency)
+- `handlers.rs` — HTTP → service adapters
 
 ```
 +-----------------------------------------------+
@@ -48,20 +53,24 @@ The execution backend is a dropdown — local, HPC queue, Docker, cloud batch. E
 +------------------v----------------------------+
 |          oxo-flow-web (Axum Server)           |
 |                                                |
-|  +---------+ +----------+ +----------------+ |
-|  | Auth    | | Workflow | | Run            | |
-|  | Layer   | | Handlers | | Handlers       | |
-|  +---------+ +----------+ +----------------+ |
-|  +---------+ +----------+ +----------------+ |
-|  | SSE     | | OpenAPI  | | Result         | |
-|  | Stream  | | Schema   | | Endpoints      | |
-|  +---------+ +----------+ +----------------+ |
+|  +---------+ +---------+ +----------------+  |
+|  | Auth    | |License  | | Observability  |  |
+|  | OAuth2  | |Headers  | | Health/Metrics |  |
+|  +---------+ +---------+ +----------------+  |
+|  +---------+ +---------+ +----------------+  |
+|  |Workflow | |Execution| | AI/Translate   |  |
+|  |Pipeline | |Diagnose | | Explain/Interp |  |
+|  +---------+ +---------+ +----------------+  |
+|  +---------+ +---------+ +----------------+  |
+|  |Collabor-| |  Data   | | HPC            |  |
+|  |ation    | | Discovery| | Scheduler      |  |
+|  +---------+ +---------+ +----------------+  |
 |  +-------------------------------------------+|
 |  |           Middleware Stack                 | |
-|  |  Rate Limit -> Auth -> Audit -> Logging   | |
+|  |  LicenseHeader -> RateLimit -> Auth       | |
 |  +-------------------------------------------+|
 |  +-------------------------------------------+|
-|  |  SQLite (Users, Runs, Workflows, Audit)   | |
+|  | StorageBackend trait (SQLite + PostgreSQL)| |
 |  +-------------------------------------------+|
 +------------------+----------------------------+
                    | API calls
@@ -73,96 +82,99 @@ The execution backend is a dropdown — local, HPC queue, Docker, cloud batch. E
 
 ---
 
-## Module Responsibilities
+## Domain-Driven Module Structure (v0.8+)
 
-| Module | Responsibility |
-|--------|---------------|
-| `lib.rs` | Router construction, global state, public types, metrics |
-| `main.rs` | Server entry point, CLI arguments |
-| `db.rs` | SQLite connection pool, CRUD operations |
-| `handlers/workflow.rs` | Workflow validation, parsing, DAG, dry-run, run, clean, export, format, lint, stats, diff |
-| `handlers/runs.rs` | Run details, logs, cancellation, HPC submission |
-| `handlers/auth.rs` | Login, session management, license verification |
-| `handlers/users.rs` | User CRUD (admin) |
-| `handlers/templates.rs` | Workflow template CRUD |
-| `handlers/saved.rs` | Saved workflow CRUD |
-| `handlers/scheduled.rs` | Cron-scheduled runs |
-| `handlers/system.rs` | Health check, version, system info, metrics, environments, SSE events, audit, HPC |
-| `handlers/reports.rs` | Report generation |
-| `executor.rs` | Background workflow execution (spawns CLI process) |
-| `workspace.rs` | Filesystem-based sandbox workspace setup |
-| `sse.rs` | Server-Sent Events broadcast |
-| `hpc.rs` | HPC scheduler detection (SLURM, PBS, LSF, SGE) |
-| `audit.rs` | Audit logging |
-| `rate_limit.rs` | Sliding window rate limiter |
-| `sys.rs` | Host resource detection |
+| Domain | Path | Responsibility |
+|--------|------|---------------|
+| **workflow** | `domains/workflow/` | Pipeline parse, validate, prepare, DAG, format, lint, stats, diff, export, search, data discovery, plugin validation |
+| **execution** | `domains/execution/` | Run create/status/cancel/retry, diagnostics engine (30+ error patterns), sandbox workspace, background runner |
+| **ai** | `domains/ai/` | AI translate, explain, interpret, optimize; provider dispatch (Claude/OpenAI/Ollama) |
+| **collaboration** | `domains/collaboration/` | Fork, diff, share, import pipelines |
+| **auth** | `domains/auth/` | Login, session management, ORCID/GitHub OAuth2, RBAC |
+| **observability** | `domains/observability/` | Health check, system info, runtime metrics, structured logging (3-layer), audit, SSE |
+| **infra/db** | `infra/db/` | StorageBackend trait with SQLite and PostgreSQL implementations |
+| **infra/license** | `infra/license.rs` | License notice text, banner, footer HTML, X-OxoFlow-License header middleware |
+| **infra/sse** | `infra/sse.rs` | Real-time SSE broadcast channel for execution events |
+| **infra/hpc** | `infra/hpc.rs` | Slurm script generation, scheduler detection |
+
+### Legacy Modules (deprecated since 0.8.0)
+
+The `handlers/` directory contains pre-v0.8 handler modules marked `#[deprecated(since = "0.8.0")]`. These are preserved for backward compatibility and will be removed no earlier than v0.10.0. New code should use `domains/*/` modules.
 
 ---
 
-## API Namespace
+## API Namespace (v0.8+)
 
 ```
 /api
-├── /health                 # Health check
-├── /version                # Version info
+├── /health                 # Health check (with license, mode, component status)
 ├── /system                 # System info
-├── /metrics                # Runtime metrics
-├── /openapi.json           # OpenAPI 3.0 spec
-├── /events                 # SSE event stream
-├── /environments           # Available environment backends
-├── /audit                  # Audit logs
-├── /hpc                    # HPC status
+├── /metrics                # Runtime metrics (CPU, memory, active runs)
+├── /openapi.json           # OpenAPI 3.1 spec
+├── /events                 # SSE event stream (real-time execution updates)
+├── /audit                  # Audit logs (structured, with result field)
+├── /hpc                    # HPC scheduler status (SLURM, PBS, etc.)
 │
 ├── /auth
-│   ├── /login              # Login
-│   ├── /me                 # Current session
-│   └── /logout             # Logout
+│   ├── /login              # Login (username/password)
+│   └── /me                 # Current session info
 │
 ├── /license
-│   ├── /                   # License status
-│   └── /upload             # Upload license file
+│   ├── /                   # License status (type, validity, contact)
+│   └── /upload             # Upload commercial license file
 │
 ├── /users                  # User CRUD (admin)
 │
-├── /workflows
-│   ├── /validate           # Validate TOML
-│   ├── /parse              # Parse TOML, return detail
-│   ├── /dag                # Build DAG, return DOT
-│   ├── /dag-json           # Build DAG, return JSON
-│   ├── /dry-run            # Simulate execution
-│   ├── /run                # Launch run
-│   ├── /generate           # [AI] Intent to pipeline
-│   ├── /clean              # List files to clean
-│   ├── /export             # Export Dockerfile/Singularity
-│   ├── /format             # Format TOML
-│   ├── /lint               # Lint workflow
-│   ├── /lint/paginated     # Paginated lint
-│   ├── /stats              # Workflow statistics
-│   ├── /diff               # Workflow comparison
-│   ├── /saved              # Saved workflows list
-│   ├── /saved/{id}         # Get/delete saved workflow
-│   ├── /save               # Save workflow
-│   └── /search             # [AI] Semantic pipeline search
+├── /pipelines (new v0.8 API — replaces /workflows)
+│   ├── /parse              # Parse TOML → structured pipeline
+│   ├── /validate           # Validate pipeline DAG
+│   ├── /prepare            # Prepare (expand wildcards, resolve envs)
+│   ├── /dag                # Build DAG as JSON
+│   ├── /format             # Canonical TOML formatting
+│   ├── /lint               # Lint pipeline with pagination
+│   ├── /stats              # Aggregate pipeline statistics
+│   ├── /diff               # Diff two pipelines (by TOML content)
+│   ├── /export             # Export Docker/Singularity packaging
+│   ├── /search             # Search pipelines by name, tags, content
+│   ├── /                   # GET: list pipelines; POST: save pipeline
+│   ├── /{id}               # GET/PUT/DELETE pipeline by ID
+│   ├── /{id}/fork          # Fork into user workspace (v0.8 collab)
+│   └── /{id}/share         # Share pipeline (v0.8 collab)
+│
+├── /pipelines/import       # Import from oxo+https:// URL (v0.8 collab)
 │
 ├── /runs
-│   ├── /                   # Run list
-│   ├── /{id}               # Run detail
-│   ├── /{id}/logs          # Run logs
-│   ├── /{id}/results       # [AI] Structured results
-│   ├── /{id}/results/{rule}# [AI] Per-rule results
-│   ├── /{id}/hpc-submit    # Submit to HPC
-│   └── /compare            # Run comparison
+│   ├── /                   # POST: create run; GET: list runs
+│   ├── /{id}               # Run detail with log tail
+│   ├── /{id}/status        # Real-time status (nodes, timeline, resources)
+│   ├── /{id}/dag-status    # DAG JSON + per-node live status
+│   ├── /{id}/diagnostics   # Diagnostic engine results (30+ error patterns)
+│   ├── /{id}/logs          # Execution logs
+│   ├── /{id}/results       # Output files and QC metrics
+│   ├── /{id}/retry         # Smart retry (failed + downstream only)
+│   └── /{id}/cancel        # Cancel running workflow
+│
+├── /data
+│   ├── /analyze            # Scan files → detect format, suggest pipeline
+│   └── /reference          # Reference genome discovery
+│
+├── /templates
+│   ├── /                   # GET: list templates; POST: create
+│   └── /{id}               # GET/DELETE template
+│
+├── /plugins
+│   └── /validate           # Validate plugin manifest + signature
+│
+├── /ai
+│   ├── /translate          # Natural language → validated .oxoflow (SSE)
+│   ├── /explain            # Explain run failure + suggest fix
+│   ├── /interpret          # Interpret results with caveats
+│   └── /optimize           # Optimize pipeline parameters
 │
 ├── /scheduled              # Scheduled runs list/create
-├── /scheduled/{id}         # Get/cancel scheduled run
-│
-├── /templates              # Template list/create
-├── /templates/{id}         # Get/delete template
-│
-└── /datasets               # [AI] Dataset catalog
 ```
-
-(Endpoints marked `[AI]` are planned AI-native features.)
+(See [Web API](./web-api.md) and [openapi.json](../../schema/openapi.yaml) for the complete API reference.)
+(Old `/workflows/*` endpoints marked `#[deprecated]` remain functional but will be removed in v0.10.0.)
 
 ---
 

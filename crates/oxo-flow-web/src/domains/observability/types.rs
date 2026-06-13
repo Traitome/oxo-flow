@@ -90,6 +90,7 @@ pub struct AuditEntry {
     pub user: String,
     pub action: String,
     pub resource: String,
+    pub result: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -234,6 +235,7 @@ mod tests {
                 user: "admin".into(),
                 action: "create".into(),
                 resource: "pipeline/p1".into(),
+                result: "success".into(),
             }],
             days: 7,
         };

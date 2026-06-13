@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { api } from '../api/client';
 import type { RunItem, RunStatus, Diagnostics, DagStatus } from '../api/types';
 import { showToast } from '../components/Toast';
@@ -24,6 +24,25 @@ function EmptyState({ title, action, onAction }: { title: string; action?: strin
   );
 }
 
+function Modal({ title, message, onConfirm, onCancel }: { title: string; message: string; onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3 style={{ fontSize: '1.1rem' }}>{title}</h3>
+        </div>
+        <div className="modal-body">
+          <p style={{ fontSize: '0.9rem', color: 'var(--color-text-secondary)' }}>{message}</p>
+        </div>
+        <div className="modal-footer">
+          <button className="btn-sm" onClick={onCancel}>Cancel</button>
+          <button className="btn-run" onClick={onConfirm} style={{ background: 'var(--color-error)', color: '#fff' }}>Confirm</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Runs() {
   const [runs, setRuns] = useState<RunItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -35,6 +54,7 @@ export default function Runs() {
   const [results, setResults] = useState<Array<{ name: string; path: string; size_bytes: number; is_dir: boolean }>>([]);
   const [tab, setTab] = useState<'monitor' | 'dag' | 'diagnostics' | 'results'>('monitor');
   const [tabLoading, setTabLoading] = useState(false);
+  const [cancelTarget, setCancelTarget] = useState<string | null>(null);
 
   const loadRuns = async () => {
     setLoading(true);
@@ -43,7 +63,25 @@ export default function Runs() {
   };
   useEffect(() => { loadRuns(); }, []);
 
-  const selectRun = async (id: string) => {
+  // SSE subscription for real-time run status updates
+  useEffect(() => {
+    const es = new EventSource('/api/events');
+    es.onmessage = (evt) => {
+      try {
+        const event = JSON.parse(evt.data);
+        if (event.type === 'run_started' || event.type === 'run_failed' || event.type === 'run_completed' || event.type === 'run_cancelled') {
+          loadRuns();
+          if (selId && event.data?.run_id === selId) {
+            selectRun(selId);
+          }
+        }
+      } catch { /* ignore parse errors */ }
+    };
+    es.onerror = () => { /* reconnect automatically */ };
+    return () => es.close();
+  }, [selId]);
+
+  const selectRun = useCallback(async (id: string) => {
     setSelId(id); setTab('monitor'); setTabLoading(true);
     try { setRunStatus(await api.getRunStatus(id)); } catch { setRunStatus(null); }
     try { setDagStatus(await api.getDagStatus(id)); } catch { setDagStatus(null); }
@@ -51,7 +89,7 @@ export default function Runs() {
     try { setResults(await api.getRunResults(id)); } catch { setResults([]); }
     try { setLogs(await api.getRunLogs(id)); } catch { setLogs(null); }
     setTabLoading(false);
-  };
+  }, []);
 
   const handleRetry = async (id: string) => {
     try {
@@ -62,7 +100,13 @@ export default function Runs() {
   };
 
   const handleCancel = async (id: string) => {
-    if (!confirm('Cancel this run? This action cannot be undone.')) return;
+    setCancelTarget(id);
+  };
+
+  const confirmCancel = async () => {
+    if (!cancelTarget) return;
+    const id = cancelTarget;
+    setCancelTarget(null);
     try { await api.cancelRun(id); showToast('Run cancelled', 'success'); loadRuns(); }
     catch { showToast('Cancel failed', 'error'); }
   };
@@ -306,6 +350,16 @@ export default function Runs() {
             </>
           )}
         </div>
+      )}
+
+      {/* Confirm Cancel Modal */}
+      {cancelTarget && (
+        <Modal
+          title="Cancel Run"
+          message="Cancel this run? This action cannot be undone."
+          onConfirm={confirmCancel}
+          onCancel={() => setCancelTarget(null)}
+        />
       )}
     </div>
   );

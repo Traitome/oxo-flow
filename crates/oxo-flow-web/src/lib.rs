@@ -391,6 +391,8 @@ fn event_tx() -> broadcast::Sender<String> {
 }
 
 /// Send an SSE event.
+/// Broadcasts to both the legacy channel and the infra SSE channel
+/// so all connected clients receive real-time updates.
 pub fn broadcast_event(event_type: &str, data: &serde_json::Value) {
     let msg = format!(
         r#"{{"type":"{}","time":"{}","data":{}}}"#,
@@ -398,7 +400,9 @@ pub fn broadcast_event(event_type: &str, data: &serde_json::Value) {
         chrono::Utc::now().to_rfc3339(),
         serde_json::to_string(data).unwrap_or_else(|_| "{}".to_string())
     );
-    let _ = event_tx().send(msg);
+    let _ = event_tx().send(msg.clone());
+    // Also forward to the infra SSE channel used by the active SSE endpoint
+    crate::sse::broadcast_event(event_type, data);
 }
 
 // ---------------------------------------------------------------------------
@@ -1431,6 +1435,48 @@ pub async fn start_server_with_base(host: &str, port: u16, base_path: &str) -> a
         addr,
         if base_path.is_empty() { "/" } else { base_path }
     );
+
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    Ok(())
+}
+
+/// Start the web server with mode selection and graceful shutdown.
+///
+/// Uses the domain-driven production router from `server::build_router(mode)`
+/// with full support for personal, team, and HPC modes, including auth,
+/// AI, collaboration, and observability routes.
+pub async fn start_server_with_mode(
+    mode: &str,
+    host: &str,
+    port: u16,
+    base_path: &str,
+) -> anyhow::Result<()> {
+    crate::db::init_db("sqlite://oxo-flow.db").await?;
+    crate::db::recover_orphaned_runs().await?;
+    crate::infra::db::sqlite::init_pool("sqlite://oxo-flow.db").await;
+
+    // Initialize structured logging
+    let log_dir = std::path::PathBuf::from("logs");
+    if let Err(e) = crate::domains::observability::logging::init_logging(&log_dir) {
+        tracing::warn!("Failed to initialize structured logging: {e}");
+    }
+
+    // Initialize AI provider
+    crate::ai_provider::AiProviderRegistry::global().init_from_env();
+
+    let app = crate::server::build_router(mode);
+    let app = if base_path.is_empty() || base_path == "/" {
+        app
+    } else {
+        axum::Router::new().nest(base_path, app)
+    };
+
+    let addr = format!("{host}:{port}");
+    tracing::info!("Starting oxo-flow web server in {mode} mode on {addr}");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app)

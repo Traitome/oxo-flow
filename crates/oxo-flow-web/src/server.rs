@@ -141,6 +141,10 @@ pub fn build_router(mode: &str) -> Router {
             "/api/pipelines/search",
             post(workflow::handlers::search_pipelines),
         )
+        .route(
+            "/api/plugins/validate",
+            post(workflow::handlers::validate_plugin),
+        )
         .route("/api/pipelines", post(workflow::handlers::save_pipeline))
         .route("/api/pipelines", get(workflow::handlers::list_pipelines))
         .route("/api/pipelines/{id}", get(workflow::handlers::get_pipeline))
@@ -258,7 +262,7 @@ pub fn build_router(mode: &str) -> Router {
             "/api/metrics",
             get(observability::handlers::runtime_metrics),
         )
-        .route("/api/events", get(observability::handlers::sse_events))
+        .route("/api/events", get(crate::sse::sse_events))
         .route("/api/audit", get(observability::handlers::get_audit_logs));
 
     // ---- HPC routes ----

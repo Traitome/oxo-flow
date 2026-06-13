@@ -202,7 +202,25 @@ pub struct FailedNode {
     pub error_pattern: Option<String>,
     pub likely_cause: String,
     pub suggestions: Vec<String>,
+    pub auto_fixable: bool,
+    pub fix_action: Option<FixAction>,
     pub relevant_log_lines: Vec<String>,
+}
+
+/// Actionable fix that can be applied to resolve a diagnostic finding.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FixAction {
+    pub description: String,
+    pub config_change: Option<ConfigChange>,
+    pub command: Option<String>,
+}
+
+/// A specific configuration change suggested by the diagnostics engine.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigChange {
+    pub path: String,
+    pub old_value: String,
+    pub new_value: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -321,6 +339,16 @@ mod tests {
                 error_pattern: Some("OOM".into()),
                 likely_cause: "out of memory".into(),
                 suggestions: vec!["increase memory".into()],
+                auto_fixable: true,
+                fix_action: Some(FixAction {
+                    description: "Increase memory".into(),
+                    config_change: Some(ConfigChange {
+                        path: "resources.memory".into(),
+                        old_value: "16GB".into(),
+                        new_value: "32GB".into(),
+                    }),
+                    command: None,
+                }),
                 relevant_log_lines: vec!["fatal error".into()],
             }],
             warnings: vec![DiagnosticWarning {

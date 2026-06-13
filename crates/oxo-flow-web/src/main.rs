@@ -110,6 +110,14 @@ async fn main() -> Result<()> {
     // Also initialize the new v0.8 domain-driven DB pool for domain handlers
     oxo_flow_web::infra::db::sqlite::init_pool("sqlite://oxo-flow.db").await;
 
+    // Initialize structured logging (three-layer logging per v0.8 spec)
+    let log_dir = std::path::PathBuf::from("logs");
+    if let Err(e) = oxo_flow_web::domains::observability::logging::init_logging(&log_dir) {
+        tracing::warn!("Failed to initialize structured logging: {e}");
+    } else {
+        tracing::info!("Structured logging initialized at {}", log_dir.display());
+    }
+
     // Initialize AI provider from environment variables
     oxo_flow_web::ai_provider::AiProviderRegistry::global().init_from_env();
     tracing::info!(

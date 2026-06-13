@@ -139,8 +139,14 @@ body{font-family:var(--font-sans);font-size:.9375rem;line-height:1.6;color:var(-
 
 /* ── Modal ── */
 .modal-overlay{position:fixed;inset:0;background:rgba(15,23,42,.3);z-index:300;display:flex;align-items:center;justify-content:center}
-.modal{background:var(--color-bg);border:1px solid var(--color-border);border-radius:var(--radius-md);width:90%;max-width:650px;max-height:85vh;padding:1.5rem;overflow-y:auto;box-shadow:0 25px 60px rgba(0,0,0,.15)}
+.modal{background:var(--color-bg);border:1px solid var(--color-border);border-radius:var(--radius-md);width:90%;max-width:520px;max-height:85vh;overflow-y:auto;box-shadow:0 25px 60px rgba(0,0,0,.15);display:flex;flex-direction:column}
+.modal-header{padding:1.5rem 1.5rem 0}
+.modal-body{padding:1rem 1.5rem;font-size:.9rem}
+.modal-footer{padding:0 1.5rem 1.5rem;display:flex;justify-content:flex-end;gap:.5rem}
 .modal h2{font-size:1.1rem;font-weight:600;margin-bottom:1rem}
+
+/* ── Mobile Menu Button ── */
+.mobile-menu-btn{display:none;background:none;border:none;color:var(--color-text);cursor:pointer;padding:4px;line-height:0}
 
 /* ── Detail Grid ── */
 .detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:.6rem;font-size:.85rem;margin-bottom:1rem}
@@ -187,11 +193,19 @@ body{font-family:var(--font-sans);font-size:.9375rem;line-height:1.6;color:var(-
 .file-list li{padding:2px 0}
 
 /* ── Responsive ── */
-@media(max-width:799px){
-  .header-nav{display:none}
+@media(max-width:1023px){
   .sidebar{width:56px !important}
   .nav-item span,.sidebar-footer{display:none}
-  .main-content{margin-left:56px !important;padding:1rem}
+  .main-content{margin-left:56px !important}
+}
+
+@media(max-width:799px){
+  .mobile-menu-btn{display:block}
+  .header-nav{display:none;position:fixed;top:56px;left:0;right:0;background:var(--color-bg);border-bottom:1px solid var(--color-border);flex-direction:column;padding:.5rem;z-index:200;box-shadow:0 4px 12px rgba(0,0,0,.1)}
+  .header-nav.open{display:flex}
+  .sidebar{width:56px !important;display:none}
+  .nav-item span,.sidebar-footer{display:none}
+  .main-content{margin-left:0 !important;padding:.75rem}
   .app-header{padding:0 .75rem}
   .stat-grid{grid-template-columns:1fr 1fr}
   .editor-layout{grid-template-columns:1fr;height:auto}

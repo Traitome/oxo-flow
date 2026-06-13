@@ -395,6 +395,23 @@ impl DiagnosticsEngine {
                 fix_desc: Some("Review the shell command for syntax errors."),
                 fix_config_path: None,
             },
+            // ---- Data: BAM index missing ----
+            Pattern {
+                id: "bam_index_missing",
+                category: ErrorCategory::Data,
+                exit_codes: vec![1],
+                stderr_patterns: vec![
+                    "failed to open index",
+                    "could not open index file",
+                    "no index available",
+                    "bai file not found",
+                    "index file is missing",
+                ],
+                likely_cause: "BAM index file (.bai) not found. Most tools (samtools, IGV) require a sorted and indexed BAM.",
+                auto_fixable: true,
+                fix_desc: Some("Generate index with: samtools index <file.bam>"),
+                fix_config_path: None,
+            },
         ];
         Self { patterns }
     }

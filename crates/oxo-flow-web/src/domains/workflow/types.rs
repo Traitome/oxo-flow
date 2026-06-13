@@ -1,11 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+/// Request to parse a TOML workflow into a structured pipeline representation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParseRequest {
     pub toml_content: String,
     pub format_version: Option<String>,
 }
 
+/// Result of parsing a workflow: pipeline identity, rules, DAG, and statistics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParseResponse {
     pub pipeline_id: String,
@@ -16,6 +18,7 @@ pub struct ParseResponse {
     pub stats: WorkflowStatsResponse,
 }
 
+/// Summary of a single rule in a pipeline (name, I/O, environment, threads).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuleSummary {
     pub name: String,
@@ -25,6 +28,7 @@ pub struct RuleSummary {
     pub threads: Option<u32>,
 }
 
+/// A node in the DAG visualization (id, label, color-coded status).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DagJsonNode {
     pub id: String,
@@ -32,12 +36,14 @@ pub struct DagJsonNode {
     pub color: String,
 }
 
+/// A directed edge between two DAG nodes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DagJsonEdge {
     pub from: String,
     pub to: String,
 }
 
+/// Full DAG representation: nodes, edges, parallel groups, critical path, metrics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DagJsonResponse {
     pub nodes: Vec<DagJsonNode>,
@@ -47,6 +53,7 @@ pub struct DagJsonResponse {
     pub metrics: DagMetrics,
 }
 
+/// Aggregate DAG metrics: node/edge counts, depth, width, and parallelism.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DagMetrics {
     pub node_count: usize,
@@ -57,6 +64,7 @@ pub struct DagMetrics {
     pub parallel_group_count: usize,
 }
 
+/// Aggregate workflow statistics (rules, dependencies, environments, wildcards).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowStatsResponse {
     pub rule_count: usize,
@@ -71,18 +79,21 @@ pub struct WorkflowStatsResponse {
     pub wildcard_names: Vec<String>,
 }
 
+/// Request to validate a pipeline's DAG for structural issues.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidateRequest {
     pub toml_content: String,
     pub pipeline_id: Option<String>,
 }
 
+/// Validation result (empty errors = valid pipeline).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidateResponse {
     pub valid: bool,
     pub errors: Vec<ValidationError>,
 }
 
+/// A single validation error with error code, message, and optional fix suggestion.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationError {
     pub code: String,
@@ -91,6 +102,7 @@ pub struct ValidationError {
     pub suggestion: Option<String>,
 }
 
+/// Request to prepare a pipeline: expand wildcards and resolve environments.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrepareRequest {
     pub toml_content: String,
@@ -99,6 +111,7 @@ pub struct PrepareRequest {
     pub pipeline_id: Option<String>,
 }
 
+/// Result of pipeline preparation: expanded rules, wildcard combinations, env commands.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrepareResponse {
     pub pipeline_id: String,
@@ -107,6 +120,7 @@ pub struct PrepareResponse {
     pub environment_setup_cmds: Vec<String>,
 }
 
+/// Request to diff two pipelines by their TOML content.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiffRequest {
     pub toml_a: String,
@@ -115,6 +129,7 @@ pub struct DiffRequest {
     pub pipeline_b_id: Option<String>,
 }
 
+/// A single structural difference between two pipeline versions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiffEntry {
     pub path: String,
@@ -123,17 +138,20 @@ pub struct DiffEntry {
     pub severity: String,
 }
 
+/// Result of diffing two pipelines: a list of structural differences.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiffResponse {
     pub diffs: Vec<DiffEntry>,
 }
 
+/// Request to search pipelines by query and optional scope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchRequest {
     pub query: String,
     pub scope: Option<String>,
 }
 
+/// A single search result with relevance score and match reason.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
     pub id: String,
@@ -146,6 +164,7 @@ pub struct SearchResult {
     pub score: f64,
 }
 
+/// Search results with query echo and total count.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResponse {
     pub query: String,
@@ -153,6 +172,7 @@ pub struct SearchResponse {
     pub results: Vec<SearchResult>,
 }
 
+/// Request to export a pipeline as Dockerfile or Singularity definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportRequest {
     pub toml_content: String,
@@ -160,17 +180,20 @@ pub struct ExportRequest {
     pub pipeline_id: Option<String>,
 }
 
+/// Exported container definition (format + content string).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportResponse {
     pub format: String,
     pub content: String,
 }
 
+/// Canonical TOML formatting result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FormatResponse {
     pub formatted: String,
 }
 
+/// A saved pipeline with full metadata, ownership, visibility, and TOML content.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Pipeline {
     pub id: String,
@@ -185,6 +208,7 @@ pub struct Pipeline {
     pub updated_at: String,
 }
 
+/// Filter criteria for listing templates (category, tags, search text).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TemplateFilter {
     pub category: Option<String>,
@@ -192,6 +216,7 @@ pub struct TemplateFilter {
     pub search: Option<String>,
 }
 
+/// A pipeline template with metadata, tags, usage count, and optional TOML content.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Template {
     pub id: String,
@@ -205,6 +230,34 @@ pub struct Template {
     pub usage_count: u64,
     pub created_at: String,
     pub updated_at: String,
+}
+
+// ---- Plugin validation types ----
+
+/// Request to validate a plugin manifest and optionally verify its signature.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidatePluginRequest {
+    /// Plugin manifest as a JSON object.
+    pub manifest: oxo_flow_core::plugin::PluginManifest,
+    /// Optional trusted keys for signature verification (key_id -> hex-encoded key).
+    pub trusted_keys: Option<std::collections::HashMap<String, String>>,
+}
+
+/// Plugin validation result: validity, parsed metadata, signature status, and errors.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidatePluginResponse {
+    /// Whether the manifest is valid.
+    pub valid: bool,
+    /// Parsed plugin name.
+    pub name: Option<String>,
+    /// Parsed plugin version.
+    pub version: Option<String>,
+    /// Parsed plugin type.
+    pub plugin_type: Option<String>,
+    /// Signature verification result.
+    pub signature_valid: Option<bool>,
+    /// List of validation errors.
+    pub errors: Vec<String>,
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { LayoutDashboard, GitBranch, PlayCircle, Library, Settings, BookOpen, FlaskConical } from 'lucide-react';
+import { LayoutDashboard, GitBranch, PlayCircle, Library, Settings, BookOpen, FlaskConical, Menu, X } from 'lucide-react';
 import Toast from './Toast';
 
 const nav = [
@@ -12,18 +13,23 @@ const nav = [
 ];
 
 export default function Layout() {
+  const [menuOpen, setMenuOpen] = useState(false);
+
   return (
     <div className="app-shell">
       {/* Header */}
       <header className="app-header">
         <div className="header-left">
+          <button className="mobile-menu-btn" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle menu">
+            {menuOpen ? <X size={20} /> : <Menu size={20} />}
+          </button>
           <FlaskConical size={20} />
           <span className="header-brand">oxo-flow</span>
           <span className="header-ver">v0.8</span>
         </div>
-        <nav className="header-nav">
+        <nav className={`header-nav${menuOpen ? ' open' : ''}`}>
           {nav.map(({ to, label }) => (
-            <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => `header-link${isActive ? ' active' : ''}`}>
+            <NavLink key={to} to={to} end={to === '/'} onClick={() => setMenuOpen(false)} className={({ isActive }) => `header-link${isActive ? ' active' : ''}`}>
               {label}
             </NavLink>
           ))}

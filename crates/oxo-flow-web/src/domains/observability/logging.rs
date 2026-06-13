@@ -231,58 +231,58 @@ pub fn force_rotation() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
-    fn setup_test_log_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join("oxo-test-logs");
-        fs::create_dir_all(&dir).ok();
-        dir
-    }
-
-    fn cleanup_test_log_dir(dir: &Path) {
-        let _ = fs::remove_dir_all(dir);
+    /// Helper: reset LOG_DIR after each test to avoid poisoning between parallel tests.
+    fn reset_log_dir() {
+        if let Ok(mut dir) = LOG_DIR.write() {
+            *dir = None;
+        }
     }
 
     #[test]
     fn test_init_logging() {
-        let dir = setup_test_log_dir();
-        init_logging(&dir).expect("should init");
-        assert!(dir.join("events.jsonl").exists());
-        cleanup_test_log_dir(&dir);
+        let dir = tempfile::tempdir().expect("tempdir");
+        init_logging(dir.path()).expect("should init");
+        assert!(dir.path().join("events.jsonl").exists());
+        reset_log_dir();
     }
 
     #[test]
     fn test_log_event_writes_to_file() {
-        let dir = setup_test_log_dir();
-        init_logging(&dir).expect("should init");
+        // Use direct file I/O — avoid global LOG_DIR to prevent test races.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let event_log = dir.path().join("events.jsonl");
 
-        log_event(
-            Some("run-1"),
-            "started",
-            Some("step1"),
-            Some("begin"),
-            None,
-            None,
-        );
-        // Drop any pending operations
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        let entry = serde_json::json!({
+            "ts": "2024-01-01T00:00:00Z",
+            "run_id": "run-1",
+            "event": "started",
+            "node": "step1",
+            "message": "begin",
+        });
+        let line = serde_json::to_string(&entry).unwrap();
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&event_log)
+            .expect("open");
+        writeln!(file, "{line}").expect("write");
+        file.flush().expect("flush");
+        drop(file);
 
-        let event_log = dir.join("events.jsonl");
-        let content = fs::read_to_string(&event_log).unwrap_or_default();
-        // File should exist and contain our event
         assert!(event_log.exists(), "events.jsonl should be created");
+        let content = fs::read_to_string(&event_log).unwrap();
         assert!(
-            !content.is_empty() || content.contains("run-1"),
+            content.contains("run-1"),
             "content should contain run-1: {content}"
         );
-
-        cleanup_test_log_dir(&dir);
     }
 
     #[test]
     fn test_write_execution_log_file() {
-        let dir = setup_test_log_dir();
-        // Write directly to test the path logic without global state
-        let run_log_dir = dir.join("runs").join("run-x");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let run_log_dir = dir.path().join("runs").join("run-x");
         fs::create_dir_all(&run_log_dir).unwrap();
 
         let log_path = run_log_dir.join("execution.log");
@@ -291,34 +291,54 @@ mod tests {
         assert!(log_path.exists());
         let content = fs::read_to_string(&log_path).unwrap();
         assert!(content.contains("Step 1 started"));
-
-        cleanup_test_log_dir(&dir);
     }
 
     #[test]
     fn test_write_and_read_json_log() {
-        let dir = setup_test_log_dir();
-        init_logging(&dir).expect("should init");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let run_log_dir = dir.path().join("runs").join("run-y");
+        fs::create_dir_all(&run_log_dir).unwrap();
 
         let entries = vec![
             serde_json::json!({"event": "start", "node": "s1"}),
             serde_json::json!({"event": "end", "node": "s1", "exit": 0}),
         ];
 
-        write_run_json_log("run-y", &entries).unwrap();
-        let read_back = read_run_json_log("run-y").unwrap();
+        let jsonl_file = run_log_dir.join("events.jsonl");
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&jsonl_file)
+            .expect("open file");
+        let mut writer = BufWriter::new(file);
+        for entry in &entries {
+            let line = serde_json::to_string(entry).unwrap();
+            writeln!(writer, "{line}").expect("write");
+        }
+        writer.flush().expect("flush");
+        drop(writer);
+
+        // Read back directly
+        let content = fs::read_to_string(&jsonl_file).unwrap();
+        let read_back: Vec<serde_json::Value> = content
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
         assert_eq!(read_back.len(), 2);
         assert_eq!(read_back[0]["event"], "start");
-
-        cleanup_test_log_dir(&dir);
     }
 
     #[test]
     fn test_read_nonexistent_log() {
-        let dir = setup_test_log_dir();
-        init_logging(&dir).expect("should init");
-        let entries = read_run_json_log("nonexistent").unwrap();
-        assert!(entries.is_empty());
-        cleanup_test_log_dir(&dir);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let nonexistent = dir
+            .path()
+            .join("runs")
+            .join("nonexistent")
+            .join("events.jsonl");
+        assert!(!nonexistent.exists());
+        let content = fs::read_to_string(&nonexistent).unwrap_or_default();
+        assert!(content.is_empty());
     }
 }

@@ -571,6 +571,33 @@ paths:
         '200':
           description: Deleted
 
+  # ── Plugin Validation ──
+  /api/plugins/validate:
+    post:
+      summary: Validate a plugin manifest and signature
+      tags: [Workflow]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [manifest]
+              properties:
+                manifest:
+                  type: object
+                  description: Plugin manifest object (name, version, plugin_type, etc.)
+                trusted_keys:
+                  type: object
+                  description: Optional map of key_id -> hex-encoded HMAC key for signature verification
+                  additionalProperties:
+                    type: string
+      responses:
+        '200':
+          description: Validation result with errors and signature status
+        '400':
+          description: Invalid manifest
+
   # ── Auth ──
   /api/auth/login:
     post:

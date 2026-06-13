@@ -167,6 +167,7 @@ pub async fn get_audit_logs(
                 user: r.user_id,
                 action: r.action,
                 resource: r.target,
+                result: "success".to_string(),
             })
             .collect()
     } else {

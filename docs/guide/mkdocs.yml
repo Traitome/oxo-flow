@@ -166,7 +166,13 @@ nav:
       - Webhooks: reference/webhook.md
       - Web API: reference/web-api.md
       - Web System Architecture: reference/web-system-architecture.md
+      - AI Translation Layer: reference/ai-translation.md
+      - Diagnostics Engine: reference/diagnostics-engine.md
       - Cloud Storage: reference/cloud-storage.md
+      - Licensing: reference/license.md
+  - Deployment:
+      - Deployment Modes: how-to/deploy-modes.md
+      - Collaboration: how-to/collaboration.md
   - Development:
       - Contributing: development/contributing.md
       - Changelog: development/changelog.md

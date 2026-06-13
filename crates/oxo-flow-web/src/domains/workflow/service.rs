@@ -430,3 +430,60 @@ pub fn search_pipelines(
         results,
     }
 }
+
+// ---------------------------------------------------------------------------
+// Plugin validation
+// ---------------------------------------------------------------------------
+
+/// Validate a plugin manifest and optionally verify its signature.
+///
+/// Checks required fields (name, version, plugin_type) and verifies the
+/// HMAC signature against the provided trusted keys (if any).
+pub fn validate_plugin_manifest(
+    manifest: &oxo_flow_core::plugin::PluginManifest,
+    trusted_keys: Option<&std::collections::HashMap<String, String>>,
+) -> Result<ValidatePluginResponse, String> {
+    let mut errors: Vec<String> = Vec::new();
+
+    // Validate required fields
+    if manifest.name.is_empty() {
+        errors.push("Plugin name is required".into());
+    }
+    if manifest.version.is_empty() {
+        errors.push("Plugin version is required".into());
+    }
+    let valid_types = ["rule", "executor", "report"];
+    if !valid_types.contains(&manifest.plugin_type.as_str()) {
+        errors.push(format!(
+            "Invalid plugin_type '{}' — must be one of: rule, executor, report",
+            manifest.plugin_type
+        ));
+    }
+
+    // Verify signature if provided
+    let signature_valid = if let Some(keys) = trusted_keys {
+        match manifest.verify_signature(keys) {
+            Ok(valid) => Some(valid),
+            Err(e) => {
+                errors.push(format!("Signature verification failed: {e}"));
+                Some(false)
+            }
+        }
+    } else if manifest.signature.is_some() {
+        // Signature provided but no trusted keys — warn but don't fail
+        None
+    } else {
+        None
+    };
+
+    let valid = errors.is_empty();
+
+    Ok(ValidatePluginResponse {
+        valid,
+        name: Some(manifest.name.clone()),
+        version: Some(manifest.version.clone()),
+        plugin_type: Some(manifest.plugin_type.clone()),
+        signature_valid,
+        errors,
+    })
+}

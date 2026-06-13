@@ -136,6 +136,16 @@ pub fn diagnose_run(run_nodes: &[NodeStatusItem], log_output: &str) -> Diagnosti
                     error_pattern: r.error_pattern,
                     likely_cause: r.likely_cause,
                     suggestions: r.suggestions,
+                    auto_fixable: r.auto_fixable,
+                    fix_action: r.fix_action.map(|fa| FixAction {
+                        description: fa.description,
+                        config_change: fa.config_change.map(|cc| ConfigChange {
+                            path: cc.path,
+                            old_value: cc.old_value,
+                            new_value: cc.new_value,
+                        }),
+                        command: fa.command,
+                    }),
                     relevant_log_lines: r.relevant_log_lines,
                 })
                 .collect::<Vec<_>>()

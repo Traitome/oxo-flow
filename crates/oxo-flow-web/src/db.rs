@@ -82,6 +82,7 @@ pub async fn init_db(database_url: &str) -> Result<()> {
             user_id TEXT NOT NULL,
             action TEXT NOT NULL,
             target TEXT NOT NULL,
+            result TEXT NOT NULL DEFAULT 'success',
             timestamp DATETIME NOT NULL,
             FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
         );
@@ -458,7 +459,7 @@ pub async fn log_action(user_id: &str, action: &str, target: &str) -> Result<()>
     let id = Uuid::new_v4().to_string();
     let now = Utc::now();
     sqlx::query(
-        "INSERT INTO audit_logs (id, user_id, action, target, timestamp) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO audit_logs (id, user_id, action, target, result, timestamp) VALUES (?, ?, ?, ?, 'success', ?)",
     )
     .bind(id)
     .bind(user_id)
