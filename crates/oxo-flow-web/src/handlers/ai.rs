@@ -740,6 +740,87 @@ fn analyze_log(
     }
 }
 
+/// Try to generate a pipeline using the configured AI provider.
+/// Returns None if AI is disabled or fails, for graceful fallback to template matching.
+pub async fn try_ai_generate(
+    intent: &str,
+    organism: Option<&str>,
+    tools: Option<&str>,
+) -> Option<crate::GenerateResponse> {
+    let provider = crate::ai_provider::AiProviderRegistry::global().provider();
+    if provider.name() == "disabled" {
+        return None;
+    }
+
+    let system_prompt = r#"You are a bioinformatics pipeline generator. Generate a valid oxo-flow workflow
+in TOML format. Follow this structure exactly:
+
+[workflow]
+name = "pipeline-name"
+version = "1.0.0"
+description = "..."
+
+[[rules]]
+name = "step_name"
+input = ["{sample}.fastq.gz"]
+output = ["{sample}_output.txt"]
+shell = "tool command {input} > {output}"
+threads = 4
+
+Rules:
+- Each rule must have a unique name, input/output files, and a shell command
+- Use {sample} wildcard for sample-specific paths
+- Set reasonable thread counts for each tool
+- Return ONLY the TOML content, no explanations.
+Generate a complete workflow TOML for: "#;
+
+    let mut user_prompt = intent.to_string();
+    if let Some(org) = organism {
+        user_prompt.push_str(&format!(
+            "
+Organism: {org}"
+        ));
+    }
+    if let Some(t) = tools {
+        user_prompt.push_str(&format!(
+            "
+Desired tools: {t}"
+        ));
+    }
+
+    match provider.chat(system_prompt, &user_prompt).await {
+        Ok(response) => {
+            let toml_content = if let Some(start) = response.find("[workflow]") {
+                response[start..].to_string()
+            } else {
+                response.clone()
+            };
+
+            match oxo_flow_core::WorkflowConfig::parse(&toml_content) {
+                Ok(config) => {
+                    let dag = oxo_flow_core::WorkflowDag::from_rules(&config.rules).ok()?;
+                    let execution_order = dag.execution_order().ok()?;
+                    Some(crate::GenerateResponse {
+                        toml_content,
+                        workflow_name: config.workflow.name.clone(),
+                        rules_count: config.rules.len(),
+                        execution_order,
+                        description: format!("AI-generated: {}", intent),
+                        valid: true,
+                    })
+                }
+                Err(e) => {
+                    tracing::warn!("AI-generated TOML validation failed: {e}");
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!("AI provider failed: {e}");
+            None
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2745,6 +2745,7 @@ dependencies = [
  "oxo-flow-core",
  "oxo-license",
  "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "sqlx",

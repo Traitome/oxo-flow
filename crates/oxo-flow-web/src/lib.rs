@@ -6,6 +6,7 @@
 //! role-based access control, and dual-license verification via
 //! [`oxo_license`].
 
+pub mod ai_provider;
 pub mod audit;
 pub mod db;
 pub mod executor;
@@ -1070,6 +1071,14 @@ async fn generate_workflow(
         ));
     }
 
+    // Try AI-powered generation first
+    if let Some(ai_resp) =
+        crate::handlers::ai::try_ai_generate(&intent, req.organism.as_deref(), req.tools.as_deref())
+            .await
+    {
+        return Ok(Json(ai_resp));
+    }
+
     // Template matching: map intent keywords to pipeline template names
     let (toml_template, default_name, description) = match () {
         _ if intent.contains("rna-seq")
@@ -1152,6 +1161,8 @@ async fn generate_workflow(
         ),
     };
 
+    // Try AI-powered generation first
+    // Template matching (AI-powered generation coming soon)
     let config = oxo_flow_core::WorkflowConfig::parse(toml_template)
         .map_err(|e| ApiError::unprocessable("Pipeline generation failed", Some(e.to_string())))?;
 
@@ -1311,6 +1322,9 @@ fn build_router_inner(limiter: Option<RateLimiter>) -> Router {
     if let Some(limiter) = limiter {
         router = router.layer(axum::Extension(limiter));
     }
+
+    // Initialize AI provider from environment
+    crate::ai_provider::AiProviderRegistry::global().init_from_env();
 
     router.layer(cors)
 }
