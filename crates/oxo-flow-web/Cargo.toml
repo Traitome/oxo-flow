@@ -36,6 +36,7 @@ regex.workspace = true
 reqwest = { workspace = true }
 clap = { workspace = true }
 maud = { version = "0.27", features = ["axum"] }
+async-trait = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

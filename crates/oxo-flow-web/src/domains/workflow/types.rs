@@ -73,7 +73,8 @@ pub struct WorkflowStatsResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidateRequest {
-    pub pipeline_id: String,
+    pub toml_content: String,
+    pub pipeline_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,9 +93,10 @@ pub struct ValidationError {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrepareRequest {
-    pub pipeline_id: String,
+    pub toml_content: String,
     pub resolve_wildcards: Option<bool>,
     pub apply_defaults: Option<bool>,
+    pub pipeline_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,8 +109,10 @@ pub struct PrepareResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiffRequest {
-    pub pipeline_a_id: String,
-    pub pipeline_b_id: String,
+    pub toml_a: String,
+    pub toml_b: String,
+    pub pipeline_a_id: Option<String>,
+    pub pipeline_b_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,8 +155,9 @@ pub struct SearchResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportRequest {
-    pub pipeline_id: String,
+    pub toml_content: String,
     pub format: Option<String>,
+    pub pipeline_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
