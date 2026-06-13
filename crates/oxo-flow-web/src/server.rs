@@ -14,6 +14,7 @@ use axum::{
 };
 
 use crate::domains::*;
+use crate::infra::license::LicenseHeaderLayer;
 
 /// Build the full application router for the given serve mode.
 pub fn build_router(_mode: &str) -> Router {
@@ -129,6 +130,16 @@ pub fn build_router(_mode: &str) -> Router {
         .route("/api/license", get(auth::handlers::license_status))
         .route("/api/license/upload", post(auth::handlers::upload_license));
 
+    // ---- AI routes ----
+    let ai_routes = Router::new()
+        .route("/api/ai/translate", post(ai::handlers::translate))
+        .route("/api/ai/explain", post(ai::handlers::explain))
+        .route("/api/ai/interpret", post(ai::handlers::interpret))
+        .route("/api/ai/optimize", post(ai::handlers::optimize))
+        .route("/api/ai/config", get(ai::handlers::get_ai_config))
+        .route("/api/ai/config", post(ai::handlers::update_ai_config))
+        .route("/api/ai/test", post(ai::handlers::test_ai_config));
+
     // ---- Observability routes ----
     let obs_routes = Router::new()
         .route("/api/health", get(observability::handlers::health))
@@ -148,6 +159,8 @@ pub fn build_router(_mode: &str) -> Router {
         .merge(template_routes)
         .merge(auth_routes)
         .merge(license_routes)
+        .merge(ai_routes)
         .merge(obs_routes)
+        .layer(LicenseHeaderLayer)
         .layer(tower_http::cors::CorsLayer::permissive())
 }

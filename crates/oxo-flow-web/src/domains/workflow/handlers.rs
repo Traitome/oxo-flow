@@ -25,7 +25,7 @@ pub struct ApiError {
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 
-fn err(status: StatusCode, code: &str, msg: String) -> (StatusCode, Json<ApiError>) {
+pub fn err(status: StatusCode, code: &str, msg: String) -> (StatusCode, Json<ApiError>) {
     (
         status,
         Json(ApiError {
