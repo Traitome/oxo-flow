@@ -17,6 +17,7 @@ pub mod rate_limit;
 pub mod sse;
 pub mod sys;
 pub mod domains;
+pub mod server;
 pub mod workspace;
 
 use axum::{
