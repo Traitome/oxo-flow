@@ -1,6 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import {
-  LayoutDashboard, GitBranch, PlayCircle, Library, Settings, FlaskConical,
+  LayoutDashboard, GitBranch, PlayCircle, Library, Settings, BookOpen, FlaskConical,
 } from 'lucide-react';
 
 const nav = [
@@ -8,6 +8,7 @@ const nav = [
   { to: '/editor', icon: GitBranch, label: 'Pipeline Editor' },
   { to: '/pipelines', icon: Library, label: 'Pipelines' },
   { to: '/runs', icon: PlayCircle, label: 'Runs' },
+  { to: '/docs', icon: BookOpen, label: 'API Docs' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
 

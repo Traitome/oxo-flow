@@ -68,7 +68,7 @@ async fn app_js() -> impl IntoResponse {
     (
         StatusCode::OK,
         [("content-type", "application/javascript; charset=utf-8")],
-        include_str!("../static/assets/index-Djer6wbM.js"),
+        include_str!("../static/assets/index-CLM7BjVy.js"),
     )
 }
 
@@ -98,7 +98,7 @@ pub fn build_router(mode: &str) -> Router {
     let frontend_routes = Router::new()
         .route("/favicon.svg", get(favicon))
         .route("/icons.svg", get(icons))
-        .route("/assets/index-Djer6wbM.js", get(app_js))
+        .route("/assets/index-CLM7BjVy.js", get(app_js))
         .route("/assets/index-CCVc6OLr.css", get(app_css))
         .route("/", get(spa_index));
 
@@ -244,6 +244,16 @@ pub fn build_router(mode: &str) -> Router {
     let obs_routes = Router::new()
         .route("/api/health", get(observability::handlers::health))
         .route("/api/system", get(observability::handlers::system_info))
+        .route(
+            "/api/openapi.json",
+            get(|| async {
+                (
+                    StatusCode::OK,
+                    [("content-type", "application/json")],
+                    include_str!("../static/openapi.json"),
+                )
+            }),
+        )
         .route(
             "/api/metrics",
             get(observability::handlers::runtime_metrics),
