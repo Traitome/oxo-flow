@@ -12,7 +12,10 @@ pub mod users;
 pub mod workflow;
 
 // Re-export all handlers for convenient access from lib.rs
-pub use ai::{debug_run, search_workflows, suggest_pipeline, try_ai_generate};
+pub use ai::{
+    debug_run, get_ai_config, search_workflows, suggest_pipeline, test_ai_config, try_ai_generate,
+    update_ai_config,
+};
 pub use auth::{auth_me, license_status, login, upload_license};
 pub use reports::generate_report;
 pub use runs::{

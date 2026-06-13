@@ -60,6 +60,7 @@ mod internal {
     use super::*;
     use anyhow::{Result, anyhow};
 
+    #[derive(Clone)]
     pub struct Claude {
         client: reqwest::Client,
         api_key: String,
@@ -120,6 +121,7 @@ mod internal {
         }
     }
 
+    #[derive(Clone)]
     pub struct OpenAi {
         client: reqwest::Client,
         api_key: String,
@@ -180,6 +182,7 @@ mod internal {
         }
     }
 
+    #[derive(Clone)]
     pub struct Ollama {
         client: reqwest::Client,
         model: String,
@@ -230,6 +233,7 @@ mod internal {
         }
     }
 
+    #[derive(Clone)]
     pub struct Noop;
 
     impl Noop {
@@ -250,6 +254,7 @@ mod internal {
 
 /// An AI provider instance. Use the enum variant methods or the convenience
 /// [`AiProvider::chat`] and [`AiProvider::name`] to interact.
+#[derive(Clone)]
 pub enum AiProvider {
     Claude(internal::Claude),
     OpenAi(internal::OpenAi),
@@ -362,9 +367,18 @@ pub fn create_provider_from_env() -> AiProvider {
     }
 }
 
+/// Runtime configuration snapshot of the AI provider (without secrets).
+#[derive(Debug, Clone)]
+pub struct ProviderConfig {
+    pub provider: String,
+    pub api_url: Option<String>,
+    pub model: Option<String>,
+    pub is_configured: bool,
+}
+
 /// A lazily-initialized, thread-safe AI provider registry.
 pub struct AiProviderRegistry {
-    provider: std::sync::OnceLock<AiProvider>,
+    provider: std::sync::RwLock<Option<AiProvider>>,
 }
 
 impl Default for AiProviderRegistry {
@@ -376,7 +390,7 @@ impl Default for AiProviderRegistry {
 impl AiProviderRegistry {
     pub const fn new() -> Self {
         Self {
-            provider: std::sync::OnceLock::new(),
+            provider: std::sync::RwLock::new(None),
         }
     }
 
@@ -389,7 +403,7 @@ impl AiProviderRegistry {
     /// Initialize from environment variables (call once at startup).
     pub fn init_from_env(&self) {
         let provider = create_provider_from_env();
-        let _ = self.provider.set(provider);
+        *self.provider.write().unwrap() = Some(provider);
     }
 
     /// Initialize with explicit parameters (call once at startup).
@@ -401,17 +415,60 @@ impl AiProviderRegistry {
         model: Option<String>,
     ) {
         let provider = create_provider(kind, api_key, api_url, model);
-        let _ = self.provider.set(provider);
+        *self.provider.write().unwrap() = Some(provider);
     }
 
-    /// Get the registered provider, or a no-op fallback.
-    pub fn provider(&self) -> &AiProvider {
-        self.provider
-            .get()
-            .unwrap_or(&AiProvider::Noop(internal::Noop))
+    /// Get the registered provider (returns a clone).
+    pub fn provider(&self) -> AiProvider {
+        self.get_provider()
     }
 }
 
+// Additional methods for AiProviderRegistry (runtime config support)
+impl AiProviderRegistry {
+    pub fn get_provider(&self) -> AiProvider {
+        let guard = self.provider.read().unwrap();
+        let opt = &*guard;
+        opt.clone().unwrap_or(AiProvider::Noop(internal::Noop))
+    }
+
+    pub fn get_config(&self) -> ProviderConfig {
+        let guard = self.provider.read().unwrap();
+        match guard.as_ref() {
+            Some(p) => ProviderConfig {
+                provider: p.name().to_string(),
+                api_url: std::env::var("ANTHROPIC_BASE_URL")
+                    .ok()
+                    .or_else(|| std::env::var("OPENAI_BASE_URL").ok())
+                    .or_else(|| std::env::var("OXO_FLOW_AI_API_URL").ok()),
+                model: std::env::var("ANTHROPIC_MODEL")
+                    .ok()
+                    .or_else(|| std::env::var("OPENAI_MODEL").ok())
+                    .or_else(|| std::env::var("OXO_FLOW_AI_MODEL").ok()),
+                is_configured: !matches!(p, AiProvider::Noop(_)),
+            },
+            None => ProviderConfig {
+                provider: "disabled".to_string(),
+                api_url: None,
+                model: None,
+                is_configured: false,
+            },
+        }
+    }
+
+    pub fn reconfigure(
+        &self,
+        kind: &str,
+        api_key: Option<String>,
+        api_url: Option<String>,
+        model: Option<String>,
+    ) -> Result<(), String> {
+        let kind_parsed: AiProviderKind = kind.parse().map_err(|e: anyhow::Error| e.to_string())?;
+        let provider = create_provider(kind_parsed, api_key, api_url, model);
+        *self.provider.write().unwrap() = Some(provider);
+        Ok(())
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

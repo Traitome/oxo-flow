@@ -747,7 +747,7 @@ pub async fn try_ai_generate(
     organism: Option<&str>,
     tools: Option<&str>,
 ) -> Option<crate::GenerateResponse> {
-    let provider = crate::ai_provider::AiProviderRegistry::global().provider();
+    let provider = crate::ai_provider::AiProviderRegistry::global().get_provider();
     if provider.name() == "disabled" {
         return None;
     }
@@ -819,6 +819,115 @@ Desired tools: {t}"
             tracing::warn!("AI provider failed: {e}");
             None
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AI Provider Config API
+// ---------------------------------------------------------------------------
+
+/// Request to update AI provider configuration at runtime.
+#[derive(Deserialize)]
+pub struct AiConfigRequest {
+    pub provider: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub api_url: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+/// Response from AI provider test.
+#[derive(Serialize)]
+pub struct AiTestResponse {
+    pub success: bool,
+    pub message: String,
+    pub provider: String,
+    pub model: String,
+}
+
+/// `GET /api/ai/config` — Get current AI provider configuration (no secrets).
+pub async fn get_ai_config() -> Json<serde_json::Value> {
+    let c = crate::ai_provider::AiProviderRegistry::global().get_config();
+    Json(serde_json::json!({
+        "provider": c.provider,
+        "api_url": c.api_url,
+        "model": c.model,
+        "is_configured": c.is_configured,
+    }))
+}
+
+/// `POST /api/ai/config` — Update AI provider configuration at runtime.
+pub async fn update_ai_config(
+    headers: axum::http::HeaderMap,
+    Json(req): Json<AiConfigRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _ = crate::extract_session(&headers)
+        .await
+        .ok_or_else(|| ApiError::unauthorized("Authentication required", None))?;
+
+    crate::ai_provider::AiProviderRegistry::global()
+        .reconfigure(&req.provider, req.api_key, req.api_url, req.model)
+        .map_err(|e| ApiError::bad_request("Failed to update AI config", Some(e)))?;
+
+    let c = crate::ai_provider::AiProviderRegistry::global().get_config();
+    Ok(Json(serde_json::json!({
+        "provider": c.provider,
+        "api_url": c.api_url,
+        "model": c.model,
+        "is_configured": c.is_configured,
+    })))
+}
+
+/// `POST /api/ai/test` — Test the AI provider with a simple prompt.
+pub async fn test_ai_config(
+    headers: axum::http::HeaderMap,
+) -> Result<Json<AiTestResponse>, ApiError> {
+    let _ = crate::extract_session(&headers)
+        .await
+        .ok_or_else(|| ApiError::unauthorized("Authentication required", None))?;
+
+    let provider = crate::ai_provider::AiProviderRegistry::global().get_provider();
+    let provider_name = provider.name().to_string();
+    let config = crate::ai_provider::AiProviderRegistry::global().get_config();
+
+    if provider_name == "disabled" {
+        return Ok(Json(AiTestResponse {
+            success: false,
+            message: "AI provider is not configured. Set provider settings first.".to_string(),
+            provider: provider_name,
+            model: config.model.unwrap_or_default(),
+        }));
+    }
+
+    match provider
+        .chat(
+            "You are a helpful assistant. Reply with a short confirmation.",
+            "Say hello and confirm you are working.",
+        )
+        .await
+    {
+        Ok(response) => {
+            let snippet: &str = response.trim();
+            let snippet = if snippet.len() > 200 {
+                &snippet[..200]
+            } else {
+                snippet
+            };
+            Ok(Json(AiTestResponse {
+                success: true,
+                message: format!("AI provider '{}' responded: {}", provider_name, snippet),
+                provider: provider_name,
+                model: config.model.unwrap_or_default(),
+            }))
+        }
+        Err(e) => Ok(Json(AiTestResponse {
+            success: false,
+            message: format!("AI provider '{}' error: {e}", provider_name),
+            provider: provider_name,
+            model: config.model.unwrap_or_default(),
+        })),
     }
 }
 #[cfg(test)]

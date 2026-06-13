@@ -29,13 +29,13 @@ use handlers::{
     auth_me, build_dag, build_dag_json, cancel_run, cancel_scheduled_run, clean_workflow,
     create_scheduled_run, create_user, debug_run, delete_saved_workflow, delete_template,
     delete_user, diff_workflows_endpoint, dry_run, export_workflow, format_workflow_endpoint,
-    generate_report, get_audit_logs, get_run_detail, get_run_logs, get_run_results,
+    generate_report, get_ai_config, get_audit_logs, get_run_detail, get_run_logs, get_run_results,
     get_saved_workflow, get_scheduled_run, get_template, health, hpc_status, hpc_submit_run,
     license_status, lint_workflow, lint_workflow_paginated, list_environments, list_runs,
     list_saved_workflows, list_scheduled_runs, list_templates, list_users, login, parse_workflow,
     run_workflow, runtime_metrics, save_template, save_workflow, search_workflows, sse_events,
-    suggest_pipeline, system_info, upload_license, validate_workflow, version,
-    workflow_stats_endpoint,
+    suggest_pipeline, system_info, test_ai_config, update_ai_config, upload_license,
+    validate_workflow, version, workflow_stats_endpoint,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -1314,6 +1314,9 @@ fn build_router_inner(limiter: Option<RateLimiter>) -> Router {
         .route("/api/auth/login", post(login))
         .route("/api/auth/me", get(auth_me))
         .route("/api/license", get(license_status))
+        .route("/api/ai/config", get(get_ai_config))
+        .route("/api/ai/config", post(update_ai_config))
+        .route("/api/ai/test", post(test_ai_config))
         .route("/api/license/upload", post(upload_license))
         .fallback(not_found)
         .layer(middleware::from_fn(add_request_id))
