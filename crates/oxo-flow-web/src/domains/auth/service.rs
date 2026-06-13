@@ -12,34 +12,35 @@ use super::types::*;
 /// Uses env-var based credential checking (backward compat with existing system).
 pub fn authenticate(username: &str, password: &str) -> Result<LoginResponse, String> {
     // Check admin
-    if let Ok(admin_pw) = std::env::var("OXO_FLOW_ADMIN_PASSWORD") {
-        if username == "admin" && password == admin_pw.as_str() {
-            return Ok(LoginResponse {
-                token: generate_token(),
-                username: "admin".into(),
-                role: "admin".into(),
-            });
-        }
+    if let Ok(admin_pw) = std::env::var("OXO_FLOW_ADMIN_PASSWORD")
+        && username == "admin"
+        && password == admin_pw.as_str()
+    {
+        return Ok(LoginResponse {
+            token: generate_token(),
+            username: "admin".into(),
+            role: "admin".into(),
+        });
     }
     // Check user
-    if let Ok(user_pw) = std::env::var("OXO_FLOW_USER_PASSWORD") {
-        if password == user_pw {
-            return Ok(LoginResponse {
-                token: generate_token(),
-                username: username.into(),
-                role: "user".into(),
-            });
-        }
+    if let Ok(user_pw) = std::env::var("OXO_FLOW_USER_PASSWORD")
+        && password == user_pw
+    {
+        return Ok(LoginResponse {
+            token: generate_token(),
+            username: username.into(),
+            role: "user".into(),
+        });
     }
     // Check viewer
-    if let Ok(viewer_pw) = std::env::var("OXO_FLOW_VIEWER_PASSWORD") {
-        if password == viewer_pw {
-            return Ok(LoginResponse {
-                token: generate_token(),
-                username: username.into(),
-                role: "viewer".into(),
-            });
-        }
+    if let Ok(viewer_pw) = std::env::var("OXO_FLOW_VIEWER_PASSWORD")
+        && password == viewer_pw
+    {
+        return Ok(LoginResponse {
+            token: generate_token(),
+            username: username.into(),
+            role: "viewer".into(),
+        });
     }
     // Dev mode fallback: password equals username
     if password == username && !username.is_empty() {
@@ -54,10 +55,7 @@ pub fn authenticate(username: &str, password: &str) -> Result<LoginResponse, Str
 }
 
 /// Validate session token. Returns user info if valid.
-pub fn validate_session(
-    token: &str,
-    _sessions: &[Session],
-) -> Result<AuthMeResponse, String> {
+pub fn validate_session(token: &str, _sessions: &[Session]) -> Result<AuthMeResponse, String> {
     // For v0.8, token-based session validation is a stub.
     // Real implementation connects to StorageBackend.
     if token.is_empty() {
@@ -91,8 +89,7 @@ pub fn license_status() -> LicenseResponse {
         issued_to: Some("Public Academic Test License (any academic user)".into()),
         commercial_use: "requires_authorization".into(),
         contact: "wangsx@traitome.com".into(),
-        message: "Free for academic use. Commercial use requires authorization."
-            .into(),
+        message: "Free for academic use. Commercial use requires authorization.".into(),
     }
 }
 

@@ -73,8 +73,7 @@ impl DiagnosticsEngine {
                 category: ErrorCategory::Tool,
                 exit_codes: vec![139, 11],
                 stderr_patterns: vec!["segmentation fault", "SIGSEGV"],
-                likely_cause:
-                    "Tool crashed with segfault. Possible binary incompatibility or bug.",
+                likely_cause: "Tool crashed with segfault. Possible binary incompatibility or bug.",
                 auto_fixable: false,
                 fix_desc: Some("Try a different tool version or check for known issues."),
                 fix_config_path: None,
@@ -94,8 +93,7 @@ impl DiagnosticsEngine {
                 category: ErrorCategory::Tool,
                 exit_codes: vec![138, 10],
                 stderr_patterns: vec!["bus error", "SIGBUS"],
-                likely_cause:
-                    "Memory alignment error. Input file may be on corrupt filesystem.",
+                likely_cause: "Memory alignment error. Input file may be on corrupt filesystem.",
                 auto_fixable: false,
                 fix_desc: Some("Check filesystem integrity. Move data to reliable storage."),
                 fix_config_path: None,
@@ -105,8 +103,7 @@ impl DiagnosticsEngine {
                 category: ErrorCategory::Tool,
                 exit_codes: vec![],
                 stderr_patterns: vec!["version", "incompatible", "unsupported"],
-                likely_cause:
-                    "Tool version incompatible with inputs or parameters.",
+                likely_cause: "Tool version incompatible with inputs or parameters.",
                 auto_fixable: false,
                 fix_desc: Some("Use a compatible tool version."),
                 fix_config_path: None,
@@ -142,11 +139,7 @@ impl DiagnosticsEngine {
                 id: "disk_full",
                 category: ErrorCategory::Resource,
                 exit_codes: vec![],
-                stderr_patterns: vec![
-                    "no space left on device",
-                    "disk quota exceeded",
-                    "ENOSPC",
-                ],
+                stderr_patterns: vec!["no space left on device", "disk quota exceeded", "ENOSPC"],
                 likely_cause: "Disk full. Free up space or redirect output.",
                 auto_fixable: false,
                 fix_desc: Some("Clean temp files or increase disk allocation."),
@@ -162,8 +155,7 @@ impl DiagnosticsEngine {
                     "resource temporarily unavailable",
                     "EAGAIN",
                 ],
-                likely_cause:
-                    "CPU time limit exceeded or resource temporarily unavailable.",
+                likely_cause: "CPU time limit exceeded or resource temporarily unavailable.",
                 auto_fixable: true,
                 fix_desc: Some("Increase thread count or CPU allocation."),
                 fix_config_path: Some("resources.threads"),
@@ -172,12 +164,7 @@ impl DiagnosticsEngine {
                 id: "ulimit",
                 category: ErrorCategory::Resource,
                 exit_codes: vec![],
-                stderr_patterns: vec![
-                    "too many open files",
-                    "ulimit",
-                    "EMFILE",
-                    "ENFILE",
-                ],
+                stderr_patterns: vec!["too many open files", "ulimit", "EMFILE", "ENFILE"],
                 likely_cause: "Too many open files. Increase ulimit.",
                 auto_fixable: true,
                 fix_desc: Some("Run 'ulimit -n 65536' before starting."),
@@ -194,8 +181,7 @@ impl DiagnosticsEngine {
                     "not found",
                     "ENOENT",
                 ],
-                likely_cause:
-                    "Input file not found. Check paths and wildcard expansion.",
+                likely_cause: "Input file not found. Check paths and wildcard expansion.",
                 auto_fixable: false,
                 fix_desc: Some("Verify input file exists at expected path."),
                 fix_config_path: None,
@@ -213,9 +199,7 @@ impl DiagnosticsEngine {
                 ],
                 likely_cause: "Input file truncated or corrupted.",
                 auto_fixable: false,
-                fix_desc: Some(
-                    "Verify file integrity with checksum. Re-download if needed.",
-                ),
+                fix_desc: Some("Verify file integrity with checksum. Re-download if needed."),
                 fix_config_path: None,
             },
             Pattern {
@@ -239,20 +223,14 @@ impl DiagnosticsEngine {
                 ],
                 likely_cause: "FASTQ files have low quality scores.",
                 auto_fixable: true,
-                fix_desc: Some(
-                    "Insert fastp or Trimmomatic step before this rule.",
-                ),
+                fix_desc: Some("Insert fastp or Trimmomatic step before this rule."),
                 fix_config_path: None,
             },
             Pattern {
                 id: "gzip_corrupt",
                 category: ErrorCategory::Data,
                 exit_codes: vec![1],
-                stderr_patterns: vec![
-                    "not in gzip format",
-                    "gzip",
-                    "corrupt input",
-                ],
+                stderr_patterns: vec!["not in gzip format", "gzip", "corrupt input"],
                 likely_cause: "Gzipped file is corrupt or not actually gzipped.",
                 auto_fixable: false,
                 fix_desc: Some("Verify file is valid gzip: 'gzip -t file.gz'"),
@@ -262,11 +240,7 @@ impl DiagnosticsEngine {
                 id: "bam_truncated",
                 category: ErrorCategory::Data,
                 exit_codes: vec![1],
-                stderr_patterns: vec![
-                    "truncated file",
-                    "bam index",
-                    "EOF marker",
-                ],
+                stderr_patterns: vec!["truncated file", "bam index", "EOF marker"],
                 likely_cause: "BAM file missing index or truncated.",
                 auto_fixable: true,
                 fix_desc: Some("Run 'samtools index' to rebuild BAM index."),
@@ -277,16 +251,10 @@ impl DiagnosticsEngine {
                 id: "permission_denied",
                 category: ErrorCategory::System,
                 exit_codes: vec![126, 13],
-                stderr_patterns: vec![
-                    "permission denied",
-                    "EACCES",
-                    "not writable",
-                ],
+                stderr_patterns: vec!["permission denied", "EACCES", "not writable"],
                 likely_cause: "Insufficient file permissions.",
                 auto_fixable: false,
-                fix_desc: Some(
-                    "Check file permissions. Ensure user has r/w access.",
-                ),
+                fix_desc: Some("Check file permissions. Ensure user has r/w access."),
                 fix_config_path: None,
             },
             Pattern {
@@ -294,29 +262,19 @@ impl DiagnosticsEngine {
                 category: ErrorCategory::System,
                 exit_codes: vec![141, 13],
                 stderr_patterns: vec!["broken pipe", "SIGPIPE"],
-                likely_cause:
-                    "Downstream process exited early, breaking the pipe.",
+                likely_cause: "Downstream process exited early, breaking the pipe.",
                 auto_fixable: false,
-                fix_desc: Some(
-                    "Check all pipeline commands produce valid output.",
-                ),
+                fix_desc: Some("Check all pipeline commands produce valid output."),
                 fix_config_path: None,
             },
             Pattern {
                 id: "network_error",
                 category: ErrorCategory::System,
                 exit_codes: vec![],
-                stderr_patterns: vec![
-                    "connection refused",
-                    "network",
-                    "cannot resolve",
-                    "timeout",
-                ],
+                stderr_patterns: vec!["connection refused", "network", "cannot resolve", "timeout"],
                 likely_cause: "Network resource unavailable.",
                 auto_fixable: false,
-                fix_desc: Some(
-                    "Check network connectivity and remote resource availability.",
-                ),
+                fix_desc: Some("Check network connectivity and remote resource availability."),
                 fix_config_path: None,
             },
             Pattern {
@@ -326,9 +284,7 @@ impl DiagnosticsEngine {
                 stderr_patterns: vec!["terminated", "SIGTERM", "killed"],
                 likely_cause: "Process terminated by external signal.",
                 auto_fixable: false,
-                fix_desc: Some(
-                    "Process was externally terminated. Check system logs.",
-                ),
+                fix_desc: Some("Process was externally terminated. Check system logs."),
                 fix_config_path: None,
             },
             Pattern {
@@ -371,21 +327,14 @@ impl DiagnosticsEngine {
                 ],
                 likely_cause: "Invalid or unrecognized command parameter.",
                 auto_fixable: false,
-                fix_desc: Some(
-                    "Check tool documentation for correct parameter spelling.",
-                ),
+                fix_desc: Some("Check tool documentation for correct parameter spelling."),
                 fix_config_path: None,
             },
             Pattern {
                 id: "missing_required_param",
                 category: ErrorCategory::Config,
                 exit_codes: vec![1],
-                stderr_patterns: vec![
-                    "required",
-                    "must specify",
-                    "missing",
-                    "argument expected",
-                ],
+                stderr_patterns: vec!["required", "must specify", "missing", "argument expected"],
                 likely_cause: "Required parameter is missing.",
                 auto_fixable: false,
                 fix_desc: Some("Add the missing parameter to the rule command."),
@@ -395,36 +344,20 @@ impl DiagnosticsEngine {
                 id: "wildcard_empty",
                 category: ErrorCategory::Config,
                 exit_codes: vec![],
-                stderr_patterns: vec![
-                    "no matches",
-                    "no files",
-                    "wildcard",
-                    "empty",
-                    "no input",
-                ],
+                stderr_patterns: vec!["no matches", "no files", "wildcard", "empty", "no input"],
                 likely_cause: "Wildcard pattern matched no files.",
                 auto_fixable: false,
-                fix_desc: Some(
-                    "Check file naming matches the wildcard pattern.",
-                ),
+                fix_desc: Some("Check file naming matches the wildcard pattern."),
                 fix_config_path: None,
             },
             Pattern {
                 id: "conda_env_fail",
                 category: ErrorCategory::Config,
                 exit_codes: vec![1],
-                stderr_patterns: vec![
-                    "conda",
-                    "environment",
-                    "environment.yml",
-                    "create failed",
-                ],
-                likely_cause:
-                    "Conda environment creation or activation failed.",
+                stderr_patterns: vec!["conda", "environment", "environment.yml", "create failed"],
+                likely_cause: "Conda environment creation or activation failed.",
                 auto_fixable: false,
-                fix_desc: Some(
-                    "Verify conda is installed and environment name is correct.",
-                ),
+                fix_desc: Some("Verify conda is installed and environment name is correct."),
                 fix_config_path: None,
             },
             Pattern {
@@ -437,45 +370,29 @@ impl DiagnosticsEngine {
                     "daemon",
                     "permission denied.*docker",
                 ],
-                likely_cause:
-                    "Docker daemon not running or no permission.",
+                likely_cause: "Docker daemon not running or no permission.",
                 auto_fixable: false,
-                fix_desc: Some(
-                    "Start Docker daemon or add user to docker group.",
-                ),
+                fix_desc: Some("Start Docker daemon or add user to docker group."),
                 fix_config_path: None,
             },
             Pattern {
                 id: "singularity_fail",
                 category: ErrorCategory::Config,
                 exit_codes: vec![255],
-                stderr_patterns: vec![
-                    "singularity",
-                    "apptainer",
-                    "image not found",
-                ],
-                likely_cause:
-                    "Singularity/Apptainer image not found or daemon issue.",
+                stderr_patterns: vec!["singularity", "apptainer", "image not found"],
+                likely_cause: "Singularity/Apptainer image not found or daemon issue.",
                 auto_fixable: false,
-                fix_desc: Some(
-                    "Pull the container image or check Singularity installation.",
-                ),
+                fix_desc: Some("Pull the container image or check Singularity installation."),
                 fix_config_path: None,
             },
             Pattern {
                 id: "shell_syntax",
                 category: ErrorCategory::Config,
                 exit_codes: vec![2],
-                stderr_patterns: vec![
-                    "syntax error",
-                    "unexpected token",
-                    "parse error",
-                ],
+                stderr_patterns: vec!["syntax error", "unexpected token", "parse error"],
                 likely_cause: "Shell syntax error in the rule command.",
                 auto_fixable: false,
-                fix_desc: Some(
-                    "Review the shell command for syntax errors.",
-                ),
+                fix_desc: Some("Review the shell command for syntax errors."),
                 fix_config_path: None,
             },
         ];
@@ -494,9 +411,8 @@ impl DiagnosticsEngine {
         let mut results = Vec::new();
 
         for p in &self.patterns {
-            let exit_match = exit_code.map_or(true, |ec| {
-                p.exit_codes.is_empty() || p.exit_codes.contains(&ec)
-            });
+            let exit_match =
+                exit_code.is_none_or(|ec| p.exit_codes.is_empty() || p.exit_codes.contains(&ec));
             let stderr_match = p
                 .stderr_patterns
                 .iter()
@@ -506,10 +422,9 @@ impl DiagnosticsEngine {
                 let relevant: Vec<String> = log_output
                     .lines()
                     .filter(|line| {
-                        p.stderr_patterns.iter().any(|pat| {
-                            line.to_lowercase()
-                                .contains(&pat.to_lowercase())
-                        })
+                        p.stderr_patterns
+                            .iter()
+                            .any(|pat| line.to_lowercase().contains(&pat.to_lowercase()))
                     })
                     .take(10)
                     .map(|s| s.to_string())
@@ -520,20 +435,19 @@ impl DiagnosticsEngine {
                     error_pattern: Some(p.id.to_string()),
                     category: p.category.clone(),
                     likely_cause: p.likely_cause.to_string(),
-                    suggestions: vec![p
-                        .fix_desc
-                        .unwrap_or("Manual investigation required.")
-                        .to_string()],
+                    suggestions: vec![
+                        p.fix_desc
+                            .unwrap_or("Manual investigation required.")
+                            .to_string(),
+                    ],
                     auto_fixable: p.auto_fixable,
                     fix_action: p.fix_desc.map(|desc| FixAction {
                         description: desc.to_string(),
-                        config_change: p
-                            .fix_config_path
-                            .map(|path| ConfigChange {
-                                path: path.to_string(),
-                                old_value: "current".into(),
-                                new_value: "increase".into(),
-                            }),
+                        config_change: p.fix_config_path.map(|path| ConfigChange {
+                            path: path.to_string(),
+                            old_value: "current".into(),
+                            new_value: "increase".into(),
+                        }),
                         command: None,
                     }),
                     relevant_log_lines: relevant,
@@ -557,11 +471,7 @@ impl DiagnosticsEngine {
                 ],
                 auto_fixable: false,
                 fix_action: None,
-                relevant_log_lines: log_output
-                    .lines()
-                    .take(20)
-                    .map(|s| s.to_string())
-                    .collect(),
+                relevant_log_lines: log_output.lines().take(20).map(|s| s.to_string()).collect(),
             });
         }
 
@@ -616,10 +526,7 @@ mod tests {
         let engine = DiagnosticsEngine::new();
         let log = "Error: no such file or directory: /data/sample.fastq";
         let results = engine.analyze("align", log, Some(1));
-        assert_eq!(
-            results[0].error_pattern.as_deref(),
-            Some("file_not_found")
-        );
+        assert_eq!(results[0].error_pattern.as_deref(), Some("file_not_found"));
     }
 
     #[test]
@@ -644,10 +551,7 @@ mod tests {
         let engine = DiagnosticsEngine::new();
         let log = "gzip: stdin: unexpected end of file";
         let results = engine.analyze("fastqc", log, Some(1));
-        assert_eq!(
-            results[0].error_pattern.as_deref(),
-            Some("truncated_file")
-        );
+        assert_eq!(results[0].error_pattern.as_deref(), Some("truncated_file"));
     }
 
     #[test]
@@ -655,9 +559,6 @@ mod tests {
         let engine = DiagnosticsEngine::new();
         let log = "something went wrong";
         let results = engine.analyze("mystery", log, Some(99));
-        assert_eq!(
-            results[0].error_pattern.as_deref(),
-            Some("unknown_error")
-        );
+        assert_eq!(results[0].error_pattern.as_deref(), Some("unknown_error"));
     }
 }

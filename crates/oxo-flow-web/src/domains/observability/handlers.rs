@@ -3,7 +3,7 @@
 //! Thin adapters: parse HTTP request → call service → serialize response.
 //! Zero business logic here — all logic lives in `service.rs`.
 
-use axum::{http::StatusCode, Json};
+use axum::{Json, http::StatusCode};
 
 use super::service;
 use super::types::*;
@@ -49,14 +49,9 @@ pub async fn sse_events() -> ApiResult<serde_json::Value> {
 
 /// GET /api/audit
 pub async fn get_audit_logs(
-    axum::extract::Query(params): axum::extract::Query<
-        std::collections::HashMap<String, String>,
-    >,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> ApiResult<AuditLogResponse> {
-    let days: u8 = params
-        .get("days")
-        .and_then(|d| d.parse().ok())
-        .unwrap_or(7);
+    let days: u8 = params.get("days").and_then(|d| d.parse().ok()).unwrap_or(7);
     Ok(Json(AuditLogResponse {
         entries: vec![],
         days,

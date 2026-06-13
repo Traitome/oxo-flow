@@ -3,7 +3,7 @@
 //! Thin adapters: parse HTTP request → call service → serialize response.
 //! Zero business logic here — all logic lives in `service.rs`.
 
-use axum::{http::StatusCode, Json};
+use axum::{Json, http::StatusCode};
 
 use super::service;
 use super::types::*;
@@ -31,9 +31,7 @@ pub async fn login(Json(req): Json<LoginRequest>) -> ApiResult<LoginResponse> {
 }
 
 /// GET /api/auth/me
-pub async fn auth_me(
-    headers: axum::http::HeaderMap,
-) -> ApiResult<AuthMeResponse> {
+pub async fn auth_me(headers: axum::http::HeaderMap) -> ApiResult<AuthMeResponse> {
     let token = headers
         .get("Authorization")
         .and_then(|v| v.to_str().ok())
@@ -51,9 +49,7 @@ pub async fn list_users() -> ApiResult<Vec<UserResponse>> {
 }
 
 /// POST /api/users
-pub async fn create_user(
-    Json(_req): Json<CreateUserRequest>,
-) -> ApiResult<UserResponse> {
+pub async fn create_user(Json(_req): Json<CreateUserRequest>) -> ApiResult<UserResponse> {
     Err(err(
         StatusCode::NOT_IMPLEMENTED,
         "NOT_IMPLEMENTED",
@@ -62,9 +58,7 @@ pub async fn create_user(
 }
 
 /// DELETE /api/users/{id}
-pub async fn delete_user(
-    axum::extract::Path(_id): axum::extract::Path<String>,
-) -> ApiResult<()> {
+pub async fn delete_user(axum::extract::Path(_id): axum::extract::Path<String>) -> ApiResult<()> {
     Err(err(
         StatusCode::NOT_IMPLEMENTED,
         "NOT_IMPLEMENTED",
@@ -78,8 +72,6 @@ pub async fn license_status() -> ApiResult<LicenseResponse> {
 }
 
 /// POST /api/license/upload
-pub async fn upload_license(
-    Json(_req): Json<serde_json::Value>,
-) -> ApiResult<LicenseResponse> {
+pub async fn upload_license(Json(_req): Json<serde_json::Value>) -> ApiResult<LicenseResponse> {
     Ok(Json(service::license_status()))
 }

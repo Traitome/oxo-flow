@@ -1,11 +1,11 @@
 use async_trait::async_trait;
-use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::SqlitePool;
+use sqlx::sqlite::SqlitePoolOptions;
 use std::sync::OnceLock;
 use uuid::Uuid;
 
 use super::models;
-use super::{Pagination, Paginated, StorageBackend};
+use super::{Paginated, Pagination, StorageBackend};
 
 /// Global SQLite connection pool for backward compatibility.
 static DB_POOL: OnceLock<SqlitePool> = OnceLock::new();
@@ -29,7 +29,9 @@ pub async fn init_pool(database_url: &str) {
 /// # Panics
 /// Panics if `init_pool` has not been called yet.
 pub fn pool() -> &'static SqlitePool {
-    DB_POOL.get().expect("DB pool not initialized — call init_pool() first")
+    DB_POOL
+        .get()
+        .expect("DB pool not initialized — call init_pool() first")
 }
 
 /// SQLite-backed implementation of [`StorageBackend`].
@@ -46,12 +48,17 @@ impl SqliteBackend {
     /// Otherwise the pool is configured with up to 5 connections.
     pub async fn new(database_url: &str) -> Result<Self, String> {
         let is_memory = database_url.contains(":memory:");
-        let mut opts = SqlitePoolOptions::new()
-            .max_connections(if is_memory { 1 } else { 5 });
+        let mut opts = SqlitePoolOptions::new().max_connections(if is_memory { 1 } else { 5 });
         if is_memory {
-            opts = opts.min_connections(1).idle_timeout(None).max_lifetime(None);
+            opts = opts
+                .min_connections(1)
+                .idle_timeout(None)
+                .max_lifetime(None);
         }
-        let pool = opts.connect(database_url).await.map_err(|e| e.to_string())?;
+        let pool = opts
+            .connect(database_url)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(Self { pool })
     }
 
@@ -256,8 +263,7 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn health(&self) -> Result<bool, String> {
-        let result: Result<(i64,), _> =
-            sqlx::query_as("SELECT 1").fetch_one(&self.pool).await;
+        let result: Result<(i64,), _> = sqlx::query_as("SELECT 1").fetch_one(&self.pool).await;
         match result {
             Ok(_) => Ok(true),
             Err(e) => Err(e.to_string()),
@@ -333,10 +339,7 @@ impl StorageBackend for SqliteBackend {
     // Pipelines
     // -----------------------------------------------------------------------
 
-    async fn save_pipeline(
-        &self,
-        p: &models::PipelineRow,
-    ) -> Result<models::PipelineRow, String> {
+    async fn save_pipeline(&self, p: &models::PipelineRow) -> Result<models::PipelineRow, String> {
         let now = Self::now();
         let id = if p.id.is_empty() {
             Uuid::new_v4().to_string()
@@ -391,12 +394,11 @@ impl StorageBackend for SqliteBackend {
         user_id: &str,
         pagination: Pagination,
     ) -> Result<Paginated<models::PipelineRow>, String> {
-        let count: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM pipelines WHERE user_id = ?")
-                .bind(user_id)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| e.to_string())?;
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM pipelines WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
 
         let total_items = count.0 as u64;
         let per_page = pagination.per_page.max(1);
@@ -458,7 +460,11 @@ impl StorageBackend for SqliteBackend {
             workdir: run.workdir.clone(),
             started_at: run.started_at.clone(),
             finished_at: run.finished_at.clone(),
-            created_at: if run.created_at.is_empty() { now } else { run.created_at.clone() },
+            created_at: if run.created_at.is_empty() {
+                now
+            } else {
+                run.created_at.clone()
+            },
         };
 
         sqlx::query(
@@ -470,7 +476,7 @@ impl StorageBackend for SqliteBackend {
         .bind(&row.pipeline_snapshot)
         .bind(&row.status)
         .bind(&row.phase)
-        .bind(&row.pid)
+        .bind(row.pid)
         .bind(&row.workdir)
         .bind(&row.started_at)
         .bind(&row.finished_at)
@@ -482,39 +488,29 @@ impl StorageBackend for SqliteBackend {
         Ok(row)
     }
 
-    async fn update_run_status(
-        &self,
-        id: &str,
-        status: &str,
-        phase: &str,
-    ) -> Result<(), String> {
+    async fn update_run_status(&self, id: &str, status: &str, phase: &str) -> Result<(), String> {
         let now = Self::now();
         // If transitioning to a terminal state, set finished_at
-        let is_terminal =
-            status == "completed" || status == "failed" || status == "cancelled";
+        let is_terminal = status == "completed" || status == "failed" || status == "cancelled";
         if is_terminal {
-            sqlx::query(
-                "UPDATE runs SET status = ?, phase = ?, finished_at = ? WHERE id = ?",
-            )
-            .bind(status)
-            .bind(phase)
-            .bind(&now)
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
+            sqlx::query("UPDATE runs SET status = ?, phase = ?, finished_at = ? WHERE id = ?")
+                .bind(status)
+                .bind(phase)
+                .bind(&now)
+                .bind(id)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
         } else if status == "running" {
             // Set started_at when run begins
-            sqlx::query(
-                "UPDATE runs SET status = ?, phase = ?, started_at = ? WHERE id = ?",
-            )
-            .bind(status)
-            .bind(phase)
-            .bind(&now)
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
+            sqlx::query("UPDATE runs SET status = ?, phase = ?, started_at = ? WHERE id = ?")
+                .bind(status)
+                .bind(phase)
+                .bind(&now)
+                .bind(id)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
         } else {
             sqlx::query("UPDATE runs SET status = ?, phase = ? WHERE id = ?")
                 .bind(status)
@@ -540,12 +536,11 @@ impl StorageBackend for SqliteBackend {
         user_id: &str,
         pagination: Pagination,
     ) -> Result<Paginated<models::RunRow>, String> {
-        let count: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM runs WHERE user_id = ?")
-                .bind(user_id)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| e.to_string())?;
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM runs WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
 
         let total_items = count.0 as u64;
         let per_page = pagination.per_page.max(1);
@@ -695,10 +690,7 @@ impl StorageBackend for SqliteBackend {
         Ok(())
     }
 
-    async fn get_session(
-        &self,
-        token: &str,
-    ) -> Result<Option<models::SessionRow>, String> {
+    async fn get_session(&self, token: &str) -> Result<Option<models::SessionRow>, String> {
         let now = Self::now();
         sqlx::query_as::<_, models::SessionRow>(
             "SELECT * FROM sessions WHERE token = ? AND expires_at > ?",
@@ -750,10 +742,7 @@ impl StorageBackend for SqliteBackend {
             .map_err(|e| e.to_string())
     }
 
-    async fn save_template(
-        &self,
-        t: &models::TemplateRow,
-    ) -> Result<models::TemplateRow, String> {
+    async fn save_template(&self, t: &models::TemplateRow) -> Result<models::TemplateRow, String> {
         let now = Self::now();
         let id = if t.id.is_empty() {
             Uuid::new_v4().to_string()
@@ -797,10 +786,7 @@ impl StorageBackend for SqliteBackend {
     // Shares
     // -----------------------------------------------------------------------
 
-    async fn create_share(
-        &self,
-        share: &models::ShareRow,
-    ) -> Result<models::ShareRow, String> {
+    async fn create_share(&self, share: &models::ShareRow) -> Result<models::ShareRow, String> {
         let id = if share.id.is_empty() {
             Uuid::new_v4().to_string()
         } else {
@@ -840,10 +826,7 @@ impl StorageBackend for SqliteBackend {
         Ok(row)
     }
 
-    async fn get_share_by_token(
-        &self,
-        token: &str,
-    ) -> Result<Option<models::ShareRow>, String> {
+    async fn get_share_by_token(&self, token: &str) -> Result<Option<models::ShareRow>, String> {
         let now = Self::now();
         sqlx::query_as::<_, models::ShareRow>(
             "SELECT * FROM shares WHERE token = ? AND (expires_at IS NULL OR expires_at > ?)",
@@ -855,10 +838,7 @@ impl StorageBackend for SqliteBackend {
         .map_err(|e| e.to_string())
     }
 
-    async fn list_shares(
-        &self,
-        pipeline_id: &str,
-    ) -> Result<Vec<models::ShareRow>, String> {
+    async fn list_shares(&self, pipeline_id: &str) -> Result<Vec<models::ShareRow>, String> {
         sqlx::query_as::<_, models::ShareRow>(
             "SELECT * FROM shares WHERE pipeline_id = ? ORDER BY created_at DESC",
         )
@@ -903,8 +883,8 @@ impl StorageBackend for SqliteBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infra::db::models;
     use crate::infra::db::Pagination;
+    use crate::infra::db::models;
     use uuid::Uuid;
 
     /// Create a fresh in-memory SqliteBackend with schema initialized.
@@ -918,11 +898,7 @@ mod tests {
 
     /// Create a simple user row for testing.
     async fn create_test_user(backend: &SqliteBackend, username: &str) -> models::UserRow {
-        let role = if username == "admin" {
-            "admin"
-        } else {
-            "user"
-        };
+        let role = if username == "admin" { "admin" } else { "user" };
         backend
             .create_user(username, role)
             .await
@@ -949,7 +925,10 @@ mod tests {
             created_at: now.clone(),
             updated_at: now,
         };
-        backend.save_pipeline(&pipeline).await.expect("Failed to save pipeline")
+        backend
+            .save_pipeline(&pipeline)
+            .await
+            .expect("Failed to save pipeline")
     }
 
     // -----------------------------------------------------------------------
@@ -976,13 +955,12 @@ mod tests {
         ];
 
         for table in &expected_tables {
-            let row: (i64,) = sqlx::query_as(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
-            )
-            .bind(table)
-            .fetch_one(backend.inner_pool())
-            .await
-            .unwrap_or_else(|_| panic!("Failed to query for table '{table}'"));
+            let row: (i64,) =
+                sqlx::query_as("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?")
+                    .bind(table)
+                    .fetch_one(backend.inner_pool())
+                    .await
+                    .unwrap_or_else(|_| panic!("Failed to query for table '{table}'"));
             assert_eq!(
                 row.0, 1,
                 "Table '{table}' should exist after init but was not found"
@@ -1325,7 +1303,10 @@ mod tests {
 
         // Expired session should not be retrievable
         let expired = backend.get_session(&expired_token).await.unwrap();
-        assert!(expired.is_none(), "Expired session should not be retrievable");
+        assert!(
+            expired.is_none(),
+            "Expired session should not be retrievable"
+        );
 
         // Cleanup expired sessions
         let cleaned = backend.cleanup_expired_sessions().await.unwrap();
@@ -1392,13 +1373,12 @@ mod tests {
             .unwrap();
 
         // Verify by querying directly
-        let rows: Vec<models::AuditLogRow> = sqlx::query_as(
-            "SELECT * FROM audit_logs WHERE user_id = ? ORDER BY timestamp DESC",
-        )
-        .bind(&user.id)
-        .fetch_all(backend.inner_pool())
-        .await
-        .unwrap();
+        let rows: Vec<models::AuditLogRow> =
+            sqlx::query_as("SELECT * FROM audit_logs WHERE user_id = ? ORDER BY timestamp DESC")
+                .bind(&user.id)
+                .fetch_all(backend.inner_pool())
+                .await
+                .unwrap();
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].action, "run_workflow");
@@ -1501,10 +1481,7 @@ mod tests {
         let url = "sqlite::memory:";
         init_pool(url).await;
         let p = pool();
-        let row: (i64,) = sqlx::query_as("SELECT 1")
-            .fetch_one(p)
-            .await
-            .unwrap();
+        let row: (i64,) = sqlx::query_as("SELECT 1").fetch_one(p).await.unwrap();
         assert_eq!(row.0, 1);
     }
 }

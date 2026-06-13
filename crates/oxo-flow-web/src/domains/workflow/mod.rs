@@ -1,4 +1,4 @@
-pub mod types;
-pub mod service;
-pub mod handlers;
 pub mod data;
+pub mod handlers;
+pub mod service;
+pub mod types;

@@ -3,7 +3,7 @@
 //! Thin adapters: parse HTTP request → call service → serialize response.
 //! Zero business logic here — all logic lives in `service.rs`.
 
-use axum::{extract::Path, http::StatusCode, Json};
+use axum::{Json, extract::Path, http::StatusCode};
 
 use super::service;
 use super::types::*;
@@ -51,9 +51,7 @@ pub async fn parse_pipeline(Json(req): Json<ParseRequest>) -> ApiResult<ParseRes
 /// POST /api/pipelines/validate
 ///
 /// Accepts TOML content directly so the endpoint is self-contained.
-pub async fn validate_pipeline(
-    Json(req): Json<serde_json::Value>,
-) -> ApiResult<ValidateResponse> {
+pub async fn validate_pipeline(Json(req): Json<serde_json::Value>) -> ApiResult<ValidateResponse> {
     // Accept either { toml_content } or { pipeline_id } for flexibility
     let toml = req
         .get("toml_content")
@@ -71,9 +69,7 @@ pub async fn validate_pipeline(
 }
 
 /// POST /api/pipelines/prepare
-pub async fn prepare_pipeline(
-    Json(req): Json<serde_json::Value>,
-) -> ApiResult<PrepareResponse> {
+pub async fn prepare_pipeline(Json(req): Json<serde_json::Value>) -> ApiResult<PrepareResponse> {
     let toml = req
         .get("toml_content")
         .and_then(|v| v.as_str())
@@ -129,9 +125,7 @@ pub async fn lint_pipeline(Json(req): Json<ParseRequest>) -> ApiResult<ValidateR
 }
 
 /// POST /api/pipelines/stats
-pub async fn pipeline_stats(
-    Json(req): Json<ParseRequest>,
-) -> ApiResult<WorkflowStatsResponse> {
+pub async fn pipeline_stats(Json(req): Json<ParseRequest>) -> ApiResult<WorkflowStatsResponse> {
     service::workflow_stats(&req.toml_content)
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "STATS_ERROR", e))
@@ -155,9 +149,7 @@ pub async fn export_pipeline(Json(req): Json<ExportRequest>) -> ApiResult<Export
 }
 
 /// POST /api/pipelines/search
-pub async fn search_pipelines(
-    Json(req): Json<SearchRequest>,
-) -> ApiResult<SearchResponse> {
+pub async fn search_pipelines(Json(req): Json<SearchRequest>) -> ApiResult<SearchResponse> {
     // For v0.8, search only matches templates (saved pipeline search comes later)
     let empty_pipelines = vec![];
     let empty_templates = vec![];
@@ -223,9 +215,7 @@ pub async fn get_template(Path(_id): Path<String>) -> ApiResult<Template> {
 }
 
 /// POST /api/templates
-pub async fn save_template(
-    Json(_req): Json<serde_json::Value>,
-) -> ApiResult<Template> {
+pub async fn save_template(Json(_req): Json<serde_json::Value>) -> ApiResult<Template> {
     Err(err(
         StatusCode::NOT_IMPLEMENTED,
         "NOT_IMPLEMENTED",
@@ -247,18 +237,14 @@ pub async fn delete_template(Path(_id): Path<String>) -> ApiResult<()> {
 // ---------------------------------------------------------------------------
 
 /// POST /api/data/analyze
-pub async fn analyze_data(
-    Json(req): Json<DataAnalysisRequest>,
-) -> ApiResult<DataAnalysisResponse> {
+pub async fn analyze_data(Json(req): Json<DataAnalysisRequest>) -> ApiResult<DataAnalysisResponse> {
     super::data::analyze_files(&req.paths, req.max_depth)
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "DATA_ERROR", e))
 }
 
 /// POST /api/data/reference
-pub async fn discover_reference(
-    Json(req): Json<ReferenceRequest>,
-) -> ApiResult<ReferenceResponse> {
+pub async fn discover_reference(Json(req): Json<ReferenceRequest>) -> ApiResult<ReferenceResponse> {
     super::data::discover_reference(&req.genome, &req.components)
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "REF_ERROR", e))

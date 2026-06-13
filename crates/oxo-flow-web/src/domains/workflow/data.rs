@@ -31,7 +31,10 @@ static FORMAT_MAP: &[(&str, &str)] = &[
 ///
 /// Detects formats via extension matching, identifies paired-end naming
 /// patterns, and suggests an appropriate workflow template.
-pub fn analyze_files(paths: &[String], _max_depth: Option<usize>) -> Result<DataAnalysisResponse, String> {
+pub fn analyze_files(
+    paths: &[String],
+    _max_depth: Option<usize>,
+) -> Result<DataAnalysisResponse, String> {
     let mut files = Vec::new();
     let mut formats = std::collections::HashSet::new();
 
@@ -56,10 +59,7 @@ pub fn analyze_files(paths: &[String], _max_depth: Option<usize>) -> Result<Data
         let is_r2 = filename.contains("_R2") || filename.contains("_2.");
 
         // Extract sample name (everything before the first underscore)
-        let sample_name = filename
-            .split('_')
-            .next()
-            .map(|s| s.to_string());
+        let sample_name = filename.split('_').next().map(|s| s.to_string());
 
         files.push(FileInfo {
             path: pattern.clone(),
@@ -74,10 +74,12 @@ pub fn analyze_files(paths: &[String], _max_depth: Option<usize>) -> Result<Data
         let _ = (is_r1, is_r2);
     }
 
-    let paired_end = files
-        .iter()
-        .any(|f| f.path.contains("_R1") || f.path.contains("_R2")
-            || f.path.contains("_1.") || f.path.contains("_2."));
+    let paired_end = files.iter().any(|f| {
+        f.path.contains("_R1")
+            || f.path.contains("_R2")
+            || f.path.contains("_1.")
+            || f.path.contains("_2.")
+    });
 
     let total_size: u64 = files.iter().map(|f| f.size).sum();
 
@@ -124,7 +126,10 @@ pub fn analyze_files(paths: &[String], _max_depth: Option<usize>) -> Result<Data
 ///
 /// Searches common reference directories and reports which components
 /// are available and which are missing.
-pub fn discover_reference(genome: &str, components: &[String]) -> Result<ReferenceResponse, String> {
+pub fn discover_reference(
+    genome: &str,
+    components: &[String],
+) -> Result<ReferenceResponse, String> {
     let search_dirs = [
         format!("/data/references/{genome}"),
         format!("/reference/{genome}"),
@@ -193,11 +198,9 @@ mod tests {
 
     #[test]
     fn test_reference_discovery() {
-        let result = discover_reference(
-            "hg38",
-            &["fasta".into(), "gtf".into(), "star_index".into()],
-        )
-        .unwrap();
+        let result =
+            discover_reference("hg38", &["fasta".into(), "gtf".into(), "star_index".into()])
+                .unwrap();
         // Most components will be missing in CI, but the function should not error
         assert_eq!(result.found.len() + result.missing.len(), 3);
     }

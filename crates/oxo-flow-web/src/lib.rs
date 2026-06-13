@@ -9,15 +9,15 @@
 pub mod ai_provider;
 pub mod audit;
 pub mod db;
+pub mod domains;
 pub mod executor;
 pub mod handlers;
-pub mod infra;
 pub mod hpc;
+pub mod infra;
 pub mod rate_limit;
+pub mod server;
 pub mod sse;
 pub mod sys;
-pub mod domains;
-pub mod server;
 pub mod workspace;
 
 use axum::{

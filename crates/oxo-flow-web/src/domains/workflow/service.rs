@@ -17,7 +17,10 @@ use super::types::*;
 ///
 /// Returns [`ParseResponse`] with DAG information, rule summaries, and
 /// workflow statistics.  Pure function, zero side effects.
-pub fn parse_pipeline(toml_content: &str, _format_version: Option<&str>) -> Result<ParseResponse, String> {
+pub fn parse_pipeline(
+    toml_content: &str,
+    _format_version: Option<&str>,
+) -> Result<ParseResponse, String> {
     let config = WorkflowConfig::parse(toml_content).map_err(|e| format!("Parse error: {e}"))?;
 
     let rules: Vec<RuleSummary> = config
@@ -34,14 +37,17 @@ pub fn parse_pipeline(toml_content: &str, _format_version: Option<&str>) -> Resu
 
     let dag = WorkflowDag::from_rules(&config.rules).map_err(|e| format!("DAG build: {e}"))?;
     let parallel_groups = dag.parallel_groups().unwrap_or_default();
-    let core_metrics = dag.metrics().unwrap_or_else(|_| oxo_flow_core::dag::DagMetrics {
-        node_count: 0,
-        edge_count: 0,
-        max_depth: 0,
-        max_width: 0,
-        critical_path_length: 0,
-        parallel_group_count: 0,
-    });
+    let core_metrics = dag
+        .metrics()
+        .ok()
+        .unwrap_or(oxo_flow_core::dag::DagMetrics {
+            node_count: 0,
+            edge_count: 0,
+            max_depth: 0,
+            max_width: 0,
+            critical_path_length: 0,
+            parallel_group_count: 0,
+        });
     let critical_path = dag.critical_path().unwrap_or_default();
 
     let nodes: Vec<DagJsonNode> = config
@@ -163,8 +169,7 @@ pub fn prepare_pipeline(
     resolve_wildcards: bool,
     apply_defaults: bool,
 ) -> Result<PrepareResponse, String> {
-    let mut config =
-        WorkflowConfig::parse(toml_content).map_err(|e| format!("Parse: {e}"))?;
+    let mut config = WorkflowConfig::parse(toml_content).map_err(|e| format!("Parse: {e}"))?;
 
     if apply_defaults {
         config.apply_defaults();
@@ -185,14 +190,12 @@ pub fn prepare_pipeline(
         .rules
         .iter()
         .filter_map(|rule| {
-            config
-                .resolve_environment(rule)
-                .and_then(|env_spec| {
-                    env_resolver
-                        .setup_command(&env_spec)
-                        .ok()
-                        .map(|cmd| format!("{}: {}", rule.name, cmd))
-                })
+            config.resolve_environment(rule).and_then(|env_spec| {
+                env_resolver
+                    .setup_command(&env_spec)
+                    .ok()
+                    .map(|cmd| format!("{}: {}", rule.name, cmd))
+            })
         })
         .collect();
 
@@ -328,14 +331,17 @@ pub fn build_dag(toml_content: &str) -> Result<DagJsonResponse, String> {
         .collect();
 
     let groups = dag.parallel_groups().unwrap_or_default();
-    let m = dag.metrics().unwrap_or_else(|_| oxo_flow_core::dag::DagMetrics {
-        node_count: 0,
-        edge_count: 0,
-        max_depth: 0,
-        max_width: 0,
-        critical_path_length: 0,
-        parallel_group_count: 0,
-    });
+    let m = dag
+        .metrics()
+        .ok()
+        .unwrap_or(oxo_flow_core::dag::DagMetrics {
+            node_count: 0,
+            edge_count: 0,
+            max_depth: 0,
+            max_width: 0,
+            critical_path_length: 0,
+            parallel_group_count: 0,
+        });
     let cp = dag.critical_path().unwrap_or_default();
 
     Ok(DagJsonResponse {
@@ -364,10 +370,8 @@ pub fn export_pipeline(toml_content: &str, format: Option<&str>) -> Result<Expor
     let fmt = format.unwrap_or("docker");
     let pkg_config = oxo_flow_core::container::PackageConfig::default();
     let content = match fmt {
-        "singularity" => {
-            oxo_flow_core::container::generate_singularity_def(&config, &pkg_config)
-                .map_err(|e| format!("Singularity: {e}"))?
-        }
+        "singularity" => oxo_flow_core::container::generate_singularity_def(&config, &pkg_config)
+            .map_err(|e| format!("Singularity: {e}"))?,
         _ => oxo_flow_core::container::generate_dockerfile(&config, &pkg_config)
             .map_err(|e| format!("Docker: {e}"))?,
     };

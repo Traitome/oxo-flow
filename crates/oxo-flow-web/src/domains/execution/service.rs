@@ -4,8 +4,8 @@
 //! Suitable for reuse from handlers, CLI commands, or tests without
 //! coupling to axum or any web framework.
 
-use oxo_flow_core::dag::WorkflowDag;
 use oxo_flow_core::WorkflowConfig;
+use oxo_flow_core::dag::WorkflowDag;
 
 use super::diagnostics::DiagnosticsEngine;
 use super::types::*;
@@ -36,7 +36,11 @@ pub fn create_run(
                 .ok()
         })
         .fold(0.0_f64, |a, b| a.max(b)) as u64;
-    let memory_mb = if max_memory > 1000 { max_memory } else { max_memory * 1024 };
+    let memory_mb = if max_memory > 1000 {
+        max_memory
+    } else {
+        max_memory * 1024
+    };
 
     // Rough duration estimate: 5 min per rule with parallel execution
     let max_jobs = config.max_jobs.unwrap_or(4).max(1) as u64;
@@ -103,9 +107,7 @@ pub fn compute_retry_plan(
     let will_skip: Vec<String> = if skip_succeeded {
         run_nodes
             .iter()
-            .filter(|n| {
-                n.status == NodeStatus::Success && !will_rerun.contains(&n.rule)
-            })
+            .filter(|n| n.status == NodeStatus::Success && !will_rerun.contains(&n.rule))
             .map(|n| n.rule.clone())
             .collect()
     } else {
@@ -120,10 +122,7 @@ pub fn compute_retry_plan(
 }
 
 /// Diagnose a failed run using the deterministic diagnostics engine.
-pub fn diagnose_run(
-    run_nodes: &[NodeStatusItem],
-    log_output: &str,
-) -> DiagnosticsResponse {
+pub fn diagnose_run(run_nodes: &[NodeStatusItem], log_output: &str) -> DiagnosticsResponse {
     let engine = DiagnosticsEngine::new();
     let failed_nodes: Vec<FailedNode> = run_nodes
         .iter()

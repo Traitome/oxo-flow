@@ -45,8 +45,7 @@ pub fn health_check(mode: &str, db_healthy: bool) -> HealthResponse {
             valid: true,
             commercial_use: "requires_authorization".into(),
             contact: "wangsx@traitome.com".into(),
-            message: "Free for academic use. Commercial use requires authorization."
-                .into(),
+            message: "Free for academic use. Commercial use requires authorization.".into(),
         },
     }
 }

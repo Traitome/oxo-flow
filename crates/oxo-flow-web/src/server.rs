@@ -31,10 +31,7 @@ pub fn build_router(_mode: &str) -> Router {
             "/api/pipelines/prepare",
             post(workflow::handlers::prepare_pipeline),
         )
-        .route(
-            "/api/pipelines/dag",
-            post(workflow::handlers::build_dag),
-        )
+        .route("/api/pipelines/dag", post(workflow::handlers::build_dag))
         .route(
             "/api/pipelines/format",
             post(workflow::handlers::format_pipeline),
@@ -59,14 +56,8 @@ pub fn build_router(_mode: &str) -> Router {
             "/api/pipelines/search",
             post(workflow::handlers::search_pipelines),
         )
-        .route(
-            "/api/pipelines",
-            get(workflow::handlers::list_pipelines),
-        )
-        .route(
-            "/api/pipelines/{id}",
-            get(workflow::handlers::get_pipeline),
-        )
+        .route("/api/pipelines", get(workflow::handlers::list_pipelines))
+        .route("/api/pipelines/{id}", get(workflow::handlers::get_pipeline))
         .route(
             "/api/pipelines/{id}",
             put(workflow::handlers::update_pipeline),
@@ -101,10 +92,7 @@ pub fn build_router(_mode: &str) -> Router {
             "/api/runs/{id}/results",
             get(execution::handlers::get_run_results),
         )
-        .route(
-            "/api/runs/{id}/retry",
-            post(execution::handlers::retry_run),
-        )
+        .route("/api/runs/{id}/retry", post(execution::handlers::retry_run))
         .route(
             "/api/runs/{id}/cancel",
             post(execution::handlers::cancel_run),
@@ -112,10 +100,7 @@ pub fn build_router(_mode: &str) -> Router {
 
     // ---- Data routes ----
     let data_routes = Router::new()
-        .route(
-            "/api/data/analyze",
-            post(workflow::handlers::analyze_data),
-        )
+        .route("/api/data/analyze", post(workflow::handlers::analyze_data))
         .route(
             "/api/data/reference",
             post(workflow::handlers::discover_reference),
@@ -123,18 +108,9 @@ pub fn build_router(_mode: &str) -> Router {
 
     // ---- Template routes ----
     let template_routes = Router::new()
-        .route(
-            "/api/templates",
-            get(workflow::handlers::list_templates),
-        )
-        .route(
-            "/api/templates/{id}",
-            get(workflow::handlers::get_template),
-        )
-        .route(
-            "/api/templates",
-            post(workflow::handlers::save_template),
-        )
+        .route("/api/templates", get(workflow::handlers::list_templates))
+        .route("/api/templates/{id}", get(workflow::handlers::get_template))
+        .route("/api/templates", post(workflow::handlers::save_template))
         .route(
             "/api/templates/{id}",
             delete(workflow::handlers::delete_template),
@@ -146,41 +122,23 @@ pub fn build_router(_mode: &str) -> Router {
         .route("/api/auth/me", get(auth::handlers::auth_me))
         .route("/api/users", get(auth::handlers::list_users))
         .route("/api/users", post(auth::handlers::create_user))
-        .route(
-            "/api/users/{id}",
-            delete(auth::handlers::delete_user),
-        );
+        .route("/api/users/{id}", delete(auth::handlers::delete_user));
 
     // ---- License routes ----
     let license_routes = Router::new()
-        .route(
-            "/api/license",
-            get(auth::handlers::license_status),
-        )
-        .route(
-            "/api/license/upload",
-            post(auth::handlers::upload_license),
-        );
+        .route("/api/license", get(auth::handlers::license_status))
+        .route("/api/license/upload", post(auth::handlers::upload_license));
 
     // ---- Observability routes ----
     let obs_routes = Router::new()
         .route("/api/health", get(observability::handlers::health))
-        .route(
-            "/api/system",
-            get(observability::handlers::system_info),
-        )
+        .route("/api/system", get(observability::handlers::system_info))
         .route(
             "/api/metrics",
             get(observability::handlers::runtime_metrics),
         )
-        .route(
-            "/api/events",
-            get(observability::handlers::sse_events),
-        )
-        .route(
-            "/api/audit",
-            get(observability::handlers::get_audit_logs),
-        );
+        .route("/api/events", get(observability::handlers::sse_events))
+        .route("/api/audit", get(observability::handlers::get_audit_logs));
 
     // ---- Assemble ----
     Router::new()
