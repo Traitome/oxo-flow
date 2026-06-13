@@ -8,6 +8,16 @@ use axum::{
 use std::task::{Context, Poll};
 use tower::{Layer, Service};
 
+/// Static version string with license for CLI --version.
+pub const VERSION_WITH_LICENSE: &str = concat!(
+    "oxo-flow v",
+    env!("CARGO_PKG_VERSION"),
+    "\n",
+    "oxo-flow-core, oxo-flow-cli: Apache 2.0\n",
+    "oxo-flow-web: Dual license (LICENSE-ACADEMIC / LICENSE-COMMERCIAL)\n",
+    "Contact: Shixiang Wang <wangsx@traitome.com>"
+);
+
 const LICENSE_NOTICE: &str = concat!(
     "oxo-flow v",
     env!("CARGO_PKG_VERSION"),
@@ -28,6 +38,39 @@ pub fn license_banner_text() -> String {
            Free for academic & research use.\n\
            Commercial use requires authorization.\n\
            Contact: Shixiang Wang <wangsx@traitome.com>\n",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
+/// Full license notice text (used in reports, version output, etc.)
+pub fn license_notice_text() -> String {
+    format!(
+        "oxo-flow v{}\n\
+         oxo-flow-core, oxo-flow-cli: Apache 2.0\n\
+         oxo-flow-web: Dual license — LICENSE-ACADEMIC (free for academic use) /\n\
+         LICENSE-COMMERCIAL (commercial use requires paid authorization)\n\
+         Contact: Shixiang Wang <wangsx@traitome.com>\n\
+         By contributing, you agree that your contributions will be licensed under these terms.",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
+/// HTML footer snippet for Web UI license notice.
+pub fn license_footer_html() -> String {
+    format!(
+        "<footer style=\"text-align:center;padding:8px;font-size:12px;color:#94A3B8;background:#F8FAFC;border-top:1px solid #E2E8F0;position:fixed;bottom:0;left:0;right:0;z-index:100\">\
+         oxo-flow v{} — Academic License. Free for academic use. Commercial use requires authorization.\
+         </footer>",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
+/// Version string with license notice (for CLI --version).
+pub fn version_with_license() -> String {
+    format!(
+        "oxo-flow v{}\noxo-flow-core, oxo-flow-cli: Apache 2.0\n\
+         oxo-flow-web: Dual license (LICENSE-ACADEMIC / LICENSE-COMMERCIAL)\n\
+         Contact: Shixiang Wang <wangsx@traitome.com>",
         env!("CARGO_PKG_VERSION")
     )
 }

@@ -22,12 +22,29 @@ use crate::infra::license::LicenseHeaderLayer;
 // Embedded frontend (same as lib.rs)
 // ---------------------------------------------------------------------------
 
-/// Serve the embedded frontend HTML.
+/// Serve the embedded frontend HTML with license footer injected.
 async fn frontend_index() -> impl IntoResponse {
+    let html = include_str!("../static/index.html");
+    // Inject license footer before </body> if not already present
+    let footer = crate::infra::license::license_footer_html();
+    let html_with_footer = if html.contains("oxo-flow-license-footer") {
+        html.to_string()
+    } else if let Some(pos) = html.rfind("</body>") {
+        format!(
+            "{}<div class=\"oxo-flow-license-footer\">{}</div>\n</body>",
+            &html[..pos],
+            footer
+        )
+    } else {
+        format!(
+            "{}\n<div class=\"oxo-flow-license-footer\">{}</div>",
+            html, footer
+        )
+    };
     (
         StatusCode::OK,
         [("content-type", "text/html; charset=utf-8")],
-        include_str!("../static/index.html"),
+        html_with_footer,
     )
 }
 

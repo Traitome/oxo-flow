@@ -31,6 +31,7 @@ impl std::fmt::Display for ServerMode {
 #[command(
     name = "oxo-flow-web",
     version,
+    long_version = oxo_flow_web::infra::license::VERSION_WITH_LICENSE,
     about = "Start the oxo-flow web interface"
 )]
 struct Cli {
