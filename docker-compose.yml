@@ -1,0 +1,25 @@
+version: "3.9"
+
+services:
+  oxo-flow:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - oxo-flow-data:/app/data
+    environment:
+      - OXO_FLOW_HOST=0.0.0.0
+      - OXO_FLOW_PORT=3000
+      - OXO_FLOW_FRONTEND_DIR=/app/frontend/dist
+      # AI Provider Configuration (optional)
+      # - OXO_FLOW_AI_PROVIDER=openai
+      # - OXO_FLOW_AI_API_KEY=sk-your-key
+      # - OXO_FLOW_AI_API_URL=https://api.deepseek.com/v1/chat/completions
+      # - OXO_FLOW_AI_MODEL=deepseek-chat
+      # Authentication (optional)
+      # - OXO_FLOW_ADMIN_PASSWORD=changeme
+      # - OXO_FLOW_USER_PASSWORD=changeme
+    restart: unless-stopped
+
+volumes:
+  oxo-flow-data:

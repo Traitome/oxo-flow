@@ -1,0 +1,10 @@
+target/
+.git/
+*.md
+docs/
+examples/
+tests/
+node_modules/
+frontend/node_modules/
+frontend/src/
+frontend/public/

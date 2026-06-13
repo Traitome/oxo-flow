@@ -1330,6 +1330,63 @@ fn build_router_inner(limiter: Option<RateLimiter>) -> Router {
 }
 
 /// Build a router mounted under a configurable base path.
+/// Build the web application router with a path to the built frontend.
+pub fn build_router_with_frontend(frontend_dir: &str) -> Router {
+    let mut router = build_router_inner(None);
+    add_frontend_fallback(&mut router, frontend_dir);
+    router
+}
+
+/// Build a router mounted under a base path with frontend serving.
+/// Build a router mounted under a configurable base path.
+pub fn build_router_with_base_and_frontend(base_path: &str, frontend_dir: &str) -> Router {
+    let mut router = build_router_inner(None);
+    add_frontend_fallback(&mut router, frontend_dir);
+    // Mount under base path
+    Router::new()
+        .nest(base_path, router)
+        .layer(tower::layer::layer_fn(|inner| inner))
+}
+
+/// Add frontend serving and SPA fallback to an existing router.
+fn add_frontend_fallback(router: &mut Router, frontend_dir: &str) {
+    if frontend_dir.is_empty() {
+        return;
+    }
+    let dist = std::path::Path::new(frontend_dir);
+    if !dist.join("index.html").exists() {
+        tracing::warn!("Frontend directory {frontend_dir} does not contain index.html");
+        return;
+    }
+
+    // Serve static assets with proper caching headers
+    let serve_assets =
+        tower_http::services::ServeDir::new(dist.join("assets")).precompressed_gzip();
+
+    // SPA fallback: for non-API, non-asset paths, serve index.html
+    // Build the frontend service: try static files first, fall back to SPA
+    let index_path = dist.join("index.html");
+    let frontend = tower_http::services::ServeDir::new(dist).fallback(
+        tower::service_fn(move |_| {
+            let index_path = index_path.clone();
+            async move {
+                let content = tokio::fs::read_to_string(&index_path).await.unwrap_or_default();
+                Ok::<_, std::convert::Infallible>(
+                    axum::http::Response::builder()
+                        .header("content-type", "text/html")
+                        .body(axum::body::Body::from(content))
+                        .unwrap()
+                )
+            }
+        })
+    );
+
+    *router = std::mem::take(router)
+        .nest_service("/assets", serve_assets)
+        .fallback_service(frontend);
+
+    tracing::info!("Serving frontend from {frontend_dir}");
+}
 pub fn build_router_with_base(base_path: &str) -> Router {
     let app = build_router();
     if base_path.is_empty() || base_path == "/" {

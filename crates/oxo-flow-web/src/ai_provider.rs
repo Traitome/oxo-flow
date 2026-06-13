@@ -13,7 +13,7 @@
 //! | `OXO_FLOW_AI_API_URL` | (provider default) | Custom API endpoint URL |
 //! | `OXO_FLOW_AI_MODEL` | (provider default) | Model name override |
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
 // ---------------------------------------------------------------------------
 // Provider kind enum
@@ -58,7 +58,7 @@ const OLLAMA_API_URL: &str = "http://localhost:11434/api/chat";
 
 mod internal {
     use super::*;
-    use anyhow::{Result, anyhow};
+    use anyhow::{anyhow, Result};
 
     pub struct Claude {
         client: reqwest::Client,
@@ -298,18 +298,34 @@ pub fn create_provider(
 
     match kind {
         AiProviderKind::Claude => {
-            let api_key = key.unwrap_or_default();
+            let api_key = key
+                .or_else(|| std::env::var("ANTHROPIC_AUTH_TOKEN").ok())
+                .unwrap_or_default();
             if api_key.is_empty() {
-                tracing::warn!("Claude provider selected but OXO_FLOW_AI_API_KEY is not set");
+                tracing::warn!("Claude provider selected but no API key found (check ANTHROPIC_AUTH_TOKEN or OXO_FLOW_AI_API_KEY)");
             }
-            AiProvider::Claude(internal::Claude::new(api_key, mdl, url))
+            let api_url = url
+                .or_else(|| std::env::var("ANTHROPIC_BASE_URL").ok())
+                .unwrap_or_else(|| CLAUDE_API_URL.to_string());
+            let model_name = mdl
+                .or_else(|| std::env::var("ANTHROPIC_MODEL").ok())
+                .or_else(|| std::env::var("OXO_FLOW_AI_MODEL").ok());
+            AiProvider::Claude(internal::Claude::new(api_key, model_name, Some(api_url)))
         }
         AiProviderKind::OpenAi => {
-            let api_key = key.unwrap_or_default();
+            let api_key = key
+                .or_else(|| std::env::var("OPENAI_API_KEY").ok())
+                .unwrap_or_default();
             if api_key.is_empty() {
-                tracing::warn!("OpenAI provider selected but OXO_FLOW_AI_API_KEY is not set");
+                tracing::warn!("OpenAI provider selected but no API key found (check OPENAI_API_KEY or OXO_FLOW_AI_API_KEY)");
             }
-            AiProvider::OpenAi(internal::OpenAi::new(api_key, mdl, url))
+            let api_url = url
+                .or_else(|| std::env::var("OPENAI_BASE_URL").ok())
+                .or_else(|| std::env::var("OXO_FLOW_AI_API_URL").ok());
+            let model_name = mdl
+                .or_else(|| std::env::var("OPENAI_MODEL").ok())
+                .or_else(|| std::env::var("OXO_FLOW_AI_MODEL").ok());
+            AiProvider::OpenAi(internal::OpenAi::new(api_key, model_name, api_url))
         }
         AiProviderKind::Ollama => AiProvider::Ollama(internal::Ollama::new(mdl, url)),
     }

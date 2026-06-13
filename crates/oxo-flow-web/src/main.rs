@@ -17,6 +17,10 @@ struct Cli {
     #[arg(long, default_value = "0.0.0.0", env = "OXO_FLOW_HOST")]
     host: String,
 
+    /// Path to the built frontend dist directory for production serving.
+    #[arg(long, default_value = "", env = "OXO_FLOW_FRONTEND_DIR")]
+    frontend_dir: String,
+
     /// Port to listen on.
     #[arg(short = 'p', long, default_value = "3000", env = "OXO_FLOW_PORT")]
     port: u16,
@@ -51,7 +55,8 @@ async fn main() -> Result<()> {
             .with_graceful_shutdown(oxo_flow_web::shutdown_signal())
             .await?;
     } else {
-        let app = oxo_flow_web::build_router_with_base(&cli.base_path);
+        let app =
+            oxo_flow_web::build_router_with_base_and_frontend(&cli.base_path, &cli.frontend_dir);
         let listener = tokio::net::TcpListener::bind(addr).await?;
         tracing::info!("Listening on http://{addr}{}", cli.base_path);
         axum::serve(listener, app)
