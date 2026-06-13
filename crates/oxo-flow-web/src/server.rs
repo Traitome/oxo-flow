@@ -10,14 +10,49 @@
 
 use axum::{
     Router,
+    http::StatusCode,
+    response::IntoResponse,
     routing::{delete, get, post, put},
 };
 
 use crate::domains::*;
 use crate::infra::license::LicenseHeaderLayer;
 
+// ---------------------------------------------------------------------------
+// Embedded frontend (same as lib.rs)
+// ---------------------------------------------------------------------------
+
+/// Serve the embedded frontend HTML.
+async fn frontend_index() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [("content-type", "text/html; charset=utf-8")],
+        include_str!("../static/index.html"),
+    )
+}
+
+/// Serve the embedded frontend JavaScript.
+async fn frontend_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [("content-type", "application/javascript; charset=utf-8")],
+        include_str!("../static/app.js"),
+    )
+}
+
 /// Build the full application router for the given serve mode.
-pub fn build_router(_mode: &str) -> Router {
+///
+/// * `personal` — bind to 127.0.0.1, no auth required
+/// * `team` — bind to 0.0.0.0, auth required
+/// * `hpc` — bind to 0.0.0.0, scheduler awareness
+pub fn build_router(mode: &str) -> Router {
+    tracing::info!("Building router for mode: {mode}");
+
+    // ---- Frontend routes ----
+    let frontend_routes = Router::new()
+        .route("/", get(frontend_index))
+        .route("/app.js", get(frontend_js));
+
     // ---- Workflow routes ----
     let workflow_routes = Router::new()
         .route(
@@ -166,8 +201,12 @@ pub fn build_router(_mode: &str) -> Router {
         .route("/api/events", get(observability::handlers::sse_events))
         .route("/api/audit", get(observability::handlers::get_audit_logs));
 
+    // ---- HPC routes ----
+    let hpc_routes = Router::new().route("/api/hpc", get(crate::handlers::system::hpc_status));
+
     // ---- Assemble ----
     Router::new()
+        .merge(frontend_routes)
         .merge(workflow_routes)
         .merge(run_routes)
         .merge(data_routes)
@@ -177,6 +216,7 @@ pub fn build_router(_mode: &str) -> Router {
         .merge(ai_routes)
         .merge(collaboration_routes)
         .merge(obs_routes)
+        .merge(hpc_routes)
         .layer(LicenseHeaderLayer)
         .layer(tower_http::cors::CorsLayer::permissive())
 }
