@@ -94,6 +94,8 @@ pub struct Finding {
 pub struct OptimizeRequest {
     pub pipeline_id: String,
     pub goal: String,
+    #[serde(default)]
+    pub toml_content: Option<String>,
     pub constraints: Option<OptimizeConstraints>,
 }
 

@@ -182,19 +182,20 @@ pub async fn interpret(Json(req): Json<InterpretRequest>) -> ApiResult<Interpret
 
 /// POST /api/ai/optimize
 ///
-/// Loads the actual pipeline TOML from DB for optimization.
+/// Accepts TOML directly or loads from DB by pipeline_id.
 pub async fn optimize(Json(req): Json<OptimizeRequest>) -> ApiResult<OptimizeResponse> {
     let provider = crate::ai_provider::AiProviderRegistry::global().get_provider();
 
-    // Load pipeline TOML from DB if pipeline_id is provided
-    let toml_content = if let Ok(pool) = get_pool() {
+    // Use provided TOML, or load from DB
+    let toml_content = if let Some(ref toml) = req.toml_content {
+        toml.clone()
+    } else if let Ok(pool) = get_pool() {
         let pipeline: Option<models::PipelineRow> =
             sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
                 .bind(&req.pipeline_id)
                 .fetch_optional(pool)
                 .await
                 .unwrap_or(None);
-
         pipeline.map(|p| p.toml_content).unwrap_or_default()
     } else {
         String::new()
