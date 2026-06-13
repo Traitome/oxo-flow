@@ -219,8 +219,14 @@ pub fn build_router(mode: &str) -> Router {
         .route("/api/users", get(auth::handlers::list_users))
         .route("/api/users", post(auth::handlers::create_user))
         .route("/api/users/{id}", delete(auth::handlers::delete_user))
-        .route("/api/auth/oauth/authorize", post(auth::handlers::oauth_authorize))
-        .route("/api/auth/oauth/callback", post(auth::handlers::oauth_callback));
+        .route(
+            "/api/auth/oauth/authorize",
+            post(auth::handlers::oauth_authorize),
+        )
+        .route(
+            "/api/auth/oauth/callback",
+            post(auth::handlers::oauth_callback),
+        );
 
     // ---- License routes ----
     let license_routes = Router::new()

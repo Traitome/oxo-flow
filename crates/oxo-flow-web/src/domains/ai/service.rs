@@ -390,12 +390,7 @@ fn parse_bullet_list(text: &str, section: &str) -> Vec<String> {
         section_text
             .lines()
             .filter(|l| l.trim().starts_with('-') || l.trim().starts_with('*'))
-            .map(|l| {
-                l.trim()
-                    .trim_start_matches(['-', '*'])
-                    .trim()
-                    .to_string()
-            })
+            .map(|l| l.trim().trim_start_matches(['-', '*']).trim().to_string())
             .filter(|s| !s.is_empty())
             .collect()
     } else {
