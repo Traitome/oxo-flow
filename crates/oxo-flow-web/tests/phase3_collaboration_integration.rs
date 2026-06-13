@@ -187,7 +187,10 @@ async fn test_all_modes_have_pipeline_routes() {
         ))
         .unwrap();
     let resp = app_personal().oneshot(req).await.unwrap();
-    assert!(resp.status().is_success(), "personal mode should have pipeline parse");
+    assert!(
+        resp.status().is_success(),
+        "personal mode should have pipeline parse"
+    );
 
     // Team: requires auth, returns 401 without token
     let req2 = Request::builder()

@@ -68,7 +68,10 @@ pub struct QuotaTracker {
 impl QuotaTracker {
     /// Create a new quota tracker with the given config.
     pub fn new(config: QuotaConfig) -> Self {
-        Self { config, usage: Mutex::new(HashMap::new()) }
+        Self {
+            config,
+            usage: Mutex::new(HashMap::new()),
+        }
     }
 
     /// Check whether a user can start a new run with the given resources.
