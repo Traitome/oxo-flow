@@ -68,7 +68,7 @@ async fn app_js() -> impl IntoResponse {
     (
         StatusCode::OK,
         [("content-type", "application/javascript; charset=utf-8")],
-        include_str!("../static/assets/index-BY7qSugc.js"),
+        include_str!("../static/assets/index-BLVzLVl8.js"),
     )
 }
 
@@ -77,7 +77,7 @@ async fn app_css() -> impl IntoResponse {
     (
         StatusCode::OK,
         [("content-type", "text/css; charset=utf-8")],
-        include_str!("../static/assets/index-CCVc6OLr.css"),
+        include_str!("../static/assets/index-B8Hpqr31.css"),
     )
 }
 
@@ -98,8 +98,8 @@ pub fn build_router(mode: &str) -> Router {
     let frontend_routes = Router::new()
         .route("/favicon.svg", get(favicon))
         .route("/icons.svg", get(icons))
-        .route("/assets/index-BY7qSugc.js", get(app_js))
-        .route("/assets/index-CCVc6OLr.css", get(app_css))
+        .route("/assets/index-BLVzLVl8.js", get(app_js))
+        .route("/assets/index-B8Hpqr31.css", get(app_css))
         .route("/", get(spa_index));
 
     // ---- Workflow routes ----

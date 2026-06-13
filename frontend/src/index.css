@@ -187,11 +187,11 @@ body{font-family:var(--font-sans);font-size:.9375rem;line-height:1.6;color:var(-
 .file-list li{padding:2px 0}
 
 /* ── Responsive ── */
-@media(max-width:768px){
+@media(max-width:799px){
   .header-nav{display:none}
-  .sidebar{width:56px}
+  .sidebar{width:56px !important}
   .nav-item span,.sidebar-footer{display:none}
-  .main-content{margin-left:56px;padding:1rem}
+  .main-content{margin-left:56px !important;padding:1rem}
   .app-header{padding:0 .75rem}
   .stat-grid{grid-template-columns:1fr 1fr}
   .editor-layout{grid-template-columns:1fr;height:auto}

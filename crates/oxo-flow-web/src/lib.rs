@@ -94,7 +94,7 @@ const EMBEDDED_ACADEMIC_LICENSE: &str = r#"{
 /// Embedded single-page web application.
 const FRONTEND_HTML: &str = include_str!("../static/index.html");
 /// Embedded JavaScript for the frontend.
-const FRONTEND_JS: &str = include_str!("../static/assets/index-BY7qSugc.js");
+const FRONTEND_JS: &str = include_str!("../static/assets/index-BLVzLVl8.js");
 
 // Store server start time for uptime calculation.
 static START_TIME: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
