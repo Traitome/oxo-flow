@@ -100,6 +100,56 @@ pub async fn persist_rule_outcome(
     Ok(())
 }
 
+/// Submit a pipeline to an HPC scheduler (SLURM/PBS) instead of running locally.
+///
+/// Generates a cluster submission script and submits it via sbatch/qsub.
+/// Returns the HPC job ID on success.
+pub async fn submit_to_hpc(
+    pipeline: &WorkflowConfig,
+    workdir: &PathBuf,
+    scheduler: &str,
+    cpus: u32,
+    memory_gb: u32,
+    walltime: &str,
+) -> Result<String, String> {
+    let workdir_str = workdir.to_string_lossy();
+    let script_path = crate::infra::hpc::generate_slurm_script(
+        &pipeline.workflow.name,
+        &workdir_str,
+        cpus,
+        memory_gb,
+        walltime,
+        &format!("oxo-flow run {}/workflow.oxoflow", workdir_str),
+    );
+
+    // Write script to workdir
+    let script_file = workdir.join("submit.sh");
+    std::fs::write(&script_file, &script_path)
+        .map_err(|e| format!("Failed to write HPC submit script: {e}"))?;
+
+    // Submit via scheduler
+    let submit_cmd = match scheduler {
+        "slurm" => ("sbatch", vec!["--parsable", "submit.sh"]),
+        "pbs" | "torque" => ("qsub", vec!["submit.sh"]),
+        _ => return Err(format!("Unsupported HPC scheduler: {scheduler}")),
+    };
+
+    let output = tokio::process::Command::new(submit_cmd.0)
+        .args(&submit_cmd.1)
+        .current_dir(workdir)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to submit HPC job: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("HPC submission failed: {stderr}"));
+    }
+
+    let job_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(job_id)
+}
+
 /// Run a pipeline by executing rules in topological order, respecting
 /// parallel groups.
 ///

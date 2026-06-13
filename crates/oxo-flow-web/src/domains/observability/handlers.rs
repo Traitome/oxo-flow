@@ -145,6 +145,21 @@ pub async fn sse_events() -> impl axum::response::IntoResponse {
     )
 }
 
+/// GET /api/quota — resource quota status for team mode.
+pub async fn quota_status() -> ApiResult<serde_json::Value> {
+    let tracker = crate::infra::quota::global_quota_tracker();
+    let config = tracker.config();
+    Ok(Json(serde_json::json!({
+        "enabled": true,
+        "limits": {
+            "max_concurrent_runs": config.max_concurrent_runs,
+            "max_total_threads": config.max_total_threads,
+            "max_total_memory_mb": config.max_total_memory_mb,
+            "max_runs_per_day": config.max_runs_per_day,
+        }
+    })))
+}
+
 /// GET /api/audit
 pub async fn get_audit_logs(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,

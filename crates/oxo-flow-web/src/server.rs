@@ -68,7 +68,7 @@ async fn app_js() -> impl IntoResponse {
     (
         StatusCode::OK,
         [("content-type", "application/javascript; charset=utf-8")],
-        include_str!("../static/assets/index-Bo4cXux9.js"),
+        include_str!("../static/assets/index-BzGLF8O9.js"),
     )
 }
 
@@ -104,7 +104,7 @@ pub fn build_router(mode: &str) -> Router {
     let frontend_routes = Router::new()
         .route("/favicon.svg", get(favicon))
         .route("/icons.svg", get(icons))
-        .route("/assets/index-Bo4cXux9.js", get(app_js))
+        .route("/assets/index-BzGLF8O9.js", get(app_js))
         .route("/assets/index-akIlVKkc.css", get(app_css))
         .route("/", get(spa_index));
 
@@ -281,7 +281,8 @@ pub fn build_router(mode: &str) -> Router {
             get(observability::handlers::runtime_metrics),
         )
         .route("/api/events", get(crate::sse::sse_events))
-        .route("/api/audit", get(observability::handlers::get_audit_logs));
+        .route("/api/audit", get(observability::handlers::get_audit_logs))
+        .route("/api/quota", get(observability::handlers::quota_status));
 
     // ---- HPC routes ----
     let hpc_routes = Router::new().route("/api/hpc", get(crate::handlers::system::hpc_status));
