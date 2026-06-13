@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Wand2, ArrowRight } from 'lucide-react';
 import { api } from '../api/client';
 import type { HealthResponse, SystemInfo, RunItem, Template } from '../api/types';
+import ChatUI from '../components/ChatUI';
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -10,9 +10,6 @@ export default function Dashboard() {
   const [sys, setSys] = useState<SystemInfo | null>(null);
   const [runs, setRuns] = useState<RunItem[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
-  const [intent, setIntent] = useState('');
-  const [generating, setGenerating] = useState(false);
-  const [genResult, setGenResult] = useState<string | null>(null);
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => {});
@@ -22,22 +19,6 @@ export default function Dashboard() {
   }, []);
 
   const activeRuns = runs.filter((r) => r.status === 'running' || r.status === 'queued').length;
-
-  const handleGenerate = async () => {
-    if (!intent.trim()) return;
-    setGenerating(true);
-    setGenResult(null);
-    try {
-      const result = await api.aiTranslate(intent);
-      setGenResult(result.pipeline_id);
-      navigate(`/editor?intent=${encodeURIComponent(intent)}`);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Generation failed';
-      setGenResult(`Error: ${msg}`);
-    }
-    setGenerating(false);
-  };
-
   const quickTemplates = templates.slice(0, 4);
 
   return (
@@ -45,27 +26,15 @@ export default function Dashboard() {
       <h1 className="page-title">oxo-flow Command Center</h1>
       <p className="page-subtitle">Bioinformatics Pipelines, Simply Powerful</p>
 
-      {/* Intent Composer */}
-      <div className="intent-composer">
-        <div className="intent-input-wrapper">
-          <Wand2 size={20} className="intent-icon" />
-          <input
-            type="text"
-            placeholder="Describe the analysis you need... e.g., 'RNA-seq, PE, hg38, STAR + featureCounts, strand-specific'"
-            value={intent}
-            onChange={(e) => setIntent(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleGenerate()}
-            className="intent-input"
-          />
-          <button onClick={handleGenerate} disabled={generating || !intent.trim()} className="intent-btn">
-            {generating ? 'Generating...' : 'Generate Pipeline'}
-            <ArrowRight size={16} />
-          </button>
-        </div>
-        {genResult && genResult.startsWith('Error') && <div className="intent-error">{genResult}</div>}
-        <div className="intent-hint">
-          <span>Or <Link to="/editor">write TOML directly</Link></span>
-        </div>
+      {/* AI Companion Chat UI */}
+      <div style={{ marginBottom: '1.5rem', height: '420px' }}>
+        <ChatUI
+          onPipelineReady={(data) => {
+            if (data?.pipeline_id) {
+              navigate(`/editor?pipeline_id=${data.pipeline_id}`);
+            }
+          }}
+        />
       </div>
 
       {/* Quick Start + Recent */}

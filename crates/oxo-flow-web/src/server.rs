@@ -68,7 +68,7 @@ async fn app_js() -> impl IntoResponse {
     (
         StatusCode::OK,
         [("content-type", "application/javascript; charset=utf-8")],
-        include_str!("../static/assets/index-BzGLF8O9.js"),
+        include_str!("../static/assets/index-D9j8BAlB.js"),
     )
 }
 
@@ -104,7 +104,7 @@ pub fn build_router(mode: &str) -> Router {
     let frontend_routes = Router::new()
         .route("/favicon.svg", get(favicon))
         .route("/icons.svg", get(icons))
-        .route("/assets/index-BzGLF8O9.js", get(app_js))
+        .route("/assets/index-D9j8BAlB.js", get(app_js))
         .route("/assets/index-akIlVKkc.css", get(app_css))
         .route("/", get(spa_index));
 
@@ -233,6 +233,12 @@ pub fn build_router(mode: &str) -> Router {
         .route("/api/license", get(auth::handlers::license_status))
         .route("/api/license/upload", post(auth::handlers::upload_license));
 
+    // ---- Chat routes (v0.9 AI Companion) ----
+    let chat_routes = Router::new()
+        .route("/api/chat/send", post(chat::handlers::chat_send))
+        .route("/api/chat/send/json", post(chat::handlers::chat_send_json))
+        .route("/api/chat/sessions", get(chat::handlers::list_sessions));
+
     // ---- AI routes ----
     let ai_routes = Router::new()
         .route("/api/ai/translate", post(ai::handlers::translate))
@@ -299,6 +305,7 @@ pub fn build_router(mode: &str) -> Router {
         .merge(template_routes)
         .merge(auth_routes)
         .merge(license_routes)
+        .merge(chat_routes)
         .merge(ai_routes)
         .merge(collaboration_routes)
         .merge(obs_routes);

@@ -95,3 +95,12 @@ pub struct AuditLogRow {
     pub metadata: Option<String>,
     pub timestamp: String,
 }
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ChatSessionRow {
+    pub id: String,
+    pub user_id: String,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
