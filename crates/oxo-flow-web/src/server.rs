@@ -1,8 +1,8 @@
 //! Domain-driven server router assembly.
 //!
 //! This module assembles the full application router from domain handler
-//! modules.  Each domain (workflow, execution, auth, observability)
-//! contributes its own route group, keeping the router definition close to
+//! modules.  Each domain (workflow, execution, auth, observability,
+//! collaboration) contributes its own route group, keeping the router definition close to
 //! the domain code it serves.
 //!
 //! This is the v0.8 forward-looking router.  The existing `build_router()`
@@ -140,6 +140,21 @@ pub fn build_router(_mode: &str) -> Router {
         .route("/api/ai/config", post(ai::handlers::update_ai_config))
         .route("/api/ai/test", post(ai::handlers::test_ai_config));
 
+    // ---- Collaboration routes ----
+    let collaboration_routes = Router::new()
+        .route(
+            "/api/pipelines/{id}/fork",
+            post(collaboration::handlers::fork_pipeline),
+        )
+        .route(
+            "/api/pipelines/{id}/share",
+            post(collaboration::handlers::share_pipeline),
+        )
+        .route(
+            "/api/pipelines/import",
+            post(collaboration::handlers::import_pipeline),
+        );
+
     // ---- Observability routes ----
     let obs_routes = Router::new()
         .route("/api/health", get(observability::handlers::health))
@@ -160,6 +175,7 @@ pub fn build_router(_mode: &str) -> Router {
         .merge(auth_routes)
         .merge(license_routes)
         .merge(ai_routes)
+        .merge(collaboration_routes)
         .merge(obs_routes)
         .layer(LicenseHeaderLayer)
         .layer(tower_http::cors::CorsLayer::permissive())
