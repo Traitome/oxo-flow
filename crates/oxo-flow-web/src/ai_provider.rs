@@ -13,7 +13,7 @@
 //! | `OXO_FLOW_AI_API_URL` | (provider default) | Custom API endpoint URL |
 //! | `OXO_FLOW_AI_MODEL` | (provider default) | Model name override |
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 // ---------------------------------------------------------------------------
 // Provider kind enum
@@ -58,7 +58,7 @@ const OLLAMA_API_URL: &str = "http://localhost:11434/api/chat";
 
 mod internal {
     use super::*;
-    use anyhow::{anyhow, Result};
+    use anyhow::{Result, anyhow};
 
     pub struct Claude {
         client: reqwest::Client,
@@ -302,7 +302,9 @@ pub fn create_provider(
                 .or_else(|| std::env::var("ANTHROPIC_AUTH_TOKEN").ok())
                 .unwrap_or_default();
             if api_key.is_empty() {
-                tracing::warn!("Claude provider selected but no API key found (check ANTHROPIC_AUTH_TOKEN or OXO_FLOW_AI_API_KEY)");
+                tracing::warn!(
+                    "Claude provider selected but no API key found (check ANTHROPIC_AUTH_TOKEN or OXO_FLOW_AI_API_KEY)"
+                );
             }
             let api_url = url
                 .or_else(|| std::env::var("ANTHROPIC_BASE_URL").ok())
@@ -317,7 +319,9 @@ pub fn create_provider(
                 .or_else(|| std::env::var("OPENAI_API_KEY").ok())
                 .unwrap_or_default();
             if api_key.is_empty() {
-                tracing::warn!("OpenAI provider selected but no API key found (check OPENAI_API_KEY or OXO_FLOW_AI_API_KEY)");
+                tracing::warn!(
+                    "OpenAI provider selected but no API key found (check OPENAI_API_KEY or OXO_FLOW_AI_API_KEY)"
+                );
             }
             let api_url = url
                 .or_else(|| std::env::var("OPENAI_BASE_URL").ok())

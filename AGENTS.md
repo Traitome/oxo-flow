@@ -69,6 +69,82 @@ cargo run -p oxo-flow-web      # API server on :3000
 cd frontend && npm run build   # Outputs to frontend/dist/
 ```
 
+
+
+## 🐳 Docker Deployment
+
+### Quick Start
+```bash
+# Build and start (single command)
+docker compose up -d
+
+# Or build manually
+docker build -t oxo-flow .
+docker run -d -p 3000:3000 -v oxo-flow-data:/app/data oxo-flow
+```
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `OXO_FLOW_AI_PROVIDER` | No | `disabled` | `"claude"`, `"openai"`, `"ollama"`, or `"disabled"` |
+| `OXO_FLOW_AI_API_KEY` | No | — | Generic API key fallback |
+| `OXO_FLOW_AI_API_URL` | No | (provider default) | Custom API endpoint URL |
+| `OXO_FLOW_AI_MODEL` | No | (provider default) | Model name override |
+| `ANTHROPIC_AUTH_TOKEN` | No | — | Claude/Anthropic API key (overrides OXO_FLOW_AI_API_KEY) |
+| `ANTHROPIC_BASE_URL` | No | `https://api.anthropic.com` | Anthropic-compatible API base URL |
+| `ANTHROPIC_MODEL` | No | `claude-sonnet-4-20250514` | Claude model name |
+| `OPENAI_API_KEY` | No | — | OpenAI-compatible API key (overrides OXO_FLOW_AI_API_KEY) |
+| `OPENAI_BASE_URL` | No | `https://api.openai.com/v1` | OpenAI-compatible API base URL |
+| `OPENAI_MODEL` | No | `gpt-4o` | OpenAI-compatible model name |
+| `OXO_FLOW_FRONTEND_DIR` | No | — | Path to built frontend dist directory |
+
+### AI Provider Examples
+
+**Claude (Anthropic):**
+```bash
+OXO_FLOW_AI_PROVIDER=claude ANTHROPIC_AUTH_TOKEN=sk-ant-... docker compose up -d
+```
+
+**DeepSeek via Anthropic-compatible API:**
+```bash
+OXO_FLOW_AI_PROVIDER=claude \
+  ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic \
+  ANTHROPIC_AUTH_TOKEN=sk-... \
+  ANTHROPIC_MODEL=deepseek-chat \
+  docker compose up -d
+```
+
+**OpenAI-compatible (DeepSeek, Groq, Azure, etc.):**
+```bash
+OXO_FLOW_AI_PROVIDER=openai \
+  OPENAI_BASE_URL=https://api.deepseek.com/v1 \
+  OPENAI_API_KEY=sk-... \
+  OPENAI_MODEL=deepseek-chat \
+  docker compose up -d
+```
+
+**Ollama (local):**
+```bash
+OXO_FLOW_AI_PROVIDER=ollama docker compose up -d
+```
+
+## 🔧 AI Provider Architecture
+
+The AI provider system (`ai_provider.rs`) supports three backends via an enum-based dispatcher:
+
+- **Claude** — Anthropic Messages API (including Anthropic-compatible third-party endpoints)
+- **OpenAI** — OpenAI Chat Completions API (compatible with DeepSeek, Groq, Azure, Together, etc.)
+- **Ollama** — Local Ollama API (default: `http://localhost:11434`)
+
+Providers are selected at startup via `OXO_FLOW_AI_PROVIDER` env var and initialized once through `AiProviderRegistry::global()`. The `try_ai_generate()` function in `handlers/ai.rs` uses the configured provider, falling back to template matching if AI is disabled or fails.
+
+## 📚 Documentation
+- `docs/guide/` — MkDocs user guide
+- `docs/guide/src/reference/web-api.md` — REST API reference
+- `docs/guide/src/reference/web-system-architecture.md` — Web system architecture
+- `docs/schema/openapi.yaml` — OpenAPI 3.0 schema
+
 ### Frontend Architecture
 - **Framework**: React 19 + TypeScript, Vite build
 - **Routing**: React Router (client-side SPA routing)

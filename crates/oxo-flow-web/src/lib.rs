@@ -1366,20 +1366,21 @@ fn add_frontend_fallback(router: &mut Router, frontend_dir: &str) {
     // SPA fallback: for non-API, non-asset paths, serve index.html
     // Build the frontend service: try static files first, fall back to SPA
     let index_path = dist.join("index.html");
-    let frontend = tower_http::services::ServeDir::new(dist).fallback(
-        tower::service_fn(move |_| {
+    let frontend =
+        tower_http::services::ServeDir::new(dist).fallback(tower::service_fn(move |_| {
             let index_path = index_path.clone();
             async move {
-                let content = tokio::fs::read_to_string(&index_path).await.unwrap_or_default();
+                let content = tokio::fs::read_to_string(&index_path)
+                    .await
+                    .unwrap_or_default();
                 Ok::<_, std::convert::Infallible>(
                     axum::http::Response::builder()
                         .header("content-type", "text/html")
                         .body(axum::body::Body::from(content))
-                        .unwrap()
+                        .unwrap(),
                 )
             }
-        })
-    );
+        }));
 
     *router = std::mem::take(router)
         .nest_service("/assets", serve_assets)
