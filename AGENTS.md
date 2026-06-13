@@ -69,7 +69,20 @@ cargo run -p oxo-flow-web      # API server on :3000
 cd frontend && npm run build   # Outputs to frontend/dist/
 ```
 
+### v0.8 Web Module Structure
 
+The web crate uses a domain-driven modular monolith pattern:
+
+- `domains/workflow/` — Pipeline parsing, validation, DAG building, formatting, data discovery
+- `domains/execution/` — Run lifecycle, diagnostics engine (30+ error patterns), retry logic
+- `domains/ai/` — AI translation layer (copilot prompts + service orchestration + handlers)
+- `domains/auth/` — Authentication service, OAuth stubs, license endpoints
+- `domains/collaboration/` — Pipeline fork, share, import
+- `domains/observability/` — Health checks, system info, metrics
+- `infra/db/` — StorageBackend trait, SqliteBackend, PostgreSQL backend (feature-gated)
+- `server.rs` — Router assembly with all v0.8 API endpoints
+
+Each domain follows: `types.rs` (data) → `service.rs` (pure logic) → `handlers.rs` (HTTP adapters).
 
 ## 🐳 Docker Deployment
 
