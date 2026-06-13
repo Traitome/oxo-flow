@@ -174,6 +174,44 @@ pub async fn license_status() -> ApiResult<LicenseResponse> {
     Ok(Json(service::license_status()))
 }
 
+// ---------------------------------------------------------------------------
+// OAuth2 handlers
+// ---------------------------------------------------------------------------
+
+/// POST /api/auth/oauth/authorize
+///
+/// Initiates an OAuth2 authorization flow. Returns the provider's
+/// authorization URL that the user should be redirected to.
+pub async fn oauth_authorize(
+    Json(req): Json<OAuthAuthorizeRequest>,
+) -> ApiResult<OAuthAuthorizeResponse> {
+    let redirect_uri = req
+        .redirect_uri
+        .as_deref()
+        .unwrap_or("http://localhost:8777/api/auth/oauth/callback");
+
+    super::service::initiate_oauth(&req.provider, redirect_uri)
+        .map(Json)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, "OAUTH_ERROR", e))
+}
+
+/// POST /api/auth/oauth/callback
+///
+/// Handles the OAuth2 callback after the user authorizes the application.
+/// Exchanges the authorization code for an access token and creates a session.
+pub async fn oauth_callback(
+    Json(req): Json<OAuthCallbackRequest>,
+) -> ApiResult<OAuthCallbackResponse> {
+    let provider = req.provider.as_deref().unwrap_or("orcid");
+    let redirect_uri = std::env::var("OXO_FLOW_OAUTH_REDIRECT_URI")
+        .unwrap_or_else(|_| "http://localhost:8777/api/auth/oauth/callback".to_string());
+
+    super::service::handle_oauth_callback(provider, &req.code, &req.state, &redirect_uri)
+        .await
+        .map(Json)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, "OAUTH_CALLBACK_ERROR", e))
+}
+
 /// POST /api/license/upload
 pub async fn upload_license(Json(req): Json<serde_json::Value>) -> ApiResult<LicenseResponse> {
     // Log the upload attempt

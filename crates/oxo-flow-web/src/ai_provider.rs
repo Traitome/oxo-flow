@@ -578,10 +578,73 @@ impl AiProviderRegistry {
         );
         Ok(())
     }
+
+    /// Create a Claude provider from environment variables (for fallback chain).
+    pub fn create_claude_from_env() -> Result<AiProvider, anyhow::Error> {
+        let api_key = std::env::var("ANTHROPIC_API_KEY")
+            .or_else(|_| std::env::var("CLAUDE_API_KEY"))
+            .map_err(|_| anyhow::anyhow!("ANTHROPIC_API_KEY not set"))?;
+        let model = std::env::var("ANTHROPIC_MODEL").ok();
+        let api_url = std::env::var("ANTHROPIC_BASE_URL").ok();
+        Ok(AiProvider::Claude(internal::Claude::new(
+            api_key, model, api_url,
+        )))
+    }
+
+    /// Create an OpenAI provider from environment variables (for fallback chain).
+    pub fn create_openai_from_env() -> Result<AiProvider, anyhow::Error> {
+        let api_key = std::env::var("OPENAI_API_KEY")
+            .map_err(|_| anyhow::anyhow!("OPENAI_API_KEY not set"))?;
+        let model = std::env::var("OPENAI_MODEL").ok();
+        let api_url = std::env::var("OPENAI_BASE_URL")
+            .ok()
+            .or_else(|| Some("https://api.openai.com/v1/chat/completions".to_string()));
+        Ok(AiProvider::OpenAi(internal::OpenAi::new(
+            api_key, model, api_url,
+        )))
+    }
+
+    /// Create an Ollama provider from environment variables (for fallback chain).
+    pub fn create_ollama_from_env() -> Result<AiProvider, anyhow::Error> {
+        let api_url = std::env::var("OLLAMA_HOST").ok();
+        let model = std::env::var("OLLAMA_MODEL").ok();
+        Ok(AiProvider::Ollama(internal::Ollama::new(model, api_url)))
+    }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A mock AI provider that returns predetermined responses for testing.
+    /// Useful for unit-testing AI service logic without a real API key.
+    #[derive(Clone)]
+    pub struct MockProvider {
+        pub response: String,
+        pub should_fail: bool,
+    }
+
+    impl MockProvider {
+        pub fn new(response: &str) -> Self {
+            Self {
+                response: response.to_string(),
+                should_fail: false,
+            }
+        }
+
+        pub fn failing() -> Self {
+            Self {
+                response: String::new(),
+                should_fail: true,
+            }
+        }
+
+        pub async fn chat(&self, _system: &str, _user: &str) -> anyhow::Result<String> {
+            if self.should_fail {
+                anyhow::bail!("Mock provider configured to fail")
+            }
+            Ok(self.response.clone())
+        }
+    }
 
     #[test]
     fn provider_kind_parse() {

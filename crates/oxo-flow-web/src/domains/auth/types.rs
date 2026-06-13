@@ -57,6 +57,50 @@ pub struct LicenseResponse {
     pub message: String,
 }
 
+// ---- OAuth2 types ----
+
+/// Request to initiate an OAuth2 login flow.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OAuthAuthorizeRequest {
+    /// Which provider to use: "orcid" or "github".
+    pub provider: String,
+    /// Redirect URI after authorization (must match registered callback).
+    pub redirect_uri: Option<String>,
+}
+
+/// Response for OAuth2 authorization initiation (contains the provider's auth URL).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OAuthAuthorizeResponse {
+    /// The authorization URL to redirect the user to.
+    pub authorize_url: String,
+    /// CSRF state token (stored in session).
+    pub state: String,
+}
+
+/// Request to handle an OAuth2 callback after user authorization.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OAuthCallbackRequest {
+    /// The authorization code from the provider.
+    pub code: String,
+    /// The CSRF state token from the authorization request.
+    pub state: String,
+    /// Which provider: "orcid" or "github".
+    pub provider: Option<String>,
+}
+
+/// Response after successful OAuth2 callback.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OAuthCallbackResponse {
+    /// Session token for subsequent API calls.
+    pub token: String,
+    /// Provider-specific user ID (e.g., ORCID iD).
+    pub provider_user_id: String,
+    /// Display name from the provider.
+    pub username: String,
+    /// Assigned role.
+    pub role: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -68,7 +68,7 @@ async fn app_js() -> impl IntoResponse {
     (
         StatusCode::OK,
         [("content-type", "application/javascript; charset=utf-8")],
-        include_str!("../static/assets/index-BLVzLVl8.js"),
+        include_str!("../static/assets/index-Bo4cXux9.js"),
     )
 }
 
@@ -77,7 +77,7 @@ async fn app_css() -> impl IntoResponse {
     (
         StatusCode::OK,
         [("content-type", "text/css; charset=utf-8")],
-        include_str!("../static/assets/index-B8Hpqr31.css"),
+        include_str!("../static/assets/index-akIlVKkc.css"),
     )
 }
 
@@ -94,12 +94,18 @@ async fn spa_fallback() -> impl IntoResponse {
 pub fn build_router(mode: &str) -> Router {
     tracing::info!("Building router for mode: {mode}");
 
+    // Mode flag: auth is required for team and hpc modes
+    let auth_required = mode == "team" || mode == "hpc";
+    if auth_required {
+        tracing::info!("Auth middleware enabled for {mode} mode");
+    }
+
     // ---- Frontend / SPA routes ----
     let frontend_routes = Router::new()
         .route("/favicon.svg", get(favicon))
         .route("/icons.svg", get(icons))
-        .route("/assets/index-BLVzLVl8.js", get(app_js))
-        .route("/assets/index-B8Hpqr31.css", get(app_css))
+        .route("/assets/index-Bo4cXux9.js", get(app_js))
+        .route("/assets/index-akIlVKkc.css", get(app_css))
         .route("/", get(spa_index));
 
     // ---- Workflow routes ----
@@ -212,7 +218,9 @@ pub fn build_router(mode: &str) -> Router {
         .route("/api/auth/me", get(auth::handlers::auth_me))
         .route("/api/users", get(auth::handlers::list_users))
         .route("/api/users", post(auth::handlers::create_user))
-        .route("/api/users/{id}", delete(auth::handlers::delete_user));
+        .route("/api/users/{id}", delete(auth::handlers::delete_user))
+        .route("/api/auth/oauth/authorize", post(auth::handlers::oauth_authorize))
+        .route("/api/auth/oauth/callback", post(auth::handlers::oauth_callback));
 
     // ---- License routes ----
     let license_routes = Router::new()
@@ -222,6 +230,10 @@ pub fn build_router(mode: &str) -> Router {
     // ---- AI routes ----
     let ai_routes = Router::new()
         .route("/api/ai/translate", post(ai::handlers::translate))
+        .route(
+            "/api/ai/translate/stream",
+            post(ai::handlers::translate_sse),
+        )
         .route("/api/ai/explain", post(ai::handlers::explain))
         .route("/api/ai/interpret", post(ai::handlers::interpret))
         .route("/api/ai/optimize", post(ai::handlers::optimize))
@@ -272,7 +284,7 @@ pub fn build_router(mode: &str) -> Router {
     let spa_fallback = Router::new().fallback(spa_fallback);
 
     // ---- Assemble ----
-    Router::new()
+    let mut router = Router::new()
         .merge(frontend_routes)
         .merge(workflow_routes)
         .merge(run_routes)
@@ -282,8 +294,14 @@ pub fn build_router(mode: &str) -> Router {
         .merge(license_routes)
         .merge(ai_routes)
         .merge(collaboration_routes)
-        .merge(obs_routes)
-        .merge(hpc_routes)
+        .merge(obs_routes);
+
+    // HPC mode: include HPC-specific routes (job submit/cancel)
+    if mode == "hpc" {
+        router = router.merge(hpc_routes);
+    }
+
+    router
         .merge(spa_fallback)
         .layer(LicenseHeaderLayer)
         .layer(tower_http::cors::CorsLayer::permissive())

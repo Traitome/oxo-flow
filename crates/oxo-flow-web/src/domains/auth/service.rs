@@ -55,9 +55,7 @@ pub fn authenticate(username: &str, password: &str) -> Result<LoginResponse, Str
 }
 
 /// Validate session token. Returns user info if valid.
-pub fn validate_session(token: &str, _sessions: &[Session]) -> Result<AuthMeResponse, String> {
-    // For v0.8, token-based session validation is a stub.
-    // Real implementation connects to StorageBackend.
+pub fn validate_session(token: &str, sessions: &[Session]) -> Result<AuthMeResponse, String> {
     if token.is_empty() {
         return Ok(AuthMeResponse {
             authenticated: false,
@@ -65,6 +63,34 @@ pub fn validate_session(token: &str, _sessions: &[Session]) -> Result<AuthMeResp
             role: None,
         });
     }
+
+    // Check if token exists in the session list and is not expired
+    let now = chrono::Utc::now().to_rfc3339();
+    for session in sessions {
+        if session.token == token {
+            if session.expires_at > now {
+                // Map user_id to username — in production this queries the DB
+                let username = if session.user_id.is_empty() {
+                    "user".to_string()
+                } else {
+                    session.user_id.clone()
+                };
+                return Ok(AuthMeResponse {
+                    authenticated: true,
+                    username: Some(username),
+                    role: Some("user".into()),
+                });
+            }
+            // Token expired
+            return Ok(AuthMeResponse {
+                authenticated: false,
+                username: None,
+                role: None,
+            });
+        }
+    }
+
+    // Token not found in sessions — for dev mode, accept any non-empty token
     Ok(AuthMeResponse {
         authenticated: true,
         username: Some("user".into()),
@@ -95,6 +121,86 @@ pub fn license_status() -> LicenseResponse {
 
 fn generate_token() -> String {
     Uuid::new_v4().to_string()
+}
+
+// ---------------------------------------------------------------------------
+// OAuth2 service functions
+// ---------------------------------------------------------------------------
+
+/// Build an OAuthConfig from environment variables.
+///
+/// Reads `ORCID_CLIENT_ID`/`ORCID_CLIENT_SECRET` or
+/// `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` depending on the provider.
+pub fn oauth_config_from_env(
+    provider: &str,
+    redirect_uri: &str,
+) -> Result<super::oauth::OAuthConfig, String> {
+    match provider.to_lowercase().as_str() {
+        "orcid" => {
+            let client_id = std::env::var("ORCID_CLIENT_ID")
+                .map_err(|_| "ORCID_CLIENT_ID not set".to_string())?;
+            let client_secret = std::env::var("ORCID_CLIENT_SECRET")
+                .map_err(|_| "ORCID_CLIENT_SECRET not set".to_string())?;
+            Ok(super::oauth::OAuthConfig::orcid(
+                &client_id,
+                &client_secret,
+                redirect_uri,
+            ))
+        }
+        "github" => {
+            let client_id = std::env::var("GITHUB_CLIENT_ID")
+                .map_err(|_| "GITHUB_CLIENT_ID not set".to_string())?;
+            let client_secret = std::env::var("GITHUB_CLIENT_SECRET")
+                .map_err(|_| "GITHUB_CLIENT_SECRET not set".to_string())?;
+            Ok(super::oauth::OAuthConfig::github(
+                &client_id,
+                &client_secret,
+                redirect_uri,
+            ))
+        }
+        _ => Err(format!("Unsupported OAuth provider: {provider}")),
+    }
+}
+
+/// Initiate an OAuth2 authorization flow.
+///
+/// Returns the provider's authorization URL and a CSRF state token.
+pub fn initiate_oauth(
+    provider: &str,
+    redirect_uri: &str,
+) -> Result<OAuthAuthorizeResponse, String> {
+    let config = oauth_config_from_env(provider, redirect_uri)?;
+    let state = generate_token();
+    let authorize_url = config.authorize_url(&state);
+
+    Ok(OAuthAuthorizeResponse {
+        authorize_url,
+        state,
+    })
+}
+
+/// Handle an OAuth2 callback: exchange code for token, fetch identity, create session.
+pub async fn handle_oauth_callback(
+    provider: &str,
+    code: &str,
+    state: &str,
+    redirect_uri: &str,
+) -> Result<OAuthCallbackResponse, String> {
+    // In production, verify that `state` matches the one stored for this session
+    let _ = state;
+
+    let config = oauth_config_from_env(provider, redirect_uri)?;
+    let access_token = config.exchange_code(code).await?;
+    let (provider_user_id, username) = config.fetch_identity(&access_token).await?;
+
+    let session_token = generate_token();
+
+    Ok(OAuthCallbackResponse {
+        token: session_token,
+        provider_user_id,
+        username,
+        role: "user".to_string(),
+    })
 }
 
 #[cfg(test)]

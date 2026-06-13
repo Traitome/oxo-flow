@@ -3,6 +3,7 @@
 //! Thin adapters: parse HTTP request -> call service -> serialize response.
 //! Zero business logic here — all logic lives in `service.rs`.
 
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::{Json, http::StatusCode};
 
 use crate::domains::ai::types::*;
@@ -22,11 +23,10 @@ fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)>
     })
 }
 
-/// POST /api/ai/translate
+/// POST /api/ai/translate — standard JSON response.
 pub async fn translate(Json(req): Json<TranslateRequest>) -> ApiResult<TranslateResponse> {
     let provider = crate::ai_provider::AiProviderRegistry::global().get_provider();
 
-    // Load template names from DB for fallback matching
     let templates: Vec<String> = if let Ok(pool) = get_pool() {
         sqlx::query_as::<_, models::TemplateRow>(
             "SELECT * FROM templates ORDER BY usage_count DESC LIMIT 20",
@@ -45,6 +45,77 @@ pub async fn translate(Json(req): Json<TranslateRequest>) -> ApiResult<Translate
         .await
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "AI_TRANSLATE_ERROR", e))
+}
+
+/// POST /api/ai/translate?stream=true — SSE streaming response.
+///
+/// Streams progress events: intent → data → match → generate → validate → done.
+/// Each event has `type` and `data` fields. The final event contains the full
+/// TranslateResponse as JSON.
+pub async fn translate_sse(
+    Json(req): Json<TranslateRequest>,
+) -> Sse<impl tokio_stream::Stream<Item = Result<Event, std::convert::Infallible>>> {
+    use std::convert::Infallible;
+
+    let provider = crate::ai_provider::AiProviderRegistry::global().get_provider();
+
+    let templates: Vec<String> = if let Ok(pool) = get_pool() {
+        sqlx::query_as::<_, models::TemplateRow>(
+            "SELECT * FROM templates ORDER BY usage_count DESC LIMIT 20",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|t| t.name)
+        .collect()
+    } else {
+        vec![]
+    };
+
+    let intent = req.intent.clone();
+    let stream = async_stream::stream! {
+        // Step 1: intent received
+        yield Ok::<_, Infallible>(Event::default()
+            .event("progress")
+            .data(serde_json::json!({"step": "intent", "message": "Intent received", "intent": &intent}).to_string()));
+
+        // Step 2: matching templates
+        yield Ok::<_, Infallible>(Event::default()
+            .event("progress")
+            .data(serde_json::json!({"step": "match", "message": "Matching templates...", "templates_count": templates.len()}).to_string()));
+
+        // Step 3: AI generation (with fallback chain)
+        yield Ok::<_, Infallible>(Event::default()
+            .event("progress")
+            .data(serde_json::json!({"step": "generate", "message": "Generating pipeline via AI..."}).to_string()));
+
+        let result = super::service::translate_intent(&provider, &intent, None, &templates).await;
+
+        // Step 4: validate + done
+        match result {
+            Ok(response) => {
+                let json = serde_json::to_string(&response).unwrap_or_default();
+                yield Ok::<_, Infallible>(Event::default()
+                    .event("progress")
+                    .data(serde_json::json!({"step": "validate", "message": "Pipeline validated", "pipeline_id": &response.pipeline_id}).to_string()));
+                yield Ok::<_, Infallible>(Event::default()
+                    .event("done")
+                    .data(json));
+            }
+            Err(e) => {
+                yield Ok::<_, Infallible>(Event::default()
+                    .event("error")
+                    .data(serde_json::json!({"error": e}).to_string()));
+            }
+        }
+    };
+
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(std::time::Duration::from_secs(15))
+            .text("ping"),
+    )
 }
 
 /// POST /api/ai/explain
