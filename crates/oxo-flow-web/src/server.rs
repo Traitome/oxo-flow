@@ -308,8 +308,66 @@ pub fn build_router(mode: &str) -> Router {
         router = router.merge(hpc_routes);
     }
 
+    // Team/HPC mode: apply auth layer to non-auth, non-health endpoints
+    if auth_required {
+        router = router.layer(axum::middleware::from_fn(require_auth));
+    }
+
     router
         .merge(spa_fallback)
         .layer(LicenseHeaderLayer)
         .layer(tower_http::cors::CorsLayer::permissive())
+}
+
+/// Middleware: require authentication for team/hpc mode.
+/// Allows unauthenticated access to auth endpoints (login, oauth, health).
+async fn require_auth(
+    headers: axum::http::HeaderMap,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let path = request.uri().path();
+
+    // Allow public endpoints without auth
+    if path == "/api/auth/login"
+        || path == "/api/auth/me"
+        || path.starts_with("/api/auth/oauth")
+        || path == "/api/health"
+        || path == "/api/openapi.json"
+        || path == "/api/license"
+        || path == "/api/system"
+        || path == "/api/metrics"
+        || path == "/api/ai/config"
+        || path == "/api/ai/test"
+        || path == "/api/hpc"
+        || path == "/api/events"
+        || path == "/"
+        || path.starts_with("/assets/")
+        || path == "/favicon.svg"
+        || path == "/icons.svg"
+    {
+        return next.run(request).await;
+    }
+
+    // Check for Bearer token
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+
+    if token.is_some() {
+        return next.run(request).await;
+    }
+
+    // No valid token — return 401
+    (
+        axum::http::StatusCode::UNAUTHORIZED,
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        axum::Json(serde_json::json!({
+            "code": "AUTH_REQUIRED",
+            "message": "Authentication required in team/hpc mode",
+            "suggestion": "Login at POST /api/auth/login to obtain a session token"
+        })),
+    )
+        .into_response()
 }

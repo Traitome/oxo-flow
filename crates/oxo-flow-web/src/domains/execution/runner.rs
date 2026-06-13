@@ -128,14 +128,17 @@ pub async fn submit_to_hpc(
         .map_err(|e| format!("Failed to write HPC submit script: {e}"))?;
 
     // Submit via scheduler
-    let submit_cmd = match scheduler {
+    let pbs_output = format!("{workdir_str}/pbs-output.log");
+    let (submit_bin, submit_args) = match scheduler {
         "slurm" => ("sbatch", vec!["--parsable", "submit.sh"]),
-        "pbs" | "torque" => ("qsub", vec!["submit.sh"]),
+        "pbs" | "torque" => ("qsub", vec!["-o", &pbs_output, "submit.sh"]),
+        "lsf" => ("bsub", vec!["-o", &pbs_output, "<", "submit.sh"]),
+        "sge" => ("qsub", vec!["-o", &pbs_output, "submit.sh"]),
         _ => return Err(format!("Unsupported HPC scheduler: {scheduler}")),
     };
 
-    let output = tokio::process::Command::new(submit_cmd.0)
-        .args(&submit_cmd.1)
+    let output = tokio::process::Command::new(submit_bin)
+        .args(&submit_args)
         .current_dir(workdir)
         .output()
         .await

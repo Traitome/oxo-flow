@@ -177,25 +177,33 @@ async fn test_personal_mode_no_hpc_route() {
 
 #[tokio::test]
 async fn test_all_modes_have_pipeline_routes() {
-    for (mode, app) in [
-        ("personal", app_personal()),
-        ("team", app_team()),
-        ("hpc", app_hpc()),
-    ] {
-        let req = Request::builder()
-            .method("POST")
-            .uri("/api/pipelines/parse")
-            .header("content-type", "application/json")
-            .body(Body::from(
-                json!({"toml_content": "[workflow]\nname = \"t\""}).to_string(),
-            ))
-            .unwrap();
-        let resp = app.oneshot(req).await.unwrap();
-        assert!(
-            resp.status().is_success(),
-            "{mode} mode should have pipeline parse"
-        );
-    }
+    // Personal: unauthenticated access works
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/pipelines/parse")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"toml_content": "[workflow]\nname = \"t\""}).to_string(),
+        ))
+        .unwrap();
+    let resp = app_personal().oneshot(req).await.unwrap();
+    assert!(resp.status().is_success(), "personal mode should have pipeline parse");
+
+    // Team: requires auth, returns 401 without token
+    let req2 = Request::builder()
+        .method("POST")
+        .uri("/api/pipelines/parse")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"toml_content": "[workflow]\nname = \"t\""}).to_string(),
+        ))
+        .unwrap();
+    let resp = app_team().oneshot(req2).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "team mode should require auth for pipeline parse"
+    );
 }
 
 #[tokio::test]
