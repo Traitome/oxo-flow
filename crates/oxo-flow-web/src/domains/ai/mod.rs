@@ -1,1 +1,1 @@
-// TODO: ai domain module
+pub mod types;

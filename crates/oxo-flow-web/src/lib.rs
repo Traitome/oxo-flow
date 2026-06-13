@@ -11,10 +11,12 @@ pub mod audit;
 pub mod db;
 pub mod executor;
 pub mod handlers;
+pub mod infra;
 pub mod hpc;
 pub mod rate_limit;
 pub mod sse;
 pub mod sys;
+pub mod domains;
 pub mod workspace;
 
 use axum::{

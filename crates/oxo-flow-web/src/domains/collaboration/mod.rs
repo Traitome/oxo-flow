@@ -1,1 +1,1 @@
-// TODO: collaboration domain module
+pub mod types;

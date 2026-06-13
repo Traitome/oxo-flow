@@ -1,1 +1,1 @@
-// TODO: observability domain module
+pub mod types;

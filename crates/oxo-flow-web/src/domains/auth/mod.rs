@@ -1,1 +1,1 @@
-// TODO: auth domain module
+pub mod types;
