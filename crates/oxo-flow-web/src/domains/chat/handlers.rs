@@ -77,9 +77,10 @@ pub async fn chat_send(
             }).to_string()));
 
         // Data Agent if paths provided
-        if let Some(ref ctx) = context {
-            if let Some(ref paths) = ctx.data_paths {
-                if !paths.is_empty() {
+        if let Some(ref ctx) = context
+            && let Some(ref paths) = ctx.data_paths
+            && !paths.is_empty()
+        {
                     yield Ok::<_, Infallible>(Event::default()
                         .event("agent")
                         .data(serde_json::json!({
@@ -97,8 +98,6 @@ pub async fn chat_send(
                                 "data": report
                             }).to_string()));
                     }
-                }
-            }
         }
 
         // Generate pipeline
@@ -115,7 +114,7 @@ pub async fn chat_send(
         match result {
             Ok((ai_text, pipeline_data)) => {
                 // Stream the AI response text in chunks
-                let chunks: Vec<&str> = ai_text.split_inclusive(|c: char| c == '.' || c == '\n').collect();
+                let chunks: Vec<&str> = ai_text.split_inclusive(['.', '\n']).collect();
                 for chunk in chunks {
                     if !chunk.trim().is_empty() {
                         yield Ok::<_, Infallible>(Event::default()

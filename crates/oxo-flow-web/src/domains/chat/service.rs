@@ -4,7 +4,7 @@
 //! All agents call deterministic core APIs — zero write access to DB/FS/process.
 
 use super::types::*;
-use crate::ai_provider::{AiProvider, AiProviderRegistry};
+use crate::ai_provider::AiProviderRegistry;
 use crate::domains::workflow::service as workflow_svc;
 
 /// Process a chat message and return SSE events via a channel.
@@ -165,10 +165,10 @@ fn build_system_prompt(
                 summary.get("paired_end_detected").and_then(|v| v.as_bool()).unwrap_or(false)
             ));
         }
-        if let Some(sw) = report.get("suggested_workflow") {
-            if let Some(template) = sw.get("template").and_then(|v| v.as_str()) {
+        if let Some(sw) = report.get("suggested_workflow")
+            && let Some(template) = sw.get("template").and_then(|v| v.as_str())
+        {
                 prompt.push_str(&format!("Suggested template: {template}\n"));
-            }
         }
     }
 
