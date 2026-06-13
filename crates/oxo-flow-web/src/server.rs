@@ -68,7 +68,7 @@ async fn app_js() -> impl IntoResponse {
     (
         StatusCode::OK,
         [("content-type", "application/javascript; charset=utf-8")],
-        include_str!("../static/assets/index-CLM7BjVy.js"),
+        include_str!("../static/assets/index-CmUwz5Yz.js"),
     )
 }
 
@@ -98,7 +98,7 @@ pub fn build_router(mode: &str) -> Router {
     let frontend_routes = Router::new()
         .route("/favicon.svg", get(favicon))
         .route("/icons.svg", get(icons))
-        .route("/assets/index-CLM7BjVy.js", get(app_js))
+        .route("/assets/index-CmUwz5Yz.js", get(app_js))
         .route("/assets/index-CCVc6OLr.css", get(app_css))
         .route("/", get(spa_index));
 
