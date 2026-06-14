@@ -88,6 +88,18 @@ pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateR
         .execute(pool)
         .await;
 
+        // Save pipeline TOML to run directory so executor can read it
+        let run_dir = crate::workspace::get_run_directory("local_user", &resp.run_id);
+        if let Err(e) = std::fs::create_dir_all(&run_dir) {
+            tracing::error!("Failed to create run dir {:?}: {e}", run_dir);
+        }
+        let workflow_path = run_dir.join("workflow.oxoflow");
+        if let Err(e) = std::fs::write(&workflow_path, toml) {
+            tracing::error!("Failed to write workflow to {:?}: {e}", workflow_path);
+        } else {
+            tracing::info!("Saved workflow to {:?}", workflow_path);
+        }
+
         crate::executor::spawn_background_run(
             resp.run_id.clone(),
             "local_user".to_string(),

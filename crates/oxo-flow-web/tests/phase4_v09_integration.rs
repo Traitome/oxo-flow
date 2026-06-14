@@ -146,6 +146,7 @@ async fn test_dag_edit_add_rule() {
     let resp = post_json(
         "/api/pipeline/test-123/command",
         &json!({
+            "toml_content": "[workflow]\nname=\"test\"\n[[rules]]\nname=\"init\"\nshell=\"echo\"",
             "source": "dag_editor",
             "operation": "add_rule",
             "payload": {"name": "new_step", "shell": "echo hello"}
@@ -166,6 +167,7 @@ async fn test_dag_edit_invalid_operation() {
     let resp = post_json(
         "/api/pipeline/test-123/command",
         &json!({
+            "toml_content": "[workflow]\nname=\"test\"",
             "source": "dag_editor",
             "operation": "unknown_op",
             "payload": {}
