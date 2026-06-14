@@ -9,16 +9,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use oxo_flow_web::server;
 use serde_json::{Value, json};
-use std::sync::Once;
 use tower::ServiceExt;
-
-static INIT: Once = Once::new();
-
-fn init_tracing() {
-    INIT.call_once(|| {
-        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
-    });
-}
 
 fn app() -> axum::Router {
     server::build_router("personal")
@@ -55,7 +46,6 @@ async fn get_json(uri: &str) -> axum::response::Response {
 #[tokio::test]
 async fn test_data_perceive_empty() {
     let resp = post_json("/api/data/perceive", &json!({})).await;
-    let status = resp.status();
     let body: Value = json_body(resp.into_body()).await;
     // Should return data_level 0 (intent only) since no paths or description
     assert_eq!(body["data_level"], 0, "no data → level 0: got {body:?}");

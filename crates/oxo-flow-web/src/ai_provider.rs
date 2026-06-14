@@ -675,37 +675,6 @@ impl AiProviderRegistry {
 mod tests {
     use super::*;
 
-    /// A mock AI provider that returns predetermined responses for testing.
-    /// Useful for unit-testing AI service logic without a real API key.
-    #[derive(Clone)]
-    pub struct MockProvider {
-        pub response: String,
-        pub should_fail: bool,
-    }
-
-    impl MockProvider {
-        pub fn new(response: &str) -> Self {
-            Self {
-                response: response.to_string(),
-                should_fail: false,
-            }
-        }
-
-        pub fn failing() -> Self {
-            Self {
-                response: String::new(),
-                should_fail: true,
-            }
-        }
-
-        pub async fn chat(&self, _system: &str, _user: &str) -> anyhow::Result<String> {
-            if self.should_fail {
-                anyhow::bail!("Mock provider configured to fail")
-            }
-            Ok(self.response.clone())
-        }
-    }
-
     #[test]
     fn provider_kind_parse() {
         assert_eq!(

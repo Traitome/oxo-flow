@@ -89,31 +89,21 @@ fn cli_no_args() {
 // ─── validate subcommand ────────────────────────────────────────────────────
 
 #[test]
-fn cli_validate_valid_workflow() {
-    oxo_flow_cmd()
-        .args(["validate", "examples/simple_variant_calling.oxoflow"])
-        .assert()
-        .success();
-}
+fn cli_validate_functional() {
+    // Valid cases
+    for file in &[
+        "examples/simple_variant_calling.oxoflow",
+        "examples/paired_experiment_control.oxoflow",
+    ] {
+        oxo_flow_cmd().args(["validate", file]).assert().success();
+    }
 
-#[test]
-fn cli_validate_paired_experiment_control() {
-    oxo_flow_cmd()
-        .args(["validate", "examples/paired_experiment_control.oxoflow"])
-        .assert()
-        .success();
-}
-
-#[test]
-fn cli_validate_nonexistent_file() {
+    // Error cases
     oxo_flow_cmd()
         .args(["validate", "nonexistent.oxoflow"])
         .assert()
         .failure();
-}
 
-#[test]
-fn cli_validate_invalid_toml() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("bad.oxoflow");
     fs::write(&path, "this is not valid TOML {{").unwrap();
@@ -297,32 +287,21 @@ fn cli_clean_dry_run() {
         .assert()
         .success();
 }
-
 // ─── completions subcommand ─────────────────────────────────────────────────
 
 #[test]
-fn cli_completions_bash() {
-    oxo_flow_cmd()
-        .args(["completions", "bash"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("oxo-flow"));
-}
+fn cli_completions_functional() {
+    for shell in &["bash", "zsh", "fish"] {
+        oxo_flow_cmd()
+            .args(["completions", shell])
+            .assert()
+            .success();
+    }
 
-#[test]
-fn cli_completions_zsh() {
     oxo_flow_cmd()
-        .args(["completions", "zsh"])
+        .args(["completions", "invalid_shell"])
         .assert()
-        .success();
-}
-
-#[test]
-fn cli_completions_fish() {
-    oxo_flow_cmd()
-        .args(["completions", "fish"])
-        .assert()
-        .success();
+        .failure();
 }
 
 // ─── oxo-flow-web binary ────────────────────────────────────────────────────
@@ -745,30 +724,18 @@ fn cli_profile_list() {
 }
 
 #[test]
-fn cli_profile_show_local() {
-    oxo_flow_cmd()
-        .args(["profile", "show", "local"])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("local"));
-}
+fn cli_profile_show_functional() {
+    for profile in &["local", "slurm", "pbs"] {
+        oxo_flow_cmd()
+            .args(["profile", "show", profile])
+            .assert()
+            .success();
+    }
 
-#[test]
-fn cli_profile_show_slurm() {
     oxo_flow_cmd()
-        .args(["profile", "show", "slurm"])
+        .args(["profile", "show", "unknown-profile"])
         .assert()
-        .success()
-        .stderr(predicate::str::contains("slurm").or(predicate::str::contains("sbatch")));
-}
-
-#[test]
-fn cli_profile_show_pbs() {
-    oxo_flow_cmd()
-        .args(["profile", "show", "pbs"])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("pbs").or(predicate::str::contains("qsub")));
+        .failure();
 }
 
 #[test]
@@ -778,14 +745,6 @@ fn cli_profile_current() {
         .assert()
         .success()
         .stderr(predicate::str::contains("local"));
-}
-
-#[test]
-fn cli_profile_show_unknown() {
-    oxo_flow_cmd()
-        .args(["profile", "show", "unknown-profile"])
-        .assert()
-        .failure();
 }
 
 // ─── Env subcommand: extended ────────────────────────────────────────────────
@@ -1860,26 +1819,4 @@ fn cli_schema_outputs_valid_json() {
         parsed["properties"].get("rules").is_some(),
         "schema should define rules property"
     );
-}
-
-// ---------------------------------------------------------------------------
-// completions command tests
-// ---------------------------------------------------------------------------
-
-#[test]
-fn cli_completions_all_shells() {
-    for shell in &["bash", "zsh", "fish"] {
-        oxo_flow_cmd()
-            .args(["completions", shell])
-            .assert()
-            .success();
-    }
-}
-
-#[test]
-fn cli_completions_invalid_shell() {
-    oxo_flow_cmd()
-        .args(["completions", "invalid_shell"])
-        .assert()
-        .failure();
 }

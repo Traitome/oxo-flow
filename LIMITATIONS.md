@@ -39,37 +39,8 @@ WDL, and no importers for those formats are currently available.
   `s3://` and `gs://` URIs via feature flags (`s3-storage`, `gcs-storage`),
   but data is fully downloaded before execution rather than streamed.
   Streaming support is on the roadmap.
-- **No GUI workflow editor** — The web interface provides monitoring and
-  management but does not include a visual drag-and-drop workflow editor.
-- **No Kubernetes operator** — Cloud-native orchestration via Kubernetes
-  CRD/operator is not yet available.
-- **No native distributed consensus** — oxo-flow assumes a shared filesystem
-  for multi-node execution. True distributed execution without shared storage
-  is not supported.
-
-## Practical Constraints
-
-- **Reference database management** — oxo-flow does not automatically download
-  or update reference databases. Versions can be tracked via the
-  `[[reference_db]]` configuration section.
-- **Conda/Pixi environment resolution** — Environment creation depends on
-  external package managers. Network issues or solver conflicts are outside
-  oxo-flow's control.
-- **Cluster backend specifics** — SLURM, PBS, SGE, and LSF backends rely on
-  the scheduler being correctly configured on the host system. oxo-flow
-  cannot diagnose cluster misconfiguration.
-- **GPU scheduling** — GPU resource declarations are passed to the cluster
-  scheduler. On the local executor, a warning is emitted when GPU specs are
-  declared but GPU availability is not verified.
-
-## Standards & Compliance
-
-- **No GA4GH TES/WES support** — Task Execution Service and Workflow Execution
-  Service APIs are not implemented.
-- **No FHIR/HL7 integration** — Clinical data interchange standards are not
-  natively supported. Report output is HTML/JSON.
-- **Limited OpenAPI specification** — A basic OpenAPI 3.0 specification is
-  available but may not cover all endpoints comprehensively.
+- **Limited OpenAPI specification** — A comprehensive OpenAPI 3.1 specification
+  is available at `GET /api/openapi.json`.
 - **No HIPAA/GDPR de-identification tools** — PHI handling and data
   de-identification must be managed by the user or external tools.
 - **No native PDF export** — PDF generation requires `wkhtmltopdf` to be
