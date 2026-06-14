@@ -180,8 +180,46 @@ All configuration is TOML-based, parsed with `serde` and the `toml` crate. Repor
 
 ---
 
+## Web Crate Architecture (v0.8+)
+
+The `oxo-flow-web` crate follows a **domain-driven modular monolith** pattern:
+
+```
+crates/oxo-flow-web/src/
+├── server.rs              # Router assembly (~200 lines)
+├── domains/
+│   ├── workflow/          # Pipeline parse, validate, prepare, DAG, format
+│   │   ├── types.rs       # Request/response structs
+│   │   ├── service.rs     # Pure logic — zero HTTP dependency
+│   │   └── handlers.rs    # HTTP → service adapters
+│   ├── execution/         # Run management, diagnostics, smart retry
+│   │   ├── diagnostics.rs # Deterministic error pattern matching (30+ patterns)
+│   │   └── runner.rs      # Background process spawn + monitor
+│   ├── ai/                # AI translation layer (calls core APIs only)
+│   │   └── provider.rs    # Claude/OpenAI/Ollama enum dispatch
+│   ├── collaboration/     # Fork, diff, share, import
+│   ├── auth/              # Authentication + OAuth2 (ORCID, GitHub)
+│   └── observability/     # Health, metrics, structured logging, SSE
+├── infra/
+│   ├── db/                # StorageBackend trait + SQLite + PostgreSQL
+│   ├── license.rs         # License notice management
+│   └── sse.rs             # Real-time Server-Sent Events
+└── templates/             # Embedded .oxoflow templates
+```
+
+**Key principles:**
+- Each domain's `service.rs` has **zero HTTP dependency** — pure Rust functions
+- HTTP is only in `handlers.rs` — parse request → call service → serialize response
+- AI domain calls other domains' services, never bypasses boundaries
+- Testing services requires no HTTP server
+
+**Dependency direction:** `handlers.rs → service.rs → oxo_flow_core`
+
 ## See Also
 
 - [DAG Engine](./dag-engine.md) — detailed DAG implementation
 - [Environment System](./environment-system.md) — environment resolution architecture
 - [Web API](./web-api.md) — REST endpoint design
+- [AI Translation Layer](./ai-translation.md) — AI integration design
+- [Diagnostics Engine](./diagnostics-engine.md) — error pattern library
+- [Licensing](./license.md) — dual-license model

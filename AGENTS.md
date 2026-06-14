@@ -46,13 +46,13 @@ make ci
 - `docs/guide/src/reference/web-api.md` — REST API reference (structured errors, endpoints)
 - `docs/guide/src/reference/web-system-architecture.md` — Web system architecture and AI-native API design
 - `docs/guide/src/reference/architecture.md` — Overall system architecture
-- `docs/schema/` — OpenAPI 3.0 schema and workflow JSON schema
+- `docs/schema/` — OpenAPI 3.1 schema and workflow JSON schema
 
 ## 🌐 Web System (AI-Native API)
 The web crate (`oxo-flow-web`) is designed as an AI-native API surface:
 
 - **Structured errors**: All responses use `{code, message, detail, suggestion}` format
-- **API discovery**: `GET /api/openapi.json` returns full OpenAPI 3.0 schema
+- **API discovery**: `GET /api/openapi.json` returns full OpenAPI 3.1 schema
 - **Intent-driven authoring**: `POST /api/workflows/generate` maps natural language to pipelines
 - **SSE streaming**: `GET /api/events` provides real-time execution events
 - **Pagination**: List endpoints use `{data, meta: {page, per_page, total_items, total_pages}}` envelope
@@ -69,7 +69,20 @@ cargo run -p oxo-flow-web      # API server on :3000
 cd frontend && npm run build   # Outputs to frontend/dist/
 ```
 
+### v0.8 Web Module Structure
 
+The web crate uses a domain-driven modular monolith pattern:
+
+- `domains/workflow/` — Pipeline parsing, validation, DAG building, formatting, data discovery
+- `domains/execution/` — Run lifecycle, diagnostics engine (30+ error patterns), retry logic
+- `domains/ai/` — AI translation layer (copilot prompts + service orchestration + handlers)
+- `domains/auth/` — Authentication service, OAuth stubs, license endpoints
+- `domains/collaboration/` — Pipeline fork, share, import
+- `domains/observability/` — Health checks, system info, metrics
+- `infra/db/` — StorageBackend trait, SqliteBackend, PostgreSQL backend (feature-gated)
+- `server.rs` — Router assembly with all v0.8 API endpoints
+
+Each domain follows: `types.rs` (data) → `service.rs` (pure logic) → `handlers.rs` (HTTP adapters).
 
 ## 🐳 Docker Deployment
 

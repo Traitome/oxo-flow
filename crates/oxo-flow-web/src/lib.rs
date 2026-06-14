@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![allow(deprecated)] // Legacy handlers preserved for backward compat; removed v0.10.0
 //! oxo-flow-web — Web interface for the oxo-flow pipeline engine.
 //!
 //! Provides a REST API and web UI for building, running, and monitoring
@@ -9,10 +10,13 @@
 pub mod ai_provider;
 pub mod audit;
 pub mod db;
+pub mod domains;
 pub mod executor;
 pub mod handlers;
 pub mod hpc;
+pub mod infra;
 pub mod rate_limit;
+pub mod server;
 pub mod sse;
 pub mod sys;
 pub mod workspace;
@@ -89,8 +93,6 @@ const EMBEDDED_ACADEMIC_LICENSE: &str = r#"{
 
 /// Embedded single-page web application.
 const FRONTEND_HTML: &str = include_str!("../static/index.html");
-/// Embedded JavaScript for the frontend.
-const FRONTEND_JS: &str = include_str!("../static/app.js");
 
 // Store server start time for uptime calculation.
 static START_TIME: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
@@ -387,6 +389,8 @@ fn event_tx() -> broadcast::Sender<String> {
 }
 
 /// Send an SSE event.
+/// Broadcasts to both the legacy channel and the infra SSE channel
+/// so all connected clients receive real-time updates.
 pub fn broadcast_event(event_type: &str, data: &serde_json::Value) {
     let msg = format!(
         r#"{{"type":"{}","time":"{}","data":{}}}"#,
@@ -394,7 +398,9 @@ pub fn broadcast_event(event_type: &str, data: &serde_json::Value) {
         chrono::Utc::now().to_rfc3339(),
         serde_json::to_string(data).unwrap_or_else(|_| "{}".to_string())
     );
-    let _ = event_tx().send(msg);
+    let _ = event_tx().send(msg.clone());
+    // Also forward to the infra SSE channel used by the active SSE endpoint
+    crate::sse::broadcast_event(event_type, data);
 }
 
 // ---------------------------------------------------------------------------
@@ -919,7 +925,7 @@ async fn frontend_js() -> impl IntoResponse {
     (
         StatusCode::OK,
         [("content-type", "application/javascript; charset=utf-8")],
-        FRONTEND_JS,
+        "",
     )
 }
 
@@ -1427,6 +1433,48 @@ pub async fn start_server_with_base(host: &str, port: u16, base_path: &str) -> a
         addr,
         if base_path.is_empty() { "/" } else { base_path }
     );
+
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    Ok(())
+}
+
+/// Start the web server with mode selection and graceful shutdown.
+///
+/// Uses the domain-driven production router from `server::build_router(mode)`
+/// with full support for personal, team, and HPC modes, including auth,
+/// AI, collaboration, and observability routes.
+pub async fn start_server_with_mode(
+    mode: &str,
+    host: &str,
+    port: u16,
+    base_path: &str,
+) -> anyhow::Result<()> {
+    crate::db::init_db("sqlite://oxo-flow.db").await?;
+    crate::db::recover_orphaned_runs().await?;
+    crate::infra::db::sqlite::init_pool("sqlite://oxo-flow.db").await;
+
+    // Initialize structured logging
+    let log_dir = std::path::PathBuf::from("logs");
+    if let Err(e) = crate::domains::observability::logging::init_logging(&log_dir) {
+        tracing::warn!("Failed to initialize structured logging: {e}");
+    }
+
+    // Initialize AI provider
+    crate::ai_provider::AiProviderRegistry::global().init_from_env();
+
+    let app = crate::server::build_router(mode);
+    let app = if base_path.is_empty() || base_path == "/" {
+        app
+    } else {
+        axum::Router::new().nest(base_path, app)
+    };
+
+    let addr = format!("{host}:{port}");
+    tracing::info!("Starting oxo-flow web server in {mode} mode on {addr}");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app)
@@ -2127,8 +2175,8 @@ shell = "echo b"
             .await
             .unwrap();
         let html = String::from_utf8_lossy(&body);
-        assert!(html.contains("oxo-flow"));
-        assert!(html.contains("Command Center"));
+        assert!(html.contains("root")); // React SPA mount point
+        assert!(html.contains("<div id=\"root\">"));
     }
 
     // -- System info endpoint ----------------------------------------------------

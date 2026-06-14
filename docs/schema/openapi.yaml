@@ -1,147 +1,215 @@
-openapi: 3.0.0
+openapi: 3.1.0
 info:
   title: oxo-flow REST API
-  description: API for managing and executing bioinformatics workflows
-  version: 0.5.1
+  description: |
+    Domain-driven API for managing and executing bioinformatics workflows.
+    v0.8 introduces 53 endpoints across 7 domains: workflow, execution,
+    data, templates, auth, AI, collaboration, and observability.
+  version: 0.8.0
+  contact:
+    name: Shixiang Wang
+    email: w_shixiang@163.com
 servers:
-  - url: http://localhost:8080
-    description: Default local server
+  - url: http://localhost:8777
+    description: Default local server (personal mode)
+  - url: http://0.0.0.0:8777
+    description: Team/HPC server
 
 paths:
+  # ── Health & System ──
   /api/health:
     get:
-      summary: Health check
+      summary: Health check with component status
+      tags: [Observability]
       responses:
         '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    example: "ok"
-
-  /api/version:
-    get:
-      summary: Get engine version
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  version:
-                    type: string
-                    example: "0.5.1"
+          description: OK (may be "degraded" if DB unreachable)
 
   /api/system:
     get:
-      summary: System information
+      summary: System info (version, OS, arch, uptime)
+      tags: [Observability]
       responses:
         '200':
           description: OK
 
   /api/metrics:
     get:
-      summary: Runtime metrics
+      summary: Runtime metrics (CPU, memory, active workflows)
+      tags: [Observability]
       responses:
         '200':
           description: OK
 
-  /api/workflows:
+  /api/events:
     get:
-      summary: List workflows
+      summary: Recent system events from audit log
+      tags: [Observability]
       responses:
         '200':
           description: OK
 
-  /api/workflows/validate:
+  /api/audit:
+    get:
+      summary: Audit log entries
+      tags: [Observability]
+      parameters:
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 7
+      responses:
+        '200':
+          description: OK
+
+  /api/openapi.json:
+    get:
+      summary: This OpenAPI spec
+      tags: [Observability]
+      responses:
+        '200':
+          description: OpenAPI 3.1 JSON
+
+  # ── Pipeline Lifecycle ──
+  /api/pipelines/parse:
     post:
-      summary: Validate a workflow file
+      summary: Parse .oxoflow TOML into structured pipeline
+      tags: [Workflow]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: [toml_content]
               properties:
-                workflow:
+                toml_content:
                   type: string
-                  description: "Path to the .oxoflow file"
+                format_version:
+                  type: string
       responses:
         '200':
-          description: Validation successful
+          description: Pipeline parsed with DAG and stats
         '400':
-          description: Validation failed
+          description: Parse error
 
-  /api/workflows/run:
+  /api/pipelines/validate:
     post:
-      summary: Run a workflow
+      summary: Validate a pipeline
+      tags: [Workflow]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: [toml_content]
               properties:
-                workflow:
-                  type: string
-                  description: "Path to the .oxoflow file"
-                jobs:
-                  type: integer
-                  default: 1
-                keep_going:
-                  type: boolean
-                  default: false
-      responses:
-        '200':
-          description: Workflow execution started
-
-  /api/workflows/dry-run:
-    post:
-      summary: Dry run a workflow
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                workflow:
+                toml_content:
                   type: string
       responses:
         '200':
-          description: Dry run result
+          description: Validation result with errors/warnings
 
-  /api/workflows/clean:
+  /api/pipelines/prepare:
     post:
-      summary: Clean workflow outputs
+      summary: Prepare pipeline (wildcard expansion + defaults)
+      tags: [Workflow]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: [toml_content]
               properties:
-                workflow:
+                toml_content:
                   type: string
-                dry_run:
+                resolve_wildcards:
                   type: boolean
-                force:
-                  type: boolean
-                orphans:
+                apply_defaults:
                   type: boolean
       responses:
         '200':
-          description: Clean successful
+          description: Prepared pipeline with expansions
 
-  /api/workflows/export:
+  /api/pipelines/dag:
     post:
-      summary: Export workflow to another format (e.g. CWL, Nextflow)
+      summary: Build DAG from pipeline TOML
+      tags: [Workflow]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [toml_content]
+              properties:
+                toml_content:
+                  type: string
+      responses:
+        '200':
+          description: DAG with nodes, edges, parallel groups, critical path
+
+  /api/pipelines/format:
+    post:
+      summary: Canonical TOML formatting
+      tags: [Workflow]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [toml_content]
+              properties:
+                toml_content:
+                  type: string
+      responses:
+        '200':
+          description: Formatted TOML
+
+  /api/pipelines/lint:
+    post:
+      summary: Lint pipeline with suggestions
+      tags: [Workflow]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [toml_content]
+              properties:
+                toml_content:
+                  type: string
+      responses:
+        '200':
+          description: Lint results
+
+  /api/pipelines/stats:
+    post:
+      summary: Aggregate pipeline statistics
+      tags: [Workflow]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [toml_content]
+              properties:
+                toml_content:
+                  type: string
+      responses:
+        '200':
+          description: Pipeline statistics
+
+  /api/pipelines/diff:
+    post:
+      summary: Diff two pipelines
+      tags: [Workflow]
       requestBody:
         required: true
         content:
@@ -149,10 +217,694 @@ paths:
             schema:
               type: object
               properties:
-                workflow:
+                pipeline_a_id:
+                  type: string
+                pipeline_b_id:
+                  type: string
+      responses:
+        '200':
+          description: Diff results
+
+  /api/pipelines/export:
+    post:
+      summary: Export pipeline for Docker/Singularity
+      tags: [Workflow]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pipeline_id:
                   type: string
                 format:
                   type: string
       responses:
         '200':
-          description: Exported workflow
+          description: Export result
+
+  /api/pipelines/search:
+    post:
+      summary: Search pipelines and templates
+      tags: [Workflow]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query:
+                  type: string
+      responses:
+        '200':
+          description: Search results
+
+  /api/pipelines:
+    get:
+      summary: List saved pipelines
+      tags: [Workflow]
+      responses:
+        '200':
+          description: Pipeline list
+
+  /api/pipelines/{id}:
+    get:
+      summary: Get pipeline by ID
+      tags: [Workflow]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Pipeline detail
+        '404':
+          description: Not found
+    put:
+      summary: Update pipeline
+      tags: [Workflow]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Updated pipeline
+    delete:
+      summary: Delete pipeline
+      tags: [Workflow]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Deleted
+
+  # ── Execution ──
+  /api/runs:
+    post:
+      summary: Create a new run
+      tags: [Execution]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [toml_content]
+              properties:
+                toml_content:
+                  type: string
+                max_jobs:
+                  type: integer
+                dry_run:
+                  type: boolean
+                keep_going:
+                  type: boolean
+      responses:
+        '200':
+          description: Run created with execution plan
+    get:
+      summary: List runs
+      tags: [Execution]
+      responses:
+        '200':
+          description: Run list
+
+  /api/runs/{id}:
+    get:
+      summary: Get run detail
+      tags: [Execution]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Run detail
+        '404':
+          description: Not found
+
+  /api/runs/{id}/status:
+    get:
+      summary: Get run status with per-node state
+      tags: [Execution]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Run status
+
+  /api/runs/{id}/dag-status:
+    get:
+      summary: 'DAG with live node status (colors: green/blue/gray/red)'
+      tags: [Execution]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: DAG status with metrics and ETA
+
+  /api/runs/{id}/diagnostics:
+    get:
+      summary: Failure diagnostics with error patterns and fix suggestions
+      tags: [Execution]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Diagnostics result
+
+  /api/runs/{id}/logs:
+    get:
+      summary: Execution log content
+      tags: [Execution]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Log text
+
+  /api/runs/{id}/results:
+    get:
+      summary: Output file listing
+      tags: [Execution]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: File list
+
+  /api/runs/{id}/retry:
+    post:
+      summary: Smart retry (only failed + downstream)
+      tags: [Execution]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                from_rule:
+                  type: string
+                skip_succeeded:
+                  type: boolean
+      responses:
+        '200':
+          description: Retry plan
+
+  /api/runs/{id}/cancel:
+    post:
+      summary: Cancel a running run
+      tags: [Execution]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Cancelled
+
+  # ── Data Discovery ──
+  /api/data/analyze:
+    post:
+      summary: Analyze files — detect formats, pairing, sample names
+      tags: [Data]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [paths]
+              properties:
+                paths:
+                  type: array
+                  items:
+                    type: string
+                max_depth:
+                  type: integer
+      responses:
+        '200':
+          description: File analysis with workflow suggestion
+
+  /api/data/reference:
+    post:
+      summary: Discover reference genome components
+      tags: [Data]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [genome, components]
+              properties:
+                genome:
+                  type: string
+                components:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Reference discovery results
+
+  # ── Templates ──
+  /api/templates:
+    get:
+      summary: List templates
+      tags: [Templates]
+      responses:
+        '200':
+          description: Template list
+    post:
+      summary: Create/update template
+      tags: [Templates]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, toml_content]
+              properties:
+                name:
+                  type: string
+                category:
+                  type: string
+                description:
+                  type: string
+                tags:
+                  type: array
+                  items:
+                    type: string
+                toml_content:
+                  type: string
+      responses:
+        '200':
+          description: Saved template
+
+  /api/templates/{id}:
+    get:
+      summary: Get template by ID
+      tags: [Templates]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Template detail
+    delete:
+      summary: Delete template
+      tags: [Templates]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Deleted
+
+  # ── Plugin Validation ──
+  /api/plugins/validate:
+    post:
+      summary: Validate a plugin manifest and signature
+      tags: [Workflow]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [manifest]
+              properties:
+                manifest:
+                  type: object
+                  description: Plugin manifest object (name, version, plugin_type, etc.)
+                trusted_keys:
+                  type: object
+                  description: Optional map of key_id -> hex-encoded HMAC key for signature verification
+                  additionalProperties:
+                    type: string
+      responses:
+        '200':
+          description: Validation result with errors and signature status
+        '400':
+          description: Invalid manifest
+
+  # ── Auth ──
+  /api/auth/login:
+    post:
+      summary: Authenticate user
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Login success with token
+        '401':
+          description: Auth failed
+
+  /api/auth/me:
+    get:
+      summary: Get current user info from Bearer token
+      tags: [Auth]
+      responses:
+        '200':
+          description: User info
+
+  /api/users:
+    get:
+      summary: List users (admin only)
+      tags: [Auth]
+      responses:
+        '200':
+          description: User list
+    post:
+      summary: Create user
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username]
+              properties:
+                username:
+                  type: string
+                role:
+                  type: string
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Created user
+
+  /api/users/{id}:
+    delete:
+      summary: Delete user
+      tags: [Auth]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Deleted
+
+  /api/license:
+    get:
+      summary: License status
+      tags: [Auth]
+      responses:
+        '200':
+          description: License info
+
+  /api/license/upload:
+    post:
+      summary: Upload commercial license
+      tags: [Auth]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                license_data:
+                  type: string
+      responses:
+        '200':
+          description: License status
+
+  # ── AI ──
+  /api/ai/translate:
+    post:
+      summary: Translate natural language intent to validated .oxoflow pipeline
+      tags: [AI]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [intent]
+              properties:
+                intent:
+                  type: string
+                context:
+                  type: object
+      responses:
+        '200':
+          description: Validated pipeline with explanation and alternatives
+
+  /api/ai/explain:
+    post:
+      summary: AI explanation of run failure
+      tags: [AI]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [run_id]
+              properties:
+                run_id:
+                  type: string
+                language:
+                  type: string
+                  enum: [zh, en]
+      responses:
+        '200':
+          description: Failure explanation with fix suggestions
+
+  /api/ai/interpret:
+    post:
+      summary: AI interpretation of results (DEG, variants, QC)
+      tags: [AI]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [run_id]
+              properties:
+                run_id:
+                  type: string
+                result_type:
+                  type: string
+                  enum: [deg, variants, qc]
+      responses:
+        '200':
+          description: Result interpretation with caveats
+
+  /api/ai/optimize:
+    post:
+      summary: AI parameter optimization
+      tags: [AI]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pipeline_id]
+              properties:
+                pipeline_id:
+                  type: string
+                goal:
+                  type: string
+                  enum: [speed, cost, sensitivity]
+                constraints:
+                  type: object
+      responses:
+        '200':
+          description: Optimized pipeline with changes
+
+  /api/ai/config:
+    get:
+      summary: Get AI provider configuration
+      tags: [AI]
+      responses:
+        '200':
+          description: AI config
+    post:
+      summary: Update AI provider configuration
+      tags: [AI]
+      responses:
+        '200':
+          description: Updated config
+
+  /api/ai/test:
+    post:
+      summary: Test AI provider connectivity
+      tags: [AI]
+      responses:
+        '200':
+          description: Test result
+
+  # ── Collaboration ──
+  /api/pipelines/{id}/fork:
+    post:
+      summary: Fork a pipeline into user workspace
+      tags: [Collaboration]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Forked pipeline info
+
+  /api/pipelines/{id}/share:
+    post:
+      summary: Share pipeline via link or workspace
+      tags: [Collaboration]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [visibility]
+              properties:
+                visibility:
+                  type: string
+                  enum: [link, workspace]
+                expires_in_days:
+                  type: integer
+      responses:
+        '200':
+          description: Share link and access token
+
+  /api/pipelines/import:
+    post:
+      summary: Import pipeline via oxo+https:// share link
+      tags: [Collaboration]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url:
+                  type: string
+                  pattern: '^oxo\+https?://'
+      responses:
+        '200':
+          description: Imported pipeline ID
+
+  # ── HPC ──
+  /api/hpc:
+    get:
+      summary: HPC scheduler status
+      tags: [HPC]
+      responses:
+        '200':
+          description: HPC status
+
+components:
+  schemas:
+    ApiError:
+      type: object
+      properties:
+        code:
+          type: string
+          example: "PARSE_ERROR"
+        message:
+          type: string
+        detail:
+          type: string
+        suggestion:
+          type: string
+    PaginatedResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items: {}
+        meta:
+          type: object
+          properties:
+            page:
+              type: integer
+            per_page:
+              type: integer
+            total:
+              type: integer
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+security:
+  - BearerAuth: []

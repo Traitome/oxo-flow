@@ -430,6 +430,43 @@ framework extensibility, code quality, and documentation.
 
 ---
 
+## Phase 11: v0.8 — Domain-Driven Architecture & AI Integration (Completed, 2026-06-13)
+
+**Goal**: Refactor to a deterministic core with AI translation layer, collaboration primitives, and three-mode deployment.
+
+### Phase 11.1: Deterministic Core
+- [x] Domain-driven module structure (6 domains + infra layer)
+- [x] `StorageBackend` trait + SQLite backend + PostgreSQL backend (feature-gated)
+- [x] Pipeline lifecycle API (parse, validate, prepare, DAG, format, lint, stats, diff, export, search)
+- [x] Execution API (runs CRUD, status, DAG status, diagnostics, logs, results, retry, cancel)
+- [x] Data discovery API (file analysis, reference genome discovery)
+- [x] Diagnostics engine with 30+ error patterns
+- [x] Three-layer logging (structured events, human-readable, audit)
+- [x] RunNode tracking per DAG node
+- [x] Smart retry via DAG dependency analysis
+- [x] Health check endpoint
+- [x] `--mode personal|team|hpc` CLI flag with mode-specific behavior
+- [x] ORCID/GitHub OAuth2 authentication module
+- [x] License visibility (banner, web footer, API response header)
+
+### Phase 11.2: AI Translation Layer
+- [x] `/api/ai/translate` — NL intent → validated .oxoflow pipeline
+- [x] `/api/ai/explain` — failure diagnosis with human-readable explanations
+- [x] `/api/ai/interpret` — result interpretation with caveats
+- [x] `/api/ai/optimize` — parameter optimization
+- [x] AI provider architecture with fallback chain (Claude → OpenAI → Ollama → template)
+- [x] AI service zero-write-permission enforcement
+
+### Phase 11.3: Collaboration & Multi-Mode
+- [x] Fork, diff, share, import collaboration primitives
+- [x] `oxo+https://` import/export protocol
+- [x] HPC submission backend (SLURM, PBS)
+- [x] Three-mode deployment (personal/team/hpc)
+- [x] Full API coverage: 53 endpoints across 7 domains
+- [x] 1,025+ tests passing, zero failures
+
+---
+
 ## Technology Stack
 
 | Component | Technology |

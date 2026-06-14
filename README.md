@@ -41,6 +41,27 @@ oxo-flow is a high-performance, modular bioinformatics pipeline engine built fro
 - ⚡ **Rust performance** — Fearless concurrency, zero-cost abstractions, `#![forbid(unsafe_code)]` across all crates
 - 🔧 **Resource-aware scheduling** — Jobs declare CPU, memory, GPU, and disk; the scheduler respects constraints across local and cluster backends (SLURM, PBS, SGE, LSF)
 - 🔒 **Security hardened** — Shell injection prevention, path traversal protection, secret scanning, and per-IP rate limiting
+- 🤖 **AI-powered translation** — Describe your analysis in natural language; AI generates validated `.oxoflow` pipelines with explanations and alternatives
+- 🔬 **Deterministic diagnostics engine** — 30+ error patterns cover tool failures, resource exhaustion, data corruption, and config issues — with auto-fix suggestions
+- 👥 **Collaboration primitives** — Fork, diff, share, and import pipelines via `oxo+https://` links; full audit trail for compliance
+- 🚀 **Three deployment modes** — Personal workstation, team server with OAuth2, or HPC submit panel — all from the same binary
+- 🌐 **Domain-driven web API** — 53 RESTful endpoints across 7 domains (workflow, execution, AI, auth, collaboration, observability, data)
+- 💬 **AI Companion (v0.8)** — Contextual AI chat on every page: Pipeline Generation (Dashboard), Pipeline Refinement (Editor), Run Diagnosis (Monitor), Results Interpretation (Report). SSE streaming with agent progress tracking.
+- 🎨 **Professional Web UI** — React 19 SPA with contextual ChatUI, cytoscape.js DAG visualization, CodeMirror 6 TOML editor, Vega-Lite charts. Light theme, system fonts, WCAG AA contrast, responsive to mobile.
+- 🔄 **PipelineSession Context** — Cross-page state persistence: chat messages, pipeline TOML, run results survive all navigation. Single source of truth per design spec.
+
+## Three-Mode Deployment (v0.8)
+
+```bash
+# Mode 1: Personal workstation (default) — SQLite, localhost, no auth
+oxo-flow serve
+
+# Mode 2: Team server — SQLite/PG, 0.0.0.0, ORCID/GitHub OAuth2
+oxo-flow serve --mode team --db postgres://...
+
+# Mode 3: HPC submit panel — Web UI for cluster job submission
+oxo-flow serve --mode hpc --scheduler slurm
+```
 
 ## Why oxo-flow?
 

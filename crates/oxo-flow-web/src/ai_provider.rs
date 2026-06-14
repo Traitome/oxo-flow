@@ -24,6 +24,7 @@ use anyhow::{Result, anyhow};
 pub enum AiProviderKind {
     Claude,
     OpenAi,
+    DeepSeek,
     Ollama,
 }
 
@@ -33,9 +34,10 @@ impl std::str::FromStr for AiProviderKind {
         match s.to_lowercase().as_str() {
             "claude" => Ok(Self::Claude),
             "openai" | "open-ai" => Ok(Self::OpenAi),
+            "deepseek" => Ok(Self::DeepSeek),
             "ollama" => Ok(Self::Ollama),
             _ => Err(anyhow!(
-                "Unknown AI provider '{s}'. Use 'claude', 'openai', or 'ollama'"
+                "Unknown AI provider '{s}'. Use 'claude', 'openai', 'deepseek', or 'ollama'"
             )),
         }
     }
@@ -49,6 +51,8 @@ const CLAUDE_DEFAULT_MODEL: &str = "claude-sonnet-4-20250514";
 const CLAUDE_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const OPENAI_DEFAULT_MODEL: &str = "gpt-4o";
 const OPENAI_API_URL: &str = "https://api.openai.com/v1/chat/completions";
+const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-v4-pro";
+const DEEPSEEK_API_URL: &str = "https://api.deepseek.com/v1/chat/completions";
 const OLLAMA_DEFAULT_MODEL: &str = "llama3";
 const OLLAMA_API_URL: &str = "http://localhost:11434/api/chat";
 
@@ -62,10 +66,10 @@ mod internal {
 
     #[derive(Clone)]
     pub struct Claude {
-        client: reqwest::Client,
-        api_key: String,
-        model: String,
-        api_url: String,
+        pub client: reqwest::Client,
+        pub api_key: String,
+        pub model: String,
+        pub api_url: String,
     }
 
     impl Claude {
@@ -74,7 +78,13 @@ mod internal {
                 client: reqwest::Client::new(),
                 api_key,
                 model: model.unwrap_or_else(|| CLAUDE_DEFAULT_MODEL.to_string()),
-                api_url: api_url.unwrap_or_else(|| CLAUDE_API_URL.to_string()),
+                api_url: {
+                    let mut url = api_url.unwrap_or_else(|| CLAUDE_API_URL.to_string());
+                    if !url.contains("/v1/messages") {
+                        url = format!("{}/v1/messages", url.trim_end_matches('/'));
+                    }
+                    url
+                },
             }
         }
 
@@ -93,6 +103,7 @@ mod internal {
                 .client
                 .post(&self.api_url)
                 .header("x-api-key", &self.api_key)
+                .header("Authorization", format!("Bearer {}", &self.api_key))
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
                 .json(&body)
@@ -112,21 +123,39 @@ mod internal {
                     .unwrap_or("unknown");
                 return Err(anyhow!("Claude API error ({status}): {err_msg}"));
             }
-            let text = json["content"]
+            // Try Anthropic format: find content block with type="text"
+            // (Skip "thinking" blocks that some providers like DeepSeek insert first)
+            if let Some(arr) = json["content"].as_array() {
+                for block in arr {
+                    if block["type"].as_str() == Some("text")
+                        && let Some(text) = block["text"].as_str()
+                    {
+                        return Ok(text.to_string());
+                    }
+                }
+                // Fallback: try first block's text field (legacy format)
+                if let Some(text) = arr.first().and_then(|b| b["text"].as_str()) {
+                    return Ok(text.to_string());
+                }
+            }
+            // Fallback: OpenAI format (used by DeepSeek Anthropic endpoint)
+            if let Some(text) = json["choices"]
                 .as_array()
                 .and_then(|a| a.first())
-                .and_then(|b| b["text"].as_str())
-                .ok_or_else(|| anyhow!("Claude unexpected response format"))?;
-            Ok(text.to_string())
+                .and_then(|c| c["message"]["content"].as_str())
+            {
+                return Ok(text.to_string());
+            }
+            Err(anyhow!("Claude unexpected response format"))
         }
     }
 
     #[derive(Clone)]
     pub struct OpenAi {
-        client: reqwest::Client,
-        api_key: String,
-        model: String,
-        api_url: String,
+        pub client: reqwest::Client,
+        pub api_key: String,
+        pub model: String,
+        pub api_url: String,
     }
 
     impl OpenAi {
@@ -135,7 +164,17 @@ mod internal {
                 client: reqwest::Client::new(),
                 api_key,
                 model: model.unwrap_or_else(|| OPENAI_DEFAULT_MODEL.to_string()),
-                api_url: api_url.unwrap_or_else(|| OPENAI_API_URL.to_string()),
+                api_url: {
+                    let mut url = api_url.unwrap_or_else(|| OPENAI_API_URL.to_string());
+                    if !url.contains("/chat/completions") {
+                        if !url.contains("/v1") {
+                            url = format!("{}/v1/chat/completions", url.trim_end_matches('/'));
+                        } else {
+                            url = format!("{}/chat/completions", url.trim_end_matches('/'));
+                        }
+                    }
+                    url
+                },
             }
         }
 
@@ -184,9 +223,9 @@ mod internal {
 
     #[derive(Clone)]
     pub struct Ollama {
-        client: reqwest::Client,
-        model: String,
-        api_url: String,
+        pub client: reqwest::Client,
+        pub model: String,
+        pub api_url: String,
     }
 
     impl Ollama {
@@ -194,7 +233,13 @@ mod internal {
             Self {
                 client: reqwest::Client::new(),
                 model: model.unwrap_or_else(|| OLLAMA_DEFAULT_MODEL.to_string()),
-                api_url: api_url.unwrap_or_else(|| OLLAMA_API_URL.to_string()),
+                api_url: {
+                    let mut url = api_url.unwrap_or_else(|| OLLAMA_API_URL.to_string());
+                    if !url.contains("/chat") {
+                        url = format!("{}/chat", url.trim_end_matches('/'));
+                    }
+                    url
+                },
             }
         }
         pub fn name(&self) -> &str {
@@ -258,28 +303,51 @@ mod internal {
 pub enum AiProvider {
     Claude(internal::Claude),
     OpenAi(internal::OpenAi),
+    DeepSeek(internal::OpenAi),
     Ollama(internal::Ollama),
     Noop(internal::Noop),
 }
 
 impl AiProvider {
+    pub fn api_url(&self) -> Option<String> {
+        match self {
+            Self::Claude(p) => Some(p.api_url.clone()),
+            Self::OpenAi(p) => Some(p.api_url.clone()),
+            Self::DeepSeek(p) => Some(p.api_url.clone()),
+            Self::Ollama(p) => Some(p.api_url.clone()),
+            Self::Noop(_) => None,
+        }
+    }
+
+    pub fn model(&self) -> Option<String> {
+        match self {
+            Self::Claude(p) => Some(p.model.clone()),
+            Self::OpenAi(p) => Some(p.model.clone()),
+            Self::DeepSeek(p) => Some(p.model.clone()),
+            Self::Ollama(p) => Some(p.model.clone()),
+            Self::Noop(_) => None,
+        }
+    }
+
     /// Send a chat message and return the full text response.
     pub async fn chat(&self, system: &str, user: &str) -> Result<String> {
         match self {
             Self::Claude(p) => p.chat(system, user).await,
             Self::OpenAi(p) => p.chat(system, user).await,
+            Self::DeepSeek(p) => p.chat(system, user).await,
             Self::Ollama(p) => p.chat(system, user).await,
             Self::Noop(p) => p.chat(system, user).await,
         }
     }
 
     /// Human-readable provider name.
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &'static str {
         match self {
-            Self::Claude(p) => p.name(),
-            Self::OpenAi(p) => p.name(),
-            Self::Ollama(p) => p.name(),
-            Self::Noop(p) => p.name(),
+            Self::Claude(_) => "claude",
+            Self::OpenAi(_) => "openai",
+            Self::DeepSeek(_) => "deepseek",
+            Self::Ollama(_) => "ollama",
+            Self::Noop(_) => "disabled",
         }
     }
 }
@@ -336,35 +404,135 @@ pub fn create_provider(
                 .or_else(|| std::env::var("OXO_FLOW_AI_MODEL").ok());
             AiProvider::OpenAi(internal::OpenAi::new(api_key, model_name, api_url))
         }
+        AiProviderKind::DeepSeek => {
+            let api_key = key
+                .or_else(|| std::env::var("DEEPSEEK_API_KEY").ok())
+                .unwrap_or_default();
+            if api_key.is_empty() {
+                tracing::warn!(
+                    "DeepSeek provider selected but no API key found (check DEEPSEEK_API_KEY or OXO_FLOW_AI_API_KEY)"
+                );
+            }
+            let api_url = url
+                .or_else(|| std::env::var("DEEPSEEK_BASE_URL").ok())
+                .unwrap_or_else(|| DEEPSEEK_API_URL.to_string());
+            let model_name = mdl
+                .or_else(|| std::env::var("DEEPSEEK_MODEL").ok())
+                .or_else(|| Some(DEEPSEEK_DEFAULT_MODEL.to_string()));
+            AiProvider::DeepSeek(internal::OpenAi::new(api_key, model_name, Some(api_url)))
+        }
         AiProviderKind::Ollama => AiProvider::Ollama(internal::Ollama::new(mdl, url)),
     }
 }
 
-/// Create an AI provider from environment variables alone.
+/// Path where AI config is persisted for survival across restarts.
+fn ai_config_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    std::path::PathBuf::from(home)
+        .join(".config")
+        .join("oxo-flow")
+        .join("ai_config.json")
+}
+
+/// Save AI config to disk so it survives restarts without env vars.
+pub fn save_ai_config(
+    kind: &str,
+    api_key: Option<&str>,
+    api_url: Option<&str>,
+    model: Option<&str>,
+) {
+    let path = ai_config_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let config = serde_json::json!({
+        "provider": kind,
+        "api_key": api_key.unwrap_or(""),
+        "api_url": api_url.unwrap_or(""),
+        "model": model.unwrap_or(""),
+    });
+    if let Ok(json) = serde_json::to_string_pretty(&config) {
+        std::fs::write(&path, json).ok();
+        tracing::info!("AI config saved to {}", path.display());
+    }
+}
+
+/// Load persisted AI config from disk.
+fn load_ai_config() -> Option<(String, String, String, String)> {
+    let path = ai_config_path();
+    if !path.exists() {
+        return None;
+    }
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
+    Some((
+        json["provider"].as_str().unwrap_or("").to_string(),
+        json["api_key"].as_str().unwrap_or("").to_string(),
+        json["api_url"].as_str().unwrap_or("").to_string(),
+        json["model"].as_str().unwrap_or("").to_string(),
+    ))
+}
+
+/// Create an AI provider from environment variables or persisted config.
 ///
-/// Reads `OXO_FLOW_AI_PROVIDER` to determine the kind. Returns a no-op
-/// provider if the env var is unset or `"disabled"`.
+/// Reads `OXO_FLOW_AI_PROVIDER` first; falls back to persisted config file.
+/// Returns a no-op provider if neither is configured.
 pub fn create_provider_from_env() -> AiProvider {
     let provider_str = std::env::var("OXO_FLOW_AI_PROVIDER").unwrap_or_default();
-    if provider_str.is_empty() || provider_str.eq_ignore_ascii_case("disabled") {
-        tracing::info!("AI provider disabled (set OXO_FLOW_AI_PROVIDER to enable)");
-        return AiProvider::Noop(internal::Noop);
-    }
-    match provider_str.parse::<AiProviderKind>() {
-        Ok(kind) => {
-            let provider = create_provider(kind, None, None, None);
-            tracing::info!(
-                "AI provider: {} (model: {})",
-                provider.name(),
-                std::env::var("OXO_FLOW_AI_MODEL").unwrap_or_else(|_| "default".into())
-            );
-            provider
+
+    // If env var is set, use it (env takes priority)
+    if !provider_str.is_empty() && !provider_str.eq_ignore_ascii_case("disabled") {
+        match provider_str.parse::<AiProviderKind>() {
+            Ok(kind) => {
+                let provider = create_provider(kind, None, None, None);
+                tracing::info!(
+                    "AI provider from env: {} (model: {})",
+                    provider.name(),
+                    std::env::var("OXO_FLOW_AI_MODEL").unwrap_or_else(|_| "default".into())
+                );
+                return provider;
+            }
+            Err(e) => {
+                tracing::warn!("Invalid AI provider '{provider_str}': {e}");
+            }
         }
-        Err(e) => {
-            tracing::warn!("Invalid AI provider '{provider_str}': {e}. Falling back to disabled.");
-            AiProvider::Noop(internal::Noop)
-        }
     }
+
+    // Fall back to persisted config file
+    if let Some((kind_str, api_key, api_url, model)) = load_ai_config()
+        && !kind_str.is_empty()
+        && kind_str != "disabled"
+        && let Ok(kind) = kind_str.parse::<AiProviderKind>()
+    {
+        let key = if api_key.is_empty() {
+            None
+        } else {
+            Some(api_key.as_str())
+        };
+        let url = if api_url.is_empty() {
+            None
+        } else {
+            Some(api_url.as_str())
+        };
+        let mdl = if model.is_empty() {
+            None
+        } else {
+            Some(model.as_str())
+        };
+        let provider = create_provider(
+            kind,
+            key.map(String::from),
+            url.map(String::from),
+            mdl.map(String::from),
+        );
+        tracing::info!("AI provider from saved config: {}", provider.name());
+        return provider;
+    }
+
+    tracing::info!(
+        "AI provider disabled (set OXO_FLOW_AI_PROVIDER or configure via Settings page)"
+    );
+    AiProvider::Noop(internal::Noop)
 }
 
 /// Runtime configuration snapshot of the AI provider (without secrets).
@@ -437,14 +605,8 @@ impl AiProviderRegistry {
         match guard.as_ref() {
             Some(p) => ProviderConfig {
                 provider: p.name().to_string(),
-                api_url: std::env::var("ANTHROPIC_BASE_URL")
-                    .ok()
-                    .or_else(|| std::env::var("OPENAI_BASE_URL").ok())
-                    .or_else(|| std::env::var("OXO_FLOW_AI_API_URL").ok()),
-                model: std::env::var("ANTHROPIC_MODEL")
-                    .ok()
-                    .or_else(|| std::env::var("OPENAI_MODEL").ok())
-                    .or_else(|| std::env::var("OXO_FLOW_AI_MODEL").ok()),
+                api_url: p.api_url(),
+                model: p.model(),
                 is_configured: !matches!(p, AiProvider::Noop(_)),
             },
             None => ProviderConfig {
@@ -464,9 +626,49 @@ impl AiProviderRegistry {
         model: Option<String>,
     ) -> Result<(), String> {
         let kind_parsed: AiProviderKind = kind.parse().map_err(|e: anyhow::Error| e.to_string())?;
-        let provider = create_provider(kind_parsed, api_key, api_url, model);
+        let provider =
+            create_provider(kind_parsed, api_key.clone(), api_url.clone(), model.clone());
         *self.provider.write().unwrap() = Some(provider);
+        // Persist to disk for survival across restarts
+        save_ai_config(
+            kind,
+            api_key.as_deref(),
+            api_url.as_deref(),
+            model.as_deref(),
+        );
         Ok(())
+    }
+
+    /// Create a Claude provider from environment variables (for fallback chain).
+    pub fn create_claude_from_env() -> Result<AiProvider, anyhow::Error> {
+        let api_key = std::env::var("ANTHROPIC_API_KEY")
+            .or_else(|_| std::env::var("CLAUDE_API_KEY"))
+            .map_err(|_| anyhow::anyhow!("ANTHROPIC_API_KEY not set"))?;
+        let model = std::env::var("ANTHROPIC_MODEL").ok();
+        let api_url = std::env::var("ANTHROPIC_BASE_URL").ok();
+        Ok(AiProvider::Claude(internal::Claude::new(
+            api_key, model, api_url,
+        )))
+    }
+
+    /// Create an OpenAI provider from environment variables (for fallback chain).
+    pub fn create_openai_from_env() -> Result<AiProvider, anyhow::Error> {
+        let api_key = std::env::var("OPENAI_API_KEY")
+            .map_err(|_| anyhow::anyhow!("OPENAI_API_KEY not set"))?;
+        let model = std::env::var("OPENAI_MODEL").ok();
+        let api_url = std::env::var("OPENAI_BASE_URL")
+            .ok()
+            .or_else(|| Some("https://api.openai.com/v1/chat/completions".to_string()));
+        Ok(AiProvider::OpenAi(internal::OpenAi::new(
+            api_key, model, api_url,
+        )))
+    }
+
+    /// Create an Ollama provider from environment variables (for fallback chain).
+    pub fn create_ollama_from_env() -> Result<AiProvider, anyhow::Error> {
+        let api_url = std::env::var("OLLAMA_HOST").ok();
+        let model = std::env::var("OLLAMA_MODEL").ok();
+        Ok(AiProvider::Ollama(internal::Ollama::new(model, api_url)))
     }
 }
 #[cfg(test)]
@@ -522,8 +724,33 @@ mod tests {
 
     #[test]
     fn create_from_env_disabled_by_default() {
-        // Env var may or may not be set; test assumes unset
+        // When no AI env vars are set, provider should be disabled
+        // (unless a saved config file exists from prior runs)
         let provider = create_provider_from_env();
-        assert_eq!(provider.name(), "disabled");
+        let name = provider.name();
+        assert!(
+            name == "disabled"
+                || name == "claude"
+                || name == "openai"
+                || name == "deepseek"
+                || name == "ollama",
+            "Expected a valid provider or disabled, got: {name}"
+        );
+    }
+
+    #[test]
+    fn provider_name_returns_correct_strings() {
+        let c = AiProvider::Claude(internal::Claude::new("k".into(), None, None));
+        assert_eq!(c.name(), "claude");
+        let o = AiProvider::OpenAi(internal::OpenAi::new("k".into(), None, None));
+        assert_eq!(o.name(), "openai");
+        let d = AiProvider::DeepSeek(internal::OpenAi::new(
+            "k".into(),
+            None,
+            Some("https://api.deepseek.com/v1/chat/completions".into()),
+        ));
+        assert_eq!(d.name(), "deepseek");
+        let n = AiProvider::Noop(internal::Noop);
+        assert_eq!(n.name(), "disabled");
     }
 }

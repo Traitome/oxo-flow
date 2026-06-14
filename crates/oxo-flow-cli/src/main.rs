@@ -236,6 +236,9 @@ pub enum Commands {
     },
     /// Start the web interface server.
     Serve {
+        /// Server operation mode: personal, team, or hpc.
+        #[arg(long, default_value = "personal", env = "OXO_FLOW_MODE")]
+        mode: String,
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
         #[arg(short = 'p', long, default_value = "8080")]
@@ -552,10 +555,11 @@ async fn main() -> Result<()> {
             output,
         } => package_command(workflow, format, output)?,
         Commands::Serve {
+            mode,
             host,
             port,
             base_path,
-        } => crate::commands::web::handle_serve(host, port, base_path).await?,
+        } => crate::commands::web::handle_serve(mode, host, port, base_path).await?,
         Commands::Completions { shell } => handle_completions(shell)?,
         Commands::Profile { action } => profile_command(action)?,
         Commands::Export {

@@ -23,6 +23,8 @@ pub struct AuditEntry {
     pub action: String,
     /// Resource affected by the action (e.g., workflow name, file path).
     pub resource: String,
+    /// Outcome of the action ("success" or "failure").
+    pub result: String,
 }
 
 /// Get the audit log directory path.
@@ -52,10 +54,15 @@ fn ensure_audit_dir() -> std::io::Result<()> {
 /// # Example
 ///
 /// ```ignore
-/// write_audit_log("user123", "workflow.run", "my-workflow");
-/// write_audit_log("admin", "user.delete", "user456");
+/// write_audit_log("user123", "workflow.run", "my-workflow", "success");
+/// write_audit_log("admin", "user.delete", "user456", "success");
 /// ```
-pub fn write_audit_log(user_id: &str, action: &str, resource: &str) -> std::io::Result<()> {
+pub fn write_audit_log(
+    user_id: &str,
+    action: &str,
+    resource: &str,
+    result: &str,
+) -> std::io::Result<()> {
     ensure_audit_dir()?;
 
     let entry = AuditEntry {
@@ -63,6 +70,7 @@ pub fn write_audit_log(user_id: &str, action: &str, resource: &str) -> std::io::
         user: user_id.to_string(),
         action: action.to_string(),
         resource: resource.to_string(),
+        result: result.to_string(),
     };
 
     let path = audit_log_path(Utc::now());
@@ -174,6 +182,7 @@ mod tests {
             user: "testuser".to_string(),
             action: "test.action".to_string(),
             resource: "test-resource".to_string(),
+            result: "success".to_string(),
         };
 
         let json = serde_json::to_string(&entry).unwrap();
@@ -194,8 +203,8 @@ mod tests {
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         // Write some entries
-        write_audit_log("user1", "login", "system").unwrap();
-        write_audit_log("user2", "workflow.run", "test-workflow").unwrap();
+        write_audit_log("user1", "login", "system", "success").unwrap();
+        write_audit_log("user2", "workflow.run", "test-workflow", "success").unwrap();
 
         // Read them back
         let logs = get_recent_audit_logs(1).unwrap();
