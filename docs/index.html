@@ -345,11 +345,6 @@
           <p>Contextual AI across the full workflow lifecycle: generate pipelines from natural language (Dashboard), get intelligent refinement suggestions (Editor), diagnose failures (Monitor), and interpret results (Report). Powered by Claude, OpenAI, DeepSeek, or local Ollama.</p>
         </div>
         <div class="feature-card">
-          <div class="icon">💬</div>
-          <h3>Natural Language → Pipeline</h3>
-          <p>Describe your analysis in plain English — AI generates validated <code>.oxoflow</code> pipelines with step-by-step explanations, tool recommendations, and alternative approaches. SSE streaming with real-time agent progress tracking.</p>
-        </div>
-        <div class="feature-card">
           <div class="icon">🔒</div>
           <h3>Security Hardened</h3>
           <p>Shell injection prevention, path traversal protection, secret scanning, per-IP rate limiting, and <code>#![forbid(unsafe_code)]</code> across every crate.</p>
@@ -502,40 +497,146 @@ docker = <span class="str">"biocontainers/bwa-mem2:2.2.1"</span>
   </section>
 
   <!-- ─── CLI Commands ────────────────────────────────────────── -->
-  <section class="alt-bg">
+  <section class="alt-bg" id="cli">
     <div class="container">
       <h2>CLI Commands</h2>
       <p class="section-sub">
-        The <code>oxo-flow</code> binary provides 30 subcommands covering the complete workflow lifecycle.
-        Global flags: <code>-v</code> (verbose), <code>--quiet</code>, <code>--no-color</code>.
+        31 subcommands covering the complete workflow lifecycle.
+        <code>-v</code> verbose, <code>--quiet</code>, <code>--no-color</code>.
+        <input type="text" id="cli-search" placeholder="🔍 Filter commands..." style="margin-left:1rem;padding:0.3rem 0.6rem;border:1px solid #e4e8ee;border-radius:4px;font-size:0.9rem;width:200px;" oninput="document.querySelectorAll('#cli-table tbody tr').forEach(r=>{const t=r.textContent.toLowerCase();r.style.display=t.includes(this.value.toLowerCase())?'':'none'})" />
       </p>
-      <table class="data-table">
-        <thead>
-          <tr><th>Command</th><th>Description</th></tr>
-        </thead>
+      <p style="margin-bottom:0.5rem;font-size:0.85rem;">
+        <a href="#" onclick="document.querySelectorAll('.cli-cat-body').forEach(e=>e.style.display='none');return false">Collapse all</a> &middot;
+        <a href="#" onclick="document.querySelectorAll('.cli-cat-body').forEach(e=>e.style.display='');return false">Expand all</a>
+      </p>
+      <table class="data-table" id="cli-table">
+        <thead><tr><th>Category</th><th>Command</th><th>Description</th></tr></thead>
         <tbody>
-          <tr><td><code>oxo-flow run</code></td><td>Execute a workflow (<code>-j</code> jobs, <code>-k</code> keep-going, <code>--timeout</code> per-job, <code>-r</code> retries)</td></tr>
-          <tr><td><code>oxo-flow dry-run</code></td><td>Simulate execution — show what would run without executing</td></tr>
-          <tr><td><code>oxo-flow validate</code></td><td>Validate an <code>.oxoflow</code> file for syntax and semantic correctness</td></tr>
-          <tr><td><code>oxo-flow lint</code></td><td>Run best-practice linting checks (<code>--strict</code> treats warnings as errors)</td></tr>
-          <tr><td><code>oxo-flow format</code></td><td>Reformat a <code>.oxoflow</code> file into canonical TOML (<code>--check</code> mode available)</td></tr>
-          <tr><td><code>oxo-flow graph</code></td><td>Export the workflow DAG in DOT format for visualisation</td></tr>
-          <tr><td><code>oxo-flow report</code></td><td>Generate execution reports (<code>-f html|json</code>, <code>-o</code> output path)</td></tr>
-          <tr><td><code>oxo-flow init</code></td><td>Scaffold a new pipeline project (<code>-d</code> output directory)</td></tr>
-          <tr><td><code>oxo-flow env list|check</code></td><td>List available environment backends or verify all requirements are met</td></tr>
-          <tr><td><code>oxo-flow package</code></td><td>Package workflow into a container image (<code>-f docker|singularity</code>)</td></tr>
-          <tr><td><code>oxo-flow export</code></td><td>Export workflow to a Dockerfile, Singularity definition, or standalone TOML</td></tr>
-          <tr><td><code>oxo-flow cluster submit|status|cancel</code></td><td>Submit and monitor jobs on SLURM, PBS, SGE, or LSF cluster backends</td></tr>
-          <tr><td><code>oxo-flow profile list|show|current</code></td><td>Manage execution profiles (local, slurm, pbs, sge, lsf)</td></tr>
-          <tr><td><code>oxo-flow config show|stats</code></td><td>Inspect workflow configuration variables and statistics</td></tr>
-          <tr><td><code>oxo-flow status</code></td><td>Show execution status from the checkpoint file</td></tr>
-          <tr><td><code>oxo-flow clean</code></td><td>Clean workflow outputs and temp files (<code>-n</code> dry-run, <code>--force</code>)</td></tr>
-          <tr><td><code>oxo-flow serve</code></td><td>Start the web interface (<code>--host</code>, <code>-p</code> port; default <code>127.0.0.1:8080</code>)</td></tr>
-          <tr><td><code>oxo-flow completions</code></td><td>Generate shell completions (bash, zsh, fish, elvish, PowerShell)</td></tr>
+          <tr class="cli-cat-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'" style="cursor:pointer;background:#f0f4f8;font-weight:600">
+            <td colspan="3">🔄 Pipeline Lifecycle</td></tr>
+          <tbody class="cli-cat-body">
+          <tr><td style="width:1px;white-space:nowrap;font-size:0.78rem;color:#0e7c86">Lifecycle</td><td><code>oxo-flow run</code></td><td>Execute a workflow (<code>-j</code> jobs, <code>-k</code> keep-going, <code>--timeout</code>)</td></tr>
+          <tr><td style="width:1px;white-space:nowrap;font-size:0.78rem;color:#0e7c86">Lifecycle</td><td><code>oxo-flow dry-run</code></td><td>Simulate execution — show what would run without executing</td></tr>
+          <tr><td>Lifecycle</td><td><code>oxo-flow resume</code></td><td>Resume an interrupted workflow from a checkpoint</td></tr>
+          <tr><td>Lifecycle</td><td><code>oxo-flow status</code></td><td>Show execution status from the checkpoint file</td></tr>
+          <tr><td>Lifecycle</td><td><code>oxo-flow clean</code></td><td>Clean workflow outputs and temp files (<code>-n</code> dry-run, <code>--force</code>)</td></tr>
+          <tr><td>Lifecycle</td><td><code>oxo-flow history</code></td><td>Show execution history from checkpoints</td></tr>
+          <tr><td>Lifecycle</td><td><code>oxo-flow test</code></td><td>Validate + lint + dry-run in test mode</td></tr>
+          <tr><td>Lifecycle</td><td><code>oxo-flow batch</code></td><td>Execute command templates in parallel across items</td></tr>
+          </tbody>
+
+          <tr class="cli-cat-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'" style="cursor:pointer;background:#f0f4f8;font-weight:600">
+            <td colspan="3">📝 Authoring &amp; Validation</td></tr>
+          <tbody class="cli-cat-body">
+          <tr><td style="width:1px;white-space:nowrap;font-size:0.78re<!-- ─── Web API ──────────────────────────────────────────────── -->
+  <section>
+    <div class="container">
+      <h2>Web API</h2>
+      <p class="section-sub">
+        48 endpoints across 7 domains. <code>oxo-flow serve</code> starts an
+        <a href="https://github.com/tokio-rs/axum">axum</a>-powered REST server.
+        <input type="text" id="api-search" placeholder="🔍 Filter endpoints..." style="margin-left:1rem;padding:0.3rem 0.6rem;border:1px solid #e4e8ee;border-radius:4px;font-size:0.9rem;width:200px;" oninput="document.querySelectorAll('#api-table tbody tr').forEach(r=>{const t=r.textContent.toLowerCase();r.style.display=t.includes(this.value.toLowerCase())?'':'none'})" />
+      </p>
+      <p style="margin-bottom:0.5rem;font-size:0.85rem;">
+        <a href="#" onclick="document.querySelectorAll('.api-cat-body').forEach(e=>e.style.display='none');return false">Collapse all</a> &middot;
+        <a href="#" onclick="document.querySelectorAll('.api-cat-body').forEach(e=>e.style.display='');return false">Expand all</a>
+      </p>
+      <table class="data-table" id="api-table">
+        <thead><tr><th>Method</th><th>Endpoint</th><th>Domain</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr class="api-cat-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'" style="cursor:pointer;background:#f0f4f8;font-weight:600">
+            <td colspan="4">🔍 Observability (6)</td></tr>
+          <tbody class="api-cat-body">
+          <tr><td><code>GET</code></td><td><code>/api/health</code></td><td style="font-size:0.78rem;color:#0e7c86">Observability</td><td>Health check with component status</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/system</code></td><td>Observability</td><td>System info (CPU, memory, OS, uptime)</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/metrics</code></td><td>Observability</td><td>Runtime metrics (requests, active workflows)</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/events</code></td><td>Observability</td><td>SSE stream for real-time updates</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/openapi.json</code></td><td>Observability</td><td>OpenAPI 3.1 specification</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/audit</code></td><td>Observability</td><td>Audit log entries</td></tr>
+          </tbody>
+
+          <tr class="api-cat-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'" style="cursor:pointer;background:#f0f4f8;font-weight:600">
+            <td colspan="4">📋 Pipeline &amp; Template (16)</td></tr>
+          <tbody class="api-cat-body">
+          <tr><td><code>GET</code></td><td><code>/api/pipelines</code></td><td style="font-size:0.78rem;color:#0e7c86">Pipeline</td><td>List saved pipelines</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/pipelines/{id}</code></td><td>Pipeline</td><td>Get pipeline detail</td></tr>
+          <tr><td><code>PUT</code></td><td><code>/api/pipelines/{id}</code></td><td>Pipeline</td><td>Update pipeline</td></tr>
+          <tr><td><code>DELETE</code></td><td><code>/api/pipelines/{id}</code></td><td>Pipeline</td><td>Delete pipeline</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/pipelines/validate</code></td><td>Pipeline</td><td>Validate TOML syntax and semantics</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/pipelines/parse</code></td><td>Pipeline</td><td>Parse into structured detail</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/pipelines/dag</code></td><td>Pipeline</td><td>Build DAG visualization data</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/pipelines/format</code></td><td>Pipeline</td><td>Reformat into canonical TOML</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/pipelines/lint</code></td><td>Pipeline</td><td>Run best-practice checks</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/pipelines/diff</code></td><td>Pipeline</td><td>Compare two pipelines</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/pipelines/search</code></td><td>Pipeline</td><td>Search pipelines</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/pipelines/export</code></td><td>Pipeline</td><td>Export for sharing</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/pipelines/import</code></td><td>Pipeline</td><td>Import from URL</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/templates</code></td><td>Template</td><td>List system and user templates</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/templates/{id}</code></td><td>Template</td><td>Get template detail</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/templates</code></td><td>Template</td><td>Save new template</td></tr>
+          </tbody>
+
+          <tr class="api-cat-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'" style="cursor:pointer;background:#f0f4f8;font-weight:600">
+            <td colspan="4">⚡ Execution &amp; Monitor (16)</td></tr>
+          <tbody class="api-cat-body">
+          <tr><td><code>POST</code></td><td><code>/api/runs</code></td><td style="font-size:0.78rem;color:#0e7c86">Execution</td><td>Start workflow execution</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/runs</code></td><td>Execution</td><td>List execution runs</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/runs/{id}</code></td><td>Execution</td><td>Get run detail</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/runs/{id}/status</code></td><td>Execution</td><td>Live status (nodes, resources)</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/runs/{id}/dag-status</code></td><td>Execution</td><td>DAG with per-node execution status</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/runs/{id}/diagnostics</code></td><td>Execution</td><td>Failure diagnostics + auto-fix suggestions</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/runs/{id}/logs</code></td><td>Execution</td><td>Execution log output</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/runs/{id}/results</code></td><td>Execution</td><td>Output file listing</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/runs/{id}/retry</code></td><td>Execution</td><td>Retry from checkpoint</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/runs/{id}/cancel</code></td><td>Execution</td><td>Cancel running workflow</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/runs/{id}/pause</code></td><td>Execution</td><td>Pause execution</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/runs/{id}/resume</code></td><td>Execution</td><td>Resume from checkpoint</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/runs/{id}/ai-status</code></td><td>Execution</td><td>AI monitor status + alerts</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/runs/{id}/report</code></td><td>Execution</td><td>AI-generated run report</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/runs/{id}/report/ask</code></td><td>Execution</td><td>Q&amp;A about results</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/runs/{id}/report/visualize</code></td><td>Execution</td><td>Generate charts (volcano, heatmap)</td></tr>
+          </tbody>
+
+          <tr class="api-cat-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'" style="cursor:pointer;background:#f0f4f8;font-weight:600">
+            <td colspan="4">🤖 AI Companion (10)</td></tr>
+          <tbody class="api-cat-body">
+          <tr><td><code>POST</code></td><td><code>/api/chat/send</code></td><td style="font-size:0.78rem;color:#0e7c86">AI</td><td>SSE streaming AI chat</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/chat/sessions</code></td><td>AI</td><td>List chat sessions</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/ai/translate</code></td><td>AI</td><td>Natural language → validated pipeline</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/ai/explain</code></td><td>AI</td><td>AI failure explanation</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/ai/interpret</code></td><td>AI</td><td>AI results interpretation</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/ai/optimize</code></td><td>AI</td><td>AI parameter optimization</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/ai/config</code></td><td>AI</td><td>Get AI configuration</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/ai/config</code></td><td>AI</td><td>Update AI configuration</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/ai/test</code></td><td>AI</td><td>Test AI provider connection</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/ai/config/effective</code></td><td>AI</td><td>Resolved config (user→server→env)</td></tr>
+          </tbody>
+
+          <tr class="api-cat-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'" style="cursor:pointer;background:#f0f4f8;font-weight:600">
+            <td colspan="4">🔐 Auth, Data &amp; Ops</td></tr>
+          <tbody class="api-cat-body">
+          <tr><td><code>POST</code></td><td><code>/api/auth/login</code></td><td style="font-size:0.78rem;color:#0e7c86">Auth</td><td>Authenticate and create session</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/auth/me</code></td><td>Auth</td><td>Current user info</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/users</code></td><td>Auth</td><td>List users (admin)</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/license</code></td><td>Auth</td><td>Check license status</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/hpc</code></td><td>HPC</td><td>HPC scheduler status</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/data/analyze</code></td><td>Data</td><td>Analyze data directory</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/data/perceive</code></td><td>Data</td><td>AI data perception</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/data/reference/status</code></td><td>Data</td><td>Reference installation status</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/pipeline/{id}/command</code></td><td>Ops</td><td>DAG edit command (add/remove/connect)</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/pipeline/{id}/undo</code></td><td>Ops</td><td>Undo last DAG edit</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/pipeline/{id}/redo</code></td><td>Ops</td><td>Redo last undone edit</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/pipeline/{id}/fork</code></td><td>Ops</td><td>Fork pipeline copy</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/pipeline/{id}/share</code></td><td>Ops</td><td>Share pipeline</td></tr>
+          </tbody>
         </tbody>
       </table>
     </div>
   </section>
+
+  <!-- ─── Web API end -->
+
+  <!-- ─── CLI Commands end -->
 
   <!-- ─── Web API ──────────────────────────────────────────────── -->
   <section>
