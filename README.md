@@ -31,24 +31,21 @@
 oxo-flow is a high-performance, modular bioinformatics pipeline engine built from first principles in Rust. It compiles workflows into Directed Acyclic Graphs and orchestrates execution with native concurrency, environment isolation, and clinical-grade reproducibility — all from a single, fast binary.
 
 - 🔀 **DAG-based execution** — Automatic dependency resolution, topological ordering, and parallel execution
-- 📦 **Environment management** — First-class support for conda, pixi, docker, singularity, and venv
+- 🤖 **AI Companion** — Contextual AI across the full workflow lifecycle: natural language pipeline generation (Dashboard), intelligent refinement suggestions (Editor), failure diagnosis (Monitor), and results interpretation (Report). Powered by Claude, OpenAI, DeepSeek, or local Ollama.
+- 💬 **Natural language to pipeline** — Describe your analysis in plain English; AI generates validated `.oxoflow` pipelines with step-by-step explanations, tool recommendations, and alternative approaches
+- 📦 **Environment management** — First-class support for conda, pixi, docker, singularity, and venv with per-rule isolation
 - 🧬 **Bioinformatics-first** — Purpose-built for genomics workflows and clinical-grade pipelines
 - 📊 **Clinical-grade reporting** — Modular HTML/PDF/JSON report generation with variant classification, biomarker tracking, and compliance audit trails
-- 🌐 **Web Interface** — REST API server with real-time resource sensing, workspace management, and on-demand log retrieval
-- 🗄️ **Persistent State** — Checkpoint-based execution history with JSON persistence; resume interrupted workflows from the last completed rule
-- 🔒 **Security Hardened** — Shell injection prevention, path traversal protection, and command sanitization for secure task execution
-- 🐳 **Container packaging** — Multi-stage Docker builds, rootless containers, and HEALTHCHECK support
+- 🌐 **Professional Web UI** — React 19 SPA with contextual ChatUI, cytoscape.js DAG visualization, CodeMirror 6 TOML editor, Vega-Lite charts. Light theme, system fonts, WCAG AA contrast, responsive to mobile.
+- 🔄 **Cross-page state persistence** — PipelineSession context: chat messages, TOML edits, dry-run results survive all navigation. Single source of truth synchronized across views.
 - ⚡ **Rust performance** — Fearless concurrency, zero-cost abstractions, `#![forbid(unsafe_code)]` across all crates
 - 🔧 **Resource-aware scheduling** — Jobs declare CPU, memory, GPU, and disk; the scheduler respects constraints across local and cluster backends (SLURM, PBS, SGE, LSF)
 - 🔒 **Security hardened** — Shell injection prevention, path traversal protection, secret scanning, and per-IP rate limiting
-- 🤖 **AI-powered translation** — Describe your analysis in natural language; AI generates validated `.oxoflow` pipelines with explanations and alternatives
+- 🗄️ **Persistent State** — Checkpoint-based execution history with JSON persistence; resume interrupted workflows from the last completed rule
 - 🔬 **Deterministic diagnostics engine** — 30+ error patterns cover tool failures, resource exhaustion, data corruption, and config issues — with auto-fix suggestions
 - 👥 **Collaboration primitives** — Fork, diff, share, and import pipelines via `oxo+https://` links; full audit trail for compliance
 - 🚀 **Three deployment modes** — Personal workstation, team server with OAuth2, or HPC submit panel — all from the same binary
-- 🌐 **Domain-driven web API** — 53 RESTful endpoints across 7 domains (workflow, execution, AI, auth, collaboration, observability, data)
-- 💬 **AI Companion (v0.8)** — Contextual AI chat on every page: Pipeline Generation (Dashboard), Pipeline Refinement (Editor), Run Diagnosis (Monitor), Results Interpretation (Report). SSE streaming with agent progress tracking.
-- 🎨 **Professional Web UI** — React 19 SPA with contextual ChatUI, cytoscape.js DAG visualization, CodeMirror 6 TOML editor, Vega-Lite charts. Light theme, system fonts, WCAG AA contrast, responsive to mobile.
-- 🔄 **PipelineSession Context** — Cross-page state persistence: chat messages, pipeline TOML, run results survive all navigation. Single source of truth per design spec.
+- 🌐 **Domain-driven web API** — 48 RESTful endpoints across 7 domains (workflow, execution, AI, auth, collaboration, observability, data)
 
 ## Three-Mode Deployment (v0.8)
 
@@ -79,7 +76,9 @@ oxo-flow serve --mode hpc --scheduler slurm
 | **Security** | Shell sanitization, path traversal prevention, rate limiting | Limited | Limited |
 | **Startup time** | Instant — native binary | Seconds (Python import) | Seconds (JVM boot) |
 | **Reproducibility** | Config checksums, execution provenance, deterministic DAG | Checksums, provenance | Checksums, provenance |
-| **Testing** | Comprehensive unit and integration test suite | pytest-based | Varied |
+| **AI Companion** | Built-in contextual AI (generate, refine, diagnose, interpret) | Not built-in | Not built-in |
+| **Web UI** | React 19 SPA with DAG visualization, TOML editor, live monitor | External Snakemake-UI | Nextflow Tower (commercial) |
+| **Testing** | 890 unit tests + 100 browser E2E scenarios | pytest-based | Varied |
 
 ## Design Principles
 
@@ -364,31 +363,43 @@ oxo-flow serve --host 0.0.0.0 -p 8080
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/health` | Health check |
-| `GET` | `/api/version` | Server and engine version info |
-| `GET` | `/api/system` | System information (CPU, memory, OS) |
+| `GET` | `/api/health` | Health check with component status |
+| `GET` | `/api/system` | System info (CPU, memory, OS, uptime) |
 | `GET` | `/api/metrics` | Runtime metrics (requests, active workflows) |
-| `GET` | `/api/workflows` | List available workflows |
-| `GET` | `/api/environments` | List available environment backends |
-| `POST` | `/api/workflows/validate` | Validate workflow TOML |
-| `POST` | `/api/workflows/parse` | Parse workflow and return structured detail |
-| `POST` | `/api/workflows/dag` | Build the DAG and return DOT representation |
-| `POST` | `/api/workflows/dry-run` | Simulate execution and return the plan |
-| `POST` | `/api/workflows/run` | Start workflow execution |
-| `POST` | `/api/workflows/clean` | List output files that would be cleaned |
-| `POST` | `/api/workflows/export` | Export workflow for sharing or archival |
-| `POST` | `/api/workflows/format` | Reformat workflow into canonical TOML |
-| `POST` | `/api/workflows/lint` | Run linting checks on a workflow |
-| `POST` | `/api/workflows/stats` | Show workflow statistics |
-| `POST` | `/api/workflows/diff` | Compare two workflow files |
-| `POST` | `/api/reports/generate` | Generate a report (HTML or JSON) |
-| `GET` | `/api/events` | Server-sent events for real-time updates |
+| `GET` | `/api/openapi.json` | OpenAPI 3.1 specification |
+| `GET` | `/api/pipelines` | List saved pipelines |
+| `POST` | `/api/pipelines/validate` | Validate workflow TOML |
+| `POST` | `/api/pipelines/parse` | Parse workflow into structured detail |
+| `POST` | `/api/pipelines/dag` | Build and return DAG visualization data |
+| `POST` | `/api/pipelines/format` | Reformat into canonical TOML |
+| `POST` | `/api/pipelines/lint` | Run best-practice linting checks |
+| `POST` | `/api/pipelines/diff` | Compare two workflow files |
+| `POST` | `/api/pipelines/search` | Search pipelines by query |
+| `GET` | `/api/templates` | List system and user templates |
+| `POST` | `/api/runs` | Start workflow execution |
 | `GET` | `/api/runs` | List execution runs |
-| `DELETE` | `/api/runs/{id}` | Cancel a running workflow |
-| `GET` | `/api/runs/{id}/logs` | Get logs for a specific run |
+| `GET` | `/api/runs/{id}` | Get run detail with status |
+| `GET` | `/api/runs/{id}/status` | Get live run status (nodes, resources) |
+| `GET` | `/api/runs/{id}/dag-status` | Get DAG with per-node execution status |
+| `GET` | `/api/runs/{id}/diagnostics` | Get failure diagnostics with suggestions |
+| `POST` | `/api/runs/{id}/retry` | Retry failed run from checkpoint |
+| `POST` | `/api/runs/{id}/cancel` | Cancel a running workflow |
+| `POST` | `/api/runs/{id}/pause` | Pause execution (AI or user triggered) |
+| `POST` | `/api/runs/{id}/resume` | Resume from last checkpoint |
+| `GET` | `/api/runs/{id}/report` | Get AI-generated run report |
+| `POST` | `/api/runs/{id}/report/ask` | Ask questions about results (Q&A) |
+| `POST` | `/api/chat/send` | SSE streaming chat with AI Companion |
+| `GET` | `/api/chat/sessions` | List chat sessions |
+| `POST` | `/api/ai/translate` | Natural language → validated pipeline |
+| `POST` | `/api/ai/explain` | AI failure explanation |
+| `POST` | `/api/ai/interpret` | AI results interpretation |
+| `POST` | `/api/ai/optimize` | AI parameter optimization |
+| `GET` | `/api/ai/config` | Get AI provider configuration |
+| `POST` | `/api/ai/test` | Test AI provider connection |
+| `GET` | `/api/events` | Server-sent events for real-time updates |
+| `GET` | `/api/license` | Check license status |
 | `POST` | `/api/auth/login` | Authenticate and create session |
 | `GET` | `/api/auth/me` | Get current authenticated user |
-| `GET` | `/api/license` | Check license status |
 
 oxo-flow is organized as a Cargo workspace with three crates:
 
@@ -422,8 +433,11 @@ oxo-flow/
 | `scheduler.rs` | Job scheduling with resource constraints |
 | `wildcard.rs` | Wildcard pattern expansion (`{sample}`, `{chr}`, etc.) |
 | `report.rs` | Modular report generation (HTML/PDF/JSON from Tera templates) |
-| `container.rs` | Container build and packaging utilities |
-| `error.rs` | Unified error types (`thiserror`) |
+| `diagnostics.rs` | Deterministic error pattern matching (30+ patterns) |
+| `ai_provider.rs` | Multi-provider AI abstraction (Claude, OpenAI, DeepSeek, Ollama) |
+| `domains/ai/` | AI translation, chat SSE streaming, agent orchestration |
+| `domains/execution/` | Run lifecycle, diagnostics, pause/resume, retry |
+| `domains/workflow/` | Pipeline CRUD, validation, DAG building, templating |
 
 ## Documentation
 
