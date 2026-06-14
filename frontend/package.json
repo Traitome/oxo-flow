@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "prebuild": "rm -f ../crates/oxo-flow-web/static/assets/*.js ../crates/oxo-flow-web/static/assets/*.css ../crates/oxo-flow-web/static/index.html",
+    "prebuild": "rm -rf ../crates/oxo-flow-web/static/assets && mkdir -p ../crates/oxo-flow-web/static/assets",
     "build": "npm run prebuild && tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
