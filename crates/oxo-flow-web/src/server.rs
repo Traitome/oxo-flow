@@ -19,29 +19,16 @@ use crate::infra::license::LicenseHeaderLayer;
 // Embedded SPA frontend
 // ---------------------------------------------------------------------------
 
-/// Serve the React SPA index.html with license footer injected.
+/// Serve the React SPA index.html. License information is rendered by the SPA.
 async fn spa_index() -> impl IntoResponse {
     let html = include_str!("../static/index.html");
-    let footer = crate::infra::license::license_footer_html();
-    let html_with_footer = if let Some(pos) = html.rfind("</body>") {
-        format!(
-            "{}<div class=\"oxo-flow-license-footer\" style=\"position:fixed;bottom:0;left:0;right:0;text-align:center;padding:4px 0;font-size:11px;color:#94A3B8;background:#F8FAFC;border-top:1px solid #E2E8F0;z-index:999\">{}</div>\n</body>",
-            &html[..pos],
-            footer
-        )
-    } else {
-        format!(
-            "{}\n<div class=\"oxo-flow-license-footer\">{}</div>",
-            html, footer
-        )
-    };
     (
         StatusCode::OK,
         [
             ("content-type", "text/html; charset=utf-8"),
             ("cache-control", "no-cache"),
         ],
-        html_with_footer,
+        html,
     )
 }
 

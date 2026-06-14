@@ -217,7 +217,7 @@ export default function ChatUI({ onPipelineReady }: ChatUIProps) {
           className="intent-input"
           style={{ flex: 1 }}
         />
-        <button onClick={sendMessage} disabled={loading || !input.trim()} className="btn-run" style={{ width: 40, height: 40, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <button onClick={sendMessage} disabled={loading || !input.trim()} className="btn-run" aria-label="Send message" style={{ width: 40, height: 40, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           {loading ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
         </button>
       </div>
