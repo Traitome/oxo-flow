@@ -4,7 +4,7 @@
 
 <h1>oxo-flow</h1>
 
-<p><strong>A Rust-native bioinformatics pipeline engine — built from first principles for performance, reproducibility, and clinical-grade rigor.</strong></p>
+<p><strong>A Rust-native bioinformatics pipeline engine with AI Companion — built from first principles for performance, reproducibility, and developer experience.</strong></p>
 
 [![CI](https://github.com/Traitome/oxo-flow/actions/workflows/ci.yml/badge.svg)](https://github.com/Traitome/oxo-flow/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/oxo-flow-core.svg)](https://crates.io/crates/oxo-flow-core)
@@ -28,14 +28,14 @@
 
 ## What is oxo-flow?
 
-oxo-flow is a high-performance, modular bioinformatics pipeline engine built from first principles in Rust. It compiles workflows into Directed Acyclic Graphs and orchestrates execution with native concurrency, environment isolation, and clinical-grade reproducibility — all from a single, fast binary.
+oxo-flow is a high-performance, modular bioinformatics pipeline engine built from first principles in Rust. It compiles workflows into Directed Acyclic Graphs and orchestrates execution with native concurrency, environment isolation, and AI-powered assistance — all from a single, fast binary.
 
 - 🔀 **DAG-based execution** — Automatic dependency resolution, topological ordering, and parallel execution
 - 🤖 **AI Companion** — Contextual AI across the full workflow lifecycle: natural language pipeline generation (Dashboard), intelligent refinement suggestions (Editor), failure diagnosis (Monitor), and results interpretation (Report). Powered by Claude, OpenAI, DeepSeek, or local Ollama.
 - 💬 **Natural language to pipeline** — Describe your analysis in plain English; AI generates validated `.oxoflow` pipelines with step-by-step explanations, tool recommendations, and alternative approaches
 - 📦 **Environment management** — First-class support for conda, pixi, docker, singularity, and venv with per-rule isolation
-- 🧬 **Bioinformatics-first** — Purpose-built for genomics workflows and clinical-grade pipelines
-- 📊 **Clinical-grade reporting** — Modular HTML/PDF/JSON report generation with variant classification, biomarker tracking, and compliance audit trails
+- 🧬 **Bioinformatics-first** — Purpose-built for genomics workflows with reproducible execution
+- 📊 **Workflow reporting** — Modular HTML/JSON report generation with execution summaries, resource metrics, and output file browsers
 - 🌐 **Professional Web UI** — React 19 SPA with contextual ChatUI, cytoscape.js DAG visualization, CodeMirror 6 TOML editor, Vega-Lite charts. Light theme, system fonts, WCAG AA contrast, responsive to mobile.
 - 🔄 **Cross-page state persistence** — PipelineSession context: chat messages, TOML edits, dry-run results survive all navigation. Single source of truth synchronized across views.
 - ⚡ **Rust performance** — Fearless concurrency, zero-cost abstractions, `#![forbid(unsafe_code)]` across all crates
@@ -69,7 +69,7 @@ oxo-flow serve --mode hpc --scheduler slurm
 | **Workflow format** | TOML (`.oxoflow`) — declarative, composable | Snakefile / `.smk` (Python DSL) | Nextflow DSL (`.nf`) (Groovy DSL) |
 | **Environment support** | conda, pixi, docker, singularity, venv — per-rule | conda, singularity, docker | conda, docker, singularity, modules |
 | **Web interface** | Built-in REST API with session auth and rate limiting | External Snakemake-UI | Nextflow Tower (commercial) |
-| **Clinical reporting** | Variant classification, compliance events | Not built-in | Not built-in |
+| **Reporting** | Built-in HTML/JSON run reports with metrics | Via MultiQC | Via Nextflow Tower |
 | **Container packaging** | Multi-stage builds, rootless containers | Singularity/Docker | Docker/Singularity |
 | **Cluster backends** | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF, k8s |
 | **Type safety** | Type-state lifecycle, `RuleBuilder`, newtypes | Dynamic Python | Dynamic Groovy |
@@ -92,9 +92,9 @@ oxo-flow is built on six engineering and scientific principles:
 
 4. **Performance through Rust** — Zero-cost abstractions, fearless concurrency, and efficient memory management make Rust the ideal foundation for orchestrating thousands of concurrent bioinformatics tasks.
 
-5. **Clinical-grade quality** — Reports are accurate, traceable, and auditable. Every step logs its provenance, inputs, outputs, software versions, and execution environment.
+5. **Reproducible by design** — Every step logs its provenance, inputs, outputs, software versions, and execution environment. Config checksums and container pinning guarantee consistent results.
 
-6. **Outcome-driven design** — Workflows are structured around the desired deliverables (clinical report, publication figure, QC dashboard). The DAG engine's target-aware execution (`-t` flag) computes the minimal set of rules needed to produce specific outputs.
+6. **Outcome-driven design** — Workflows are structured around the desired deliverables (report, publication figure, QC dashboard). The DAG engine's target-aware execution (`-t` flag) computes the minimal set of rules needed to produce specific outputs.
 
 ## Workflow Gallery
 
@@ -451,7 +451,7 @@ Comprehensive documentation is available at **[traitome.github.io/oxo-flow/docum
 | **A Bioinformatician** | [Workflow Gallery](https://traitome.github.io/oxo-flow/documentation/gallery/) |
 | **A Pipeline Engineer** | [Workflow Format Specification](https://traitome.github.io/oxo-flow/documentation/reference/workflow-format/) · [CLI Reference](https://traitome.github.io/oxo-flow/documentation/commands/run/) |
 | **A DevOps/Cloud Admin** | [Environment Management](https://traitome.github.io/oxo-flow/documentation/tutorials/environment-management/) · [Running on Cluster](https://traitome.github.io/oxo-flow/documentation/how-to/run-on-cluster/) |
-| **A Clinical Lab Lead** | [Reporting System](https://traitome.github.io/oxo-flow/documentation/reference/reporting-system/) · [Validation Protocol](docs/VALIDATION_PROTOCOL.md) |
+| **A Bioinformatics Core** | [Workflow Gallery](https://traitome.github.io/oxo-flow/documentation/gallery/) · [Environment Management](https://traitome.github.io/oxo-flow/documentation/tutorials/environment-management/) |
 
 MkDocs source lives under [`docs/guide/src/`](docs/guide/src/).
 
