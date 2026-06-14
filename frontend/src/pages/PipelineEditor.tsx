@@ -48,6 +48,10 @@ export default function PipelineEditor() {
   const [pipelineId] = useState(() => 'draft-' + Math.random().toString(36).slice(2, 9));
   const navigate = useNavigate();
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [showAddDialog, setShowAddDialog] = useState(false);
+  const [showConnectDialog, setShowConnectDialog] = useState(false);
+  const [newNodeName, setNewNodeName] = useState('');
+  const [connectTarget, setConnectTarget] = useState('');
 
   const updateDag = useCallback(async (content: string) => {
     try {
@@ -73,9 +77,9 @@ export default function PipelineEditor() {
     setResult(null);
     try {
       const res = await api.createRun(toml, 4, dryRun);
-      setResult({ runId: res.id, message: `${dryRun ? 'Dry ' : ''}Run started: ${res.id.slice(0, 8)}...` });
-      if (!dryRun && res.id) {
-         navigate(`/runs/${res.id}`);
+      setResult({ runId: res.run_id, message: `${dryRun ? 'Dry ' : ''}Run started: ${res.run_id.slice(0, 8)}...` });
+      if (!dryRun && res.run_id) {
+         navigate(`/runs/${res.run_id}`);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to start run';
@@ -135,19 +139,13 @@ export default function PipelineEditor() {
             <div className="panel-actions">
               <button className="btn-sm" onClick={handleUndo} title="Undo"><Undo2 size={14}/></button>
               <button className="btn-sm" onClick={handleRedo} title="Redo"><Redo2 size={14}/></button>
-              <button className="btn-sm" onClick={() => {
-                const name = prompt("Rule name?");
-                if (name) handleDagEdit('add_rule', { rule: { name, shell: 'echo TODO' } });
-              }} title="Add Node"><Plus size={14}/></button>
+              <button className="btn-sm" onClick={() => setShowAddDialog(true)} title="Add Node"><Plus size={14}/></button>
               {selectedNodeId && (
                 <>
                   <button className="btn-sm btn-error" onClick={() => {
                     if (confirm("Delete " + selectedNodeId + "?")) handleDagEdit('remove_rule', { name: selectedNodeId });
                   }} title="Delete"><Trash2 size={14}/></button>
-                  <button className="btn-sm" onClick={() => {
-                    const tgt = prompt("Target node name?");
-                    if (tgt) handleDagEdit('connect', { source: selectedNodeId, target: tgt });
-                  }} title="Connect"><LinkIcon size={14}/></button>
+                  <button className="btn-sm" onClick={() => setShowConnectDialog(true)} title="Connect"><LinkIcon size={14}/></button>
                 </>
               )}
               {dagJson && <span className="dag-counts">{dagJson.nodes.length} nodes, {dagJson.edges.length} edges</span>}
@@ -166,6 +164,43 @@ export default function PipelineEditor() {
       {result && (
         <div className={`result-bar ${result.runId ? 'success' : result.message.startsWith('Error') ? 'error' : 'info'}`}>
           {result.message}
+        </div>
+      )}
+
+      {/* Add Node inline dialog (replaces window.prompt) */}
+      {showAddDialog && (
+        <div className="modal-overlay" onClick={() => setShowAddDialog(false)}>
+          <div className="modal-dialog" onClick={e => e.stopPropagation()}>
+            <h3>Add Rule Node</h3>
+            <input autoFocus placeholder="Rule name (e.g. fastqc)" value={newNodeName}
+              onChange={e => setNewNodeName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { handleDagEdit('add_rule', { rule: { name: newNodeName, shell: 'echo TODO' } }); setNewNodeName(''); setShowAddDialog(false); }}}
+            />
+            <div className="modal-actions">
+              <button className="btn-sm" onClick={() => { setShowAddDialog(false); setNewNodeName(''); }}>Cancel</button>
+              <button className="btn-run" onClick={() => { handleDagEdit('add_rule', { rule: { name: newNodeName, shell: 'echo TODO' } }); setNewNodeName(''); setShowAddDialog(false); }}
+                disabled={!newNodeName.trim()}>Add</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Connect Node inline dialog (replaces window.prompt) */}
+      {showConnectDialog && (
+        <div className="modal-overlay" onClick={() => setShowConnectDialog(false)}>
+          <div className="modal-dialog" onClick={e => e.stopPropagation()}>
+            <h3>Connect Edge</h3>
+            <p style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>From: {selectedNodeId} → To:</p>
+            <input autoFocus placeholder="Target node name" value={connectTarget}
+              onChange={e => setConnectTarget(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { handleDagEdit('connect', { source: selectedNodeId, target: connectTarget }); setConnectTarget(''); setShowConnectDialog(false); }}}
+            />
+            <div className="modal-actions">
+              <button className="btn-sm" onClick={() => { setShowConnectDialog(false); setConnectTarget(''); }}>Cancel</button>
+              <button className="btn-run" onClick={() => { handleDagEdit('connect', { source: selectedNodeId, target: connectTarget }); setConnectTarget(''); setShowConnectDialog(false); }}
+                disabled={!connectTarget.trim()}>Connect</button>
+            </div>
+          </div>
         </div>
       )}
     </div>

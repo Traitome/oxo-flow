@@ -139,7 +139,11 @@ body{font-family:var(--font-sans);font-size:.9375rem;line-height:1.6;color:var(-
 
 /* ── Modal ── */
 .modal-overlay{position:fixed;inset:0;background:rgba(15,23,42,.3);z-index:300;display:flex;align-items:center;justify-content:center}
-.modal{background:var(--color-bg);border:1px solid var(--color-border);border-radius:var(--radius-md);width:90%;max-width:520px;max-height:85vh;overflow-y:auto;box-shadow:0 25px 60px rgba(0,0,0,.15);display:flex;flex-direction:column}
+.modal,.modal-dialog{background:var(--color-bg);border:1px solid var(--color-border);border-radius:var(--radius-md);width:90%;max-width:520px;max-height:85vh;overflow-y:auto;box-shadow:0 25px 60px rgba(0,0,0,.15);display:flex;flex-direction:column;padding:1.25rem}
+.modal-dialog h3{font-size:1rem;font-weight:600;margin:0 0 .75rem}
+.modal-dialog input{border:1px solid var(--color-border);border-radius:var(--radius-sm);padding:.5rem .75rem;font-size:.9rem;width:100%;margin-bottom:.75rem}
+.modal-dialog input:focus{outline:none;border-color:var(--color-primary);box-shadow:0 0 0 2px var(--color-primary-light)}
+.modal-actions{display:flex;justify-content:flex-end;gap:.5rem}
 .modal-header{padding:1.5rem 1.5rem 0}
 .modal-body{padding:1rem 1.5rem;font-size:.9rem}
 .modal-footer{padding:0 1.5rem 1.5rem;display:flex;justify-content:flex-end;gap:.5rem}

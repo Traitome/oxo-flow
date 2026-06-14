@@ -19,9 +19,13 @@ use crate::infra::license::LicenseHeaderLayer;
 // Embedded SPA frontend
 // ---------------------------------------------------------------------------
 
-/// Serve the React SPA index.html. License information is rendered by the SPA.
+/// Serve the React SPA index.html, reading from disk to avoid
+/// compile-time embedding mismatches with frontend build hashes.
 async fn spa_index() -> impl IntoResponse {
-    let html = include_str!("../static/index.html");
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/static/index.html");
+    let html = std::fs::read_to_string(path).unwrap_or_else(|_| {
+        r#"<!doctype html><html><body><h1>oxo-flow</h1><p>SPA not built. Run <code>npm run build</code> in frontend/ first.</p></body></html>"#.to_string()
+    });
     (
         StatusCode::OK,
         [

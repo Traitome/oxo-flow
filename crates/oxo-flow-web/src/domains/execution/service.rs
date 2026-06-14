@@ -124,6 +124,29 @@ pub fn compute_retry_plan(
 /// Diagnose a failed run using the deterministic diagnostics engine.
 pub fn diagnose_run(run_nodes: &[NodeStatusItem], log_output: &str) -> DiagnosticsResponse {
     let engine = DiagnosticsEngine::new();
+
+    // If there are no nodes at all, the run failed before execution (e.g. parsing/validation).
+    if run_nodes.is_empty() && !log_output.is_empty() {
+        let lines: Vec<&str> = log_output.lines().rev().take(5).collect();
+        return DiagnosticsResponse {
+            failed_nodes: vec![FailedNode {
+                rule: "workflow".into(),
+                error_pattern: Some("pre_execution_failure".into()),
+                likely_cause: "Pipeline failed before execution (parsing, validation, or preparation error).".into(),
+                suggestions: vec![
+                    "Check the pipeline TOML for syntax errors.".into(),
+                    "Ensure all referenced tools are available in the environment.".into(),
+                    "Review the pipeline configuration for missing required fields.".into(),
+                ],
+                auto_fixable: false,
+                fix_action: None,
+                relevant_log_lines: lines.into_iter().map(|s| s.to_string()).collect(),
+            }],
+            warnings: vec![],
+            resource_bottlenecks: vec![],
+        };
+    }
+
     let failed_nodes: Vec<FailedNode> = run_nodes
         .iter()
         .filter(|n| n.status == NodeStatus::Failed)

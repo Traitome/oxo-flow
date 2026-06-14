@@ -1,11 +1,11 @@
 import type {
   HealthResponse, SystemInfo, RuntimeMetrics, LoginResponse, UserInfo,
   ValidateResponse, ParseResponse, Pipeline, DagJson, DagStatus,
-  RunItem, RunStatus, Diagnostics, RetryPlan,
+  RunItem, RunStatus, Diagnostics, RetryPlan, RunResponse,
   AiConfig, AiTranslateResponse, AiExplainResponse, AiInterpretResponse, AiOptimizeResponse,
   Template, ForkResponse, ShareResponse, ImportResponse,
   DataAnalysis, ReferenceResult, AuditLogResponse, SearchResponse,
-DagEditResponse, DataPerceptionReport, MonitorStatus,
+  DagEditResponse, DataPerceptionReport, MonitorStatus,
   ReportData, AiConfigFull, ServerAiConfig, UserAiConfig, AiConfigUpdate,
 } from './types';
 
@@ -81,7 +81,7 @@ export const api = {
   referenceStatus: () => get<{ installed: any[]; missing: string[] }>('/api/data/reference/status'),
 
   // ── Execution ──
-  createRun: (toml_content: string, maxJobs = 4, dryRun = false) => post<RunItem>('/api/runs', { toml_content, max_jobs: maxJobs, dry_run: dryRun }),
+  createRun: (toml_content: string, maxJobs = 4, dryRun = false) => post<RunResponse>('/api/runs', { toml_content, max_jobs: maxJobs, dry_run: dryRun }),
   listRuns: () => get<RunItem[]>('/api/runs'),
   getRun: (id: string) => get<RunItem>(`/api/runs/${id}`),
   getRunStatus: (id: string) => get<RunStatus>(`/api/runs/${id}/status`),

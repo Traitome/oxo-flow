@@ -102,7 +102,20 @@ export interface SearchResponse { query: string; total: number; results: Array<{
 // ── Legacy compat ──
 export interface GenerateResponse { toml_content: string; workflow_name: string; rules_count: number; execution_order: string[]; description: string; valid: boolean; }
 export interface WorkflowDetail extends ParseResponse {}
-export interface RunResponse { run_id: string; status: string; execution_order: string[]; rules_total: number; }
+export interface RunResponse {
+  run_id: string;
+  status: string;
+  estimated_resources: {
+    max_memory_mb: number;
+    max_threads: number;
+    estimated_duration_secs: number;
+  };
+  execution_plan: {
+    total_rules: number;
+    parallel_groups: string[][];
+    execution_order: string[];
+  };
+}
 export interface RunDetail extends RunItem { workflow_name?: string; log_tail?: string; output_files?: string[]; }
 export interface TemplateSummary { id: string; name: string; category: string; description: string; tags: string; is_system: boolean; created_at: string; }
 export interface DagData { dot: string; nodes: number; edges: number; }
