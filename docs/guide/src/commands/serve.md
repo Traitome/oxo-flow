@@ -56,7 +56,7 @@ POST /oxo-flow/api/workflows/validate
 ## Output
 
 ```
-oxo-flow 0.7.0 — Bioinformatics Pipeline Engine
+oxo-flow 0.8.0 — Bioinformatics Pipeline Engine
 Starting web server at 127.0.0.1:8080 ...
 ```
 

@@ -99,7 +99,7 @@ The web crate follows a **domain-driven modular monolith** pattern. Each domain 
 
 ### Legacy Modules (deprecated since 0.8.0)
 
-The `handlers/` directory contains pre-v0.8 handler modules marked `#[deprecated(since = "0.8.0")]`. These are preserved for backward compatibility and will be removed no earlier than v0.10.0. New code should use `domains/*/` modules.
+The `handlers/` directory contains pre-v0.8 handler modules marked `#[deprecated(since = "0.8.0")]`. These are preserved for backward compatibility and will be removed no earlier than v0.8.0. New code should use `domains/*/` modules.
 
 ---
 
@@ -174,7 +174,7 @@ The `handlers/` directory contains pre-v0.8 handler modules marked `#[deprecated
 ├── /scheduled              # Scheduled runs list/create
 ```
 (See [Web API](./web-api.md) and [openapi.json](../../schema/openapi.yaml) for the complete API reference.)
-(Old `/workflows/*` endpoints marked `#[deprecated]` remain functional but will be removed in v0.10.0.)
+(Old `/workflows/*` endpoints marked `#[deprecated]` remain functional but will be removed in v0.8.0.)
 
 ---
 
