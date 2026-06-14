@@ -46,6 +46,9 @@ oxo-flow is a high-performance, modular bioinformatics pipeline engine built fro
 - 👥 **Collaboration primitives** — Fork, diff, share, and import pipelines via `oxo+https://` links; full audit trail for compliance
 - 🚀 **Three deployment modes** — Personal workstation, team server with OAuth2, or HPC submit panel — all from the same binary
 - 🌐 **Domain-driven web API** — 53 RESTful endpoints across 7 domains (workflow, execution, AI, auth, collaboration, observability, data)
+- 💬 **AI Companion (v0.8)** — Contextual AI chat on every page: Pipeline Generation (Dashboard), Pipeline Refinement (Editor), Run Diagnosis (Monitor), Results Interpretation (Report). SSE streaming with agent progress tracking.
+- 🎨 **Professional Web UI** — React 19 SPA with contextual ChatUI, cytoscape.js DAG visualization, CodeMirror 6 TOML editor, Vega-Lite charts. Light theme, system fonts, WCAG AA contrast, responsive to mobile.
+- 🔄 **PipelineSession Context** — Cross-page state persistence: chat messages, pipeline TOML, run results survive all navigation. Single source of truth per design spec.
 
 ## Three-Mode Deployment (v0.8)
 

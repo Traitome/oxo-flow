@@ -151,7 +151,7 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
       {/* Header */}
       <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--color-border)', display: 'flex', alignItems: 'center', gap: '8px' }}>
         <Bot size={18} color="var(--color-primary)" />
-        <h1 style={{ fontWeight: 600, fontSize: '0.9rem', margin: 0 }}>AI Companion</h1>
+        <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>AI Companion</span>
         <span style={{ fontSize: '0.65rem', color: 'var(--color-primary)', background: 'var(--color-primary-light)', padding: '1px 6px', borderRadius: '3px', fontWeight: 500 }}>{CONTEXT_LABELS[context]}</span>
         <span style={{ fontSize: '0.7rem', color: 'var(--color-text-tertiary)', marginLeft: 'auto' }}>v0.8</span>
       </div>
