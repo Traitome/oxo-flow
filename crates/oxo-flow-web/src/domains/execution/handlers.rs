@@ -87,7 +87,7 @@ pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateR
         .bind("my-pipeline")
         .execute(pool)
         .await;
-        
+
         crate::executor::spawn_background_run(
             resp.run_id.clone(),
             "local_user".to_string(),

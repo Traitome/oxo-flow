@@ -77,7 +77,13 @@ pub fn build_router(mode: &str) -> Router {
     let frontend_routes = Router::new()
         .route("/favicon.svg", get(favicon))
         .route("/icons.svg", get(icons))
-        .nest_service("/assets", tower_http::services::ServeDir::new(concat!(env!("CARGO_MANIFEST_DIR"), "/static/assets")))
+        .nest_service(
+            "/assets",
+            tower_http::services::ServeDir::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/static/assets"
+            )),
+        )
         .route("/", get(spa_index));
 
     // ---- Workflow routes ----

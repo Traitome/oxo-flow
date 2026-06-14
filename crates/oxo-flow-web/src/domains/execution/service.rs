@@ -132,7 +132,9 @@ pub fn diagnose_run(run_nodes: &[NodeStatusItem], log_output: &str) -> Diagnosti
             failed_nodes: vec![FailedNode {
                 rule: "workflow".into(),
                 error_pattern: Some("pre_execution_failure".into()),
-                likely_cause: "Pipeline failed before execution (parsing, validation, or preparation error).".into(),
+                likely_cause:
+                    "Pipeline failed before execution (parsing, validation, or preparation error)."
+                        .into(),
                 suggestions: vec![
                     "Check the pipeline TOML for syntax errors.".into(),
                     "Ensure all referenced tools are available in the environment.".into(),

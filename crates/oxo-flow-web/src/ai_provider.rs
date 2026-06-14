@@ -760,7 +760,11 @@ mod tests {
         let provider = create_provider_from_env();
         let name = provider.name();
         assert!(
-            name == "disabled" || name == "claude" || name == "openai" || name == "deepseek" || name == "ollama",
+            name == "disabled"
+                || name == "claude"
+                || name == "openai"
+                || name == "deepseek"
+                || name == "ollama",
             "Expected a valid provider or disabled, got: {name}"
         );
     }
@@ -771,7 +775,11 @@ mod tests {
         assert_eq!(c.name(), "claude");
         let o = AiProvider::OpenAi(internal::OpenAi::new("k".into(), None, None));
         assert_eq!(o.name(), "openai");
-        let d = AiProvider::DeepSeek(internal::OpenAi::new("k".into(), None, Some("https://api.deepseek.com/v1/chat/completions".into())));
+        let d = AiProvider::DeepSeek(internal::OpenAi::new(
+            "k".into(),
+            None,
+            Some("https://api.deepseek.com/v1/chat/completions".into()),
+        ));
         assert_eq!(d.name(), "deepseek");
         let n = AiProvider::Noop(internal::Noop);
         assert_eq!(n.name(), "disabled");
