@@ -1,16 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import { api, apiV2 } from '../api/client';
+import { useParams, useNavigate } from 'react-router-dom';
+import { api } from '../api/client';
 import type { RunItem, MonitorStatus, ReportData, DagStatus, Diagnostics } from '../api/types';
-import { Play, Pause, RotateCcw, AlertTriangle, FileText, BarChart3, Loader2, Bot } from 'lucide-react';
+import { Play, Pause, RotateCcw, BarChart3, Loader2, Bot } from 'lucide-react';
 
 type TabType = 'monitor' | 'report' | 'diagnostics' | 'dag';
-
-const STATUS_COLORS: Record<string, string> = {
-  success: '#059669', completed: '#059669',
-  running: '#2563EB', failed: '#DC2626',
-  pending: '#94A3B8', queued: '#D97706',
-  skipped: '#94A3B8', paused: '#D97706',
-};
 
 function StatCard({ value, label, color }: { value: string; label: string; color?: string }) {
   return (
@@ -29,10 +23,30 @@ export default function MonitorReport() {
   const [dagStatus, setDagStatus] = useState<DagStatus | null>(null);
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
   const [tab, setTab] = useState<TabType>('monitor');
-  const [loading, setLoading] = useState(true);
+  const [, setLoading] = useState(true);
   const [qaInput, setQaInput] = useState('');
   const [qaAnswer, setQaAnswer] = useState<string | null>(null);
-  const [alertOpen, setAlertOpen] = useState<string[]>([]);
+
+  const { id: routeId } = useParams();
+  const navigate = useNavigate();
+
+
+  const [, setAlertOpen] = useState<string[]>([]);
+  const selectRun = useCallback(async (id: string) => {
+    setSelId(id);
+    setTab('monitor');
+    setQaAnswer(null);
+    try { setMonitorStatus(await api.aiStatus(id)); } catch { setMonitorStatus(null); }
+    try { setReportData(await api.runReport(id)); } catch { setReportData(null); }
+    try { setDagStatus(await api.getDagStatus(id)); } catch { setDagStatus(null); }
+    try { setDiagnostics(await api.getDiagnostics(id)); } catch { setDiagnostics(null); }
+  }, []);
+
+  useEffect(() => {
+    if (routeId && routeId !== selId) {
+      selectRun(routeId);
+    }
+  }, [routeId, selectRun, selId]);
 
   const toggleAlert = (idx: string) => {
     setAlertOpen(prev => prev.includes(idx) ? prev.filter(x => x !== idx) : [...prev, idx]);
@@ -48,7 +62,7 @@ export default function MonitorReport() {
     const es = new EventSource('/api/events');
     const interval = setInterval(async () => {
       try {
-        const status = await apiV2.aiStatus(selId);
+        const status = await api.aiStatus(selId);
         setMonitorStatus(status);
       } catch { /* ignore */ }
     }, 5000);
@@ -67,21 +81,13 @@ export default function MonitorReport() {
     return () => { clearInterval(interval); es.close(); };
   }, [selId]);
 
-  const selectRun = useCallback(async (id: string) => {
-    setSelId(id);
-    setTab('monitor');
-    setQaAnswer(null);
-    try { setMonitorStatus(await apiV2.aiStatus(id)); } catch { setMonitorStatus(null); }
-    try { setReportData(await apiV2.runReport(id)); } catch { setReportData(null); }
-    try { setDagStatus(await api.getDagStatus(id)); } catch { setDagStatus(null); }
-    try { setDiagnostics(await api.getDiagnostics(id)); } catch { setDiagnostics(null); }
-  }, []);
+
 
   const handlePause = async () => {
     if (!selId) return;
     try {
-      await apiV2.pauseRun(selId, 'user_request');
-      const s = await apiV2.aiStatus(selId);
+      await api.pauseRun(selId, 'user_request');
+      const s = await api.aiStatus(selId);
       setMonitorStatus(s);
     } catch { /* ignore */ }
   };
@@ -89,8 +95,8 @@ export default function MonitorReport() {
   const handleResume = async () => {
     if (!selId) return;
     try {
-      await apiV2.resumeRun(selId);
-      const s = await apiV2.aiStatus(selId);
+      await api.resumeRun(selId);
+      const s = await api.aiStatus(selId);
       setMonitorStatus(s);
     } catch { /* ignore */ }
   };
@@ -106,7 +112,7 @@ export default function MonitorReport() {
   const handleAsk = async () => {
     if (!qaInput.trim() || !selId) return;
     try {
-      const answer = await apiV2.askReport(selId, qaInput);
+      const answer = await api.askReport(selId, qaInput);
       setQaAnswer(answer);
     } catch {
       setQaAnswer('Sorry, I could not answer that question. Please try rephrasing.');
@@ -417,7 +423,7 @@ export default function MonitorReport() {
                 <td>{r.phase || '-'}</td>
                 <td style={{ fontSize: '0.8rem' }}>{r.created_at ? new Date(r.created_at).toLocaleString() : '-'}</td>
                 <td>
-                  <button className="btn-sm" onClick={() => selectRun(r.id)}>
+                  <button className="btn-sm" onClick={() => navigate(`/runs/${r.id}`)}>
                     {r.status === 'running' ? <Loader2 size={12} className="spin" style={{ marginRight: 4 }} /> : null}
                     {r.status === 'completed' ? '📊 Report' : r.status === 'failed' ? '🔍 Diagnose' : '📡 Monitor'}
                   </button>

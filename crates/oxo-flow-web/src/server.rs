@@ -63,24 +63,6 @@ async fn icons() -> impl IntoResponse {
     )
 }
 
-/// Serve embedded JS bundle
-async fn app_js() -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        [("content-type", "application/javascript; charset=utf-8")],
-        include_str!("../static/assets/index-Hf5dXr86.js"),
-    )
-}
-
-/// Serve embedded CSS
-async fn app_css() -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        [("content-type", "text/css; charset=utf-8")],
-        include_str!("../static/assets/index-akIlVKkc.css"),
-    )
-}
-
 /// SPA fallback: serve index.html for any non-API route.
 async fn spa_fallback() -> impl IntoResponse {
     spa_index().await
@@ -104,8 +86,7 @@ pub fn build_router(mode: &str) -> Router {
     let frontend_routes = Router::new()
         .route("/favicon.svg", get(favicon))
         .route("/icons.svg", get(icons))
-        .route("/assets/index-Hf5dXr86.js", get(app_js))
-        .route("/assets/index-akIlVKkc.css", get(app_css))
+        .nest_service("/assets", tower_http::services::ServeDir::new(concat!(env!("CARGO_MANIFEST_DIR"), "/static/assets")))
         .route("/", get(spa_index));
 
     // ---- Workflow routes ----
@@ -266,13 +247,13 @@ pub fn build_router(mode: &str) -> Router {
         .route("/api/license", get(auth::handlers::license_status))
         .route("/api/license/upload", post(auth::handlers::upload_license));
 
-    // ---- Chat routes (v0.9 AI Companion) ----
+    // ---- Chat routes (v0.8 AI Companion) ----
     let chat_routes = Router::new()
         .route("/api/chat/send", post(chat::handlers::chat_send))
         .route("/api/chat/send/json", post(chat::handlers::chat_send_json))
         .route("/api/chat/sessions", get(chat::handlers::list_sessions));
 
-    // ---- DAG Edit routes (v0.9) ----
+    // ---- DAG Edit routes ----
     let dag_edit_routes = Router::new()
         .route(
             "/api/pipeline/{id}/command",

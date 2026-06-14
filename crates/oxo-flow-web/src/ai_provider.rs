@@ -24,6 +24,7 @@ use anyhow::{Result, anyhow};
 pub enum AiProviderKind {
     Claude,
     OpenAi,
+    DeepSeek,
     Ollama,
 }
 
@@ -33,9 +34,10 @@ impl std::str::FromStr for AiProviderKind {
         match s.to_lowercase().as_str() {
             "claude" => Ok(Self::Claude),
             "openai" | "open-ai" => Ok(Self::OpenAi),
+            "deepseek" => Ok(Self::DeepSeek),
             "ollama" => Ok(Self::Ollama),
             _ => Err(anyhow!(
-                "Unknown AI provider '{s}'. Use 'claude', 'openai', or 'ollama'"
+                "Unknown AI provider '{s}'. Use 'claude', 'openai', 'deepseek', or 'ollama'"
             )),
         }
     }
@@ -49,6 +51,8 @@ const CLAUDE_DEFAULT_MODEL: &str = "claude-sonnet-4-20250514";
 const CLAUDE_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const OPENAI_DEFAULT_MODEL: &str = "gpt-4o";
 const OPENAI_API_URL: &str = "https://api.openai.com/v1/chat/completions";
+const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-v4-pro";
+const DEEPSEEK_API_URL: &str = "https://api.deepseek.com/v1/chat/completions";
 const OLLAMA_DEFAULT_MODEL: &str = "llama3";
 const OLLAMA_API_URL: &str = "http://localhost:11434/api/chat";
 
@@ -62,10 +66,10 @@ mod internal {
 
     #[derive(Clone)]
     pub struct Claude {
-        client: reqwest::Client,
-        api_key: String,
-        model: String,
-        api_url: String,
+        pub client: reqwest::Client,
+        pub api_key: String,
+        pub model: String,
+        pub api_url: String,
     }
 
     impl Claude {
@@ -148,10 +152,10 @@ mod internal {
 
     #[derive(Clone)]
     pub struct OpenAi {
-        client: reqwest::Client,
-        api_key: String,
-        model: String,
-        api_url: String,
+        pub client: reqwest::Client,
+        pub api_key: String,
+        pub model: String,
+        pub api_url: String,
     }
 
     impl OpenAi {
@@ -219,9 +223,9 @@ mod internal {
 
     #[derive(Clone)]
     pub struct Ollama {
-        client: reqwest::Client,
-        model: String,
-        api_url: String,
+        pub client: reqwest::Client,
+        pub model: String,
+        pub api_url: String,
     }
 
     impl Ollama {
@@ -299,28 +303,51 @@ mod internal {
 pub enum AiProvider {
     Claude(internal::Claude),
     OpenAi(internal::OpenAi),
+    DeepSeek(internal::OpenAi),
     Ollama(internal::Ollama),
     Noop(internal::Noop),
 }
 
 impl AiProvider {
+    pub fn api_url(&self) -> Option<String> {
+        match self {
+            Self::Claude(p) => Some(p.api_url.clone()),
+            Self::OpenAi(p) => Some(p.api_url.clone()),
+            Self::DeepSeek(p) => Some(p.api_url.clone()),
+            Self::Ollama(p) => Some(p.api_url.clone()),
+            Self::Noop(_) => None,
+        }
+    }
+
+    pub fn model(&self) -> Option<String> {
+        match self {
+            Self::Claude(p) => Some(p.model.clone()),
+            Self::OpenAi(p) => Some(p.model.clone()),
+            Self::DeepSeek(p) => Some(p.model.clone()),
+            Self::Ollama(p) => Some(p.model.clone()),
+            Self::Noop(_) => None,
+        }
+    }
+
     /// Send a chat message and return the full text response.
     pub async fn chat(&self, system: &str, user: &str) -> Result<String> {
         match self {
             Self::Claude(p) => p.chat(system, user).await,
             Self::OpenAi(p) => p.chat(system, user).await,
+            Self::DeepSeek(p) => p.chat(system, user).await,
             Self::Ollama(p) => p.chat(system, user).await,
             Self::Noop(p) => p.chat(system, user).await,
         }
     }
 
     /// Human-readable provider name.
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &'static str {
         match self {
-            Self::Claude(p) => p.name(),
-            Self::OpenAi(p) => p.name(),
-            Self::Ollama(p) => p.name(),
-            Self::Noop(p) => p.name(),
+            Self::Claude(_) => "claude",
+            Self::OpenAi(_) => "openai",
+            Self::DeepSeek(_) => "deepseek",
+            Self::Ollama(_) => "ollama",
+            Self::Noop(_) => "noop",
         }
     }
 }
@@ -376,6 +403,23 @@ pub fn create_provider(
                 .or_else(|| std::env::var("OPENAI_MODEL").ok())
                 .or_else(|| std::env::var("OXO_FLOW_AI_MODEL").ok());
             AiProvider::OpenAi(internal::OpenAi::new(api_key, model_name, api_url))
+        }
+        AiProviderKind::DeepSeek => {
+            let api_key = key
+                .or_else(|| std::env::var("DEEPSEEK_API_KEY").ok())
+                .unwrap_or_default();
+            if api_key.is_empty() {
+                tracing::warn!(
+                    "DeepSeek provider selected but no API key found (check DEEPSEEK_API_KEY or OXO_FLOW_AI_API_KEY)"
+                );
+            }
+            let api_url = url
+                .or_else(|| std::env::var("DEEPSEEK_BASE_URL").ok())
+                .unwrap_or_else(|| DEEPSEEK_API_URL.to_string());
+            let model_name = mdl
+                .or_else(|| std::env::var("DEEPSEEK_MODEL").ok())
+                .or_else(|| Some(DEEPSEEK_DEFAULT_MODEL.to_string()));
+            AiProvider::DeepSeek(internal::OpenAi::new(api_key, model_name, Some(api_url)))
         }
         AiProviderKind::Ollama => AiProvider::Ollama(internal::Ollama::new(mdl, url)),
     }
@@ -561,14 +605,8 @@ impl AiProviderRegistry {
         match guard.as_ref() {
             Some(p) => ProviderConfig {
                 provider: p.name().to_string(),
-                api_url: std::env::var("ANTHROPIC_BASE_URL")
-                    .ok()
-                    .or_else(|| std::env::var("OPENAI_BASE_URL").ok())
-                    .or_else(|| std::env::var("OXO_FLOW_AI_API_URL").ok()),
-                model: std::env::var("ANTHROPIC_MODEL")
-                    .ok()
-                    .or_else(|| std::env::var("OPENAI_MODEL").ok())
-                    .or_else(|| std::env::var("OXO_FLOW_AI_MODEL").ok()),
+                api_url: p.api_url(),
+                model: p.model(),
                 is_configured: !matches!(p, AiProvider::Noop(_)),
             },
             None => ProviderConfig {

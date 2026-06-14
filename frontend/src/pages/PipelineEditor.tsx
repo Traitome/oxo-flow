@@ -1,7 +1,9 @@
 import { useState, useCallback, useEffect, lazy, Suspense } from 'react';
-import { Play, CheckCircle, AlertCircle, Wand2 } from 'lucide-react';
+import { Play, CheckCircle, AlertCircle, Undo2, Redo2, Plus, Trash2, Link as LinkIcon } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { DagJson } from '../api/types';
+import ChatUI from '../components/ChatUI';
 
 // Lazy-loaded components for bundle optimization
 const TomlEditor = lazy(() => import('../components/TomlEditor'));
@@ -43,7 +45,9 @@ export default function PipelineEditor() {
   const [validation, setValidation] = useState<{ valid: boolean; errors: Array<{ code: string; message: string; rule: string | null; suggestion: string | null }> } | null>(null);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<{ runId?: string; message: string } | null>(null);
-  const [intent, setIntent] = useState('');
+  const [pipelineId] = useState(() => 'draft-' + Math.random().toString(36).slice(2, 9));
+  const navigate = useNavigate();
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   const updateDag = useCallback(async (content: string) => {
     try {
@@ -64,12 +68,15 @@ export default function PipelineEditor() {
     return () => clearTimeout(timer);
   }, [toml, updateDag]);
 
-  const handleRun = async () => {
+  const handleRun = async (dryRun = false) => {
     setRunning(true);
     setResult(null);
     try {
-      const res = await api.createRun(toml);
-      setResult({ runId: res.run_id, message: `Run started: ${res.run_id.slice(0, 8)}...` });
+      const res = await api.createRun(toml, 4, dryRun);
+      setResult({ runId: res.id, message: `${dryRun ? 'Dry ' : ''}Run started: ${res.id.slice(0, 8)}...` });
+      if (!dryRun && res.id) {
+         navigate(`/runs/${res.id}`);
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to start run';
       setResult({ message: `Error: ${msg}` });
@@ -77,39 +84,29 @@ export default function PipelineEditor() {
     setRunning(false);
   };
 
-  const handleGenerate = async () => {
-    if (!intent.trim()) return;
-    setRunning(true);
+  const handleDagEdit = async (operation: string, payload: any) => {
     try {
-      const gen = await api.aiTranslate(intent);
-      setToml(gen.toml_content);
-      setResult({ message: `Generated pipeline (${gen.confidence * 100}% confidence)` });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Generation failed';
-      setResult({ message: `Error: ${msg}` });
-    }
-    setRunning(false);
+      const res = await api.dagCommand(pipelineId, 'dag_editor', operation, payload);
+      if (res.success) {
+        setToml(res.toml_content);
+      } else {
+        alert("Edit failed: " + (res.validation_errors || []).join(', '));
+      }
+    } catch (e: any) { alert("Error: " + e.message); }
   };
+  const handleUndo = async () => { try { const res = await api.dagUndo(pipelineId); setToml(res.toml_content); } catch (e: any) { alert(e.message); } };
+  const handleRedo = async () => { try { const res = await api.dagRedo(pipelineId); setToml(res.toml_content); } catch (e: any) { alert(e.message); } };
 
   return (
     <div className="page">
       <h1 className="page-title">Pipeline Editor</h1>
 
-      <div className="generate-bar">
-        <input
-          type="text"
-          placeholder="Describe your pipeline (e.g., 'RNA-seq differential expression')"
-          value={intent}
-          onChange={(e) => setIntent(e.target.value)}
-          className="generate-input"
-          onKeyDown={(e) => e.key === 'Enter' && handleGenerate()}
-        />
-        <button onClick={handleGenerate} disabled={running || !intent.trim()} className="btn-gen">
-          <Wand2 size={16} /> Generate
-        </button>
-      </div>
-
-      <div className="editor-layout">
+      <div className="editor-layout" style={{ display: 'grid', gridTemplateColumns: '300px 1fr 1fr', gap: '16px', height: '80vh' }}>
+        <div className="chat-panel" style={{ overflow: 'hidden' }}>
+           <ChatUI onPipelineReady={(data) => {
+              if (data.toml_content) setToml(data.toml_content);
+           }} />
+        </div>
         <div className="editor-panel">
           <div className="panel-header">
             <span>Workflow TOML</span>
@@ -120,20 +117,10 @@ export default function PipelineEditor() {
                   {validation.valid ? ' Valid' : `${validation.errors.length} error(s)`}
                 </span>
               )}
-              <button onClick={async () => {
-                setRunning(true);
-                try {
-                  const val = await api.validate(toml);
-                  setValidation(val);
-                  setResult({ message: val.valid ? '✅ Pipeline is valid' : `❌ ${val.errors.length} validation error(s)` });
-                } catch (e) {
-                  setResult({ message: 'Error: ' + (e instanceof Error ? e.message : 'Validation failed') });
-                }
-                setRunning(false);
-              }} className="btn-sm" style={{ background: 'transparent', border: '1px solid var(--color-border)' }}>
+              <button onClick={() => handleRun(true)} disabled={running || !validation?.valid} className="btn-sm" style={{ background: 'transparent', border: '1px solid var(--color-border)' }}>
                 <CheckCircle size={14} /> Dry-Run
               </button>
-              <button onClick={handleRun} disabled={running || !validation?.valid} className="btn-run">
+              <button onClick={() => handleRun(false)} disabled={running || !validation?.valid} className="btn-run">
                 <Play size={16} /> {running ? 'Starting...' : 'Run'}
               </button>
             </div>
@@ -145,11 +132,30 @@ export default function PipelineEditor() {
         <div className="dag-panel">
           <div className="panel-header">
             <span>Pipeline DAG</span>
-            {dagJson && <span className="dag-counts">{dagJson.nodes.length} nodes, {dagJson.edges.length} edges</span>}
+            <div className="panel-actions">
+              <button className="btn-sm" onClick={handleUndo} title="Undo"><Undo2 size={14}/></button>
+              <button className="btn-sm" onClick={handleRedo} title="Redo"><Redo2 size={14}/></button>
+              <button className="btn-sm" onClick={() => {
+                const name = prompt("Rule name?");
+                if (name) handleDagEdit('add_rule', { rule: { name, shell: 'echo TODO' } });
+              }} title="Add Node"><Plus size={14}/></button>
+              {selectedNodeId && (
+                <>
+                  <button className="btn-sm btn-error" onClick={() => {
+                    if (confirm("Delete " + selectedNodeId + "?")) handleDagEdit('remove_rule', { name: selectedNodeId });
+                  }} title="Delete"><Trash2 size={14}/></button>
+                  <button className="btn-sm" onClick={() => {
+                    const tgt = prompt("Target node name?");
+                    if (tgt) handleDagEdit('connect', { source: selectedNodeId, target: tgt });
+                  }} title="Connect"><LinkIcon size={14}/></button>
+                </>
+              )}
+              {dagJson && <span className="dag-counts">{dagJson.nodes.length} nodes, {dagJson.edges.length} edges</span>}
+            </div>
           </div>
           <Suspense fallback={<DagFallback />}>
             {dagJson ? (
-              <DagView nodes={dagJson.nodes} edges={dagJson.edges} />
+              <DagView nodes={dagJson.nodes} edges={dagJson.edges} onNodeClick={setSelectedNodeId} />
             ) : (
               <div className="empty-state">Enter valid TOML to see the DAG</div>
             )}

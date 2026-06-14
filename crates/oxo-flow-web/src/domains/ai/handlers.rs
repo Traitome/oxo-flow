@@ -331,7 +331,7 @@ pub async fn test_ai_config(Json(_req): Json<AiConfigRequest>) -> ApiResult<AiTe
 }
 
 // ---------------------------------------------------------------------------
-// AI Config - Three-tier priority (v0.9)
+// AI Config - Three-tier priority
 // ---------------------------------------------------------------------------
 
 /// GET /api/ai/config/effective

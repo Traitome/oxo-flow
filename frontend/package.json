@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "prebuild": "rm -f ../crates/oxo-flow-web/static/assets/*.js ../crates/oxo-flow-web/static/assets/*.css ../crates/oxo-flow-web/static/index.html",
+    "build": "npm run prebuild && tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
   },
@@ -16,10 +17,12 @@
     "@codemirror/language": "^6.12.3",
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.43.1",
+    "@types/cytoscape-edgehandles": "^4.0.5",
     "clsx": "^2.1.1",
     "codemirror": "^6.0.2",
     "cytoscape": "^3.34.0",
     "cytoscape-dagre": "^4.0.0",
+    "cytoscape-edgehandles": "^4.0.1",
     "lucide-react": "^1.18.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",

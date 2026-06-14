@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import * as vega from 'vega-lite';
+
 import embed from 'vega-embed';
 
 interface VegaChartProps {

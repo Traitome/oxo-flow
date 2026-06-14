@@ -27,7 +27,7 @@ export default function Layout() {
           </button>
           <FlaskConical size={20} />
           <span className="header-brand">oxo-flow</span>
-          <span className="header-ver">v0.8</span>
+          <span className="header-ver">v0.8.0</span>
         </div>
         <nav className={`header-nav${menuOpen ? ' open' : ''}`}>
           {nav.map(({ to, label }) => (

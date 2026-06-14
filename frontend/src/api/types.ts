@@ -107,7 +107,7 @@ export interface RunDetail extends RunItem { workflow_name?: string; log_tail?: 
 export interface TemplateSummary { id: string; name: string; category: string; description: string; tags: string; is_system: boolean; created_at: string; }
 export interface DagData { dot: string; nodes: number; edges: number; }
 
-// ── v0.9 AI Companion Types ──
+// ── v0.8 AI Companion Types ──
 
 // Chat Events (SSE)
 export interface ChatEventV2 {
@@ -158,6 +158,7 @@ export interface DagEditCommand {
 }
 
 export interface DagEditResponse {
+  validation_errors?: string[];
   success: boolean;
   toml_content: string;
   dag_json: DagJson;

@@ -373,7 +373,7 @@ paths:
 
   /api/runs/{id}/dag-status:
     get:
-      summary: DAG with live node status (colors: green/blue/gray/red)
+      summary: 'DAG with live node status (colors: green/blue/gray/red)'
       tags: [Execution]
       parameters:
         - name: id

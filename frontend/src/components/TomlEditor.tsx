@@ -1,31 +1,6 @@
 import { useRef, useEffect } from 'react';
 import { EditorView, basicSetup } from 'codemirror';
 import { EditorState } from '@codemirror/state';
-import { StreamLanguage } from '@codemirror/language';
-
-// Simple TOML-like syntax highlighting using StreamLanguage
-const tomlLanguage = StreamLanguage.define<unknown>({
-  token(stream) {
-    // Comments
-    if (stream.match(/^#.*/)) return 'comment';
-    // Strings
-    if (stream.match(/^"[^"]*"/)) return 'string';
-    if (stream.match(/^'[^']*'/)) return 'string';
-    // Keys
-    if (stream.match(/^[a-zA-Z_][a-zA-Z0-9_-]*\s*(?==)/)) return 'atom';
-    if (stream.match(/^\[\[?[^\]]*\]\]?/)) return 'heading';
-    // Table headers
-    if (stream.match(/^\[[^\]]*\]/)) return 'heading';
-    // Numbers
-    if (stream.match(/^\d+(\.\d+)?([eE][+-]?\d+)?/)) return 'number';
-    if (stream.match(/^true|false|yes|no|on|off/i)) return 'bool';
-    // Skip whitespace
-    if (stream.match(/^\s+/)) return null;
-    // Operators and other
-    stream.next();
-    return null;
-  },
-});
 
 interface TomlEditorProps {
   value: string;
@@ -50,7 +25,6 @@ export default function TomlEditor({ value, onChange, readOnly }: TomlEditorProp
       doc: value,
       extensions: [
         basicSetup,
-        tomlLanguage,
         updateListener,
         EditorView.theme({
           '&': { height: '100%', fontSize: '13px', fontFamily: '"Cascadia Code", "SF Mono", "Fira Code", monospace' },

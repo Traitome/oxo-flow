@@ -45,38 +45,79 @@ export default function ChatUI({ onPipelineReady }: ChatUIProps) {
     setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: '', agentStatus: 'Thinking...' }]);
 
     try {
-      const resp = await fetch('/api/chat/send/json', {
+      const resp = await fetch('/api/chat/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text }),
       });
-      const data = await resp.json();
+      if (!resp.body) throw new Error("No response body");
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let doneReading = false;
+      let finalPipelineData: any = null;
 
-      if (data.pipeline_id) {
-        // Update assistant message with result
-        const tomlPreview = (data.toml_content as string || '').split('\n').slice(0, 6).join('\n');
+      while (!doneReading) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let nextIndex;
+        while ((nextIndex = buffer.indexOf('\n\n')) !== -1) {
+          const eventString = buffer.substring(0, nextIndex);
+          buffer = buffer.substring(nextIndex + 2);
+          
+          const lines = eventString.split('\n');
+          let currentEvent = '';
+          let currentData = '';
+          for (const line of lines) {
+            if (line.startsWith('event:')) currentEvent = line.substring(6).trim();
+            else if (line.startsWith('data:')) currentData = line.substring(5).trim();
+          }
+          
+          if (currentEvent && currentData) {
+            const payload = JSON.parse(currentData);
+            if (currentEvent === 'agent') {
+              setAgents(prev => ({...prev, [payload.agent]: payload.status}));
+              setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, agentStatus: `${payload.agent}: ${payload.status}` } : m));
+            } else if (currentEvent === 'text') {
+              setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: m.content + payload.chunk } : m));
+            } else if (currentEvent === 'action') {
+              if (payload.action_type === 'pipeline_ready') {
+                finalPipelineData = payload.data;
+              } else if (payload.action_type === 'data_report') {
+                // handle data report
+              }
+            } else if (currentEvent === 'done') {
+              doneReading = true;
+            } else if (currentEvent === 'error') {
+              throw new Error(payload.message || JSON.stringify(payload));
+            }
+          }
+        }
+      }
+
+      if (finalPipelineData) {
+        const tomlPreview = (finalPipelineData.toml_content as string || '').split('\n').slice(0, 6).join('\n');
         setMessages(prev => prev.map(m =>
           m.id === assistantId ? {
             ...m,
-            content: `✅ Pipeline generated!\n\n\`\`\`toml\n${tomlPreview}\n...\n\`\`\``,
+            content: m.content + `\n\n✅ Pipeline generated!\n\n\`\`\`toml\n${tomlPreview}\n...\n\`\`\``,
             agentStatus: undefined,
             actions: [
-              { type: 'primary', label: '✅ Accept', action: 'accept', data },
-              { type: 'secondary', label: '✏️ Edit', action: 'edit', data },
+              { type: 'primary', label: '✅ Accept', action: 'accept', data: finalPipelineData },
+              { type: 'secondary', label: '✏️ Edit', action: 'edit', data: finalPipelineData },
               { type: 'ghost', label: '🔄 Regenerate', action: 'regenerate' },
             ],
           } : m
         ));
-        onPipelineReady?.(data);
-        setAgents({});
-      } else if (data.code) {
-        setMessages(prev => prev.map(m =>
-          m.id === assistantId ? { ...m, content: `❌ ${data.message || 'Error generating pipeline'}`, agentStatus: undefined } : m
-        ));
+        onPipelineReady?.(finalPipelineData);
+      } else {
+        setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, agentStatus: undefined } : m));
       }
-    } catch (e) {
+      setAgents({});
+    } catch (e: any) {
       setMessages(prev => prev.map(m =>
-        m.id === assistantId ? { ...m, content: '❌ Connection error. Please try again.', agentStatus: undefined } : m
+        m.id === assistantId ? { ...m, content: m.content + `\n❌ ${e.message || 'Connection error.'}`, agentStatus: undefined } : m
       ));
     }
     setLoading(false);
@@ -99,8 +140,8 @@ export default function ChatUI({ onPipelineReady }: ChatUIProps) {
       {/* Header */}
       <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--color-border)', display: 'flex', alignItems: 'center', gap: '8px' }}>
         <Bot size={18} color="var(--color-primary)" />
-        <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>AI Companion</span>
-        <span style={{ fontSize: '0.7rem', color: 'var(--color-text-tertiary)', marginLeft: 'auto' }}>v0.9</span>
+        <h1 style={{ fontWeight: 600, fontSize: '0.9rem', margin: 0 }}>AI Companion</h1>
+        <span style={{ fontSize: '0.7rem', color: 'var(--color-text-tertiary)', marginLeft: 'auto' }}>v0.8</span>
       </div>
 
       {/* Messages */}
@@ -164,15 +205,15 @@ export default function ChatUI({ onPipelineReady }: ChatUIProps) {
       </div>
 
       {/* Input */}
-      <div style={{ padding: '12px 16px', borderTop: '1px solid var(--color-border)', display: 'flex', gap: '8px' }}>
-        <input
-          ref={inputRef}
-          type="text"
+      <div style={{ padding: '12px 16px', borderTop: '1px solid var(--color-border)', display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
+        <textarea
+          ref={inputRef as any}
           value={input}
           onChange={e => setInput(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && sendMessage()}
-          placeholder="Describe your analysis..."
+          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }}}
+          placeholder="Describe your analysis... (Shift+Enter for newline)"
           disabled={loading}
+          rows={2}
           className="intent-input"
           style={{ flex: 1 }}
         />

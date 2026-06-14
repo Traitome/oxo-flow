@@ -15,11 +15,15 @@ export default function Settings() {
   const [model, setModel] = useState('');
   const [testResult, setTestResult] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [refs, setRefs] = useState<{ installed: any[]; missing: string[] } | null>(null);
+
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => {});
     api.aiConfig().then((c) => { setAiConfig(c); setProvider(c.provider); if (c.api_url) setApiUrl(c.api_url); if (c.model) setModel(c.model); }).catch(() => {});
     fetch('/api/quota').then(r => r.json()).then(setQuota).catch(() => {});
+    api.referenceStatus().then(setRefs).catch(() => {});
+
   }, []);
 
   const handleSave = async () => {
@@ -119,21 +123,29 @@ export default function Settings() {
             Base path: <code>/data/references</code>
           </div>
           <div style={{ display: 'grid', gap: '6px' }}>
-            {[
-              { name: 'hg38', components: 'STAR index, FASTA, GTF', status: 'complete' },
-              { name: 'mm10', components: 'STAR index, FASTA', status: 'partial', missing: 'GTF' },
-            ].map(ref => (
-              <div key={ref.name} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border-light)' }}>
+            {refs?.installed?.map((ref: any, idx: number) => (
+              <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border-light)' }}>
                 <div>
-                  <strong>{ref.name}</strong>
-                  <span style={{ color: 'var(--color-text-secondary)', marginLeft: '8px', fontSize: '0.8rem' }}>{ref.components}</span>
+                  <strong>{ref.genome || 'unknown'}</strong>
+                  <span style={{ color: 'var(--color-text-secondary)', marginLeft: '8px', fontSize: '0.8rem' }}>{ref.components?.join(', ')}</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span className={`status-badge ${ref.status === 'complete' ? 'success' : 'warning'}`}>{ref.status === 'complete' ? 'Complete' : `Missing: ${ref.missing}`}</span>
-                  {ref.status === 'partial' && <button className="btn-sm" style={{ fontSize: '0.7rem' }}>Download</button>}
+                  <span className="status-badge success">Complete</span>
                 </div>
               </div>
             ))}
+            {refs?.missing?.map((missingName: string, idx: number) => (
+              <div key={`missing-${idx}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border-light)' }}>
+                <div>
+                  <strong>{missingName}</strong>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span className="status-badge warning">Missing</span>
+                  <button className="btn-sm" style={{ fontSize: '0.7rem' }}>Download</button>
+                </div>
+              </div>
+            ))}
+            {!refs && <div style={{ color: 'var(--color-text-secondary)' }}>Loading references...</div>}
           </div>
           <div style={{ marginTop: '0.75rem' }}>
             <button className="btn-sm">+ Add Reference Genome</button>
@@ -148,20 +160,17 @@ export default function Settings() {
             Default: <strong>Conda (bioconda channel)</strong>
           </div>
           <div style={{ display: 'grid', gap: '6px' }}>
-            {[
-              { name: 'conda', version: 'bioconda channel', status: 'available' },
-              { name: 'docker', version: 'Docker version 27+', status: 'available' },
-              { name: 'singularity', version: 'not detected', status: 'unavailable' },
-              { name: 'pixi', version: 'not detected', status: 'unavailable' },
-            ].map(env => (
-              <div key={env.name} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border-light)' }}>
+            {['conda', 'docker', 'singularity', 'pixi'].map(envName => {
+              const available = null; // env detection via system API
+              return (
+              <div key={envName} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border-light)' }}>
                 <div>
-                  <strong>{env.name}</strong>
-                  <span style={{ color: 'var(--color-text-secondary)', marginLeft: '8px', fontSize: '0.8rem' }}>{env.version}</span>
+                  <strong>{envName}</strong>
+                  <span style={{ color: 'var(--color-text-secondary)', marginLeft: '8px', fontSize: '0.8rem' }}>{available ? 'detected' : 'not detected'}</span>
                 </div>
-                <span className={`status-badge ${env.status === 'available' ? 'success' : 'cancelled'}`}>{env.status}</span>
+                <span className={`status-badge ${available ? 'success' : 'cancelled'}`}>{available ? 'available' : 'unavailable'}</span>
               </div>
-            ))}
+            )})}
           </div>
         </div>
       </Section>

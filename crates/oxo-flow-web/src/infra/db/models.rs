@@ -104,7 +104,7 @@ pub struct ChatSessionRow {
     pub created_at: String,
     pub updated_at: String,
 }
-// v0.9 AI Companion models
+// v0.8 AI Companion models
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct ChatMessageRow {

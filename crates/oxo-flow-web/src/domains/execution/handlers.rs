@@ -71,7 +71,7 @@ pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateR
             created_at: now_iso(),
         };
         let _ = sqlx::query(
-            "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, status, phase, pid, workdir, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, status, phase, pid, workdir, started_at, finished_at, created_at, workflow_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&run.id)
         .bind(&run.user_id)
@@ -84,8 +84,16 @@ pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateR
         .bind(&run.started_at)
         .bind(&run.finished_at)
         .bind(&run.created_at)
+        .bind("my-pipeline")
         .execute(pool)
         .await;
+        
+        crate::executor::spawn_background_run(
+            resp.run_id.clone(),
+            "local_user".to_string(),
+            "none".to_string(),
+            "local".to_string(),
+        );
     }
 
     Ok(Json(resp))

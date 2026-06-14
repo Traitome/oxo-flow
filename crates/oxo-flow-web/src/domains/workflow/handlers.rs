@@ -655,7 +655,7 @@ pub async fn validate_plugin(
 }
 
 // ---------------------------------------------------------------------------
-// Data Perception API (v0.9 AI Companion)
+// Data Perception API (v0.8 AI Companion)
 // ---------------------------------------------------------------------------
 
 /// POST /api/data/perceive

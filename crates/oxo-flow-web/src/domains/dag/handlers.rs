@@ -5,13 +5,19 @@ use axum::{Json, extract::Path, http::StatusCode};
 
 type AR<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 
+#[derive(serde::Deserialize)]
+pub struct EditPayload {
+    pub toml_content: String,
+    #[serde(flatten)]
+    pub cmd: super::service::DagEditCommand,
+}
+
 /// POST /api/pipeline/{id}/command
 pub async fn edit_command(
     Path(id): Path<String>,
-    Json(cmd): Json<super::service::DagEditCommand>,
+    Json(payload): Json<EditPayload>,
 ) -> AR<super::service::DagEditResponse> {
-    let default_toml = "[workflow]\nname = \"edit\"\n\n[[rules]]\nname = \"s1\"\nshell = \"echo s1\"\n\n[[rules]]\nname = \"s2\"\nshell = \"echo s2\"\ndepends_on = [\"s1\"]\n";
-    super::service::execute_edit(default_toml, &id, &cmd)
+    super::service::execute_edit(&payload.toml_content, &id, &payload.cmd)
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "DAG_EDIT_ERROR", e))
 }
