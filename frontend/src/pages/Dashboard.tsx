@@ -3,9 +3,11 @@ import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { HealthResponse, SystemInfo, RunItem, Template } from '../api/types';
 import ChatUI from '../components/ChatUI';
+import { usePipelineSession } from '../context/PipelineSession';
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const session = usePipelineSession();
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [sys, setSys] = useState<SystemInfo | null>(null);
   const [runs, setRuns] = useState<RunItem[]>([]);
@@ -29,10 +31,12 @@ export default function Dashboard() {
       {/* AI Companion Chat UI */}
       <div style={{ marginBottom: '1.5rem', height: '420px' }}>
         <ChatUI
+          context="dashboard"
           onPipelineReady={(data) => {
-            if (data?.pipeline_id) {
-              navigate(`/editor?pipeline_id=${data.pipeline_id}`);
+            if (data?.toml_content) {
+              session.setPipelineToml(data.toml_content);
             }
+            navigate(`/editor`);
           }}
         />
       </div>

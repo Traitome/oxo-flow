@@ -1,33 +1,45 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, Loader2, Check } from 'lucide-react';
+import { usePipelineSession, type ChatContextType, type ChatMessage, type ChatAction } from '../context/PipelineSession';
 
-interface ChatMessage {
-  id: string;
-  role: 'user' | 'assistant' | 'agent' | 'system';
-  content: string;
-  actions?: ChatAction[];
-  agentStatus?: string;
-}
+const CONTEXT_LABELS: Record<ChatContextType, string> = {
+  dashboard: 'Pipeline Generation',
+  editor: 'Pipeline Refinement',
+  monitor: 'Run Diagnosis',
+  report: 'Results Interpretation',
+};
 
-interface ChatAction {
-  type: string;
-  label: string;
-  action: string;
-  data?: any;
-}
+const PLACEHOLDERS: Record<ChatContextType, string> = {
+  dashboard: 'Describe your analysis and I\'ll generate a pipeline. Try: "RNA-seq paired-end, hg38, STAR + featureCounts"',
+  editor: 'Ask me to refine this pipeline — add rules, change parameters, or fix validation issues.',
+  monitor: 'Ask me about the running pipeline — status, errors, or predictions.',
+  report: 'Ask me about the results — findings, comparisons, or next steps.',
+};
 
 interface ChatUIProps {
+  context?: ChatContextType;
   onPipelineReady?: (data: any) => void;
   onDataReport?: (report: any) => void;
 }
 
-export default function ChatUI({ onPipelineReady }: ChatUIProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatUIProps) {
+  const session = usePipelineSession();
+  const [messages, setMessages] = useState<ChatMessage[]>(() => session.state.chatMessages[context] || []);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [agents, setAgents] = useState<Record<string, string>>({});
   const chatRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Sync messages to session context whenever they change
+  useEffect(() => {
+    session.setChatMessages(context, messages);
+  }, [messages, context]);
+
+  // Set chat context on mount
+  useEffect(() => {
+    session.setChatContext(context);
+  }, [context]);
 
   useEffect(() => { chatRef.current?.scrollTo(0, chatRef.current.scrollHeight); }, [messages, agents]);
 
@@ -48,7 +60,7 @@ export default function ChatUI({ onPipelineReady }: ChatUIProps) {
       const resp = await fetch('/api/chat/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, context: { intent: context } }),
       });
       if (!resp.body) throw new Error("No response body");
       const reader = resp.body.getReader();
@@ -131,7 +143,6 @@ export default function ChatUI({ onPipelineReady }: ChatUIProps) {
       sendMessage();
     } else if (action.action === 'edit' && action.data) {
       onPipelineReady?.(action.data);
-      window.location.href = '/editor';
     }
   };
 
@@ -141,6 +152,7 @@ export default function ChatUI({ onPipelineReady }: ChatUIProps) {
       <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--color-border)', display: 'flex', alignItems: 'center', gap: '8px' }}>
         <Bot size={18} color="var(--color-primary)" />
         <h1 style={{ fontWeight: 600, fontSize: '0.9rem', margin: 0 }}>AI Companion</h1>
+        <span style={{ fontSize: '0.65rem', color: 'var(--color-primary)', background: 'var(--color-primary-light)', padding: '1px 6px', borderRadius: '3px', fontWeight: 500 }}>{CONTEXT_LABELS[context]}</span>
         <span style={{ fontSize: '0.7rem', color: 'var(--color-text-tertiary)', marginLeft: 'auto' }}>v0.8</span>
       </div>
 
@@ -149,8 +161,7 @@ export default function ChatUI({ onPipelineReady }: ChatUIProps) {
         {messages.length === 0 && (
           <div style={{ textAlign: 'center', color: 'var(--color-text-tertiary)', padding: '2rem 1rem' }}>
             <Bot size={32} style={{ marginBottom: '8px', opacity: 0.5 }} />
-            <p style={{ fontSize: '0.9rem', marginBottom: '4px' }}>Describe your analysis and I'll generate a pipeline.</p>
-            <p style={{ fontSize: '0.75rem' }}>Try: "RNA-seq paired-end, hg38, STAR + featureCounts"</p>
+            <p style={{ fontSize: '0.9rem', marginBottom: '4px' }}>{PLACEHOLDERS[context]}</p>
           </div>
         )}
 

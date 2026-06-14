@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { LayoutDashboard, GitBranch, PlayCircle, BarChart3, Library, Settings, BookOpen, FlaskConical, Menu, X, MessageCircle } from 'lucide-react';
 import Toast from './Toast';
+import ResultNotification from './ResultNotification';
+import { usePipelineSession } from '../context/PipelineSession';
 
 const nav = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -16,6 +18,7 @@ const nav = [
 
 export default function Layout() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const session = usePipelineSession();
 
   return (
     <div className="app-shell">
@@ -49,6 +52,9 @@ export default function Layout() {
             {nav.map(({ to, icon: Icon, label }) => (
               <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
                 <Icon size={18} /><span>{label}</span>
+                {label === 'Runs' && session.state.activeRunId && (
+                  <span style={{ marginLeft: 'auto', width: 6, height: 6, borderRadius: '50%', background: 'var(--color-primary)', animation: 'pulse 1.5s infinite' }} title="Active run" />
+                )}
               </NavLink>
             ))}
           </nav>
@@ -59,6 +65,7 @@ export default function Layout() {
         </aside>
 
         <main className="main-content">
+          <ResultNotification />
           <Outlet />
         </main>
       </div>

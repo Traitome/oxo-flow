@@ -3,6 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { RunItem, MonitorStatus, ReportData, DagStatus, Diagnostics } from '../api/types';
 import { Play, Pause, RotateCcw, BarChart3, Loader2, Bot } from 'lucide-react';
+import DagView from '../components/DagView';
+import { usePipelineSession } from '../context/PipelineSession';
 
 type TabType = 'monitor' | 'report' | 'diagnostics' | 'dag';
 
@@ -16,6 +18,7 @@ function StatCard({ value, label, color }: { value: string; label: string; color
 }
 
 export default function MonitorReport() {
+  const session = usePipelineSession();
   const [runs, setRuns] = useState<RunItem[]>([]);
   const [selId, setSelId] = useState<string | null>(null);
   const [monitorStatus, setMonitorStatus] = useState<MonitorStatus | null>(null);
@@ -36,6 +39,8 @@ export default function MonitorReport() {
     setSelId(id);
     setTab('monitor');
     setQaAnswer(null);
+    session.setActiveRunId(id);
+    session.setChatContext('monitor');
     try { setMonitorStatus(await api.aiStatus(id)); } catch { setMonitorStatus(null); }
     try { setReportData(await api.runReport(id)); } catch { setReportData(null); }
     try { setDagStatus(await api.getDagStatus(id)); } catch { setDagStatus(null); }
@@ -375,26 +380,24 @@ export default function MonitorReport() {
 
   // ── DAG Status ──
   const renderDag = () => {
-    if (!dagStatus) return <div className="empty-state">No DAG status available</div>;
+    if (!dagStatus || dagStatus.nodes.length === 0) return <div className="empty-state">No DAG status available</div>;
     return (
       <div>
         <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem', fontSize: '0.82rem', flexWrap: 'wrap' }}>
           <span>Total: <strong>{dagStatus.metrics.total_nodes}</strong></span>
-          <span style={{ color: '#059669' }}>Done: <strong>{dagStatus.metrics.completed_nodes}</strong></span>
-          <span style={{ color: '#2563EB' }}>Running: <strong>{dagStatus.metrics.running_nodes}</strong></span>
-          <span style={{ color: '#DC2626' }}>Failed: <strong>{dagStatus.metrics.failed_nodes}</strong></span>
-          <span>Pending: <strong>{dagStatus.metrics.pending_nodes}</strong></span>
+          <span style={{ color: '#059669' }}>✅ Done: <strong>{dagStatus.metrics.completed_nodes}</strong></span>
+          <span style={{ color: '#3B82F6' }}>🔄 Running: <strong>{dagStatus.metrics.running_nodes}</strong></span>
+          <span style={{ color: '#DC2626' }}>❌ Failed: <strong>{dagStatus.metrics.failed_nodes}</strong></span>
+          <span>⏳ Pending: <strong>{dagStatus.metrics.pending_nodes}</strong></span>
+          {dagStatus.metrics.eta_ms != null && dagStatus.metrics.eta_ms > 0 && (
+            <span style={{ color: 'var(--color-text-secondary)' }}>ETA: {(dagStatus.metrics.eta_ms / 60000).toFixed(0)}min</span>
+          )}
         </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-          {dagStatus.nodes.map((n) => (
-            <div key={n.id} style={{
-              padding: '6px 12px', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem',
-              background: n.color === 'green' ? '#05966920' : n.color === 'red' ? '#DC262620' : n.color === 'blue' ? '#2563EB20' : '#94A3B820',
-              border: `1px solid ${n.color === 'green' ? '#059669' : n.color === 'red' ? '#DC2626' : n.color === 'blue' ? '#2563EB' : '#94A3B8'}`,
-            }}>
-              {n.label} {n.duration_ms ? `${(n.duration_ms / 1000).toFixed(1)}s` : ''}
-            </div>
-          ))}
+        <div style={{ height: '400px', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
+          <DagView
+            nodes={dagStatus.nodes.map(n => ({ id: n.id, label: n.label, color: n.color, duration_ms: n.duration_ms ?? undefined }))}
+            edges={dagStatus.edges}
+          />
         </div>
       </div>
     );
@@ -435,14 +438,14 @@ export default function MonitorReport() {
       </div>
 
       {/* Run Detail */}
-      {selId && selectedRun && (
+      {(selId) && (
         <div className="dash-card">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
             <div>
               <h3 style={{ fontSize: '1rem', fontFamily: 'var(--font-mono)' }}>Run {selId.slice(0, 12)}...</h3>
               <div style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>
-                Status: <span className={`status-badge ${selectedRun.status}`}>{selectedRun.status}</span>
-                · Phase: {selectedRun.phase || '-'}
+                Status: <span className={`status-badge ${selectedRun?.status || 'unknown'}`}>{selectedRun?.status || 'unknown'}</span>
+                · Phase: {selectedRun?.phase || '-'}
               </div>
             </div>
             <div style={{ display: 'flex', gap: '4px' }}>

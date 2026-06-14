@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { DagJson } from '../api/types';
 import ChatUI from '../components/ChatUI';
+import { usePipelineSession } from '../context/PipelineSession';
 
 // Lazy-loaded components for bundle optimization
 const TomlEditor = lazy(() => import('../components/TomlEditor'));
@@ -40,11 +41,11 @@ threads = 4
 `;
 
 export default function PipelineEditor() {
-  const [toml, setToml] = useState(DEFAULT_TOML);
-  const [dagJson, setDagJson] = useState<DagJson | null>(null);
+  const session = usePipelineSession();
+  const [toml, setToml] = useState(() => session.state.pipelineToml || DEFAULT_TOML);
+  const [dagJson, setDagJson] = useState<DagJson | null>(() => session.state.dagData);
   const [validation, setValidation] = useState<{ valid: boolean; errors: Array<{ code: string; message: string; rule: string | null; suggestion: string | null }> } | null>(null);
   const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<{ runId?: string; message: string } | null>(null);
   const [pipelineId] = useState(() => 'draft-' + Math.random().toString(36).slice(2, 9));
   const navigate = useNavigate();
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -52,6 +53,16 @@ export default function PipelineEditor() {
   const [showConnectDialog, setShowConnectDialog] = useState(false);
   const [newNodeName, setNewNodeName] = useState('');
   const [connectTarget, setConnectTarget] = useState('');
+
+  // Sync TOML to session context
+  useEffect(() => {
+    session.setPipelineToml(toml);
+  }, [toml]);
+
+  // Sync DAG to session
+  useEffect(() => {
+    if (dagJson) session.setDagData(dagJson);
+  }, [dagJson]);
 
   const updateDag = useCallback(async (content: string) => {
     try {
@@ -74,16 +85,20 @@ export default function PipelineEditor() {
 
   const handleRun = async (dryRun = false) => {
     setRunning(true);
-    setResult(null);
     try {
       const res = await api.createRun(toml, 4, dryRun);
-      setResult({ runId: res.run_id, message: `${dryRun ? 'Dry ' : ''}Run started: ${res.run_id.slice(0, 8)}...` });
+      session.setRunResult({
+        runId: res.run_id,
+        message: `${dryRun ? 'Dry-Run' : 'Run'} started: ${res.run_id.slice(0, 8)}... | ${res.execution_plan.total_rules} rules, est. ${res.estimated_resources.estimated_duration_secs}s`,
+        type: 'success',
+      });
       if (!dryRun && res.run_id) {
+         session.setActiveRunId(res.run_id);
          navigate(`/runs/${res.run_id}`);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to start run';
-      setResult({ message: `Error: ${msg}` });
+      session.setRunResult({ message: `Error: ${msg}`, type: 'error' });
     }
     setRunning(false);
   };
@@ -107,8 +122,8 @@ export default function PipelineEditor() {
 
       <div className="editor-layout" style={{ display: 'grid', gridTemplateColumns: '300px 1fr 1fr', gap: '16px', height: '80vh' }}>
         <div className="chat-panel" style={{ overflow: 'hidden' }}>
-           <ChatUI onPipelineReady={(data) => {
-              if (data.toml_content) setToml(data.toml_content);
+           <ChatUI context="editor" onPipelineReady={(data) => {
+              if (data.toml_content) { setToml(data.toml_content); session.setPipelineToml(data.toml_content); }
            }} />
         </div>
         <div className="editor-panel">
@@ -161,9 +176,11 @@ export default function PipelineEditor() {
         </div>
       </div>
 
-      {result && (
-        <div className={`result-bar ${result.runId ? 'success' : result.message.startsWith('Error') ? 'error' : 'info'}`}>
-          {result.message}
+      {session.state.lastRunResult && (
+        <div className={`result-bar ${session.state.lastRunResult.type}`} style={{ cursor: 'pointer' }}
+          onClick={() => session.setRunResult(null)}>
+          {session.state.lastRunResult.message}
+          <span style={{ marginLeft: 'auto', fontSize: '0.7rem', opacity: 0.7 }}>click to dismiss</span>
         </div>
       )}
 
