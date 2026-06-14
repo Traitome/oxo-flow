@@ -280,8 +280,9 @@
       <h1>Rust-native bioinformatics<br />pipeline engine</h1>
       <p class="subtitle">
         Build, validate, and execute reproducible bioinformatics workflows with
-        DAG-based execution, first-class environment management, cluster scheduling,
-        and clinical-grade reporting — all from a single, fast Rust binary.
+        DAG-based execution, AI-powered pipeline generation, first-class environment
+        management, cluster scheduling, and clinical-grade reporting — all from a
+        single, fast Rust binary.
       </p>
       <div class="badges">
         <a href="https://github.com/Traitome/oxo-flow/actions/workflows/ci.yml">
@@ -339,6 +340,16 @@
           <p>Export workflows to multi-stage Docker builds or Singularity images. Rootless containers with HEALTHCHECK support for portable, self-contained execution.</p>
         </div>
         <div class="feature-card">
+          <div class="icon">🤖</div>
+          <h3>AI Companion</h3>
+          <p>Contextual AI across the full workflow lifecycle: generate pipelines from natural language (Dashboard), get intelligent refinement suggestions (Editor), diagnose failures (Monitor), and interpret results (Report). Powered by Claude, OpenAI, DeepSeek, or local Ollama.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">💬</div>
+          <h3>Natural Language → Pipeline</h3>
+          <p>Describe your analysis in plain English — AI generates validated <code>.oxoflow</code> pipelines with step-by-step explanations, tool recommendations, and alternative approaches. SSE streaming with real-time agent progress tracking.</p>
+        </div>
+        <div class="feature-card">
           <div class="icon">🔒</div>
           <h3>Security Hardened</h3>
           <p>Shell injection prevention, path traversal protection, secret scanning, per-IP rate limiting, and <code>#![forbid(unsafe_code)]</code> across every crate.</p>
@@ -346,7 +357,7 @@
         <div class="feature-card">
           <div class="icon">⚡</div>
           <h3>Rust Performance</h3>
-          <p>Native binary — instant startup, fearless concurrency, zero-cost abstractions. Rust 2024 edition with a type-state lifecycle (<em>Parsed → Validated → Ready</em>).</p>
+          <p>Native binary — instant startup, fearless concurrency, zero-cost abstractions. Rust 2024 edition. 890 tests including 100 browser E2E scenarios.</p>
         </div>
       </div>
     </div>
@@ -539,18 +550,22 @@ docker = <span class="str">"biocontainers/bwa-mem2:2.2.1"</span>
           <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
         </thead>
         <tbody>
-          <tr><td><code>GET</code></td><td><code>/api/health</code></td><td>Health check</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/version</code></td><td>Server and engine version info</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/workflows</code></td><td>List available workflows</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/environments</code></td><td>List available environment backends</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/workflows/validate</code></td><td>Validate workflow TOML</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/workflows/dag</code></td><td>Build the DAG and return DOT representation</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/workflows/dry-run</code></td><td>Simulate execution and return the plan</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/workflows/run</code></td><td>Start workflow execution</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/workflows/export</code></td><td>Export workflow for sharing or archival</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/reports/generate</code></td><td>Generate a report (HTML or JSON)</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/health</code></td><td>Health check with component status</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/openapi.json</code></td><td>OpenAPI 3.1 specification</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/pipelines</code></td><td>List saved pipelines</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/pipelines/validate</code></td><td>Validate workflow TOML</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/pipelines/dag</code></td><td>Build DAG visualization data</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/pipelines/format</code></td><td>Reformat into canonical TOML</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/pipelines/lint</code></td><td>Run best-practice linting checks</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/templates</code></td><td>List system and user templates</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/runs</code></td><td>Start workflow execution</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/runs</code></td><td>List execution runs</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/runs/{id}</code></td><td>Run detail with status, DAG, diagnostics</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/chat/send</code></td><td>SSE streaming AI chat</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/ai/translate</code></td><td>Natural language → validated pipeline</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/ai/test</code></td><td>Test AI provider connection</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/ai/config</code></td><td>Get AI provider configuration</td></tr>
           <tr><td><code>POST</code></td><td><code>/api/auth/login</code></td><td>Authenticate and receive a session token</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/auth/me</code></td><td>Return the authenticated user details</td></tr>
           <tr><td><code>GET</code></td><td><code>/api/license</code></td><td>Check license status</td></tr>
         </tbody>
       </table>
@@ -597,13 +612,17 @@ cargo build --release
     <div class="container">
       <h2>Tech Stack</h2>
       <p class="section-sub">
-        Built on battle-tested Rust crates. 475 tests including a 1,000-rule stress test,
+        Built on battle-tested Rust crates and React 19. 890 tests including 100 browser E2E scenarios,
         with <code>#![forbid(unsafe_code)]</code> enforced across all crates.
       </p>
       <div class="tech-grid">
         <div class="tech-item">
           <div class="tech-label">Language</div>
           <div class="tech-value">Rust 2024 edition</div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">Frontend</div>
+          <div class="tech-value">React 19 + TypeScript</div>
         </div>
         <div class="tech-item">
           <div class="tech-label">Async runtime</div>
@@ -618,8 +637,20 @@ cargo build --release
           <div class="tech-value"><a href="https://github.com/tokio-rs/axum">axum</a></div>
         </div>
         <div class="tech-item">
+          <div class="tech-label">DAG viz</div>
+          <div class="tech-value"><a href="https://js.cytoscape.org/">Cytoscape.js</a></div>
+        </div>
+        <div class="tech-item">
           <div class="tech-label">Graph library</div>
           <div class="tech-value"><a href="https://github.com/petgraph/petgraph">petgraph</a></div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">Code editor</div>
+          <div class="tech-value"><a href="https://codemirror.net/">CodeMirror 6</a></div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">AI providers</div>
+          <div class="tech-value">Claude, OpenAI, DeepSeek, Ollama</div>
         </div>
         <div class="tech-item">
           <div class="tech-label">Serialization</div>
