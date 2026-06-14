@@ -1,8 +1,14 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, lazy, Suspense } from 'react';
 import { Play, CheckCircle, AlertCircle, Wand2 } from 'lucide-react';
 import { api } from '../api/client';
-import DagView from '../components/DagView';
 import type { DagJson } from '../api/types';
+
+// Lazy-loaded components for bundle optimization
+const TomlEditor = lazy(() => import('../components/TomlEditor'));
+const DagView = lazy(() => import('../components/DagView'));
+
+const EditorFallback = () => <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-text-tertiary)', fontSize: '0.85rem' }}>Loading editor...</div>;
+const DagFallback = () => <div className="empty-state">Loading DAG view...</div>;
 
 const DEFAULT_TOML = `[workflow]
 name = "my-pipeline"
@@ -114,28 +120,40 @@ export default function PipelineEditor() {
                   {validation.valid ? ' Valid' : `${validation.errors.length} error(s)`}
                 </span>
               )}
+              <button onClick={async () => {
+                setRunning(true);
+                try {
+                  const val = await api.validate(toml);
+                  setValidation(val);
+                  setResult({ message: val.valid ? '✅ Pipeline is valid' : `❌ ${val.errors.length} validation error(s)` });
+                } catch (e) {
+                  setResult({ message: 'Error: ' + (e instanceof Error ? e.message : 'Validation failed') });
+                }
+                setRunning(false);
+              }} className="btn-sm" style={{ background: 'transparent', border: '1px solid var(--color-border)' }}>
+                <CheckCircle size={14} /> Dry-Run
+              </button>
               <button onClick={handleRun} disabled={running || !validation?.valid} className="btn-run">
                 <Play size={16} /> {running ? 'Starting...' : 'Run'}
               </button>
             </div>
           </div>
-          <textarea
-            className="toml-editor"
-            value={toml}
-            onChange={(e) => setToml(e.target.value)}
-            spellCheck={false}
-          />
+          <Suspense fallback={<EditorFallback />}>
+            <TomlEditor value={toml} onChange={(v) => setToml(v)} />
+          </Suspense>
         </div>
         <div className="dag-panel">
           <div className="panel-header">
             <span>Pipeline DAG</span>
             {dagJson && <span className="dag-counts">{dagJson.nodes.length} nodes, {dagJson.edges.length} edges</span>}
           </div>
-          {dagJson ? (
-            <DagView nodes={dagJson.nodes} edges={dagJson.edges} />
-          ) : (
-            <div className="empty-state">Enter valid TOML to see the DAG</div>
-          )}
+          <Suspense fallback={<DagFallback />}>
+            {dagJson ? (
+              <DagView nodes={dagJson.nodes} edges={dagJson.edges} />
+            ) : (
+              <div className="empty-state">Enter valid TOML to see the DAG</div>
+            )}
+          </Suspense>
         </div>
       </div>
 

@@ -10,9 +10,9 @@ info:
     name: Shixiang Wang
     email: w_shixiang@163.com
 servers:
-  - url: http://localhost:8777
+  - url: http://localhost:3000
     description: Default local server (personal mode)
-  - url: http://0.0.0.0:8777
+  - url: http://0.0.0.0:3000
     description: Team/HPC server
 
 paths:

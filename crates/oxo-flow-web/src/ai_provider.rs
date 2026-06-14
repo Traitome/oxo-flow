@@ -74,7 +74,13 @@ mod internal {
                 client: reqwest::Client::new(),
                 api_key,
                 model: model.unwrap_or_else(|| CLAUDE_DEFAULT_MODEL.to_string()),
-                api_url: api_url.unwrap_or_else(|| CLAUDE_API_URL.to_string()),
+                api_url: {
+                    let mut url = api_url.unwrap_or_else(|| CLAUDE_API_URL.to_string());
+                    if !url.contains("/v1/messages") {
+                        url = format!("{}/v1/messages", url.trim_end_matches('/'));
+                    }
+                    url
+                },
             }
         }
 
@@ -154,7 +160,17 @@ mod internal {
                 client: reqwest::Client::new(),
                 api_key,
                 model: model.unwrap_or_else(|| OPENAI_DEFAULT_MODEL.to_string()),
-                api_url: api_url.unwrap_or_else(|| OPENAI_API_URL.to_string()),
+                api_url: {
+                    let mut url = api_url.unwrap_or_else(|| OPENAI_API_URL.to_string());
+                    if !url.contains("/chat/completions") {
+                        if !url.contains("/v1") {
+                            url = format!("{}/v1/chat/completions", url.trim_end_matches('/'));
+                        } else {
+                            url = format!("{}/chat/completions", url.trim_end_matches('/'));
+                        }
+                    }
+                    url
+                },
             }
         }
 
@@ -213,7 +229,13 @@ mod internal {
             Self {
                 client: reqwest::Client::new(),
                 model: model.unwrap_or_else(|| OLLAMA_DEFAULT_MODEL.to_string()),
-                api_url: api_url.unwrap_or_else(|| OLLAMA_API_URL.to_string()),
+                api_url: {
+                    let mut url = api_url.unwrap_or_else(|| OLLAMA_API_URL.to_string());
+                    if !url.contains("/chat") {
+                        url = format!("{}/chat", url.trim_end_matches('/'));
+                    }
+                    url
+                },
             }
         }
         pub fn name(&self) -> &str {

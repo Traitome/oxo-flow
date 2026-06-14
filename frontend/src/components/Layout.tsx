@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { LayoutDashboard, GitBranch, PlayCircle, Library, Settings, BookOpen, FlaskConical, Menu, X } from 'lucide-react';
+import { LayoutDashboard, GitBranch, PlayCircle, BarChart3, Library, Settings, BookOpen, FlaskConical, Menu, X, MessageCircle } from 'lucide-react';
 import Toast from './Toast';
 
 const nav = [
@@ -8,7 +8,8 @@ const nav = [
   { to: '/editor', icon: GitBranch, label: 'Pipeline Editor' },
   { to: '/pipelines', icon: Library, label: 'Pipelines' },
   { to: '/runs', icon: PlayCircle, label: 'Runs' },
-  { to: '/monitor', icon: PlayCircle, label: 'Monitor' },
+  { to: '/chat', icon: MessageCircle, label: 'AI Chat' },
+  { to: '/monitor', icon: BarChart3, label: 'Monitor' },
   { to: '/docs', icon: BookOpen, label: 'API Docs' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];

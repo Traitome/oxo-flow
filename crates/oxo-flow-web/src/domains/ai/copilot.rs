@@ -236,9 +236,8 @@ You are a bioinformatics pipeline optimizer for oxo-flow. You analyze pipeline T
 - ALWAYS validate the optimized pipeline would still produce correct results
 "#;
 
-    let mut user = format!(
-        "## Pipeline to Optimize\nGoal: {goal}\n\n```toml\n{toml_content}\n```\n\n"
-    );
+    let mut user =
+        format!("## Pipeline to Optimize\nGoal: {goal}\n\n```toml\n{toml_content}\n```\n\n");
     if let Some(c) = constraints {
         if let Some(ref mem) = c.max_memory {
             user.push_str(&format!("## Constraint\nMax memory: {mem}\n"));
@@ -260,15 +259,27 @@ mod tests {
     fn test_translate_prompt_has_role_and_safety() {
         let (system, _) = assemble_translate_prompt("RNA-seq", None, &[]);
         assert!(system.contains("## Role"), "should have ## Role section");
-        assert!(system.contains("## Safety"), "should have ## Safety section");
-        assert!(system.contains("## Tools Reference"), "should have tool reference");
-        assert!(system.contains("## Instructions"), "should have instructions");
+        assert!(
+            system.contains("## Safety"),
+            "should have ## Safety section"
+        );
+        assert!(
+            system.contains("## Tools Reference"),
+            "should have tool reference"
+        );
+        assert!(
+            system.contains("## Instructions"),
+            "should have instructions"
+        );
     }
 
     #[test]
     fn test_translate_prompt_includes_user_input() {
         let (_, user) = assemble_translate_prompt("variant calling", None, &[]);
-        assert!(user.contains("variant calling"), "should include user intent");
+        assert!(
+            user.contains("variant calling"),
+            "should include user intent"
+        );
         assert!(user.contains("```toml"), "should mention output format");
     }
 
@@ -280,22 +291,40 @@ mod tests {
             resource_bottlenecks: vec![],
         };
         let (system, _) = assemble_explain_prompt(&diag, "", "en");
-        assert!(system.contains("## Analysis Protocol"), "should have protocol section");
-        assert!(system.contains("## Known Error Patterns"), "should have error patterns table");
+        assert!(
+            system.contains("## Analysis Protocol"),
+            "should have protocol section"
+        );
+        assert!(
+            system.contains("## Known Error Patterns"),
+            "should have error patterns table"
+        );
     }
 
     #[test]
     fn test_interpret_prompt_has_output_structure() {
         let (system, _) = assemble_interpret_prompt("run1", "differential expression", "data");
-        assert!(system.contains("## Output Structure"), "should specify output structure");
-        assert!(system.contains("### Key Findings"), "should have findings template");
-        assert!(system.contains("### Caveats"), "should have caveats template");
+        assert!(
+            system.contains("## Output Structure"),
+            "should specify output structure"
+        );
+        assert!(
+            system.contains("### Key Findings"),
+            "should have findings template"
+        );
+        assert!(
+            system.contains("### Caveats"),
+            "should have caveats template"
+        );
     }
 
     #[test]
     fn test_optimize_prompt_has_heuristics_and_constraints() {
         let (system, _) = assemble_optimize_prompt("[workflow]", "speed", None);
-        assert!(system.contains("## Optimization Heuristics"), "should have heuristics");
+        assert!(
+            system.contains("## Optimization Heuristics"),
+            "should have heuristics"
+        );
         assert!(system.contains("## Safety"), "should have safety section");
 
         let constraints = OptimizeConstraints {
@@ -304,6 +333,9 @@ mod tests {
         };
         let (_, user) = assemble_optimize_prompt("[workflow]", "speed", Some(&constraints));
         assert!(user.contains("16GB"), "should include memory constraint");
-        assert!(user.contains("Max threads: 8"), "should include thread constraint");
+        assert!(
+            user.contains("Max threads: 8"),
+            "should include thread constraint"
+        );
     }
 }

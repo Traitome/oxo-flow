@@ -33,7 +33,17 @@ pub fn health_check(mode: &str, db_healthy: bool) -> HealthResponse {
                 latency_ms: None,
             },
             scheduler: None,
-            ai_provider: None,
+            ai_provider: {
+                let config = crate::ai_provider::AiProviderRegistry::global().get_config();
+                if config.is_configured {
+                    Some(crate::domains::observability::types::ComponentStatus {
+                        status: "connected".into(),
+                        latency_ms: None,
+                    })
+                } else {
+                    None
+                }
+            },
         },
         resources: ResourceInfo {
             cpu_pct: 0.0,
