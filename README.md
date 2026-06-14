@@ -308,6 +308,132 @@ shell = "process-dir {input} -o {output}"
 
 ## CLI Commands
 
+The `oxo-flow` binary provides **31 subcommands** covering the complete workflow lifecycle: `run`, `validate`, `dry-run`, `resume`, `graph`, `report`, `init`, `cluster`, `serve`, `completions`, and more. See the full [CLI Reference](https://traitome.github.io/oxo-flow/documentation/commands/run/) for details.
+
+## Cluster / HPC
+
+oxo-flow supports job submission to HPC cluster schedulers including SLURM, PBS/PBS Pro, SGE/UGE, and LSF. The `oxo-flow cluster` subcommand manages the full submission lifecycle.
+
+```bash
+# Submit a workflow to a SLURM cluster
+oxo-flow cluster submit workflow.oxoflow --backend slurm --queue short -o jobs/
+
+# Check submission status
+oxo-flow cluster status --id <job-id>
+
+# Cancel a submitted job
+oxo-flow cluster cancel --id <job-id>
+```
+
+**Supported backends:** `slurm`, `pbs`, `sge`, `lsf`. Configure cluster profiles with `oxo-flow profile` for reusable queue, walltime, and resource defaults.
+
+Workflows can also be executed directly on a cluster without the submit subcommand by using a profile:
+
+```bash
+# List available profiles
+oxo-flow profile list
+
+# Run a workflow using a SLURM profile
+oxo-flow run workflow.oxoflow --profile slurm
+```
+
+## Workflow Format (`.oxoflow`)
+
+oxo-flow uses a TOML-based workflow format that is human-readable, composable, and declarative:
+
+```toml
+[workflow]
+name = "variant-calling"
+version = "0.6.0"
+
+[config]
+reference = "/data/ref/GRCh38.fa"
+
+[[rules]]
+name = "fastp"
+input = ["raw/{sample}_R1.fastq.gz", "raw/{sample}_R2.fastq.gz"]
+output = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz"]
+threads = 8
+shell = "fastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]}"
+
+[rules.environment]
+conda = "envs/fastp.yaml"
+
+[[rules]]
+name = "bwa_align"
+input = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz"]
+output = ["aligned/{sample}.bam"]
+threads = 16
+memory = "32G"
+shell = "bwa-mem2 mem -t {threads} {config.reference} {input[0]} {input[1]} | samtools sort -o {output[0]}"
+
+[rules.environment]
+docker = "biocontainers/bwa-mem2:2.2.1"
+```
+
+Wildcards like `{sample}` are expanded automatically based on input file discovery or explicit configuration, enabling concise and powerful pattern-based pipeline definitions.
+
+### Reference Directory Convention
+
+Set a base directory and let oxo-flow derive standard paths:
+
+```toml
+reference_dir = "/data/references/GRCh38"
+
+# Auto-derived:
+# - reference_fasta → /data/references/GRCh38/genome.fa
+# - gene_annotation → /data/references/GRCh38/genes.gtf
+# - bwa_index → /data/references/GRCh38/bwa/genome.fa
+# ... etc.
+
+# Override specific paths:
+reference_fasta = "/custom/path/genome.fa"
+```
+
+### Environment Groups
+
+Share environments across multiple rules:
+
+```toml
+[env_groups.qc]
+conda = "envs/qc.yaml"
+
+[[rules]]
+name = "fastqc"
+env_group = "qc"
+
+[[rules]]
+name = "multiqc"
+env_group = "qc"  # Reuses same environment
+```
+
+### Optional Rules
+
+Rules can be marked as optional to skip execution when inputs are missing:
+
+```toml
+[[rules]]
+name = "optional_qc"
+input = ["{sample}_extra.fastq"]  # May not exist for all samples
+output = ["{sample}_extra_qc.html"]
+shell = "fastqc {input}"
+optional = true  # Skip gracefully if input missing
+```
+
+### Directory Input
+
+Track all files in a directory for modification detection:
+
+```toml
+[[rules]]
+name = "process_dir"
+input = { dir = "data/raw/", pattern = "*.fastq" }  # Optional glob pattern
+output = ["results/processed/"]
+shell = "process-dir {input} -o {output}"
+```
+
+## CLI Commands
+
 The `oxo-flow` binary provides 31 subcommands for the complete workflow lifecycle:
 
 | Command | Description |
@@ -352,54 +478,10 @@ oxo-flow validate rules/qc.oxoflow --as-include
 
 This skips DAG validation since fragments don't have complete dependency graphs.
 
-## Web API Endpoints
+## Web API
 
-The `oxo-flow-web` server exposes a REST API (powered by [axum](https://github.com/tokio-rs/axum)):
+The `oxo-flow serve` command starts an [axum](https://github.com/tokio-rs/axum)-powered REST server with **48 endpoints** across 7 domains (Observability, Pipeline, Execution, AI, Auth, Data, Ops). Full API reference at the [OpenAPI 3.1 spec](https://traitome.github.io/oxo-flow/documentation/reference/api/).
 
-```bash
-# Start the server
-oxo-flow serve --host 0.0.0.0 -p 8080
-```
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/health` | Health check with component status |
-| `GET` | `/api/system` | System info (CPU, memory, OS, uptime) |
-| `GET` | `/api/metrics` | Runtime metrics (requests, active workflows) |
-| `GET` | `/api/openapi.json` | OpenAPI 3.1 specification |
-| `GET` | `/api/pipelines` | List saved pipelines |
-| `POST` | `/api/pipelines/validate` | Validate workflow TOML |
-| `POST` | `/api/pipelines/parse` | Parse workflow into structured detail |
-| `POST` | `/api/pipelines/dag` | Build and return DAG visualization data |
-| `POST` | `/api/pipelines/format` | Reformat into canonical TOML |
-| `POST` | `/api/pipelines/lint` | Run best-practice linting checks |
-| `POST` | `/api/pipelines/diff` | Compare two workflow files |
-| `POST` | `/api/pipelines/search` | Search pipelines by query |
-| `GET` | `/api/templates` | List system and user templates |
-| `POST` | `/api/runs` | Start workflow execution |
-| `GET` | `/api/runs` | List execution runs |
-| `GET` | `/api/runs/{id}` | Get run detail with status |
-| `GET` | `/api/runs/{id}/status` | Get live run status (nodes, resources) |
-| `GET` | `/api/runs/{id}/dag-status` | Get DAG with per-node execution status |
-| `GET` | `/api/runs/{id}/diagnostics` | Get failure diagnostics with suggestions |
-| `POST` | `/api/runs/{id}/retry` | Retry failed run from checkpoint |
-| `POST` | `/api/runs/{id}/cancel` | Cancel a running workflow |
-| `POST` | `/api/runs/{id}/pause` | Pause execution (AI or user triggered) |
-| `POST` | `/api/runs/{id}/resume` | Resume from last checkpoint |
-| `GET` | `/api/runs/{id}/report` | Get AI-generated run report |
-| `POST` | `/api/runs/{id}/report/ask` | Ask questions about results (Q&A) |
-| `POST` | `/api/chat/send` | SSE streaming chat with AI Companion |
-| `GET` | `/api/chat/sessions` | List chat sessions |
-| `POST` | `/api/ai/translate` | Natural language → validated pipeline |
-| `POST` | `/api/ai/explain` | AI failure explanation |
-| `POST` | `/api/ai/interpret` | AI results interpretation |
-| `POST` | `/api/ai/optimize` | AI parameter optimization |
-| `GET` | `/api/ai/config` | Get AI provider configuration |
-| `POST` | `/api/ai/test` | Test AI provider connection |
-| `GET` | `/api/events` | Server-sent events for real-time updates |
-| `GET` | `/api/license` | Check license status |
-| `POST` | `/api/auth/login` | Authenticate and create session |
-| `GET` | `/api/auth/me` | Get current authenticated user |
 
 oxo-flow is organized as a Cargo workspace with three crates:
 

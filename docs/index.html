@@ -498,180 +498,782 @@ docker = <span class="str">"biocontainers/bwa-mem2:2.2.1"</span>
 
   <!-- ─── CLI Commands ────────────────────────────────────────── -->
   <section class="alt-bg" id="cli">
-    <div class="container">
+    <div class="container" style="text-align:center">
       <h2>CLI Commands</h2>
-      <p class="section-sub">
-        31 subcommands covering the complete workflow lifecycle.
-        <code>-v</code> verbose, <code>--quiet</code>, <code>--no-color</code>.
-        <input type="text" id="cli-search" placeholder="🔍 Filter commands..." style="margin-left:1rem;padding:0.3rem 0.6rem;border:1px solid #e4e8ee;border-radius:4px;font-size:0.9rem;width:200px;" oninput="document.querySelectorAll('#cli-table tbody tr').forEach(r=>{const t=r.textContent.toLowerCase();r.style.display=t.includes(this.value.toLowerCase())?'':'none'})" />
+      <p class="section-sub" style="margin-left:auto;margin-right:auto;max-width:600px">
+        31 subcommands covering the complete workflow lifecycle —
+        <code>run</code>, <code>validate</code>, <code>dry-run</code>, <code>graph</code>,
+        <code>cluster</code>, <code>serve</code>, and more.
       </p>
-      <p style="margin-bottom:0.5rem;font-size:0.85rem;">
-        <a href="#" onclick="document.querySelectorAll('.cli-cat-body').forEach(e=>e.style.display='none');return false">Collapse all</a> &middot;
-        <a href="#" onclick="document.querySelectorAll('.cli-cat-body').forEach(e=>e.style.display='');return false">Expand all</a>
+      <p style="margin-top:1rem">
+        <a class="btn btn-primary" href="documentation/commands/run/">CLI Reference →</a>
       </p>
-      <table class="data-table" id="cli-table">
-        <thead><tr><th>Category</th><th>Command</th><th>Description</th></tr></thead>
-        <tbody>
-          <tr class="cli-cat-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'" style="cursor:pointer;background:#f0f4f8;font-weight:600">
-            <td colspan="3">🔄 Pipeline Lifecycle</td></tr>
-          <tbody class="cli-cat-body">
-          <tr><td style="width:1px;white-space:nowrap;font-size:0.78rem;color:#0e7c86">Lifecycle</td><td><code>oxo-flow run</code></td><td>Execute a workflow (<code>-j</code> jobs, <code>-k</code> keep-going, <code>--timeout</code>)</td></tr>
-          <tr><td style="width:1px;white-space:nowrap;font-size:0.78rem;color:#0e7c86">Lifecycle</td><td><code>oxo-flow dry-run</code></td><td>Simulate execution — show what would run without executing</td></tr>
-          <tr><td>Lifecycle</td><td><code>oxo-flow resume</code></td><td>Resume an interrupted workflow from a checkpoint</td></tr>
-          <tr><td>Lifecycle</td><td><code>oxo-flow status</code></td><td>Show execution status from the checkpoint file</td></tr>
-          <tr><td>Lifecycle</td><td><code>oxo-flow clean</code></td><td>Clean workflow outputs and temp files (<code>-n</code> dry-run, <code>--force</code>)</td></tr>
-          <tr><td>Lifecycle</td><td><code>oxo-flow history</code></td><td>Show execution history from checkpoints</td></tr>
-          <tr><td>Lifecycle</td><td><code>oxo-flow test</code></td><td>Validate + lint + dry-run in test mode</td></tr>
-          <tr><td>Lifecycle</td><td><code>oxo-flow batch</code></td><td>Execute command templates in parallel across items</td></tr>
-          </tbody>
+    </div>
+  </section>
+  <!-- ─── CLI Commands end -->
 
-          <tr class="cli-cat-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'" style="cursor:pointer;background:#f0f4f8;font-weight:600">
-            <td colspan="3">📝 Authoring &amp; Validation</td></tr>
-          <tbody class="cli-cat-body">
-          <tr><td style="width:1px;white-space:nowrap;font-size:0.78re<!-- ─── Web API ──────────────────────────────────────────────── -->
-  <section>
+  <!-- ─── Install ─────────────────────────────────────────────── -->
+  <section id="install" class="alt-bg">
     <div class="container">
-      <h2>Web API</h2>
-      <p class="section-sub">
-        48 endpoints across 7 domains. <code>oxo-flow serve</code> starts an
-        <a href="https://github.com/tokio-rs/axum">axum</a>-powered REST server.
-        <input type="text" id="api-search" placeholder="🔍 Filter endpoints..." style="margin-left:1rem;padding:0.3rem 0.6rem;border:1px solid #e4e8ee;border-radius:4px;font-size:0.9rem;width:200px;" oninput="document.querySelectorAll('#api-table tbody tr').forEach(r=>{const t=r.textContent.toLowerCase();r.style.display=t.includes(this.value.toLowerCase())?'':'none'})" />
-      </p>
-      <p style="margin-bottom:0.5rem;font-size:0.85rem;">
-        <a href="#" onclick="document.querySelectorAll('.api-cat-body').forEach(e=>e.style.display='none');return false">Collapse all</a> &middot;
-        <a href="#" onclick="document.querySelectorAll('.api-cat-body').forEach(e=>e.style.display='');return false">Expand all</a>
-      </p>
-      <table class="data-table" id="api-table">
-        <thead><tr><th>Method</th><th>Endpoint</th><th>Domain</th><th>Description</th></tr></thead>
-        <tbody>
-          <tr class="api-cat-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'" style="cursor:pointer;background:#f0f4f8;font-weight:600">
-            <td colspan="4">🔍 Observability (6)</td></tr>
-          <tbody class="api-cat-body">
-          <tr><td><code>GET</code></td><td><code>/api/health</code></td><td style="font-size:0.78rem;color:#0e7c86">Observability</td><td>Health check with component status</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/system</code></td><td>Observability</td><td>System info (CPU, memory, OS, uptime)</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/metrics</code></td><td>Observability</td><td>Runtime metrics (requests, active workflows)</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/events</code></td><td>Observability</td><td>SSE stream for real-time updates</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/openapi.json</code></td><td>Observability</td><td>OpenAPI 3.1 specification</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/audit</code></td><td>Observability</td><td>Audit log entries</td></tr>
-          </tbody>
+      <h2>Installation</h2>
+      <p class="section-sub">Three ways to get oxo-flow on your system.</p>
+      <div class="install-methods">
+        <div class="install-card">
+          <h3>Cargo (recommended)</h3>
+          <code>cargo install oxo-flow-cli</code>
+        </div>
+        <div class="install-card">
+          <h3>Pre-built binary</h3>
+          <code># Linux (x86_64)
+curl -LO https://github.com/Traitome/oxo-flow/releases/latest/download/oxo-flow-x86_64-unknown-linux-gnu.tar.gz
+tar xzf oxo-flow-x86_64-unknown-linux-gnu.tar.gz
+sudo mv oxo-flow /usr/local/bin/
 
-          <tr class="api-cat-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'" style="cursor:pointer;background:#f0f4f8;font-weight:600">
-            <td colspan="4">📋 Pipeline &amp; Template (16)</td></tr>
-          <tbody class="api-cat-body">
-          <tr><td><code>GET</code></td><td><code>/api/pipelines</code></td><td style="font-size:0.78rem;color:#0e7c86">Pipeline</td><td>List saved pipelines</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/pipelines/{id}</code></td><td>Pipeline</td><td>Get pipeline detail</td></tr>
-          <tr><td><code>PUT</code></td><td><code>/api/pipelines/{id}</code></td><td>Pipeline</td><td>Update pipeline</td></tr>
-          <tr><td><code>DELETE</code></td><td><code>/api/pipelines/{id}</code></td><td>Pipeline</td><td>Delete pipeline</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/pipelines/validate</code></td><td>Pipeline</td><td>Validate TOML syntax and semantics</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/pipelines/parse</code></td><td>Pipeline</td><td>Parse into structured detail</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/pipelines/dag</code></td><td>Pipeline</td><td>Build DAG visualization data</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/pipelines/format</code></td><td>Pipeline</td><td>Reformat into canonical TOML</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/pipelines/lint</code></td><td>Pipeline</td><td>Run best-practice checks</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/pipelines/diff</code></td><td>Pipeline</td><td>Compare two pipelines</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/pipelines/search</code></td><td>Pipeline</td><td>Search pipelines</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/pipelines/export</code></td><td>Pipeline</td><td>Export for sharing</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/pipelines/import</code></td><td>Pipeline</td><td>Import from URL</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/templates</code></td><td>Template</td><td>List system and user templates</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/templates/{id}</code></td><td>Template</td><td>Get template detail</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/templates</code></td><td>Template</td><td>Save new template</td></tr>
-          </tbody>
-
-          <tr class="api-cat-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'" style="cursor:pointer;background:#f0f4f8;font-weight:600">
-            <td colspan="4">⚡ Execution &amp; Monitor (16)</td></tr>
-          <tbody class="api-cat-body">
-          <tr><td><code>POST</code></td><td><code>/api/runs</code></td><td style="font-size:0.78rem;color:#0e7c86">Execution</td><td>Start workflow execution</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/runs</code></td><td>Execution</td><td>List execution runs</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/runs/{id}</code></td><td>Execution</td><td>Get run detail</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/runs/{id}/status</code></td><td>Execution</td><td>Live status (nodes, resources)</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/runs/{id}/dag-status</code></td><td>Execution</td><td>DAG with per-node execution status</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/runs/{id}/diagnostics</code></td><td>Execution</td><td>Failure diagnostics + auto-fix suggestions</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/runs/{id}/logs</code></td><td>Execution</td><td>Execution log output</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/runs/{id}/results</code></td><td>Execution</td><td>Output file listing</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/runs/{id}/retry</code></td><td>Execution</td><td>Retry from checkpoint</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/runs/{id}/cancel</code></td><td>Execution</td><td>Cancel running workflow</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/runs/{id}/pause</code></td><td>Execution</td><td>Pause execution</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/runs/{id}/resume</code></td><td>Execution</td><td>Resume from checkpoint</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/runs/{id}/ai-status</code></td><td>Execution</td><td>AI monitor status + alerts</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/runs/{id}/report</code></td><td>Execution</td><td>AI-generated run report</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/runs/{id}/report/ask</code></td><td>Execution</td><td>Q&amp;A about results</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/runs/{id}/report/visualize</code></td><td>Execution</td><td>Generate charts (volcano, heatmap)</td></tr>
-          </tbody>
-
-          <tr class="api-cat-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'" style="cursor:pointer;background:#f0f4f8;font-weight:600">
-            <td colspan="4">🤖 AI Companion (10)</td></tr>
-          <tbody class="api-cat-body">
-          <tr><td><code>POST</code></td><td><code>/api/chat/send</code></td><td style="font-size:0.78rem;color:#0e7c86">AI</td><td>SSE streaming AI chat</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/chat/sessions</code></td><td>AI</td><td>List chat sessions</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/ai/translate</code></td><td>AI</td><td>Natural language → validated pipeline</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/ai/explain</code></td><td>AI</td><td>AI failure explanation</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/ai/interpret</code></td><td>AI</td><td>AI results interpretation</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/ai/optimize</code></td><td>AI</td><td>AI parameter optimization</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/ai/config</code></td><td>AI</td><td>Get AI configuration</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/ai/config</code></td><td>AI</td><td>Update AI configuration</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/ai/test</code></td><td>AI</td><td>Test AI provider connection</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/ai/config/effective</code></td><td>AI</td><td>Resolved config (user→server→env)</td></tr>
-          </tbody>
-
-          <tr class="api-cat-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'" style="cursor:pointer;background:#f0f4f8;font-weight:600">
-            <td colspan="4">🔐 Auth, Data &amp; Ops</td></tr>
-          <tbody class="api-cat-body">
-          <tr><td><code>POST</code></td><td><code>/api/auth/login</code></td><td style="font-size:0.78rem;color:#0e7c86">Auth</td><td>Authenticate and create session</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/auth/me</code></td><td>Auth</td><td>Current user info</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/users</code></td><td>Auth</td><td>List users (admin)</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/license</code></td><td>Auth</td><td>Check license status</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/hpc</code></td><td>HPC</td><td>HPC scheduler status</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/data/analyze</code></td><td>Data</td><td>Analyze data directory</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/data/perceive</code></td><td>Data</td><td>AI data perception</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/data/reference/status</code></td><td>Data</td><td>Reference installation status</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/pipeline/{id}/command</code></td><td>Ops</td><td>DAG edit command (add/remove/connect)</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/pipeline/{id}/undo</code></td><td>Ops</td><td>Undo last DAG edit</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/pipeline/{id}/redo</code></td><td>Ops</td><td>Redo last undone edit</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/pipeline/{id}/fork</code></td><td>Ops</td><td>Fork pipeline copy</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/pipeline/{id}/share</code></td><td>Ops</td><td>Share pipeline</td></tr>
-          </tbody>
-        </tbody>
-      </table>
+# macOS (Apple Silicon)
+curl -LO https://github.com/Traitome/oxo-flow/releases/latest/download/oxo-flow-aarch64-apple-darwin.tar.gz
+tar xzf oxo-flow-aarch64-apple-darwin.tar.gz
+sudo mv oxo-flow /usr/local/bin/</code>
+        </div>
+        <div class="install-card">
+          <h3>Build from source</h3>
+          <code>git clone https://github.com/Traitome/oxo-flow.git
+cd oxo-flow
+cargo build --release
+# Binaries in target/release/
+#   oxo-flow      (CLI)
+#   oxo-flow-web  (Web server)</code>
+        </div>
+      </div>
     </div>
   </section>
 
-  <!-- ─── Web API end -->
-
-  <!-- ─── CLI Commands end -->
-
-  <!-- ─── Web API ──────────────────────────────────────────────── -->
+  <!-- ─── Tech Stack ──────────────────────────────────────────── -->
   <section>
     <div class="container">
-      <h2>Web API</h2>
+      <h2>Tech Stack</h2>
       <p class="section-sub">
-        <code>oxo-flow serve</code> starts an <a href="https://github.com/tokio-rs/axum">axum</a>-powered
-        REST server with a versioned API, RBAC, rate limiting, and security headers.
+        Built on battle-tested Rust crates and React 19. 890 tests including 100 browser E2E scenarios,
+        with <code>#![forbid(unsafe_code)]</code> enforced across all crates.
+      </p>
+      <div class="tech-grid">
+        <div class="tech-item">
+          <div class="tech-label">Language</div>
+          <div class="tech-value">Rust 2024 edition</div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">Frontend</div>
+          <div class="tech-value">React 19 + TypeScript</div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">Async runtime</div>
+          <div class="tech-value"><a href="https://tokio.rs/">tokio</a></div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">CLI framework</div>
+          <div class="tech-value"><a href="https://github.com/clap-rs/clap">clap</a> (derive)</div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">Web framework</div>
+          <div class="tech-value"><a href="https://github.com/tokio-rs/axum">axum</a></div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">DAG viz</div>
+          <div class="tech-value"><a href="https://js.cytoscape.org/">Cytoscape.js</a></div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">Graph library</div>
+          <div class="tech-value"><a href="https://github.com/petgraph/petgraph">petgraph</a></div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">Code editor</div>
+          <div class="tech-value"><a href="https://codemirror.net/">CodeMirror 6</a></div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">AI providers</div>
+          <div class="tech-value">Claude, OpenAI, DeepSeek, Ollama</div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">Serialization</div>
+          <div class="tech-value"><a href="https://serde.rs/">serde</a> + TOML</div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">Templating</div>
+          <div class="tech-value"><a href="https://github.com/Keats/tera">tera</a></div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">Error handling</div>
+          <div class="tech-value"><a href="https://github.com/dtolnay/thiserror">thiserror</a> / <a href="https://github.com/dtolnay/anyhow">anyhow</a></div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-label">Logging</div>
+          <div class="tech-value"><a href="https://github.com/tokio-rs/tracing">tracing</a></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── License ─────────────────────────────────────────────── -->
+  <section class="alt-bg">
+    <div class="container">
+      <h2>Licensing</h2>
+      <p class="section-sub">
+        Open-source core with a dual-license model for the web interface.
+        The core library and CLI are free and open-source under Apache 2.0.
       </p>
       <table class="data-table">
         <thead>
-          <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
+          <tr><th>Component</th><th>License</th><th>Details</th></tr>
         </thead>
         <tbody>
-          <tr><td><code>GET</code></td><td><code>/api/health</code></td><td>Health check with component status</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/openapi.json</code></td><td>OpenAPI 3.1 specification</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/pipelines</code></td><td>List saved pipelines</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/pipelines/validate</code></td><td>Validate workflow TOML</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/pipelines/dag</code></td><td>Build DAG visualization data</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/pipelines/format</code></td><td>Reformat into canonical TOML</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/pipelines/lint</code></td><td>Run best-practice linting checks</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/templates</code></td><td>List system and user templates</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/runs</code></td><td>Start workflow execution</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/runs</code></td><td>List execution runs</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/runs/{id}</code></td><td>Run detail with status, DAG, diagnostics</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/chat/send</code></td><td>SSE streaming AI chat</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/ai/translate</code></td><td>Natural language → validated pipeline</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/ai/test</code></td><td>Test AI provider connection</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/ai/config</code></td><td>Get AI provider configuration</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/auth/login</code></td><td>Authenticate and receive a session token</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/license</code></td><td>Check license status</td></tr>
+          <tr>
+            <td><code>oxo-flow-core</code></td>
+            <td>Apache 2.0</td>
+            <td>Free and open-source — use, modify, distribute without restriction</td>
+          </tr>
+          <tr>
+            <td><code>oxo-flow-cli</code></td>
+            <td>Apache 2.0</td>
+            <td>Free and open-source — use, modify, distribute without restriction</td>
+          </tr>
+          <tr>
+            <td><code>oxo-flow-web</code></td>
+            <td>Dual — <a href="https://github.com/Traitome/oxo-flow/blob/main/LICENSE-ACADEMIC">Academic</a> / <a href="https://github.com/Traitome/oxo-flow/blob/main/LICENSE-COMMERCIAL">Commercial</a></td>
+            <td>Free for academic &amp; non-commercial use; commercial use requires a paid license</td>
+          </tr>
         </tbody>
       </table>
     </div>
   </section>
+
+  <!-- ─── Contributing / Community ──────────────────────────────── -->
+  <section>
+    <div class="container">
+      <h2>Contributing &amp; Community</h2>
+      <p class="section-sub">
+        Contributions are welcome. Read the guides below, ensure <code>make ci</code> passes, then open a PR.
+      </p>
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="icon">📖</div>
+          <h3>Documentation</h3>
+          <p>
+            <a href="documentation/">Full guide</a> ·
+            <a href="documentation/gallery/">Workflow Gallery</a> ·
+            <a href="https://deepwiki.com/Traitome/oxo-flow">Ask DeepWiki</a>
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">🗺️</div>
+          <h3>Project Resources</h3>
+          <p>
+            <a href="https://github.com/Traitome/oxo-flow/blob/main/ROADMAP.md">Roadmap</a> ·
+            <a href="https://github.com/Traitome/oxo-flow/blob/main/CONTRIBUTING.md">Contributing guide</a> ·
+            <a href="https://github.com/Traitome/oxo-flow/blob/main/GOVERNANCE.md">Governance</a> ·
+            <a href="https://github.com/Traitome/oxo-flow/blob/main/CODE_OF_CONDUCT.md">Code of Conduct</a>
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">🔒</div>
+          <h3>Compliance &amp; Security</h3>
+          <p>
+            <a href="https://github.com/Traitome/oxo-flow/blob/main/SECURITY.md">Security policy</a> ·
+            <a href="https://github.com/Traitome/oxo-flow/blob/main/REPRODUCIBILITY.md">Reproducibility guarantees</a> ·
+            <a href="https://github.com/Traitome/oxo-flow/blob/main/docs/VALIDATION_PROTOCOL.md">IQ/OQ/PQ validation</a> ·
+            <a href="https://github.com/Traitome/oxo-flow/blob/main/docs/CHANGE_CONTROL.md">Change control</a>
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">🐛</div>
+          <h3>Issues &amp; Feedback</h3>
+          <p>
+            <a href="https://github.com/Traitome/oxo-flow/issues/new?template=bug_report.md">Bug reports</a> ·
+            <a href="https://github.com/Traitome/oxo-flow/issues/new?template=feature_request.md">Feature requests</a> ·
+            <a href="https://github.com/Traitome/oxo-flow/blob/main/LIMITATIONS.md">Known limitations</a>
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── Citing ──────────────────────────────────────────────── -->
+  <section id="citing">
+    <div class="container" style="text-align:center;max-width:720px;margin:0 auto;">
+      <h2>How to Cite</h2>
+      <p class="section-sub" style="margin-left:auto;margin-right:auto;">
+        If you use oxo-flow in academic research, please cite our work:
+      </p>
+      <div style="background:white;border:1px solid #e4e8ee;border-radius:8px;padding:1.5rem 2rem;text-align:left;font-size:0.92rem;line-height:1.7;">
+        <p style="margin-bottom:0.5rem;">
+          Jia Ding, Yun Peng, Ruochen Wei, Boquan Wang, Jian-Guo Zhou, <strong>Shixiang Wang</strong><br />
+          <em>BLIT: an R package for seamless integration of command-line bioinformatics tool universe</em><br />
+          <span style="color:#555;">Bioinformatics Advances, Volume 6, Issue 1, 2026, vbag088</span><br />
+          <a href="https://doi.org/10.1093/bioadv/vbag088">doi:10.1093/bioadv/vbag088</a>
+        </p>
+      </div>
+      <p style="color:#777;font-size:0.85rem;margin-top:0.75rem;">
+        A dedicated oxo-flow manuscript is in preparation and will be announced when available.
+      </p>
+    </div>
+  </section>
+
+  <!-- ─── Links / CTA ─────────────────────────────────────────── -->
+  <section class="alt-bg">
+    <div class="container" style="text-align:center;">
+      <h2>Get Started</h2>
+      <p class="section-sub" style="margin-left:auto;margin-right:auto;">
+        Read the documentation, explore the gallery, or dive straight into the source.
+      </p>
+      <div class="cta-group" style="justify-content:center;">
+        <a class="btn btn-primary" href="documentation/">Documentation</a>
+        <a class="btn btn-secondary" style="border-color:#0e7c86;color:#0e7c86;" href="documentation/gallery/">Workflow Gallery</a>
+        <a class="btn btn-secondary" style="border-color:#0e7c86;color:#0e7c86;" href="https://github.com/Traitome/oxo-flow">GitHub</a>
+        <a class="btn btn-secondary" style="border-color:#0e7c86;color:#0e7c86;" href="https://github.com/Traitome/oxo-flow/blob/main/ROADMAP.md">Roadmap</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── Footer ──────────────────────────────────────────────── -->
+  <footer>
+    <div class="container">
+      <span>&copy; 2026 Traitome. oxo-flow is open-source software.</span>
+      <span>
+        <a href="https://github.com/Traitome/oxo-flow">GitHub</a> &middot;
+        <a href="documentation/">Docs</a> &middot;
+        <a href="https://github.com/Traitome/oxo-flow/blob/main/ROADMAP.md">Roadmap</a> &middot;
+        <a href="https://github.com/Traitome/oxo-flow/blob/main/LICENSE">License</a> &middot;
+        <a href="https://deepwiki.com/Traitome/oxo-flow">DeepWiki</a>
+      </span>
+    </div>
+  </footer>
+
+</body>
+</html><!-- ─── Web API ──────────────────────────────────────────────── -->
+  <section>
+    <div class="container" style="text-align:center">
+      <h2>Web API</h2>
+      <p class="section-sub" style="margin-left:auto;margin-right:auto;max-width:600px">
+        48 endpoints across 7 domains. <code>oxo-flow serve</code> starts an
+        <a href="https://github.com/tokio-rs/axum">axum</a>-powered REST server.
+        OpenAPI 3.1 spec at <code>/api/openapi.json</code>.
+      </p>
+      <p style="margin-top:1rem">
+        <a class="btn btn-primary" href="documentation/reference/api/">API Reference →</a>
+      </p>
+    </div>
+  </section>
+  <!-- ─── Web API end --> html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>oxo-flow — Rust-native bioinformatics pipeline engine</title>
+  <meta name="description" content="A high-performance, modular bioinformatics pipeline engine built in Rust. DAG execution, AI-powered pipeline generation, environment management, cluster scheduling, and container packaging." />
+  <style>
+    /* ── Reset & base ───────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      color: #1a1a2e;
+      background: #ffffff;
+    }
+    a { color: #0e7c86; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Layout ─────────────────────────────────────────────────── */
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 1.5rem; }
+
+    /* ── Header / Nav ──────────────────────────────────────────── */
+    header {
+      background: #0e7c86;
+      color: white;
+      padding: 0.75rem 0;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    header .container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    header .logo {
+      font-size: 1.35rem;
+      font-weight: 700;
+      color: white;
+      letter-spacing: -0.02em;
+    }
+    header .logo:hover { text-decoration: none; }
+    header nav a {
+      color: rgba(255,255,255,0.9);
+      margin-left: 1.5rem;
+      font-size: 0.95rem;
+      font-weight: 500;
+    }
+    header nav a:hover { color: #fff; text-decoration: none; }
+
+    /* ── Hero ───────────────────────────────────────────────────── */
+    .hero {
+      background: linear-gradient(135deg, #0e7c86 0%, #065c64 40%, #1a1a2e 100%);
+      color: white;
+      padding: 5rem 0 4rem;
+      text-align: center;
+    }
+    .hero h1 {
+      font-size: 2.75rem;
+      font-weight: 800;
+      line-height: 1.15;
+      margin-bottom: 1rem;
+      letter-spacing: -0.03em;
+    }
+    .hero .subtitle {
+      font-size: 1.2rem;
+      color: rgba(255,255,255,0.85);
+      max-width: 680px;
+      margin: 0 auto 1.5rem;
+    }
+    .hero .badges {
+      display: flex;
+      gap: 0.5rem;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 2rem;
+    }
+    .hero .badges a { display: inline-block; }
+    .hero .cta-group { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+    .btn {
+      display: inline-block;
+      padding: 0.75rem 1.75rem;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 1rem;
+      transition: background 0.2s, transform 0.1s;
+    }
+    .btn:hover { text-decoration: none; transform: translateY(-1px); }
+    .btn-primary { background: #e8590c; color: white; }
+    .btn-primary:hover { background: #d14e0a; }
+    .btn-secondary { background: rgba(255,255,255,0.15); color: white; border: 1px solid rgba(255,255,255,0.3); }
+    .btn-secondary:hover { background: rgba(255,255,255,0.25); }
+
+    /* ── Section ────────────────────────────────────────────────── */
+    section { padding: 4rem 0; }
+    section h2 {
+      font-size: 2rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+      letter-spacing: -0.02em;
+    }
+    section .section-sub {
+      color: #555;
+      font-size: 1.05rem;
+      margin-bottom: 2.5rem;
+      max-width: 600px;
+    }
+    .alt-bg { background: #f6f9fc; }
+
+    /* ── Features grid ─────────────────────────────────────────── */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1.5rem;
+    }
+    .feature-card {
+      background: white;
+      border: 1px solid #e4e8ee;
+      border-radius: 8px;
+      padding: 1.5rem;
+      transition: box-shadow 0.2s;
+    }
+    .feature-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.08); }
+    .feature-card .icon { font-size: 1.75rem; margin-bottom: 0.75rem; }
+    .feature-card h3 { font-size: 1.15rem; margin-bottom: 0.4rem; }
+    .feature-card p { color: #555; font-size: 0.95rem; }
+
+    /* ── Code block ────────────────────────────────────────────── */
+    .code-section { text-align: center; }
+    .code-block {
+      background: #1a1a2e;
+      color: #e6edf3;
+      border-radius: 8px;
+      padding: 1.75rem 2rem;
+      text-align: left;
+      font-family: "JetBrains Mono", "Fira Code", monospace;
+      font-size: 0.9rem;
+      line-height: 1.7;
+      overflow-x: auto;
+      max-width: 740px;
+      margin: 0 auto;
+      white-space: pre;
+    }
+    .code-block .comment { color: #6a737d; }
+    .code-block .cmd { color: #3dbfc9; }
+    .code-block .str { color: #ff8a4c; }
+    .code-block .output { color: #8b949e; }
+
+    /* ── Install section ───────────────────────────────────────── */
+    .install-methods {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1.5rem;
+    }
+    .install-card {
+      background: white;
+      border: 1px solid #e4e8ee;
+      border-radius: 8px;
+      padding: 1.5rem;
+    }
+    .install-card h3 { font-size: 1.05rem; margin-bottom: 0.75rem; color: #0e7c86; }
+    .install-card code {
+      display: block;
+      background: #f6f9fc;
+      padding: 0.75rem 1rem;
+      border-radius: 4px;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.85rem;
+      color: #1a1a2e;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    /* ── Tables ────────────────────────────────────────────────── */
+    .data-table { width: 100%; border-collapse: collapse; margin-top: 1rem; font-size: 0.95rem; }
+    .data-table th, .data-table td {
+      text-align: left;
+      padding: 0.55rem 1rem;
+      border-bottom: 1px solid #e4e8ee;
+      vertical-align: top;
+    }
+    .data-table th { font-weight: 600; color: #555; font-size: 0.88rem; background: #f6f9fc; }
+    .data-table td code {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.85rem;
+      background: #f1f5f9;
+      padding: 0.1em 0.35em;
+      border-radius: 3px;
+    }
+
+    /* ── Gallery grid ──────────────────────────────────────────── */
+    .gallery-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1rem;
+    }
+    .gallery-card {
+      background: white;
+      border: 1px solid #e4e8ee;
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+      transition: box-shadow 0.2s;
+    }
+    .gallery-card:hover { box-shadow: 0 4px 14px rgba(0,0,0,0.08); }
+    .gallery-card .num {
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: #0e7c86;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 0.35rem;
+    }
+    .gallery-card h3 { font-size: 1rem; margin-bottom: 0.3rem; }
+    .gallery-card .stars { color: #e8590c; font-size: 0.85rem; margin-bottom: 0.3rem; }
+    .gallery-card .domain { font-size: 0.82rem; color: #888; }
+
+    /* ── Tech stack ────────────────────────────────────────────── */
+    .tech-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+    }
+    .tech-item {
+      background: white;
+      border: 1px solid #e4e8ee;
+      border-radius: 6px;
+      padding: 0.9rem 1.2rem;
+    }
+    .tech-item .tech-label { font-size: 0.78rem; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.25rem; }
+    .tech-item .tech-value { font-size: 0.95rem; color: #1a1a2e; }
+    .tech-item .tech-value a { color: #0e7c86; }
+
+    /* ── Footer ────────────────────────────────────────────────── */
+    footer {
+      background: #1a1a2e;
+      color: rgba(255,255,255,0.7);
+      padding: 2.5rem 0;
+      font-size: 0.9rem;
+    }
+    footer .container {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+    footer a { color: #3dbfc9; }
+
+    /* ── Responsive ────────────────────────────────────────────── */
+    @media (max-width: 640px) {
+      .hero h1 { font-size: 2rem; }
+      .hero { padding: 3rem 0 2.5rem; }
+      header nav a { margin-left: 0.75rem; font-size: 0.85rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ─── Header ──────────────────────────────────────────────── -->
+  <header>
+    <div class="container">
+      <a class="logo" href="#">oxo-flow</a>
+      <nav>
+        <a href="#features">Features</a>
+        <a href="#gallery">Gallery</a>
+        <a href="#install">Install</a>
+        <a href="#quickstart">Quick Start</a>
+        <a href="documentation/">Docs</a>
+        <a href="https://github.com/Traitome/oxo-flow">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- ─── Hero ────────────────────────────────────────────────── -->
+  <section class="hero">
+    <div class="container">
+      <h1>Rust-native bioinformatics<br />pipeline engine</h1>
+      <p class="subtitle">
+        Build, validate, and execute reproducible bioinformatics workflows with
+        DAG-based execution, AI-powered pipeline generation, first-class environment
+        management, cluster scheduling, and reproducible reporting — all from a
+        single, fast Rust binary.
+      </p>
+      <div class="badges">
+        <a href="https://github.com/Traitome/oxo-flow/actions/workflows/ci.yml">
+          <img src="https://github.com/Traitome/oxo-flow/actions/workflows/ci.yml/badge.svg" alt="CI" />
+        </a>
+        <a href="https://crates.io/crates/oxo-flow-core">
+          <img src="https://img.shields.io/crates/v/oxo-flow-core?label=crates.io" alt="Crates.io" />
+        </a>
+        <a href="#license">
+          <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License" />
+        </a>
+      </div>
+      <div class="cta-group">
+        <a class="btn btn-primary" href="documentation/">Read the Docs</a>
+        <a class="btn btn-secondary" href="#gallery">Workflow Gallery</a>
+        <a class="btn btn-secondary" href="https://github.com/Traitome/oxo-flow">View on GitHub</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── Features ────────────────────────────────────────────── -->
+  <section id="features" class="alt-bg">
+    <div class="container">
+      <h2>Core Capabilities</h2>
+      <p class="section-sub">Everything you need to build production-grade bioinformatics pipelines.</p>
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="icon">🔀</div>
+          <h3>DAG Execution Engine</h3>
+          <p>Automatic dependency resolution, topological sorting, cycle detection, and parallel execution. Built with <a href="https://github.com/petgraph/petgraph">petgraph</a> — proven on 1,000-rule stress tests.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">📦</div>
+          <h3>Environment Management</h3>
+          <p>First-class support for conda, pixi, Docker, Singularity, Python venv, and HPC modules. Each rule declares its own isolated environment.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">🖥️</div>
+          <h3>Cluster Scheduling</h3>
+          <p>Resource-aware scheduling across SLURM, PBS, SGE, and LSF backends. Rules declare CPU, memory, GPU, and disk requirements; the scheduler enforces them.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">📊</div>
+          <h3>Workflow Reporting</h3>
+          <p>Modular HTML/JSON report generation with Tera templates. Execution summaries, resource metrics, and output file browsers for each pipeline run.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">🌐</div>
+          <h3>REST API &amp; Web Interface</h3>
+          <p>Built-in <a href="https://github.com/tokio-rs/axum">axum</a> server with versioned REST API, RBAC (Admin/User/Viewer), rate limiting, and security headers.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">🐳</div>
+          <h3>Container Packaging</h3>
+          <p>Export workflows to multi-stage Docker builds or Singularity images. Rootless containers with HEALTHCHECK support for portable, self-contained execution.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">🤖</div>
+          <h3>AI Companion</h3>
+          <p>Contextual AI across the full workflow lifecycle: generate pipelines from natural language (Dashboard), get intelligent refinement suggestions (Editor), diagnose failures (Monitor), and interpret results (Report). Powered by Claude, OpenAI, DeepSeek, or local Ollama.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">🔒</div>
+          <h3>Security Hardened</h3>
+          <p>Shell injection prevention, path traversal protection, secret scanning, per-IP rate limiting, and <code>#![forbid(unsafe_code)]</code> across every crate.</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon">⚡</div>
+          <h3>Rust Performance</h3>
+          <p>Native binary — instant startup, fearless concurrency, zero-cost abstractions. Rust 2024 edition. 890 tests including 100 browser E2E scenarios.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── Workflow Gallery ─────────────────────────────────────── -->
+  <section id="gallery">
+    <div class="container">
+      <h2>Workflow Gallery</h2>
+      <p class="section-sub">
+        Learn oxo-flow incrementally — from a one-rule hello-world to production-grade
+        multi-omics pipelines. Every example passes <code>oxo-flow validate</code> and is tested in CI.
+      </p>
+      <div class="gallery-grid">
+        <div class="gallery-card">
+          <div class="num">01</div>
+          <h3><a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/01_hello_world.oxoflow">Hello World</a></h3>
+          <div class="stars">⭐</div>
+          <div class="domain">General</div>
+        </div>
+        <div class="gallery-card">
+          <div class="num">02</div>
+          <h3><a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/02_file_pipeline.oxoflow">File Pipeline</a></h3>
+          <div class="stars">⭐⭐</div>
+          <div class="domain">Data processing</div>
+        </div>
+        <div class="gallery-card">
+          <div class="num">03</div>
+          <h3><a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/03_parallel_samples.oxoflow">Parallel Samples</a></h3>
+          <div class="stars">⭐⭐</div>
+          <div class="domain">Batch processing</div>
+        </div>
+        <div class="gallery-card">
+          <div class="num">04</div>
+          <h3><a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/04_scatter_gather.oxoflow">Scatter-Gather</a></h3>
+          <div class="stars">⭐⭐⭐</div>
+          <div class="domain">Parallel computing</div>
+        </div>
+        <div class="gallery-card">
+          <div class="num">05</div>
+          <h3><a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/05_conda_environments.oxoflow">Environment Management</a></h3>
+          <div class="stars">⭐⭐⭐</div>
+          <div class="domain">DevOps</div>
+        </div>
+        <div class="gallery-card">
+          <div class="num">06</div>
+          <h3><a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/06_rnaseq_quantification.oxoflow">RNA-seq Quantification</a></h3>
+          <div class="stars">⭐⭐⭐⭐</div>
+          <div class="domain">Transcriptomics</div>
+        </div>
+        <div class="gallery-card">
+          <div class="num">07</div>
+          <h3><a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/07_wgs_germline.oxoflow">WGS Germline Calling</a></h3>
+          <div class="stars">⭐⭐⭐⭐⭐</div>
+          <div class="domain">Genomics</div>
+        </div>
+        <div class="gallery-card">
+          <div class="num">08</div>
+          <h3><a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/08_multiomics_integration.oxoflow">Multi-Omics Integration</a></h3>
+          <div class="stars">⭐⭐⭐⭐⭐</div>
+          <div class="domain">Multi-omics</div>
+        </div>
+      </div>
+      <p style="margin-top:1.5rem;">
+        <a href="documentation/gallery/">Browse the full Gallery documentation →</a>
+      </p>
+    </div>
+  </section>
+
+  <!-- ─── Quick Start ─────────────────────────────────────────── -->
+  <section id="quickstart" class="alt-bg">
+    <div class="container code-section">
+      <h2>Quick Start</h2>
+      <p class="section-sub" style="margin-left:auto;margin-right:auto;">From zero to running pipeline in a few commands.</p>
+      <div class="code-block">
+<span class="comment"># 1. Install</span>
+<span class="cmd">cargo install oxo-flow-cli</span>
+
+<span class="comment"># 2. Scaffold a new project</span>
+<span class="cmd">oxo-flow init my-pipeline</span>
+<span class="cmd">cd my-pipeline</span>
+
+<span class="comment"># 3. Validate the workflow</span>
+<span class="cmd">oxo-flow validate my-pipeline.oxoflow</span>
+<span class="output">✓ my-pipeline.oxoflow — valid</span>
+
+<span class="comment"># 4. Preview execution plan (dry-run)</span>
+<span class="cmd">oxo-flow dry-run my-pipeline.oxoflow</span>
+
+<span class="comment"># 5. Execute with 8 parallel jobs</span>
+<span class="cmd">oxo-flow run my-pipeline.oxoflow -j 8</span>
+
+<span class="comment"># 6. Visualise the DAG</span>
+<span class="cmd">oxo-flow graph my-pipeline.oxoflow &gt; dag.dot</span>
+<span class="cmd">dot -Tpng dag.dot -o dag.png</span>
+
+<span class="comment"># 7. Generate an HTML report</span>
+<span class="cmd">oxo-flow report my-pipeline.oxoflow -f html -o report.html</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── Workflow Format ─────────────────────────────────────── -->
+  <section>
+    <div class="container code-section">
+      <h2>The .oxoflow Format</h2>
+      <p class="section-sub" style="margin-left:auto;margin-right:auto;">
+        Define your pipeline in clean, readable TOML. Wildcards like <code>{sample}</code>
+        are expanded automatically based on input file discovery or explicit configuration.
+      </p>
+      <div class="code-block">
+<span class="comment"># variant-calling.oxoflow</span>
+[<span class="str">workflow</span>]
+name = <span class="str">"variant-calling"</span>
+version = <span class="str">"1.0.0"</span>
+
+[<span class="str">config</span>]
+reference = <span class="str">"/data/ref/GRCh38.fa"</span>
+
+[[<span class="str">rules</span>]]
+name = <span class="str">"fastp"</span>
+input  = [<span class="str">"raw/{sample}_R1.fastq.gz"</span>, <span class="str">"raw/{sample}_R2.fastq.gz"</span>]
+output = [<span class="str">"trimmed/{sample}_R1.fastq.gz"</span>, <span class="str">"trimmed/{sample}_R2.fastq.gz"</span>]
+threads = <span class="cmd">8</span>
+shell = <span class="str">"fastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]}"</span>
+
+[<span class="str">rules.environment</span>]
+conda = <span class="str">"envs/fastp.yaml"</span>
+
+[[<span class="str">rules</span>]]
+name = <span class="str">"bwa_align"</span>
+input  = [<span class="str">"trimmed/{sample}_R1.fastq.gz"</span>, <span class="str">"trimmed/{sample}_R2.fastq.gz"</span>]
+output = [<span class="str">"aligned/{sample}.bam"</span>]
+threads = <span class="cmd">16</span>
+memory = <span class="str">"32G"</span>
+shell = <span class="str">"bwa-mem2 mem -t {threads} {config.reference} {input[0]} {input[1]} | samtools sort -o {output[0]}"</span>
+
+[<span class="str">rules.environment</span>]
+docker = <span class="str">"biocontainers/bwa-mem2:2.2.1"</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── CLI Commands ────────────────────────────────────────── -->
+  <section class="alt-bg" id="cli">
+    <div class="container" style="text-align:center">
+      <h2>CLI Commands</h2>
+      <p class="section-sub" style="margin-left:auto;margin-right:auto;max-width:600px">
+        31 subcommands covering the complete workflow lifecycle —
+        <code>run</code>, <code>validate</code>, <code>dry-run</code>, <code>graph</code>,
+        <code>cluster</code>, <code>serve</code>, and more.
+      </p>
+      <p style="margin-top:1rem">
+        <a class="btn btn-primary" href="documentation/commands/run/">CLI Reference →</a>
+      </p>
+    </div>
+  </section>
+  <!-- ─── CLI Commands end -->
 
   <!-- ─── Install ─────────────────────────────────────────────── -->
   <section id="install" class="alt-bg">
