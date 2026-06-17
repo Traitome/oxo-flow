@@ -183,9 +183,9 @@ oxo-flow is under active development. The current release (`v0.8.0`) includes th
 
 If you use oxo-flow in academic research, please cite:
 
+> **Shixiang Wang**, *oxo-flow: compiled, memory-safe bioinformatics workflow orchestration*, bioRxiv, 2026, [https://doi.org/10.64898/2026.06.11.731578](https://doi.org/10.64898/2026.06.11.731578)
+>
 > Jia Ding, Yun Peng, Ruochen Wei, Boquan Wang, Jian-Guo Zhou, **Shixiang Wang**, *BLIT: an R package for seamless integration of command-line bioinformatics tool universe*, Bioinformatics Advances, Volume 6, Issue 1, 2026, vbag088, [https://doi.org/10.1093/bioadv/vbag088](https://doi.org/10.1093/bioadv/vbag088)
-
-A dedicated oxo-flow manuscript is in preparation.
 
 ## Join the Community
 
