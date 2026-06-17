@@ -1267,7 +1267,10 @@ impl WorkflowConfig {
         let system_threads = num_cpus::get() as u32;
         let system_memory_mb = {
             use sysinfo::System;
-            let mut sys = System::new_all();
+            // Only memory is needed here; `System::new_all()` would walk all of
+            // /proc (every process, disk, and network interface) just to read
+            // total RAM, adding ~50ms to every parse/validate/dry-run/run call.
+            let mut sys = System::new();
             sys.refresh_memory();
             sys.total_memory() / 1024 / 1024
         };
