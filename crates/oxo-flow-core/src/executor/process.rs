@@ -300,7 +300,8 @@ fn detect_total_memory_mb() -> u64 {
     // Primary: sysinfo crate (cross-platform)
     if let Ok(mb) = std::panic::catch_unwind(|| {
         use sysinfo::System;
-        let mut sys = System::new_all();
+        // Only memory is needed; avoid `System::new_all()` scanning all of /proc.
+        let mut sys = System::new();
         sys.refresh_memory();
         sys.total_memory() / 1024 / 1024
     }) && mb > 0
