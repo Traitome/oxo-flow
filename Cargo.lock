@@ -2671,7 +2671,7 @@ checksum = "1a80800c0488c3a21695ea981a54918fbb37abf04f4d0720c453632255e2ff0e"
 
 [[package]]
 name = "oxo-flow"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "assert_cmd",
  "oxo-flow-core",
@@ -2684,7 +2684,7 @@ dependencies = [
 
 [[package]]
 name = "oxo-flow-cli"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2708,7 +2708,7 @@ dependencies = [
 
 [[package]]
 name = "oxo-flow-core"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -2744,7 +2744,7 @@ dependencies = [
 
 [[package]]
 name = "oxo-flow-web"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "async-stream",
