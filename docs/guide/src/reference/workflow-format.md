@@ -1268,7 +1268,7 @@ bwa mem -t {threads} ref.fa {input} | \
 name = "ngs-pipeline"
 version = "2.0.0"
 description = "Complete NGS analysis pipeline"
-author = "Genomics Core <core@example.org>"
+author = "Shixiang Wang <w_shixiang@163.com>"
 
 [config]
 reference = "/data/ref/hg38.fa"

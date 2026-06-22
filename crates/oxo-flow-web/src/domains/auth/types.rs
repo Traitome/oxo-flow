@@ -174,7 +174,7 @@ mod tests {
             license_type: Some("MIT".into()),
             issued_to: Some("user".into()),
             commercial_use: "yes".into(),
-            contact: "admin@example.com".into(),
+            contact: "w_shixiang@163.com".into(),
             message: "license valid".into(),
         };
         let json = serde_json::to_string(&resp).unwrap();

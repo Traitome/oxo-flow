@@ -1,10 +1,11 @@
 target/
 .git/
+.github/
 *.md
 docs/
 examples/
-tests/
+*.oxoflow
 node_modules/
 frontend/node_modules/
-frontend/src/
-frontend/public/
+**/target/
+**/.git/

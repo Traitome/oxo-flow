@@ -179,7 +179,7 @@ mod tests {
                 license_type: "MIT".into(),
                 valid: true,
                 commercial_use: "yes".into(),
-                contact: "admin@example.com".into(),
+                contact: "w_shixiang@163.com".into(),
                 message: "ok".into(),
             },
         };

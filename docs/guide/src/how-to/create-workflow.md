@@ -35,7 +35,7 @@ Every `.oxoflow` file is TOML with four top-level sections:
 name = "my-pipeline"
 version = "1.0.0"
 description = "Short description of what this pipeline does"
-author = "Your Name <you@example.com>"
+author = "Shixiang Wang <w_shixiang@163.com>"
 ```
 
 | Field | Required | Description |
