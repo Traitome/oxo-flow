@@ -124,7 +124,7 @@ oxo-flow serve
 On startup, oxo-flow prints the license banner and mode info:
 
 ```
-oxo-flow v0.8.0
+oxo-flow v0.8.1
 oxo-flow-core, oxo-flow-cli: Apache 2.0
 oxo-flow-web: Dual license — LICENSE-ACADEMIC / LICENSE-COMMERCIAL
 Contact: Shixiang Wang <w_shixiang@163.com>

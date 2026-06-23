@@ -67,7 +67,7 @@ oxo-flow dry-run pipeline.oxoflow -v
 ## Output
 
 ```
-oxo-flow 0.8.0 — Bioinformatics Pipeline Engine
+oxo-flow 0.8.1 — Bioinformatics Pipeline Engine
 Dry-run: 3 rules would execute:
   1. trim_reads [threads=4, env=conda]
      $ fastp --in1 raw/sample1_R1.fastq.gz --in2 raw/sample1_R2.fastq.gz --out1
