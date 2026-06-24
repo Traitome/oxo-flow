@@ -96,6 +96,12 @@ pub async fn run_command(
         eprintln!("  {}. {}", i + 1, rule_name);
     }
 
+    // indicatif's stderr draw target auto-hides when stderr is not a terminal,
+    // which makes every per-rule progress message silently disappear under pipes,
+    // redirects, nohup, CI, or schedulers. When that happens, fall back to plain
+    // eprintln lines so the run is never silent.
+    let is_tty = std::io::IsTerminal::is_terminal(&std::io::stderr());
+
     let progress = indicatif::ProgressBar::new(order.len() as u64);
     progress.set_style(
         indicatif::ProgressStyle::default_bar()
@@ -157,6 +163,9 @@ pub async fn run_command(
     let mut skipped_count = 0;
     let mut completed_rules = std::collections::HashSet::new();
     let mut failed_rules_set = std::collections::HashSet::new();
+    // Collected so `--keep-going` can print a consolidated failure summary at the
+    // end instead of leaving the user to scroll back through interleaved output.
+    let mut failures: Vec<(String, String)> = Vec::new();
 
     let checkpoint_path = workdir
         .as_ref()
@@ -208,7 +217,8 @@ pub async fn run_command(
         }
     }
 
-    for rule_name in &order {
+    let total_rules = order.len();
+    for (idx, rule_name) in order.iter().enumerate() {
         if completed_rules.contains(rule_name) {
             progress.inc(1);
             continue;
@@ -241,6 +251,9 @@ pub async fn run_command(
             if outputs_exist {
                 skipped_count += 1;
                 progress.set_message("skipping already completed");
+                if !is_tty {
+                    eprintln!("  {} {} (already completed)", "⊝".dimmed(), rule_name);
+                }
                 progress.inc(1);
                 continue;
             }
@@ -256,15 +269,23 @@ pub async fn run_command(
                 .filter(|d| failed_rules_set.contains(d.as_str()))
                 .collect();
             skipped_count += 1;
+            let failed_deps_str = failed_deps
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
             progress.set_message(format!(
                 "skipping {} (dependency failed: {})",
-                rule_name,
-                failed_deps
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                rule_name, failed_deps_str
             ));
+            if !is_tty {
+                eprintln!(
+                    "  {} {} (dependency failed: {})",
+                    "⊝".yellow(),
+                    rule_name,
+                    failed_deps_str
+                );
+            }
             progress.inc(1);
             if !keep_going {
                 // Build a clear error about the cascade
@@ -288,6 +309,15 @@ pub async fn run_command(
             .ok_or_else(|| anyhow::anyhow!("rule '{}' not found in workflow", rule_name))?
             .clone();
         progress.set_message(format!("executing {}", rule_name));
+        if !is_tty {
+            eprintln!(
+                "{} [{}/{}] {}",
+                "Running:".bold().cyan(),
+                idx + 1,
+                total_rules,
+                rule_name
+            );
+        }
 
         match executor.execute_rule(&rule, &wildcard_values).await {
             Ok(record) => {
@@ -299,6 +329,9 @@ pub async fn run_command(
 
                 if record.status == oxo_flow_core::executor::JobStatus::Success {
                     success_count += 1;
+                    if !is_tty {
+                        eprintln!("  {} {} ({:.1}s)", "✓".green(), rule_name, duration);
+                    }
                     let benchmark = oxo_flow_core::executor::checkpoint::BenchmarkRecord {
                         rule: rule_name.clone(),
                         wall_time_secs: duration,
@@ -351,8 +384,26 @@ pub async fn run_command(
                         progress.finish_and_clear();
                         return Err(anyhow::anyhow!(err_msg));
                     }
-                    // In keep_going mode, still print the error
+                    // In keep_going mode, still print the error and record a concise
+                    // one-line reason for the end-of-run failure summary.
                     eprintln!("  {} {}", "✗".red(), err_msg);
+                    let mut reason = String::new();
+                    if let Some(code) = record.exit_code {
+                        reason.push_str(&format!("exit code {}", code));
+                    }
+                    if let Some(ref stderr) = record.stderr
+                        && let Some(last) =
+                            stderr.trim().lines().next_back().filter(|l| !l.is_empty())
+                    {
+                        if !reason.is_empty() {
+                            reason.push_str(" — ");
+                        }
+                        reason.push_str(last);
+                    }
+                    if reason.is_empty() {
+                        reason.push_str("failed");
+                    }
+                    failures.push((rule_name.clone(), reason));
                 }
             }
             Err(e) => {
@@ -366,6 +417,11 @@ pub async fn run_command(
                     progress.finish_and_clear();
                     return Err(e.into());
                 }
+                // Previously this branch swallowed the error entirely in keep_going
+                // mode — surface it inline and record it for the summary.
+                let reason = e.to_string();
+                eprintln!("  {} rule '{}' failed: {}", "✗".red(), rule_name, reason);
+                failures.push((rule_name.clone(), reason));
             }
         }
         progress.inc(1);
@@ -379,6 +435,15 @@ pub async fn run_command(
         skipped_count,
         fail_count
     );
+
+    // With --keep-going, execution continues past failures, so list every failed
+    // rule (and why) in one place rather than making the user hunt for them.
+    if !failures.is_empty() {
+        eprintln!("\n{}", "Failed rules:".bold().red());
+        for (name, reason) in &failures {
+            eprintln!("  {} {} — {}", "✗".red(), name.bold(), reason);
+        }
+    }
 
     // Verify output files exist for completed rules
     if success_count > 0 {
