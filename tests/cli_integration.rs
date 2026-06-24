@@ -1014,6 +1014,73 @@ shell = "echo 'I ran despite the failure' > {ok}"
         stderr.contains("fail_step") || stderr.contains("failed") || stderr.contains("✗"),
         "should mention the failed rule in stderr"
     );
+    // --keep-going must print a consolidated end-of-run failure summary naming the
+    // failed rule, so it is not lost in interleaved output on large pipelines.
+    assert!(
+        stderr.contains("Failed rules:"),
+        "keep-going should print a 'Failed rules:' summary, got:\n{stderr}"
+    );
+    let summary = stderr
+        .split("Failed rules:")
+        .nth(1)
+        .expect("summary section present");
+    assert!(
+        summary.contains("fail_step"),
+        "failure summary should name the failed rule, got:\n{stderr}"
+    );
+}
+
+#[test]
+fn cli_run_nontty_emits_plain_progress_lines() {
+    // assert_cmd runs the binary with a piped (non-terminal) stderr, so the
+    // indicatif progress bar is hidden. The run must fall back to plain per-rule
+    // log lines instead of going silent between the DAG listing and the summary.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow = dir.path().join("progress.oxoflow");
+    let a = dir.path().join("a.txt");
+    let b = dir.path().join("b.txt");
+
+    fs::write(
+        &workflow,
+        format!(
+            r#"
+[workflow]
+name = "nontty-progress"
+version = "1.0.0"
+
+[[rules]]
+name = "make_a"
+output = ["{a}"]
+shell = "echo a > {a}"
+
+[[rules]]
+name = "make_b"
+input = ["{a}"]
+output = ["{b}"]
+shell = "cat {a} > {b}"
+"#,
+            a = a.to_str().unwrap(),
+            b = b.to_str().unwrap(),
+        ),
+    )
+    .unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["run", workflow.to_str().unwrap(), "-j", "1"])
+        .output()
+        .expect("failed to run");
+
+    assert!(output.status.success(), "run should succeed");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Per-rule "Running:" lines only exist on the non-TTY fallback path.
+    assert!(
+        stderr.contains("Running:") && stderr.contains("make_a") && stderr.contains("make_b"),
+        "non-TTY run should emit plain per-rule progress lines, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Done:"),
+        "run should print a completion summary, got:\n{stderr}"
+    );
 }
 
 #[test]
