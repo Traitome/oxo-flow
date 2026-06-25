@@ -157,6 +157,32 @@ pub async fn run_command(
         interpreter_map: config.workflow.interpreter_map.clone(),
     };
 
+    // Fail fast if any rule's declared request can never fit an explicit
+    // --max-memory / --max-threads cap. Otherwise the run would execute earlier
+    // rules and only discover the impossible one mid-pipeline.
+    let scheduled: Vec<&oxo_flow_core::rule::Rule> = order
+        .iter()
+        .filter_map(|name| config.get_rule(name))
+        .collect();
+    let breaches = oxo_flow_core::scheduler::check_budget_feasibility(
+        &scheduled,
+        exec_config.max_threads,
+        exec_config.max_memory_mb,
+    );
+    if !breaches.is_empty() {
+        progress.finish_and_clear();
+        let detail = breaches
+            .iter()
+            .map(|b| format!("  - {b}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(anyhow::anyhow!(
+            "resource budget too small for {} rule(s); no rules were run:\n{}",
+            breaches.len(),
+            detail
+        ));
+    }
+
     let executor = LocalExecutor::new(exec_config);
     let mut success_count = 0;
     let mut fail_count = 0;
