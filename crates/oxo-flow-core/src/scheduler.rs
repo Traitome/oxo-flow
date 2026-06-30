@@ -342,6 +342,43 @@ pub fn parse_memory_mb(memory: &str) -> Option<u64> {
     Some(mb_int)
 }
 
+/// Pre-flight check: report rules whose declared request can never fit an
+/// *explicitly configured* budget (`--max-threads` / `--max-memory`), so the
+/// run can fail fast instead of dying mid-pipeline on an impossible rule.
+/// A cap of `None` means "auto-detect" and is not treated as a hard limit.
+/// Returns one message per breaching rule (empty if feasible).
+pub fn check_budget_feasibility(
+    rules: &[&Rule],
+    max_threads: Option<u32>,
+    max_memory_mb: Option<u64>,
+) -> Vec<String> {
+    let mut breaches = Vec::new();
+    for rule in rules {
+        if let Some(cap) = max_memory_mb {
+            let required = rule
+                .effective_memory()
+                .and_then(parse_memory_mb)
+                .unwrap_or(0);
+            if required > cap {
+                breaches.push(format!(
+                    "rule '{}' requires {}MB memory but --max-memory caps the run at {}MB",
+                    rule.name, required, cap
+                ));
+            }
+        }
+        if let Some(cap) = max_threads {
+            let required = rule.effective_threads();
+            if required > cap {
+                breaches.push(format!(
+                    "rule '{}' requires {} threads but --max-threads caps the run at {}",
+                    rule.name, required, cap
+                ));
+            }
+        }
+    }
+    breaches
+}
+
 /// Validate that a rule's resource requirements don't exceed system capacity.
 /// Returns a list of warning messages (empty if all requirements are within limits).
 pub fn validate_resources_against_system(
@@ -874,6 +911,57 @@ mod tests {
 
         let warnings = validate_resources_against_system(&rule, 64, 8192);
         assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn budget_breach_on_explicit_memory_cap() {
+        let rule = Rule {
+            name: "hungry".to_string(),
+            memory: Some("8G".to_string()),
+            ..Default::default()
+        };
+        let breaches = check_budget_feasibility(&[&rule], None, Some(100));
+        assert_eq!(breaches.len(), 1);
+        assert!(breaches[0].contains("hungry"));
+        assert!(breaches[0].contains("--max-memory"));
+    }
+
+    #[test]
+    fn budget_breach_on_explicit_threads_cap() {
+        let rule = Rule {
+            name: "wide".to_string(),
+            threads: Some(16),
+            ..Default::default()
+        };
+        let breaches = check_budget_feasibility(&[&rule], Some(4), None);
+        assert_eq!(breaches.len(), 1);
+        assert!(breaches[0].contains("wide"));
+        assert!(breaches[0].contains("--max-threads"));
+    }
+
+    #[test]
+    fn budget_no_breach_within_caps() {
+        let rule = Rule {
+            name: "fits".to_string(),
+            threads: Some(2),
+            memory: Some("2G".to_string()),
+            ..Default::default()
+        };
+        let breaches = check_budget_feasibility(&[&rule], Some(4), Some(4096));
+        assert!(breaches.is_empty());
+    }
+
+    #[test]
+    fn budget_none_cap_is_not_a_hard_limit() {
+        // Auto-detect (None) must not be treated as a breach even for a huge request.
+        let rule = Rule {
+            name: "huge".to_string(),
+            threads: Some(1024),
+            memory: Some("1T".to_string()),
+            ..Default::default()
+        };
+        let breaches = check_budget_feasibility(&[&rule], None, None);
+        assert!(breaches.is_empty());
     }
 
     #[test]

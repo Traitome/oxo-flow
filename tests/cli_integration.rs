@@ -493,6 +493,56 @@ shell = "cat mid.txt > output.txt"
     assert!(stderr.contains("Debugging 1 rules"));
 }
 
+#[test]
+fn cli_run_fails_fast_when_rule_exceeds_max_memory() {
+    // A rule declaring more memory than the explicit --max-memory cap can never
+    // be scheduled. The run must fail up front with a clear message and must NOT
+    // execute the earlier, feasible rule (no wasted work).
+    let dir = tempfile::tempdir().unwrap();
+    let workflow = dir.path().join("test.oxoflow");
+    fs::write(
+        &workflow,
+        r#"
+[workflow]
+name = "budget-test"
+version = "1.0.0"
+
+[[rules]]
+name = "cheap_first"
+output = ["a.txt"]
+shell = "echo did-real-work > a.txt"
+
+[[rules]]
+name = "hungry_second"
+input = ["a.txt"]
+output = ["b.txt"]
+shell = "echo hello > b.txt"
+memory = "8G"
+"#,
+    )
+    .unwrap();
+
+    let output = oxo_flow_cmd()
+        .current_dir(dir.path())
+        .args(["run", workflow.to_str().unwrap(), "--max-memory", "100"])
+        .output()
+        .expect("failed to run command");
+
+    assert!(
+        !output.status.success(),
+        "run should fail when a rule exceeds the memory budget"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("hungry_second") && stderr.contains("--max-memory"),
+        "error should name the breaching rule and the cap: {stderr}"
+    );
+    assert!(
+        !dir.path().join("a.txt").exists(),
+        "no rules should have run; cheap_first must not have produced a.txt"
+    );
+}
+
 // ─── Cluster CLI tests ──────────────────────────────────────────────────────
 
 #[test]
