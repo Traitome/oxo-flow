@@ -103,7 +103,7 @@ mod internal {
                 .client
                 .post(&self.api_url)
                 .header("x-api-key", &self.api_key)
-                .header("Authorization", format!("Bearer {}", &self.api_key))
+                .header("Authorization", format!("Bearer {}", self.api_key))
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
                 .json(&body)
