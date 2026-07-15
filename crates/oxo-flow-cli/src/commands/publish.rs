@@ -47,35 +47,28 @@ pub fn publish_command(workflow: PathBuf, output: Option<PathBuf>) -> Result<()>
 
     let mut referenced_files: Vec<(String, PathBuf)> = Vec::new();
 
-    // Scan [[rules]] for environment spec file references
+    // Scan [[rules]] for environment spec file references.
+    //
+    // The schema is `[rules.environment]` (EnvironmentSpec). Only the fields
+    // that point at a local file are bundleable: `conda`/`pixi`/`venv` and the
+    // optional `venv_requirements`. `docker`/`singularity` are image refs and
+    // `modules` are HPC module names — nothing to copy.
     if let Some(rules) = toml_value.get("rules").and_then(|v| v.as_array()) {
         for rule in rules {
-            // Check for env.file (table format: [rules.env])
-            if let Some(env) = rule.get("env")
-                && let Some(env_file) = env.get("file").and_then(|v| v.as_str())
-            {
-                let abs_path = workflow_dir.join(env_file);
-                if abs_path.exists() {
-                    let filename = abs_path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    if !referenced_files.iter().any(|(name, _)| name == &filename) {
-                        referenced_files.push((filename, abs_path));
-                    }
-                }
-            }
-
-            // Check for conda_env field
-            if let Some(conda_env) = rule.get("conda_env").and_then(|v| v.as_str()) {
-                let abs_path = workflow_dir.join(conda_env);
-                if abs_path.exists() {
-                    let filename = abs_path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    if !referenced_files.iter().any(|(name, _)| name == &filename) {
-                        referenced_files.push((filename, abs_path));
+            let Some(env) = rule.get("environment") else {
+                continue;
+            };
+            for field in ["conda", "pixi", "venv", "venv_requirements"] {
+                if let Some(env_file) = env.get(field).and_then(|v| v.as_str()) {
+                    let abs_path = workflow_dir.join(env_file);
+                    if abs_path.exists() {
+                        let filename = abs_path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        if !referenced_files.iter().any(|(name, _)| name == &filename) {
+                            referenced_files.push((filename, abs_path));
+                        }
                     }
                 }
             }
