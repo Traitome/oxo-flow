@@ -1805,6 +1805,40 @@ fn cli_publish_creates_bundle() {
 }
 
 #[test]
+fn cli_publish_bundles_environment_conda_file() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("envs")).unwrap();
+    fs::write(
+        dir.path().join("envs/fastp.yaml"),
+        "name: fastp\ndependencies: [fastp]\n",
+    )
+    .unwrap();
+    let wf = dir.path().join("pub_env.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"pub-env\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo done > {output[0]}\"\n\n[rules.environment]\nconda = \"envs/fastp.yaml\"\n",
+    )
+    .unwrap();
+
+    oxo_flow_cmd()
+        .args(["publish", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    let bundle = dir.path().join("pub_env-bundle");
+    assert!(
+        bundle.join("fastp.yaml").exists(),
+        "conda env file from [rules.environment] should be bundled"
+    );
+    let manifest = fs::read_to_string(bundle.join("manifest.json")).unwrap();
+    assert!(
+        manifest.contains("fastp.yaml"),
+        "manifest should list the bundled env file"
+    );
+}
+
+#[test]
 fn cli_publish_nonexistent_workflow() {
     oxo_flow_cmd()
         .args(["publish", "/nonexistent/path/workflow.oxoflow"])
