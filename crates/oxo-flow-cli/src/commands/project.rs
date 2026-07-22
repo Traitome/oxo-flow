@@ -394,14 +394,14 @@ fn apply_template(gallery_dir: &Path, template_name: &str, output: Option<PathBu
     let output_path = match output {
         Some(p) => {
             if p.is_dir() {
-                p.join(format!("{}.oxoflow", &new_name))
+                p.join(format!("{}.oxoflow", new_name))
             } else {
                 p
             }
         }
         None => std::env::current_dir()
             .context("cannot determine current directory")?
-            .join(format!("{}.oxoflow", &new_name)),
+            .join(format!("{}.oxoflow", new_name)),
     };
 
     if output_path.exists() {
