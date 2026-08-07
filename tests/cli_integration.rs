@@ -1772,6 +1772,130 @@ fn cli_batch_empty_items_error() {
         .failure();
 }
 
+// ─── workflow [arguments] CLI tests ──────────────────────────────────────
+
+#[test]
+fn cli_run_with_arg_required_missing_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("args.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"args\"\nversion = \"1.0.0\"\n\n[arguments]\ndatabase = { required = true, help = \"Path to database\" }\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo {arguments.database} > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "should fail when required arg missing"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("required argument"),
+        "should mention required arg: {stderr}"
+    );
+    assert!(
+        stderr.contains("database"),
+        "should name the missing arg: {stderr}"
+    );
+}
+
+#[test]
+fn cli_run_with_arg_provided_succeeds() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("args2.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"args2\"\nversion = \"1.0.0\"\n\n[arguments]\ndatabase = { required = true, help = \"Path\" }\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo {arguments.database} > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--arg", "database=refs/nt"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(dir.path().join("out.txt").exists());
+    let content = fs::read_to_string(dir.path().join("out.txt")).unwrap();
+    assert_eq!(content.trim(), "refs/nt");
+}
+
+#[test]
+fn cli_run_with_arg_default_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("args3.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"args3\"\nversion = \"1.0.0\"\n\n[arguments]\nthreshold = { default = \"1e-5\", help = \"E-value\" }\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo {arguments.threshold} > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "should succeed with default: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let content = fs::read_to_string(dir.path().join("out.txt")).unwrap();
+    assert_eq!(content.trim(), "1e-5", "default value should be used");
+}
+
+#[test]
+fn cli_run_with_arg_overrides_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("args4.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"args4\"\nversion = \"1.0.0\"\n\n[arguments]\nthreshold = { default = \"1e-5\", help = \"E-value\" }\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo {arguments.threshold} > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--arg", "threshold=1e-10"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let content = fs::read_to_string(dir.path().join("out.txt")).unwrap();
+    assert_eq!(content.trim(), "1e-10", "CLI arg should override default");
+}
+
+#[test]
+fn cli_run_with_arg_invalid_format_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("args5.oxoflow");
+    fs::write(&wf, "[workflow]\nname = \"args5\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo ok > {output[0]}\"\n").unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--arg", "no-equals-sign"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "should fail on invalid format");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("KEY=VALUE") || stderr.contains("invalid"),
+        "should mention format: {stderr}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // publish command tests
 // ---------------------------------------------------------------------------

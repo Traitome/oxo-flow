@@ -92,6 +92,13 @@ pub enum Commands {
         provenance: bool,
         #[arg(long, help = "Execute from a published .tar.zst bundle")]
         bundle: Option<PathBuf>,
+        #[arg(
+            short = 'a',
+            long = "arg",
+            value_name = "KEY=VALUE",
+            help = "Set a workflow argument (overrides [arguments] defaults)"
+        )]
+        args: Vec<String>,
     },
     /// Resume an interrupted workflow from a checkpoint.
     Resume {
@@ -489,6 +496,7 @@ async fn main() -> Result<()> {
             cache_dir,
             provenance,
             bundle,
+            args,
         } => {
             let (wf, wd) = if let Some(bundle_path) = bundle {
                 let (extracted_wf, extracted_dir) =
@@ -515,6 +523,7 @@ async fn main() -> Result<()> {
                 cache_dir,
                 provenance,
                 cli.json,
+                args,
             )
             .await?
         }
@@ -707,6 +716,7 @@ async fn main() -> Result<()> {
                     None,            // cache_dir
                     false,           // provenance
                     cli.json,
+                    vec![], // cli_args
                 )
                 .await?;
             }

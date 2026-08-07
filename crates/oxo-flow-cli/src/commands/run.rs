@@ -27,6 +27,7 @@ pub async fn run_command(
     cache_dir: Option<PathBuf>,
     provenance: bool,
     json: bool,
+    cli_args: Vec<String>,
 ) -> Result<()> {
     print_banner();
     let workflow = resolve_workflow(workflow)?;
@@ -34,6 +35,50 @@ pub async fn run_command(
 
     let mut config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
+
+    // ── Parse and merge CLI --arg key=value overrides ───────────────────
+
+    let mut cli_arg_values: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for arg_str in &cli_args {
+        let (k, v) = arg_str
+            .split_once('=')
+            .with_context(|| format!("invalid --arg format: '{arg_str}' — expected KEY=VALUE"))?;
+        if k.is_empty() || v.is_empty() {
+            anyhow::bail!("invalid --arg format: '{arg_str}' — KEY and VALUE must be non-empty");
+        }
+        cli_arg_values.insert(k.to_string(), v.to_string());
+    }
+
+    // Validate required arguments and apply defaults from [arguments] block
+    for (name, arg_def) in &config.arguments {
+        if let Some(val) = cli_arg_values.get(name) {
+            config.config.insert(
+                format!("arguments.{name}"),
+                toml::Value::String(val.clone()),
+            );
+        } else if let Some(ref default) = arg_def.default {
+            config
+                .config
+                .entry(format!("arguments.{name}"))
+                .or_insert_with(|| toml::Value::String(default.clone()));
+        } else if arg_def.required {
+            anyhow::bail!(
+                "required argument '{}' not set. Use --arg {}=<value>\n  {}",
+                name,
+                name,
+                arg_def.help.as_deref().unwrap_or("")
+            );
+        }
+    }
+
+    // Also inject any undeclared --arg values as {arguments.xxx}
+    for (k, v) in &cli_arg_values {
+        config
+            .config
+            .entry(format!("arguments.{k}"))
+            .or_insert_with(|| toml::Value::String(v.clone()));
+    }
 
     config.apply_defaults();
     config
@@ -232,6 +277,24 @@ pub async fn run_command(
             other => other.to_string(),
         };
         wildcard_values.insert(format!("config.{key}"), string_val);
+    }
+    // Also inject argument values as {arguments.xxx} for shell expansion.
+    // This covers both --arg overrides and declared defaults from [arguments].
+    for name in config.arguments.keys() {
+        let config_key = format!("arguments.{name}");
+        if let Some(val) = config.config.get(&config_key) {
+            let string_val = match val {
+                toml::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            wildcard_values.insert(format!("arguments.{name}"), string_val);
+        }
+    }
+    // Also add any undeclared --arg values
+    for (k, v) in &cli_arg_values {
+        wildcard_values
+            .entry(format!("arguments.{k}"))
+            .or_insert_with(|| v.clone());
     }
     let wildcard_values: Arc<HashMap<String, String>> = Arc::new(wildcard_values);
     let workdir_actual = Arc::new(workdir.as_ref().unwrap_or(&workflow_dir).clone());
@@ -978,6 +1041,7 @@ pub async fn resume_command(checkpoint: PathBuf, jobs: usize) -> Result<()> {
         None,            // cache_dir
         false,           // provenance (checkpoint already has checksums)
         false,           // json (resume defaults to human-readable)
+        Vec::new(),      // cli_args (resume reuses checkpoint state)
     )
     .await
 }

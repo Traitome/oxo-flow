@@ -338,6 +338,28 @@ pub struct ClusterProfile {
     pub extra_args: Vec<String>,
 }
 
+/// A declared workflow argument — a user-facing parameter exposed as a CLI flag.
+///
+/// Arguments are declared in the `[arguments]` block of a `.oxoflow` file.
+/// Each becomes available via `--arg name=value` at runtime and is referenced
+/// in shell commands as `{arguments.name}`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ArgumentDef {
+    /// Whether this argument must be provided at runtime.
+    #[serde(default)]
+    pub required: bool,
+
+    /// Default value when not provided via CLI.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+
+    /// Human-readable help text shown in `--help`.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub help: Option<String>,
+}
+
 /// Resource budget constraints for the entire workflow.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ResourceBudget {
@@ -900,6 +922,14 @@ pub struct WorkflowConfig {
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub config: HashMap<String, toml::Value>,
+
+    /// Declared workflow arguments — user-facing parameters that become CLI flags.
+    ///
+    /// Each argument can specify whether it is required, a default value, and
+    /// help text for the `--help` output.
+    #[serde(default, rename = "arguments")]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub arguments: HashMap<String, ArgumentDef>,
 
     /// Base directory for reference files.
     ///
@@ -3993,5 +4023,35 @@ name = "test"
 
         let derived = config.derive_reference_paths();
         assert!(derived.is_empty());
+    }
+
+    #[test]
+    fn argument_def_deserialization() {
+        let toml_str = r#"
+[workflow]
+name = "test"
+version = "1.0.0"
+
+[arguments]
+database = { required = true, help = "Path to DB" }
+threshold = { default = "1e-5", help = "E-value" }
+
+[[rules]]
+name = "s"
+output = ["out.txt"]
+shell = "echo {arguments.database} > {output[0]}"
+"#;
+        let config = WorkflowConfig::parse(toml_str).unwrap();
+        assert_eq!(config.arguments.len(), 2);
+        assert!(config.arguments["database"].required);
+        assert_eq!(
+            config.arguments["database"].help.as_deref(),
+            Some("Path to DB")
+        );
+        assert_eq!(
+            config.arguments["threshold"].default.as_deref(),
+            Some("1e-5")
+        );
+        assert!(!config.arguments["threshold"].required);
     }
 }
