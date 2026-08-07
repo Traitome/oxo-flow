@@ -1792,15 +1792,21 @@ fn cli_publish_creates_bundle() {
         .assert()
         .success();
 
-    let bundle = dir.path().join("pub_test-bundle");
-    assert!(bundle.exists(), "bundle directory should exist");
+    // New publish emits a .tar.zst archive, not a loose directory
+    let archive = dir.path().join("pub_test-bundle.tar.zst");
     assert!(
-        bundle.join("pub_test.oxoflow").exists(),
-        "workflow should be in bundle"
+        archive.exists(),
+        "bundle archive should exist at {:?}",
+        archive
     );
-    assert!(
-        bundle.join("manifest.json").exists(),
-        "manifest should exist"
+    // Verify it's a valid tar.zst by checking the magic bytes
+    let data = fs::read(&archive).unwrap();
+    assert!(data.len() > 8, "archive should not be empty");
+    // zstd magic: 0x28 0xB5 0x2F 0xFD
+    assert_eq!(
+        &data[..4],
+        &[0x28, 0xB5, 0x2F, 0xFD],
+        "should be zstd compressed"
     );
 }
 
@@ -1820,21 +1826,99 @@ fn cli_publish_bundles_environment_conda_file() {
     )
     .unwrap();
 
+    let output = oxo_flow_cmd()
+        .args(["publish", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "publish failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify the archive contains the expected files
+    let archive = dir.path().join("pub_env-bundle.tar.zst");
+    assert!(archive.exists(), "bundle archive should exist");
+
+    // Decompress and list contents
+    let file = std::fs::File::open(&archive).unwrap();
+    let decoder = zstd::stream::read::Decoder::new(file).unwrap();
+    let mut archive = tar::Archive::new(decoder);
+    let mut found_manifest = false;
+    let mut found_env = false;
+    let mut found_wf = false;
+    let mut paths = Vec::new();
+    for entry in archive.entries().unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path().unwrap().to_string_lossy().to_string();
+        paths.push(path.clone());
+        if path == "manifest.json" {
+            found_manifest = true;
+        }
+        if path.contains("fastp.yaml") {
+            found_env = true;
+        }
+        if path.contains("pub_env.oxoflow") {
+            found_wf = true;
+        }
+    }
+    assert!(
+        found_manifest,
+        "manifest.json should be in archive. Found: {:?}",
+        paths
+    );
+    assert!(
+        found_env,
+        "conda env file should be in archive. Found: {:?}",
+        paths
+    );
+    assert!(
+        found_wf,
+        "workflow file should be in archive. Found: {:?}",
+        paths
+    );
+}
+
+#[test]
+fn cli_publish_bundles_mamba_env() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("envs")).unwrap();
+    fs::write(
+        dir.path().join("envs/qc.yaml"),
+        "name: qc\ndependencies: [fastqc]\n",
+    )
+    .unwrap();
+    let wf = dir.path().join("pub_mamba.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"pub-mamba\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo done > {output[0]}\"\n\n[rules.environment]\nmamba = \"envs/qc.yaml\"\n",
+    )
+    .unwrap();
+
     oxo_flow_cmd()
         .args(["publish", wf.to_str().unwrap()])
         .current_dir(dir.path())
         .assert()
         .success();
 
-    let bundle = dir.path().join("pub_env-bundle");
+    let archive = dir.path().join("pub_mamba-bundle.tar.zst");
+    assert!(archive.exists(), "bundle archive should exist");
+
+    let file = std::fs::File::open(&archive).unwrap();
+    let decoder = zstd::stream::read::Decoder::new(file).unwrap();
+    let mut archive = tar::Archive::new(decoder);
+    let mut found_qc = false;
+    for entry in archive.entries().unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path().unwrap().to_string_lossy().to_string();
+        if path.contains("qc.yaml") {
+            found_qc = true;
+        }
+    }
     assert!(
-        bundle.join("fastp.yaml").exists(),
-        "conda env file from [rules.environment] should be bundled"
-    );
-    let manifest = fs::read_to_string(bundle.join("manifest.json")).unwrap();
-    assert!(
-        manifest.contains("fastp.yaml"),
-        "manifest should list the bundled env file"
+        found_qc,
+        "mamba env file from [rules.environment] should be bundled"
     );
 }
 

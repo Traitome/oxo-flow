@@ -95,3 +95,5 @@ tempfile = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 tokio = { workspace = true }
+zstd = { version = "0.13", default-features = false }
+tar = "0.4"

@@ -30,6 +30,10 @@ toml = { workspace = true }
 glob = { workspace = true }
 filetime = "0.2.29"
 oxo-license = "0.1.1"
+sha2 = { workspace = true }
+tar = "0.4"
+zstd = { version = "0.13", default-features = false }
+walkdir = "2"
 
 [dev-dependencies]
 tempfile = { workspace = true }
