@@ -1930,6 +1930,185 @@ fn cli_publish_nonexistent_workflow() {
         .failure();
 }
 
+// ─── publish + run --bundle round-trip ─────────────────────────────────
+
+#[test]
+fn cli_publish_then_run_bundle_roundtrip() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("roundtrip.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"roundtrip\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo ok > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    // Publish
+    let output = oxo_flow_cmd()
+        .args(["publish", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "publish failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let bundle = dir.path().join("roundtrip-bundle.tar.zst");
+    assert!(bundle.exists(), "bundle should exist");
+
+    // Run from bundle with explicit workdir
+    let run_output = oxo_flow_cmd()
+        .args([
+            "run",
+            "--bundle",
+            bundle.to_str().unwrap(),
+            "-d",
+            dir.path().to_str().unwrap(),
+            "-j",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        run_output.status.success(),
+        "run --bundle failed: stderr={}",
+        String::from_utf8_lossy(&run_output.stderr)
+    );
+    assert!(
+        dir.path().join("out.txt").exists(),
+        "output file should be created in specified workdir"
+    );
+}
+
+#[test]
+fn cli_run_bundle_rejects_corrupted_archive() {
+    let dir = tempfile::tempdir().unwrap();
+    let bad_bundle = dir.path().join("corrupt.tar.zst");
+    fs::write(&bad_bundle, "this is not a valid zstd archive").unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["run", "--bundle", bad_bundle.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "should reject corrupted archive");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("zstd") || stderr.contains("decompress") || stderr.contains("bundle"),
+        "error should mention bundle/decompress: {stderr}"
+    );
+}
+
+#[test]
+fn cli_run_bundle_rejects_missing_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    // Build a valid tar.zst with no manifest.json
+    let bundle_path = dir.path().join("nomanifest.tar.zst");
+    let file = std::fs::File::create(&bundle_path).unwrap();
+    let encoder = zstd::stream::write::Encoder::new(file, 3).unwrap();
+    let mut tar = tar::Builder::new(encoder);
+    // Add a dummy file but no manifest
+    let tmp = dir.path().join("dummy.txt");
+    fs::write(&tmp, "hello").unwrap();
+    tar.append_path_with_name(&tmp, "dummy.txt").unwrap();
+    let encoder = tar.into_inner().unwrap();
+    encoder.finish().unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["run", "--bundle", bundle_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "should reject bundle without manifest"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("manifest"),
+        "error should mention manifest: {stderr}"
+    );
+}
+
+#[test]
+fn cli_run_bundle_rejects_checksum_mismatch() {
+    let dir = tempfile::tempdir().unwrap();
+    // Create a valid bundle via publish
+    fs::write(dir.path().join("dummy.txt"), "original content").unwrap();
+    let wf = dir.path().join("cs_test.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"cs\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"s\"\noutput = [\"dummy.txt\"]\nshell = \"echo ok > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["publish", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    // Now tamper with the bundle — modify a file inside it
+    let bundle = dir.path().join("cs_test-bundle.tar.zst");
+    // Extract, modify dummy.txt checksum in manifest, repack
+    let extract_dir = dir.path().join("tampered");
+    std::fs::create_dir(&extract_dir).unwrap();
+    let file = std::fs::File::open(&bundle).unwrap();
+    let decoder = zstd::stream::read::Decoder::new(file).unwrap();
+    let mut archive = tar::Archive::new(decoder);
+    archive.unpack(&extract_dir).unwrap();
+
+    // Tamper manifest — change a SHA-256 prefix
+    let manifest_path = extract_dir.join("manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["files"][0]["sha256"] = serde_json::Value::String(
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000".into(),
+    );
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    // Repack
+    let tampered_bundle = dir.path().join("tampered.tar.zst");
+    let file = std::fs::File::create(&tampered_bundle).unwrap();
+    let encoder = zstd::stream::write::Encoder::new(file, 3).unwrap();
+    let mut tar = tar::Builder::new(encoder);
+    for entry in std::fs::read_dir(&extract_dir).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.is_file() {
+            let name = path.file_name().unwrap().to_str().unwrap();
+            tar.append_path_with_name(&path, name).unwrap();
+        }
+    }
+    let encoder = tar.into_inner().unwrap();
+    encoder.finish().unwrap();
+
+    // Run tampered bundle
+    let output = oxo_flow_cmd()
+        .args(["run", "--bundle", tampered_bundle.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "should reject tampered bundle");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("checksum") || stderr.contains("mismatch"),
+        "error should mention checksum mismatch: {stderr}"
+    );
+}
+
+#[test]
+fn cli_pull_rejects_invalid_url() {
+    let output = oxo_flow_cmd()
+        .args(["pull", "not-a-valid-url!!!"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "should reject invalid URL");
+}
+
 // ---------------------------------------------------------------------------
 // provenance verify tests
 // ---------------------------------------------------------------------------

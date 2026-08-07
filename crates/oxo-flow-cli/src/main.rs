@@ -491,7 +491,9 @@ async fn main() -> Result<()> {
             let (wf, wd) = if let Some(bundle_path) = bundle {
                 let (extracted_wf, extracted_dir) =
                     crate::commands::bundle::extract_and_verify_bundle(&bundle_path)?;
-                (Some(extracted_wf), Some(extracted_dir))
+                // Respect explicit -d flag; otherwise use extracted dir
+                let effective_wd = workdir.unwrap_or(extracted_dir);
+                (Some(extracted_wf), Some(effective_wd))
             } else {
                 (workflow, workdir)
             };
