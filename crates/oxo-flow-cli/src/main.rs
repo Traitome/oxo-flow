@@ -337,6 +337,8 @@ pub enum Commands {
         workflow: PathBuf,
         #[arg(short = 'o', long)]
         output: Option<PathBuf>,
+        #[arg(long, help = "Generate conda lockfiles for reproducible environments")]
+        with_lockfiles: bool,
     },
     /// Verify or display license status.
     License {
@@ -727,7 +729,11 @@ async fn main() -> Result<()> {
             }
             eprintln!("\n{} All checks passed.", "✓".green().bold());
         }
-        Commands::Publish { workflow, output } => publish_command(workflow, output)?,
+        Commands::Publish {
+            workflow,
+            output,
+            with_lockfiles,
+        } => publish_command(workflow, output, with_lockfiles)?,
         Commands::License { path } => {
             use colored::Colorize;
             let status = oxo_flow_web::check_license();

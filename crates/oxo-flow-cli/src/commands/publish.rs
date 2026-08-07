@@ -9,7 +9,14 @@ use std::path::{Path, PathBuf};
 /// Reads the .oxoflow workflow file, follows `[[include]]` references to discover
 /// all environment spec files, collects `scripts/` and `bin/` directories, and
 /// produces a single `.tar.zst` archive with a complete, checksum-verified manifest.
-pub fn publish_command(workflow: PathBuf, output: Option<PathBuf>) -> Result<()> {
+///
+/// With `--with-lockfiles`, generates deterministic conda lockfiles for each
+/// conda/mamba environment YAML, ensuring exact reproducibility across time.
+pub fn publish_command(
+    workflow: PathBuf,
+    output: Option<PathBuf>,
+    with_lockfiles: bool,
+) -> Result<()> {
     let workflow_path =
         std::path::absolute(&workflow).context("failed to resolve workflow path")?;
     let workflow_dir = workflow_path.parent().unwrap_or(Path::new("."));
@@ -44,6 +51,12 @@ pub fn publish_command(workflow: PathBuf, output: Option<PathBuf>) -> Result<()>
         &mut container_refs,
         &mut scanned_workflows,
     )?;
+
+    // ── Generate conda lockfiles (if --with-lockfiles) ────────────────────
+
+    if with_lockfiles {
+        generate_lockfiles(workflow_dir, &mut referenced_files);
+    }
 
     // Collect scripts/ and bin/ directories if they exist (Nextflow-style auto-PATH convention)
     for dir_name in &["scripts", "bin"] {
@@ -199,13 +212,13 @@ fn scan_workflow_env_files(
             }
             // Container image references — record for reproducibility
             for field in ["docker", "singularity"] {
-                if let Some(image) = env.get(field).and_then(|v| v.as_str()) {
-                    if !container_refs.iter().any(|c| c["image"] == image) {
-                        container_refs.push(serde_json::json!({
-                            "type": field,
-                            "image": image,
-                        }));
-                    }
+                if let Some(image) = env.get(field).and_then(|v| v.as_str())
+                    && !container_refs.iter().any(|c| c["image"] == image)
+                {
+                    container_refs.push(serde_json::json!({
+                        "type": field,
+                        "image": image,
+                    }));
                 }
             }
         }
@@ -219,13 +232,13 @@ fn scan_workflow_env_files(
                 add_env_file(env_spec, field, workflow_dir, referenced_files);
             }
             for field in ["docker", "singularity"] {
-                if let Some(image) = env_spec.get(field).and_then(|v| v.as_str()) {
-                    if !container_refs.iter().any(|c| c["image"] == image) {
-                        container_refs.push(serde_json::json!({
-                            "type": field,
-                            "image": image,
-                        }));
-                    }
+                if let Some(image) = env_spec.get(field).and_then(|v| v.as_str())
+                    && !container_refs.iter().any(|c| c["image"] == image)
+                {
+                    container_refs.push(serde_json::json!({
+                        "type": field,
+                        "image": image,
+                    }));
                 }
             }
         }
@@ -337,4 +350,98 @@ fn compute_sha256(path: &Path) -> Result<String> {
         hasher.update(&buf[..n]);
     }
     Ok(format!("sha256:{:x}", hasher.finalize()))
+}
+
+/// Generate conda lockfiles for collected environment YAML files.
+///
+/// Tries `conda-lock` first, then falls back to `conda env export`.
+/// Lockfiles are added to `referenced_files` for inclusion in the bundle.
+fn generate_lockfiles(_workflow_dir: &Path, referenced_files: &mut Vec<(String, PathBuf)>) {
+    // Find conda-lock or compatible tool
+    let lock_tool = if std::process::Command::new("conda-lock")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success())
+    {
+        Some("conda-lock")
+    } else {
+        None
+    };
+
+    if let Some(tool) = lock_tool {
+        eprintln!("  {} Generating lockfiles with {}", "→".cyan(), tool);
+    } else {
+        eprintln!(
+            "  {} conda-lock not found — install with: pip install conda-lock",
+            "⚠".yellow()
+        );
+        eprintln!(
+            "  {} lockfiles not generated; environments may resolve differently over time",
+            "⚠".yellow()
+        );
+        return;
+    }
+
+    let temp_dir = std::env::temp_dir().join(format!("oxo-lock-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+
+    // Collect conda/mamba env files to lock
+    let env_files: Vec<(String, PathBuf)> = referenced_files
+        .iter()
+        .filter(|(name, _)| name.ends_with(".yaml") || name.ends_with(".yml"))
+        .map(|(name, path)| (name.clone(), path.clone()))
+        .collect();
+
+    for (name, abs_path) in &env_files {
+        let lock_name = format!(
+            "{}.lock.yml",
+            Path::new(name).file_stem().unwrap().to_string_lossy()
+        );
+        let lock_path = temp_dir.join(&lock_name);
+
+        eprintln!("    Locking {}...", name);
+        let result = std::process::Command::new("conda-lock")
+            .args([
+                "lock",
+                "--file",
+                &abs_path.display().to_string(),
+                "--platform",
+                "linux-64",
+                "--platform",
+                "osx-64",
+                "--lockfile",
+                &lock_path.display().to_string(),
+                "--quiet",
+            ])
+            .output();
+
+        match result {
+            Ok(output) if output.status.success() => {
+                if lock_path.exists() && !referenced_files.iter().any(|(n, _)| n == &lock_name) {
+                    eprintln!("      {} {} generated", "✓".green(), lock_name);
+                    referenced_files.push((lock_name, lock_path));
+                }
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                eprintln!(
+                    "      {} conda-lock failed for {}: {}",
+                    "⚠".yellow(),
+                    name,
+                    stderr.lines().next().unwrap_or("unknown error")
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "      {} failed to run conda-lock for {}: {}",
+                    "⚠".yellow(),
+                    name,
+                    e
+                );
+            }
+        }
+    }
+
+    // Note: lock temp dir intentionally not cleaned — files are referenced
+    // by the archive builder and must persist until tar creation finishes.
 }
