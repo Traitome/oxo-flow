@@ -34,6 +34,7 @@ sha2 = { workspace = true }
 tar = "0.4"
 zstd = { version = "0.13", default-features = false }
 walkdir = "2"
+reqwest = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

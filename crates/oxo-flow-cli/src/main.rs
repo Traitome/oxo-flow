@@ -90,6 +90,8 @@ pub enum Commands {
         cache_dir: Option<PathBuf>,
         #[arg(long)]
         provenance: bool,
+        #[arg(long, help = "Execute from a published .tar.zst bundle")]
+        bundle: Option<PathBuf>,
     },
     /// Resume an interrupted workflow from a checkpoint.
     Resume {
@@ -142,6 +144,13 @@ pub enum Commands {
     Status {
         #[arg(value_name = "CHECKPOINT")]
         checkpoint: PathBuf,
+    },
+    /// Pull a published bundle from a remote source.
+    Pull {
+        #[arg(value_name = "URL")]
+        url: String,
+        #[arg(short = 'o', long)]
+        output: Option<PathBuf>,
     },
     /// Inspect and manage workflow configuration.
     Config {
@@ -477,12 +486,20 @@ async fn main() -> Result<()> {
             skip_env_setup,
             cache_dir,
             provenance,
+            bundle,
         } => {
+            let (wf, wd) = if let Some(bundle_path) = bundle {
+                let (extracted_wf, extracted_dir) =
+                    crate::commands::bundle::extract_and_verify_bundle(&bundle_path)?;
+                (Some(extracted_wf), Some(extracted_dir))
+            } else {
+                (workflow, workdir)
+            };
             run_command(
-                workflow,
+                wf,
                 jobs,
                 keep_going,
-                workdir,
+                wd,
                 target,
                 retry,
                 timeout,
@@ -515,6 +532,7 @@ async fn main() -> Result<()> {
             output,
         } => handle_graph(workflow, format, output)?,
         Commands::Status { checkpoint } => handle_status(checkpoint, cli.json).await?,
+        Commands::Pull { url, output } => crate::commands::pull::pull_command(&url, output).await?,
         Commands::Config { action } => crate::commands::infra::handle_config(action)?,
         Commands::Diff {
             workflow_a,

@@ -187,6 +187,7 @@ pub fn run_batch_command(cmd: &str, workdir: &Path) -> Result<i32> {
 }
 
 pub mod batch;
+pub mod bundle;
 pub mod clean;
 pub mod cluster;
 pub mod completions;
@@ -195,6 +196,7 @@ pub mod output;
 pub mod project;
 pub mod provenance;
 pub mod publish;
+pub mod pull;
 pub mod quality;
 pub mod run;
 pub mod web;
