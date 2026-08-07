@@ -24,11 +24,15 @@ pub trait EnvironmentBackend: Send + Sync {
     fn is_available(&self) -> bool;
 
     /// Wrap a shell command to run inside this environment.
+    ///
+    /// `workdir` is the executor's working directory — used by container
+    /// backends for bind-mount paths. Other backends may ignore it.
     fn wrap_command(
         &self,
         command: &str,
         spec: &str,
         _resources: Option<&crate::rule::Resources>,
+        workdir: &std::path::Path,
     ) -> Result<String>;
 
     /// Return the shell command to set up / create this environment.
@@ -92,6 +96,7 @@ impl EnvironmentBackend for CondaBackend {
         command: &str,
         spec: &str,
         _resources: Option<&crate::rule::Resources>,
+        _workdir: &std::path::Path,
     ) -> Result<String> {
         let env_name = conda_env_name_from_spec(spec);
         let escaped = escape_for_sh_single_quote(command);
@@ -177,6 +182,148 @@ fn escape_for_sh_single_quote(s: &str) -> String {
     s.replace('\'', "'\\''")
 }
 
+/// Mamba / micromamba environment backend.
+///
+/// Auto-detects the installed binary, preferring `mamba` (fast solver)
+/// over `micromamba` (standalone) over `conda` as a last-resort fallback.
+/// CLI interface is compatible with conda — command templates are shared.
+#[derive(Debug)]
+pub struct MambaBackend {
+    binary: String,
+}
+
+impl Default for MambaBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MambaBackend {
+    /// Create a new backend, auto-detecting the available binary.
+    ///
+    /// Detection priority: `mamba` → `micromamba` → `conda` (fallback).
+    pub fn new() -> Self {
+        let binary = if std::process::Command::new("mamba")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+        {
+            "mamba"
+        } else if std::process::Command::new("micromamba")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+        {
+            "micromamba"
+        } else {
+            "conda"
+        };
+        Self {
+            binary: binary.to_string(),
+        }
+    }
+
+    /// Setup command with optional project-local prefix.
+    pub fn setup_command_with_opts(&self, spec: &str, prefix: Option<&str>) -> Result<String> {
+        if let Some(prefix) = prefix {
+            Ok(format!(
+                "{} env create -p {prefix} -f {spec} 2>/dev/null || {} env update -p {prefix} -f {spec} --prune",
+                self.binary, self.binary
+            ))
+        } else {
+            self.setup_command(spec)
+        }
+    }
+
+    /// Wrap command with optional project-local prefix.
+    pub fn wrap_command_with_opts(
+        &self,
+        command: &str,
+        spec: &str,
+        prefix: Option<&str>,
+    ) -> Result<String> {
+        let escaped = escape_for_sh_single_quote(command);
+        if let Some(prefix) = prefix {
+            Ok(format!(
+                "{} run -p {prefix} bash -c '{escaped}'",
+                self.binary
+            ))
+        } else {
+            let env_name = conda_env_name_from_spec(spec);
+            Ok(format!(
+                "{} run -n {env_name} bash -c '{escaped}'",
+                self.binary
+            ))
+        }
+    }
+
+    /// Teardown command with optional project-local prefix.
+    pub fn teardown_command_with_opts(
+        &self,
+        spec: &str,
+        prefix: Option<&str>,
+    ) -> Result<Option<String>> {
+        if let Some(prefix) = prefix {
+            Ok(Some(format!("{} env remove -p {prefix} -y", self.binary)))
+        } else {
+            self.teardown_command(spec)
+        }
+    }
+
+    /// Cache key with optional project-local prefix.
+    pub fn cache_key_with_opts(&self, spec: &str, prefix: Option<&str>) -> String {
+        if let Some(prefix) = prefix {
+            format!("mamba:{}:{spec}:{prefix}", self.binary)
+        } else {
+            self.cache_key(spec)
+        }
+    }
+}
+
+impl EnvironmentBackend for MambaBackend {
+    fn name(&self) -> &str {
+        "mamba"
+    }
+
+    fn is_available(&self) -> bool {
+        std::process::Command::new(&self.binary)
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }
+
+    fn wrap_command(
+        &self,
+        command: &str,
+        spec: &str,
+        _resources: Option<&crate::rule::Resources>,
+        _workdir: &std::path::Path,
+    ) -> Result<String> {
+        let env_name = conda_env_name_from_spec(spec);
+        let escaped = escape_for_sh_single_quote(command);
+        Ok(format!(
+            "{} run -n {env_name} bash -c '{escaped}'",
+            self.binary
+        ))
+    }
+
+    fn setup_command(&self, spec: &str) -> Result<String> {
+        Ok(format!(
+            "{} env create -f {spec} 2>/dev/null || {} env update -f {spec} --prune",
+            self.binary, self.binary
+        ))
+    }
+
+    fn teardown_command(&self, spec: &str) -> Result<Option<String>> {
+        let env_name = conda_env_name_from_spec(spec);
+        Ok(Some(format!("{} env remove -n {env_name} -y", self.binary)))
+    }
+
+    fn cache_key(&self, spec: &str) -> String {
+        format!("mamba:{}:{spec}", self.binary)
+    }
+}
+
 /// Docker environment backend.
 #[derive(Debug, Default)]
 pub struct DockerBackend;
@@ -198,11 +345,9 @@ impl EnvironmentBackend for DockerBackend {
         command: &str,
         spec: &str,
         resources: Option<&crate::rule::Resources>,
+        workdir: &std::path::Path,
     ) -> Result<String> {
-        let workdir = std::env::current_dir()
-            .unwrap_or_default()
-            .display()
-            .to_string();
+        let workdir = workdir.display().to_string();
         let escaped_cmd = escape_for_sh_single_quote(command);
 
         let mut mem_arg = String::new();
@@ -280,11 +425,9 @@ impl EnvironmentBackend for SingularityBackend {
         command: &str,
         spec: &str,
         _resources: Option<&crate::rule::Resources>,
+        workdir: &std::path::Path,
     ) -> Result<String> {
-        let workdir = std::env::current_dir()
-            .unwrap_or_default()
-            .display()
-            .to_string();
+        let workdir = workdir.display().to_string();
         let escaped_cmd = escape_for_sh_single_quote(command);
 
         Ok(format!(
@@ -327,6 +470,7 @@ impl EnvironmentBackend for VenvBackend {
         command: &str,
         spec: &str,
         _resources: Option<&crate::rule::Resources>,
+        _workdir: &std::path::Path,
     ) -> Result<String> {
         Ok(format!("source {spec}/bin/activate && {command}"))
     }
@@ -391,6 +535,7 @@ impl EnvironmentBackend for PixiBackend {
         command: &str,
         spec: &str,
         _resources: Option<&crate::rule::Resources>,
+        _workdir: &std::path::Path,
     ) -> Result<String> {
         Ok(format!("pixi run -e {spec} {command}"))
     }
@@ -426,6 +571,7 @@ impl EnvironmentBackend for SystemBackend {
         command: &str,
         _spec: &str,
         _resources: Option<&crate::rule::Resources>,
+        _workdir: &std::path::Path,
     ) -> Result<String> {
         Ok(command.to_string())
     }
@@ -469,6 +615,7 @@ impl EnvironmentBackend for ModulesBackend {
         command: &str,
         spec: &str,
         _resources: Option<&crate::rule::Resources>,
+        _workdir: &std::path::Path,
     ) -> Result<String> {
         let modules = spec.replace(',', " ");
         // Initialize module system before loading modules
@@ -601,6 +748,7 @@ impl EnvironmentCache {
 
 /// Resolves the appropriate environment backend for a rule's environment spec.
 pub struct EnvironmentResolver {
+    mamba: MambaBackend,
     conda: CondaBackend,
     docker: DockerBackend,
     singularity: SingularityBackend,
@@ -621,6 +769,7 @@ impl EnvironmentResolver {
     /// Create a new environment resolver.
     pub fn new() -> Self {
         Self {
+            mamba: MambaBackend::new(),
             conda: CondaBackend,
             docker: DockerBackend,
             singularity: SingularityBackend::new(),
@@ -635,6 +784,7 @@ impl EnvironmentResolver {
     /// Create a new environment resolver with persistent cache directory.
     pub fn with_cache_dir(cache_dir: &std::path::Path) -> Self {
         Self {
+            mamba: MambaBackend::new(),
             conda: CondaBackend,
             docker: DockerBackend,
             singularity: SingularityBackend::new(),
@@ -664,7 +814,15 @@ impl EnvironmentResolver {
         command: &str,
         env_spec: &EnvironmentSpec,
         resources: Option<&crate::rule::Resources>,
+        workdir: &std::path::Path,
     ) -> Result<String> {
+        if let Some(ref mamba) = env_spec.mamba {
+            return self.mamba.wrap_command_with_opts(
+                command,
+                mamba,
+                env_spec.mamba_prefix.as_deref(),
+            );
+        }
         if let Some(ref conda) = env_spec.conda {
             return self.conda.wrap_command_with_opts(
                 command,
@@ -673,29 +831,38 @@ impl EnvironmentResolver {
             );
         }
         if let Some(ref pixi) = env_spec.pixi {
-            return self.pixi.wrap_command(command, pixi, resources);
+            return self.pixi.wrap_command(command, pixi, resources, workdir);
         }
         if let Some(ref docker) = env_spec.docker {
-            return self.docker.wrap_command(command, docker, resources);
+            return self
+                .docker
+                .wrap_command(command, docker, resources, workdir);
         }
         if let Some(ref singularity) = env_spec.singularity {
             return self
                 .singularity
-                .wrap_command(command, singularity, resources);
+                .wrap_command(command, singularity, resources, workdir);
         }
         if let Some(ref venv) = env_spec.venv {
-            return self.venv.wrap_command(command, venv, resources);
+            return self.venv.wrap_command(command, venv, resources, workdir);
         }
         if !env_spec.modules.is_empty() {
             let spec = env_spec.modules.join(",");
-            return self.modules.wrap_command(command, &spec, resources);
+            return self
+                .modules
+                .wrap_command(command, &spec, resources, workdir);
         }
-        self.system.wrap_command(command, "", resources)
+        self.system.wrap_command(command, "", resources, workdir)
     }
 
     /// Get the cache key for an environment specification.
     /// Used to track whether an environment has already been set up.
     pub fn cache_key(&self, env_spec: &EnvironmentSpec) -> String {
+        if let Some(ref mamba) = env_spec.mamba {
+            return self
+                .mamba
+                .cache_key_with_opts(mamba, env_spec.mamba_prefix.as_deref());
+        }
         if let Some(ref conda) = env_spec.conda {
             return self
                 .conda
@@ -722,6 +889,11 @@ impl EnvironmentResolver {
     /// Get the setup command for an environment specification.
     /// This command creates/pulls the environment before first use.
     pub fn setup_command(&self, env_spec: &EnvironmentSpec) -> Result<String> {
+        if let Some(ref mamba) = env_spec.mamba {
+            return self
+                .mamba
+                .setup_command_with_opts(mamba, env_spec.mamba_prefix.as_deref());
+        }
         if let Some(ref conda) = env_spec.conda {
             return self
                 .conda
@@ -750,6 +922,9 @@ impl EnvironmentResolver {
     /// Check which environment backends are available on the system.
     pub fn available_backends(&self) -> Vec<&str> {
         let mut available = vec!["system"];
+        if self.mamba.is_available() {
+            available.push("mamba");
+        }
         if self.conda.is_available() {
             available.push("conda");
         }
@@ -777,11 +952,25 @@ impl EnvironmentResolver {
     /// Use this as the authoritative list when iterating over backends, so that
     /// user-facing code stays in sync with the resolver implementation.
     pub fn all_known_backends() -> &'static [&'static str] {
-        &["conda", "pixi", "docker", "singularity", "venv", "modules"]
+        &[
+            "mamba",
+            "conda",
+            "pixi",
+            "docker",
+            "singularity",
+            "venv",
+            "modules",
+        ]
     }
 
     /// Validate that the required environment backend is available for a spec.
     pub fn validate_spec(&self, env_spec: &EnvironmentSpec) -> Result<()> {
+        if env_spec.mamba.is_some() && !self.mamba.is_available() {
+            return Err(OxoFlowError::Environment {
+                kind: "mamba".to_string(),
+                message: "neither mamba nor micromamba is installed or in PATH".to_string(),
+            });
+        }
         if env_spec.conda.is_some() && !self.conda.is_available() {
             return Err(OxoFlowError::Environment {
                 kind: "conda".to_string(),
@@ -843,7 +1032,9 @@ mod tests {
     #[test]
     fn system_backend_passthrough() {
         let backend = SystemBackend;
-        let result = backend.wrap_command("echo hello", "", None).unwrap();
+        let result = backend
+            .wrap_command("echo hello", "", None, std::path::Path::new("."))
+            .unwrap();
         assert_eq!(result, "echo hello");
     }
 
@@ -901,7 +1092,12 @@ mod tests {
     fn docker_wrap_command() {
         let backend = DockerBackend;
         let result = backend
-            .wrap_command("bwa mem ref.fa reads.fq", "biocontainers/bwa:0.7.17", None)
+            .wrap_command(
+                "bwa mem ref.fa reads.fq",
+                "biocontainers/bwa:0.7.17",
+                None,
+                std::path::Path::new("."),
+            )
             .unwrap();
         assert!(result.contains("docker run"));
         assert!(result.contains("--user $(id -u):$(id -g)"));
@@ -941,7 +1137,12 @@ mod tests {
     fn singularity_wrap_command() {
         let backend = SingularityBackend::new();
         let result = backend
-            .wrap_command("samtools sort input.bam", "image.sif", None)
+            .wrap_command(
+                "samtools sort input.bam",
+                "image.sif",
+                None,
+                std::path::Path::new("."),
+            )
             .unwrap();
         assert!(result.contains(" exec "));
         assert!(!result.contains("--memory"));
@@ -1065,7 +1266,9 @@ mod tests {
     fn resolver_empty_spec_uses_system() {
         let resolver = EnvironmentResolver::new();
         let spec = EnvironmentSpec::default();
-        let result = resolver.wrap_command("echo test", &spec, None).unwrap();
+        let result = resolver
+            .wrap_command("echo test", &spec, None, std::path::Path::new("."))
+            .unwrap();
         assert_eq!(result, "echo test");
     }
 
@@ -1076,7 +1279,9 @@ mod tests {
             docker: Some("ubuntu:22.04".to_string()),
             ..Default::default()
         };
-        let result = resolver.wrap_command("echo test", &spec, None).unwrap();
+        let result = resolver
+            .wrap_command("echo test", &spec, None, std::path::Path::new("."))
+            .unwrap();
         assert!(result.contains("docker run"));
         assert!(result.contains("ubuntu:22.04"));
     }
@@ -1103,7 +1308,12 @@ mod tests {
     fn conda_wrap_command() {
         let backend = CondaBackend;
         let result = backend
-            .wrap_command("fastqc reads.fq", "envs/qc.yaml", None)
+            .wrap_command(
+                "fastqc reads.fq",
+                "envs/qc.yaml",
+                None,
+                std::path::Path::new("."),
+            )
             .unwrap();
         assert!(
             result.contains("conda run"),
@@ -1113,9 +1323,117 @@ mod tests {
     }
 
     #[test]
+    fn mamba_backend_name() {
+        let backend = MambaBackend::new();
+        assert_eq!(backend.name(), "mamba");
+    }
+
+    #[test]
+    fn mamba_wrap_command() {
+        let backend = MambaBackend::new();
+        let result = backend
+            .wrap_command(
+                "fastqc reads.fq",
+                "envs/qc.yaml",
+                None,
+                std::path::Path::new("."),
+            )
+            .unwrap();
+        assert!(result.contains("run -n"), "expected 'run -n' in: {result}");
+        assert!(result.contains("fastqc reads.fq"));
+    }
+
+    #[test]
+    fn mamba_setup_command() {
+        let backend = MambaBackend::new();
+        let result = backend.setup_command("envs/qc.yaml").unwrap();
+        assert!(result.contains("env create"));
+        assert!(result.contains("env update"));
+    }
+
+    #[test]
+    fn mamba_teardown_command() {
+        let backend = MambaBackend::new();
+        let result = backend.teardown_command("envs/qc.yaml").unwrap();
+        assert!(result.unwrap().contains("env remove"));
+    }
+
+    #[test]
+    fn mamba_cache_key() {
+        let backend = MambaBackend::new();
+        let key = backend.cache_key("envs/qc.yaml");
+        assert!(key.starts_with("mamba:"), "expected 'mamba:' prefix: {key}");
+        assert!(key.contains("envs/qc.yaml"));
+    }
+
+    #[test]
+    fn mamba_setup_command_with_prefix() {
+        let backend = MambaBackend::new();
+        let result = backend
+            .setup_command_with_opts("envs/qc.yaml", Some(".oxo-conda"))
+            .unwrap();
+        assert!(result.contains("-p .oxo-conda"));
+    }
+
+    #[test]
+    fn mamba_wrap_command_with_prefix() {
+        let backend = MambaBackend::new();
+        let result = backend
+            .wrap_command_with_opts("fastqc reads.fq", "envs/qc.yaml", Some(".oxo-conda"))
+            .unwrap();
+        assert!(result.contains("-p .oxo-conda"));
+        assert!(result.contains("fastqc reads.fq"));
+    }
+
+    #[test]
+    fn mamba_cache_key_with_prefix() {
+        let backend = MambaBackend::new();
+        let key = backend.cache_key_with_opts("envs/qc.yaml", Some(".oxo-conda"));
+        assert!(key.contains(".oxo-conda"));
+    }
+
+    #[test]
+    fn resolver_wraps_mamba_spec() {
+        let resolver = EnvironmentResolver::new();
+        let spec = EnvironmentSpec {
+            mamba: Some("envs/qc.yaml".to_string()),
+            ..Default::default()
+        };
+        let result = resolver
+            .wrap_command("fastqc reads.fq", &spec, None, std::path::Path::new("."))
+            .unwrap();
+        assert!(
+            result.contains("run -n"),
+            "expected wrapped mamba command: {result}"
+        );
+    }
+
+    #[test]
+    fn resolver_mamba_preferred_over_conda() {
+        let resolver = EnvironmentResolver::new();
+        let spec = EnvironmentSpec {
+            mamba: Some("envs/qc.yaml".to_string()),
+            conda: Some("envs/other.yaml".to_string()),
+            ..Default::default()
+        };
+        let wrapped = resolver
+            .wrap_command("echo test", &spec, None, std::path::Path::new("."))
+            .unwrap();
+        // Should use mamba binary, not conda
+        assert!(wrapped.contains("run -n"), "expected 'run -n': {wrapped}");
+        let cache_key = resolver.cache_key(&spec);
+        assert!(
+            cache_key.starts_with("mamba:"),
+            "mamba should take priority over conda: {cache_key}"
+        );
+    }
+
+    #[test]
     fn venv_wrap_command() {
         let backend = VenvBackend;
-        let result = backend.wrap_command("pip list", ".venv", None).unwrap();
+        let result = backend
+            .wrap_command("pip list", ".venv", None, std::path::Path::new("."))
+            .unwrap();
         assert!(result.contains("source .venv/bin/activate"));
         assert!(result.contains("pip list"));
     }
@@ -1124,7 +1442,7 @@ mod tests {
     fn pixi_wrap_command() {
         let backend = PixiBackend;
         let result = backend
-            .wrap_command("python main.py", "default", None)
+            .wrap_command("python main.py", "default", None, std::path::Path::new("."))
             .unwrap();
         assert_eq!(result, "pixi run -e default python main.py");
     }
@@ -1137,7 +1455,7 @@ mod tests {
             ..Default::default()
         };
         let result = resolver
-            .wrap_command("fastqc reads.fq", &spec, None)
+            .wrap_command("fastqc reads.fq", &spec, None, std::path::Path::new("."))
             .unwrap();
         assert!(
             result.contains("conda run"),
@@ -1153,7 +1471,12 @@ mod tests {
             ..Default::default()
         };
         let result = resolver
-            .wrap_command("bwa mem ref.fa reads.fq", &spec, None)
+            .wrap_command(
+                "bwa mem ref.fa reads.fq",
+                &spec,
+                None,
+                std::path::Path::new("."),
+            )
             .unwrap();
         assert!(result.contains("docker run"));
         assert!(result.contains("biocontainers/bwa:0.7.17"));
@@ -1224,7 +1547,12 @@ mod tests {
     fn modules_wrap_command() {
         let backend = ModulesBackend;
         let cmd = backend
-            .wrap_command("java -jar gatk.jar", "java/11,gatk/4.2", None)
+            .wrap_command(
+                "java -jar gatk.jar",
+                "java/11,gatk/4.2",
+                None,
+                std::path::Path::new("."),
+            )
             .unwrap();
         assert!(cmd.contains("module load java/11 gatk/4.2"));
         assert!(cmd.contains("java -jar gatk.jar"));
@@ -1360,7 +1688,9 @@ mod tests {
     #[test]
     fn modules_wrap_command_has_init_error_guard() {
         let backend = ModulesBackend;
-        let cmd = backend.wrap_command("echo test", "gcc/11.2", None).unwrap();
+        let cmd = backend
+            .wrap_command("echo test", "gcc/11.2", None, std::path::Path::new("."))
+            .unwrap();
         assert!(
             cmd.contains("command -v module"),
             "expected init guard, got: {cmd}"
@@ -1379,7 +1709,7 @@ mod tests {
             ..Default::default()
         };
         let result = resolver
-            .wrap_command("fastqc reads.fq", &spec, None)
+            .wrap_command("fastqc reads.fq", &spec, None, std::path::Path::new("."))
             .unwrap();
         assert!(result.contains("conda run -p .oxo-conda"));
         assert!(!result.contains(" -n "));
@@ -1405,7 +1735,12 @@ mod tests {
             ..Default::default()
         };
         let result = backend
-            .wrap_command("bwa mem ref.fa reads.fq", "image.sif", Some(&resources))
+            .wrap_command(
+                "bwa mem ref.fa reads.fq",
+                "image.sif",
+                Some(&resources),
+                std::path::Path::new("."),
+            )
             .unwrap();
         assert!(!result.contains("--memory"));
     }

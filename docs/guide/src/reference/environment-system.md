@@ -74,6 +74,7 @@ Before executing a rule with an environment specification:
 | Backend | Setup Command |
 |---|---|
 | Conda | `conda env create -f <yaml_file>` |
+| Mamba | `mamba env create -f <yaml_file>` (auto-detects mamba, micromamba, or conda) |
 | Pixi | `pixi install` (if pixi.toml exists) |
 | Docker | `docker pull <image>` |
 | Singularity | `singularity pull <image>` |
@@ -98,6 +99,14 @@ oxo-flow run pipeline.oxoflow --skip-env-setup
 - **Resolution**: Parses YAML environment file
 - **Activation**: Runs `conda activate <env_name>` before the command
 - **Caching**: Environments are created once and reused across rules that share the same YAML file
+
+### Mamba
+
+- **Detection**: Checks for `mamba`, then `micromamba`, then falls back to `conda` on `$PATH`
+- **Resolution**: Parses YAML environment file (same format as conda)
+- **Activation**: Runs `mamba run -n <env_name> bash -c '<command>'`
+- **Caching**: Environments are created once and reused across rules that share the same YAML file
+- **Usage**: Set `environment.mamba = "envs/qc.yaml"` in the rule. Uses the same YAML format as conda but with the mamba/micromamba binary for faster solving.
 
 ### Pixi
 
@@ -154,7 +163,7 @@ environment = { venv = "envs/requirements.txt" }
 environment = { modules = ["gcc/11.2", "cuda/11.7"] }
 ```
 
-If multiple backends are specified, the first one found is used in this priority order: docker, singularity, conda, pixi, venv. HPC `modules` are loaded regardless of the primary backend if the executor supports them.
+If multiple backends are specified, the first one found is used in this priority order: mamba, conda, pixi, docker, singularity, venv. HPC `modules` are loaded regardless of the primary backend if the executor supports them.
 
 ---
 

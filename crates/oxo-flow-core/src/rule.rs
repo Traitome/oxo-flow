@@ -206,6 +206,14 @@ pub struct EnvironmentSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conda: Option<String>,
 
+    /// Mamba / micromamba environment YAML file path.
+    ///
+    /// Uses the same YAML format as conda. Auto-detects mamba, micromamba,
+    /// or conda as the underlying binary at runtime.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mamba: Option<String>,
+
     /// Pixi environment specification.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -239,6 +247,14 @@ pub struct EnvironmentSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conda_prefix: Option<String>,
 
+    /// Optional project-local prefix for the mamba environment.
+    ///
+    /// When set, `mamba env create -p <prefix>` is used instead of the
+    /// default name-based (`-n`) install.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mamba_prefix: Option<String>,
+
     /// Optional custom requirements file path for Python venv.
     ///
     /// Defaults to `requirements.txt` in the working directory.
@@ -251,6 +267,7 @@ impl EnvironmentSpec {
     /// Returns `true` if no environment is specified.
     pub fn is_empty(&self) -> bool {
         self.conda.is_none()
+            && self.mamba.is_none()
             && self.pixi.is_none()
             && self.docker.is_none()
             && self.singularity.is_none()
@@ -262,6 +279,8 @@ impl EnvironmentSpec {
     pub fn kind(&self) -> &str {
         if self.conda.is_some() {
             "conda"
+        } else if self.mamba.is_some() {
+            "mamba"
         } else if self.pixi.is_some() {
             "pixi"
         } else if self.docker.is_some() {

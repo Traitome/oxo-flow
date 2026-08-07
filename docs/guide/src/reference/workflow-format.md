@@ -316,6 +316,9 @@ environment = { modules = ["gcc/11.2.0", "openmpi/4.1.1"] }
 # Conda with custom prefix
 environment = { conda = "envs/qc.yaml", conda_prefix = ".oxo-flow/envs" }
 
+# Mamba / micromamba (auto-detects binary, same YAML format as conda)
+environment = { mamba = "envs/qc.yaml", mamba_prefix = ".oxo-flow/envs" }
+
 # venv with custom requirements file
 environment = { venv = ".venv/", venv_requirements = "envs/dev-requirements.txt" }
 
@@ -411,6 +414,13 @@ retries = 3
 - **`pre_exec`**: Runs *before* the main command. If it fails, the rule is aborted.
 - **`on_success`**: Runs only after the main command completes with exit code 0.
 - **`on_failure`**: Runs if the main command fails, *after* all `retries` have been exhausted.
+
+**Output validation:** After a rule's shell command exits successfully (exit code 0),
+oxo-flow verifies that all declared `output` files exist on disk. If any declared output
+is missing — for example, because a multi-step shell script's cleanup step masked an
+earlier tool failure — the rule is treated as **failed** (with exit code sentinel `-1`)
+and the `on_failure` hook runs instead of `on_success`. This prevents silently broken
+rules from being checkpointed as "completed" and skipped on resume.
 
 ---
 

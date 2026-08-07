@@ -193,12 +193,14 @@
       "type": "object",
       "properties": {
         "conda": { "type": "string" },
+        "mamba": { "type": "string", "description": "Mamba/micromamba environment YAML file (same format as conda)" },
         "pixi": { "type": "string" },
         "docker": { "type": "string" },
         "singularity": { "type": "string" },
         "venv": { "type": "string" },
         "modules": { "type": "array", "items": { "type": "string" } },
         "conda_prefix": { "type": "string" },
+        "mamba_prefix": { "type": "string", "description": "Optional project-local prefix for mamba environment" },
         "venv_requirements": { "type": "string" }
       }
     },

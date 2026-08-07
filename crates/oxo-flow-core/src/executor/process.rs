@@ -12,7 +12,7 @@ use std::sync::{Arc, LazyLock};
 use tokio::process::Command;
 use tokio::sync::{Mutex, Semaphore};
 
-use super::checkpoint::cleanup_temp_outputs;
+use super::checkpoint::{cleanup_temp_outputs, validate_outputs};
 use super::security::{
     sanitize_shell_command, validate_path_safety, validate_shell_safety,
     validate_wildcard_injection,
@@ -385,6 +385,30 @@ impl LocalExecutor {
     fn env_setup_hint(kind: &str, stderr: &str) -> Option<String> {
         let stderr_lower = stderr.to_lowercase();
         match kind {
+            "mamba" => {
+                if stderr_lower.contains("command not found")
+                    || stderr_lower.contains("no such file")
+                {
+                    Some("mamba / micromamba is not installed or not in PATH. Install Mambaforge: https://github.com/conda-forge/miniforge".into())
+                } else if stderr_lower.contains("prefix already exists") {
+                    Some("environment already exists — this should have been caught by the cache. Try running with a clean cache directory.".into())
+                } else if stderr_lower.contains("solver") || stderr_lower.contains("conflict") {
+                    Some("dependency solver conflict. Try relaxing version pins in the environment YAML, or add 'conda-forge' channel.".into())
+                } else if stderr_lower.contains("environmentfilenotfound")
+                    || stderr_lower.contains("no such file")
+                {
+                    Some("environment YAML file not found. Check that the path is correct and relative to the workflow file.".into())
+                } else if stderr_lower.contains("permission denied")
+                    || stderr_lower.contains("operation not permitted")
+                {
+                    Some(
+                        "permission denied creating environment. If using a project-local prefix, check that the parent directory is writable."
+                            .into(),
+                    )
+                } else {
+                    None
+                }
+            }
             "conda" => {
                 if stderr_lower.contains("command not found")
                     || stderr_lower.contains("no such file")
@@ -504,10 +528,12 @@ impl LocalExecutor {
     }
 
     fn resolve_command(&self, command: &str, rule: &Rule) -> String {
-        match self
-            .env_resolver
-            .wrap_command(command, &rule.environment, Some(&rule.resources))
-        {
+        match self.env_resolver.wrap_command(
+            command,
+            &rule.environment,
+            Some(&rule.resources),
+            &self.config.workdir,
+        ) {
             Ok(wrapped) => wrapped,
             Err(e) => {
                 tracing::warn!(rule = %rule.name, error = %e, "environment wrapping failed");
@@ -823,15 +849,50 @@ impl LocalExecutor {
         self.release_resources(rule).await;
 
         if all_commands_succeeded {
-            record.status = JobStatus::Success;
-            if let Some(ref hook_cmd) = rule.on_success {
-                let _ = Command::new("sh")
-                    .arg("-c")
-                    .arg(hook_cmd)
-                    .current_dir(&self.config.workdir)
-                    .envs(&rule.envvars)
-                    .output()
-                    .await;
+            // Verify declared output files actually exist before marking success.
+            // Shell commands can exit 0 even when tools fail internally
+            // (e.g. "tool_a; rm -f temp" — rm succeeds, masking tool_a failure).
+            let missing = validate_outputs(rule, &self.config.workdir, wildcard_values);
+            if missing.is_empty() {
+                record.status = JobStatus::Success;
+                if let Some(ref hook_cmd) = rule.on_success {
+                    let _ = Command::new("sh")
+                        .arg("-c")
+                        .arg(hook_cmd)
+                        .current_dir(&self.config.workdir)
+                        .envs(&rule.envvars)
+                        .output()
+                        .await;
+                }
+            } else {
+                record.status = JobStatus::Failed;
+                record.exit_code = Some(-1);
+                let missing_list = missing.join(", ");
+                tracing::warn!(
+                    rule = %rule.name,
+                    missing = %missing_list,
+                    "Shell exited 0 but declared outputs are missing — marking as failed"
+                );
+                let msg = format!(
+                    "\n[oxo-flow] output validation failed: {} declared output(s) not found: {}",
+                    missing.len(),
+                    missing_list
+                );
+                if let Some(ref mut stderr) = record.stderr {
+                    stderr.push_str(&msg);
+                } else {
+                    record.stderr = Some(msg);
+                }
+                cleanup_temp_outputs(rule, &self.config.workdir).await;
+                if let Some(ref hook_cmd) = rule.on_failure {
+                    let _ = Command::new("sh")
+                        .arg("-c")
+                        .arg(hook_cmd)
+                        .current_dir(&self.config.workdir)
+                        .envs(&rule.envvars)
+                        .output()
+                        .await;
+                }
             }
         } else {
             // Keep the status set in the loop (Failed or TimedOut)

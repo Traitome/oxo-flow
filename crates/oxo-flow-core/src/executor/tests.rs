@@ -108,6 +108,72 @@ async fn execute_failing_command() {
 }
 
 #[tokio::test]
+async fn execute_shell_exits_zero_but_outputs_missing() {
+    let tmp = std::env::temp_dir().join("oxo_test_output_validation");
+    let _ = std::fs::create_dir_all(&tmp);
+    let config = ExecutorConfig {
+        max_jobs: 1,
+        dry_run: false,
+        workdir: tmp.clone(),
+        keep_going: false,
+        retry_count: 0,
+        timeout: None,
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    // Rule declares an output but shell just runs "true" (exits 0, creates nothing).
+    let rule = RuleBuilder::new("missing_output_test")
+        .shell("true")
+        .output(vec!["should_exist.txt".to_string()])
+        .build();
+
+    let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+    assert_eq!(
+        record.status,
+        JobStatus::Failed,
+        "rule should fail when declared outputs are missing, even if shell exits 0"
+    );
+    assert_eq!(record.exit_code, Some(-1));
+    assert!(
+        record
+            .stderr
+            .as_ref()
+            .is_some_and(|s| s.contains("output validation failed"))
+    );
+    // Cleanup
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[tokio::test]
+async fn execute_shell_creates_outputs_succeeds() {
+    let tmp = std::env::temp_dir().join("oxo_test_output_validation_ok");
+    let _ = std::fs::create_dir_all(&tmp);
+    let config = ExecutorConfig {
+        max_jobs: 1,
+        dry_run: false,
+        workdir: tmp.clone(),
+        keep_going: false,
+        retry_count: 0,
+        timeout: None,
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    let rule = RuleBuilder::new("output_ok_test")
+        .shell("echo done > output.txt")
+        .output(vec!["output.txt".to_string()])
+        .build();
+
+    let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+    assert_eq!(
+        record.status,
+        JobStatus::Success,
+        "rule should succeed when shell exits 0 and outputs exist"
+    );
+    // Cleanup
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[tokio::test]
 async fn execute_wildcard_expansion() {
     let config = ExecutorConfig {
         max_jobs: 1,
@@ -209,10 +275,12 @@ fn render_shell_config_values() {
 
 #[tokio::test]
 async fn execute_output_index_expansion() {
+    let tmp = std::env::temp_dir().join("oxo_test_output_index");
+    let _ = std::fs::create_dir_all(&tmp);
     let config = ExecutorConfig {
         max_jobs: 1,
         dry_run: false,
-        workdir: std::env::temp_dir(),
+        workdir: tmp.clone(),
         keep_going: false,
         retry_count: 0,
         timeout: None,
@@ -223,7 +291,7 @@ async fn execute_output_index_expansion() {
         name: "output_test".to_string(),
         input: vec![].into(),
         output: vec!["hello_output.txt".to_string()].into(),
-        shell: Some("echo hello_oxoflow_{output[0]}".to_string()),
+        shell: Some("touch {output[0]} && echo hello_oxoflow_{output[0]}".to_string()),
         ..Default::default()
     };
     let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
@@ -233,6 +301,7 @@ async fn execute_output_index_expansion() {
         stdout.contains("hello_oxoflow_hello_output.txt"),
         "stdout was: {stdout}"
     );
+    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 #[test]
