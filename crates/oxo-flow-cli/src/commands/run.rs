@@ -253,11 +253,20 @@ pub async fn run_command(
 
     // Execute rules in parallel groups (topological levels).
     // Rules within a group have no dependencies on each other and can run concurrently.
-    let groups = dag
+    // Filter groups to only include rules in the execution order (respects --target).
+    let order_set: std::collections::HashSet<&str> = order.iter().map(String::as_str).collect();
+    let groups: Vec<Vec<String>> = dag
         .parallel_groups()
-        .context("failed to compute parallel groups")?;
+        .context("failed to compute parallel groups")?
+        .into_iter()
+        .map(|g| {
+            g.into_iter()
+                .filter(|name| order_set.contains(name.as_str()))
+                .collect()
+        })
+        .filter(|g: &Vec<String>| !g.is_empty())
+        .collect();
     let semaphore = Arc::new(tokio::sync::Semaphore::new(jobs.max(1)));
-    let total_rules = order.len();
 
     for group in &groups {
         let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
@@ -299,7 +308,7 @@ pub async fn run_command(
                                 }
                             }
                         }
-                        if outputs_exist { true } else { false }
+                        outputs_exist
                     } else {
                         true
                     }
@@ -335,11 +344,8 @@ pub async fn run_command(
             let skipped_count = skipped_count.clone();
             let wildcard_values = wildcard_values.clone();
             let workdir_actual = workdir_actual.clone();
-            let workdir = workdir.clone();
-            let workflow_dir = workflow_dir.clone();
             let semaphore = semaphore.clone();
             let progress = progress.clone();
-            let provenance = provenance;
 
             progress.set_message(format!("executing {}", rule_name));
             if !is_tty {
@@ -476,7 +482,6 @@ pub async fn run_command(
     let fail_count = fail_count.load(std::sync::atomic::Ordering::Relaxed);
     let skipped_count = skipped_count.load(std::sync::atomic::Ordering::Relaxed);
     let checkpoint = checkpoint.lock().await;
-    let failed_rules_set = failed_rules_set.lock().await;
     let failures = failures.lock().await;
 
     progress.finish_and_clear();
