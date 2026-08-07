@@ -7,6 +7,8 @@ use oxo_flow_core::executor::{CheckpointState, ExecutorConfig, LocalExecutor};
 use oxo_flow_core::rule::parse_duration_secs;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run_command(
@@ -183,34 +185,38 @@ pub async fn run_command(
         ));
     }
 
-    let executor = LocalExecutor::new(exec_config);
-    let mut success_count = 0;
-    let mut fail_count = 0;
-    let mut skipped_count = 0;
-    let mut completed_rules = std::collections::HashSet::new();
-    let mut failed_rules_set = std::collections::HashSet::new();
-    // Collected so `--keep-going` can print a consolidated failure summary at the
-    // end instead of leaving the user to scroll back through interleaved output.
-    let mut failures: Vec<(String, String)> = Vec::new();
+    let executor = Arc::new(LocalExecutor::new(exec_config));
+    let success_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let fail_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let skipped_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let failed_rules_set: Arc<Mutex<std::collections::HashSet<String>>> =
+        Arc::new(Mutex::new(std::collections::HashSet::new()));
+    let failures: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
 
     let checkpoint_path = workdir
         .as_ref()
         .unwrap_or(&workflow_dir)
         .join(".oxo-flow/checkpoint.json");
-    let mut checkpoint = if checkpoint_path.exists() {
-        CheckpointState::load_from_file(&checkpoint_path).unwrap_or_default()
+    let checkpoint: Arc<Mutex<CheckpointState>> = if checkpoint_path.exists() {
+        Arc::new(Mutex::new(
+            CheckpointState::load_from_file(&checkpoint_path).unwrap_or_default(),
+        ))
     } else {
-        CheckpointState::default()
+        Arc::new(Mutex::new(CheckpointState::default()))
     };
 
     // Store workflow path in checkpoint for resume support
-    checkpoint.set_workflow_path(&workflow);
+    {
+        let mut ck = checkpoint.lock().await;
+        ck.set_workflow_path(&workflow);
+    }
 
     // When --resume-failed is set, clear failed rules from checkpoint so they re-execute.
     if resume_failed && checkpoint_path.exists() {
-        let failed_count = checkpoint.failed_rules.len();
-        let completed_count = checkpoint.completed_rules.len();
-        checkpoint.failed_rules.clear();
+        let mut ck = checkpoint.lock().await;
+        let failed_count = ck.failed_rules.len();
+        let completed_count = ck.completed_rules.len();
+        ck.failed_rules.clear();
         eprintln!(
             "{} Resuming {} completed, re-running {} failed rules",
             "Resume:".bold().cyan(),
@@ -227,55 +233,83 @@ pub async fn run_command(
         };
         wildcard_values.insert(format!("config.{key}"), string_val);
     }
+    let wildcard_values: Arc<HashMap<String, String>> = Arc::new(wildcard_values);
+    let workdir_actual = Arc::new(workdir.as_ref().unwrap_or(&workflow_dir).clone());
 
+    // Pre-loop: evaluate rule conditions, mark false-condition rules as skipped
     for rule in config.rules.iter() {
         if !order.contains(&rule.name) {
             continue;
         }
-
         if let Some(ref condition) = rule.when {
             let config_values: HashMap<String, toml::Value> = config.config.clone();
             if !oxo_flow_core::executor::process::evaluate_condition(condition, &config_values) {
-                skipped_count += 1;
-                completed_rules.insert(rule.name.clone());
+                skipped_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                progress.inc(1);
                 continue;
             }
         }
     }
 
+    // Execute rules in parallel groups (topological levels).
+    // Rules within a group have no dependencies on each other and can run concurrently.
+    let groups = dag
+        .parallel_groups()
+        .context("failed to compute parallel groups")?;
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(jobs.max(1)));
     let total_rules = order.len();
-    for (idx, rule_name) in order.iter().enumerate() {
-        if completed_rules.contains(rule_name) {
-            progress.inc(1);
-            continue;
-        }
 
-        if checkpoint.is_completed(rule_name) {
-            // Verify output files still exist before skipping — user may have
-            // cleaned the output directory since the last run.
-            let mut outputs_exist = true;
-            if let Some(rule) = config.get_rule(rule_name) {
-                let workdir_actual = workdir.as_ref().unwrap_or(&workflow_dir);
-                for output in &rule.output {
-                    if !output.contains('{') {
-                        let expanded = oxo_flow_core::executor::checkpoint::expand_config_in_path(
-                            output,
-                            &wildcard_values,
-                        );
-                        if !workdir_actual.join(&expanded).exists() {
-                            outputs_exist = false;
-                            tracing::info!(
-                                rule = rule_name,
-                                output = expanded,
-                                "Output file missing, will re-execute rule"
-                            );
-                            break;
-                        }
-                    }
+    for group in &groups {
+        let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+
+        for rule_name in group {
+            // Skip if already in failed set (from previous groups)
+            let skip_from_failure = {
+                let frs = failed_rules_set.lock().await;
+                if let Ok(deps) = dag.dependencies(rule_name) {
+                    deps.iter().any(|d| frs.contains(d.as_str()))
+                } else {
+                    false
                 }
+            };
+
+            if skip_from_failure {
+                skipped_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                progress.inc(1);
+                continue;
             }
-            if outputs_exist {
-                skipped_count += 1;
+
+            // Check if already checkpoint-completed
+            let should_skip = {
+                let ck = checkpoint.lock().await;
+                if ck.is_completed(rule_name) {
+                    // Verify outputs still exist
+                    if let Some(rule) = config.get_rule(rule_name) {
+                        let mut outputs_exist = true;
+                        for output in &rule.output {
+                            if !output.contains('{') {
+                                let expanded =
+                                    oxo_flow_core::executor::checkpoint::expand_config_in_path(
+                                        output,
+                                        &wildcard_values,
+                                    );
+                                if !workdir_actual.join(&expanded).exists() {
+                                    outputs_exist = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if outputs_exist { true } else { false }
+                    } else {
+                        true
+                    }
+                } else {
+                    false
+                }
+            };
+
+            if should_skip {
+                skipped_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 progress.set_message("skipping already completed");
                 if !is_tty {
                     eprintln!("  {} {} (already completed)", "⊝".dimmed(), rule_name);
@@ -283,175 +317,167 @@ pub async fn run_command(
                 progress.inc(1);
                 continue;
             }
-        }
 
-        // Check if any upstream dependency failed — skip with clear message
-        if !failed_rules_set.is_empty()
-            && let Ok(deps) = dag.dependencies(rule_name)
-            && deps.iter().any(|d| failed_rules_set.contains(d.as_str()))
-        {
-            let failed_deps: Vec<_> = deps
-                .iter()
-                .filter(|d| failed_rules_set.contains(d.as_str()))
-                .collect();
-            skipped_count += 1;
-            let failed_deps_str = failed_deps
-                .iter()
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            progress.set_message(format!(
-                "skipping {} (dependency failed: {})",
-                rule_name, failed_deps_str
-            ));
+            // Clone shared state for the spawned task
+            let rule = config
+                .get_rule(rule_name)
+                .ok_or_else(|| anyhow::anyhow!("rule '{}' not found in workflow", rule_name))
+                .unwrap()
+                .clone();
+            let rule_name = rule_name.clone();
+            let executor = executor.clone();
+            let checkpoint = checkpoint.clone();
+            let checkpoint_path = checkpoint_path.clone();
+            let failed_rules_set = failed_rules_set.clone();
+            let failures = failures.clone();
+            let success_count = success_count.clone();
+            let fail_count = fail_count.clone();
+            let skipped_count = skipped_count.clone();
+            let wildcard_values = wildcard_values.clone();
+            let workdir_actual = workdir_actual.clone();
+            let workdir = workdir.clone();
+            let workflow_dir = workflow_dir.clone();
+            let semaphore = semaphore.clone();
+            let progress = progress.clone();
+            let provenance = provenance;
+
+            progress.set_message(format!("executing {}", rule_name));
             if !is_tty {
-                eprintln!(
-                    "  {} {} (dependency failed: {})",
-                    "⊝".yellow(),
-                    rule_name,
-                    failed_deps_str
-                );
+                eprintln!("  {} {}", "Running:".bold().cyan(), rule_name);
             }
-            progress.inc(1);
-            if !keep_going {
-                // Build a clear error about the cascade
-                progress.finish_and_clear();
-                return Err(anyhow::anyhow!(
-                    "Stopping: rule '{}' depends on failed rule '{}'",
-                    rule_name,
-                    failed_deps[0]
-                ));
-            }
-            tracing::warn!(
-                rule = rule_name,
-                failed_deps = ?failed_deps,
-                "Skipping rule because upstream dependency failed"
-            );
-            continue;
-        }
 
-        let rule = config
-            .get_rule(rule_name)
-            .ok_or_else(|| anyhow::anyhow!("rule '{}' not found in workflow", rule_name))?
-            .clone();
-        progress.set_message(format!("executing {}", rule_name));
-        if !is_tty {
-            eprintln!(
-                "{} [{}/{}] {}",
-                "Running:".bold().cyan(),
-                idx + 1,
-                total_rules,
-                rule_name
-            );
-        }
+            let handle = tokio::spawn(async move {
+                let _permit = semaphore.acquire().await;
 
-        match executor.execute_rule(&rule, &wildcard_values).await {
-            Ok(record) => {
-                let duration = record
-                    .finished_at
-                    .and_then(|f| record.started_at.map(|s| f.signed_duration_since(s)))
-                    .map(|d| d.num_milliseconds() as f64 / 1000.0)
-                    .unwrap_or(0.0);
+                match executor.execute_rule(&rule, &wildcard_values).await {
+                    Ok(record) => {
+                        let duration = record
+                            .finished_at
+                            .and_then(|f| record.started_at.map(|s| f.signed_duration_since(s)))
+                            .map(|d| d.num_milliseconds() as f64 / 1000.0)
+                            .unwrap_or(0.0);
 
-                if record.status == oxo_flow_core::executor::JobStatus::Success {
-                    success_count += 1;
-                    if !is_tty {
-                        eprintln!("  {} {} ({:.1}s)", "✓".green(), rule_name, duration);
-                    }
-                    let benchmark = oxo_flow_core::executor::checkpoint::BenchmarkRecord {
-                        rule: rule_name.clone(),
-                        wall_time_secs: duration,
-                        max_memory_mb: None,
-                        cpu_seconds: None,
-                        retries: record.retries,
-                    };
-                    checkpoint.mark_completed(rule_name, benchmark);
-                    if provenance {
-                        for output in &rule.output {
-                            let output_path =
-                                workdir.as_ref().unwrap_or(&workflow_dir).join(output);
-                            if output_path.exists()
-                                && let Ok(checksum) =
-                                    oxo_flow_core::executor::checkpoint::compute_file_checksum(
-                                        &output_path,
-                                    )
+                        if record.status == oxo_flow_core::executor::JobStatus::Success {
+                            success_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            if !is_tty {
+                                eprintln!("  {} {} ({:.1}s)", "✓".green(), rule_name, duration);
+                            }
+                            let benchmark = oxo_flow_core::executor::checkpoint::BenchmarkRecord {
+                                rule: rule_name.clone(),
+                                wall_time_secs: duration,
+                                max_memory_mb: None,
+                                cpu_seconds: None,
+                                retries: record.retries,
+                            };
+                            let mut ck = checkpoint.lock().await;
+                            ck.mark_completed(&rule_name, benchmark);
+                            if provenance {
+                                for output in &rule.output {
+                                    let output_path = workdir_actual.join(output);
+                                    if output_path.exists()
+                                        && let Ok(checksum) = oxo_flow_core::executor::checkpoint::compute_file_checksum(&output_path)
+                                    {
+                                        ck.record_checksum(output, checksum);
+                                    }
+                                }
+                            }
+                            if let Err(e) = ck.save_to_file(&checkpoint_path) {
+                                tracing::warn!("Failed to save checkpoint: {e}");
+                            }
+                        } else if record.status == oxo_flow_core::executor::JobStatus::Skipped {
+                            skipped_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        } else {
+                            fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             {
-                                checkpoint.record_checksum(output, checksum);
+                                let mut frs = failed_rules_set.lock().await;
+                                frs.insert(rule_name.clone());
+                            }
+                            let mut ck = checkpoint.lock().await;
+                            ck.mark_failed(&rule_name);
+                            if let Err(e) = ck.save_to_file(&checkpoint_path) {
+                                tracing::warn!("Failed to save checkpoint: {e}");
+                            }
+                            let mut err_msg = format!("rule '{}' failed", rule_name);
+                            if let Some(ref stderr) = record.stderr {
+                                let trimmed = stderr.trim();
+                                if !trimmed.is_empty() {
+                                    err_msg.push_str(&format!("\nstderr: {}", trimmed));
+                                }
+                            }
+                            if let Some(code) = record.exit_code {
+                                err_msg.push_str(&format!("\nexit code: {}", code));
+                            }
+                            if !keep_going {
+                                eprintln!("  {} {}", "✗".red(), err_msg);
+                            } else {
+                                eprintln!("  {} {}", "✗".red(), err_msg);
+                                let mut reason = String::new();
+                                if let Some(code) = record.exit_code {
+                                    reason.push_str(&format!("exit code {}", code));
+                                }
+                                if let Some(ref stderr) = record.stderr
+                                    && let Some(last) =
+                                        stderr.trim().lines().next_back().filter(|l| !l.is_empty())
+                                {
+                                    if !reason.is_empty() {
+                                        reason.push_str(" — ");
+                                    }
+                                    reason.push_str(last);
+                                }
+                                if reason.is_empty() {
+                                    reason.push_str("failed");
+                                }
+                                let mut f = failures.lock().await;
+                                f.push((rule_name.clone(), reason));
                             }
                         }
                     }
-                    if let Err(e) = checkpoint.save_to_file(&checkpoint_path) {
-                        tracing::warn!("Failed to save checkpoint: {e}");
-                    }
-                } else if record.status == oxo_flow_core::executor::JobStatus::Skipped {
-                    skipped_count += 1;
-                } else {
-                    fail_count += 1;
-                    failed_rules_set.insert(rule_name.clone());
-                    checkpoint.mark_failed(rule_name);
-                    if let Err(e) = checkpoint.save_to_file(&checkpoint_path) {
-                        tracing::warn!("Failed to save checkpoint: {e}");
-                    }
-                    // Build detailed error message with stderr and exit code
-                    let mut err_msg = format!("rule '{}' failed", rule_name);
-                    if let Some(ref stderr) = record.stderr {
-                        let trimmed = stderr.trim();
-                        if !trimmed.is_empty() {
-                            err_msg.push_str(&format!("\nstderr: {}", trimmed));
+                    Err(e) => {
+                        fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        {
+                            let mut frs = failed_rules_set.lock().await;
+                            frs.insert(rule_name.clone());
+                        }
+                        let mut ck = checkpoint.lock().await;
+                        ck.mark_failed(&rule_name);
+                        if let Err(e) = ck.save_to_file(&checkpoint_path) {
+                            tracing::warn!("Failed to save checkpoint: {e}");
+                        }
+                        if !keep_going {
+                            eprintln!("  {} rule '{}' failed: {}", "✗".red(), rule_name, e);
+                        } else {
+                            let mut f = failures.lock().await;
+                            f.push((rule_name.clone(), e.to_string()));
                         }
                     }
-                    if let Some(code) = record.exit_code {
-                        err_msg.push_str(&format!("\nexit code: {}", code));
-                    }
-                    if let Some(ref cmd) = record.command {
-                        err_msg.push_str(&format!("\ncommand: {}", cmd));
-                    }
-                    if !keep_going {
-                        progress.finish_and_clear();
-                        return Err(anyhow::anyhow!(err_msg));
-                    }
-                    // In keep_going mode, still print the error and record a concise
-                    // one-line reason for the end-of-run failure summary.
-                    eprintln!("  {} {}", "✗".red(), err_msg);
-                    let mut reason = String::new();
-                    if let Some(code) = record.exit_code {
-                        reason.push_str(&format!("exit code {}", code));
-                    }
-                    if let Some(ref stderr) = record.stderr
-                        && let Some(last) =
-                            stderr.trim().lines().next_back().filter(|l| !l.is_empty())
-                    {
-                        if !reason.is_empty() {
-                            reason.push_str(" — ");
-                        }
-                        reason.push_str(last);
-                    }
-                    if reason.is_empty() {
-                        reason.push_str("failed");
-                    }
-                    failures.push((rule_name.clone(), reason));
                 }
-            }
-            Err(e) => {
-                fail_count += 1;
-                failed_rules_set.insert(rule_name.clone());
-                checkpoint.mark_failed(rule_name);
-                if let Err(e) = checkpoint.save_to_file(&checkpoint_path) {
-                    tracing::warn!("Failed to save checkpoint: {e}");
-                }
-                if !keep_going {
-                    progress.finish_and_clear();
-                    return Err(e.into());
-                }
-                // Previously this branch swallowed the error entirely in keep_going
-                // mode — surface it inline and record it for the summary.
-                let reason = e.to_string();
-                eprintln!("  {} rule '{}' failed: {}", "✗".red(), rule_name, reason);
-                failures.push((rule_name.clone(), reason));
+                progress.inc(1);
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all rules in this group before proceeding to next group
+        for handle in handles {
+            if let Err(e) = handle.await {
+                tracing::error!("Task panicked: {e}");
+                fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         }
-        progress.inc(1);
+
+        // After each group, check if we should abort (non-keep-going mode)
+        let fc = fail_count.load(std::sync::atomic::Ordering::Relaxed);
+        if fc > 0 && !keep_going {
+            progress.finish_and_clear();
+            return Err(anyhow::anyhow!("workflow execution failed"));
+        }
     }
+
+    let success_count = success_count.load(std::sync::atomic::Ordering::Relaxed);
+    let fail_count = fail_count.load(std::sync::atomic::Ordering::Relaxed);
+    let skipped_count = skipped_count.load(std::sync::atomic::Ordering::Relaxed);
+    let checkpoint = checkpoint.lock().await;
+    let failed_rules_set = failed_rules_set.lock().await;
+    let failures = failures.lock().await;
 
     progress.finish_and_clear();
     eprintln!(
@@ -466,7 +492,7 @@ pub async fn run_command(
     // rule (and why) in one place rather than making the user hunt for them.
     if !failures.is_empty() {
         eprintln!("\n{}", "Failed rules:".bold().red());
-        for (name, reason) in &failures {
+        for (name, reason) in failures.iter() {
             eprintln!("  {} {} — {}", "✗".red(), name.bold(), reason);
         }
     }

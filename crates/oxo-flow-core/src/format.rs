@@ -2505,7 +2505,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn format_workflow_includes_on_success() {
         let toml = r#"
             [workflow]
