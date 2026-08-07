@@ -826,15 +826,6 @@ pub struct Rule {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retry_delay: Option<String>,
 
-    /// Per-rule working directory override.
-    ///
-    /// If set, the rule executes in this directory instead of the workflow's
-    /// global working directory. Relative paths are resolved against the
-    /// workflow working directory.
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub workdir: Option<String>,
-
     /// Shell command to execute before the main command.
     ///
     /// Useful for environment initialization, directory setup, or
@@ -1160,13 +1151,6 @@ impl RuleBuilder {
     #[must_use]
     pub fn retry_delay(mut self, delay: impl Into<String>) -> Self {
         self.rule.retry_delay = Some(delay.into());
-        self
-    }
-
-    /// Set the per-rule working directory.
-    #[must_use]
-    pub fn workdir(mut self, workdir: impl Into<String>) -> Self {
-        self.rule.workdir = Some(workdir.into());
         self
     }
 
@@ -1871,23 +1855,6 @@ mod tests {
     }
 
     #[test]
-    fn workdir_deserialization() {
-        let toml = r#"
-            name = "compile"
-            workdir = "/data/scratch"
-            shell = "make all"
-        "#;
-        let rule: Rule = toml::from_str(toml).unwrap();
-        assert_eq!(rule.workdir, Some("/data/scratch".to_string()));
-    }
-
-    #[test]
-    fn workdir_default_is_none() {
-        let rule = Rule::default();
-        assert!(rule.workdir.is_none());
-    }
-
-    #[test]
     fn on_success_deserialization() {
         let toml = r#"
             name = "qc"
@@ -1978,12 +1945,6 @@ mod tests {
     }
 
     #[test]
-    fn rule_builder_workdir() {
-        let rule = RuleBuilder::new("compile").workdir("/data/scratch").build();
-        assert_eq!(rule.workdir, Some("/data/scratch".to_string()));
-    }
-
-    #[test]
     fn rule_builder_on_success() {
         let rule = RuleBuilder::new("qc").on_success("echo done").build();
         assert_eq!(rule.on_success, Some("echo done".to_string()));
@@ -2001,13 +1962,11 @@ mod tests {
             .shell("do something")
             .depends_on(vec!["dep1".into()])
             .retry_delay("5s")
-            .workdir("/work")
             .on_success("echo ok")
             .on_failure("echo fail")
             .build();
         assert_eq!(rule.depends_on, vec!["dep1"]);
         assert_eq!(rule.retry_delay, Some("5s".to_string()));
-        assert_eq!(rule.workdir, Some("/work".to_string()));
         assert_eq!(rule.on_success, Some("echo ok".to_string()));
         assert_eq!(rule.on_failure, Some("echo fail".to_string()));
     }

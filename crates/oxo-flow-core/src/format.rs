@@ -2505,22 +2505,6 @@ mod tests {
     }
 
     #[test]
-    fn format_workflow_includes_workdir() {
-        let toml = r#"
-            [workflow]
-            name = "test"
-            version = "1.0.0"
-
-            [[rules]]
-            name = "step1"
-            workdir = "/data/scratch"
-            shell = "echo hello"
-        "#;
-        let config = WorkflowConfig::parse(toml).unwrap();
-        let formatted = format_workflow(&config);
-        assert!(formatted.contains("workdir = \"/data/scratch\""));
-    }
-
     #[test]
     fn format_workflow_includes_on_success() {
         let toml = r#"

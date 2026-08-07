@@ -278,7 +278,6 @@ shell = "bwa mem -t {threads} {config.reference} {input} | samtools sort -o {out
 | `depends_on` | Array | No | Explicit rule-level dependencies (by rule name) |
 | `extends` | String | No | Inherit settings from a base rule |
 | `retry_delay` | String | No | Delay between retries (e.g., `"5s"`, `"30s"`, `"2m"`) |
-| `workdir` | String | No | Per-rule working directory override |
 | `temp_output` | Array | No | Temporary outputs cleaned up after downstream rules complete |
 | `protected_output` | Array | No | Outputs that must never be overwritten or deleted |
 | `tags` | Array | No | Categorization tags (e.g., `["qc", "alignment"]`) |
@@ -629,7 +628,6 @@ temp_output = ["aligned/{sample}.tmp.bam"]  # Cleaned after downstream use
 |-------|------|---------|-------------|
 | `depends_on` | Array | — | Explicit rule dependencies (not inferred from files) |
 | `localrule` | Boolean | `false` | Always run locally, never submit to cluster |
-| `workdir` | String | — | Per-rule working directory override |
 | `shadow` | String | — | Atomic execution mode: `"minimal"`, `"shallow"`, `"full"` |
 | `checkpoint` | Boolean | `false` | Enable dynamic DAG modification |
 

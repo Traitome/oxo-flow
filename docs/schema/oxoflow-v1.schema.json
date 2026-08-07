@@ -321,7 +321,6 @@
         "retries": { "type": "integer", "default": 0, "description": "Number of retry attempts on failure" },
         "retry_delay": { "type": "string", "description": "Delay between retries (e.g., '5s', '30s')" },
         "interpreter": { "type": "string", "description": "Explicit interpreter for script execution" },
-        "workdir": { "type": "string", "description": "Per-rule working directory override" },
         "pre_exec": { "type": "string", "description": "Command to run before the main shell command" },
         "on_success": { "type": "string", "description": "Command to run after rule succeeds" },
         "on_failure": { "type": "string", "description": "Command to run after rule fails" },
