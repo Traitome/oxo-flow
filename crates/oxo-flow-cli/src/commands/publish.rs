@@ -32,6 +32,7 @@ pub fn publish_command(workflow: PathBuf, output: Option<PathBuf>) -> Result<()>
     // ── Collect all referenced files ──────────────────────────────────────
 
     let mut referenced_files: Vec<(String, PathBuf)> = Vec::new();
+    let mut container_refs: Vec<serde_json::Value> = Vec::new();
     let mut scanned_workflows: std::collections::HashSet<PathBuf> =
         std::collections::HashSet::new();
 
@@ -40,6 +41,7 @@ pub fn publish_command(workflow: PathBuf, output: Option<PathBuf>) -> Result<()>
         &workflow_path,
         workflow_dir,
         &mut referenced_files,
+        &mut container_refs,
         &mut scanned_workflows,
     )?;
 
@@ -104,6 +106,7 @@ pub fn publish_command(workflow: PathBuf, output: Option<PathBuf>) -> Result<()>
         "created_at_epoch": timestamp,
         "entrypoint": workflow_path.file_name().and_then(|s| s.to_str()),
         "files": &manifest_files,
+        "containers": &container_refs,
     });
 
     let manifest_json = serde_json::to_string_pretty(&manifest)?;
@@ -170,6 +173,7 @@ fn scan_workflow_env_files(
     wf_path: &Path,
     workflow_dir: &Path,
     referenced_files: &mut Vec<(String, PathBuf)>,
+    container_refs: &mut Vec<serde_json::Value>,
     scanned: &mut std::collections::HashSet<PathBuf>,
 ) -> Result<()> {
     let canonical = std::path::absolute(wf_path)?;
@@ -190,9 +194,19 @@ fn scan_workflow_env_files(
                 continue;
             };
             // All local-file environment fields (conda, mamba, pixi, venv, venv_requirements).
-            // docker / singularity are image refs; modules are HPC module names — not files.
             for field in ["conda", "mamba", "pixi", "venv", "venv_requirements"] {
                 add_env_file(env, field, workflow_dir, referenced_files);
+            }
+            // Container image references — record for reproducibility
+            for field in ["docker", "singularity"] {
+                if let Some(image) = env.get(field).and_then(|v| v.as_str()) {
+                    if !container_refs.iter().any(|c| c["image"] == image) {
+                        container_refs.push(serde_json::json!({
+                            "type": field,
+                            "image": image,
+                        }));
+                    }
+                }
             }
         }
     }
@@ -203,6 +217,16 @@ fn scan_workflow_env_files(
         for (_group_name, env_spec) in env_groups {
             for field in ["conda", "mamba", "pixi", "venv", "venv_requirements"] {
                 add_env_file(env_spec, field, workflow_dir, referenced_files);
+            }
+            for field in ["docker", "singularity"] {
+                if let Some(image) = env_spec.get(field).and_then(|v| v.as_str()) {
+                    if !container_refs.iter().any(|c| c["image"] == image) {
+                        container_refs.push(serde_json::json!({
+                            "type": field,
+                            "image": image,
+                        }));
+                    }
+                }
             }
         }
     }
@@ -233,7 +257,13 @@ fn scan_workflow_env_files(
             if let Some(inc_path) = inc.get("path").and_then(|v| v.as_str()) {
                 let included_wf = workflow_dir.join(inc_path);
                 if included_wf.exists() {
-                    scan_workflow_env_files(&included_wf, workflow_dir, referenced_files, scanned)?;
+                    scan_workflow_env_files(
+                        &included_wf,
+                        workflow_dir,
+                        referenced_files,
+                        container_refs,
+                        scanned,
+                    )?;
                 }
             }
         }
@@ -259,6 +289,13 @@ fn add_env_file(
             if !referenced_files.iter().any(|(name, _)| name == &filename) {
                 referenced_files.push((filename, abs_path));
             }
+        } else {
+            eprintln!(
+                "  {} env file referenced but not found: {} (field: {})",
+                "⚠".yellow(),
+                env_file,
+                field
+            );
         }
     }
 }
