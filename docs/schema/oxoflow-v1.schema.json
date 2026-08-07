@@ -33,6 +33,18 @@
       "description": "User-defined configuration variables for wildcard expansion",
       "additionalProperties": true
     },
+    "arguments": {
+      "type": "object",
+      "description": "Declared workflow arguments exposed as CLI --arg flags",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "required": { "type": "boolean", "description": "Whether this argument must be provided at runtime" },
+          "default": { "type": "string", "description": "Default value when not provided via CLI" },
+          "help": { "type": "string", "description": "Human-readable help text" }
+        }
+      }
+    },
     "defaults": {
       "type": "object",
       "description": "Default settings applied to all rules",

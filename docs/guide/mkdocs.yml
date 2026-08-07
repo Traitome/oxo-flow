@@ -150,6 +150,8 @@ nav:
       - lint: commands/lint.md
       - package: commands/package.md
       - profile: commands/profile.md
+      - publish: commands/publish.md
+      - pull: commands/pull.md
       - report: commands/report.md
       - run: commands/run.md
       - serve: commands/serve.md

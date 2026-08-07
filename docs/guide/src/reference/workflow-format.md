@@ -38,6 +38,7 @@ Workflow files must use the `.oxoflow` extension (e.g., `qc_pipeline.oxoflow`).
 ```toml
 [workflow]          # Required: metadata
 [config]            # Optional: user variables
+[arguments]         # Optional: declared CLI arguments
 [defaults]          # Optional: rule defaults
 [report]            # Optional: report configuration
 [[include]]         # Optional: include external workflow files
@@ -182,6 +183,57 @@ min_quality = "30"
 ```
 
 Values are TOML strings, integers, booleans, or arrays. String interpolation in rules uses `{config.key}` syntax.
+
+---
+
+## `[arguments]` — Declared Workflow Arguments
+
+Declare user-facing parameters that become CLI flags via `--arg KEY=VALUE`.
+Each argument can specify whether it is required, a default value, and help text.
+
+### Syntax
+
+```toml
+[arguments]
+database  = { required = true, help = "Path to the BLAST database" }
+threshold = { default = "1e-5", help = "E-value cutoff" }
+```
+
+### Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `required` | Bool | If `true`, the argument must be provided at runtime (default: `false`) |
+| `default` | String | Default value when not provided via CLI |
+| `help` | String | Human-readable description shown in error messages |
+
+### Usage in Rules
+
+Argument values are accessible as `{arguments.<name>}` in shell commands,
+input/output paths, and `when` conditions:
+
+```toml
+[[rules]]
+name = "blast"
+shell = "blastn -db {arguments.database} -evalue {arguments.threshold} -query {input} -out {output}"
+```
+
+### CLI
+
+```bash
+# Provide required arguments
+oxo-flow run pipeline.oxoflow --arg database=refs/nt
+
+# Override defaults
+oxo-flow run pipeline.oxoflow --arg database=refs/nt --arg threshold=1e-3
+
+# Short form
+oxo-flow run pipeline.oxoflow -a database=refs/nt
+```
+
+### Precedence
+
+CLI `--arg` > declared `default` > error if `required` and unset.
 
 ---
 
@@ -840,6 +892,7 @@ Built-in placeholders use the same syntax but have reserved meanings:
 | `{threads}` | Thread count assigned to this rule |
 | `{memory}` | Memory allocation assigned to this rule |
 | `{config.*}` | Value from the `[config]` section |
+| `{arguments.*}` | Value from the `[arguments]` section or `--arg` CLI flag |
 
 ### Named Input & Output
 

@@ -53,6 +53,18 @@
         }
       }
     },
+    "arguments": {
+      "type": "object",
+      "description": "Declared workflow arguments exposed as CLI --arg flags",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "required": { "type": "boolean" },
+          "default": { "type": "string" },
+          "help": { "type": "string" }
+        }
+      }
+    },
     "config": {
       "type": "object",
       "description": "Default configuration variables for wildcard expansion",

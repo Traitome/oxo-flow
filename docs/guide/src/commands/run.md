@@ -37,6 +37,8 @@ oxo-flow run [OPTIONS] [WORKFLOW]
 | `--resume-failed` | — | — | Resume only failed rules from a previous run |
 | `--profile` | — | `local` | Execution profile: `local`, `slurm`, `pbs`, `sge`, or `lsf` |
 | `--provenance` | — | — | Track output file checksums for later verification |
+| `--arg` | `-a` | — | Set a workflow argument (`KEY=VALUE`). Repeatable. See `[arguments]` in workflow-format |
+| `--bundle` | — | — | Execute from a published `.tar.zst` bundle (extract → verify → run) |
 | `--verbose` | `-v` | — | Enable debug-level logging |
 
 ---
@@ -111,6 +113,26 @@ oxo-flow run pipeline.oxoflow --cache-dir .oxo-flow/cache
 
 ```bash
 oxo-flow run pipeline.oxoflow --skip-env-setup
+```
+
+### Pass workflow arguments
+
+```bash
+# Provide a required argument
+oxo-flow run pipeline.oxoflow --arg database=refs/nt
+
+# Override a default value
+oxo-flow run pipeline.oxoflow --arg database=refs/nt --arg threshold=1e-3
+
+# Short form
+oxo-flow run pipeline.oxoflow -a sample=SRR123 -a min_qual=30
+```
+
+### Execute a published bundle
+
+```bash
+# Run directly from a bundle archive (extracts, verifies checksums, executes)
+oxo-flow run --bundle pipeline-bundle.tar.zst -j 16
 ```
 
 ---
