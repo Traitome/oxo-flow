@@ -524,7 +524,7 @@ pub fn discover_paired_files(dir: &std::path::Path, sample: &str) -> Vec<(String
 ///     ExperimentControlPair {
 ///         pair_id: "CASE_001".to_string(),
 ///         experiment: "EXP_01".to_string(),
-///         control: "CTRL_01".to_string(),
+///         control: Some("CTRL_01".to_string()),
 ///         experiment_type: Some("lung".to_string()),
 ///         metadata: Default::default(),
 ///     },
@@ -545,10 +545,16 @@ pub fn wildcard_combinations_from_pairs(
             let mut values = WildcardValues::new();
             values.insert("pair_id".to_string(), pair.pair_id.clone());
             values.insert("experiment".to_string(), pair.experiment.clone());
-            values.insert("control".to_string(), pair.control.clone());
+            values.insert(
+                "control".to_string(),
+                pair.control.clone().unwrap_or_default(),
+            );
             // Backward-compatible aliases
             values.insert("tumor".to_string(), pair.experiment.clone());
-            values.insert("normal".to_string(), pair.control.clone());
+            values.insert(
+                "normal".to_string(),
+                pair.control.clone().unwrap_or_default(),
+            );
             if let Some(ref t) = pair.experiment_type {
                 values.insert("experiment_type".to_string(), t.clone());
                 values.insert("tumor_type".to_string(), t.clone());
@@ -778,14 +784,14 @@ mod tests {
             ExperimentControlPair {
                 pair_id: "CASE_001".to_string(),
                 experiment: "EXP_01".to_string(),
-                control: "CTRL_01".to_string(),
+                control: Some("CTRL_01".to_string()),
                 experiment_type: Some("lung".to_string()),
                 metadata: Default::default(),
             },
             ExperimentControlPair {
                 pair_id: "CASE_002".to_string(),
                 experiment: "EXP_02".to_string(),
-                control: "CTRL_02".to_string(),
+                control: Some("CTRL_02".to_string()),
                 experiment_type: None,
                 metadata: Default::default(),
             },
@@ -816,7 +822,7 @@ mod tests {
         let pairs = vec![ExperimentControlPair {
             pair_id: "P1".to_string(),
             experiment: "E1".to_string(),
-            control: "C1".to_string(),
+            control: Some("C1".to_string()),
             experiment_type: None,
             metadata: meta,
         }];

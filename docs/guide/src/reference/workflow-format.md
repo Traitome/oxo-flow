@@ -1215,17 +1215,55 @@ oxo-flow run pipeline.oxoflow --sample EXTRA_01 --sample EXTRA_02
 All sources deduplicate — the same sample from multiple sources appears once.
 Per-group sample lists are available as `{config.samples_<group_name>}`.
 
-### Partial Pair Tolerance
+### Partial Pair Tolerance & Tumor-Only Mode
 
-When using `[[pairs]]` or `pairs_pattern`, pairs where either the experiment or
-control sample is missing are skipped with a warning rather than aborting the run:
+Pairs with missing controls are supported — `control` is now optional:
 
 ```toml
-[workflow]
-pairs_pattern = "aligned/{experiment}_vs_{control}.bam"
+# Tumor-only CNV calling (no matched normals)
+[[pairs]]
+experiment = "T1"
+# control omitted → {control} = ""
+
+# Pooled normal via arguments
+[[pairs]]
+experiment = "T2"
+# control = ""  # empty string also works
 ```
 
-Rules using `{experiment}`/`{control}` only expand for complete pairs.
+Rules using `{control}` receive an empty string when no control is specified.
+Use shell conditionals or `[arguments]` to handle this:
+
+```toml
+[[rules]]
+name = "cnv_detect"
+input = ["aligned/{experiment}.bam"]
+shell = """
+if [ -n "{control}" ]; then
+    cnvkit.py batch {input} --normal aligned/{control}.bam
+else
+    cnvkit.py batch {input} --method cbs  # tumor-only mode
+fi
+"""
+```
+
+For pooled-normal scenarios, use `[arguments]`:
+
+```toml
+[arguments]
+normal_mode = { default = "pooled", help = "matched, pooled, or none" }
+pooled_normal = { default = "results/pooled_normal.bam" }
+```
+
+Supported multi-omics pair patterns:
+
+| Scenario | Pair Configuration | Control |
+|---|---|---|
+| Matched tumor-normal | `experiment = "T1", control = "N1"` | Required |
+| Unmatched tumor vs pooled | `experiment = "T1"` | None |
+| Tumor-only (CNV, somatic) | `experiment = "T1"` | None |
+| Paired-end case-control | `experiment = "CASE", control = "CTRL"` | Required |
+| Time-series (no control) | `experiment = "T0", experiment = "T6"` | None |
 
 ---
 

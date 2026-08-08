@@ -490,9 +490,14 @@ pub struct ExperimentControlPair {
 
     /// Control sample identifier (available as `{control}`).
     ///
+    /// When `None` (e.g., tumor-only CNV detection), `{control}` expands to
+    /// an empty string. Rules should handle this via shell conditionals or
+    /// `[arguments]` flags.
+    ///
     /// Backward-compatible TOML alias: `normal`.
+    #[serde(default)]
     #[serde(alias = "normal")]
-    pub control: String,
+    pub control: Option<String>,
 
     /// Optional experiment type / cohort label (available as `{experiment_type}`).
     ///
@@ -655,7 +660,7 @@ impl ExperimentControlPair {
                         let pair = Self {
                             pair_id: pair_id.clone(),
                             experiment: experiment.clone(),
-                            control: control.clone(),
+                            control: Some(control.clone()),
                             experiment_type: wildcards.get("experiment_type").cloned(),
                             metadata: HashMap::new(),
                         };
@@ -765,7 +770,7 @@ impl ExperimentControlPair {
             let pair = Self {
                 pair_id: record.get(*pair_id_col).unwrap_or("").to_string(),
                 experiment: record.get(*experiment_col).unwrap_or("").to_string(),
-                control: record.get(*control_col).unwrap_or("").to_string(),
+                control: Some(record.get(*control_col).unwrap_or("").to_string()),
                 experiment_type: experiment_type_col
                     .and_then(|&i| record.get(i).map(|s| s.to_string())),
                 metadata,
