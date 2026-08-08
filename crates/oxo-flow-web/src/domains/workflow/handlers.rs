@@ -172,7 +172,14 @@ pub async fn search_pipelines(Json(req): Json<SearchRequest>) -> ApiResult<Searc
     .bind(format!("%{}%", req.query))
     .fetch_all(pool)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("DB error searching pipelines: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     let pipelines: Vec<Pipeline> = pipeline_rows
         .into_iter()
@@ -199,7 +206,14 @@ pub async fn search_pipelines(Json(req): Json<SearchRequest>) -> ApiResult<Searc
     .bind(format!("%{}%", req.query))
     .fetch_all(pool)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("DB error searching templates: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     let templates: Vec<Template> = template_rows
         .into_iter()
@@ -273,7 +287,14 @@ pub async fn save_pipeline(Json(req): Json<serde_json::Value>) -> ApiResult<Pipe
     .bind(&id).bind(&user_id).bind(name).bind(version).bind(toml_content)
     .bind(rules_count).bind(None::<String>).bind(visibility).bind(&now).bind(&now)
     .execute(pool).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("DB error creating pipeline: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     Ok(Json(Pipeline {
         id,
@@ -297,7 +318,14 @@ pub async fn list_pipelines() -> ApiResult<Vec<Pipeline>> {
         sqlx::query_as("SELECT * FROM pipelines ORDER BY updated_at DESC LIMIT 100")
             .fetch_all(pool)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!("DB error listing pipelines: {e}");
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    "Internal database error".into(),
+                )
+            })?;
 
     let list: Vec<Pipeline> = rows
         .into_iter()
@@ -326,7 +354,14 @@ pub async fn get_pipeline(Path(id): Path<String>) -> ApiResult<Pipeline> {
         .bind(&id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error fetching pipeline {id}: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     match row {
         Some(r) => Ok(Json(Pipeline {
@@ -361,7 +396,14 @@ pub async fn update_pipeline(
             .bind(&id)
             .fetch_optional(pool)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!("DB error fetching pipeline {id} for update: {e}");
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    "Internal database error".into(),
+                )
+            })?;
 
     let existing = existing.ok_or_else(|| {
         err(
@@ -403,7 +445,14 @@ pub async fn update_pipeline(
     .bind(&id)
     .execute(pool)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("DB error updating pipeline {id}: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     Ok(Json(Pipeline {
         id,
@@ -428,7 +477,14 @@ pub async fn delete_pipeline(Path(id): Path<String>) -> ApiResult<serde_json::Va
             .bind(&id)
             .fetch_optional(pool)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!("DB error fetching pipeline {id} for deletion: {e}");
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    "Internal database error".into(),
+                )
+            })?;
 
     if existing.is_none() {
         return Err(err(
@@ -442,7 +498,14 @@ pub async fn delete_pipeline(Path(id): Path<String>) -> ApiResult<serde_json::Va
         .bind(&id)
         .execute(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error deleting pipeline {id}: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     Ok(Json(serde_json::json!({"deleted": id})))
 }
@@ -459,7 +522,14 @@ pub async fn list_templates() -> ApiResult<Vec<Template>> {
         sqlx::query_as("SELECT * FROM templates ORDER BY category, name ASC")
             .fetch_all(pool)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!("DB error listing templates: {e}");
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    "Internal database error".into(),
+                )
+            })?;
 
     let list: Vec<Template> = rows
         .into_iter()
@@ -489,7 +559,14 @@ pub async fn get_template(Path(id): Path<String>) -> ApiResult<Template> {
         .bind(&id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error fetching template {id}: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     match row {
         Some(r) => Ok(Json(Template {
@@ -578,7 +655,14 @@ pub async fn save_template(Json(req): Json<serde_json::Value>) -> ApiResult<Temp
     .bind(&now)
     .execute(pool)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("DB error saving template: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     Ok(Json(Template {
         id,
@@ -604,7 +688,14 @@ pub async fn delete_template(Path(id): Path<String>) -> ApiResult<serde_json::Va
             .bind(&id)
             .fetch_optional(pool)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!("DB error fetching template {id} for deletion: {e}");
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    "Internal database error".into(),
+                )
+            })?;
 
     if existing.is_none() {
         return Err(err(
@@ -618,7 +709,14 @@ pub async fn delete_template(Path(id): Path<String>) -> ApiResult<serde_json::Va
         .bind(&id)
         .execute(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error deleting template {id}: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     Ok(Json(serde_json::json!({"deleted": id})))
 }

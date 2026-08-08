@@ -214,7 +214,14 @@ pub async fn get_run_status(Path(id): Path<String>) -> ApiResult<RunStatusRespon
         .bind(&id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error fetching run {id} for status: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     let run = run.ok_or_else(|| {
         err(
@@ -294,7 +301,14 @@ pub async fn get_dag_status(Path(id): Path<String>) -> ApiResult<DagStatusRespon
         .bind(&id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error fetching run {id} for DAG status: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     let run = run.ok_or_else(|| {
         err(
@@ -422,7 +436,14 @@ pub async fn get_diagnostics(Path(id): Path<String>) -> ApiResult<DiagnosticsRes
         .bind(&id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error fetching run {id} for diagnostics: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     let run = run.ok_or_else(|| {
         err(
@@ -492,7 +513,14 @@ pub async fn get_run_logs(Path(id): Path<String>) -> ApiResult<String> {
         .bind(&id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error fetching run {id} for logs: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     let run = run.ok_or_else(|| {
         err(
@@ -525,7 +553,14 @@ pub async fn get_run_results(Path(id): Path<String>) -> ApiResult<Vec<serde_json
         .bind(&id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error fetching run {id} for results: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     let run = run.ok_or_else(|| {
         err(
@@ -578,7 +613,14 @@ pub async fn retry_run(
         .bind(&id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error fetching run {id} for retry: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     let run = run.ok_or_else(|| {
         err(
@@ -659,7 +701,14 @@ pub async fn cancel_run(Path(id): Path<String>) -> ApiResult<serde_json::Value> 
         .bind(&id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error fetching run {id} for cancellation: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     match run {
         Some(_r) => {
@@ -669,7 +718,14 @@ pub async fn cancel_run(Path(id): Path<String>) -> ApiResult<serde_json::Value> 
                 .bind(&id)
                 .execute(pool)
                 .await
-                .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+                .map_err(|e| {
+                    tracing::error!("DB error cancelling run {id}: {e}");
+                    err(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "DB_ERROR",
+                        "Internal database error".into(),
+                    )
+                })?;
 
             Ok(Json(serde_json::json!({
                 "run_id": id,
@@ -702,7 +758,14 @@ pub async fn pause_run(
         .bind(&id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error fetching run {id} for pause: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     let _run = run.ok_or_else(|| {
         err(
@@ -722,7 +785,14 @@ pub async fn pause_run(
         .bind(&id)
         .execute(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error pausing run {id}: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     crate::broadcast_event(
         "run_paused",
@@ -754,7 +824,14 @@ pub async fn resume_run(
         .bind(&id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error fetching run {id} for resume: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     let _run = run.ok_or_else(|| {
         err(
@@ -770,7 +847,14 @@ pub async fn resume_run(
         .bind(&id)
         .execute(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error resuming run {id}: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     crate::broadcast_event(
         "run_resumed",
@@ -798,7 +882,14 @@ pub async fn get_ai_status(Path(id): Path<String>) -> ApiResult<serde_json::Valu
         .bind(&id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error fetching run {id} for AI status: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     let _run = run.ok_or_else(|| {
         err(
@@ -859,7 +950,14 @@ pub async fn get_run_report(Path(id): Path<String>) -> ApiResult<serde_json::Val
         .bind(&id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error fetching run {id} for report: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     let run = run.ok_or_else(|| {
         err(
@@ -927,7 +1025,14 @@ pub async fn ask_report_question(
         .bind(&id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error fetching run {id} for report question: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
     let _run = run.ok_or_else(|| {
         err(
             StatusCode::NOT_FOUND,
@@ -964,7 +1069,14 @@ pub async fn visualize_report(
         .bind(&id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error fetching run {id} for report visualization: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
     let _run = run.ok_or_else(|| {
         err(
             StatusCode::NOT_FOUND,
