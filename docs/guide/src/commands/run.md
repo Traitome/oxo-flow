@@ -159,7 +159,7 @@ To bypass checkpoints and re-execute rules that have already completed, use the 
 ## Output
 
 ```
-oxo-flow 0.9.0 — Bioinformatics Pipeline Engine
+oxo-flow 0.9.1 — Bioinformatics Pipeline Engine
 DAG: 5 rules in execution order
   1. fastqc
   2. trim_reads
