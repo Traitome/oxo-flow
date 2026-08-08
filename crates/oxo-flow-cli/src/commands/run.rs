@@ -6,7 +6,7 @@ use oxo_flow_core::dag::WorkflowDag;
 use oxo_flow_core::executor::{CheckpointState, ExecutorConfig, LocalExecutor};
 use oxo_flow_core::rule::parse_duration_secs;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -298,6 +298,112 @@ pub async fn run_command(
     }
     let wildcard_values: Arc<HashMap<String, String>> = Arc::new(wildcard_values);
     let workdir_actual = Arc::new(workdir.as_ref().unwrap_or(&workflow_dir).clone());
+
+    // ── Auto-build references (indexes, data files) ──────────────────────
+
+    if !config.references.is_empty() {
+        let ref_workdir = workdir.as_ref().unwrap_or(&workflow_dir);
+        let ref_checkpoint = checkpoint_path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join(".oxo-flow/reference-checkpoint.json");
+        let mut ref_state: std::collections::HashSet<String> = if ref_checkpoint.exists() {
+            std::fs::read_to_string(&ref_checkpoint)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default()
+        } else {
+            std::collections::HashSet::new()
+        };
+
+        for ref_def in &config.references {
+            let output_path = oxo_flow_core::executor::checkpoint::expand_config_in_path(
+                &ref_def.output,
+                &wildcard_values,
+            );
+            let output_full = ref_workdir.join(&output_path);
+
+            if output_full.exists() && ref_state.contains(&ref_def.name) {
+                continue; // Already built and tracked
+            }
+
+            // Check freshness: source newer than output → warn
+            if let Some(ref source) = ref_def.source {
+                let source_path =
+                    ref_workdir.join(oxo_flow_core::executor::checkpoint::expand_config_in_path(
+                        source,
+                        &wildcard_values,
+                    ));
+                if source_path.exists()
+                    && output_full.exists()
+                    && oxo_flow_core::executor::checkpoint::file_is_newer(
+                        &source_path,
+                        &output_full,
+                    )
+                {
+                    eprintln!(
+                        "  {} {}: source is newer than output, rebuilding...",
+                        "↻".yellow(),
+                        ref_def.name
+                    );
+                }
+            }
+
+            if !output_full.exists() {
+                let build_cmd = oxo_flow_core::executor::process::render_shell_command(
+                    &ref_def.build,
+                    &oxo_flow_core::rule::Rule {
+                        name: format!("ref:{}", ref_def.name),
+                        output: vec![output_path.clone()].into(),
+                        ..Default::default()
+                    },
+                    &wildcard_values,
+                );
+                eprintln!(
+                    "  {} Building {}: {}",
+                    "⚙".cyan().bold(),
+                    ref_def.name,
+                    ref_def.description.as_deref().unwrap_or(&ref_def.output)
+                );
+                let status = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&build_cmd)
+                    .current_dir(ref_workdir)
+                    .status();
+                match status {
+                    Ok(s) if s.success() => {
+                        ref_state.insert(ref_def.name.clone());
+                        if let Some(parent) = ref_checkpoint.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        let _ = std::fs::write(
+                            &ref_checkpoint,
+                            serde_json::to_string(&ref_state).unwrap_or_default(),
+                        );
+                        eprintln!("    {} {} built", "✓".green(), ref_def.name);
+                    }
+                    Ok(s) => {
+                        anyhow::bail!(
+                            "failed to build reference '{}' (exit {}). Command: {}",
+                            ref_def.name,
+                            s.code().unwrap_or(-1),
+                            build_cmd
+                        );
+                    }
+                    Err(e) => {
+                        anyhow::bail!("failed to run build command for '{}': {}", ref_def.name, e);
+                    }
+                }
+            } else if !ref_state.contains(&ref_def.name) {
+                // Output exists but not tracked — mark as built
+                ref_state.insert(ref_def.name.clone());
+                let _ = std::fs::write(
+                    &ref_checkpoint,
+                    serde_json::to_string(&ref_state).unwrap_or_default(),
+                );
+            }
+        }
+    }
 
     // Pre-loop: evaluate rule conditions, mark false-condition rules as skipped
     for rule in config.rules.iter() {

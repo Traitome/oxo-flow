@@ -360,6 +360,43 @@ pub struct ArgumentDef {
     pub help: Option<String>,
 }
 
+/// A declared reference artifact — a pre-built index or data file.
+///
+/// References are declared in `[[references]]` blocks. The engine checks if the
+/// output exists before execution, and auto-builds it using the declared build
+/// command if missing. Built references are tracked in the checkpoint state so
+/// they are not rebuilt on resume.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReferenceDef {
+    /// Unique name for this reference (used for checkpoint tracking).
+    pub name: String,
+
+    /// Path to the source file (e.g., genome.fa) — used for freshness checks.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+
+    /// Path to the output artifact (index file or directory).
+    pub output: String,
+
+    /// Shell command to build this reference from source.
+    pub build: String,
+
+    /// CPU threads for the build command.
+    #[serde(default)]
+    pub threads: Option<u32>,
+
+    /// Memory limit for the build command.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory: Option<String>,
+
+    /// Human-readable description.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
 /// Resource budget constraints for the entire workflow.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ResourceBudget {
@@ -930,6 +967,15 @@ pub struct WorkflowConfig {
     #[serde(default, rename = "arguments")]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub arguments: HashMap<String, ArgumentDef>,
+
+    /// Declared reference artifacts — pre-built indexes and data files.
+    ///
+    /// The engine auto-builds any reference whose output is missing, using
+    /// the declared build command. Built references are tracked in the
+    /// checkpoint and not rebuilt on resume.
+    #[serde(default, rename = "references")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<ReferenceDef>,
 
     /// Base directory for reference files.
     ///
