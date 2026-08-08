@@ -66,10 +66,11 @@ async fn validate_token(
             .fetch_optional(pool)
             .await
             .map_err(|e| {
+                tracing::error!("DB error looking up session token: {e}");
                 err(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "DB_ERROR",
-                    e.to_string(),
+                    "Internal database error".into(),
                 )
             })?;
 
@@ -98,10 +99,11 @@ async fn validate_token(
             .fetch_optional(pool)
             .await
             .map_err(|e| {
+                tracing::error!("DB error looking up user role: {e}");
                 err(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "DB_ERROR",
-                    e.to_string(),
+                    "Internal database error".into(),
                 )
             })?;
 
@@ -218,7 +220,14 @@ pub async fn list_users(headers: axum::http::HeaderMap) -> ApiResult<Vec<UserRes
     let rows: Vec<models::UserRow> = sqlx::query_as("SELECT * FROM users ORDER BY created_at ASC")
         .fetch_all(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error listing users: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     let users: Vec<UserResponse> = rows
         .into_iter()
@@ -258,10 +267,11 @@ pub async fn create_user(
     .execute(pool)
     .await
     .map_err(|e| {
+        tracing::error!("DB error creating user: {e}");
         err(
             StatusCode::CONFLICT,
             "DB_ERROR",
-            format!("Failed to create user: {e}"),
+            "Failed to create user (duplicate username or invalid role)".into(),
         )
     })?;
 
@@ -287,7 +297,14 @@ pub async fn delete_user(
         .bind(&id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error fetching user {id} for deletion: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     if existing.is_none() {
         return Err(err(
@@ -301,7 +318,14 @@ pub async fn delete_user(
         .bind(&id)
         .execute(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error deleting user {id}: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     Ok(Json(serde_json::json!({"deleted": id})))
 }

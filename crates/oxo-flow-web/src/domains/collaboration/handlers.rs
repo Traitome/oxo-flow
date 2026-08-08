@@ -54,7 +54,14 @@ pub async fn fork_pipeline(
             .bind(&id)
             .fetch_optional(pool)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!("DB error fetching source pipeline {id} for fork: {e}");
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    "Internal database error".into(),
+                )
+            })?;
 
     let source = source.ok_or_else(|| {
         err(
@@ -97,7 +104,14 @@ pub async fn fork_pipeline(
     .bind(&new_pipeline.updated_at)
     .execute(pool)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("DB error creating forked pipeline: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     // Log the fork action
     let _ = sqlx::query(
@@ -128,7 +142,14 @@ pub async fn share_pipeline(
             .bind(&id)
             .fetch_optional(pool)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!("DB error fetching pipeline {id} to share: {e}");
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    "Internal database error".into(),
+                )
+            })?;
 
     if pipeline.is_none() {
         return Err(err(
@@ -168,10 +189,19 @@ pub async fn share_pipeline(
     .bind(&share.created_at)
     .execute(pool)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("DB error creating share link for pipeline {id}: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
+    let host = std::env::var("OXO_FLOW_HOST").unwrap_or_else(|_| "localhost".into());
+    let port = std::env::var("OXO_FLOW_PORT").unwrap_or_else(|_| "3000".into());
     Ok(Json(ShareResponse {
-        share_url: format!("oxo+https://localhost:8777/share/{token}"),
+        share_url: format!("oxo+https://{host}:{port}/share/{token}"),
         access_token: token,
         expires_at,
     }))
@@ -198,7 +228,14 @@ pub async fn import_pipeline(Json(body): Json<ImportRequest>) -> ApiResult<Impor
         .bind(&token)
         .fetch_optional(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error looking up share by token: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     let share = share.ok_or_else(|| {
         err(
@@ -226,7 +263,14 @@ pub async fn import_pipeline(Json(body): Json<ImportRequest>) -> ApiResult<Impor
             .bind(&share.pipeline_id)
             .fetch_optional(pool)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!("DB error fetching source pipeline for import: {e}");
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    "Internal database error".into(),
+                )
+            })?;
 
     let pipeline = pipeline.ok_or_else(|| {
         err(
@@ -256,7 +300,14 @@ pub async fn import_pipeline(Json(body): Json<ImportRequest>) -> ApiResult<Impor
     .bind(&now)
     .execute(pool)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("DB error creating imported pipeline: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     Ok(Json(ImportResponse {
         pipeline_id: import_id,

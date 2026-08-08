@@ -125,7 +125,14 @@ pub async fn list_runs() -> ApiResult<Vec<serde_json::Value>> {
         sqlx::query_as("SELECT * FROM runs ORDER BY created_at DESC LIMIT 100")
             .fetch_all(pool)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!("DB error listing runs: {e}");
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    "Internal database error".into(),
+                )
+            })?;
 
     let list: Vec<serde_json::Value> = rows
         .into_iter()
@@ -162,7 +169,14 @@ pub async fn get_run(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
         .bind(&id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error fetching run {id}: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     match run {
         Some(r) => Ok(Json(serde_json::json!({
@@ -215,7 +229,14 @@ pub async fn get_run_status(Path(id): Path<String>) -> ApiResult<RunStatusRespon
             .bind(&id)
             .fetch_all(pool)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!("DB error fetching run nodes for status: {e}");
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    "Internal database error".into(),
+                )
+            })?;
 
     let node_items: Vec<NodeStatusItem> = nodes
         .into_iter()
@@ -293,7 +314,14 @@ pub async fn get_dag_status(Path(id): Path<String>) -> ApiResult<DagStatusRespon
             .bind(&id)
             .fetch_all(pool)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!("DB error fetching run nodes for DAG status: {e}");
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    "Internal database error".into(),
+                )
+            })?;
 
     let dag_nodes: Vec<DagNode> = nodes
         .iter()
@@ -409,7 +437,14 @@ pub async fn get_diagnostics(Path(id): Path<String>) -> ApiResult<DiagnosticsRes
             .bind(&id)
             .fetch_all(pool)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!("DB error fetching run nodes for diagnostics: {e}");
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    "Internal database error".into(),
+                )
+            })?;
 
     let node_items: Vec<NodeStatusItem> = nodes
         .iter()
@@ -564,7 +599,14 @@ pub async fn retry_run(
             .bind(&id)
             .fetch_all(pool)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!("DB error fetching run nodes for retry: {e}");
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    "Internal database error".into(),
+                )
+            })?;
 
     let node_items: Vec<NodeStatusItem> = nodes
         .iter()
@@ -771,7 +813,14 @@ pub async fn get_ai_status(Path(id): Path<String>) -> ApiResult<serde_json::Valu
             .bind(&id)
             .fetch_all(pool)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!("DB error fetching run nodes for AI status: {e}");
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    "Internal database error".into(),
+                )
+            })?;
 
     let exec_nodes: Vec<NodeExecutionStatus> = nodes
         .iter()
