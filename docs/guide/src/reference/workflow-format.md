@@ -1171,6 +1171,62 @@ Produces `align_treatment_S001` and `align_treatment_S002`.
 
 See [`examples/cohort_analysis.oxoflow`](https://github.com/Traitome/oxo-flow/blob/main/examples/cohort_analysis.oxoflow) for a complete cohort study pipeline.
 
+### Auto-Discovery with `sample_pattern`
+
+The `[workflow]` `sample_pattern` auto-discovers samples from the filesystem:
+
+```toml
+[workflow]
+# Paired-end reads (Illumina standard)
+sample_pattern = "raw/{sample}_R1.fastq.gz"
+
+# Paired-end reads (common variant)
+sample_pattern = "raw/{sample}_1.fq.gz"
+
+# Single-end reads
+sample_pattern = "raw/{sample}.fastq.gz"
+
+# With technical replicates
+sample_pattern = "raw/{sample}_rep{replicate}_R1.fastq.gz"
+```
+
+Supported wildcards in `sample_pattern`:
+| Wildcard | Description | Example match |
+|---|---|---|
+| `{sample}` | Sample identifier | `SAMPLE_01` from `SAMPLE_01_R1.fastq.gz` |
+| `{replicate}` | Technical replicate number | `1`, `2`, `3` |
+| `{read}` | Read pair identifier | `1` or `2` (R1/R2) |
+
+### Merging Multiple Sample Sources
+
+All sample sources are merged into a single `{config.samples_list}`:
+
+```bash
+# Filesystem auto-discovery
+sample_pattern = "raw/{sample}_R1.fastq.gz"
+
+# CSV/TSV file
+sample_groups_file = "metadata/samples.csv"
+
+# Ad-hoc via CLI
+oxo-flow run pipeline.oxoflow --sample EXTRA_01 --sample EXTRA_02
+```
+
+All sources deduplicate — the same sample from multiple sources appears once.
+Per-group sample lists are available as `{config.samples_<group_name>}`.
+
+### Partial Pair Tolerance
+
+When using `[[pairs]]` or `pairs_pattern`, pairs where either the experiment or
+control sample is missing are skipped with a warning rather than aborting the run:
+
+```toml
+[workflow]
+pairs_pattern = "aligned/{experiment}_vs_{control}.bam"
+```
+
+Rules using `{experiment}`/`{control}` only expand for complete pairs.
+
 ---
 
 ## `when` — Conditional Rule Execution (WF-01)

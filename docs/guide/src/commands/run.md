@@ -39,6 +39,7 @@ oxo-flow run [OPTIONS] [WORKFLOW]
 | `--profile` | — | `local` | Execution profile: `local`, `slurm`, `pbs`, `sge`, or `lsf` |
 | `--provenance` | — | — | Track output file checksums for later verification |
 | `--arg` | `-a` | — | Set a workflow argument (`KEY=VALUE`). Repeatable. See `[arguments]` in workflow-format |
+| `--sample` | — | — | Add a sample to the run. Repeatable. Merges with sample_pattern/CSV sources |
 | `--bundle` | — | — | Execute from a published `.tar.zst` bundle (extract → verify → run) |
 | `--verbose` | `-v` | — | Enable debug-level logging |
 
