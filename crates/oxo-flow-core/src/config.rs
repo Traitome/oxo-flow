@@ -1287,6 +1287,12 @@ impl WorkflowConfig {
                         metadata: HashMap::new(),
                     };
                     config.sample_groups.push(auto_group);
+                    // Inject discovered sample names as config variable for
+                    // downstream use (aggregation, reporting) without a CSV file
+                    config
+                        .config
+                        .entry("samples_list".to_string())
+                        .or_insert(toml::Value::String(auto_samples.join(",")));
                     tracing::info!(
                         "Auto-discovered {} samples from pattern '{}'",
                         auto_samples.len(),
@@ -1390,9 +1396,13 @@ impl WorkflowConfig {
             ("reference_fasta", "genome.fa"),
             ("gene_annotation", "genes.gtf"),
             ("bwa_index", "bwa/genome.fa"),
+            ("bwamem2_index", "bwamem2/genome.fa"),
             ("bowtie2_index", "bowtie2/genome.fa"),
             ("star_index", "star"),
             ("hisat2_index", "hisat2/genome.fa"),
+            ("minimap2_index", "genome.fa.mmi"),
+            ("gatk_dict", "genome.dict"),
+            ("samtools_faidx", "genome.fa.fai"),
         ];
 
         let mut result = HashMap::new();
@@ -1430,51 +1440,95 @@ impl WorkflowConfig {
                 .or_else(|| self.config.get("reference_dir").and_then(|v| v.as_str()))
         {
             let defaults: Vec<ReferenceDef> = vec![
+                // --- Universal: FASTA index (.fai) — required by virtually every tool ---
+                ReferenceDef {
+                    name: "samtools_faidx".into(),
+                    source: Some(format!("{base}/genome.fa")),
+                    output: format!("{base}/genome.fa.fai"),
+                    build: format!("samtools faidx {base}/genome.fa"),
+                    threads: Some(1),
+                    memory: Some("2G".into()),
+                    description: Some("FASTA index (.fai) — required by IGV, GATK, samtools, and most viewers".into()),
+                },
+                // --- Short-read DNA alignment: BWA (classic, widely used) ---
                 ReferenceDef {
                     name: "bwa_index".into(),
                     source: Some(format!("{base}/genome.fa")),
-                    output: format!("{base}/bwa/genome.fa"),
+                    output: format!("{base}/bwa/genome.fa.bwt"),
                     build: format!(
                         "mkdir -p {base}/bwa && bwa index -p {base}/bwa/genome.fa {base}/genome.fa"
                     ),
                     threads: Some(8),
                     memory: Some("8G".into()),
-                    description: Some("BWA index (auto-derived from reference_dir)".into()),
+                    description: Some("BWA index for short-read DNA alignment (BWA-MEM/BWA-SW)".into()),
                 },
+                // --- Short-read DNA alignment: BWA-MEM2 (1.3-3.1x faster, identical output) ---
+                ReferenceDef {
+                    name: "bwamem2_index".into(),
+                    source: Some(format!("{base}/genome.fa")),
+                    output: format!("{base}/bwamem2/genome.fa.0123"),
+                    build: format!(
+                        "mkdir -p {base}/bwamem2 && bwa-mem2 index -p {base}/bwamem2/genome.fa {base}/genome.fa"
+                    ),
+                    threads: Some(8),
+                    memory: Some("16G".into()),
+                    description: Some("BWA-MEM2 index — faster BWA replacement, identical alignment output".into()),
+                },
+                // --- Short-read DNA alignment: Bowtie2 ---
                 ReferenceDef {
                     name: "bowtie2_index".into(),
                     source: Some(format!("{base}/genome.fa")),
-                    output: format!("{base}/bowtie2/genome.fa"),
+                    output: format!("{base}/bowtie2/genome.fa.1.bt2"),
                     build: format!(
-                        "mkdir -p {base}/bowtie2 && bowtie2-build {base}/genome.fa {base}/bowtie2/genome.fa"
+                        "mkdir -p {base}/bowtie2 && bowtie2-build --threads 8 {base}/genome.fa {base}/bowtie2/genome.fa"
                     ),
                     threads: Some(8),
                     memory: Some("8G".into()),
-                    description: Some("Bowtie2 index (auto-derived from reference_dir)".into()),
+                    description: Some("Bowtie2 index for short-read DNA alignment".into()),
                 },
+                // --- Long-read alignment: Minimap2 (Nanopore, PacBio) ---
+                ReferenceDef {
+                    name: "minimap2_index".into(),
+                    source: Some(format!("{base}/genome.fa")),
+                    output: format!("{base}/genome.fa.mmi"),
+                    build: format!("minimap2 -d {base}/genome.fa.mmi {base}/genome.fa"),
+                    threads: Some(4),
+                    memory: Some("8G".into()),
+                    description: Some("Minimap2 index (.mmi) for long-read alignment (Nanopore/PacBio)".into()),
+                },
+                // --- RNA-seq alignment: STAR (splice-aware, gold standard) ---
                 ReferenceDef {
                     name: "star_index".into(),
                     source: Some(format!("{base}/genome.fa")),
-                    output: format!("{base}/star"),
+                    output: format!("{base}/star/SAindex"),
                     build: format!(
                         "mkdir -p {base}/star && STAR --runMode genomeGenerate --genomeDir {base}/star --genomeFastaFiles {base}/genome.fa --sjdbGTFfile {base}/genes.gtf --runThreadN 16"
                     ),
                     threads: Some(16),
                     memory: Some("64G".into()),
-                    description: Some(
-                        "STAR index (auto-derived from reference_dir, large: ~30 GB)".into(),
-                    ),
+                    description: Some("STAR index for splice-aware RNA-seq alignment (~30 GB, 2-6 hours)".into()),
                 },
+                // --- RNA-seq alignment: HISAT2 (hierarchical indexing, smaller memory) ---
                 ReferenceDef {
                     name: "hisat2_index".into(),
                     source: Some(format!("{base}/genome.fa")),
-                    output: format!("{base}/hisat2/genome.fa"),
+                    output: format!("{base}/hisat2/genome.fa.1.ht2"),
                     build: format!(
-                        "mkdir -p {base}/hisat2 && hisat2-build {base}/genome.fa {base}/hisat2/genome.fa"
+                        "mkdir -p {base}/hisat2 && hisat2-build -p 8 {base}/genome.fa {base}/hisat2/genome.fa"
                     ),
                     threads: Some(8),
                     memory: Some("8G".into()),
-                    description: Some("HISAT2 index (auto-derived from reference_dir)".into()),
+                    description: Some("HISAT2 index for splice-aware RNA-seq alignment (hierarchical, smaller memory)".into()),
+                },
+                // --- Variant calling: Sequence dictionary (.dict) for GATK/Picard ---
+                ReferenceDef {
+                    name: "gatk_dict".into(),
+                    source: Some(format!("{base}/genome.fa")),
+                    output: format!("{base}/genome.dict"),
+                    build: format!("samtools dict {base}/genome.fa -o {base}/genome.dict"),
+                    threads: Some(1),
+                    memory: Some("4G".into()),
+                    description: Some("Sequence dictionary (.dict) for GATK/Picard variant calling".into()),
                 },
             ];
             self.references = defaults;

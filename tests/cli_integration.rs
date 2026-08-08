@@ -1896,6 +1896,95 @@ fn cli_run_with_arg_invalid_format_fails() {
     );
 }
 
+// ─── [[references]] auto-build tests ────────────────────────────────────
+
+#[test]
+fn cli_run_auto_builds_reference() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("ref")).unwrap();
+    std::fs::write(dir.path().join("ref/genome.fa"), ">chr1\nACGT\n").unwrap();
+    let wf = dir.path().join("ref_test.oxoflow");
+    std::fs::write(
+        &wf,
+        "[workflow]\nname = \"ref-test\"\nversion = \"1.0.0\"\n\n[config]\nreference_dir = \"ref\"\nsamples = \"s.csv\"\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo bwa={config.bwa_index} > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--skip-ref-build"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "should succeed with --skip-ref-build: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let content = std::fs::read_to_string(dir.path().join("out.txt")).unwrap();
+    assert!(
+        content.contains("bwa=ref/bwa/genome.fa"),
+        "config should contain derived bwa_index path: {content}"
+    );
+}
+
+#[test]
+fn cli_run_auto_derives_all_index_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("ref")).unwrap();
+    std::fs::write(dir.path().join("ref/genome.fa"), ">chr1\nACGT\n").unwrap();
+    let wf = dir.path().join("derive.oxoflow");
+    std::fs::write(
+        &wf,
+        "[workflow]\nname = \"derive\"\nversion = \"1.0.0\"\n\n[config]\nreference_dir = \"ref\"\nsamples = \"s.csv\"\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo bwa={config.bwa_index} star={config.star_index} minimap2={config.minimap2_index} dict={config.gatk_dict} faidx={config.samtools_faidx} > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--skip-ref-build"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let content = std::fs::read_to_string(dir.path().join("out.txt")).unwrap();
+    assert!(content.contains("bwa=ref/bwa/genome.fa"), "{content}");
+    assert!(content.contains("star=ref/star"), "{content}");
+    assert!(content.contains("minimap2=ref/genome.fa.mmi"), "{content}");
+    assert!(content.contains("dict=ref/genome.dict"), "{content}");
+    assert!(content.contains("faidx=ref/genome.fa.fai"), "{content}");
+}
+
+#[test]
+fn cli_run_ref_build_fails_with_clear_error() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("ref")).unwrap();
+    std::fs::write(dir.path().join("ref/genome.fa"), ">chr1\nACGT\n").unwrap();
+    let wf = dir.path().join("fail_ref.oxoflow");
+    std::fs::write(
+        &wf,
+        "[workflow]\nname = \"fail-ref\"\nversion = \"1.0.0\"\n\n[config]\nreference_dir = \"ref\"\nsamples = \"s.csv\"\n\n[[references]]\nname = \"custom\"\nsource = \"ref/genome.fa\"\noutput = \"ref/custom.idx\"\nbuild = \"nonexistent_command_xyz\"\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo done > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "should fail when build command is missing"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("failed to build"),
+        "should report build failure: {stderr}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // publish command tests
 // ---------------------------------------------------------------------------

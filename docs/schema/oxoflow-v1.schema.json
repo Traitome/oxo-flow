@@ -45,6 +45,23 @@
         }
       }
     },
+    "references": {
+      "type": "array",
+      "description": "Auto-built reference artifacts (indexes, data files). Auto-derived from reference_dir if empty.",
+      "items": {
+        "type": "object",
+        "required": ["name", "output", "build"],
+        "properties": {
+          "name": { "type": "string", "description": "Unique name for checkpoint tracking" },
+          "source": { "type": "string", "description": "Source file for freshness checks" },
+          "output": { "type": "string", "description": "Path to the built artifact" },
+          "build": { "type": "string", "description": "Shell command to produce output from source" },
+          "threads": { "type": "integer" },
+          "memory": { "type": "string" },
+          "description": { "type": "string" }
+        }
+      }
+    },
     "defaults": {
       "type": "object",
       "description": "Default settings applied to all rules",

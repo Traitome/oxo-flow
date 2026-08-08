@@ -33,6 +33,7 @@ oxo-flow run [OPTIONS] [WORKFLOW]
 | `--max-threads` | — | `0` (auto-detect) | Maximum CPU threads available for execution |
 | `--max-memory` | — | `0` (auto-detect) | Maximum memory in MB available for execution |
 | `--skip-env-setup` | — | — | Skip environment setup (assume environments are ready) |
+| `--skip-ref-build` | — | — | Skip automatic reference/index building (assume pre-built) |
 | `--cache-dir` | — | — | Directory for caching environment setup state |
 | `--resume-failed` | — | — | Resume only failed rules from a previous run |
 | `--profile` | — | `local` | Execution profile: `local`, `slurm`, `pbs`, `sge`, or `lsf` |
