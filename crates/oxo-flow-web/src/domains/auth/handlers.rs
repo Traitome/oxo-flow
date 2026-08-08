@@ -145,7 +145,7 @@ pub async fn login(Json(req): Json<LoginRequest>) -> ApiResult<LoginResponse> {
     // Without this, require_auth and auth_me would reject the token.
     if let Ok(pool) = get_pool() {
         let expires = chrono::Utc::now() + chrono::Duration::hours(24);
-        let _ = sqlx::query(
+        let insert_result = sqlx::query(
             "INSERT OR REPLACE INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
         )
         .bind(&result.token)
@@ -154,6 +154,18 @@ pub async fn login(Json(req): Json<LoginRequest>) -> ApiResult<LoginResponse> {
         .bind(expires.to_rfc3339())
         .execute(pool)
         .await;
+
+        if let Err(e) = insert_result {
+            tracing::error!(
+                "Failed to persist session for user '{}': {e}",
+                result.username
+            );
+        }
+    } else {
+        tracing::error!(
+            "DB pool unavailable — session NOT persisted for user '{}'",
+            result.username
+        );
     }
 
     Ok(Json(result))
@@ -356,7 +368,7 @@ pub async fn oauth_callback(
     // Persist the session
     if let Ok(pool) = get_pool() {
         let expires = chrono::Utc::now() + chrono::Duration::hours(24);
-        let _ = sqlx::query(
+        let insert_result = sqlx::query(
             "INSERT OR REPLACE INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
         )
         .bind(&result.token)
@@ -365,6 +377,18 @@ pub async fn oauth_callback(
         .bind(expires.to_rfc3339())
         .execute(pool)
         .await;
+
+        if let Err(e) = insert_result {
+            tracing::error!(
+                "Failed to persist OAuth session for user '{}': {e}",
+                result.username
+            );
+        }
+    } else {
+        tracing::error!(
+            "DB pool unavailable — OAuth session NOT persisted for user '{}'",
+            result.username
+        );
     }
 
     Ok(Json(result))

@@ -114,8 +114,7 @@ pub async fn init_db(database_url: &str) -> Result<()> {
             token TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
             created_at DATETIME NOT NULL,
-            expires_at DATETIME NOT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            expires_at DATETIME NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS scheduled_runs (
