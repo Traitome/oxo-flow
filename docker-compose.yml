@@ -6,26 +6,23 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - oxo-flow-data:/app/data
+      # Persist database, logs, and workspace across container restarts
+      - oxo-flow-data:/app
     environment:
+      - OXO_FLOW_MODE=team
       - OXO_FLOW_HOST=0.0.0.0
       - OXO_FLOW_PORT=3000
       - OXO_FLOW_FRONTEND_DIR=/app/frontend/dist
+      # Authentication — CHANGE THESE in production:
+      - OXO_FLOW_ADMIN_PASSWORD=changeme
       # AI Provider Configuration (optional)
       # - OXO_FLOW_AI_PROVIDER=openai
       # - OXO_FLOW_AI_API_KEY=sk-your-key
       # - OXO_FLOW_AI_API_URL=https://api.deepseek.com/v1/chat/completions
       # - OXO_FLOW_AI_MODEL=deepseek-chat
-      # Authentication (optional)
-      # - OXO_FLOW_ADMIN_PASSWORD=changeme
-      # - OXO_FLOW_USER_PASSWORD=changeme
+      # PostgreSQL (optional — uncomment to use instead of SQLite)
+      # - DATABASE_URL=postgres://user:pass@postgres:5432/oxoflow
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
     deploy:
       resources:
         limits:

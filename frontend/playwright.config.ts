@@ -8,22 +8,24 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: 'html',
   use: {
-    baseURL: 'http://localhost:5173',
+    // Tests use the Rust server directly (port 3000) for both UI and API tests.
+    // The frontend must be pre-built: npm run build
+    baseURL: 'http://localhost:3000',
     trace: 'on-first-retry',
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
+    },
   ],
   webServer: [
     {
-      command: 'cd /Users/wsx/Documents/GitHub/oxo-flow && cargo run -p oxo-flow-web -- --port 3000 &',
+      command: 'cargo run -p oxo-flow-web -- --port 3000',
+      cwd: '../',
       port: 3000,
       reuseExistingServer: true,
-    },
-    {
-      command: 'npm run dev',
-      port: 5173,
-      reuseExistingServer: true,
+      timeout: 60000,
     },
   ],
 });

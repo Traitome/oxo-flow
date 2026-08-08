@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, lazy, Suspense } from 'react';
-import { Play, CheckCircle, AlertCircle, Undo2, Redo2, Plus, Trash2, Link as LinkIcon } from 'lucide-react';
+import { Play, CheckCircle, AlertCircle, Undo2, Redo2, Plus, Trash2, Link as LinkIcon, Save } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { DagJson } from '../api/types';
@@ -105,7 +105,7 @@ export default function PipelineEditor() {
 
   const handleDagEdit = async (operation: string, payload: any) => {
     try {
-      const res = await api.dagCommand(pipelineId, 'dag_editor', operation, payload);
+      const res = await api.dagCommand(pipelineId, toml, operation, payload);
       if (res.success) {
         setToml(res.toml_content);
       } else {
@@ -115,6 +115,17 @@ export default function PipelineEditor() {
   };
   const handleUndo = async () => { try { const res = await api.dagUndo(pipelineId); setToml(res.toml_content); } catch (e: any) { alert(e.message); } };
   const handleRedo = async () => { try { const res = await api.dagRedo(pipelineId); setToml(res.toml_content); } catch (e: any) { alert(e.message); } };
+
+  const handleSave = async () => {
+    try {
+      const name = toml.match(/name\s*=\s*"([^"]+)"/)?.[1] || 'untitled-pipeline';
+      const res = await api.createPipeline({ name, toml_content: toml });
+      session.setRunResult({ message: `Pipeline "${name}" saved (ID: ${res.id.slice(0, 8)}...)`, type: 'success' });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Failed to save';
+      session.setRunResult({ message: `Save failed: ${msg}`, type: 'error' });
+    }
+  };
 
   return (
     <div className="page">
@@ -136,6 +147,9 @@ export default function PipelineEditor() {
                   {validation.valid ? ' Valid' : `${validation.errors.length} error(s)`}
                 </span>
               )}
+              <button onClick={handleSave} className="btn-sm" style={{ background: 'transparent', border: '1px solid var(--color-border)' }}>
+                <Save size={14} /> Save
+              </button>
               <button onClick={() => handleRun(true)} disabled={running || !validation?.valid} className="btn-sm" style={{ background: 'transparent', border: '1px solid var(--color-border)' }}>
                 <CheckCircle size={14} /> Dry-Run
               </button>
@@ -191,11 +205,11 @@ export default function PipelineEditor() {
             <h3>Add Rule Node</h3>
             <input autoFocus placeholder="Rule name (e.g. fastqc)" value={newNodeName}
               onChange={e => setNewNodeName(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') { handleDagEdit('add_rule', { rule: { name: newNodeName, shell: 'echo TODO' } }); setNewNodeName(''); setShowAddDialog(false); }}}
+              onKeyDown={e => { if (e.key === 'Enter') { handleDagEdit('add_rule', { name: newNodeName, shell: 'echo TODO' }); setNewNodeName(''); setShowAddDialog(false); }}}
             />
             <div className="modal-actions">
               <button className="btn-sm" onClick={() => { setShowAddDialog(false); setNewNodeName(''); }}>Cancel</button>
-              <button className="btn-run" onClick={() => { handleDagEdit('add_rule', { rule: { name: newNodeName, shell: 'echo TODO' } }); setNewNodeName(''); setShowAddDialog(false); }}
+              <button className="btn-run" onClick={() => { handleDagEdit('add_rule', { name: newNodeName, shell: 'echo TODO' }); setNewNodeName(''); setShowAddDialog(false); }}
                 disabled={!newNodeName.trim()}>Add</button>
             </div>
           </div>
@@ -210,11 +224,11 @@ export default function PipelineEditor() {
             <p style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>From: {selectedNodeId} → To:</p>
             <input autoFocus placeholder="Target node name" value={connectTarget}
               onChange={e => setConnectTarget(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') { handleDagEdit('connect', { source: selectedNodeId, target: connectTarget }); setConnectTarget(''); setShowConnectDialog(false); }}}
+              onKeyDown={e => { if (e.key === 'Enter') { handleDagEdit('connect', { from: selectedNodeId, to: connectTarget }); setConnectTarget(''); setShowConnectDialog(false); }}}
             />
             <div className="modal-actions">
               <button className="btn-sm" onClick={() => { setShowConnectDialog(false); setConnectTarget(''); }}>Cancel</button>
-              <button className="btn-run" onClick={() => { handleDagEdit('connect', { source: selectedNodeId, target: connectTarget }); setConnectTarget(''); setShowConnectDialog(false); }}
+              <button className="btn-run" onClick={() => { handleDagEdit('connect', { from: selectedNodeId, to: connectTarget }); setConnectTarget(''); setShowConnectDialog(false); }}
                 disabled={!connectTarget.trim()}>Connect</button>
             </div>
           </div>

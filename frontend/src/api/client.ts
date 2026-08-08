@@ -63,14 +63,16 @@ export const api = {
   search: (query: string) => post<SearchResponse>('/api/pipelines/search', { query }),
 
   // ── Pipeline CRUD ──
+  createPipeline: (data: { name: string; toml_content: string; version?: string; visibility?: string }) =>
+    post<Pipeline>('/api/pipelines', data),
   listPipelines: () => get<Pipeline[]>('/api/pipelines'),
   getPipeline: (id: string) => get<Pipeline>(`/api/pipelines/${id}`),
   updatePipeline: (id: string, data: Record<string, unknown>) => put<Pipeline>(`/api/pipelines/${id}`, data),
   deletePipeline: (id: string) => del<{ deleted: string }>(`/api/pipelines/${id}`),
 
   // ── DAG Editor ──
-  dagCommand: (id: string, source: string, operation: string, payload: Record<string, unknown>) =>
-    post<DagEditResponse>(`/api/pipeline/${id}/command`, { source, operation, payload }),
+  dagCommand: (id: string, toml_content: string, operation: string, payload: Record<string, unknown>) =>
+    post<DagEditResponse>(`/api/pipeline/${id}/command`, { toml_content, source: 'dag_editor', operation, payload }),
   dagUndo: (id: string) => post<{ toml_content: string }>(`/api/pipeline/${id}/undo`, {}),
   dagRedo: (id: string) => post<{ toml_content: string }>(`/api/pipeline/${id}/redo`, {}),
 

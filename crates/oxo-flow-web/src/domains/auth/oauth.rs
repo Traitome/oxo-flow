@@ -78,15 +78,16 @@ impl OAuthConfig {
 
     /// Exchange an authorization code for an access token.
     ///
-    /// Returns the access token string on success.
-    pub async fn exchange_code(&self, code: &str) -> Result<String, String> {
+    /// Returns `(access_token, Option&lt;orcid_id&gt;)` on success.
+    /// The ORCID iD (if available) is used to construct the identity fetch URL.
+    pub async fn exchange_code(&self, code: &str) -> Result<(String, Option<String>), String> {
         match self.provider {
             OAuthProvider::Orcid => self.exchange_orcid_code(code).await,
             OAuthProvider::GitHub => self.exchange_github_code(code).await,
         }
     }
 
-    async fn exchange_orcid_code(&self, code: &str) -> Result<String, String> {
+    async fn exchange_orcid_code(&self, code: &str) -> Result<(String, Option<String>), String> {
         let token_url = if std::env::var("ORCID_SANDBOX").is_ok() {
             "https://sandbox.orcid.org/oauth/token"
         } else {
@@ -115,13 +116,19 @@ impl OAuthConfig {
             .await
             .map_err(|e| format!("ORCID token parse failed: {e}"))?;
 
-        body["access_token"]
+        let access_token = body["access_token"]
             .as_str()
             .map(|s| s.to_string())
-            .ok_or_else(|| format!("ORCID token response missing access_token: {}", body))
+            .ok_or_else(|| format!("ORCID token response missing access_token: {}", body))?;
+
+        // Also extract the ORCID iD from the token response so we can use it
+        // as the URL path (instead of the access token).
+        let orcid = body["orcid"].as_str().map(|s| s.to_string());
+
+        Ok((access_token, orcid))
     }
 
-    async fn exchange_github_code(&self, code: &str) -> Result<String, String> {
+    async fn exchange_github_code(&self, code: &str) -> Result<(String, Option<String>), String> {
         let client = reqwest::Client::new();
         let params = [
             ("client_id", self.client_id.as_str()),
@@ -143,16 +150,23 @@ impl OAuthConfig {
             .await
             .map_err(|e| format!("GitHub token parse failed: {e}"))?;
 
-        body["access_token"]
+        let access_token = body["access_token"]
             .as_str()
             .map(|s| s.to_string())
-            .ok_or_else(|| format!("GitHub token response missing access_token: {}", body))
+            .ok_or_else(|| format!("GitHub token response missing access_token: {}", body))?;
+
+        Ok((access_token, None)) // GitHub doesn't have a separate ID field in the token response
     }
 
     /// Fetch user identity from the provider using an access token.
     ///
     /// Returns (provider_user_id, username).
-    pub async fn fetch_identity(&self, access_token: &str) -> Result<(String, String), String> {
+    /// `orcid_id` is the ORCID iD extracted from the token exchange (None for GitHub).
+    pub async fn fetch_identity(
+        &self,
+        access_token: &str,
+        orcid_id: Option<&str>,
+    ) -> Result<(String, String), String> {
         match self.provider {
             OAuthProvider::Orcid => {
                 let client = reqwest::Client::new();
@@ -162,8 +176,14 @@ impl OAuthConfig {
                     "https://pub.orcid.org/v3.0"
                 };
 
+                // Use the ORCID iD as the URL path, access token in the Authorization header.
+                // Previously the access token was embedded in the URL path, which leaked it
+                // into proxy logs, browser history, and referrer headers.
+                let orcid_path = orcid_id.unwrap_or(access_token);
+
                 let resp = client
-                    .get(format!("{orcid_api}/{access_token}/record"))
+                    .get(format!("{orcid_api}/{orcid_path}/record"))
+                    .header("Authorization", format!("Bearer {access_token}"))
                     .header("Accept", "application/json")
                     .send()
                     .await
@@ -174,9 +194,9 @@ impl OAuthConfig {
                     .await
                     .map_err(|e| format!("ORCID identity parse failed: {e}"))?;
 
-                let orcid_id = body["orcid-identifier"]["path"]
+                let orcid_id_result = body["orcid-identifier"]["path"]
                     .as_str()
-                    .unwrap_or(access_token)
+                    .unwrap_or("unknown")
                     .to_string();
 
                 let name = body["person"]["name"]["given-names"]["value"]
@@ -184,7 +204,7 @@ impl OAuthConfig {
                     .unwrap_or("Unknown")
                     .to_string();
 
-                Ok((orcid_id, name))
+                Ok((orcid_id_result, name))
             }
             OAuthProvider::GitHub => {
                 let client = reqwest::Client::new();

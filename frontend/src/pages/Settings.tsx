@@ -5,6 +5,25 @@ import { FlaskConical, Cpu, HardDrive, Database, Shield } from 'lucide-react';
 
 interface QuotaInfo { enabled: boolean; limits: { max_concurrent_runs: number; max_total_threads: number; max_total_memory_mb: number; max_runs_per_day: number } }
 
+// Module-level components — defined outside the render function so React
+// preserves their identity across re-renders (prevents input focus loss).
+function Section({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="dash-card" style={{ marginBottom: '1rem' }}>
+      <h3 className="dash-card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>{icon} {title}</h3>
+      {children}
+    </div>
+  );
+}
+
+function SettingLabel({ text }: { text: string }) {
+  return <label style={{ fontSize: '0.8rem', fontWeight: 500, color: 'var(--color-text-secondary)', display: 'block', marginBottom: '4px' }}>{text}</label>;
+}
+
+function SettingInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  return <input {...props} style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', fontSize: '0.9rem', background: 'var(--color-bg)', color: 'var(--color-text)', ...(props.style as object) }} />;
+}
+
 export default function Settings() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [aiConfig, setAiConfig] = useState<AiConfig | null>(null);
@@ -44,17 +63,6 @@ export default function Settings() {
     } catch (err: unknown) { setTestResult('❌ ' + (err instanceof Error ? err.message : 'Test failed')); }
   };
 
-  const Section = ({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) => (
-    <div className="dash-card" style={{ marginBottom: '1rem' }}>
-      <h3 className="dash-card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>{icon} {title}</h3>
-      {children}
-    </div>
-  );
-
-  const Label = ({ text }: { text: string }) => <label style={{ fontSize: '0.8rem', fontWeight: 500, color: 'var(--color-text-secondary)', display: 'block', marginBottom: '4px' }}>{text}</label>;
-
-  const Input = (props: React.InputHTMLAttributes<HTMLInputElement>) => <input {...props} style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', fontSize: '0.9rem', background: 'var(--color-bg)', color: 'var(--color-text)', ...(props as any).style }} />;
-
   return (
     <div className="page">
       <h1 className="page-title">Settings</h1>
@@ -69,7 +77,7 @@ export default function Settings() {
             </div>
             <div style={{ display: 'grid', gap: '0.75rem' }}>
               <div>
-                <Label text="Provider" />
+                <SettingLabel text="Provider" />
                 <select value={provider} onChange={(e) => setProvider(e.target.value)}
                   style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', fontSize: '0.9rem', background: 'var(--color-bg)', color: 'var(--color-text)' }}>
                   <option value="openai">OpenAI / DeepSeek / Groq</option>
@@ -78,9 +86,9 @@ export default function Settings() {
                   <option value="disabled">Disabled</option>
                 </select>
               </div>
-              <div><Label text="API Key" /><Input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-..." /></div>
-              <div><Label text="Model" /><Input type="text" value={model} onChange={(e) => setModel(e.target.value)} placeholder="deepseek-v4-pro" /></div>
-              <div><Label text="API URL (optional)" /><Input type="text" value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://api.deepseek.com/v1/chat/completions" /></div>
+              <div><SettingLabel text="API Key" /><SettingInput type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-..." /></div>
+              <div><SettingLabel text="Model" /><SettingInput type="text" value={model} onChange={(e) => setModel(e.target.value)} placeholder="deepseek-v4-pro" /></div>
+              <div><SettingLabel text="API URL (optional)" /><SettingInput type="text" value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://api.deepseek.com/v1/chat/completions" /></div>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 <button onClick={handleSave} disabled={saving} className="btn-run">{saving ? 'Saving...' : 'Save'}</button>
                 <button onClick={handleTest} className="action-btn">Test Connection</button>
@@ -106,7 +114,7 @@ export default function Settings() {
                 <input type="checkbox" /> Auto retry without asking
               </label>
               <div style={{ marginTop: '6px' }}>
-                <Label text="Max correction rounds" />
+                <SettingLabel text="Max correction rounds" />
                 <select defaultValue="3" style={{ padding: '2px 6px', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem' }}>
                   {[1,2,3,4,5].map(n => <option key={n} value={n}>{n}</option>)}
                 </select>

@@ -42,8 +42,17 @@ pub fn authenticate(username: &str, password: &str) -> Result<LoginResponse, Str
             role: "viewer".into(),
         });
     }
-    // Dev mode fallback: password equals username
-    if password == username && !username.is_empty() {
+    // Dev mode fallback: password equals username — ONLY when explicitly enabled.
+    // In production this MUST be off, otherwise anyone can log in as any username.
+    if std::env::var("OXO_FLOW_DEV_MODE").as_deref() == Ok("1")
+        && password == username
+        && !username.is_empty()
+    {
+        tracing::warn!(
+            username = username,
+            "DEV MODE: accepted password==username login for '{}'",
+            username
+        );
         return Ok(LoginResponse {
             token: generate_token(),
             username: username.into(),
@@ -90,11 +99,12 @@ pub fn validate_session(token: &str, sessions: &[Session]) -> Result<AuthMeRespo
         }
     }
 
-    // Token not found in sessions — for dev mode, accept any non-empty token
+    // Token not found in sessions — authentication failed.
+    // In production, every token MUST be in the sessions table.
     Ok(AuthMeResponse {
-        authenticated: true,
-        username: Some("user".into()),
-        role: Some("user".into()),
+        authenticated: false,
+        username: None,
+        role: None,
     })
 }
 
@@ -190,8 +200,9 @@ pub async fn handle_oauth_callback(
     let _ = state;
 
     let config = oauth_config_from_env(provider, redirect_uri)?;
-    let access_token = config.exchange_code(code).await?;
-    let (provider_user_id, username) = config.fetch_identity(&access_token).await?;
+    let (access_token, orcid_id) = config.exchange_code(code).await?;
+    let (provider_user_id, username) =
+        config.fetch_identity(&access_token, orcid_id.as_deref()).await?;
 
     let session_token = generate_token();
 
@@ -208,11 +219,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_authenticate_dev_mode() {
-        let result = authenticate("testuser", "testuser").unwrap();
-        assert_eq!(result.username, "testuser");
-        assert_eq!(result.role, "user");
-        assert!(!result.token.is_empty());
+    fn test_authenticate_password_equals_username_rejected_in_production() {
+        // Without OX_FLOW_DEV_MODE=1, password==username MUST be rejected.
+        // This test must pass in CI (where the env var is not set).
+        if std::env::var("OXO_FLOW_DEV_MODE").as_deref() == Ok("1") {
+            // Dev mode is enabled — skip this assertion
+            return;
+        }
+        let result = authenticate("testuser", "testuser");
+        assert!(result.is_err(), "password==username should be rejected without OX_FLOW_DEV_MODE=1");
     }
 
     #[test]
@@ -229,10 +244,36 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_session_with_token() {
+    fn test_validate_session_unknown_token_rejected() {
+        // Unknown tokens are rejected — no more dev-mode fallback
         let sessions = vec![];
         let result = validate_session("some-token", &sessions).unwrap();
+        assert!(!result.authenticated);
+    }
+
+    #[test]
+    fn test_validate_session_valid_token() {
+        let sessions = vec![Session {
+            token: "valid-token".into(),
+            user_id: "admin".into(),
+            created_at: "2024-01-01T00:00:00Z".into(),
+            expires_at: "2099-12-31T23:59:59Z".into(),
+        }];
+        let result = validate_session("valid-token", &sessions).unwrap();
         assert!(result.authenticated);
+        assert_eq!(result.username, Some("admin".into()));
+    }
+
+    #[test]
+    fn test_validate_session_expired_token() {
+        let sessions = vec![Session {
+            token: "expired-token".into(),
+            user_id: "admin".into(),
+            created_at: "2020-01-01T00:00:00Z".into(),
+            expires_at: "2020-01-02T00:00:00Z".into(),
+        }];
+        let result = validate_session("expired-token", &sessions).unwrap();
+        assert!(!result.authenticated);
     }
 
     #[test]

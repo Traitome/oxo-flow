@@ -21,11 +21,30 @@ use crate::infra::license::LicenseHeaderLayer;
 
 /// Serve the React SPA index.html, reading from disk to avoid
 /// compile-time embedding mismatches with frontend build hashes.
+///
+/// Path resolution order:
+/// 1. `OXO_FLOW_FRONTEND_DIR` env var (set in Docker/deployment)
+/// 2. `--frontend-dir` CLI flag (via FRONTEND_DIR env var)
+/// 3. Compile-time `crates/oxo-flow-web/static/` (dev)
 async fn spa_index() -> impl IntoResponse {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/static/index.html");
-    let html = std::fs::read_to_string(path).unwrap_or_else(|_| {
-        r#"<!doctype html><html><body><h1>oxo-flow</h1><p>SPA not built. Run <code>npm run build</code> in frontend/ first.</p></body></html>"#.to_string()
-    });
+    let fallback = r#"<!doctype html><html><body><h1>oxo-flow</h1><p>SPA not built. Run <code>npm run build</code> in frontend/ first.</p></body></html>"#;
+
+    let html = std::env::var("OXO_FLOW_FRONTEND_DIR")
+        .ok()
+        .or_else(|| std::env::var("FRONTEND_DIR").ok())
+        .map(|dir| {
+            let path = std::path::PathBuf::from(&dir).join("index.html");
+            std::fs::read_to_string(&path).unwrap_or_else(|_| {
+                tracing::warn!("SPA index not found at {}, using fallback", path.display());
+                fallback.to_string()
+            })
+        })
+        .unwrap_or_else(|| {
+            let compile_time_path =
+                concat!(env!("CARGO_MANIFEST_DIR"), "/static/index.html");
+            std::fs::read_to_string(compile_time_path).unwrap_or_else(|_| fallback.to_string())
+        });
+
     (
         StatusCode::OK,
         [
@@ -59,6 +78,20 @@ async fn spa_fallback() -> impl IntoResponse {
     spa_index().await
 }
 
+/// Resolve the frontend directory at runtime.
+///
+/// Checks `OXO_FLOW_FRONTEND_DIR` env var first (for Docker/deployment),
+/// then falls back to the compile-time static directory (for dev).
+fn frontend_dir() -> std::path::PathBuf {
+    std::env::var("OXO_FLOW_FRONTEND_DIR")
+        .ok()
+        .or_else(|| std::env::var("FRONTEND_DIR").ok())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/static"))
+        })
+}
+
 /// Build the full application router for the given serve mode.
 ///
 /// * `personal` — bind to 127.0.0.1, no auth required
@@ -79,10 +112,7 @@ pub fn build_router(mode: &str) -> Router {
         .route("/icons.svg", get(icons))
         .nest_service(
             "/assets",
-            tower_http::services::ServeDir::new(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/static/assets"
-            )),
+            tower_http::services::ServeDir::new(frontend_dir().join("assets")),
         )
         .route("/", get(spa_index));
 
@@ -358,14 +388,107 @@ pub fn build_router(mode: &str) -> Router {
         router = router.layer(axum::middleware::from_fn(require_auth));
     }
 
+    // Rate limiter: 100 requests per 60 seconds per client IP (login brute-force protection).
+    let rate_limiter = std::sync::Arc::new(crate::rate_limit::RateLimiter::new(
+        crate::rate_limit::RateLimiterConfig::default(),
+    ));
+
+    // Build CORS layer: restrictive by default, configurable via OXO_FLOW_ALLOWED_ORIGINS.
+    let cors = {
+        let allowed = std::env::var("OXO_FLOW_ALLOWED_ORIGINS").unwrap_or_default();
+        if allowed.is_empty() {
+            // Default: only localhost origins (browser dev + local deployments)
+            tower_http::cors::CorsLayer::new()
+                .allow_origin([
+                    "http://localhost:3000".parse().unwrap(),
+                    "http://localhost:5173".parse().unwrap(),
+                    "http://127.0.0.1:3000".parse().unwrap(),
+                    "http://127.0.0.1:5173".parse().unwrap(),
+                ])
+                .allow_methods([
+                    axum::http::Method::GET,
+                    axum::http::Method::POST,
+                    axum::http::Method::PUT,
+                    axum::http::Method::DELETE,
+                ])
+                .allow_headers([
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::header::AUTHORIZATION,
+                ])
+        } else {
+            // User-specified origins (comma-separated)
+            let origins: Vec<axum::http::HeaderValue> = allowed
+                .split(',')
+                .filter_map(|s| s.trim().parse().ok())
+                .collect();
+            tower_http::cors::CorsLayer::new()
+                .allow_origin(origins)
+                .allow_methods([
+                    axum::http::Method::GET,
+                    axum::http::Method::POST,
+                    axum::http::Method::PUT,
+                    axum::http::Method::DELETE,
+                ])
+                .allow_headers([
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::header::AUTHORIZATION,
+                ])
+        }
+    };
+
     router
         .merge(spa_fallback)
         .layer(LicenseHeaderLayer)
-        .layer(tower_http::cors::CorsLayer::permissive())
+        .layer(axum::middleware::from_fn(security_headers))
+        .layer(axum::Extension(rate_limiter))
+        .layer(axum::middleware::from_fn(
+            crate::rate_limit::rate_limit_middleware,
+        ))
+        .layer(cors)
+}
+
+/// Add standard security headers to every response.
+async fn security_headers(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+
+    // Prevent MIME-type sniffing
+    headers.insert(
+        axum::http::header::HeaderName::from_static("x-content-type-options"),
+        "nosniff".parse().unwrap(),
+    );
+    // Prevent clickjacking
+    headers.insert(
+        axum::http::header::HeaderName::from_static("x-frame-options"),
+        "DENY".parse().unwrap(),
+    );
+    // Basic CSP: only allow same-origin resources
+    headers.insert(
+        axum::http::header::HeaderName::from_static("content-security-policy"),
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'".parse().unwrap(),
+    );
+    // Referrer policy
+    headers.insert(
+        axum::http::header::HeaderName::from_static("referrer-policy"),
+        "strict-origin-when-cross-origin".parse().unwrap(),
+    );
+    // Permissions policy: restrict sensitive browser features
+    headers.insert(
+        axum::http::header::HeaderName::from_static("permissions-policy"),
+        "camera=(), microphone=(), geolocation=()".parse().unwrap(),
+    );
+
+    response
 }
 
 /// Middleware: require authentication for team/hpc mode.
-/// Allows unauthenticated access to auth endpoints (login, oauth, health).
+///
+/// Validates the Bearer token against the `sessions` table — the token must
+/// exist and not be expired.  Returns 401 for missing, malformed, or invalid
+/// tokens.  Public endpoints (login, OAuth, health, etc.) bypass this check.
 async fn require_auth(
     headers: axum::http::HeaderMap,
     request: axum::extract::Request,
@@ -394,24 +517,60 @@ async fn require_auth(
         return next.run(request).await;
     }
 
-    // Check for Bearer token
+    // Extract Bearer token
     let token = headers
         .get("Authorization")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|s| s.to_string());
 
-    if token.is_some() {
+    let token = match token {
+        Some(t) if !t.is_empty() => t,
+        _ => {
+            return (
+                axum::http::StatusCode::UNAUTHORIZED,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                axum::Json(serde_json::json!({
+                    "code": "AUTH_REQUIRED",
+                    "message": "Authentication required in team/hpc mode",
+                    "suggestion": "Login at POST /api/auth/login to obtain a session token"
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    // Validate the token against the sessions table
+    let valid = match crate::infra::db::sqlite::try_pool() {
+        Ok(pool) => {
+            let now = chrono::Utc::now().to_rfc3339();
+            let session: Option<crate::infra::db::models::SessionRow> =
+                sqlx::query_as("SELECT * FROM sessions WHERE token = ? AND expires_at > ?")
+                    .bind(&token)
+                    .bind(&now)
+                    .fetch_optional(pool)
+                    .await
+                    .unwrap_or(None);
+            session.is_some()
+        }
+        Err(_) => {
+            // DB not available — reject all tokens (fail-secure)
+            tracing::error!("require_auth: DB pool not available, rejecting request");
+            false
+        }
+    };
+
+    if valid {
         return next.run(request).await;
     }
 
-    // No valid token — return 401
     (
         axum::http::StatusCode::UNAUTHORIZED,
         [(axum::http::header::CONTENT_TYPE, "application/json")],
         axum::Json(serde_json::json!({
-            "code": "AUTH_REQUIRED",
-            "message": "Authentication required in team/hpc mode",
-            "suggestion": "Login at POST /api/auth/login to obtain a session token"
+            "code": "INVALID_TOKEN",
+            "message": "Invalid or expired session token",
+            "suggestion": "Login again at POST /api/auth/login to obtain a fresh token"
         })),
     )
         .into_response()

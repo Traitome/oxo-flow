@@ -3,10 +3,12 @@
 //! Provides per-IP rate limiting using a sliding window algorithm.
 
 use axum::{
-    http::{HeaderValue, Request, StatusCode, header},
+    http::{HeaderValue, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
 };
+
+use axum::extract::Request;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -89,23 +91,30 @@ pub struct RateLimitResponse {
 
 /// Axum middleware that enforces per-IP rate limiting.
 ///
-/// The [`RateLimiter`] instance is extracted from request extensions
-/// (added via `Extension`).  If no limiter is present the request is
-/// allowed through unconditionally so that existing tests keep passing
-/// without modification.
+/// The IP is extracted from the `X-Forwarded-For` header (for reverse-proxy
+/// deployments), then `X-Real-IP`, then falls back to a fixed key.  The
+/// [`RateLimiter`] instance must be available via request extensions.
 pub async fn rate_limit_middleware(request: Request<axum::body::Body>, next: Next) -> Response {
     use axum::Json;
-    use axum::extract::ConnectInfo;
 
     // Extract the rate limiter from extensions (if present).
     let limiter = request.extensions().get::<RateLimiter>().cloned();
 
     if let Some(limiter) = limiter {
-        // Derive a key from the peer IP or fall back to a fixed string.
+        // Derive client key: X-Forwarded-For > X-Real-IP > fallback
         let key = request
-            .extensions()
-            .get::<ConnectInfo<std::net::SocketAddr>>()
-            .map(|ci| ci.0.ip().to_string())
+            .headers()
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(',').next())
+            .map(|s| s.trim().to_string())
+            .or_else(|| {
+                request
+                    .headers()
+                    .get("x-real-ip")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string())
+            })
             .unwrap_or_else(|| "unknown".to_string());
 
         if let Err(retry_after) = limiter.check_rate_limit(&key) {

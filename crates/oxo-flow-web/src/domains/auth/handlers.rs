@@ -38,50 +38,169 @@ fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)>
     })
 }
 
+/// Extract the Bearer token from request headers.
+fn extract_token(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|s| s.to_string())
+}
+
+/// Validate a session token and return (username, role) if valid.
+async fn validate_token(
+    pool: &sqlx::SqlitePool,
+    token: &str,
+) -> Result<(String, String), (StatusCode, Json<ApiError>)> {
+    if token.is_empty() {
+        return Err(err(
+            StatusCode::UNAUTHORIZED,
+            "AUTH_REQUIRED",
+            "Authentication required".into(),
+        ));
+    }
+
+    let session: Option<models::SessionRow> =
+        sqlx::query_as("SELECT * FROM sessions WHERE token = ?")
+            .bind(token)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| {
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    e.to_string(),
+                )
+            })?;
+
+    let session = session.ok_or_else(|| {
+        err(
+            StatusCode::UNAUTHORIZED,
+            "INVALID_TOKEN",
+            "Invalid or expired session token".into(),
+        )
+    })?;
+
+    // Check expiry
+    let now = chrono::Utc::now().to_rfc3339();
+    if session.expires_at <= now {
+        return Err(err(
+            StatusCode::UNAUTHORIZED,
+            "TOKEN_EXPIRED",
+            "Session token has expired".into(),
+        ));
+    }
+
+    // Look up the user's role
+    let user: Option<models::UserRow> =
+        sqlx::query_as("SELECT * FROM users WHERE username = ?")
+            .bind(&session.user_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| {
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    e.to_string(),
+                )
+            })?;
+
+    let role = user.map(|u| u.role).unwrap_or_else(|| "user".to_string());
+
+    Ok((session.user_id, role))
+}
+
+/// Require admin role — returns 403 if the caller is not an admin.
+async fn require_admin(
+    headers: &axum::http::HeaderMap,
+) -> Result<String, (StatusCode, Json<ApiError>)> {
+    let token = extract_token(headers).ok_or_else(|| {
+        err(
+            StatusCode::UNAUTHORIZED,
+            "AUTH_REQUIRED",
+            "Authentication required".into(),
+        )
+    })?;
+
+    let pool = get_pool()?;
+    let (username, role) = validate_token(pool, &token).await?;
+
+    if role != "admin" {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "ACCESS_DENIED",
+            "Admin role required for this operation".into(),
+        ));
+    }
+
+    Ok(username)
+}
+
 /// POST /api/auth/login
 pub async fn login(Json(req): Json<LoginRequest>) -> ApiResult<LoginResponse> {
-    service::authenticate(&req.username, &req.password)
-        .map(Json)
-        .map_err(|e| err(StatusCode::UNAUTHORIZED, "AUTH_FAILED", e))
+    let result = service::authenticate(&req.username, &req.password)
+        .map_err(|e| err(StatusCode::UNAUTHORIZED, "AUTH_FAILED", e))?;
+
+    // Persist session to database so the token is actually valid.
+    // Without this, require_auth and auth_me would reject the token.
+    if let Ok(pool) = get_pool() {
+        let expires = chrono::Utc::now() + chrono::Duration::hours(24);
+        let _ = sqlx::query(
+            "INSERT OR REPLACE INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(&result.token)
+        .bind(&result.username)
+        .bind(now_iso())
+        .bind(expires.to_rfc3339())
+        .execute(pool)
+        .await;
+    }
+
+    Ok(Json(result))
 }
 
 /// GET /api/auth/me
 pub async fn auth_me(headers: axum::http::HeaderMap) -> ApiResult<AuthMeResponse> {
-    let token = headers
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .unwrap_or("");
+    let token = extract_token(&headers).unwrap_or_default();
 
-    // Try DB session first
-    let sessions = if let Ok(pool) = get_pool() {
-        let token_str = token.to_string();
-        let rows: Vec<models::SessionRow> =
-            sqlx::query_as("SELECT * FROM sessions WHERE token = ?")
-                .bind(&token_str)
-                .fetch_all(pool)
-                .await
-                .unwrap_or_default();
+    if token.is_empty() {
+        return Ok(Json(AuthMeResponse {
+            authenticated: false,
+            username: None,
+            role: None,
+        }));
+    }
 
-        rows.into_iter()
-            .map(|r| crate::domains::auth::types::Session {
-                token: r.token,
-                user_id: r.user_id,
-                created_at: r.created_at,
-                expires_at: r.expires_at,
-            })
-            .collect()
-    } else {
-        vec![]
-    };
+    // Validate against sessions table
+    if let Ok(pool) = get_pool() {
+        match validate_token(pool, &token).await {
+            Ok((username, role)) => {
+                return Ok(Json(AuthMeResponse {
+                    authenticated: true,
+                    username: Some(username),
+                    role: Some(role),
+                }));
+            }
+            Err(_) => {
+                return Ok(Json(AuthMeResponse {
+                    authenticated: false,
+                    username: None,
+                    role: None,
+                }));
+            }
+        }
+    }
 
-    service::validate_session(token, &sessions)
-        .map(Json)
-        .map_err(|e| err(StatusCode::UNAUTHORIZED, "SESSION_ERROR", e))
+    Ok(Json(AuthMeResponse {
+        authenticated: false,
+        username: None,
+        role: None,
+    }))
 }
 
-/// GET /api/users
-pub async fn list_users() -> ApiResult<Vec<UserResponse>> {
+/// GET /api/users — admin only
+pub async fn list_users(headers: axum::http::HeaderMap) -> ApiResult<Vec<UserResponse>> {
+    let _admin = require_admin(&headers).await?;
     let pool = get_pool()?;
 
     let rows: Vec<models::UserRow> = sqlx::query_as("SELECT * FROM users ORDER BY created_at ASC")
@@ -104,8 +223,12 @@ pub async fn list_users() -> ApiResult<Vec<UserResponse>> {
     Ok(Json(users))
 }
 
-/// POST /api/users
-pub async fn create_user(Json(req): Json<CreateUserRequest>) -> ApiResult<UserResponse> {
+/// POST /api/users — admin only
+pub async fn create_user(
+    headers: axum::http::HeaderMap,
+    Json(req): Json<CreateUserRequest>,
+) -> ApiResult<UserResponse> {
+    let _admin = require_admin(&headers).await?;
     let pool = get_pool()?;
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -140,10 +263,12 @@ pub async fn create_user(Json(req): Json<CreateUserRequest>) -> ApiResult<UserRe
     }))
 }
 
-/// DELETE /api/users/{id}
+/// DELETE /api/users/{id} — admin only
 pub async fn delete_user(
+    headers: axum::http::HeaderMap,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> ApiResult<serde_json::Value> {
+    let _admin = require_admin(&headers).await?;
     let pool = get_pool()?;
 
     let existing: Option<models::UserRow> = sqlx::query_as("SELECT * FROM users WHERE id = ?")
@@ -206,10 +331,43 @@ pub async fn oauth_callback(
     let redirect_uri = std::env::var("OXO_FLOW_OAUTH_REDIRECT_URI")
         .unwrap_or_else(|_| "http://localhost:8777/api/auth/oauth/callback".to_string());
 
-    super::service::handle_oauth_callback(provider, &req.code, &req.state, &redirect_uri)
+    // Verify CSRF state — the state from the callback must match what we issued.
+    // In production, the state should be stored server-side (e.g. in the sessions table
+    // or a short-lived cache) at authorization time and verified here.
+    // For now we validate that state is non-empty; a full implementation would
+    // store pending states with a TTL.
+    if req.state.is_empty() {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "OAUTH_INVALID_STATE",
+            "Missing CSRF state parameter".into(),
+        ));
+    }
+    tracing::debug!(
+        oauth_provider = provider,
+        oauth_state = req.state,
+        "OAuth callback received — state should be verified against stored pending request"
+    );
+
+    let result = super::service::handle_oauth_callback(provider, &req.code, &req.state, &redirect_uri)
         .await
-        .map(Json)
-        .map_err(|e| err(StatusCode::BAD_REQUEST, "OAUTH_CALLBACK_ERROR", e))
+        .map_err(|e| err(StatusCode::BAD_REQUEST, "OAUTH_CALLBACK_ERROR", e))?;
+
+    // Persist the session
+    if let Ok(pool) = get_pool() {
+        let expires = chrono::Utc::now() + chrono::Duration::hours(24);
+        let _ = sqlx::query(
+            "INSERT OR REPLACE INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(&result.token)
+        .bind(&result.username)
+        .bind(now_iso())
+        .bind(expires.to_rfc3339())
+        .execute(pool)
+        .await;
+    }
+
+    Ok(Json(result))
 }
 
 /// POST /api/license/upload
