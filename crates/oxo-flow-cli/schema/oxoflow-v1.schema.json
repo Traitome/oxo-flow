@@ -65,6 +65,23 @@
         }
       }
     },
+    "references": {
+      "type": "array",
+      "description": "Auto-built reference artifacts. Auto-derived from reference_dir if empty.",
+      "items": {
+        "type": "object",
+        "required": ["name", "output", "build"],
+        "properties": {
+          "name": { "type": "string" },
+          "source": { "type": "string" },
+          "output": { "type": "string" },
+          "build": { "type": "string" },
+          "threads": { "type": "integer" },
+          "memory": { "type": "string" },
+          "description": { "type": "string" }
+        }
+      }
+    },
     "config": {
       "type": "object",
       "description": "Default configuration variables for wildcard expansion",
