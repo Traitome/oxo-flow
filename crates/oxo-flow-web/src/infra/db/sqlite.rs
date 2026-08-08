@@ -197,6 +197,21 @@ impl StorageBackend for SqliteBackend {
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS ai_provider_config (
+                id TEXT PRIMARY KEY,
+                user_id TEXT UNIQUE,
+                provider TEXT NOT NULL,
+                api_key TEXT,
+                api_url TEXT,
+                model TEXT,
+                search_enabled INTEGER NOT NULL DEFAULT 1,
+                monitor_enabled INTEGER NOT NULL DEFAULT 1,
+                auto_retry_enabled INTEGER NOT NULL DEFAULT 0,
+                max_correction_rounds INTEGER NOT NULL DEFAULT 3,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS shares (
                 id TEXT PRIMARY KEY,
                 pipeline_id TEXT NOT NULL,

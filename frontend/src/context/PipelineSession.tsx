@@ -1,4 +1,4 @@
-import { createContext, useContext, useReducer, type Dispatch, type ReactNode } from 'react';
+import { createContext, useContext, useReducer, useEffect, type Dispatch, type ReactNode } from 'react';
 import type { DagJson } from '../api/types';
 
 // ── Types ──
@@ -44,7 +44,45 @@ type SessionAction =
   | { type: 'SET_RUN_RESULT'; payload: RunResult | null }
   | { type: 'SET_CHAT_CONTEXT'; payload: ChatContextType }
   | { type: 'SET_CHAT_MESSAGES'; payload: { context: ChatContextType; messages: ChatMessage[] } }
-  | { type: 'CLEAR_SESSION' };
+  | { type: 'CLEAR_SESSION' }
+  | { type: 'RESTORE_STATE'; payload: Partial<PipelineSessionState> };
+
+// ── localStorage key ──
+
+const STORAGE_KEY = 'oxo_session';
+
+function loadStoredState(): Partial<PipelineSessionState> {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      // Only restore specific fields (not transient ones like lastRunResult)
+      return {
+        pipelineToml: parsed.pipelineToml || '',
+        dagData: parsed.dagData || null,
+        activeRunId: parsed.activeRunId || null,
+        chatMessages: parsed.chatMessages || undefined,
+      };
+    }
+  } catch {
+    // Corrupt localStorage — clear it
+    localStorage.removeItem(STORAGE_KEY);
+  }
+  return {};
+}
+
+function saveState(state: PipelineSessionState) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      pipelineToml: state.pipelineToml,
+      dagData: state.dagData,
+      activeRunId: state.activeRunId,
+      chatMessages: state.chatMessages,
+    }));
+  } catch {
+    // localStorage full or unavailable — silently degrade
+  }
+}
 
 // ── Initial state ──
 
@@ -56,6 +94,15 @@ const INITIAL: PipelineSessionState = {
   chatContext: 'dashboard',
   chatMessages: { dashboard: [], editor: [], monitor: [], report: [] },
 };
+
+function createInitialState(): PipelineSessionState {
+  const stored = loadStoredState();
+  return {
+    ...INITIAL,
+    ...stored,
+    chatMessages: stored.chatMessages || { dashboard: [], editor: [], monitor: [], report: [] },
+  };
+}
 
 function reducer(state: PipelineSessionState, action: SessionAction): PipelineSessionState {
   switch (action.type) {
@@ -78,7 +125,10 @@ function reducer(state: PipelineSessionState, action: SessionAction): PipelineSe
         chatMessages: { ...state.chatMessages, [context]: capped },
       };
     }
+    case 'RESTORE_STATE':
+      return { ...state, ...action.payload };
     case 'CLEAR_SESSION':
+      localStorage.removeItem(STORAGE_KEY);
       return { ...INITIAL, chatMessages: { dashboard: [], editor: [], monitor: [], report: [] } };
   }
 }
@@ -100,7 +150,12 @@ interface SessionContextValue {
 const SessionCtx = createContext<SessionContextValue | null>(null);
 
 export function PipelineSessionProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(reducer, INITIAL);
+  const [state, dispatch] = useReducer(reducer, null, createInitialState);
+
+  // Persist key state to localStorage on every change
+  useEffect(() => {
+    saveState(state);
+  }, [state.pipelineToml, state.dagData, state.activeRunId, state.chatMessages]);
 
   const ctx: SessionContextValue = {
     state,

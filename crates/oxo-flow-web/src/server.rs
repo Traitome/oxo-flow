@@ -78,6 +78,11 @@ async fn spa_fallback() -> impl IntoResponse {
     spa_index().await
 }
 
+/// JSON 404 for unknown API paths — API clients must never receive HTML.
+async fn api_not_found() -> impl IntoResponse {
+    crate::ApiError::not_found("API endpoint not found", None)
+}
+
 /// Resolve the frontend directory at runtime.
 ///
 /// Checks `OXO_FLOW_FRONTEND_DIR` env var first (for Docker/deployment),
@@ -360,7 +365,11 @@ pub fn build_router(mode: &str) -> Router {
     // ---- HPC routes ----
     let hpc_routes = Router::new().route("/api/hpc", get(crate::handlers::system::hpc_status));
 
-    // ---- SPA fallback: any unknown route serves index.html ----
+    // ---- API 404: unknown /api/* paths return JSON, never HTML ----
+    let api_fallback =
+        Router::new().nest("/api", Router::new().fallback(api_not_found));
+
+    // ---- SPA fallback: any unknown non-API route serves index.html ----
     let spa_fallback = Router::new().fallback(spa_fallback);
 
     // ---- Assemble ----
@@ -437,6 +446,7 @@ pub fn build_router(mode: &str) -> Router {
     };
 
     router
+        .merge(api_fallback)
         .merge(spa_fallback)
         .layer(LicenseHeaderLayer)
         .layer(axum::middleware::from_fn(security_headers))

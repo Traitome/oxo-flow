@@ -64,6 +64,18 @@ export default function PipelineEditor() {
     if (dagJson) session.setDagData(dagJson);
   }, [dagJson]);
 
+  // Close dialogs on Escape key (modal accessibility)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowAddDialog(false);
+        setShowConnectDialog(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   const updateDag = useCallback(async (content: string) => {
     try {
       const [dag, val] = await Promise.all([
@@ -201,8 +213,8 @@ export default function PipelineEditor() {
       {/* Add Node inline dialog (replaces window.prompt) */}
       {showAddDialog && (
         <div className="modal-overlay" onClick={() => setShowAddDialog(false)}>
-          <div className="modal-dialog" onClick={e => e.stopPropagation()}>
-            <h3>Add Rule Node</h3>
+          <div className="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="add-node-title" onClick={e => e.stopPropagation()}>
+            <h3 id="add-node-title">Add Rule Node</h3>
             <input autoFocus placeholder="Rule name (e.g. fastqc)" value={newNodeName}
               onChange={e => setNewNodeName(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') { handleDagEdit('add_rule', { name: newNodeName, shell: 'echo TODO' }); setNewNodeName(''); setShowAddDialog(false); }}}
@@ -219,8 +231,8 @@ export default function PipelineEditor() {
       {/* Connect Node inline dialog (replaces window.prompt) */}
       {showConnectDialog && (
         <div className="modal-overlay" onClick={() => setShowConnectDialog(false)}>
-          <div className="modal-dialog" onClick={e => e.stopPropagation()}>
-            <h3>Connect Edge</h3>
+          <div className="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="connect-node-title" onClick={e => e.stopPropagation()}>
+            <h3 id="connect-node-title">Connect Edge</h3>
             <p style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>From: {selectedNodeId} → To:</p>
             <input autoFocus placeholder="Target node name" value={connectTarget}
               onChange={e => setConnectTarget(e.target.value)}

@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { LayoutDashboard, GitBranch, PlayCircle, BarChart3, Library, Settings, BookOpen, FlaskConical, Menu, X, MessageCircle } from 'lucide-react';
 import Toast from './Toast';
 import ResultNotification from './ResultNotification';
 import { usePipelineSession } from '../context/PipelineSession';
+import { api } from '../api/client';
 
 const nav = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -16,9 +17,38 @@ const nav = [
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
 
+type ServerStatus = 'checking' | 'ok' | 'degraded' | 'down';
+
+const STATUS_TITLES: Record<ServerStatus, string> = {
+  checking: 'Checking server status...',
+  ok: 'Server connected',
+  degraded: 'Server degraded',
+  down: 'Server unreachable',
+};
+
+const STATUS_POLL_MS = 30000;
+
 export default function Layout() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [serverStatus, setServerStatus] = useState<ServerStatus>('checking');
   const session = usePipelineSession();
+
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const res = await api.health();
+        if (!cancelled) {
+          setServerStatus(res.status === 'ok' ? 'ok' : res.status === 'degraded' ? 'degraded' : 'down');
+        }
+      } catch {
+        if (!cancelled) setServerStatus('down');
+      }
+    };
+    check();
+    const timer = setInterval(check, STATUS_POLL_MS);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, []);
 
   return (
     <div className="app-shell">
@@ -30,7 +60,7 @@ export default function Layout() {
           </button>
           <FlaskConical size={20} />
           <span className="header-brand">oxo-flow</span>
-          <span className="header-ver">v0.8.0</span>
+          <span className="header-ver">v0.9.2</span>
         </div>
         <nav className={`header-nav${menuOpen ? ' open' : ''}`}>
           {nav.map(({ to, label }) => (
@@ -40,7 +70,7 @@ export default function Layout() {
           ))}
         </nav>
         <div className="header-right">
-          <span id="header-status" className="status-dot ok" title="Server connected" />
+          <span id="header-status" role="status" aria-label={STATUS_TITLES[serverStatus]} className={`status-dot ${serverStatus}`} title={STATUS_TITLES[serverStatus]} />
           <span className="header-user">Guest</span>
         </div>
       </header>
@@ -59,7 +89,7 @@ export default function Layout() {
             ))}
           </nav>
           <div className="sidebar-footer">
-            <span>oxo-flow v0.8.0</span>
+            <span>oxo-flow v0.9.2</span>
             <span>Academic License</span>
           </div>
         </aside>
@@ -72,7 +102,7 @@ export default function Layout() {
 
       {/* Footer */}
       <footer className="app-footer">
-        <span>oxo-flow v0.8.0 — Academic License. Free for academic use. Commercial use requires authorization.</span>
+        <span>oxo-flow v0.9.2 — Academic License. Free for academic use. Commercial use requires authorization.</span>
         <span>Contact: w_shixiang@163.com</span>
       </footer>
 

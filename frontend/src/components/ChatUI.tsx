@@ -153,11 +153,11 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
         <Bot size={18} color="var(--color-primary)" />
         <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>AI Companion</span>
         <span style={{ fontSize: '0.65rem', color: 'var(--color-primary)', background: 'var(--color-primary-light)', padding: '1px 6px', borderRadius: '3px', fontWeight: 500 }}>{CONTEXT_LABELS[context]}</span>
-        <span style={{ fontSize: '0.7rem', color: 'var(--color-text-tertiary)', marginLeft: 'auto' }}>v0.8</span>
+        <span style={{ fontSize: '0.7rem', color: 'var(--color-text-tertiary)', marginLeft: 'auto' }}>v0.9.2</span>
       </div>
 
       {/* Messages */}
-      <div ref={chatRef} style={{ flex: 1, overflow: 'auto', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <div ref={chatRef} aria-live="polite" aria-label="Chat messages" style={{ flex: 1, overflow: 'auto', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
         {messages.length === 0 && (
           <div style={{ textAlign: 'center', color: 'var(--color-text-tertiary)', padding: '2rem 1rem' }}>
             <Bot size={32} style={{ marginBottom: '8px', opacity: 0.5 }} />

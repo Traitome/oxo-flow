@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { lazy, Suspense } from 'react';
 import Layout from './components/Layout';
 
@@ -24,6 +24,7 @@ export default function App() {
           <Route path="/" element={<Suspense fallback={<PageFallback />}><Dashboard /></Suspense>} />
           <Route path="/editor" element={<Suspense fallback={<PageFallback />}><PipelineEditor /></Suspense>} />
           <Route path="/pipelines" element={<Suspense fallback={<PageFallback />}><Pipelines /></Suspense>} />
+          <Route path="/templates" element={<Navigate to="/pipelines" replace />} />
           <Route path="/runs" element={<Suspense fallback={<PageFallback />}><MonitorReport /></Suspense>} />
           <Route path="/runs/:id" element={<Suspense fallback={<PageFallback />}><MonitorReport /></Suspense>} />
           <Route path="/monitor" element={<Suspense fallback={<PageFallback />}><MonitorReport /></Suspense>} />
