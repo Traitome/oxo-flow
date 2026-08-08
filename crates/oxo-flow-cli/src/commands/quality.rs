@@ -452,6 +452,7 @@ pub async fn watch_command(workflow: PathBuf, auto_run: bool, jobs: usize) -> Re
                             0,               // max_threads
                             0,               // max_memory
                             false,           // skip_env_setup
+                            false,           // skip_ref_build
                             None,            // cache_dir
                             false,           // provenance
                             false,           // json (watch mode = human-readable)

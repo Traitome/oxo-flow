@@ -1405,12 +1405,79 @@ impl WorkflowConfig {
         result
     }
 
-    /// Merge derived reference paths into config.
+    /// Merge derived reference paths into config, and auto-generate default
+    /// `[[references]]` entries for standard indexes when `reference_dir` is set
+    /// and no explicit references block exists.
+    ///
+    /// This connects the Reference Discovery API (`reference_dir`) with the
+    /// auto-build system (`[[references]]`), so pipelines using only
+    /// `reference_dir` get automatic index building without explicit declarations.
     #[must_use]
     pub fn with_derived_references(mut self) -> Self {
         let derived = self.derive_reference_paths();
-        for (key, value) in derived {
-            self.config.insert(key, toml::Value::String(value));
+        for (key, value) in &derived {
+            self.config
+                .entry(key.clone())
+                .or_insert_with(|| toml::Value::String(value.clone()));
+        }
+
+        // If reference_dir is set but no [[references]] block exists, auto-derive
+        // default index-building references so users don't need to declare them.
+        if self.references.is_empty()
+            && let Some(ref base) = self
+                .reference_dir
+                .as_deref()
+                .or_else(|| self.config.get("reference_dir").and_then(|v| v.as_str()))
+        {
+            let defaults: Vec<ReferenceDef> = vec![
+                ReferenceDef {
+                    name: "bwa_index".into(),
+                    source: Some(format!("{base}/genome.fa")),
+                    output: format!("{base}/bwa/genome.fa"),
+                    build: format!(
+                        "mkdir -p {base}/bwa && bwa index -p {base}/bwa/genome.fa {base}/genome.fa"
+                    ),
+                    threads: Some(8),
+                    memory: Some("8G".into()),
+                    description: Some("BWA index (auto-derived from reference_dir)".into()),
+                },
+                ReferenceDef {
+                    name: "bowtie2_index".into(),
+                    source: Some(format!("{base}/genome.fa")),
+                    output: format!("{base}/bowtie2/genome.fa"),
+                    build: format!(
+                        "mkdir -p {base}/bowtie2 && bowtie2-build {base}/genome.fa {base}/bowtie2/genome.fa"
+                    ),
+                    threads: Some(8),
+                    memory: Some("8G".into()),
+                    description: Some("Bowtie2 index (auto-derived from reference_dir)".into()),
+                },
+                ReferenceDef {
+                    name: "star_index".into(),
+                    source: Some(format!("{base}/genome.fa")),
+                    output: format!("{base}/star"),
+                    build: format!(
+                        "mkdir -p {base}/star && STAR --runMode genomeGenerate --genomeDir {base}/star --genomeFastaFiles {base}/genome.fa --sjdbGTFfile {base}/genes.gtf --runThreadN 16"
+                    ),
+                    threads: Some(16),
+                    memory: Some("64G".into()),
+                    description: Some(
+                        "STAR index (auto-derived from reference_dir, large: ~30 GB)".into(),
+                    ),
+                },
+                ReferenceDef {
+                    name: "hisat2_index".into(),
+                    source: Some(format!("{base}/genome.fa")),
+                    output: format!("{base}/hisat2/genome.fa"),
+                    build: format!(
+                        "mkdir -p {base}/hisat2 && hisat2-build {base}/genome.fa {base}/hisat2/genome.fa"
+                    ),
+                    threads: Some(8),
+                    memory: Some("8G".into()),
+                    description: Some("HISAT2 index (auto-derived from reference_dir)".into()),
+                },
+            ];
+            self.references = defaults;
         }
         self
     }

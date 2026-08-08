@@ -86,6 +86,8 @@ pub enum Commands {
         max_memory: u64,
         #[arg(long)]
         skip_env_setup: bool,
+        #[arg(long, help = "Skip automatic reference/index building")]
+        skip_ref_build: bool,
         #[arg(long)]
         cache_dir: Option<PathBuf>,
         #[arg(long)]
@@ -493,6 +495,7 @@ async fn main() -> Result<()> {
             max_threads,
             max_memory,
             skip_env_setup,
+            skip_ref_build,
             cache_dir,
             provenance,
             bundle,
@@ -520,6 +523,7 @@ async fn main() -> Result<()> {
                 max_threads,
                 max_memory,
                 skip_env_setup,
+                skip_ref_build,
                 cache_dir,
                 provenance,
                 cli.json,
@@ -713,6 +717,7 @@ async fn main() -> Result<()> {
                     0,               // max_threads
                     0,               // max_memory
                     false,           // skip_env_setup
+                    false,           // skip_ref_build
                     None,            // cache_dir
                     false,           // provenance
                     cli.json,

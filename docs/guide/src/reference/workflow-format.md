@@ -237,6 +237,71 @@ CLI `--arg` > declared `default` > error if `required` and unset.
 
 ---
 
+---
+
+## `[[references]]` — Auto-Built Indexes & Reference Data
+
+Declare reference artifacts (indexes, data files) that the engine auto-builds
+when missing. Each `[[references]]` entry specifies a source, output, and build
+command. The engine tracks built state in `.oxo-flow/reference-checkpoint.json`
+and never rebuilds unnecessarily.
+
+When `reference_dir` is set, four standard indexes are auto-derived without
+explicit `[[references]]` blocks: BWA, Bowtie2, STAR, and HISAT2.
+
+Use `--skip-ref-build` to skip automatic reference building.
+
+### Syntax
+
+```toml
+[[references]]
+name = "bwa_index"
+source = "{reference_dir}/genome.fa"
+output = "{reference_dir}/bwa/genome.fa"
+build = "mkdir -p {reference_dir}/bwa && bwa index -p {output} {source}"
+threads = 8
+memory = "8G"
+description = "BWA index for alignment"
+```
+
+### Fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | String | Yes | Unique name (used for checkpoint tracking) |
+| `source` | String | No | Source file for freshness checks |
+| `output` | String | Yes | Path to the built artifact |
+| `build` | String | Yes | Shell command to produce output from source |
+| `threads` | Integer | No | CPU threads for the build command |
+| `memory` | String | No | Memory limit (e.g., `"64G"`) |
+| `description` | String | No | Human-readable description |
+
+### Auto-Derivation from `reference_dir`
+
+When `[config]` contains `reference_dir` and no explicit `[[references]]` blocks
+are declared, the engine automatically derives four standard indexes:
+
+| Auto-Generated | Build Time | Size |
+|---|---|---|
+| `bwa_index` | ~1-2 hours | ~4 GB |
+| `bowtie2_index` | ~30-60 min | ~4 GB |
+| `star_index` | ~2-6 hours | ~30 GB |
+| `hisat2_index` | ~1-2 hours | ~7 GB |
+
+Users can override any auto-derived reference by declaring it explicitly.
+
+### CLI
+
+```bash
+# Auto-build missing references
+oxo-flow run pipeline.oxoflow -j 16
+
+# Skip reference building (assume pre-built)
+oxo-flow run pipeline.oxoflow --skip-ref-build
+```
+
+---
+
 ## `[defaults]` — Default Settings
 
 Applied to all rules unless explicitly overridden:

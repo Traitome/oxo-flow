@@ -24,6 +24,7 @@ pub async fn run_command(
     max_threads: u32,
     max_memory: u64,
     skip_env_setup: bool,
+    skip_ref_build: bool,
     cache_dir: Option<PathBuf>,
     provenance: bool,
     json: bool,
@@ -301,7 +302,7 @@ pub async fn run_command(
 
     // ── Auto-build references (indexes, data files) ──────────────────────
 
-    if !config.references.is_empty() {
+    if !skip_ref_build && !config.references.is_empty() {
         let ref_workdir = workdir.as_ref().unwrap_or(&workflow_dir);
         let ref_checkpoint = checkpoint_path
             .parent()
@@ -1144,6 +1145,7 @@ pub async fn resume_command(checkpoint: PathBuf, jobs: usize) -> Result<()> {
         0,               // max_threads
         0,               // max_memory
         false,           // skip_env_setup
+        true,            // skip_ref_build (resume: refs already built)
         None,            // cache_dir
         false,           // provenance (checkpoint already has checksums)
         false,           // json (resume defaults to human-readable)
