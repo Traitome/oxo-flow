@@ -457,6 +457,7 @@ pub async fn watch_command(workflow: PathBuf, auto_run: bool, jobs: usize) -> Re
                             false,           // provenance
                             false,           // json (watch mode = human-readable)
                             vec![],          // cli_args
+                            vec![],          // extra_samples
                         )
                         .await;
                     } else {

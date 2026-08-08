@@ -1287,12 +1287,6 @@ impl WorkflowConfig {
                         metadata: HashMap::new(),
                     };
                     config.sample_groups.push(auto_group);
-                    // Inject discovered sample names as config variable for
-                    // downstream use (aggregation, reporting) without a CSV file
-                    config
-                        .config
-                        .entry("samples_list".to_string())
-                        .or_insert(toml::Value::String(auto_samples.join(",")));
                     tracing::info!(
                         "Auto-discovered {} samples from pattern '{}'",
                         auto_samples.len(),
@@ -1305,6 +1299,55 @@ impl WorkflowConfig {
                     );
                 }
             }
+        }
+
+        // ── Consolidate all sample sources into samples_list ──────────────
+        // Merges auto-discovered samples (from sample_pattern), file-loaded
+        // samples (from sample_groups_file), and inline [[sample_groups]].
+        let mut all_samples: Vec<String> = Vec::new();
+        for group in &config.sample_groups {
+            for s in &group.samples {
+                if !all_samples.contains(s) {
+                    all_samples.push(s.clone());
+                }
+            }
+        }
+        if !all_samples.is_empty() {
+            let existing = config
+                .config
+                .get("samples_list")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let mut merged: Vec<String> = if existing.is_empty() {
+                all_samples
+            } else {
+                let existing_set: std::collections::HashSet<&str> =
+                    existing.split(',').filter(|s| !s.is_empty()).collect();
+                let mut result: Vec<String> = existing
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .collect();
+                for s in &all_samples {
+                    if !existing_set.contains(s.as_str()) {
+                        result.push(s.clone());
+                    }
+                }
+                result
+            };
+            merged.sort();
+            merged.dedup();
+            config.config.insert(
+                "samples_list".to_string(),
+                toml::Value::String(merged.join(",")),
+            );
+        }
+        // Also inject each sample group's name as a config variable
+        for group in &config.sample_groups {
+            config
+                .config
+                .entry(format!("samples_{}", group.name))
+                .or_insert_with(|| toml::Value::String(group.samples.join(",")));
         }
 
         // Derive standard reference paths from reference_dir (e.g., reference_fasta = reference_dir + "/genome.fa")

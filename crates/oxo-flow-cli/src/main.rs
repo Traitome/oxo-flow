@@ -101,6 +101,12 @@ pub enum Commands {
             help = "Set a workflow argument (overrides [arguments] defaults)"
         )]
         args: Vec<String>,
+        #[arg(
+            long = "sample",
+            value_name = "SAMPLE",
+            help = "Add a sample to the run (repeatable, merges with all sources)"
+        )]
+        extra_samples: Vec<String>,
     },
     /// Resume an interrupted workflow from a checkpoint.
     Resume {
@@ -500,6 +506,7 @@ async fn main() -> Result<()> {
             provenance,
             bundle,
             args,
+            extra_samples,
         } => {
             let (wf, wd) = if let Some(bundle_path) = bundle {
                 let (extracted_wf, extracted_dir) =
@@ -528,6 +535,7 @@ async fn main() -> Result<()> {
                 provenance,
                 cli.json,
                 args,
+                extra_samples,
             )
             .await?
         }
@@ -722,6 +730,7 @@ async fn main() -> Result<()> {
                     false,           // provenance
                     cli.json,
                     vec![], // cli_args
+                    vec![], // extra_samples
                 )
                 .await?;
             }

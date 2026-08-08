@@ -29,6 +29,7 @@ pub async fn run_command(
     provenance: bool,
     json: bool,
     cli_args: Vec<String>,
+    extra_samples: Vec<String>,
 ) -> Result<()> {
     print_banner();
     let workflow = resolve_workflow(workflow)?;
@@ -79,6 +80,54 @@ pub async fn run_command(
             .config
             .entry(format!("arguments.{k}"))
             .or_insert_with(|| toml::Value::String(v.clone()));
+    }
+
+    // ── Merge --sample CLI flags into sample groups and samples_list ───
+
+    if !extra_samples.is_empty() {
+        if let Some(group) = config
+            .sample_groups
+            .iter_mut()
+            .find(|g| g.name == "auto-discovered")
+        {
+            for s in &extra_samples {
+                if !group.samples.contains(s) {
+                    group.samples.push(s.clone());
+                }
+            }
+        } else {
+            config
+                .sample_groups
+                .push(oxo_flow_core::config::SampleGroup {
+                    name: "cli-specified".to_string(),
+                    samples: extra_samples.clone(),
+                    metadata: std::collections::HashMap::new(),
+                });
+        }
+        let existing = config
+            .config
+            .get("samples_list")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let mut merged: Vec<String> = existing
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .collect();
+        for s in &extra_samples {
+            if !merged.contains(s) {
+                merged.push(s.clone());
+            }
+        }
+        config.config.insert(
+            "samples_list".to_string(),
+            toml::Value::String(merged.join(",")),
+        );
+        eprintln!(
+            "  {} Added {} sample(s) via --sample flag",
+            "Samples:".cyan(),
+            extra_samples.len()
+        );
     }
 
     config.apply_defaults();
@@ -1150,6 +1199,7 @@ pub async fn resume_command(checkpoint: PathBuf, jobs: usize) -> Result<()> {
         false,           // provenance (checkpoint already has checksums)
         false,           // json (resume defaults to human-readable)
         Vec::new(),      // cli_args (resume reuses checkpoint state)
+        Vec::new(),      // extra_samples (resume uses existing groups)
     )
     .await
 }
