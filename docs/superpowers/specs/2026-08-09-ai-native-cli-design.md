@@ -1147,3 +1147,29 @@ fn dry_run_detects_missing_threads() {
 - Web crate migration (delete ai_provider.rs, copilot.rs; depend on oxo-flow-ai)
 - Dry-run + validate AI integration
 - Run error recovery with --ai-recover
+
+### Phase 2 Complete (2026-08-10)
+
+**Delivered:**
+- `oxo-flow dry-run <workflow> --ai` — AI analyzes workflow for errors, resource mismatches, safety violations
+- `oxo-flow validate <workflow> --ai` — AI semantic validation in addition to schema checks
+- Web crate migration: `ai_provider.rs` → compatibility shim over oxo-flow-ai
+
+**Files created:**
+- `crates/oxo-flow-cli/src/commands/ai_check.rs` — shared AI analysis engine
+
+**Files modified:**
+- `crates/oxo-flow-cli/src/main.rs` — --ai flag on DryRun, Validate commands
+- `crates/oxo-flow-cli/src/commands/run.rs` — dry_run_command AI parameter
+- `crates/oxo-flow-cli/src/commands/quality.rs` — validate_command AI + block_on adapter
+- `crates/oxo-flow-cli/src/commands/ai_template.rs` — resolve_ai_provider() helper
+- `crates/oxo-flow-web/src/ai_provider.rs` — compatibility shim
+- `crates/oxo-flow-web/Cargo.toml` — oxo-flow-ai dependency
+- `Makefile` — audit --no-fetch fallback
+
+**Verified:**
+- Tested on `examples/cohort_analysis.oxoflow`: AI found 4 ERRORs + 4 WARNINGs
+- `make ci`: fmt + clippy + build + test + audit all passing
+
+**Deferred to Phase 3:**
+- Run error recovery with --ai-recover
