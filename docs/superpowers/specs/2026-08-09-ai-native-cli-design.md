@@ -1115,3 +1115,35 @@ fn dry_run_detects_missing_threads() {
 | `auto_fix` default = `"ask"` | Safety: users should see what AI changed before it runs |
 | Session JSON + archive directory | JSON for programmatic analysis + .oxoflow snapshots for quick human review |
 | Phase 5 MCP deferred | Core value delivered in Phases 1-4; MCP extends reach to third-party tool ecosystems |
+
+---
+
+## 15. Implementation Log
+
+### Phase 1 Complete (2026-08-09/10)
+
+**Delivered:**
+- `oxo-flow-ai` crate with full Layer 1–3 infrastructure
+- `oxo-flow template "<intent>" --ai` working with DeepSeek
+- `--from-url`, `--from-file`, `--ai-max-retries` flags on template command
+
+**Files created:**
+- `crates/oxo-flow-ai/` — 9 source files, 54 unit tests
+- `crates/oxo-flow-cli/src/commands/ai_template.rs` — 7 tests
+
+**Files modified:**
+- `Cargo.toml` — added workspace member + dep
+- `crates/oxo-flow-cli/Cargo.toml` — added oxo-flow-ai dep
+- `crates/oxo-flow-cli/src/main.rs` — Template command AI flags
+- `crates/oxo-flow-cli/src/commands/mod.rs` — ai_template module
+- `crates/oxo-flow-cli/src/commands/project.rs` — async template_command
+
+**Verified:**
+- `make ci`: fmt + clippy + build + test all passing (audit skipped — DNS timeout)
+- Manual test: `DEEPSEEK_API_KEY=<key> OXO_FLOW_AI_PROVIDER=deepseek oxo-flow template "RNA-seq" --ai` → generated valid 4-rule workflow
+- All 226+ tests passing across workspace
+
+**Deferred to Phase 2:**
+- Web crate migration (delete ai_provider.rs, copilot.rs; depend on oxo-flow-ai)
+- Dry-run + validate AI integration
+- Run error recovery with --ai-recover

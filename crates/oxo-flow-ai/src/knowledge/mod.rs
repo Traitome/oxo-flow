@@ -1,0 +1,10 @@
+//! Knowledge system — domain knowledge for AI agents.
+//!
+//! The knowledge system provides:
+//! - Built-in bioinformatics tool reference tables
+//! - Error pattern matching for diagnosis
+//! - Best practice rules for workflow validation
+//! - Context assembly for different agent scenarios
+
+pub mod assembler;
+pub mod builtin;

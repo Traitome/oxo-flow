@@ -145,12 +145,24 @@ pub enum Commands {
         #[arg(short = 'd', long)]
         dir: Option<PathBuf>,
     },
-    /// Generate a workflow from a predefined template.
+    /// Generate a workflow from a predefined template or via AI.
     Template {
         #[arg(value_name = "TEMPLATE")]
         template: Option<String>,
         #[arg(short = 'o', long)]
         output: Option<PathBuf>,
+        /// Enable AI-powered workflow generation from natural language.
+        #[arg(long)]
+        ai: bool,
+        /// URL(s) to use as reference material for AI generation.
+        #[arg(long = "from-url", value_name = "URL")]
+        from_url: Vec<String>,
+        /// File(s) to use as reference material for AI generation.
+        #[arg(long = "from-file", value_name = "PATH")]
+        from_file: Vec<PathBuf>,
+        /// Maximum AI correction rounds (overrides config).
+        #[arg(long = "ai-max-retries", value_name = "N")]
+        ai_max_retries: Option<u32>,
     },
     /// Output the workflow DAG for visualization.
     Graph {
@@ -561,7 +573,14 @@ async fn main() -> Result<()> {
             validate_command(workflow, as_include, cli.json)?;
         }
         Commands::Init { name, dir } => init_command(name, dir)?,
-        Commands::Template { template, output } => template_command(template, output)?,
+        Commands::Template {
+            template,
+            output,
+            ai,
+            from_url,
+            from_file,
+            ai_max_retries,
+        } => template_command(template, output, ai, from_url, from_file, ai_max_retries).await?,
         Commands::Graph {
             workflow,
             format,

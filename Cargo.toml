@@ -5,7 +5,7 @@ edition.workspace = true
 publish = false
 
 [workspace]
-members = ["crates/oxo-flow-core", "crates/oxo-flow-cli", "crates/oxo-flow-web"]
+members = ["crates/oxo-flow-core", "crates/oxo-flow-ai", "crates/oxo-flow-cli", "crates/oxo-flow-web"]
 resolver = "2"
 
 [dependencies]
@@ -24,6 +24,7 @@ homepage = "https://github.com/Traitome/oxo-flow"
 async-trait = "0.1"
 # Internal workspace crates
 oxo-flow-core = { path = "crates/oxo-flow-core", version = "0.9.4" }
+oxo-flow-ai = { path = "crates/oxo-flow-ai", version = "0.9.4" }
 oxo-flow-web = { path = "crates/oxo-flow-web", version = "0.9.4" }
 
 # Serialization

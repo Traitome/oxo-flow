@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 oxo-flow-core = { workspace = true }
+oxo-flow-ai = { workspace = true }
 oxo-flow-web = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }

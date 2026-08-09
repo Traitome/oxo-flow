@@ -437,8 +437,41 @@ fn apply_template(gallery_dir: &Path, template_name: &str, output: Option<PathBu
 // Public entry point
 // ---------------------------------------------------------------------------
 
-pub fn template_command(name: Option<String>, output: Option<PathBuf>) -> Result<()> {
+pub async fn template_command(
+    name: Option<String>,
+    output: Option<PathBuf>,
+    ai: bool,
+    from_url: Vec<String>,
+    from_file: Vec<PathBuf>,
+    _ai_max_retries: Option<u32>,
+) -> Result<()> {
     print_banner();
+
+    // AI-powered generation
+    if ai {
+        let intent = name.ok_or_else(|| {
+            anyhow::anyhow!(
+                "AI template generation requires a description.\n\
+                 Example: oxo-flow template \"RNA-seq with STAR\" --ai"
+            )
+        })?;
+
+        // Initialize AI provider
+        let provider = oxo_flow_ai::provider::create_provider_from_env();
+        if matches!(provider, oxo_flow_ai::provider::AiProvider::Noop) {
+            anyhow::bail!(
+                "AI provider not configured.\n\
+                 Set OXO_FLOW_AI_PROVIDER=deepseek and DEEPSEEK_API_KEY=sk-...\n\
+                 Or configure via ~/.oxo-flow/ai_config.json"
+            );
+        }
+
+        crate::commands::ai_template::generate_workflow(
+            &intent, &provider, &from_url, &from_file, output,
+        )
+        .await?;
+        return Ok(());
+    }
 
     let gallery_dir = find_gallery_directory()?;
 

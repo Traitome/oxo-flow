@@ -1,0 +1,29 @@
+[package]
+name = "oxo-flow-ai"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "AI provider abstraction, agent framework, and knowledge system for oxo-flow"
+
+[dependencies]
+# Workspace
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+reqwest = { workspace = true }
+tracing = { workspace = true }
+toml = { workspace = true }
+sha2 = { workspace = true }
+
+# Async trait support
+async-trait = "0.1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "macros"] }

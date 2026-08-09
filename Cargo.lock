@@ -2650,6 +2650,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxo-flow-ai"
+version = "0.9.4"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror",
+ "tokio",
+ "toml",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "oxo-flow-cli"
 version = "0.9.4"
 dependencies = [
@@ -2661,6 +2679,7 @@ dependencies = [
  "filetime",
  "glob",
  "indicatif",
+ "oxo-flow-ai",
  "oxo-flow-core",
  "oxo-flow-web",
  "oxo-license",

@@ -186,6 +186,7 @@ pub fn run_batch_command(cmd: &str, workdir: &Path) -> Result<i32> {
     Ok(output.status.code().unwrap_or(-1))
 }
 
+pub mod ai_template;
 pub mod batch;
 pub mod bundle;
 pub mod clean;
