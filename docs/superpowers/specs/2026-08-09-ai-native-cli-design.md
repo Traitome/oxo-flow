@@ -1173,3 +1173,28 @@ fn dry_run_detects_missing_threads() {
 
 **Deferred to Phase 3:**
 - Run error recovery with --ai-recover
+
+### Phase 3 Complete (2026-08-10)
+
+**Delivered:**
+- `oxo-flow run <workflow> --ai-recover` — AI diagnoses rule failures and proposes fixes
+- `oxo-flow resume <checkpoint> --ai-recover` — AI diagnosis for resumed workflows
+- Error pattern matching against built-in library (OOM, segfault, missing files, etc.)
+- Automatic workflow archiving before fix application
+
+**Files created:**
+- `crates/oxo-flow-cli/src/commands/ai_recover.rs` — AI error diagnosis + fix archiving
+
+**Files modified:**
+- `crates/oxo-flow-cli/src/main.rs` — --ai-recover on Run, Resume
+- `crates/oxo-flow-cli/src/commands/run.rs` — AI recovery in failure path
+- `crates/oxo-flow-cli/src/commands/quality.rs` — updated run_command callers
+- `crates/oxo-flow-cli/Cargo.toml` — added chrono dependency
+
+**Verified:**
+- `make ci`: fmt + clippy + build + test + audit all passing
+
+**Deferred to Phase 4-5:**
+- Scope-level AI config (project/rule-level [ai] sections)
+- AI plugin types (AiToolPlugin, AiKnowledgePlugin, AiValidatorPlugin)
+- MCP/Skill ecosystem

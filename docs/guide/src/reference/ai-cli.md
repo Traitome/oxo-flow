@@ -194,6 +194,52 @@ Every AI interaction is logged to `.oxo-flow/ai_sessions/` for audit and debuggi
 
 ---
 
+## AI Workflow Analysis (`dry-run --ai`)
+
+Validate workflow correctness, safety, and resource allocation before running:
+
+```bash
+oxo-flow dry-run workflow.oxoflow --ai
+```
+
+The AI checks:
+- Resource allocations vs. tool recommendations
+- DAG structure (missing dependencies, invalid edges)
+- Safety violations (destructive commands)
+- Environment declarations
+- Best practice adherence
+
+Output includes severity ratings: `[ERROR]`, `[WARNING]`, `[INFO]`.
+
+---
+
+## AI Semantic Validation (`validate --ai`)
+
+Combine schema validation with AI-powered semantic analysis:
+
+```bash
+oxo-flow validate workflow.oxoflow --ai
+```
+
+---
+
+## AI Error Recovery (`run --ai-recover`)
+
+When a workflow fails, the AI diagnoses the error and proposes a fix:
+
+```bash
+oxo-flow run workflow.oxoflow --ai-recover
+```
+
+**Recovery flow:**
+1. Rule fails → capture error signature
+2. AI matches against known error patterns (OOM, segfault, missing files, etc.)
+3. AI proposes root cause + specific fix
+4. If safe to auto-apply: original archived, fix applied
+5. Run can be retried with corrected workflow
+
+---
+
 ## Troubleshooting
 
 ### "AI provider not configured"
@@ -223,8 +269,8 @@ If you see "Rate limited by deepseek", wait a few seconds and retry. For product
 | Phase | Features | Status |
 |-------|----------|--------|
 | Phase 1 | AI template generation | ✅ Complete |
-| Phase 2 | AI dry-run analysis (`--ai` on dry-run/validate) | 🚧 Planned |
-| Phase 3 | AI error recovery (`--ai-recover` on run/resume) | 📋 Planned |
+| Phase 2 | AI dry-run + validate analysis | ✅ Complete |
+| Phase 3 | AI error recovery (`--ai-recover`) | ✅ Complete |
 | Phase 4 | Scope-level AI config, AI plugin types | 📋 Planned |
 | Phase 5 | MCP/Skill ecosystem | 📋 Planned |
 
