@@ -53,18 +53,6 @@
         }
       }
     },
-    "arguments": {
-      "type": "object",
-      "description": "Declared workflow arguments exposed as CLI --arg flags",
-      "additionalProperties": {
-        "type": "object",
-        "properties": {
-          "required": { "type": "boolean" },
-          "default": { "type": "string" },
-          "help": { "type": "string" }
-        }
-      }
-    },
     "references": {
       "type": "array",
       "description": "Auto-built reference artifacts. Auto-derived from reference_dir if empty.",
@@ -84,8 +72,30 @@
     },
     "config": {
       "type": "object",
-      "description": "Default configuration variables for wildcard expansion",
-      "additionalProperties": true
+      "description": "Configuration variables for wildcard expansion. Plain values (key = \"value\") act as defaults; declarative inline tables (key = { default, required, help, sensitive, type, choices, range, must_exist }) declare CLI-overridable parameters",
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "string" },
+          { "type": "integer" },
+          { "type": "number" },
+          { "type": "boolean" },
+          { "type": "array" },
+          {
+            "type": "object",
+            "properties": {
+              "default": { "type": "string", "description": "Default value when not provided via CLI" },
+              "required": { "type": "boolean", "description": "Must be set via CLI, profile, or explicit config" },
+              "help": { "type": "string", "description": "Human-readable help text" },
+              "sensitive": { "type": "boolean", "description": "Mask the value in logs and errors" },
+              "type": { "type": "string", "enum": ["string", "int", "float", "bool", "path"], "description": "Expected value type" },
+              "choices": { "type": "array", "items": { "type": "string" }, "description": "Allowed values" },
+              "range": { "type": "string", "description": "Numeric range \"min..max\"" },
+              "must_exist": { "type": "boolean", "description": "Path must exist on disk" }
+            },
+            "additionalProperties": false
+          }
+        ]
+      }
     },
     "cluster": {
       "type": "object",

@@ -1772,7 +1772,7 @@ fn cli_batch_empty_items_error() {
         .failure();
 }
 
-// ─── workflow [arguments] CLI tests ──────────────────────────────────────
+// ─── workflow [config] CLI tests ──────────────────────────────────────
 
 #[test]
 fn cli_run_with_arg_required_missing_fails() {
@@ -1780,7 +1780,7 @@ fn cli_run_with_arg_required_missing_fails() {
     let wf = dir.path().join("args.oxoflow");
     fs::write(
         &wf,
-        "[workflow]\nname = \"args\"\nversion = \"1.0.0\"\n\n[arguments]\ndatabase = { required = true, help = \"Path to database\" }\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo {arguments.database} > {output[0]}\"\n",
+        "[workflow]\nname = \"args\"\nversion = \"1.0.0\"\n\n[config]\ndatabase = { required = true, help = \"Path to database\" }\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo {config.database} > {output[0]}\"\n",
     )
     .unwrap();
 
@@ -1795,8 +1795,8 @@ fn cli_run_with_arg_required_missing_fails() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("required argument"),
-        "should mention required arg: {stderr}"
+        stderr.contains("required config"),
+        "should mention required config: {stderr}"
     );
     assert!(
         stderr.contains("database"),
@@ -1810,7 +1810,7 @@ fn cli_run_with_arg_provided_succeeds() {
     let wf = dir.path().join("args2.oxoflow");
     fs::write(
         &wf,
-        "[workflow]\nname = \"args2\"\nversion = \"1.0.0\"\n\n[arguments]\ndatabase = { required = true, help = \"Path\" }\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo {arguments.database} > {output[0]}\"\n",
+        "[workflow]\nname = \"args2\"\nversion = \"1.0.0\"\n\n[config]\ndatabase = { required = true, help = \"Path\" }\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo {config.database} > {output[0]}\"\n",
     )
     .unwrap();
 
@@ -1835,7 +1835,7 @@ fn cli_run_with_arg_default_value() {
     let wf = dir.path().join("args3.oxoflow");
     fs::write(
         &wf,
-        "[workflow]\nname = \"args3\"\nversion = \"1.0.0\"\n\n[arguments]\nthreshold = { default = \"1e-5\", help = \"E-value\" }\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo {arguments.threshold} > {output[0]}\"\n",
+        "[workflow]\nname = \"args3\"\nversion = \"1.0.0\"\n\n[config]\nthreshold = { default = \"1e-5\", help = \"E-value\" }\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo {config.threshold} > {output[0]}\"\n",
     )
     .unwrap();
 
@@ -1859,7 +1859,7 @@ fn cli_run_with_arg_overrides_default() {
     let wf = dir.path().join("args4.oxoflow");
     fs::write(
         &wf,
-        "[workflow]\nname = \"args4\"\nversion = \"1.0.0\"\n\n[arguments]\nthreshold = { default = \"1e-5\", help = \"E-value\" }\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo {arguments.threshold} > {output[0]}\"\n",
+        "[workflow]\nname = \"args4\"\nversion = \"1.0.0\"\n\n[config]\nthreshold = { default = \"1e-5\", help = \"E-value\" }\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo {config.threshold} > {output[0]}\"\n",
     )
     .unwrap();
 
@@ -2563,19 +2563,19 @@ fn cli_run_condition_skip_counted_once() {
     );
 }
 
-/// A `when` condition referencing `{arguments.*}` must evaluate correctly.
+/// A `when` condition referencing `{config.*}` must evaluate correctly.
 /// The executor's config_values builder and evaluate_condition must both
-/// handle the `arguments.` prefix alongside `config.`.
+/// handle the `config.` prefix.
 #[test]
-fn cli_run_when_condition_sees_arguments_values() {
+fn cli_run_when_condition_sees_config_values() {
     let dir = tempfile::tempdir().unwrap();
     let wf = dir.path().join("argwhen.oxoflow");
     fs::write(
         &wf,
         "[workflow]\nname = \"argwhen\"\nversion = \"1.0.0\"\n\n\
-         [arguments]\nmode = { default = \"dna\" }\n\n\
+         [config]\nmode = { default = \"dna\" }\n\n\
          [[rules]]\nname = \"only_rna\"\noutput = [\"rna.txt\"]\n\
-         when = 'arguments.mode == \"rna\"'\nshell = \"echo ran > {output[0]}\"\n",
+         when = 'config.mode == \"rna\"'\nshell = \"echo ran > {output[0]}\"\n",
     )
     .unwrap();
 
@@ -2594,15 +2594,15 @@ fn cli_run_when_condition_sees_arguments_values() {
 
 /// When the condition IS true, the rule should execute.
 #[test]
-fn cli_run_when_condition_matches_argument_and_runs() {
+fn cli_run_when_condition_matches_config_and_runs() {
     let dir = tempfile::tempdir().unwrap();
     let wf = dir.path().join("argwhen2.oxoflow");
     fs::write(
         &wf,
         "[workflow]\nname = \"argwhen2\"\nversion = \"1.0.0\"\n\n\
-         [arguments]\nmode = { default = \"rna\" }\n\n\
+         [config]\nmode = { default = \"rna\" }\n\n\
          [[rules]]\nname = \"only_rna\"\noutput = [\"rna.txt\"]\n\
-         when = 'arguments.mode == \"rna\"'\nshell = \"echo ran > {output[0]}\"\n",
+         when = 'config.mode == \"rna\"'\nshell = \"echo ran > {output[0]}\"\n",
     )
     .unwrap();
 

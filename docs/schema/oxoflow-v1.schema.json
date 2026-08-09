@@ -30,19 +30,29 @@
     },
     "config": {
       "type": "object",
-      "description": "User-defined configuration variables for wildcard expansion",
-      "additionalProperties": true
-    },
-    "arguments": {
-      "type": "object",
-      "description": "Declared workflow arguments exposed as CLI --arg flags",
+      "description": "Configuration variables for wildcard expansion. Plain values (key = \"value\") act as defaults; declarative inline tables (key = { default, required, help, sensitive, type, choices, range, must_exist }) declare CLI-overridable parameters",
       "additionalProperties": {
-        "type": "object",
-        "properties": {
-          "required": { "type": "boolean", "description": "Whether this argument must be provided at runtime" },
-          "default": { "type": "string", "description": "Default value when not provided via CLI" },
-          "help": { "type": "string", "description": "Human-readable help text" }
-        }
+        "oneOf": [
+          { "type": "string" },
+          { "type": "integer" },
+          { "type": "number" },
+          { "type": "boolean" },
+          { "type": "array" },
+          {
+            "type": "object",
+            "properties": {
+              "default": { "type": "string", "description": "Default value when not provided via CLI" },
+              "required": { "type": "boolean", "description": "Must be set via CLI, profile, or explicit config" },
+              "help": { "type": "string", "description": "Human-readable help text" },
+              "sensitive": { "type": "boolean", "description": "Mask the value in logs and errors" },
+              "type": { "type": "string", "enum": ["string", "int", "float", "bool", "path"], "description": "Expected value type" },
+              "choices": { "type": "array", "items": { "type": "string" }, "description": "Allowed values" },
+              "range": { "type": "string", "description": "Numeric range \"min..max\"" },
+              "must_exist": { "type": "boolean", "description": "Path must exist on disk" }
+            },
+            "additionalProperties": false
+          }
+        ]
       }
     },
     "references": {

@@ -526,7 +526,7 @@ pub struct ExperimentControlPair {
     ///
     /// When `None` (e.g., tumor-only CNV detection), `{control}` expands to
     /// an empty string. Rules should handle this via shell conditionals or
-    /// `[arguments]` flags.
+    /// declarative `[config]` entries.
     ///
     /// Backward-compatible TOML alias: `normal`.
     #[serde(default)]
@@ -1306,7 +1306,17 @@ impl WorkflowConfig {
         // Auto-discover samples from filesystem pattern
         if let Some(ref sample_pattern) = config.workflow.sample_pattern {
             // Expand config variables in the pattern (e.g. {config.data_dir}/.../{sample}_R1.fq.gz)
-            let expanded_pattern = expand_config_vars_in_path(sample_pattern, &config.config);
+            // Declared config defaults (from `key = { default = … }` entries) are
+            // included alongside plain values so the pattern always resolves.
+            let mut expand_config = config.config.clone();
+            for (key, def) in &config.config_meta {
+                if !expand_config.contains_key(key)
+                    && let Some(ref default) = def.default
+                {
+                    expand_config.insert(key.clone(), toml::Value::String(default.clone()));
+                }
+            }
+            let expanded_pattern = expand_config_vars_in_path(sample_pattern, &expand_config);
 
             // Validate pattern contains {sample} wildcard
             if !expanded_pattern.contains("{sample}") {
@@ -2564,14 +2574,11 @@ impl WorkflowConfig {
         }
 
         if let Some(ref n_str) = split.n {
-            // Resolve n from config or parse as number
-            let n = if n_str.starts_with("config.") {
-                self.resolve_config_list(n_str)
-                    .and_then(|v| v.first().and_then(|s| s.parse::<usize>().ok()))
-                    .unwrap_or(1)
-            } else {
-                n_str.parse::<usize>().unwrap_or(1)
-            };
+            // Resolve n from config (config.<key> or bare <key>) or parse as number
+            let n = self
+                .resolve_config_list(n_str)
+                .and_then(|v| v.first().and_then(|s| s.parse::<usize>().ok()))
+                .unwrap_or_else(|| n_str.parse::<usize>().unwrap_or(1));
             // Generate chunk indices: 0, 1, 2, ..., n-1
             return Ok((0..n).map(|i| i.to_string()).collect());
         }
@@ -2601,23 +2608,23 @@ impl WorkflowConfig {
     }
 
     /// Resolve a config variable (e.g., "config.samples") into a list of strings.
+    ///
+    /// Accepts both the `config.<key>` form and a bare `<key>` reference.
     pub fn resolve_config_list(&self, var: &str) -> Option<Vec<String>> {
-        if let Some(key) = var.strip_prefix("config.")
-            && let Some(val) = self.config.get(key)
-        {
-            if let Some(arr) = val.as_array() {
-                return Some(
-                    arr.iter()
-                        .map(|v| match v {
-                            toml::Value::String(s) => s.clone(),
-                            other => other.to_string(),
-                        })
-                        .collect(),
-                );
-            } else if let Some(s) = val.as_str() {
-                // Fallback to single-item list
-                return Some(vec![s.to_string()]);
-            }
+        let key = var.strip_prefix("config.").unwrap_or(var);
+        let val = self.config.get(key)?;
+        if let Some(arr) = val.as_array() {
+            return Some(
+                arr.iter()
+                    .map(|v| match v {
+                        toml::Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    })
+                    .collect(),
+            );
+        } else if let Some(s) = val.as_str() {
+            // Fallback to single-item list
+            return Some(vec![s.to_string()]);
         }
         None
     }

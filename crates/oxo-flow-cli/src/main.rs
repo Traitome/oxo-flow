@@ -95,12 +95,18 @@ pub enum Commands {
         #[arg(long, help = "Execute from a published .tar.zst bundle")]
         bundle: Option<PathBuf>,
         #[arg(
-            short = 'a',
             long = "arg",
             value_name = "KEY=VALUE",
-            help = "Set a workflow argument (overrides [arguments] defaults)"
+            help = "Set a workflow config value (overrides [config] defaults). Repeatable."
         )]
         args: Vec<String>,
+        #[arg(
+            value_name = "KEY=VALUE",
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            help = "Direct config overrides: KEY=VALUE, --KEY=VALUE, or --KEY VALUE"
+        )]
+        config_overrides: Vec<String>,
         #[arg(
             long = "sample",
             value_name = "SAMPLE",
@@ -506,6 +512,7 @@ async fn main() -> Result<()> {
             provenance,
             bundle,
             args,
+            config_overrides,
             extra_samples,
         } => {
             let (wf, wd) = if let Some(bundle_path) = bundle {
@@ -517,6 +524,10 @@ async fn main() -> Result<()> {
             } else {
                 (workflow, workdir)
             };
+            // Merge direct `KEY=VALUE` / `--KEY VALUE` overrides with `--arg KEY=VALUE`
+            // (backward compat). Later entries win on duplicate keys.
+            let mut merged_args = config_overrides;
+            merged_args.extend(args);
             run_command(
                 wf,
                 jobs,
@@ -534,7 +545,7 @@ async fn main() -> Result<()> {
                 cache_dir,
                 provenance,
                 cli.json,
-                args,
+                merged_args,
                 extra_samples,
             )
             .await?

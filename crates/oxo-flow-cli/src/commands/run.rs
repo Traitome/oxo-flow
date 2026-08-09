@@ -38,18 +38,37 @@ pub async fn run_command(
     let mut config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
-    // ── Parse and merge CLI --arg key=value overrides ───────────────────
+    // ── Parse and merge CLI config overrides ────────────────────────────
+    // Accepted forms (all map to `config.<key>` values):
+    //   KEY=VALUE            direct positional form
+    //   --KEY=VALUE          long-flag form
+    //   --KEY VALUE          long-flag form with separate value
+    //   --arg KEY=VALUE      legacy `--arg` form (backward compatible)
 
     let mut cli_arg_values: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
-    for arg_str in &cli_args {
-        let (k, v) = arg_str
-            .split_once('=')
-            .with_context(|| format!("invalid --arg format: '{arg_str}' — expected KEY=VALUE"))?;
+    let mut cli_args_iter = cli_args.into_iter().peekable();
+    while let Some(arg_str) = cli_args_iter.next() {
+        let (k, v) = if let Some(eq) = arg_str.find('=') {
+            let k = arg_str[..eq].trim_start_matches('-').to_string();
+            (k, arg_str[eq + 1..].to_string())
+        } else if let Some(k) = arg_str.strip_prefix("--") {
+            // `--KEY VALUE` — consume the next argument as the value
+            let v = cli_args_iter.next().with_context(|| {
+                format!("invalid config flag: '{arg_str}' — expected --KEY=VALUE or --KEY VALUE")
+            })?;
+            (k.to_string(), v)
+        } else {
+            anyhow::bail!(
+                "invalid config value format: '{arg_str}' — expected KEY=VALUE, --KEY=VALUE, or --KEY VALUE"
+            );
+        };
         if k.is_empty() || v.is_empty() {
-            anyhow::bail!("invalid --arg format: '{arg_str}' — KEY and VALUE must be non-empty");
+            anyhow::bail!(
+                "invalid config value format: '{arg_str}' — KEY and VALUE must be non-empty"
+            );
         }
-        cli_arg_values.insert(k.to_string(), v.to_string());
+        cli_arg_values.insert(k, v);
     }
 
     // Apply CLI overrides and defaults from declarative config entries.
@@ -67,7 +86,7 @@ pub async fn run_command(
                 .or_insert_with(|| toml::Value::String(default.clone()));
         } else if cfg_def.required {
             anyhow::bail!(
-                "required config '{}' not set. Use --arg {}=<value>\n  {}",
+                "required config '{}' not set. Use --{} <value>\n  {}",
                 name,
                 name,
                 cfg_def.help.as_deref().unwrap_or("")

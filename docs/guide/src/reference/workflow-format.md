@@ -37,8 +37,7 @@ Workflow files must use the `.oxoflow` extension (e.g., `qc_pipeline.oxoflow`).
 
 ```toml
 [workflow]          # Required: metadata
-[config]            # Optional: user variables
-[arguments]         # Optional: declared CLI arguments
+[config]            # Optional: user variables (plain or declarative form)
 [defaults]          # Optional: rule defaults
 [report]            # Optional: report configuration
 [[include]]         # Optional: include external workflow files
@@ -172,68 +171,82 @@ This mapping applies only to the [`script`](#rules-script-field) field.
 
 ## `[config]` — Configuration Variables
 
-User-defined key-value pairs accessible in rules as `{config.<key>}`:
+User-defined key-value pairs accessible in rules as `{config.<key>}`. Every
+config key can be overridden from the CLI.
+
+Two forms are supported:
 
 ```toml
 [config]
-reference = "/data/ref/hg38.fa"
+reference = "/data/ref/hg38.fa"             # plain value (implicit default)
 samples_dir = "raw_data"
 results_dir = "results"
 min_quality = "30"
 ```
 
-Values are TOML strings, integers, booleans, or arrays. String interpolation in rules uses `{config.key}` syntax.
+Values are TOML strings, integers, booleans, or arrays. String interpolation
+in rules uses `{config.key}` syntax.
 
----
+### Declarative Form (inline table)
 
-## `[arguments]` — Declared Workflow Arguments
-
-Declare user-facing parameters that become CLI flags via `--arg KEY=VALUE`.
-Each argument can specify whether it is required, a default value, and help text.
-
-### Syntax
+For user-facing parameters, use the declarative inline-table form. Declared
+keys become automatic CLI flags (`--<key> <value>`), can be required, and
+carry metadata:
 
 ```toml
-[arguments]
+[config]
 database  = { required = true, help = "Path to the BLAST database" }
 threshold = { default = "1e-5", help = "E-value cutoff" }
+mode      = { default = "dna", choices = ["dna", "rna"], type = "string" }
+samples   = { required = true, type = "path", must_exist = true }
 ```
 
 ### Fields
 
 | Field | Type | Description |
 |---|---|---|
-| `required` | Bool | If `true`, the argument must be provided at runtime (default: `false`) |
 | `default` | String | Default value when not provided via CLI |
+| `required` | Bool | If `true`, the value must be provided at runtime (default: `false`) |
 | `help` | String | Human-readable description shown in error messages |
+| `sensitive` | Bool | Mask the value as `****` in logs, `--help`, and errors (default: `false`) |
+| `type` | String | Expected value type for validation: `"string"`, `"int"`, `"float"`, `"bool"`, `"path"` |
+| `choices` | Array of String | Allowed values (requires `type = "string"`) |
+| `range` | String | Numeric range `"min..max"` (requires `type = "int"` or `"float"`) |
+| `must_exist` | Bool | Path must exist on disk (requires `type = "path"`) |
 
 ### Usage in Rules
 
-Argument values are accessible as `{arguments.<name>}` in shell commands,
-input/output paths, and `when` conditions:
+Values are accessible as `{config.<name>}` in shell commands, input/output
+paths, and `when` conditions:
 
 ```toml
 [[rules]]
 name = "blast"
-shell = "blastn -db {arguments.database} -evalue {arguments.threshold} -query {input} -out {output}"
+shell = "blastn -db {config.database} -evalue {config.threshold} -query {input} -out {output}"
 ```
 
 ### CLI
 
 ```bash
-# Provide required arguments
-oxo-flow run pipeline.oxoflow --arg database=refs/nt
+# Provide a required value (direct flag form)
+oxo-flow run pipeline.oxoflow --database refs/nt
 
-# Override defaults
+# Attached form
+oxo-flow run pipeline.oxoflow --database=refs/nt
+
+# Key=value form directly after the workflow file
+oxo-flow run pipeline.oxoflow database=refs/nt
+
+# Override several values
+oxo-flow run pipeline.oxoflow --database refs/nt --threshold 1e-3
+
+# Legacy --arg form (still supported)
 oxo-flow run pipeline.oxoflow --arg database=refs/nt --arg threshold=1e-3
-
-# Short form
-oxo-flow run pipeline.oxoflow -a database=refs/nt
 ```
 
 ### Precedence
 
-CLI `--arg` > declared `default` > error if `required` and unset.
+CLI override > declared `default` > error if `required` and unset.
 
 ---
 
@@ -956,8 +969,7 @@ Built-in placeholders use the same syntax but have reserved meanings:
 | `{output.name}` | The output file named `name` from `named_output` |
 | `{threads}` | Thread count assigned to this rule |
 | `{memory}` | Memory allocation assigned to this rule |
-| `{config.*}` | Value from the `[config]` section |
-| `{arguments.*}` | Value from the `[arguments]` section or `--arg` CLI flag |
+| `{config.*}` | Value from the `[config]` section (plain value, declared default, or CLI override) |
 
 ### Named Input & Output
 
@@ -1225,14 +1237,14 @@ Pairs with missing controls are supported — `control` is now optional:
 experiment = "T1"
 # control omitted → {control} = ""
 
-# Pooled normal via arguments
+# Pooled normal via config values
 [[pairs]]
 experiment = "T2"
 # control = ""  # empty string also works
 ```
 
 Rules using `{control}` receive an empty string when no control is specified.
-Use shell conditionals or `[arguments]` to handle this:
+Use shell conditionals or declarative `[config]` entries to handle this:
 
 ```toml
 [[rules]]
@@ -1247,10 +1259,10 @@ fi
 """
 ```
 
-For pooled-normal scenarios, use `[arguments]`:
+For pooled-normal scenarios, use declarative `[config]` entries:
 
 ```toml
-[arguments]
+[config]
 normal_mode = { default = "pooled", help = "matched, pooled, or none" }
 pooled_normal = { default = "results/pooled_normal.bam" }
 ```

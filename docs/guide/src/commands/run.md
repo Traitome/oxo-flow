@@ -38,7 +38,7 @@ oxo-flow run [OPTIONS] [WORKFLOW]
 | `--resume-failed` | — | — | Resume only failed rules from a previous run |
 | `--profile` | — | `local` | Execution profile: `local`, `slurm`, `pbs`, `sge`, or `lsf` |
 | `--provenance` | — | — | Track output file checksums for later verification |
-| `--arg` | `-a` | — | Set a workflow argument (`KEY=VALUE`). Repeatable. See `[arguments]` in workflow-format |
+| `--arg` | — | — | Legacy form: set a workflow config value (`KEY=VALUE`). Repeatable. See `[config]` in workflow-format |
 | `--sample` | — | — | Add a sample to the run. Repeatable. Merges with sample_pattern/CSV sources |
 | `--bundle` | — | — | Execute from a published `.tar.zst` bundle (extract → verify → run) |
 | `--verbose` | `-v` | — | Enable debug-level logging |
@@ -117,17 +117,24 @@ oxo-flow run pipeline.oxoflow --cache-dir .oxo-flow/cache
 oxo-flow run pipeline.oxoflow --skip-env-setup
 ```
 
-### Pass workflow arguments
+### Pass config values
+
+Every key in the `[config]` section of the workflow (including declarative
+`key = { default = …, required = …, … }` entries) can be overridden from the
+CLI — no extra flags to declare:
 
 ```bash
-# Provide a required argument
-oxo-flow run pipeline.oxoflow --arg database=refs/nt
+# Direct flag form
+oxo-flow run pipeline.oxoflow --database refs/nt
 
-# Override a default value
+# Attached form
+oxo-flow run pipeline.oxoflow --database=refs/nt
+
+# Key=value form directly after the workflow file
+oxo-flow run pipeline.oxoflow database=refs/nt threshold=1e-3
+
+# Legacy --arg form (still supported)
 oxo-flow run pipeline.oxoflow --arg database=refs/nt --arg threshold=1e-3
-
-# Short form
-oxo-flow run pipeline.oxoflow -a sample=SRR123 -a min_qual=30
 ```
 
 ### Execute a published bundle
