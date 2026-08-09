@@ -1217,21 +1217,16 @@ impl WorkflowConfig {
     /// Extract declarative `ConfigDef` entries from inline-table `[config]` values.
     fn extract_declarative_config(&mut self) -> Result<()> {
         for (key, val) in self.config.clone().iter() {
-            if let toml::Value::Table(t) = val {
-                if t.contains_key("default")
-                    || t.contains_key("required")
-                    || t.contains_key("help")
-                {
-                    if let Ok(def) = toml::Value::Table(t.clone()).try_into::<ConfigDef>() {
-                        self.config_meta.insert(key.clone(), def);
-                        let runtime_val = self.config_meta[key]
-                            .default
-                            .clone()
-                            .unwrap_or_default();
-                        self.config
-                            .insert(key.clone(), toml::Value::String(runtime_val));
-                    }
-                }
+            let toml::Value::Table(t) = val else {
+                continue;
+            };
+            if (t.contains_key("default") || t.contains_key("required") || t.contains_key("help"))
+                && let Ok(def) = toml::Value::Table(t.clone()).try_into::<ConfigDef>()
+            {
+                self.config_meta.insert(key.clone(), def);
+                let runtime_val = self.config_meta[key].default.clone().unwrap_or_default();
+                self.config
+                    .insert(key.clone(), toml::Value::String(runtime_val));
             }
         }
         Ok(())
@@ -4342,7 +4337,7 @@ shell = "echo {config.database} > {output[0]}"
         // Config values are resolved from defaults when no CLI override
         assert_eq!(
             config.config.get("database").and_then(|v| v.as_str()),
-            Some("")  // required, no default → empty string
+            Some("") // required, no default → empty string
         );
         assert_eq!(
             config.config.get("threshold").and_then(|v| v.as_str()),

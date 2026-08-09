@@ -425,7 +425,10 @@ fn evaluate_condition_with_config_prefix() {
     );
 
     // Bare key reference (truthiness)
-    assert!(evaluate_condition("config.mode", &config), "truthy config.mode");
+    assert!(
+        evaluate_condition("config.mode", &config),
+        "truthy config.mode"
+    );
     assert!(
         !evaluate_condition("config.missing", &config),
         "falsy config.missing"
