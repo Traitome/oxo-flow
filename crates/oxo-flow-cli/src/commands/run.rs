@@ -75,22 +75,62 @@ pub async fn run_command(
     // config_meta holds the declaration (required/default/help) for keys
     // that use the `key = { default, required, … }` syntax in [config].
     for (name, cfg_def) in &config.config_meta {
-        if let Some(val) = cli_arg_values.get(name) {
+        let effective_value = if let Some(val) = cli_arg_values.get(name) {
+            // Validate choices for CLI-provided values
+            if let Some(ref choices) = cfg_def.choices {
+                if !choices.iter().any(|c| c == val) {
+                    anyhow::bail!(
+                        "invalid value '{}' for config '{}'. Allowed: [{}]\n  {}",
+                        val,
+                        name,
+                        choices.join(", "),
+                        cfg_def.help.as_deref().unwrap_or("")
+                    );
+                }
+            }
             config
                 .config
                 .insert(name.clone(), toml::Value::String(val.clone()));
+            val.clone()
         } else if let Some(ref default) = cfg_def.default {
+            // Validate choices for default values too (catches bad .oxoflow files early)
+            if let Some(ref choices) = cfg_def.choices {
+                if !choices.iter().any(|c| c == default.as_str()) {
+                    anyhow::bail!(
+                        "default value '{}' for config '{}' is not in allowed choices: [{}]",
+                        default,
+                        name,
+                        choices.join(", ")
+                    );
+                }
+            }
             config
                 .config
                 .entry(name.clone())
                 .or_insert_with(|| toml::Value::String(default.clone()));
+            default.clone()
         } else if cfg_def.required {
+            let help_suffix = cfg_def
+                .help
+                .as_deref()
+                .map(|h| format!("\n  {h}"))
+                .unwrap_or_default();
+            let display_name = if cfg_def.sensitive {
+                format!("{name} (sensitive)")
+            } else {
+                name.clone()
+            };
             anyhow::bail!(
-                "required config '{}' not set. Use --{} <value>\n  {}",
-                name,
-                name,
-                cfg_def.help.as_deref().unwrap_or("")
+                "required config '{display_name}' not set. Use --{name} <value>{help_suffix}"
             );
+        } else {
+            continue;
+        };
+        // Mask sensitive values in all non-execution output
+        if cfg_def.sensitive {
+            tracing::info!("config '{}' = **** (sensitive)", name);
+        } else {
+            tracing::debug!("config '{}' = '{}'", name, effective_value);
         }
     }
 

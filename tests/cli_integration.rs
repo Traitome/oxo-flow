@@ -1896,6 +1896,62 @@ fn cli_run_with_arg_invalid_format_fails() {
     );
 }
 
+#[test]
+fn cli_run_config_with_choices_rejects_invalid_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("choices.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"choices\"\nversion = \"1.0.0\"\n\n[config]\nmode = { default = \"dna\", choices = [\"dna\", \"rna\"] }\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo {config.mode} > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    // Invalid value should fail
+    let output = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--mode=protein"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "invalid choice should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("invalid value") && stderr.contains("dna, rna"),
+        "should mention invalid value and allowed choices: {stderr}"
+    );
+
+    // Valid value should work
+    let output2 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--mode=rna"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(output2.status.success(), "valid choice should succeed");
+}
+
+#[test]
+fn cli_run_config_with_bad_default_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("badchoice.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"badchoice\"\nversion = \"1.0.0\"\n\n[config]\nmode = { default = \"protein\", choices = [\"dna\", \"rna\"] }\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo {config.mode} > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    // Default itself is invalid — should fail at parse/validation time
+    let output = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "bad default should be rejected");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("default value") && stderr.contains("protein"),
+        "should mention bad default: {stderr}"
+    );
+}
+
 // ─── [[references]] auto-build tests ────────────────────────────────────
 
 #[test]
