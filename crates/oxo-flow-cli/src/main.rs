@@ -113,6 +113,9 @@ pub enum Commands {
             help = "Add a sample to the run (repeatable, merges with all sources)"
         )]
         extra_samples: Vec<String>,
+        /// Enable AI error recovery on rule failure.
+        #[arg(long)]
+        ai_recover: bool,
     },
     /// Resume an interrupted workflow from a checkpoint.
     Resume {
@@ -120,6 +123,9 @@ pub enum Commands {
         checkpoint: PathBuf,
         #[arg(short = 'j', long, default_value = "1")]
         jobs: usize,
+        /// Enable AI error recovery on rule failure.
+        #[arg(long)]
+        ai_recover: bool,
     },
     /// Preview execution without running any commands.
     DryRun {
@@ -532,6 +538,7 @@ async fn main() -> Result<()> {
             args,
             config_overrides,
             extra_samples,
+            ai_recover,
         } => {
             let (wf, wd) = if let Some(bundle_path) = bundle {
                 let (extracted_wf, extracted_dir) =
@@ -565,10 +572,15 @@ async fn main() -> Result<()> {
                 cli.json,
                 merged_args,
                 extra_samples,
+                ai_recover,
             )
             .await?
         }
-        Commands::Resume { checkpoint, jobs } => resume_command(checkpoint, jobs).await?,
+        Commands::Resume {
+            checkpoint,
+            jobs,
+            ai_recover,
+        } => resume_command(checkpoint, jobs, ai_recover).await?,
         Commands::DryRun {
             workflow,
             target,
@@ -770,6 +782,7 @@ async fn main() -> Result<()> {
                     cli.json,
                     vec![], // cli_args
                     vec![], // extra_samples
+                    false,  // ai_recover
                 )
                 .await?;
             }

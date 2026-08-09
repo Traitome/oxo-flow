@@ -474,6 +474,7 @@ pub async fn watch_command(workflow: PathBuf, auto_run: bool, jobs: usize) -> Re
                             false,           // json (watch mode = human-readable)
                             vec![],          // cli_args
                             vec![],          // extra_samples
+                            false,           // ai_recover
                         )
                         .await;
                     } else {

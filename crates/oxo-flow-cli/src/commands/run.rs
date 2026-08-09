@@ -140,6 +140,7 @@ pub async fn run_command(
     json: bool,
     cli_args: Vec<String>,
     extra_samples: Vec<String>,
+    ai_recover: bool,
 ) -> Result<()> {
     print_banner();
     let workflow = resolve_workflow(workflow)?;
@@ -836,6 +837,45 @@ pub async fn run_command(
         let fc = fail_count.load(std::sync::atomic::Ordering::Relaxed);
         if fc > 0 && !keep_going {
             progress.finish_and_clear();
+
+            // AI error recovery
+            if ai_recover {
+                let failures_guard = failures.lock().await;
+                if let Some((rule, error)) = failures_guard.first() {
+                    let provider = crate::commands::ai_template::resolve_ai_provider()
+                        .unwrap_or_else(|_| {
+                            eprintln!("  AI provider not configured — skipping recovery");
+                            oxo_flow_ai::provider::AiProvider::Noop
+                        });
+
+                    if !matches!(provider, oxo_flow_ai::provider::AiProvider::Noop) {
+                        let result = crate::commands::ai_recover::diagnose_failure(
+                            &workflow, rule, -1, // exit code not tracked at this level
+                            error, &provider,
+                        )
+                        .await;
+
+                        match result {
+                            Ok(diag) => {
+                                if diag.safe_to_auto_apply
+                                    && let Some(ref toml) = diag.modified_toml
+                                {
+                                    let session_id = "recovery";
+                                    if let Err(e) = crate::commands::ai_recover::apply_fix(
+                                        &workflow, toml, session_id,
+                                    ) {
+                                        eprintln!("  Failed to apply fix: {e}");
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("  AI diagnosis failed: {e}");
+                            }
+                        }
+                    }
+                }
+            }
+
             return Err(anyhow::anyhow!("workflow execution failed"));
         }
     }
@@ -1272,7 +1312,7 @@ pub async fn handle_status(checkpoint_path: PathBuf, json: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn resume_command(checkpoint: PathBuf, jobs: usize) -> Result<()> {
+pub async fn resume_command(checkpoint: PathBuf, jobs: usize, _ai_recover: bool) -> Result<()> {
     // resume does not produce structured JSON output
     print_banner();
 
@@ -1362,6 +1402,7 @@ pub async fn resume_command(checkpoint: PathBuf, jobs: usize) -> Result<()> {
         false,           // json (resume defaults to human-readable)
         Vec::new(),      // cli_args (resume reuses checkpoint state)
         Vec::new(),      // extra_samples (resume uses existing groups)
+        false,           // ai_recover (resume doesn't support recovery)
     )
     .await
 }
