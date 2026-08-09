@@ -1947,9 +1947,140 @@ fn cli_run_config_with_bad_default_rejected() {
     assert!(!output.status.success(), "bad default should be rejected");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("default value") && stderr.contains("protein"),
-        "should mention bad default: {stderr}"
+        stderr.contains("invalid value") && stderr.contains("protein"),
+        "should mention invalid value: {stderr}"
     );
+}
+
+/// Typed config values (int/float) must support numeric comparisons in `when`.
+#[test]
+fn cli_run_when_condition_uses_typed_integer() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("typed.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"typed\"\nversion = \"1.0.0\"\n\n\
+         [config]\nmin_qual = 30\n\n\
+         [[rules]]\nname = \"qc_pass\"\noutput = [\"pass.txt\"]\n\
+         shell = \"echo pass > {output[0]}\"\n\
+         when = 'config.min_qual >= 20'\n\n\
+         [[rules]]\nname = \"qc_fail\"\noutput = [\"fail.txt\"]\n\
+         shell = \"echo fail > {output[0]}\"\n\
+         when = 'config.min_qual < 20'\n",
+    )
+    .unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("1 succeeded"),
+        "qc_pass should run: {stderr}"
+    );
+    assert!(
+        dir.path().join("pass.txt").exists(),
+        "qc_pass output should exist"
+    );
+    assert!(
+        !dir.path().join("fail.txt").exists(),
+        "qc_fail should be skipped"
+    );
+}
+
+#[test]
+fn cli_run_config_type_int_rejects_bad_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("typeint.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"t\"\nversion = \"1.0\"\n\n[config]\nmin_q = { default = \"30\", type = \"int\" }\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo {config.min_q} > {output[0]}\"\n",
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--min_q=abc"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("expects an integer"), "{stderr}");
+}
+
+#[test]
+fn cli_run_config_type_int_accepts_good_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("typeint2.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"t\"\nversion = \"1.0\"\n\n[config]\nmin_q = { default = \"30\", type = \"int\" }\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo {config.min_q} > {output[0]}\"\n",
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--min_q=42"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+}
+
+#[test]
+fn cli_run_config_type_float_rejects_bad_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("typefloat.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"t\"\nversion = \"1.0\"\n\n[config]\nthr = { default = \"1e-5\", type = \"float\" }\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo {config.thr} > {output[0]}\"\n",
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--thr=notanumber"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("expects a float"), "{stderr}");
+}
+
+#[test]
+fn cli_run_config_range_rejects_out_of_range() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("range.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"t\"\nversion = \"1.0\"\n\n[config]\nqual = { default = \"30\", type = \"int\", range = \"0..60\" }\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo {config.qual} > {output[0]}\"\n",
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--qual=999"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("outside range"), "{stderr}");
+}
+
+#[test]
+fn cli_run_config_range_accepts_in_range() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("range2.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"t\"\nversion = \"1.0\"\n\n[config]\nqual = { default = \"30\", type = \"int\", range = \"0..60\" }\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo {config.qual} > {output[0]}\"\n",
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--qual=45"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
 }
 
 // ─── [[references]] auto-build tests ────────────────────────────────────

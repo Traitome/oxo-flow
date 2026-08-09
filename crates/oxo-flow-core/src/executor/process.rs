@@ -593,6 +593,22 @@ impl LocalExecutor {
         rule: &Rule,
         wildcard_values: &HashMap<String, String>,
     ) -> Result<JobRecord> {
+        self.execute_rule_with_config(rule, wildcard_values, &HashMap::new())
+            .await
+    }
+
+    /// Execute a single rule with typed config values for condition evaluation.
+    ///
+    /// `config` should be the original `WorkflowConfig.config` map (preserving
+    /// TOML types). When provided, `when` conditions use typed comparisons
+    /// (e.g., `config.min_qual >= 20` for integers). When empty, falls back to
+    /// string-only comparisons from `wildcard_values` (backward compatible).
+    pub async fn execute_rule_with_config(
+        &self,
+        rule: &Rule,
+        wildcard_values: &HashMap<String, String>,
+        config: &HashMap<String, toml::Value>,
+    ) -> Result<JobRecord> {
         let timeout = self.get_timeout(rule);
 
         let mut record = JobRecord {
@@ -621,13 +637,18 @@ impl LocalExecutor {
             };
 
         if let Some(ref condition) = rule.when {
-            let config_values: HashMap<String, toml::Value> = wildcard_values
-                .iter()
-                .filter_map(|(k, v)| {
-                    k.strip_prefix("config.")
-                        .map(|key| (key.to_string(), toml::Value::String(v.clone())))
-                })
-                .collect();
+            // Build condition values from typed config first (preserves
+            // int/float/bool for numeric comparisons), then fall back to
+            // wildcard_values (strings from CLI args and template expansion).
+            let mut config_values: HashMap<String, toml::Value> =
+                config.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            for (k, v) in wildcard_values {
+                if let Some(key) = k.strip_prefix("config.") {
+                    config_values
+                        .entry(key.to_string())
+                        .or_insert_with(|| toml::Value::String(v.clone()));
+                }
+            }
             if !evaluate_condition(condition, &config_values) {
                 record.status = JobStatus::Skipped;
                 record.skip_reason = Some("condition evaluated to false".to_string());

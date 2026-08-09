@@ -451,6 +451,36 @@ fn evaluate_condition_with_config_prefix() {
 }
 
 #[test]
+fn evaluate_condition_typed_integer_comparison() {
+    let mut config = HashMap::new();
+    config.insert("min_qual".to_string(), toml::Value::Integer(30));
+    config.insert("threads".to_string(), toml::Value::Integer(8));
+
+    assert!(evaluate_condition("config.min_qual == 30", &config));
+    assert!(!evaluate_condition("config.min_qual == 20", &config));
+    assert!(evaluate_condition("config.min_qual >= 20", &config));
+    assert!(evaluate_condition("config.min_qual <= 30", &config));
+    assert!(evaluate_condition("config.min_qual > 10", &config));
+    assert!(evaluate_condition("config.min_qual < 50", &config));
+    assert!(!evaluate_condition("config.min_qual >= 50", &config));
+    assert!(evaluate_condition(
+        "config.min_qual >= 20 && config.threads >= 4",
+        &config
+    ));
+}
+
+#[test]
+fn evaluate_condition_typed_float_comparison() {
+    let mut config = HashMap::new();
+    config.insert("threshold".to_string(), toml::Value::Float(1e-5));
+
+    assert!(evaluate_condition("config.threshold == 0.00001", &config));
+    assert!(!evaluate_condition("config.threshold == 0.001", &config));
+    assert!(evaluate_condition("config.threshold < 0.001", &config));
+    assert!(evaluate_condition("config.threshold > 1e-10", &config));
+}
+
+#[test]
 fn validate_shell_safety_blocks_dangerous_deletion() {
     assert!(validate_shell_safety("rm -rf /").is_err());
 }

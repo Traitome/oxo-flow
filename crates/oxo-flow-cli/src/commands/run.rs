@@ -10,6 +10,116 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+/// Validate a config value against its ConfigDef declaration.
+fn validate_config_value(
+    name: &str,
+    value: &str,
+    def: &oxo_flow_core::config::ConfigDef,
+) -> anyhow::Result<()> {
+    // ── choices ──
+    if let Some(ref choices) = def.choices
+        && !choices.iter().any(|c| c == value)
+    {
+        anyhow::bail!(
+            "invalid value '{}' for config '{}'. Allowed: [{}]\n  {}",
+            value,
+            name,
+            choices.join(", "),
+            def.help.as_deref().unwrap_or("")
+        );
+    }
+
+    // ── type validation ──
+    if let Some(ref type_) = def.type_ {
+        match type_.as_str() {
+            "int" => {
+                value.parse::<i64>().map_err(|_| {
+                    anyhow::anyhow!(
+                        "config '{}' expects an integer, got '{}'\n  {}",
+                        name,
+                        value,
+                        def.help.as_deref().unwrap_or("")
+                    )
+                })?;
+            }
+            "float" => {
+                value.parse::<f64>().map_err(|_| {
+                    anyhow::anyhow!(
+                        "config '{}' expects a float, got '{}'\n  {}",
+                        name,
+                        value,
+                        def.help.as_deref().unwrap_or("")
+                    )
+                })?;
+            }
+            "bool" => {
+                if value != "true" && value != "false" {
+                    anyhow::bail!(
+                        "config '{}' expects a boolean (true/false), got '{}'\n  {}",
+                        name,
+                        value,
+                        def.help.as_deref().unwrap_or("")
+                    );
+                }
+            }
+            "path" => {
+                if value.is_empty() {
+                    anyhow::bail!(
+                        "config '{}' expects a path, got empty string\n  {}",
+                        name,
+                        def.help.as_deref().unwrap_or("")
+                    );
+                }
+                // must_exist check
+                if def.must_exist {
+                    let p = std::path::Path::new(value);
+                    if !p.exists() {
+                        anyhow::bail!(
+                            "config '{}' path does not exist: '{}'\n  {}",
+                            name,
+                            value,
+                            def.help.as_deref().unwrap_or("")
+                        );
+                    }
+                }
+            }
+            _ => { /* "string" or unknown — no validation */ }
+        }
+    }
+
+    // ── range validation (requires type = int or float) ──
+    if let Some(ref range) = def.range
+        && let Some((min_str, max_str)) = range.split_once("..")
+    {
+        let min: f64 = min_str.trim().parse().map_err(|_| {
+            anyhow::anyhow!("invalid range min '{}' for config '{}'", min_str, name)
+        })?;
+        let max: f64 = max_str.trim().parse().map_err(|_| {
+            anyhow::anyhow!("invalid range max '{}' for config '{}'", max_str, name)
+        })?;
+        let val: f64 = value.parse().map_err(|_| {
+            anyhow::anyhow!(
+                "config '{}' has range '{range}' but value '{}' is not numeric\n  {}",
+                name,
+                value,
+                def.help.as_deref().unwrap_or("")
+            )
+        })?;
+        if val < min || val > max {
+            anyhow::bail!(
+                "config '{}' value {} is outside range {}..{}\n  {}",
+                name,
+                val,
+                min,
+                max,
+                def.help.as_deref().unwrap_or("")
+            );
+        }
+    }
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_command(
     workflow: Option<PathBuf>,
@@ -76,34 +186,13 @@ pub async fn run_command(
     // that use the `key = { default, required, … }` syntax in [config].
     for (name, cfg_def) in &config.config_meta {
         let effective_value = if let Some(val) = cli_arg_values.get(name) {
-            // Validate choices for CLI-provided values
-            if let Some(ref choices) = cfg_def.choices {
-                if !choices.iter().any(|c| c == val) {
-                    anyhow::bail!(
-                        "invalid value '{}' for config '{}'. Allowed: [{}]\n  {}",
-                        val,
-                        name,
-                        choices.join(", "),
-                        cfg_def.help.as_deref().unwrap_or("")
-                    );
-                }
-            }
+            validate_config_value(name, val, cfg_def)?;
             config
                 .config
                 .insert(name.clone(), toml::Value::String(val.clone()));
             val.clone()
         } else if let Some(ref default) = cfg_def.default {
-            // Validate choices for default values too (catches bad .oxoflow files early)
-            if let Some(ref choices) = cfg_def.choices {
-                if !choices.iter().any(|c| c == default.as_str()) {
-                    anyhow::bail!(
-                        "default value '{}' for config '{}' is not in allowed choices: [{}]",
-                        default,
-                        name,
-                        choices.join(", ")
-                    );
-                }
-            }
+            validate_config_value(name, default, cfg_def)?;
             config
                 .config
                 .entry(name.clone())
@@ -621,10 +710,14 @@ pub async fn run_command(
                 eprintln!("  {} {}", "Running:".bold().cyan(), rule_name);
             }
 
+            let typed_config = config.config.clone();
             let handle = tokio::spawn(async move {
                 let _permit = semaphore.acquire().await;
 
-                match executor.execute_rule(&rule, &wildcard_values).await {
+                match executor
+                    .execute_rule_with_config(&rule, &wildcard_values, &typed_config)
+                    .await
+                {
                     Ok(record) => {
                         let duration = record
                             .finished_at
