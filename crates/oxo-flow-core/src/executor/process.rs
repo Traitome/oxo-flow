@@ -625,6 +625,7 @@ impl LocalExecutor {
                 .iter()
                 .filter_map(|(k, v)| {
                     k.strip_prefix("config.")
+                        .or_else(|| k.strip_prefix("arguments."))
                         .map(|key| (key.to_string(), toml::Value::String(v.clone())))
                 })
                 .collect();
@@ -1108,12 +1109,18 @@ fn evaluate_condition_inner(s: &str, config_values: &HashMap<String, toml::Value
         if let Some(idx) = find_top_level_op(s, op) {
             let lhs = s[..idx].trim();
             let rhs = s[idx + op.len()..].trim();
-            if let Some(key) = lhs.strip_prefix("config.") {
+            if let Some(key) = lhs
+                .strip_prefix("config.")
+                .or_else(|| lhs.strip_prefix("arguments."))
+            {
                 return compare_config_value(config_values.get(key), op, rhs);
             }
         }
     }
-    if let Some(key) = s.strip_prefix("config.") {
+    if let Some(key) = s
+        .strip_prefix("config.")
+        .or_else(|| s.strip_prefix("arguments."))
+    {
         return match config_values.get(key) {
             Some(toml::Value::Boolean(b)) => *b,
             Some(toml::Value::String(sv)) => !sv.is_empty() && sv != "false" && sv != "0",

@@ -2561,8 +2561,64 @@ fn cli_run_condition_skip_counted_once() {
         stderr.contains("0 succeeded, 1 skipped, 0 failed"),
         "one rule skipped once, not twice: {stderr}"
     );
+}
+
+/// A `when` condition referencing `{arguments.*}` must evaluate correctly.
+/// The executor's config_values builder and evaluate_condition must both
+/// handle the `arguments.` prefix alongside `config.`.
+#[test]
+fn cli_run_when_condition_sees_arguments_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("argwhen.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"argwhen\"\nversion = \"1.0.0\"\n\n\
+         [arguments]\nmode = { default = \"dna\" }\n\n\
+         [[rules]]\nname = \"only_rna\"\noutput = [\"rna.txt\"]\n\
+         when = 'arguments.mode == \"rna\"'\nshell = \"echo ran > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        !dir.path().join("rna.txt").exists(),
-        "rule with a false condition must not run"
+        stderr.contains("0 succeeded, 1 skipped, 0 failed"),
+        "rule should be skipped when condition is false (mode=dna, when asks for rna): {stderr}"
+    );
+}
+
+/// When the condition IS true, the rule should execute.
+#[test]
+fn cli_run_when_condition_matches_argument_and_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("argwhen2.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"argwhen2\"\nversion = \"1.0.0\"\n\n\
+         [arguments]\nmode = { default = \"rna\" }\n\n\
+         [[rules]]\nname = \"only_rna\"\noutput = [\"rna.txt\"]\n\
+         when = 'arguments.mode == \"rna\"'\nshell = \"echo ran > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("1 succeeded"),
+        "rule should execute when condition matches: {stderr}"
+    );
+    assert!(
+        dir.path().join("rna.txt").exists(),
+        "output file should exist when rule executed"
     );
 }

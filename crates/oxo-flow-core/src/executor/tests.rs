@@ -416,6 +416,53 @@ fn evaluate_condition_complex_expression() {
 }
 
 #[test]
+fn evaluate_condition_with_arguments_prefix() {
+    let mut config = HashMap::new();
+    config.insert("mode".to_string(), toml::Value::String("dna".to_string()));
+    config.insert(
+        "min_qual".to_string(),
+        toml::Value::String("30".to_string()),
+    );
+
+    // Bare key reference (truthiness)
+    assert!(
+        evaluate_condition("arguments.mode", &config),
+        "truthy arguments.mode"
+    );
+    assert!(
+        !evaluate_condition("arguments.missing", &config),
+        "falsy arguments.missing"
+    );
+
+    // Equality comparison
+    assert!(evaluate_condition(
+        r#"arguments.mode == "dna""#,
+        &config
+    ));
+    assert!(!evaluate_condition(
+        r#"arguments.mode == "rna""#,
+        &config
+    ));
+
+    // Equality with string value (compare_config_value only supports ==/!= for strings)
+    assert!(evaluate_condition(
+        r#"arguments.min_qual == "30""#,
+        &config
+    ));
+    assert!(!evaluate_condition(
+        r#"arguments.min_qual == "20""#,
+        &config
+    ));
+
+    // Mix config. and arguments. in same expression
+    config.insert("paired".to_string(), toml::Value::Boolean(true));
+    assert!(evaluate_condition(
+        r#"config.paired == true && arguments.mode == "dna""#,
+        &config
+    ));
+}
+
+#[test]
 fn validate_shell_safety_blocks_dangerous_deletion() {
     assert!(validate_shell_safety("rm -rf /").is_err());
 }
