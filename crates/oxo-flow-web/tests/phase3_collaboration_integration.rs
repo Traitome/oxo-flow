@@ -228,8 +228,7 @@ async fn test_all_modes_have_auth_routes() {
         // Should return a JSON response (401 for bad credentials), not a 404.
         // We check the route exists, not that credentials are accepted.
         assert!(
-            resp.status() == axum::http::StatusCode::UNAUTHORIZED
-                || resp.status().is_success(),
+            resp.status() == axum::http::StatusCode::UNAUTHORIZED || resp.status().is_success(),
             "{mode} mode: login route should exist (expected 401 or 200, got {})",
             resp.status()
         );

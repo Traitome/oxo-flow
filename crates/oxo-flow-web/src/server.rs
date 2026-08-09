@@ -40,8 +40,7 @@ async fn spa_index() -> impl IntoResponse {
             })
         })
         .unwrap_or_else(|| {
-            let compile_time_path =
-                concat!(env!("CARGO_MANIFEST_DIR"), "/static/index.html");
+            let compile_time_path = concat!(env!("CARGO_MANIFEST_DIR"), "/static/index.html");
             std::fs::read_to_string(compile_time_path).unwrap_or_else(|_| fallback.to_string())
         });
 
@@ -92,9 +91,7 @@ fn frontend_dir() -> std::path::PathBuf {
         .ok()
         .or_else(|| std::env::var("FRONTEND_DIR").ok())
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/static"))
-        })
+        .unwrap_or_else(|| std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/static")))
 }
 
 /// Build the full application router for the given serve mode.
@@ -366,8 +363,7 @@ pub fn build_router(mode: &str) -> Router {
     let hpc_routes = Router::new().route("/api/hpc", get(crate::handlers::system::hpc_status));
 
     // ---- API 404: unknown /api/* paths return JSON, never HTML ----
-    let api_fallback =
-        Router::new().nest("/api", Router::new().fallback(api_not_found));
+    let api_fallback = Router::new().nest("/api", Router::new().fallback(api_not_found));
 
     // ---- SPA fallback: any unknown non-API route serves index.html ----
     let spa_fallback = Router::new().fallback(spa_fallback);

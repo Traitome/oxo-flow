@@ -31,7 +31,10 @@ pub async fn init_pool(database_url: &str) {
     let backend = PostgresBackend::new(database_url)
         .await
         .expect("Failed to create PostgresBackend");
-    backend.init().await.expect("Failed to initialize PostgreSQL database");
+    backend
+        .init()
+        .await
+        .expect("Failed to initialize PostgreSQL database");
     let _ = PG_POOL.set(backend.pool);
 }
 

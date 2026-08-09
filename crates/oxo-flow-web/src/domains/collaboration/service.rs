@@ -83,8 +83,10 @@ pub async fn share_pipeline(
         .await
         .map_err(|e| format!("Failed to create share: {e}"))?;
 
+    let host = std::env::var("OXO_FLOW_HOST").unwrap_or_else(|_| "localhost".into());
+    let port = std::env::var("OXO_FLOW_PORT").unwrap_or_else(|_| "3000".into());
     Ok(ShareResponse {
-        share_url: format!("oxo+https://localhost:8777/share/{token}"),
+        share_url: format!("oxo+https://{host}:{port}/share/{token}"),
         access_token: token,
         expires_at: share.expires_at,
     })

@@ -107,10 +107,11 @@ async fn main() -> Result<()> {
 
     // Database initialization: PostgreSQL if DATABASE_URL starts with postgres://,
     // otherwise SQLite (default).
-    let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "sqlite://oxo-flow.db".to_string());
+    let database_url =
+        std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://oxo-flow.db".to_string());
 
-    let is_postgres = database_url.starts_with("postgres://") || database_url.starts_with("postgresql://");
+    let is_postgres =
+        database_url.starts_with("postgres://") || database_url.starts_with("postgresql://");
 
     if is_postgres {
         #[cfg(feature = "postgres")]
@@ -124,9 +125,7 @@ async fn main() -> Result<()> {
                 "DATABASE_URL is a PostgreSQL URL but the 'postgres' feature is not enabled. \
                  Rebuild with: cargo build --features postgres"
             );
-            anyhow::bail!(
-                "PostgreSQL support not compiled in — rebuild with --features postgres"
-            );
+            anyhow::bail!("PostgreSQL support not compiled in — rebuild with --features postgres");
         }
     } else {
         oxo_flow_web::db::init_db(&database_url).await?;

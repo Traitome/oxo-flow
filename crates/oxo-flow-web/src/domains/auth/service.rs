@@ -201,8 +201,9 @@ pub async fn handle_oauth_callback(
 
     let config = oauth_config_from_env(provider, redirect_uri)?;
     let (access_token, orcid_id) = config.exchange_code(code).await?;
-    let (provider_user_id, username) =
-        config.fetch_identity(&access_token, orcid_id.as_deref()).await?;
+    let (provider_user_id, username) = config
+        .fetch_identity(&access_token, orcid_id.as_deref())
+        .await?;
 
     let session_token = generate_token();
 
@@ -227,7 +228,10 @@ mod tests {
             return;
         }
         let result = authenticate("testuser", "testuser");
-        assert!(result.is_err(), "password==username should be rejected without OX_FLOW_DEV_MODE=1");
+        assert!(
+            result.is_err(),
+            "password==username should be rejected without OX_FLOW_DEV_MODE=1"
+        );
     }
 
     #[test]

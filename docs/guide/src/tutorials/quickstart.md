@@ -199,7 +199,7 @@ oxo-flow serve --mode team
 oxo-flow serve --mode hpc --scheduler slurm
 ```
 
-Open `http://localhost:8777` to access the web UI with:
+Open `http://localhost:3000` to access the web UI with:
 - DAG visualization with live status
 - Pipeline validation and execution monitoring
 - AI-powered pipeline generation from natural language

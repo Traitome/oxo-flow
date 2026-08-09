@@ -93,19 +93,18 @@ async fn validate_token(
     }
 
     // Look up the user's role
-    let user: Option<models::UserRow> =
-        sqlx::query_as("SELECT * FROM users WHERE username = ?")
-            .bind(&session.user_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error looking up user role: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
+    let user: Option<models::UserRow> = sqlx::query_as("SELECT * FROM users WHERE username = ?")
+        .bind(&session.user_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error looking up user role: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
 
     let role = user.map(|u| u.role).unwrap_or_else(|| "user".to_string());
 
@@ -349,7 +348,7 @@ pub async fn oauth_authorize(
     let redirect_uri = req
         .redirect_uri
         .as_deref()
-        .unwrap_or("http://localhost:8777/api/auth/oauth/callback");
+        .unwrap_or("http://localhost:3000/api/auth/oauth/callback");
 
     super::service::initiate_oauth(&req.provider, redirect_uri)
         .map(Json)
@@ -365,7 +364,7 @@ pub async fn oauth_callback(
 ) -> ApiResult<OAuthCallbackResponse> {
     let provider = req.provider.as_deref().unwrap_or("orcid");
     let redirect_uri = std::env::var("OXO_FLOW_OAUTH_REDIRECT_URI")
-        .unwrap_or_else(|_| "http://localhost:8777/api/auth/oauth/callback".to_string());
+        .unwrap_or_else(|_| "http://localhost:3000/api/auth/oauth/callback".to_string());
 
     // Verify CSRF state — the state from the callback must match what we issued.
     // In production, the state should be stored server-side (e.g. in the sessions table
@@ -385,9 +384,10 @@ pub async fn oauth_callback(
         "OAuth callback received — state should be verified against stored pending request"
     );
 
-    let result = super::service::handle_oauth_callback(provider, &req.code, &req.state, &redirect_uri)
-        .await
-        .map_err(|e| err(StatusCode::BAD_REQUEST, "OAUTH_CALLBACK_ERROR", e))?;
+    let result =
+        super::service::handle_oauth_callback(provider, &req.code, &req.state, &redirect_uri)
+            .await
+            .map_err(|e| err(StatusCode::BAD_REQUEST, "OAUTH_CALLBACK_ERROR", e))?;
 
     // Persist the session
     if let Ok(pool) = get_pool() {

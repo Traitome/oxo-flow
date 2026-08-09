@@ -48,12 +48,12 @@ The web server verifies its license at startup:
 export OXO_FLOW_LICENSE=/path/to/license.oxo.json
 
 # Upload via API
-curl -X POST http://localhost:8777/api/license/upload \
+curl -X POST http://localhost:3000/api/license/upload \
   -H "Content-Type: application/json" \
   -d '{"license_data": "..."}'
 
 # Check status
-curl http://localhost:8777/api/license
+curl http://localhost:3000/api/license
 ```
 
 ## License Visibility

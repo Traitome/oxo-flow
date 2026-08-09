@@ -22,7 +22,7 @@ oxo-flow serve --mode hpc --scheduler slurm
 
 | Setting | Value |
 |---------|-------|
-| Network | `127.0.0.1:8777` (localhost only) |
+| Network | `127.0.0.1:3000` (localhost only) |
 | Database | SQLite file (`oxo-flow.db`) |
 | Auth | None (single user) |
 | Workspace | `workspace/personal/` |
@@ -35,7 +35,7 @@ oxo-flow serve
 oxo-flow serve -p 9090
 
 # Open browser
-open http://localhost:8777
+open http://localhost:3000
 ```
 
 ## Mode 2: Team
@@ -44,7 +44,7 @@ open http://localhost:8777
 
 | Setting | Value |
 |---------|-------|
-| Network | `0.0.0.0:8777` (all interfaces) |
+| Network | `0.0.0.0:3000` (all interfaces) |
 | Database | SQLite (default) or PostgreSQL |
 | Auth | ORCID OAuth2 → GitHub OAuth2 → Invite Code → Basic |
 | Workspace | `workspace/users/<username>/` |
@@ -86,7 +86,7 @@ workspace/
 
 | Setting | Value |
 |---------|-------|
-| Network | `0.0.0.0:8777` |
+| Network | `0.0.0.0:3000` |
 | Database | SQLite or PostgreSQL |
 | Auth | Same as Team mode |
 | Executor | SLURM / PBS / LSF / SGE |
@@ -129,7 +129,7 @@ oxo-flow-core, oxo-flow-cli: Apache 2.0
 oxo-flow-web: Dual license — LICENSE-ACADEMIC / LICENSE-COMMERCIAL
 Contact: Shixiang Wang <w_shixiang@163.com>
 
-Starting oxo-flow-web in team mode on 0.0.0.0:8777
+Starting oxo-flow-web in team mode on 0.0.0.0:3000
 HPC scheduler detected: slurm (version: 23.02.7)
 ```
 
