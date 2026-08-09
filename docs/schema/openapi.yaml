@@ -1,474 +1,944 @@
 openapi: 3.1.0
 info:
-  title: oxo-flow REST API
+  title: oxo-flow API
   description: |
-    Domain-driven API for managing and executing bioinformatics workflows.
-    v0.8 introduces 53 endpoints across 7 domains: workflow, execution,
-    data, templates, auth, AI, collaboration, and observability.
-  version: 0.8.0
+    Domain-driven REST API for bioinformatics pipeline orchestration —
+    85+ endpoints across 11 domains.
+  version: 0.9.2
   contact:
     name: Shixiang Wang
     email: w_shixiang@163.com
 servers:
-  - url: http://localhost:8777
+  - url: http://localhost:3000
     description: Default local server (personal mode)
-  - url: http://0.0.0.0:8777
+  - url: http://0.0.0.0:3000
     description: Team/HPC server
 
+tags:
+  - name: Observability
+    description: Health, system, metrics, audit, quota, and HPC status
+  - name: Workflow
+    description: Pipeline parsing, validation, DAG, linting, and CRUD
+  - name: Execution
+    description: Run lifecycle, status, diagnostics, logs, and reports
+  - name: Data
+    description: Data discovery, reference genomes, and samplesheets
+  - name: Templates
+    description: Reusable pipeline templates
+  - name: Auth
+    description: Authentication, users, and OAuth
+  - name: License
+    description: License status and upload
+  - name: AI
+    description: AI Companion — translate, explain, interpret, optimize, config
+  - name: Chat
+    description: AI chat sessions and streaming responses
+  - name: DAG Editor
+    description: In-place DAG command editing with undo/redo
+  - name: Collaboration
+    description: Fork, share, and import pipelines
+  - name: Frontend
+    description: Embedded SPA and static assets
+
 paths:
-  # ── Health & System ──
+  # ── Observability ─────────────────────────────────────────────────────
   /api/health:
     get:
       summary: Health check with component status
+      description: Public endpoint. Reports overall status (ok or degraded when
+        the SQLite database is unreachable) and per-component status.
       tags: [Observability]
+      security: []
       responses:
         '200':
           description: OK (may be "degraded" if DB unreachable)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
   /api/system:
     get:
       summary: System info (version, OS, arch, uptime)
+      description: Public endpoint. Reports server version, platform, and mode.
       tags: [Observability]
+      security: []
       responses:
         '200':
-          description: OK
+          description: System information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemInfo'
+
+  /api/openapi.json:
+    get:
+      summary: This OpenAPI specification
+      description: Public endpoint. Serves the embedded OpenAPI 3.1 JSON document.
+      tags: [Observability]
+      security: []
+      responses:
+        '200':
+          description: OpenAPI 3.1 JSON document
+          content:
+            application/json:
+              schema:
+                type: object
 
   /api/metrics:
     get:
       summary: Runtime metrics (CPU, memory, active workflows)
+      description: Public endpoint. Live runtime metrics for monitoring.
       tags: [Observability]
+      security: []
       responses:
         '200':
-          description: OK
+          description: Runtime metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsResponse'
 
   /api/events:
     get:
-      summary: Recent system events from audit log
+      summary: System events stream (SSE)
+      description: Public endpoint. Server-Sent Events stream of system events
+        (run status changes, audit events, workflow lifecycle).
       tags: [Observability]
+      security: []
       responses:
         '200':
-          description: OK
+          description: Server-Sent Events stream (text/event-stream)
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/SseEvent'
 
   /api/audit:
     get:
       summary: Audit log entries
+      description: Requires Bearer token in team/hpc modes. Returns audit log
+        entries filtered by time range.
       tags: [Observability]
       parameters:
         - name: days
           in: query
+          description: Number of days of history to include
           schema:
             type: integer
             default: 7
+        - name: limit
+          in: query
+          description: Maximum number of entries to return
+          schema:
+            type: integer
+            default: 100
       responses:
         '200':
-          description: OK
+          description: Audit log entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AuditLogEntry'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
-  /api/openapi.json:
+  /api/quota:
     get:
-      summary: This OpenAPI spec
+      summary: License quota status
+      description: Requires Bearer token in team/hpc modes. Reports usage of
+        pipeline, run, storage, and AI quotas.
       tags: [Observability]
       responses:
         '200':
-          description: OpenAPI 3.1 JSON
+          description: Quota status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuotaStatus'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
-  # ── Pipeline Lifecycle ──
+  /api/hpc:
+    get:
+      summary: HPC scheduler status
+      description: Public endpoint, available in HPC mode only. Reports scheduler
+        type, queue, and job counts.
+      tags: [Observability]
+      security: []
+      responses:
+        '200':
+          description: HPC scheduler status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HpcStatus'
+
+  # ── Workflow / Pipeline Lifecycle ─────────────────────────────────────
   /api/pipelines/parse:
     post:
       summary: Parse .oxoflow TOML into structured pipeline
+      description: Parses pipeline TOML into a structured representation with
+        rules, DAG, and statistics.
       tags: [Workflow]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [toml_content]
-              properties:
-                toml_content:
-                  type: string
-                format_version:
-                  type: string
+              $ref: '#/components/schemas/ParsePipelineRequest'
       responses:
         '200':
           description: Pipeline parsed with DAG and stats
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParsePipelineResponse'
         '400':
           description: Parse error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
   /api/pipelines/validate:
     post:
       summary: Validate a pipeline
+      description: Validates pipeline TOML and returns errors and warnings.
       tags: [Workflow]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [toml_content]
-              properties:
-                toml_content:
-                  type: string
+              $ref: '#/components/schemas/TOMLContent'
       responses:
         '200':
           description: Validation result with errors/warnings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResponse'
 
   /api/pipelines/prepare:
     post:
       summary: Prepare pipeline (wildcard expansion + defaults)
+      description: Expands {sample}-style wildcards and applies default values.
       tags: [Workflow]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [toml_content]
-              properties:
-                toml_content:
-                  type: string
-                resolve_wildcards:
-                  type: boolean
-                apply_defaults:
-                  type: boolean
+              $ref: '#/components/schemas/PreparePipelineRequest'
       responses:
         '200':
           description: Prepared pipeline with expansions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreparedPipeline'
 
   /api/pipelines/dag:
     post:
       summary: Build DAG from pipeline TOML
+      description: Builds the directed acyclic graph with nodes, edges, parallel
+        groups, and critical path.
       tags: [Workflow]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [toml_content]
-              properties:
-                toml_content:
-                  type: string
+              $ref: '#/components/schemas/TOMLContent'
       responses:
         '200':
           description: DAG with nodes, edges, parallel groups, critical path
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DagGraph'
 
   /api/pipelines/format:
     post:
       summary: Canonical TOML formatting
+      description: Re-formats pipeline TOML to the canonical style.
       tags: [Workflow]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [toml_content]
-              properties:
-                toml_content:
-                  type: string
+              $ref: '#/components/schemas/TOMLContent'
       responses:
         '200':
           description: Formatted TOML
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FormatResponse'
 
   /api/pipelines/lint:
     post:
       summary: Lint pipeline with suggestions
+      description: Static analysis of the pipeline with severity-ranked issues.
       tags: [Workflow]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [toml_content]
-              properties:
-                toml_content:
-                  type: string
+              $ref: '#/components/schemas/TOMLContent'
       responses:
         '200':
           description: Lint results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LintResponse'
 
   /api/pipelines/stats:
     post:
       summary: Aggregate pipeline statistics
+      description: Computes rule, sample, and job statistics for a pipeline.
       tags: [Workflow]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [toml_content]
-              properties:
-                toml_content:
-                  type: string
+              $ref: '#/components/schemas/TOMLContent'
       responses:
         '200':
           description: Pipeline statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PipelineStats'
 
   /api/pipelines/diff:
     post:
       summary: Diff two pipelines
+      description: Compares two saved pipelines by ID and lists changes.
       tags: [Workflow]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                pipeline_a_id:
-                  type: string
-                pipeline_b_id:
-                  type: string
+              $ref: '#/components/schemas/DiffPipelinesRequest'
       responses:
         '200':
           description: Diff results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiffResponse'
 
   /api/pipelines/export:
     post:
       summary: Export pipeline for Docker/Singularity
+      description: Exports a saved pipeline as a Docker/Singularity recipe or a
+        standalone execution script.
       tags: [Workflow]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                pipeline_id:
-                  type: string
-                format:
-                  type: string
+              $ref: '#/components/schemas/ExportPipelineRequest'
       responses:
         '200':
           description: Export result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  format:
+                    type: string
+                  content:
+                    type: string
+                  filename:
+                    type: string
 
   /api/pipelines/search:
     post:
       summary: Search pipelines and templates
+      description: Full-text search across saved pipelines and templates.
       tags: [Workflow]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [query]
-              properties:
-                query:
-                  type: string
+              $ref: '#/components/schemas/SearchPipelinesRequest'
       responses:
         '200':
           description: Search results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PipelineSummary'
+
+  /api/plugins/validate:
+    post:
+      summary: Validate a plugin manifest and signature
+      description: Validates a plugin manifest and optionally verifies its
+        HMAC signature against trusted keys.
+      tags: [Workflow]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PluginValidateRequest'
+      responses:
+        '200':
+          description: Validation result with errors and signature status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PluginValidateResponse'
+        '400':
+          description: Invalid manifest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
   /api/pipelines:
     get:
       summary: List saved pipelines
+      description: Lists saved pipelines, newest first, with pagination.
       tags: [Workflow]
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            default: 20
       responses:
         '200':
           description: Pipeline list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PipelineListResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+    post:
+      summary: Create a saved pipeline
+      description: Saves a pipeline from TOML content into the pipeline store.
+      tags: [Workflow]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SavePipelineRequest'
+      responses:
+        '200':
+          description: Saved pipeline
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pipeline'
+        '400':
+          description: Invalid pipeline content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
   /api/pipelines/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Pipeline ID (UUID)
+        schema:
+          type: string
+          format: uuid
     get:
       summary: Get pipeline by ID
       tags: [Workflow]
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
       responses:
         '200':
           description: Pipeline detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pipeline'
         '404':
           description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
     put:
       summary: Update pipeline
+      description: Replaces the pipeline content and metadata.
       tags: [Workflow]
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SavePipelineRequest'
       responses:
         '200':
           description: Updated pipeline
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pipeline'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
     delete:
       summary: Delete pipeline
       tags: [Workflow]
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
       responses:
         '200':
           description: Deleted
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
-  # ── Execution ──
+  # ── Execution / Runs ──────────────────────────────────────────────────
   /api/runs:
     post:
       summary: Create a new run
+      description: Creates and starts a run from pipeline TOML. With dry_run
+        set, only the execution plan is returned.
       tags: [Execution]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [toml_content]
-              properties:
-                toml_content:
-                  type: string
-                max_jobs:
-                  type: integer
-                dry_run:
-                  type: boolean
-                keep_going:
-                  type: boolean
+              $ref: '#/components/schemas/CreateRunRequest'
       responses:
         '200':
           description: Run created with execution plan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '400':
+          description: Invalid pipeline or execution request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
     get:
       summary: List runs
+      description: Lists runs, newest first, optionally filtered by status.
       tags: [Execution]
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: status
+          in: query
+          description: Filter by run status
+          schema:
+            $ref: '#/components/schemas/RunStatus'
       responses:
         '200':
           description: Run list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunListResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
   /api/runs/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Run ID (UUID)
+        schema:
+          type: string
+          format: uuid
     get:
       summary: Get run detail
       tags: [Execution]
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
       responses:
         '200':
           description: Run detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
         '404':
           description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
   /api/runs/{id}/status:
     get:
       summary: Get run status with per-node state
       tags: [Execution]
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
+        - $ref: '#/components/parameters/RunId'
       responses:
         '200':
           description: Run status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunStatusResponse'
+        '404':
+          description: Run not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
   /api/runs/{id}/dag-status:
     get:
-      summary: 'DAG with live node status (colors: green/blue/gray/red)'
+      summary: DAG with live node status
+      description: 'DAG with live node status (colors: green/blue/gray/red) plus
+        execution metrics and ETA.'
       tags: [Execution]
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
+        - $ref: '#/components/parameters/RunId'
       responses:
         '200':
           description: DAG status with metrics and ETA
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DagStatusResponse'
+        '404':
+          description: Run not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
   /api/runs/{id}/diagnostics:
     get:
-      summary: Failure diagnostics with error patterns and fix suggestions
+      summary: Failure diagnostics with fix suggestions
+      description: Analyzes failed jobs for error patterns and suggests fixes.
       tags: [Execution]
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
+        - $ref: '#/components/parameters/RunId'
       responses:
         '200':
           description: Diagnostics result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiagnosticsResponse'
 
   /api/runs/{id}/logs:
     get:
       summary: Execution log content
+      description: Returns the raw execution log as plain text.
       tags: [Execution]
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
+        - $ref: '#/components/parameters/RunId'
       responses:
         '200':
           description: Log text
+          content:
+            text/plain:
+              schema:
+                type: string
 
   /api/runs/{id}/results:
     get:
       summary: Output file listing
+      description: Lists output files produced by the run.
       tags: [Execution]
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
+        - $ref: '#/components/parameters/RunId'
       responses:
         '200':
           description: File list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/OutputFile'
+
+  /api/runs/{id}/ai-status:
+    get:
+      summary: AI analysis status for a run
+      description: Reports whether AI post-run analysis (explain, interpret,
+        report) is available or in progress for the run.
+      tags: [Execution]
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: AI analysis status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  available:
+                    type: boolean
+                  ai_analyzed:
+                    type: boolean
+                  status:
+                    type: string
+                    enum: [idle, running, ready, failed]
+
+  /api/runs/{id}/report:
+    get:
+      summary: Get run report
+      description: Returns the generated run report with sections and summary.
+      tags: [Execution]
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Run report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunReport'
 
   /api/runs/{id}/retry:
     post:
       summary: Smart retry (only failed + downstream)
+      description: Retries only failed rules and their downstream dependents,
+        optionally skipping already-succeeded rules.
       tags: [Execution]
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
+        - $ref: '#/components/parameters/RunId'
       requestBody:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                from_rule:
-                  type: string
-                skip_succeeded:
-                  type: boolean
+              $ref: '#/components/schemas/RetryRequest'
       responses:
         '200':
           description: Retry plan
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  retry_id:
+                    type: string
+                  retried_rules:
+                    type: array
+                    items:
+                      type: string
+                  skipped_rules:
+                    type: array
+                    items:
+                      type: string
 
   /api/runs/{id}/cancel:
     post:
       summary: Cancel a running run
       tags: [Execution]
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
+        - $ref: '#/components/parameters/RunId'
       responses:
         '200':
           description: Cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  status:
+                    $ref: '#/components/schemas/RunStatus'
 
-  # ── Data Discovery ──
+  /api/runs/{id}/pause:
+    post:
+      summary: Pause a running run
+      tags: [Execution]
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Paused
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  status:
+                    $ref: '#/components/schemas/RunStatus'
+
+  /api/runs/{id}/resume:
+    post:
+      summary: Resume a paused run
+      tags: [Execution]
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Resumed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  status:
+                    $ref: '#/components/schemas/RunStatus'
+
+  /api/runs/{id}/report/ask:
+    post:
+      summary: Ask a question about the run report
+      description: Answers natural-language questions about the run report
+        using the AI Companion.
+      tags: [Execution]
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AskReportRequest'
+      responses:
+        '200':
+          description: Answer to the question
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  answer:
+                    type: string
+
+  /api/runs/{id}/report/visualize:
+    post:
+      summary: Generate a chart from run report data
+      description: Generates a visualization (chart) from run report data.
+      tags: [Execution]
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VisualizeReportRequest'
+      responses:
+        '200':
+          description: Visualization result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  chart:
+                    type: string
+                  data:
+                    type: object
+
+  # ── Data Discovery ────────────────────────────────────────────────────
   /api/data/analyze:
     post:
       summary: Analyze files — detect formats, pairing, sample names
+      description: Scans the given paths and detects file formats, read
+        pairing, and sample names, suggesting a suitable workflow.
+      tags: [Data]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnalyzeDataRequest'
+      responses:
+        '200':
+          description: File analysis with workflow suggestion
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyzeDataResponse'
+
+  /api/data/reference:
+    post:
+      summary: Discover reference genome components
+      description: Discovers reference genome component files (index, GTF,
+        annotation, etc.) for the given genome.
+      tags: [Data]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReferenceDiscoveryRequest'
+      responses:
+        '200':
+          description: Reference discovery results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReferenceDiscoveryResponse'
+
+  /api/data/perceive:
+    post:
+      summary: Perceive data semantics
+      description: Infers semantics (data type, organelle, assay, etc.) from
+        paths or project layout.
       tags: [Data]
       requestBody:
         required: true
@@ -476,41 +946,70 @@ paths:
           application/json:
             schema:
               type: object
-              required: [paths]
               properties:
                 paths:
                   type: array
                   items:
                     type: string
-                max_depth:
-                  type: integer
+                layout:
+                  type: string
       responses:
         '200':
-          description: File analysis with workflow suggestion
+          description: Perceived data semantics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data_type:
+                    type: string
+                  assay:
+                    type: string
+                  organelle:
+                    type: string
+                  confidence:
+                    type: number
 
-  /api/data/reference:
+  /api/data/reference/status:
+    get:
+      summary: Reference discovery status
+      description: Polls the status of an in-progress reference discovery.
+      tags: [Data]
+      parameters:
+        - name: reference_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Reference discovery status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReferenceStatusResponse'
+
+  /api/data/samplesheet/parse:
     post:
-      summary: Discover reference genome components
+      summary: Parse a samplesheet
+      description: Parses a samplesheet (CSV/TSV content) into structured
+        sample records.
       tags: [Data]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [genome, components]
-              properties:
-                genome:
-                  type: string
-                components:
-                  type: array
-                  items:
-                    type: string
+              $ref: '#/components/schemas/ParseSamplesheetRequest'
       responses:
         '200':
-          description: Reference discovery results
+          description: Parsed samples
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParseSamplesheetResponse'
 
-  # ── Templates ──
+  # ── Templates ─────────────────────────────────────────────────────────
   /api/templates:
     get:
       summary: List templates
@@ -518,116 +1017,122 @@ paths:
       responses:
         '200':
           description: Template list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Template'
     post:
       summary: Create/update template
+      description: Creates a new template or updates an existing one by name.
       tags: [Templates]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [name, toml_content]
-              properties:
-                name:
-                  type: string
-                category:
-                  type: string
-                description:
-                  type: string
-                tags:
-                  type: array
-                  items:
-                    type: string
-                toml_content:
-                  type: string
+              $ref: '#/components/schemas/SaveTemplateRequest'
       responses:
         '200':
           description: Saved template
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Template'
 
   /api/templates/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Template ID (UUID)
+        schema:
+          type: string
+          format: uuid
     get:
       summary: Get template by ID
       tags: [Templates]
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
       responses:
         '200':
           description: Template detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Template'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
     delete:
       summary: Delete template
       tags: [Templates]
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
       responses:
         '200':
           description: Deleted
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
-  # ── Plugin Validation ──
-  /api/plugins/validate:
-    post:
-      summary: Validate a plugin manifest and signature
-      tags: [Workflow]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [manifest]
-              properties:
-                manifest:
-                  type: object
-                  description: Plugin manifest object (name, version, plugin_type, etc.)
-                trusted_keys:
-                  type: object
-                  description: Optional map of key_id -> hex-encoded HMAC key for signature verification
-                  additionalProperties:
-                    type: string
-      responses:
-        '200':
-          description: Validation result with errors and signature status
-        '400':
-          description: Invalid manifest
-
-  # ── Auth ──
+  # ── Auth & Users ──────────────────────────────────────────────────────
   /api/auth/login:
     post:
       summary: Authenticate user
+      description: Public endpoint. Exchanges credentials for a session token.
+        Rate-limited to protect against brute force.
       tags: [Auth]
+      security: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [username, password]
-              properties:
-                username:
-                  type: string
-                password:
-                  type: string
+              $ref: '#/components/schemas/LoginRequest'
       responses:
         '200':
           description: Login success with token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
         '401':
           description: Auth failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
   /api/auth/me:
     get:
       summary: Get current user info from Bearer token
+      description: Public endpoint. Resolves the current user from the Bearer
+        token in the Authorization header.
       tags: [Auth]
+      security: []
       responses:
         '200':
           description: User info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          description: Invalid or missing token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
   /api/users:
     get:
@@ -636,257 +1141,750 @@ paths:
       responses:
         '200':
           description: User list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserListResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Admin role required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
     post:
-      summary: Create user
+      summary: Create user (admin only)
       tags: [Auth]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [username]
-              properties:
-                username:
-                  type: string
-                role:
-                  type: string
-                password:
-                  type: string
+              $ref: '#/components/schemas/CreateUserRequest'
       responses:
         '200':
           description: Created user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Username already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
   /api/users/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: User ID
+        schema:
+          type: integer
     delete:
-      summary: Delete user
+      summary: Delete user (admin only)
       tags: [Auth]
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
       responses:
         '200':
           description: Deleted
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
+  /api/auth/oauth/authorize:
+    post:
+      summary: Initiate OAuth authorization
+      description: Public endpoint. Starts an OAuth flow for the given
+        provider and returns the redirect URI.
+      tags: [Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OAuthAuthorizeRequest'
+      responses:
+        '200':
+          description: Authorization URL for the provider
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  authorize_url:
+                    type: string
+                  state:
+                    type: string
+
+  /api/auth/oauth/callback:
+    post:
+      summary: Complete OAuth callback
+      description: Public endpoint. Exchanges the provider authorization code
+        for a session token.
+      tags: [Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OAuthCallbackRequest'
+      responses:
+        '200':
+          description: Session established
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: OAuth exchange failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  # ── License ───────────────────────────────────────────────────────────
   /api/license:
     get:
       summary: License status
-      tags: [Auth]
+      description: Public endpoint. Reports whether a commercial license is
+        active and its expiry.
+      tags: [License]
+      security: []
       responses:
         '200':
           description: License info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LicenseStatus'
 
   /api/license/upload:
     post:
       summary: Upload commercial license
-      tags: [Auth]
+      description: Uploads a commercial license payload to activate licensed
+        features.
+      tags: [License]
       requestBody:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                license_data:
-                  type: string
+              $ref: '#/components/schemas/LicenseUploadRequest'
       responses:
         '200':
-          description: License status
+          description: Updated license status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LicenseStatus'
+        '400':
+          description: Invalid license data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
-  # ── AI ──
+  # ── AI Companion ──────────────────────────────────────────────────────
   /api/ai/translate:
     post:
-      summary: Translate natural language intent to validated .oxoflow pipeline
+      summary: Translate natural language intent to a validated pipeline
+      description: Converts a natural-language intent into a validated
+        .oxoflow pipeline with explanation and alternatives.
       tags: [AI]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [intent]
-              properties:
-                intent:
-                  type: string
-                context:
-                  type: object
+              $ref: '#/components/schemas/TranslateRequest'
       responses:
         '200':
           description: Validated pipeline with explanation and alternatives
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranslateResponse'
+        '400':
+          description: AI provider error or invalid intent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/ai/translate/stream:
+    post:
+      summary: Stream translation of intent to pipeline (SSE)
+      description: Like translate, but streams progress and the resulting
+        pipeline as Server-Sent Events.
+      tags: [AI]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TranslateRequest'
+      responses:
+        '200':
+          description: Server-Sent Events stream of translation progress
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/SseEvent'
 
   /api/ai/explain:
     post:
       summary: AI explanation of run failure
+      description: Explains why a run failed and suggests fixes, optionally in
+        Chinese or English.
       tags: [AI]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [run_id]
-              properties:
-                run_id:
-                  type: string
-                language:
-                  type: string
-                  enum: [zh, en]
+              $ref: '#/components/schemas/ExplainRequest'
       responses:
         '200':
           description: Failure explanation with fix suggestions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExplainResponse'
 
   /api/ai/interpret:
     post:
       summary: AI interpretation of results (DEG, variants, QC)
+      description: Interprets run result files (differential expression,
+        variants, QC) with caveats.
       tags: [AI]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [run_id]
-              properties:
-                run_id:
-                  type: string
-                result_type:
-                  type: string
-                  enum: [deg, variants, qc]
+              $ref: '#/components/schemas/InterpretRequest'
       responses:
         '200':
           description: Result interpretation with caveats
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InterpretResponse'
 
   /api/ai/optimize:
     post:
       summary: AI parameter optimization
+      description: Optimizes pipeline parameters toward a goal (speed, cost,
+        or sensitivity) subject to constraints.
       tags: [AI]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [pipeline_id]
-              properties:
-                pipeline_id:
-                  type: string
-                goal:
-                  type: string
-                  enum: [speed, cost, sensitivity]
-                constraints:
-                  type: object
+              $ref: '#/components/schemas/OptimizeRequest'
       responses:
         '200':
           description: Optimized pipeline with changes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OptimizeResponse'
 
   /api/ai/config:
     get:
       summary: Get AI provider configuration
+      description: Public endpoint. Returns the effective AI provider config
+        (with secrets redacted).
       tags: [AI]
+      security: []
       responses:
         '200':
           description: AI config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiConfig'
     post:
       summary: Update AI provider configuration
+      description: Public endpoint. Updates the server-wide AI provider
+        configuration.
       tags: [AI]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AiConfigUpdateRequest'
       responses:
         '200':
           description: Updated config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiConfig'
 
   /api/ai/test:
     post:
       summary: Test AI provider connectivity
+      description: Public endpoint. Sends a probe prompt to the AI provider
+        and reports latency and result.
       tags: [AI]
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AiTestRequest'
       responses:
         '200':
           description: Test result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiTestResponse'
 
-  # ── Collaboration ──
+  /api/ai/config/user:
+    get:
+      summary: Get per-user AI configuration
+      tags: [AI]
+      responses:
+        '200':
+          description: User AI config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiConfig'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+    put:
+      summary: Update per-user AI configuration
+      tags: [AI]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AiConfigUpdateRequest'
+      responses:
+        '200':
+          description: Updated user AI config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiConfig'
+
+  /api/ai/config/server:
+    get:
+      summary: Get server-wide AI configuration
+      description: Admin-only. Returns the server-side AI provider config.
+      tags: [AI]
+      responses:
+        '200':
+          description: Server AI config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiConfig'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Admin role required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+    put:
+      summary: Update server-wide AI configuration
+      description: Admin-only. Persists the server-side AI provider config.
+      tags: [AI]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AiConfigUpdateRequest'
+      responses:
+        '200':
+          description: Updated server AI config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiConfig'
+
+  /api/ai/config/effective:
+    get:
+      summary: Get effective AI configuration
+      description: Returns the merged user/server/default AI configuration
+        with the precedence source.
+      tags: [AI]
+      responses:
+        '200':
+          description: Effective AI config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiEffectiveConfig'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  # ── Chat ──────────────────────────────────────────────────────────────
+  /api/chat/send:
+    post:
+      summary: Send a chat message (SSE)
+      description: Sends a message to the AI chat and streams the reply as
+        Server-Sent Events.
+      tags: [Chat]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatMessageRequest'
+      responses:
+        '200':
+          description: Server-Sent Events stream of the AI reply
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/SseEvent'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/chat/send/json:
+    post:
+      summary: Send a chat message (JSON response)
+      description: Non-streaming variant of chat/send; returns the full reply
+        as JSON.
+      tags: [Chat]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatMessageRequest'
+      responses:
+        '200':
+          description: Chat reply
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatJsonResponse'
+
+  /api/chat/sessions:
+    get:
+      summary: List chat sessions
+      description: Lists the current user's chat sessions.
+      tags: [Chat]
+      responses:
+        '200':
+          description: Chat sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ChatSession'
+
+  # ── DAG Editor ────────────────────────────────────────────────────────
+  /api/pipeline/{id}/command:
+    post:
+      summary: Apply an edit command to a pipeline
+      description: Applies a DAG edit command (add/remove rule, rewire edge,
+        set params) and returns the updated pipeline with undo history.
+      tags: [DAG Editor]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Pipeline ID (UUID)
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DagEditRequest'
+      responses:
+        '200':
+          description: Updated pipeline with undo/redo state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DagEditResponse'
+        '404':
+          description: Pipeline not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/pipeline/{id}/undo:
+    post:
+      summary: Undo the last edit command
+      tags: [DAG Editor]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Pipeline ID (UUID)
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Pipeline after undo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DagEditResponse'
+
+  /api/pipeline/{id}/redo:
+    post:
+      summary: Redo the last undone edit command
+      tags: [DAG Editor]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Pipeline ID (UUID)
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Pipeline after redo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DagEditResponse'
+
+  # ── Collaboration ─────────────────────────────────────────────────────
   /api/pipelines/{id}/fork:
     post:
       summary: Fork a pipeline into user workspace
+      description: Creates a copy of the pipeline owned by the current user.
       tags: [Collaboration]
       parameters:
         - name: id
           in: path
           required: true
+          description: Pipeline ID (UUID)
           schema:
             type: string
+            format: uuid
       responses:
         '200':
           description: Forked pipeline info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForkResponse'
+        '404':
+          description: Pipeline not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
   /api/pipelines/{id}/share:
     post:
       summary: Share pipeline via link or workspace
+      description: Generates a share link (oxo+https://) or shares the
+        pipeline into a workspace.
       tags: [Collaboration]
       parameters:
         - name: id
           in: path
           required: true
+          description: Pipeline ID (UUID)
           schema:
             type: string
+            format: uuid
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [visibility]
-              properties:
-                visibility:
-                  type: string
-                  enum: [link, workspace]
-                expires_in_days:
-                  type: integer
+              $ref: '#/components/schemas/ShareRequest'
       responses:
         '200':
           description: Share link and access token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShareResponse'
+        '404':
+          description: Pipeline not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
   /api/pipelines/import:
     post:
-      summary: Import pipeline via oxo+https:// share link
+      summary: Import pipeline via share link
+      description: Imports a pipeline from an oxo+https:// share link.
       tags: [Collaboration]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [url]
-              properties:
-                url:
-                  type: string
-                  pattern: '^oxo\+https?://'
+              $ref: '#/components/schemas/ImportRequest'
       responses:
         '200':
-          description: Imported pipeline ID
+          description: Imported pipeline
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportResponse'
+        '400':
+          description: Invalid share link
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
-  # ── HPC ──
-  /api/hpc:
+  # ── Frontend (embedded SPA) ───────────────────────────────────────────
+  /:
     get:
-      summary: HPC scheduler status
-      tags: [HPC]
+      summary: Embedded SPA index page
+      description: Public endpoint. Serves the React SPA index.html; any
+        non-API route falls back to this page.
+      tags: [Frontend]
+      security: []
       responses:
         '200':
-          description: HPC status
+          description: SPA index.html
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /favicon.svg:
+    get:
+      summary: SPA favicon
+      tags: [Frontend]
+      security: []
+      responses:
+        '200':
+          description: SVG favicon
+          content:
+            image/svg+xml:
+              schema:
+                type: string
+
+  /icons.svg:
+    get:
+      summary: Icon sprite
+      tags: [Frontend]
+      security: []
+      responses:
+        '200':
+          description: SVG icon sprite
+          content:
+            image/svg+xml:
+              schema:
+                type: string
+
+  /assets/{path}:
+    get:
+      summary: Static frontend assets
+      description: Public endpoint. Serves compiled assets (JS, CSS, images)
+        from the frontend build directory.
+      tags: [Frontend]
+      security: []
+      parameters:
+        - name: path
+          in: path
+          required: true
+          description: Asset path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Asset file
+        '404':
+          description: Asset not found
 
 components:
+  parameters:
+    RunId:
+      name: id
+      in: path
+      required: true
+      description: Run ID (UUID)
+      schema:
+        type: string
+        format: uuid
+
   schemas:
     ApiError:
       type: object
       properties:
         code:
           type: string
-          example: "PARSE_ERROR"
+          example: PARSE_ERROR
         message:
           type: string
         detail:
           type: string
         suggestion:
           type: string
+
+    PaginationMeta:
+      type: object
+      properties:
+        page:
+          type: integer
+        per_page:
+          type: integer
+        total:
+          type: integer
+
     PaginatedResponse:
       type: object
       properties:
@@ -894,17 +1892,1161 @@ components:
           type: array
           items: {}
         meta:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    # ── Observability ──
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+          example: ok
+        version:
+          type: string
+          example: 0.9.2
+        components:
           type: object
-          properties:
-            page:
-              type: integer
-            per_page:
-              type: integer
-            total:
-              type: integer
+          additionalProperties:
+            type: object
+            properties:
+              status:
+                type: string
+                enum: [ok, error]
+              detail:
+                type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    SystemInfo:
+      type: object
+      properties:
+        version:
+          type: string
+        os:
+          type: string
+        arch:
+          type: string
+        uptime_seconds:
+          type: number
+        mode:
+          type: string
+          enum: [personal, team, hpc]
+
+    MetricsResponse:
+      type: object
+      properties:
+        cpu_percent:
+          type: number
+        memory_percent:
+          type: number
+        active_workflows:
+          type: integer
+        completed_workflows:
+          type: integer
+        failed_workflows:
+          type: integer
+        uptime_seconds:
+          type: number
+
+    SseEvent:
+      type: object
+      description: A single Server-Sent Events frame (event name + JSON data).
+      properties:
+        event:
+          type: string
+          example: run_status
+        data:
+          type: object
+
+    AuditLogEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+        timestamp:
+          type: string
+          format: date-time
+        actor:
+          type: string
+        action:
+          type: string
+        resource:
+          type: string
+        outcome:
+          type: string
+          enum: [success, denied, error]
+        detail:
+          type: string
+
+    QuotaStatus:
+      type: object
+      properties:
+        pipeline_limit:
+          type: integer
+        pipelines_used:
+          type: integer
+        run_limit:
+          type: integer
+        runs_used:
+          type: integer
+        storage_bytes:
+          type: integer
+        storage_used_bytes:
+          type: integer
+        ai_credits:
+          type: number
+        ai_credits_used:
+          type: number
+
+    HpcStatus:
+      type: object
+      properties:
+        scheduler:
+          type: string
+          enum: [slurm, pbs, lsf, sge]
+        queue:
+          type: string
+        running_jobs:
+          type: integer
+        queued_jobs:
+          type: integer
+        nodes:
+          type: integer
+        cores:
+          type: integer
+        available:
+          type: boolean
+
+    # ── Workflow ──
+    TOMLContent:
+      type: object
+      required: [toml_content]
+      properties:
+        toml_content:
+          type: string
+          description: .oxoflow pipeline TOML content
+
+    ParsePipelineRequest:
+      type: object
+      required: [toml_content]
+      properties:
+        toml_content:
+          type: string
+        format_version:
+          type: string
+          example: '0.9'
+
+    ParsePipelineResponse:
+      type: object
+      properties:
+        name:
+          type: string
+        format_version:
+          type: string
+        rules:
+          type: array
+          items:
+            type: object
+        dag:
+          $ref: '#/components/schemas/DagGraph'
+        stats:
+          $ref: '#/components/schemas/PipelineStats'
+        warnings:
+          type: array
+          items:
+            type: string
+
+    DagGraph:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              rule:
+                type: string
+              sample:
+                type: string
+        edges:
+          type: array
+          items:
+            type: object
+            properties:
+              from:
+                type: string
+              to:
+                type: string
+              via:
+                type: string
+        parallel_groups:
+          type: array
+          items:
+            type: array
+            items:
+              type: string
+        critical_path:
+          type: array
+          items:
+            type: string
+
+    PipelineStats:
+      type: object
+      properties:
+        rules:
+          type: integer
+        samples:
+          type: integer
+        total_jobs:
+          type: integer
+        estimated_runtime_seconds:
+          type: integer
+
+    ValidationResponse:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: string
+        warnings:
+          type: array
+          items:
+            type: string
+
+    PreparePipelineRequest:
+      type: object
+      required: [toml_content]
+      properties:
+        toml_content:
+          type: string
+        resolve_wildcards:
+          type: boolean
+          default: true
+        apply_defaults:
+          type: boolean
+          default: true
+
+    PreparedPipeline:
+      type: object
+      properties:
+        toml_content:
+          type: string
+        expanded_rules:
+          type: integer
+        expansions:
+          type: array
+          items:
+            type: object
+
+    FormatResponse:
+      type: object
+      properties:
+        toml_content:
+          type: string
+
+    LintIssue:
+      type: object
+      properties:
+        severity:
+          type: string
+          enum: [error, warning, info]
+        message:
+          type: string
+        rule:
+          type: string
+        line:
+          type: integer
+
+    LintResponse:
+      type: object
+      properties:
+        issues:
+          type: array
+          items:
+            $ref: '#/components/schemas/LintIssue'
+
+    DiffPipelinesRequest:
+      type: object
+      properties:
+        pipeline_a_id:
+          type: string
+          format: uuid
+        pipeline_b_id:
+          type: string
+          format: uuid
+
+    DiffResponse:
+      type: object
+      properties:
+        changes:
+          type: array
+          items:
+            type: object
+        summary:
+          type: object
+
+    ExportPipelineRequest:
+      type: object
+      properties:
+        pipeline_id:
+          type: string
+          format: uuid
+        format:
+          type: string
+          enum: [docker, singularity, script]
+
+    SearchPipelinesRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+
+    PipelineSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        version:
+          type: string
+        rule_count:
+          type: integer
+        owner:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Pipeline:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        version:
+          type: string
+        toml_content:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        owner:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    SavePipelineRequest:
+      type: object
+      required: [name, toml_content]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        version:
+          type: string
+        toml_content:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+
+    PipelineListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/PipelineSummary'
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    PluginValidateRequest:
+      type: object
+      required: [manifest]
+      properties:
+        manifest:
+          type: object
+          description: Plugin manifest object (name, version, plugin_type, etc.)
+        trusted_keys:
+          type: object
+          additionalProperties:
+            type: string
+          description: Optional map of key_id to hex-encoded HMAC key for signature verification
+
+    PluginValidateResponse:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: string
+        signature:
+          type: string
+          enum: [valid, invalid, missing]
+
+    # ── Execution ──
+    CreateRunRequest:
+      type: object
+      required: [toml_content]
+      properties:
+        toml_content:
+          type: string
+        max_jobs:
+          type: integer
+          default: 1
+        dry_run:
+          type: boolean
+          default: false
+        keep_going:
+          type: boolean
+          default: false
+        env_backend:
+          type: string
+          enum: [conda, pixi, docker, singularity, venv, modules]
+        workdir:
+          type: string
+
+    RunStatus:
+      type: string
+      enum: [queued, running, completed, failed, cancelled, paused, prepared]
+
+    Run:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        status:
+          $ref: '#/components/schemas/RunStatus'
+        pipeline_id:
+          type: string
+          format: uuid
+          nullable: true
+        node_count:
+          type: integer
+        total_jobs:
+          type: integer
+        failed_jobs:
+          type: integer
+        error:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    RunListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Run'
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    RunStatusResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/RunStatus'
+        progress_percent:
+          type: number
+        active_rules:
+          type: array
+          items:
+            type: string
+        completed_rules:
+          type: array
+          items:
+            type: string
+        failed_rules:
+          type: array
+          items:
+            type: string
+        nodes:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [pending, running, completed, failed, skipped, cancelled]
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    DagStatusResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/RunStatus'
+        dag:
+          $ref: '#/components/schemas/DagGraph'
+        nodes:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [pending, running, completed, failed, skipped, cancelled]
+        metrics:
+          type: object
+        eta_seconds:
+          type: number
+          nullable: true
+
+    DiagnosticsResponse:
+      type: object
+      properties:
+        errors:
+          type: array
+          items:
+            type: object
+        patterns:
+          type: array
+          items:
+            type: string
+        suggestions:
+          type: array
+          items:
+            type: string
+
+    OutputFile:
+      type: object
+      properties:
+        path:
+          type: string
+        size_bytes:
+          type: integer
+        rule:
+          type: string
+        kind:
+          type: string
+
+    RunReport:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/RunStatus'
+        summary:
+          type: string
+        sections:
+          type: array
+          items:
+            type: object
+
+    RetryRequest:
+      type: object
+      properties:
+        from_rule:
+          type: string
+          description: Retry starting from this rule onward
+        skip_succeeded:
+          type: boolean
+          default: true
+
+    AskReportRequest:
+      type: object
+      required: [question]
+      properties:
+        question:
+          type: string
+
+    VisualizeReportRequest:
+      type: object
+      required: [chart]
+      properties:
+        chart:
+          type: string
+          enum: [bar, line, scatter, heatmap, pie]
+        field:
+          type: string
+
+    # ── Data ──
+    AnalyzeDataRequest:
+      type: object
+      required: [paths]
+      properties:
+        paths:
+          type: array
+          items:
+            type: string
+        max_depth:
+          type: integer
+          default: 3
+
+    AnalyzeDataResponse:
+      type: object
+      properties:
+        files:
+          type: array
+          items:
+            type: object
+        samples:
+          type: array
+          items:
+            type: object
+        pairings:
+          type: array
+          items:
+            type: object
+        suggested_workflow:
+          type: string
+          nullable: true
+
+    ReferenceDiscoveryRequest:
+      type: object
+      required: [genome, components]
+      properties:
+        genome:
+          type: string
+          example: hg38
+        components:
+          type: array
+          items:
+            type: string
+          example: [fasta, index, gtf]
+
+    ReferenceDiscoveryResponse:
+      type: object
+      properties:
+        genome:
+          type: string
+        components:
+          type: array
+          items:
+            type: object
+        missing:
+          type: array
+          items:
+            type: string
+
+    ReferenceStatusResponse:
+      type: object
+      properties:
+        reference_id:
+          type: string
+        status:
+          type: string
+          enum: [discovering, ready, failed]
+        progress_percent:
+          type: number
+
+    ParseSamplesheetRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+          description: Raw CSV/TSV samplesheet content
+
+    ParseSamplesheetResponse:
+      type: object
+      properties:
+        samples:
+          type: array
+          items:
+            type: object
+        errors:
+          type: array
+          items:
+            type: string
+
+    # ── Templates ──
+    Template:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        category:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        toml_content:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    SaveTemplateRequest:
+      type: object
+      required: [name, toml_content]
+      properties:
+        name:
+          type: string
+        category:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        toml_content:
+          type: string
+
+    # ── Auth ──
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: 'Session token to send as Authorization: Bearer <token>'
+        token_type:
+          type: string
+          example: Bearer
+        expires_at:
+          type: string
+          format: date-time
+        user:
+          $ref: '#/components/schemas/User'
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        username:
+          type: string
+        role:
+          type: string
+          enum: [admin, user, viewer]
+        created_at:
+          type: string
+          format: date-time
+        last_login_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    CreateUserRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+        role:
+          type: string
+          enum: [admin, user, viewer]
+          default: user
+
+    UserListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    OAuthAuthorizeRequest:
+      type: object
+      required: [provider]
+      properties:
+        provider:
+          type: string
+          enum: [github, google, gitlab]
+        redirect_uri:
+          type: string
+
+    OAuthCallbackRequest:
+      type: object
+      required: [provider, code]
+      properties:
+        provider:
+          type: string
+          enum: [github, google, gitlab]
+        code:
+          type: string
+        state:
+          type: string
+
+    # ── License ──
+    LicenseStatus:
+      type: object
+      properties:
+        licensed:
+          type: boolean
+        license_type:
+          type: string
+          enum: [community, commercial]
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        seats:
+          type: integer
+          nullable: true
+
+    LicenseUploadRequest:
+      type: object
+      properties:
+        license_data:
+          type: string
+          description: License payload (base64 or raw license text)
+
+    # ── Chat ──
+    ChatMessageRequest:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+        session_id:
+          type: string
+        run_id:
+          type: string
+          format: uuid
+        context:
+          type: object
+
+    ChatJsonResponse:
+      type: object
+      properties:
+        session_id:
+          type: string
+        reply:
+          type: string
+
+    ChatSession:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        message_count:
+          type: integer
+
+    # ── DAG Editor ──
+    DagEditRequest:
+      type: object
+      required: [command]
+      properties:
+        command:
+          type: string
+          description: DAG edit command, e.g. add_rule, remove_rule, add_edge,
+            remove_edge, set_param
+        params:
+          type: object
+
+    DagEditResponse:
+      type: object
+      properties:
+        command_id:
+          type: string
+        toml_content:
+          type: string
+        can_undo:
+          type: boolean
+        can_redo:
+          type: boolean
+
+    # ── AI ──
+    TranslateRequest:
+      type: object
+      required: [intent]
+      properties:
+        intent:
+          type: string
+          description: Natural-language description of the pipeline to build
+        context:
+          type: object
+          description: Optional context (sample names, reference genomes, options)
+
+    TranslateResponse:
+      type: object
+      properties:
+        pipeline:
+          $ref: '#/components/schemas/Pipeline'
+        explanation:
+          type: string
+        alternatives:
+          type: array
+          items:
+            type: string
+        validation:
+          $ref: '#/components/schemas/ValidationResponse'
+
+    ExplainRequest:
+      type: object
+      required: [run_id]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        language:
+          type: string
+          enum: [zh, en]
+          default: en
+
+    ExplainResponse:
+      type: object
+      properties:
+        explanation:
+          type: string
+        fixes:
+          type: array
+          items:
+            type: string
+
+    InterpretRequest:
+      type: object
+      required: [run_id]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        result_type:
+          type: string
+          enum: [deg, variants, qc]
+
+    InterpretResponse:
+      type: object
+      properties:
+        interpretation:
+          type: string
+        caveats:
+          type: array
+          items:
+            type: string
+
+    OptimizeRequest:
+      type: object
+      required: [pipeline_id]
+      properties:
+        pipeline_id:
+          type: string
+          format: uuid
+        goal:
+          type: string
+          enum: [speed, cost, sensitivity]
+        constraints:
+          type: object
+
+    OptimizeResponse:
+      type: object
+      properties:
+        optimized_pipeline:
+          $ref: '#/components/schemas/Pipeline'
+        changes:
+          type: array
+          items:
+            type: object
+
+    AiConfig:
+      type: object
+      description: AI provider configuration (secrets redacted in responses).
+      properties:
+        provider:
+          type: string
+          enum: [openai, anthropic, deepseek, ollama, custom]
+        model:
+          type: string
+        base_url:
+          type: string
+        temperature:
+          type: number
+        max_tokens:
+          type: integer
+
+    AiConfigUpdateRequest:
+      type: object
+      properties:
+        provider:
+          type: string
+          enum: [openai, anthropic, deepseek, ollama, custom]
+        model:
+          type: string
+        base_url:
+          type: string
+        api_key:
+          type: string
+          format: password
+        temperature:
+          type: number
+        max_tokens:
+          type: integer
+
+    AiTestRequest:
+      type: object
+      properties:
+        provider:
+          type: string
+          enum: [openai, anthropic, deepseek, ollama, custom]
+        model:
+          type: string
+        base_url:
+          type: string
+        api_key:
+          type: string
+          format: password
+        prompt:
+          type: string
+          default: 'Ping'
+
+    AiTestResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        latency_ms:
+          type: integer
+        response:
+          type: string
+        error:
+          type: string
+          nullable: true
+
+    AiEffectiveConfig:
+      type: object
+      properties:
+        provider:
+          type: string
+        model:
+          type: string
+        source:
+          type: string
+          enum: [user, server, default]
+        temperature:
+          type: number
+        max_tokens:
+          type: integer
+
+    # ── Collaboration ──
+    ForkResponse:
+      type: object
+      properties:
+        fork_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        owner:
+          type: string
+
+    ShareRequest:
+      type: object
+      required: [visibility]
+      properties:
+        visibility:
+          type: string
+          enum: [link, workspace]
+        expires_in_days:
+          type: integer
+
+    ShareResponse:
+      type: object
+      properties:
+        share_url:
+          type: string
+          example: oxo+https://example.com/pipelines/share/abc123
+        access_token:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ImportRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          pattern: '^oxo\+https?://'
+
+    ImportResponse:
+      type: object
+      properties:
+        pipeline_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+
   securitySchemes:
     BearerAuth:
       type: http
       scheme: bearer
+      bearerFormat: session-token
+      description: Session token issued by POST /api/auth/login. Required in
+        team and hpc modes; personal mode does not enforce auth.
+
 security:
   - BearerAuth: []

@@ -18,6 +18,30 @@ use uuid::Uuid;
 use super::models;
 use super::{Paginated, Pagination, StorageBackend};
 
+/// Global PostgreSQL connection pool.
+static PG_POOL: std::sync::OnceLock<PgPool> = std::sync::OnceLock::new();
+
+/// Initialize the global PostgreSQL pool and run schema migrations.
+///
+/// Can safely be called multiple times — subsequent calls are no-ops.
+pub async fn init_pool(database_url: &str) {
+    if PG_POOL.get().is_some() {
+        return;
+    }
+    let backend = PostgresBackend::new(database_url)
+        .await
+        .expect("Failed to create PostgresBackend");
+    backend.init().await.expect("Failed to initialize PostgreSQL database");
+    let _ = PG_POOL.set(backend.pool);
+}
+
+/// Try to obtain a reference to the global PostgreSQL pool.
+pub fn try_pool() -> Result<&'static PgPool, String> {
+    PG_POOL
+        .get()
+        .ok_or_else(|| "PostgreSQL pool not initialized — call init_pool() first".to_string())
+}
+
 /// PostgreSQL-backed implementation of [`StorageBackend`].
 #[derive(Debug, Clone)]
 pub struct PostgresBackend {
@@ -93,7 +117,7 @@ impl StorageBackend for PostgresBackend {
 
             CREATE TABLE IF NOT EXISTS sessions (
                 token TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                user_id TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 expires_at TEXT NOT NULL
             );
@@ -128,6 +152,37 @@ impl StorageBackend for PostgresBackend {
                 action TEXT NOT NULL,
                 target TEXT NOT NULL,
                 metadata TEXT,
+                timestamp TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS ai_provider_config (
+                id TEXT PRIMARY KEY,
+                user_id TEXT UNIQUE,
+                provider TEXT NOT NULL,
+                api_key TEXT DEFAULT '',
+                api_url TEXT DEFAULT '',
+                model TEXT DEFAULT '',
+                search_enabled INTEGER NOT NULL DEFAULT 1,
+                monitor_enabled INTEGER NOT NULL DEFAULT 1,
+                auto_retry_enabled INTEGER NOT NULL DEFAULT 1,
+                max_correction_rounds INTEGER NOT NULL DEFAULT 3,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS chat_sessions (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT 'New Chat',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
                 timestamp TEXT NOT NULL
             );
             "#,

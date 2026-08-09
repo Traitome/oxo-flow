@@ -105,10 +105,35 @@ async fn main() -> Result<()> {
         }
     }
 
-    oxo_flow_web::db::init_db("sqlite://oxo-flow.db").await?;
-    oxo_flow_web::db::recover_orphaned_runs().await?;
-    // Also initialize the new v0.8 domain-driven DB pool for domain handlers
-    oxo_flow_web::infra::db::sqlite::init_pool("sqlite://oxo-flow.db").await;
+    // Database initialization: PostgreSQL if DATABASE_URL starts with postgres://,
+    // otherwise SQLite (default).
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "sqlite://oxo-flow.db".to_string());
+
+    let is_postgres = database_url.starts_with("postgres://") || database_url.starts_with("postgresql://");
+
+    if is_postgres {
+        #[cfg(feature = "postgres")]
+        {
+            tracing::info!("Initializing PostgreSQL backend");
+            oxo_flow_web::infra::db::postgres::init_pool(&database_url).await;
+        }
+        #[cfg(not(feature = "postgres"))]
+        {
+            tracing::error!(
+                "DATABASE_URL is a PostgreSQL URL but the 'postgres' feature is not enabled. \
+                 Rebuild with: cargo build --features postgres"
+            );
+            anyhow::bail!(
+                "PostgreSQL support not compiled in — rebuild with --features postgres"
+            );
+        }
+    } else {
+        oxo_flow_web::db::init_db(&database_url).await?;
+        oxo_flow_web::db::recover_orphaned_runs().await?;
+        // Also initialize the new v0.8 domain-driven DB pool for domain handlers
+        oxo_flow_web::infra::db::sqlite::init_pool(&database_url).await;
+    }
 
     // Initialize structured logging (three-layer logging per v0.8 spec)
     let log_dir = std::path::PathBuf::from("logs");
