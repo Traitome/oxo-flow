@@ -58,7 +58,7 @@ oxo-flow config get pipeline.oxoflow reference
 ## Output
 
 ```
-oxo-flow 0.9.3 — Bioinformatics Pipeline Engine
+oxo-flow 0.9.4 — Bioinformatics Pipeline Engine
 Workflow Configuration:
   Name:    germline-wgs
   Version: 1.0.0
