@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 oxo-flow-core = { workspace = true }
+oxo-flow-ai = { workspace = true }
 oxo-license = "0.1.1"
 axum = { workspace = true }
 tower = { workspace = true }

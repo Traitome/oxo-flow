@@ -152,10 +152,50 @@ The AI provider system (`ai_provider.rs`) supports three backends via an enum-ba
 
 Providers are selected at startup via `OXO_FLOW_AI_PROVIDER` env var and initialized once through `AiProviderRegistry::global()`. The `try_ai_generate()` function in `handlers/ai.rs` uses the configured provider, falling back to template matching if AI is disabled or fails.
 
+## 🤖 AI CLI Integration (Phase 1, v0.9.5+)
+
+The `oxo-flow-ai` crate provides shared AI infrastructure for CLI and web:
+
+```
+crates/oxo-flow-ai/   — AI provider abstraction, agent framework, knowledge system
+```
+
+### AI-Powered Template Generation
+
+```bash
+# Set up DeepSeek (one-time)
+export DEEPSEEK_API_KEY="sk-..."
+export OXO_FLOW_AI_PROVIDER=deepseek
+
+# Generate workflow from natural language
+oxo-flow template "RNA-seq with STAR and featureCounts" --ai
+
+# With external reference materials
+oxo-flow template "variant calling" --ai --from-url https://example.com/protocol \
+    --from-file data/experiment.csv
+```
+
+### Architecture
+
+| Crate | Role |
+|-------|------|
+| `oxo-flow-ai` | Provider abstraction, Agent framework, Tool system, Knowledge base |
+| `oxo-flow-cli` | Command integration (`--ai` flag), TemplateAgent |
+| `oxo-flow-web` | Compatibility shim over oxo-flow-ai |
+
+### Key Design Decisions
+
+- **AI is optional**: no `[ai]` section → zero AI overhead
+- **One flag**: `--ai` activates AI on any suitable command
+- **Provider-agnostic**: DeepSeek, Claude, OpenAI, Ollama — swap via config
+- **Everything archived**: AI sessions + modifications in `.oxo-flow/ai_sessions/`
+
 ## 📚 Documentation
 - `docs/guide/` — MkDocs user guide
+- `docs/guide/src/reference/ai-cli.md` — AI CLI features
 - `docs/guide/src/reference/web-api.md` — REST API reference
 - `docs/guide/src/reference/web-system-architecture.md` — Web system architecture
+- `docs/superpowers/specs/2026-08-09-ai-native-cli-design.md` — Full design spec
 - `docs/schema/openapi.yaml` — OpenAPI 3.0 schema
 
 ### Frontend Architecture

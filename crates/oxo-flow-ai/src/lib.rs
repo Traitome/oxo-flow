@@ -77,7 +77,7 @@ impl AiRegistry {
     ///
     /// Call once at process startup. If `overrides` is provided, it
     /// takes highest priority.
-    pub fn init(overrides: Option<AiConfig>) -> Result<(), AiError> {
+    pub fn init(&self, overrides: Option<AiConfig>) -> Result<(), AiError> {
         // Start with env-based config
         let mut config = AiConfig::from_env();
 

@@ -715,6 +715,17 @@ fn load_ai_config() -> Option<(String, String, String, String)> {
     ))
 }
 
+// ── ProviderConfig ─────────────────────────────────────────────────────────
+
+/// Runtime configuration snapshot (no secrets).
+#[derive(Debug, Clone)]
+pub struct ProviderConfig {
+    pub provider: String,
+    pub api_url: Option<String>,
+    pub model: Option<String>,
+    pub is_configured: bool,
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

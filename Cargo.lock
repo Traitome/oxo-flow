@@ -2747,6 +2747,7 @@ dependencies = [
  "futures",
  "maud",
  "num_cpus",
+ "oxo-flow-ai",
  "oxo-flow-core",
  "oxo-license",
  "rand 0.10.2",
