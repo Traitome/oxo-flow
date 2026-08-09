@@ -4,23 +4,19 @@ use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
 use std::path::{Path, PathBuf};
 
-/// Run AI analysis on a workflow file from a sync context.
-fn ai_validate(workflow_path: &Path) -> Result<()> {
-    let provider = crate::commands::ai_template::resolve_ai_provider()?;
-    tokio::runtime::Handle::current().block_on(crate::commands::ai_check::analyze_workflow(
-        workflow_path,
-        &provider,
-        "validate",
-    ))
-}
-
 use crate::commands::print_banner;
 
-pub fn validate_command(workflow: PathBuf, as_include: bool, json: bool, ai: bool) -> Result<()> {
+pub async fn validate_command(
+    workflow: PathBuf,
+    as_include: bool,
+    json: bool,
+    ai: bool,
+) -> Result<()> {
     // AI mode: analyze workflow, then proceed with normal validation
     if ai {
-        ai_validate(&workflow)?;
-        println!(); // separator before normal validation output
+        let provider = crate::commands::ai_template::resolve_ai_provider()?;
+        crate::commands::ai_check::analyze_workflow(&workflow, &provider, "validate").await?;
+        println!(); // separator
     }
 
     let _ = &json;
@@ -451,7 +447,7 @@ pub async fn watch_command(workflow: PathBuf, auto_run: bool, jobs: usize) -> Re
             );
 
             // Run validate + optional dry-run/run for quick feedback
-            match validate_command(workflow_path.clone(), false, false, false) {
+            match validate_command(workflow_path.clone(), false, false, false).await {
                 Ok(()) => {
                     if auto_run {
                         eprintln!();

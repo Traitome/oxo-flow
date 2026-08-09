@@ -591,7 +591,7 @@ async fn main() -> Result<()> {
             as_include,
             ai,
         } => {
-            validate_command(workflow, as_include, cli.json, ai)?;
+            validate_command(workflow, as_include, cli.json, ai).await?;
         }
         Commands::Init { name, dir } => init_command(name, dir)?,
         Commands::Template {
@@ -753,7 +753,7 @@ async fn main() -> Result<()> {
             );
             // 1. Validate
             eprintln!("{} Validation...", "1.".bold());
-            validate_command(workflow.clone(), false, cli.json, false)?;
+            validate_command(workflow.clone(), false, cli.json, false).await?;
             // 2. Lint
             eprintln!("{} Lint...", "2.".bold());
             lint_command(workflow.clone(), false, cli.json)?;
