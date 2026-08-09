@@ -416,7 +416,7 @@ fn evaluate_condition_complex_expression() {
 }
 
 #[test]
-fn evaluate_condition_with_arguments_prefix() {
+fn evaluate_condition_with_config_prefix() {
     let mut config = HashMap::new();
     config.insert("mode".to_string(), toml::Value::String("dna".to_string()));
     config.insert(
@@ -425,39 +425,24 @@ fn evaluate_condition_with_arguments_prefix() {
     );
 
     // Bare key reference (truthiness)
+    assert!(evaluate_condition("config.mode", &config), "truthy config.mode");
     assert!(
-        evaluate_condition("arguments.mode", &config),
-        "truthy arguments.mode"
-    );
-    assert!(
-        !evaluate_condition("arguments.missing", &config),
-        "falsy arguments.missing"
+        !evaluate_condition("config.missing", &config),
+        "falsy config.missing"
     );
 
     // Equality comparison
-    assert!(evaluate_condition(
-        r#"arguments.mode == "dna""#,
-        &config
-    ));
-    assert!(!evaluate_condition(
-        r#"arguments.mode == "rna""#,
-        &config
-    ));
+    assert!(evaluate_condition(r#"config.mode == "dna""#, &config));
+    assert!(!evaluate_condition(r#"config.mode == "rna""#, &config));
 
-    // Equality with string value (compare_config_value only supports ==/!= for strings)
-    assert!(evaluate_condition(
-        r#"arguments.min_qual == "30""#,
-        &config
-    ));
-    assert!(!evaluate_condition(
-        r#"arguments.min_qual == "20""#,
-        &config
-    ));
+    // Equality with string value
+    assert!(evaluate_condition(r#"config.min_qual == "30""#, &config));
+    assert!(!evaluate_condition(r#"config.min_qual == "20""#, &config));
 
-    // Mix config. and arguments. in same expression
+    // Mixed conditions
     config.insert("paired".to_string(), toml::Value::Boolean(true));
     assert!(evaluate_condition(
-        r#"config.paired == true && arguments.mode == "dna""#,
+        r#"config.paired == true && config.mode == "dna""#,
         &config
     ));
 }

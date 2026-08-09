@@ -338,26 +338,60 @@ pub struct ClusterProfile {
     pub extra_args: Vec<String>,
 }
 
-/// A declared workflow argument — a user-facing parameter exposed as a CLI flag.
+/// A declared configuration parameter with optional metadata.
 ///
-/// Arguments are declared in the `[arguments]` block of a `.oxoflow` file.
-/// Each becomes available via `--arg name=value` at runtime and is referenced
-/// in shell commands as `{arguments.name}`.
+/// Declared in the `[config]` block of a `.oxoflow` file.  Every config key
+/// becomes a CLI `--key` flag.  The declarative inline-table form adds
+/// validation, help text, and type constraints:
+///
+/// ```toml
+/// [config]
+/// reference = "/data/hg38.fa"                 # bare string = default value
+/// database  = { required = true, help = "BLAST database" }
+/// threshold = { default = "1e-5" }
+/// mode      = { default = "dna", choices = ["dna", "rna"] }
+/// ```
+///
+/// Referenced in shells / inputs / outputs / `when` as `{config.key}`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ArgumentDef {
-    /// Whether this argument must be provided at runtime.
-    #[serde(default)]
-    pub required: bool,
-
-    /// Default value when not provided via CLI.
+pub struct ConfigDef {
+    /// Default value when not provided via CLI or profile.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
+
+    /// Whether this parameter must be set (via CLI, profile, or explicit config).
+    #[serde(default)]
+    pub required: bool,
 
     /// Human-readable help text shown in `--help`.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
+
+    /// Mask the value as `****` in logs, `--help`, and error output.
+    #[serde(default)]
+    pub sensitive: bool,
+
+    /// Expected value type for validation.
+    /// One of: `"string"`, `"int"`, `"float"`, `"bool"`, `"path"`.
+    #[serde(default, rename = "type")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_: Option<String>,
+
+    /// Allowed values (requires `type = "string"`).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub choices: Option<Vec<String>>,
+
+    /// Numeric range `"min..max"` (requires `type = "int"` or `"float"`).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<String>,
+
+    /// Path must exist on disk (requires `type = "path"`).
+    #[serde(default)]
+    pub must_exist: bool,
 }
 
 /// A declared reference artifact — a pre-built index or data file.
@@ -960,18 +994,22 @@ pub struct WorkflowConfig {
     /// Workflow metadata.
     pub workflow: WorkflowMeta,
 
-    /// Configuration variables (user-defined key-value pairs).
+    /// Configuration variables — every key is a CLI `--key` flag.
+    ///
+    /// Supports two forms:
+    ///   key = "value"              → implicit default, simple string
+    ///   key = { default = "…", … } → declared with metadata (see `config_meta`)
+    ///
+    /// Referenced in shells / inputs / outputs / `when` as `{config.key}`.
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub config: HashMap<String, toml::Value>,
 
-    /// Declared workflow arguments — user-facing parameters that become CLI flags.
-    ///
-    /// Each argument can specify whether it is required, a default value, and
-    /// help text for the `--help` output.
-    #[serde(default, rename = "arguments")]
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub arguments: HashMap<String, ArgumentDef>,
+    /// Metadata for declarative `[config]` entries — parsed from inline-table values.
+    /// Only populated for keys using the `key = { default, required, … }` form.
+    /// Simple `key = "value"` entries do NOT appear here.
+    #[serde(default, skip_deserializing, skip_serializing_if = "HashMap::is_empty")]
+    pub config_meta: HashMap<String, ConfigDef>,
 
     /// Declared reference artifacts — pre-built indexes and data files.
     ///
@@ -1170,9 +1208,33 @@ impl WorkflowConfig {
     /// Parse a workflow configuration from a TOML string.
     #[must_use = "parsing a config returns a Result that must be used"]
     pub fn parse(content: &str) -> Result<Self> {
-        let config: WorkflowConfig = toml::from_str(content)?;
+        let mut config: WorkflowConfig = toml::from_str(content)?;
+        config.extract_declarative_config()?;
         config.validate()?;
         Ok(config)
+    }
+
+    /// Extract declarative `ConfigDef` entries from inline-table `[config]` values.
+    fn extract_declarative_config(&mut self) -> Result<()> {
+        for (key, val) in self.config.clone().iter() {
+            if let toml::Value::Table(t) = val {
+                if t.contains_key("default")
+                    || t.contains_key("required")
+                    || t.contains_key("help")
+                {
+                    if let Ok(def) = toml::Value::Table(t.clone()).try_into::<ConfigDef>() {
+                        self.config_meta.insert(key.clone(), def);
+                        let runtime_val = self.config_meta[key]
+                            .default
+                            .clone()
+                            .unwrap_or_default();
+                        self.config
+                            .insert(key.clone(), toml::Value::String(runtime_val));
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Parse a workflow configuration from a `.oxoflow` file.
@@ -1187,6 +1249,8 @@ impl WorkflowConfig {
                 path: path.to_path_buf(),
                 message: e.to_string(),
             })?;
+
+        config.extract_declarative_config()?;
 
         // Format Versioning check (S5)
         const SUPPORTED_FORMAT_VERSION: &str = "1.0";
@@ -4241,32 +4305,41 @@ name = "test"
     }
 
     #[test]
-    fn argument_def_deserialization() {
+    fn config_def_declarative_syntax() {
         let toml_str = r#"
 [workflow]
 name = "test"
 version = "1.0.0"
 
-[arguments]
+[config]
 database = { required = true, help = "Path to DB" }
 threshold = { default = "1e-5", help = "E-value" }
 
 [[rules]]
 name = "s"
 output = ["out.txt"]
-shell = "echo {arguments.database} > {output[0]}"
+shell = "echo {config.database} > {output[0]}"
 "#;
         let config = WorkflowConfig::parse(toml_str).unwrap();
-        assert_eq!(config.arguments.len(), 2);
-        assert!(config.arguments["database"].required);
+        assert_eq!(config.config_meta.len(), 2);
+        assert!(config.config_meta["database"].required);
         assert_eq!(
-            config.arguments["database"].help.as_deref(),
+            config.config_meta["database"].help.as_deref(),
             Some("Path to DB")
         );
         assert_eq!(
-            config.arguments["threshold"].default.as_deref(),
+            config.config_meta["threshold"].default.as_deref(),
             Some("1e-5")
         );
-        assert!(!config.arguments["threshold"].required);
+        assert!(!config.config_meta["threshold"].required);
+        // Config values are resolved from defaults when no CLI override
+        assert_eq!(
+            config.config.get("database").and_then(|v| v.as_str()),
+            Some("")  // required, no default → empty string
+        );
+        assert_eq!(
+            config.config.get("threshold").and_then(|v| v.as_str()),
+            Some("1e-5")
+        );
     }
 }

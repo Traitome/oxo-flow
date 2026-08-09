@@ -52,33 +52,34 @@ pub async fn run_command(
         cli_arg_values.insert(k.to_string(), v.to_string());
     }
 
-    // Validate required arguments and apply defaults from [arguments] block
-    for (name, arg_def) in &config.arguments {
+    // Apply CLI overrides and defaults from declarative config entries.
+    // config_meta holds the declaration (required/default/help) for keys
+    // that use the `key = { default, required, … }` syntax in [config].
+    for (name, cfg_def) in &config.config_meta {
         if let Some(val) = cli_arg_values.get(name) {
-            config.config.insert(
-                format!("arguments.{name}"),
-                toml::Value::String(val.clone()),
-            );
-        } else if let Some(ref default) = arg_def.default {
             config
                 .config
-                .entry(format!("arguments.{name}"))
+                .insert(name.clone(), toml::Value::String(val.clone()));
+        } else if let Some(ref default) = cfg_def.default {
+            config
+                .config
+                .entry(name.clone())
                 .or_insert_with(|| toml::Value::String(default.clone()));
-        } else if arg_def.required {
+        } else if cfg_def.required {
             anyhow::bail!(
-                "required argument '{}' not set. Use --arg {}=<value>\n  {}",
+                "required config '{}' not set. Use --arg {}=<value>\n  {}",
                 name,
                 name,
-                arg_def.help.as_deref().unwrap_or("")
+                cfg_def.help.as_deref().unwrap_or("")
             );
         }
     }
 
-    // Also inject any undeclared --arg values as {arguments.xxx}
+    // Also inject any undeclared --arg values as {config.xxx}
     for (k, v) in &cli_arg_values {
         config
             .config
-            .entry(format!("arguments.{k}"))
+            .entry(k.clone())
             .or_insert_with(|| toml::Value::String(v.clone()));
     }
 
@@ -325,30 +326,13 @@ pub async fn run_command(
     }
 
     let mut wildcard_values: HashMap<String, String> = HashMap::new();
+    // All config values (including CLI --arg overrides) become {config.key} in templates.
     for (key, value) in &config.config {
         let string_val = match value {
             toml::Value::String(s) => s.clone(),
             other => other.to_string(),
         };
         wildcard_values.insert(format!("config.{key}"), string_val);
-    }
-    // Also inject argument values as {arguments.xxx} for shell expansion.
-    // This covers both --arg overrides and declared defaults from [arguments].
-    for name in config.arguments.keys() {
-        let config_key = format!("arguments.{name}");
-        if let Some(val) = config.config.get(&config_key) {
-            let string_val = match val {
-                toml::Value::String(s) => s.clone(),
-                other => other.to_string(),
-            };
-            wildcard_values.insert(format!("arguments.{name}"), string_val);
-        }
-    }
-    // Also add any undeclared --arg values
-    for (k, v) in &cli_arg_values {
-        wildcard_values
-            .entry(format!("arguments.{k}"))
-            .or_insert_with(|| v.clone());
     }
     let wildcard_values: Arc<HashMap<String, String>> = Arc::new(wildcard_values);
     let workdir_actual = Arc::new(workdir.as_ref().unwrap_or(&workflow_dir).clone());
