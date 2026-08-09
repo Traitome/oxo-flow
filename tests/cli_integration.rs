@@ -2447,3 +2447,122 @@ fn cli_schema_outputs_valid_json() {
         "schema should define rules property"
     );
 }
+
+// ─── transitive failure propagation / skip accounting ───────────────────
+
+/// A three-rule chain `a -> b -> c` where `a` fails. `c` must not execute:
+/// `dag.dependencies()` reports direct predecessors only, so a blocked rule
+/// has to join the failed set for the block to reach its own dependents.
+#[test]
+fn cli_run_keep_going_blocks_transitive_dependents() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("chain.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"chain\"\nversion = \"1.0.0\"\n\n\
+         [[rules]]\nname = \"a_fails\"\noutput = [\"a.txt\"]\nshell = \"exit 1\"\n\n\
+         [[rules]]\nname = \"b_child\"\ninput = [\"a.txt\"]\noutput = [\"b.txt\"]\n\
+         depends_on = [\"a_fails\"]\nshell = \"cat {input[0]} > {output[0]}\"\n\n\
+         [[rules]]\nname = \"c_grandchild\"\ninput = [\"b.txt\"]\noutput = [\"c.txt\"]\n\
+         depends_on = [\"b_child\"]\nshell = \"cat {input[0]} 2>/dev/null > {output[0]}; exit 0\"\n",
+    )
+    .unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "-k"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    // The grandchild tolerates a missing input, so if it runs it "succeeds"
+    // and writes an empty file — the silent-corruption case this guards.
+    assert!(
+        !dir.path().join("c.txt").exists(),
+        "grandchild of a failed rule must not execute"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("0 succeeded"),
+        "no rule should succeed: {stderr}"
+    );
+    assert!(
+        stderr.contains("Blocked rules"),
+        "blocked rules should be reported: {stderr}"
+    );
+    assert!(
+        stderr.contains("c_grandchild"),
+        "grandchild should be listed as blocked: {stderr}"
+    );
+}
+
+/// A blocked rule produces no outputs, so it must never be checkpointed as
+/// completed — otherwise a later run skips it forever and the pipeline reports
+/// success while an output is silently empty.
+#[test]
+fn cli_run_blocked_rule_is_not_checkpointed() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("chain.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"chain\"\nversion = \"1.0.0\"\n\n\
+         [[rules]]\nname = \"a_fails\"\noutput = [\"a.txt\"]\nshell = \"exit 1\"\n\n\
+         [[rules]]\nname = \"b_child\"\ninput = [\"a.txt\"]\noutput = [\"b.txt\"]\n\
+         depends_on = [\"a_fails\"]\nshell = \"cat {input[0]} 2>/dev/null > {output[0]}; exit 0\"\n",
+    )
+    .unwrap();
+
+    oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "-k"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    let checkpoint = dir.path().join(".oxo-flow/checkpoint.json");
+    if checkpoint.exists() {
+        let raw = fs::read_to_string(&checkpoint).unwrap();
+        assert!(
+            !raw.contains("b_child") || !raw.contains("\"completed_rules\":[\"b_child\"]"),
+            "blocked rule must not be recorded as completed: {raw}"
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        if let Some(done) = parsed["completed_rules"].as_array() {
+            assert!(
+                !done.iter().any(|r| r.as_str() == Some("b_child")),
+                "blocked rule must not be checkpointed as completed: {raw}"
+            );
+        }
+    }
+}
+
+/// A rule skipped by a false `when` condition must be counted once, not once
+/// by a pre-pass and again by the executor that actually evaluates it.
+#[test]
+fn cli_run_condition_skip_counted_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("cond.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"cond\"\nversion = \"1.0.0\"\n\n\
+         [config]\nmode = \"dna\"\n\n\
+         [[rules]]\nname = \"only_rna\"\noutput = [\"rna.txt\"]\n\
+         when = 'config.mode == \"rna\"'\nshell = \"echo x > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("0 succeeded, 1 skipped, 0 failed"),
+        "one rule skipped once, not twice: {stderr}"
+    );
+    assert!(
+        !dir.path().join("rna.txt").exists(),
+        "rule with a false condition must not run"
+    );
+}
