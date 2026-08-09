@@ -16,7 +16,7 @@ test:
 	PATH="$$(pwd)/target/debug:$$PATH" cargo test --workspace -- --test-threads=1
 
 audit:
-	cargo audit
+	cargo audit --no-fetch 2>&1 || cargo audit
 
 ## Generate code coverage report (requires cargo-tarpaulin).
 coverage:
