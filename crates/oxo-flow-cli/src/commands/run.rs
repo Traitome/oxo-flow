@@ -287,6 +287,10 @@ pub async fn run_command(
     let failed_rules_set: Arc<Mutex<std::collections::HashSet<String>>> =
         Arc::new(Mutex::new(std::collections::HashSet::new()));
     let failures: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    // Rules that never ran because an upstream dependency failed, paired with the
+    // dependency that blocked them. Reported separately from genuine failures so
+    // the root cause stays distinguishable from the fallout.
+    let blocked: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
 
     let checkpoint_path = workdir
         .as_ref()
@@ -455,20 +459,9 @@ pub async fn run_command(
         }
     }
 
-    // Pre-loop: evaluate rule conditions, mark false-condition rules as skipped
-    for rule in config.rules.iter() {
-        if !order.contains(&rule.name) {
-            continue;
-        }
-        if let Some(ref condition) = rule.when {
-            let config_values: HashMap<String, toml::Value> = config.config.clone();
-            if !oxo_flow_core::executor::process::evaluate_condition(condition, &config_values) {
-                skipped_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                progress.inc(1);
-                continue;
-            }
-        }
-    }
+    // Rule `when` conditions are evaluated by the executor itself, which reports
+    // them back as JobStatus::Skipped. Pre-evaluating them here as well would
+    // count every condition-skipped rule twice.
 
     // Execute rules in parallel groups (topological levels).
     // Rules within a group have no dependencies on each other and can run concurrently.
@@ -491,18 +484,32 @@ pub async fn run_command(
         let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
         for rule_name in group {
-            // Skip if already in failed set (from previous groups)
-            let skip_from_failure = {
+            // Skip if any direct dependency failed or was itself blocked.
+            // `dag.dependencies()` returns direct predecessors only, so a blocked
+            // rule must join the failed set for the block to reach its own
+            // dependents. Groups are processed in topological order, so a rule's
+            // dependencies are always resolved before the rule is considered.
+            let blocked_by = {
                 let frs = failed_rules_set.lock().await;
-                if let Ok(deps) = dag.dependencies(rule_name) {
-                    deps.iter().any(|d| frs.contains(d.as_str()))
-                } else {
-                    false
-                }
+                dag.dependencies(rule_name)
+                    .ok()
+                    .and_then(|deps| deps.into_iter().find(|d| frs.contains(d.as_str())))
             };
 
-            if skip_from_failure {
+            if let Some(dep) = blocked_by {
                 skipped_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                {
+                    let mut frs = failed_rules_set.lock().await;
+                    frs.insert(rule_name.clone());
+                }
+                blocked.lock().await.push((rule_name.clone(), dep));
+                if !is_tty {
+                    eprintln!(
+                        "  {} {} (blocked by failed dependency)",
+                        "⊘".yellow(),
+                        rule_name
+                    );
+                }
                 progress.inc(1);
                 continue;
             }
@@ -702,6 +709,7 @@ pub async fn run_command(
     let skipped_count = skipped_count.load(std::sync::atomic::Ordering::Relaxed);
     let checkpoint = checkpoint.lock().await;
     let failures = failures.lock().await;
+    let blocked = blocked.lock().await;
 
     progress.finish_and_clear();
     eprintln!(
@@ -718,6 +726,15 @@ pub async fn run_command(
         eprintln!("\n{}", "Failed rules:".bold().red());
         for (name, reason) in failures.iter() {
             eprintln!("  {} {} — {}", "✗".red(), name.bold(), reason);
+        }
+    }
+
+    // Blocked rules did not run and produced no outputs. Listing them keeps the
+    // fallout of a failure visible without disguising it as a genuine failure.
+    if !blocked.is_empty() {
+        eprintln!("\n{}", "Blocked rules (did not run):".bold().yellow());
+        for (name, dep) in blocked.iter() {
+            eprintln!("  {} {} — depends on '{}'", "⊘".yellow(), name.bold(), dep);
         }
     }
 
@@ -790,6 +807,7 @@ pub async fn run_command(
                 "succeeded": success_count,
                 "skipped": skipped_count,
                 "failed": fail_count,
+                "blocked": blocked.len(),
             }),
         });
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
