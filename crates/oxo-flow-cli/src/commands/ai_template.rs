@@ -8,6 +8,19 @@ use colored::Colorize;
 use oxo_flow_ai::{knowledge::builtin::format_tool_table, provider::AiProvider};
 use std::path::PathBuf;
 
+/// Resolve AI provider from environment or config, returning an error if not configured.
+pub fn resolve_ai_provider() -> Result<AiProvider> {
+    let provider = oxo_flow_ai::provider::create_provider_from_env();
+    if matches!(provider, AiProvider::Noop) {
+        anyhow::bail!(
+            "AI provider not configured.\n\
+             Set OXO_FLOW_AI_PROVIDER=deepseek and DEEPSEEK_API_KEY=sk-...\n\
+             Or configure via ~/.oxo-flow/ai_config.json"
+        );
+    }
+    Ok(provider)
+}
+
 /// Generate a workflow from natural language using AI.
 pub async fn generate_workflow(
     intent: &str,

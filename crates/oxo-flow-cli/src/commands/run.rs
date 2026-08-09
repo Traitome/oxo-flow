@@ -961,9 +961,17 @@ pub async fn dry_run_command(
     target: Vec<String>,
     verbose: bool,
     json: bool,
+    ai: bool,
 ) -> Result<()> {
     print_banner();
     let workflow = resolve_workflow(workflow)?;
+
+    // AI mode: analyze workflow, then proceed with normal dry-run
+    if ai {
+        let provider = crate::commands::ai_template::resolve_ai_provider()?;
+        crate::commands::ai_check::analyze_workflow(&workflow, &provider, "dry-run").await?;
+        println!(); // separator
+    }
     let mut config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
 

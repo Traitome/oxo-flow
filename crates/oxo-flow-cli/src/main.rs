@@ -127,6 +127,9 @@ pub enum Commands {
         workflow: Option<PathBuf>,
         #[arg(short = 't', long)]
         target: Vec<String>,
+        /// Enable AI-powered analysis of the workflow.
+        #[arg(long)]
+        ai: bool,
     },
     /// Validate a .oxoflow workflow file.
     Validate {
@@ -137,6 +140,9 @@ pub enum Commands {
             help = "Validate as a sub-workflow fragment (skip DAG validation)"
         )]
         as_include: bool,
+        /// Enable AI-powered semantic validation.
+        #[arg(long)]
+        ai: bool,
     },
     /// Initialize a new workflow project.
     Init {
@@ -563,14 +569,17 @@ async fn main() -> Result<()> {
             .await?
         }
         Commands::Resume { checkpoint, jobs } => resume_command(checkpoint, jobs).await?,
-        Commands::DryRun { workflow, target } => {
-            dry_run_command(workflow, target, cli.verbose, cli.json).await?
-        }
+        Commands::DryRun {
+            workflow,
+            target,
+            ai,
+        } => dry_run_command(workflow, target, cli.verbose, cli.json, ai).await?,
         Commands::Validate {
             workflow,
             as_include,
+            ai,
         } => {
-            validate_command(workflow, as_include, cli.json)?;
+            validate_command(workflow, as_include, cli.json, ai)?;
         }
         Commands::Init { name, dir } => init_command(name, dir)?,
         Commands::Template {
@@ -732,13 +741,13 @@ async fn main() -> Result<()> {
             );
             // 1. Validate
             eprintln!("{} Validation...", "1.".bold());
-            validate_command(workflow.clone(), false, cli.json)?;
+            validate_command(workflow.clone(), false, cli.json, false)?;
             // 2. Lint
             eprintln!("{} Lint...", "2.".bold());
             lint_command(workflow.clone(), false, cli.json)?;
             // 3. Dry-run
             eprintln!("{} Dry-run...", "3.".bold());
-            dry_run_command(Some(workflow.clone()), vec![], cli.verbose, cli.json).await?;
+            dry_run_command(Some(workflow.clone()), vec![], cli.verbose, cli.json, false).await?;
             // 4. Optional: run with --run flag
             if run {
                 eprintln!("{} Execution...", "4.".bold());
