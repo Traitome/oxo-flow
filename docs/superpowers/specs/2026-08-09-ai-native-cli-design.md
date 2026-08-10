@@ -1198,3 +1198,46 @@ fn dry_run_detects_missing_threads() {
 - Scope-level AI config (project/rule-level [ai] sections)
 - AI plugin types (AiToolPlugin, AiKnowledgePlugin, AiValidatorPlugin)
 - MCP/Skill ecosystem
+
+### Phase 4 Complete (2026-08-10)
+
+**Delivered:**
+- Scope-level AI config: `AiConfig::resolve_chain()` resolving global→project→workflow→rule
+- `AiConfig::from_project_file()` — reads `.oxo-flow/ai.toml`
+- `AiConfig::from_rule_table()` — per-rule `[ai]` section
+- AI Plugin traits: `AiToolPlugin`, `AiKnowledgePlugin`, `AiValidatorPlugin`
+- `AiPluginRegistry` for dynamic plugin discovery
+
+**Files created:**
+- `crates/oxo-flow-ai/src/plugin.rs` — 4 tests
+
+**Files modified:**
+- `crates/oxo-flow-ai/src/config.rs` — scope resolution + 4 tests
+- `crates/oxo-flow-ai/src/lib.rs` — plugin module
+
+### Phase 5 Complete (2026-08-10)
+
+**Delivered:**
+- MCP bridge: `McpClient` trait, `McpToolBridge` (MCP→Tool adapter)
+- MCP tool discovery: `McpToolBridge::discover()` auto-registers server tools
+- Skill system: `SkillManifest` TOML format, `SkillRegistry`, discovery
+- Skill auto-discovery from `~/.oxo-flow/skills/` and project-level dirs
+
+**Files created:**
+- `crates/oxo-flow-ai/src/mcp.rs` — 3 tests
+- `crates/oxo-flow-ai/src/skill.rs` — 5 tests
+
+**Final verification:**
+- `make ci`: fmt + clippy + build + test + audit all passing
+- 70 oxo-flow-ai tests, 113 core tests, 59 CLI integration tests
+- E2E tested with DeepSeek: template, dry-run, validate all working
+
+### Summary
+
+| Phase | Features | Status |
+|-------|----------|--------|
+| Phase 1 | oxo-flow-ai crate, template --ai | ✅ |
+| Phase 2 | dry-run --ai, validate --ai, web migration | ✅ |
+| Phase 3 | run --ai-recover, resume --ai-recover | ✅ |
+| Phase 4 | scope config, AI plugin traits | ✅ |
+| Phase 5 | MCP bridge, skill system | ✅ |

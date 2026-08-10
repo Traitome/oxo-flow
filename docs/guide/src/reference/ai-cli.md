@@ -271,7 +271,7 @@ If you see "Rate limited by deepseek", wait a few seconds and retry. For product
 | Phase 1 | AI template generation | ✅ Complete |
 | Phase 2 | AI dry-run + validate analysis | ✅ Complete |
 | Phase 3 | AI error recovery (`--ai-recover`) | ✅ Complete |
-| Phase 4 | Scope-level AI config, AI plugin types | 📋 Planned |
-| Phase 5 | MCP/Skill ecosystem | 📋 Planned |
+| Phase 4 | Scope-level AI config, AI plugin types | ✅ Complete |
+| Phase 5 | MCP/Skill ecosystem | ✅ Complete |
 
 See the [full design spec](../../../../docs/superpowers/specs/2026-08-09-ai-native-cli-design.md) for architecture details.
