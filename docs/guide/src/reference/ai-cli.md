@@ -232,7 +232,9 @@ Every AI interaction is logged to `.oxo-flow/ai_sessions/` for audit and debuggi
 
 | Command | AI Flag | Auto-Detect | What It Does |
 |---------|---------|:-----------:|--------------|
-| `oxo-flow ai` | — | — | Show provider, model, endpoint, test connectivity, session count |
+| `oxo-flow ai` | — | — | Quick status: provider, model, endpoint, connectivity, session count |
+| `oxo-flow ai test` | — | — | Comprehensive self-test: connectivity + generation + analysis |
+| `oxo-flow ai setup` | — | — | Interactive wizard: choose provider, enter key, save config |
 | `oxo-flow template "X" --ai` | required | ❌ | Natural language → .oxoflow file |
 | `oxo-flow template "X" --ai --from-url URL` | required | ❌ | Generate with web page as reference |
 | `oxo-flow template "X" --ai --from-file PATH` | required | ❌ | Generate with local file as reference |
