@@ -28,7 +28,7 @@ When given a workflow file, lists the environments used by each rule.
 **Output:**
 
 ```
-oxo-flow 0.9.4 — Bioinformatics Pipeline Engine
+oxo-flow 0.10.0 — Bioinformatics Pipeline Engine
 Available environment backends:
   ✓ conda
   ✓ docker

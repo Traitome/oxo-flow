@@ -20,7 +20,7 @@ with `oxo-flow run --bundle`.
 
 | Scheme | Format | Example |
 |---|---|---|
-| GitHub Release | `gh:owner/repo@tag` | `gh:WangLabCSU/oxo-flow-circrna@v0.9.4` |
+| GitHub Release | `gh:owner/repo@tag` | `gh:WangLabCSU/oxo-flow-circrna@v0.10.0` |
 | HTTPS | `https://host/path` | `https://example.com/bundle.tar.zst` |
 | HTTP | `http://host/path` | `http://example.com/bundle.tar.zst` |
 | Local file | `file:///path` | `file:///data/bundles/pipeline.tar.zst` |
@@ -40,7 +40,7 @@ the first `.tar.zst` asset listed in the release.
 
 ```bash
 # Pull from a GitHub release
-oxo-flow pull gh:WangLabCSU/oxo-flow-circrna@v0.9.4
+oxo-flow pull gh:WangLabCSU/oxo-flow-circrna@v0.10.0
 
 # Pull from an HTTPS URL
 oxo-flow pull https://example.com/pipelines/circrna-bundle.tar.zst
