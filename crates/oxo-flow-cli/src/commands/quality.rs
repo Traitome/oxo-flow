@@ -149,8 +149,15 @@ pub async fn validate_command(
     Ok(())
 }
 
-pub fn lint_command(workflow: PathBuf, strict: bool, json: bool) -> Result<()> {
+pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool) -> Result<()> {
     print_banner();
+
+    // AI mode: semantic linting
+    if ai {
+        let provider = crate::commands::ai_template::resolve_ai_provider()?;
+        crate::commands::ai_check::analyze_workflow(&workflow, &provider, "lint").await?;
+        println!(); // separator
+    }
     let config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
@@ -493,7 +500,7 @@ pub async fn watch_command(workflow: PathBuf, auto_run: bool, jobs: usize) -> Re
             }
 
             // Run lint
-            match lint_command(workflow_path.clone(), false, false) {
+            match lint_command(workflow_path.clone(), false, false, false).await {
                 Ok(()) => {
                     eprintln!();
                 }

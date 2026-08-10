@@ -215,6 +215,9 @@ pub enum Commands {
         workflow: PathBuf,
         #[arg(short = 'r', long = "rule")]
         rule_name: Option<String>,
+        /// Enable AI-powered command explanation.
+        #[arg(long)]
+        ai: bool,
     },
     /// Clean workflow outputs and temporary files.
     Clean {
@@ -247,6 +250,9 @@ pub enum Commands {
         workflow: PathBuf,
         #[arg(long)]
         strict: bool,
+        /// Enable AI-powered semantic linting.
+        #[arg(long)]
+        ai: bool,
     },
     /// Watch workflow file for changes and re-validate/re-run.
     Watch {
@@ -617,7 +623,8 @@ async fn main() -> Result<()> {
         Commands::Debug {
             workflow,
             rule_name,
-        } => debug_command(workflow, rule_name).await?,
+            ai,
+        } => debug_command(workflow, rule_name, ai).await?,
         Commands::Clean {
             workflow,
             dry_run,
@@ -630,7 +637,11 @@ async fn main() -> Result<()> {
             output,
             check,
         } => format_command(workflow, output, check)?,
-        Commands::Lint { workflow, strict } => lint_command(workflow, strict, cli.json)?,
+        Commands::Lint {
+            workflow,
+            strict,
+            ai,
+        } => lint_command(workflow, strict, cli.json, ai).await?,
         Commands::Watch {
             workflow,
             run,
@@ -756,7 +767,7 @@ async fn main() -> Result<()> {
             validate_command(workflow.clone(), false, cli.json, false).await?;
             // 2. Lint
             eprintln!("{} Lint...", "2.".bold());
-            lint_command(workflow.clone(), false, cli.json)?;
+            lint_command(workflow.clone(), false, cli.json, false).await?;
             // 3. Dry-run
             eprintln!("{} Dry-run...", "3.".bold());
             dry_run_command(Some(workflow.clone()), vec![], cli.verbose, cli.json, false).await?;

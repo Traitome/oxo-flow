@@ -1179,7 +1179,7 @@ pub async fn dry_run_command(
     Ok(())
 }
 
-pub async fn debug_command(workflow: PathBuf, rule_name: Option<String>) -> Result<()> {
+pub async fn debug_command(workflow: PathBuf, rule_name: Option<String>, ai: bool) -> Result<()> {
     print_banner();
     let mut config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
@@ -1188,6 +1188,55 @@ pub async fn debug_command(workflow: PathBuf, rule_name: Option<String>) -> Resu
     config
         .expand_wildcards()
         .context("failed to expand wildcard rules")?;
+
+    // AI mode: explain expanded commands
+    if ai {
+        let provider = crate::commands::ai_template::resolve_ai_provider()?;
+        let expanded: Vec<String> = config
+            .rules
+            .iter()
+            .map(|r| {
+                let shell_cmd = r.shell.as_deref().unwrap_or("(no shell command)");
+                let shell = oxo_flow_core::executor::process::render_shell_command(
+                    shell_cmd,
+                    r,
+                    &std::collections::HashMap::new(),
+                );
+                format!(
+                    "## {}\nthreads={}, memory={}, env={:?}\n```bash\n{}\n```",
+                    r.name,
+                    r.resources.threads,
+                    r.resources.memory.as_deref().unwrap_or("1G"),
+                    r.environment,
+                    shell
+                )
+            })
+            .collect();
+        let joined = expanded.join("\n\n");
+
+        let system = r#"## Role
+You are a bioinformatics pipeline debugger. Explain each expanded shell command in plain language,
+flagging potential issues: parameter misuse, resource mismatch, missing required flags, or
+logical errors. Output format per rule:
+
+**rule_name**: <what this command does — 1 sentence>
+⚠ <any issues found — 1 line per issue, or "No issues" if clean>
+"#
+        .to_string();
+        let user = format!(
+            "## Workflow: {}\n\n## Expanded Commands\n\n{joined}\n\n## Task\nExplain each command and flag issues.",
+            workflow.display()
+        );
+
+        println!("{}", "  Analyzing commands...".bold().cyan());
+        match provider.chat(&system, &user).await {
+            Ok(response) => {
+                println!("\n{}\n{response}", "AI Analysis".bold().green().underline());
+                return Ok(());
+            }
+            Err(e) => eprintln!("  AI analysis failed: {e}"),
+        }
+    }
 
     let dag = WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;
 

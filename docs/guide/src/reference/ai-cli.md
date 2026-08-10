@@ -192,6 +192,27 @@ Every AI interaction is logged to `.oxo-flow/ai_sessions/` for audit and debuggi
 
 **Recommendation**: DeepSeek v4-pro offers the best cost-quality balance for bioinformatics workflow generation.
 
+## AI Command Explanation (`debug --ai`)
+
+Analyze expanded shell commands with AI:
+
+```bash
+oxo-flow debug workflow.oxoflow --ai
+oxo-flow debug workflow.oxoflow --ai -r specific_rule
+```
+
+The AI explains what each command does and flags potential issues like resource mismatches, missing flags, or incorrect parameter usage.
+
+---
+
+## AI Linting (`lint --ai`)
+
+Add semantic best-practice checks beyond the deterministic linter:
+
+```bash
+oxo-flow lint workflow.oxoflow --ai
+```
+
 ---
 
 ## AI Workflow Analysis (`dry-run --ai`)
