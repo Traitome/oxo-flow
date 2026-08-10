@@ -443,7 +443,7 @@ pub async fn template_command(
     ai: bool,
     from_url: Vec<String>,
     from_file: Vec<PathBuf>,
-    _ai_max_retries: Option<u32>,
+    ai_max_retries: Option<u32>,
 ) -> Result<()> {
     print_banner();
 
@@ -467,7 +467,11 @@ pub async fn template_command(
         }
 
         crate::commands::ai_template::generate_workflow(
-            &intent, &provider, &from_url, &from_file, output,
+            &intent,
+            &from_url,
+            &from_file,
+            output,
+            ai_max_retries,
         )
         .await?;
         return Ok(());

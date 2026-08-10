@@ -49,11 +49,15 @@ pub fn try_resolve_ai(workflow_path: Option<&Path>, cli_flag: bool) -> Option<Ai
 /// Generate a workflow from natural language using AI.
 pub async fn generate_workflow(
     intent: &str,
-    provider: &AiProvider,
     from_urls: &[String],
     from_files: &[PathBuf],
     output: Option<PathBuf>,
+    ai_max_retries: Option<u32>,
 ) -> Result<()> {
+    // L1-L3: Initialize AI runtime with scope config + tools
+    let runtime = crate::commands::ai_runtime::AiRuntime::new(None, None, ai_max_retries)?;
+    let provider = &runtime.provider;
+
     println!("{}", "AI Template Generator".bold().green());
     println!(
         "  Model: {}",
@@ -212,7 +216,7 @@ Your TOML must include:
 
     user.push_str("\n## Task\nGenerate the optimized .oxoflow TOML configuration now. Output inside ```toml fences.");
 
-    // Call AI with session tracking
+    // Call AI through AiRuntime (L1-L3 connected)
     println!("{}", "  Generating workflow...".bold().cyan());
     let cmd_session =
         crate::commands::ai_session::AiCommandSession::begin("template", intent, provider);
