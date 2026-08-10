@@ -10,6 +10,26 @@ oxo-flow can use AI (DeepSeek, Claude, OpenAI, or Ollama) to help you create, va
 
 ### 1. Configure Your AI Provider
 
+DeepSeek supports **two** API formats — both verified working:
+
+#### OpenAI-compatible format (recommended)
+
+```bash
+export DEEPSEEK_API_KEY="sk-..."
+export OXO_FLOW_AI_PROVIDER=deepseek
+```
+
+#### Anthropic-compatible format
+
+```bash
+export ANTHROPIC_AUTH_TOKEN="sk-..."
+export ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
+export ANTHROPIC_MODEL="deepseek-chat"
+export OXO_FLOW_AI_PROVIDER=claude
+```
+
+#### Other providers
+
 ```bash
 # DeepSeek (recommended for cost + quality balance)
 export DEEPSEEK_API_KEY="sk-..."

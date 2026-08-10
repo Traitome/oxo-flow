@@ -1314,6 +1314,12 @@ workflows without `[ai]` sections.
 | 15 | workflow without [ai] → no AI | ✅ |
 | 16 | workflow with [ai] enabled=true → AI auto | ✅ |
 
+**Provider Verification**:
+| Format | Status | Commands Tested |
+|--------|--------|-----------------|
+| DeepSeek OpenAI-compatible | ✅ | ai, template, dry-run, validate, debug, lint |
+| DeepSeek Anthropic-compatible | ✅ | ai, template, dry-run |
+
 **CI**: `make ci` fully passing (fmt + clippy + build + test + audit)
 **Tests**: 70 oxo-flow-ai + 113 core + 59 CLI = 242 total
 **Docs**: `docs/guide/src/reference/ai-cli.md` complete command reference
