@@ -838,40 +838,28 @@ pub async fn run_command(
         if fc > 0 && !keep_going {
             progress.finish_and_clear();
 
-            // AI error recovery
-            if ai_recover {
+            // AI error recovery: auto-detect from workflow [ai] or explicit --ai-recover
+            let should_recover =
+                ai_recover || crate::commands::ai_template::should_use_ai(Some(&workflow), false);
+            if should_recover {
                 let failures_guard = failures.lock().await;
-                if let Some((rule, error)) = failures_guard.first() {
-                    let provider = crate::commands::ai_template::resolve_ai_provider()
-                        .unwrap_or_else(|_| {
-                            eprintln!("  AI provider not configured — skipping recovery");
-                            oxo_flow_ai::provider::AiProvider::Noop
-                        });
-
-                    if !matches!(provider, oxo_flow_ai::provider::AiProvider::Noop) {
-                        let result = crate::commands::ai_recover::diagnose_failure(
-                            &workflow, rule, -1, // exit code not tracked at this level
-                            error, &provider,
-                        )
-                        .await;
-
-                        match result {
-                            Ok(diag) => {
-                                if diag.safe_to_auto_apply
-                                    && let Some(ref toml) = diag.modified_toml
-                                {
-                                    let session_id = "recovery";
-                                    if let Err(e) = crate::commands::ai_recover::apply_fix(
-                                        &workflow, toml, session_id,
-                                    ) {
-                                        eprintln!("  Failed to apply fix: {e}");
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("  AI diagnosis failed: {e}");
+                if let Some((rule, error)) = failures_guard.first()
+                    && let Some(provider) =
+                        crate::commands::ai_template::try_resolve_ai(Some(&workflow), true)
+                {
+                    let result = crate::commands::ai_recover::diagnose_failure(
+                        &workflow, rule, -1, error, &provider,
+                    )
+                    .await;
+                    match result {
+                        Ok(diag) => {
+                            if let Some(ref toml) = diag.modified_toml {
+                                let _ = crate::commands::ai_recover::apply_fix(
+                                    &workflow, toml, "recovery",
+                                );
                             }
                         }
+                        Err(e) => eprintln!("  AI diagnosis failed: {e}"),
                     }
                 }
             }
@@ -1006,11 +994,10 @@ pub async fn dry_run_command(
     print_banner();
     let workflow = resolve_workflow(workflow)?;
 
-    // AI mode: analyze workflow, then proceed with normal dry-run
-    if ai {
-        let provider = crate::commands::ai_template::resolve_ai_provider()?;
+    // AI: auto-detect from workflow [ai] or explicit --ai flag
+    if let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(&workflow), ai) {
         crate::commands::ai_check::analyze_workflow(&workflow, &provider, "dry-run").await?;
-        println!(); // separator
+        println!();
     }
     let mut config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
@@ -1189,9 +1176,8 @@ pub async fn debug_command(workflow: PathBuf, rule_name: Option<String>, ai: boo
         .expand_wildcards()
         .context("failed to expand wildcard rules")?;
 
-    // AI mode: explain expanded commands
-    if ai {
-        let provider = crate::commands::ai_template::resolve_ai_provider()?;
+    // AI: auto-detect from workflow [ai] or explicit --ai flag
+    if let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(&workflow), ai) {
         let expanded: Vec<String> = config
             .rules
             .iter()

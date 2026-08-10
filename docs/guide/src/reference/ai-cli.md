@@ -1,8 +1,8 @@
 # AI-Powered CLI
 
-oxo-flow can use AI (DeepSeek, Claude, OpenAI, or Ollama) to help you create, validate, and fix bioinformatics workflows.
+oxo-flow can use AI (DeepSeek, Claude, OpenAI, or Ollama) to help you create, validate, and fix bioinformatics workflows. AI is **optional** — no AI code runs unless explicitly enabled.
 
-> **Status**: Phase 1 — Template generation is available. Dry-run + run recovery coming in future releases.
+> **Design principle**: Add one line of config. AI activates automatically on all suitable commands.
 
 ---
 
@@ -14,34 +14,42 @@ oxo-flow can use AI (DeepSeek, Claude, OpenAI, or Ollama) to help you create, va
 # DeepSeek (recommended for cost + quality balance)
 export DEEPSEEK_API_KEY="sk-..."
 export OXO_FLOW_AI_PROVIDER=deepseek
-export OXO_FLOW_AI_MODEL="deepseek-v4-pro"  # optional, this is the default
-
-# Or use Claude
-export ANTHROPIC_AUTH_TOKEN="sk-ant-..."
-export OXO_FLOW_AI_PROVIDER=claude
-
-# Or use OpenAI
-export OPENAI_API_KEY="sk-..."
-export OXO_FLOW_AI_PROVIDER=openai
-
-# Or use a local Ollama instance
-export OXO_FLOW_AI_PROVIDER=ollama
-export OLLAMA_MODEL="llama3"
 ```
 
-Configuration is persisted to `~/.oxo-flow/ai_config.json` after first use.
+Configuration persists to `~/.oxo-flow/ai_config.json`.
 
-### 2. Generate a Workflow
+### 2. Enable AI in Your Workflow
+
+Add one section to your `.oxoflow` file:
+
+```toml
+[ai]
+enabled = true
+```
+
+That's it. Now **all** AI-capable commands auto-activate without extra flags:
+
+```bash
+oxo-flow dry-run workflow.oxoflow     # AI analysis runs automatically
+oxo-flow validate workflow.oxoflow   # AI semantic validation
+oxo-flow run workflow.oxoflow        # AI error recovery on failure
+```
+
+### 3. Generate a New Workflow
 
 ```bash
 oxo-flow template "RNA-seq analysis with STAR alignment and featureCounts quantification" --ai
 ```
 
-The AI generates a complete `.oxoflow` file with:
-- `[workflow]` section with name, version, description
-- `[config]` section with configurable variables
-- `[[rules]]` with shell commands, resource allocations, and environment declarations
-- Proper DAG edges via `depends_on`
+### 4. Override with CLI Flags
+
+```bash
+# Force AI on (even without [ai] section)
+oxo-flow dry-run workflow.oxoflow --ai
+
+# Force AI off (even with [ai] section) 
+# (just don't pass --ai — AI is only auto-detected, never forced)
+```
 
 ### 3. Review and Run
 

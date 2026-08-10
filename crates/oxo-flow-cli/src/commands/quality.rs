@@ -12,11 +12,10 @@ pub async fn validate_command(
     json: bool,
     ai: bool,
 ) -> Result<()> {
-    // AI mode: analyze workflow, then proceed with normal validation
-    if ai {
-        let provider = crate::commands::ai_template::resolve_ai_provider()?;
+    // AI: auto-detect from workflow [ai] or explicit --ai flag
+    if let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(&workflow), ai) {
         crate::commands::ai_check::analyze_workflow(&workflow, &provider, "validate").await?;
-        println!(); // separator
+        println!();
     }
 
     let _ = &json;
@@ -152,11 +151,10 @@ pub async fn validate_command(
 pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool) -> Result<()> {
     print_banner();
 
-    // AI mode: semantic linting
-    if ai {
-        let provider = crate::commands::ai_template::resolve_ai_provider()?;
+    // AI: auto-detect from workflow [ai] or explicit --ai flag
+    if let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(&workflow), ai) {
         crate::commands::ai_check::analyze_workflow(&workflow, &provider, "lint").await?;
-        println!(); // separator
+        println!();
     }
     let config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;

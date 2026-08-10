@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
 use oxo_flow_ai::{knowledge::builtin::format_tool_table, provider::AiProvider};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Resolve AI provider from environment or config, returning an error if not configured.
 pub fn resolve_ai_provider() -> Result<AiProvider> {
@@ -19,6 +19,31 @@ pub fn resolve_ai_provider() -> Result<AiProvider> {
         );
     }
     Ok(provider)
+}
+
+/// Check whether AI should be used for a workflow operation.
+///
+/// Resolution: CLI flag wins if true; otherwise check workflow `[ai]` section.
+pub fn should_use_ai(workflow_path: Option<&Path>, cli_flag: bool) -> bool {
+    if cli_flag {
+        return true;
+    }
+    if let Some(path) = workflow_path
+        && let Ok(content) = std::fs::read_to_string(path)
+        && let Ok(table) = content.parse::<toml::Table>()
+        && let Some(ai) = table.get("ai")
+    {
+        return ai.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+    }
+    false
+}
+
+/// Try to resolve AI provider. Returns None if AI is not available.
+pub fn try_resolve_ai(workflow_path: Option<&Path>, cli_flag: bool) -> Option<AiProvider> {
+    if !should_use_ai(workflow_path, cli_flag) {
+        return None;
+    }
+    resolve_ai_provider().ok()
 }
 
 /// Generate a workflow from natural language using AI.
