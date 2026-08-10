@@ -33,9 +33,11 @@ pub mod agent;
 pub mod config;
 pub mod error;
 pub mod knowledge;
+pub mod mcp;
 pub mod plugin;
 pub mod provider;
 pub mod session;
+pub mod skill;
 pub mod tools;
 pub mod types;
 
