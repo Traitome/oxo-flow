@@ -5,7 +5,7 @@
 
 pub mod commands;
 
-use crate::commands::ai_status::ai_status_command;
+use crate::commands::ai_status::{ai_setup_command, ai_status_command, ai_test_command};
 use crate::commands::batch::batch_command;
 use crate::commands::clean::clean_command;
 use crate::commands::cluster::cluster_command;
@@ -186,9 +186,16 @@ pub enum Commands {
         #[arg(long = "ai-max-retries", value_name = "N")]
         ai_max_retries: Option<u32>,
     },
-    /// Show AI configuration status and test connectivity.
+    /// AI status, test, and setup.
+    ///
+    /// Run without args for quick status.
+    /// Use 'ai test' for comprehensive self-test.
+    /// Use 'ai setup' for interactive wizard.
     #[command(name = "ai")]
-    AiStatus,
+    Ai {
+        #[arg(num_args = 0..=1, value_name = "ACTION", help = "test | setup")]
+        action: Option<String>,
+    },
 
     /// Output the workflow DAG for visualization.
     Graph {
@@ -626,7 +633,11 @@ async fn main() -> Result<()> {
             from_file,
             ai_max_retries,
         } => template_command(template, output, ai, from_url, from_file, ai_max_retries).await?,
-        Commands::AiStatus => ai_status_command().await?,
+        Commands::Ai { action } => match action.as_deref() {
+            Some("test") => ai_test_command().await?,
+            Some("setup") => ai_setup_command().await?,
+            _ => ai_status_command().await?,
+        },
         Commands::Graph {
             workflow,
             format,
