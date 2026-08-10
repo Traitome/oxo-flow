@@ -1270,3 +1270,50 @@ workflows without `[ai]` sections.
 - All 7 AI commands refactored to use auto-detection
 
 **Verified:** Auto-ON with [ai] enabled=true, OFF without [ai] section.
+
+### Post-Phase: AiRuntime + Session + ai status (2026-08-10)
+
+**Delivered: Genuine 5-layer connection + user observability.**
+
+- `AiRuntime` — central integration point connecting L1-L3 for L4 commands
+- Scope config resolution via `resolve_chain()` (global → project → workflow → CLI)
+- `AiCommandSession` — wraps all AI calls, auto-saves to `.oxo-flow/ai_sessions/`
+- `oxo-flow ai` — status command: provider config, connectivity test, session listing
+- `--ai-max-retries` flag on Run, Resume, DryRun commands
+- `lint --ai` and `debug --ai` commands added
+- Skill/MCP discovery runs at AiRuntime initialization
+
+**Files created:**
+- `crates/oxo-flow-cli/src/commands/ai_runtime.rs` — L1-L3 integration
+- `crates/oxo-flow-cli/src/commands/ai_session.rs` — session tracking
+- `crates/oxo-flow-cli/src/commands/ai_status.rs` — status command
+- `crates/oxo-flow-ai/src/plugin.rs` — AI plugin traits
+- `crates/oxo-flow-ai/src/mcp.rs` — MCP bridge
+- `crates/oxo-flow-ai/src/skill.rs` — skill system
+
+### Final Verification (2026-08-10)
+
+**E2E Test Battery: 16/16 user scenarios passing.**
+
+| # | Scenario | Status |
+|---|----------|--------|
+| 1 | `oxo-flow ai` | ✅ |
+| 2 | `template "X" --ai` | ✅ |
+| 3 | `template "X" --ai --from-url URL` | ✅ |
+| 4 | `template "X" --ai --from-file PATH` | ✅ |
+| 5 | `template "X" --ai -o custom.oxoflow` | ✅ |
+| 6 | `template "X" --ai --ai-max-retries N` | ✅ |
+| 7 | `dry-run` auto-detect (no --ai) | ✅ |
+| 8 | `dry-run --ai` force | ✅ |
+| 9 | `validate` auto-detect | ✅ |
+| 10 | `lint --ai` | ✅ |
+| 11 | `debug --ai` | ✅ |
+| 12 | `run --ai-recover` | ✅ |
+| 13 | `run --ai-max-retries N` | ✅ |
+| 14 | `resume --ai-recover` | ✅ |
+| 15 | workflow without [ai] → no AI | ✅ |
+| 16 | workflow with [ai] enabled=true → AI auto | ✅ |
+
+**CI**: `make ci` fully passing (fmt + clippy + build + test + audit)
+**Tests**: 70 oxo-flow-ai + 113 core + 59 CLI = 242 total
+**Docs**: `docs/guide/src/reference/ai-cli.md` complete command reference
