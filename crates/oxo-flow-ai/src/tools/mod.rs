@@ -4,11 +4,13 @@
 //! Each tool has a JSON Schema definition (for the AI's tool_call API)
 //! and an async execute method.
 
+pub mod builtin;
+
 use async_trait::async_trait;
 use std::collections::HashMap;
 
 use crate::error::AiError;
-use crate::types::ToolDef;
+pub use crate::types::ToolDef;
 
 // ── Tool trait ─────────────────────────────────────────────────────────────
 

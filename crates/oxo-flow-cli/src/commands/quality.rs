@@ -476,6 +476,7 @@ pub async fn watch_command(workflow: PathBuf, auto_run: bool, jobs: usize) -> Re
                             vec![],          // cli_args
                             vec![],          // extra_samples
                             false,           // ai_recover
+                            None,            // ai_max_retries
                         )
                         .await;
                     } else {
@@ -487,6 +488,7 @@ pub async fn watch_command(workflow: PathBuf, auto_run: bool, jobs: usize) -> Re
                             false,
                             false, // json (watch mode = human-readable)
                             false, // ai
+                            None,  // ai_max_retries
                         )
                         .await;
                     }

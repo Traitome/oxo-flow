@@ -141,6 +141,7 @@ pub async fn run_command(
     cli_args: Vec<String>,
     extra_samples: Vec<String>,
     ai_recover: bool,
+    _ai_max_retries: Option<u32>,
 ) -> Result<()> {
     print_banner();
     let workflow = resolve_workflow(workflow)?;
@@ -990,6 +991,7 @@ pub async fn dry_run_command(
     verbose: bool,
     json: bool,
     ai: bool,
+    _ai_max_retries: Option<u32>,
 ) -> Result<()> {
     print_banner();
     let workflow = resolve_workflow(workflow)?;
@@ -1347,7 +1349,12 @@ pub async fn handle_status(checkpoint_path: PathBuf, json: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn resume_command(checkpoint: PathBuf, jobs: usize, _ai_recover: bool) -> Result<()> {
+pub async fn resume_command(
+    checkpoint: PathBuf,
+    jobs: usize,
+    _ai_recover: bool,
+    _ai_max_retries: Option<u32>,
+) -> Result<()> {
     // resume does not produce structured JSON output
     print_banner();
 
@@ -1438,6 +1445,7 @@ pub async fn resume_command(checkpoint: PathBuf, jobs: usize, _ai_recover: bool)
         Vec::new(),      // cli_args (resume reuses checkpoint state)
         Vec::new(),      // extra_samples (resume uses existing groups)
         false,           // ai_recover (resume doesn't support recovery)
+        None,            // ai_max_retries
     )
     .await
 }

@@ -9,6 +9,7 @@ use super::{Tool, ToolDef};
 use crate::error::AiError;
 
 /// Read contents of a local file.
+#[derive(Default)]
 pub struct ReadFileTool;
 
 impl ReadFileTool {
@@ -62,6 +63,7 @@ impl Tool for ReadFileTool {
 }
 
 /// Fetch content from a URL.
+#[derive(Default)]
 pub struct FetchUrlTool {
     client: reqwest::Client,
 }
@@ -119,13 +121,10 @@ impl Tool for FetchUrlTool {
                 message: format!("request failed: {e}"),
             })?;
 
-        let text = response
-            .text()
-            .await
-            .map_err(|e| AiError::ToolError {
-                tool: "fetch_url".into(),
-                message: format!("read response failed: {e}"),
-            })?;
+        let text = response.text().await.map_err(|e| AiError::ToolError {
+            tool: "fetch_url".into(),
+            message: format!("read response failed: {e}"),
+        })?;
 
         Ok(text)
     }
@@ -135,6 +134,7 @@ impl Tool for FetchUrlTool {
 ///
 /// This is the only non-read-only builtin tool. It always creates a
 /// backup before overwriting.
+#[derive(Default)]
 pub struct WriteFileTool;
 
 impl WriteFileTool {
@@ -181,14 +181,11 @@ impl Tool for WriteFileTool {
                 message: format!("invalid arguments: {e}"),
             })?;
 
-        let path = std::path::Path::new(
-            args["path"]
-                .as_str()
-                .ok_or_else(|| AiError::ToolError {
-                    tool: "write_file".into(),
-                    message: "missing 'path' argument".into(),
-                })?,
-        );
+        let path =
+            std::path::Path::new(args["path"].as_str().ok_or_else(|| AiError::ToolError {
+                tool: "write_file".into(),
+                message: "missing 'path' argument".into(),
+            })?);
 
         let content = args["content"].as_str().ok_or_else(|| AiError::ToolError {
             tool: "write_file".into(),
@@ -226,7 +223,12 @@ mod tests {
         let def = tool.def();
         assert_eq!(def.name, "read_file");
         assert!(def.description.contains("Read"));
-        assert!(def.parameters["required"].as_array().unwrap().contains(&serde_json::json!("path")));
+        assert!(
+            def.parameters["required"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("path"))
+        );
     }
 
     #[test]
@@ -251,19 +253,14 @@ mod tests {
     async fn read_file_tool_reads_content() {
         let tool = ReadFileTool::new();
         // Read Cargo.toml of this crate
-        let result = tool
-            .execute(r#"{"path": "Cargo.toml"}"#)
-            .await
-            .unwrap();
+        let result = tool.execute(r#"{"path": "Cargo.toml"}"#).await.unwrap();
         assert!(result.contains("oxo-flow-ai"));
     }
 
     #[tokio::test]
     async fn read_file_tool_errors_on_missing_file() {
         let tool = ReadFileTool::new();
-        let result = tool
-            .execute(r#"{"path": "/nonexistent/file.txt"}"#)
-            .await;
+        let result = tool.execute(r#"{"path": "/nonexistent/file.txt"}"#).await;
         assert!(result.is_err());
     }
 

@@ -117,6 +117,9 @@ pub enum Commands {
         /// Enable AI error recovery on rule failure.
         #[arg(long)]
         ai_recover: bool,
+        /// Maximum AI retries (overrides [ai] config).
+        #[arg(long = "ai-max-retries", value_name = "N")]
+        ai_max_retries: Option<u32>,
     },
     /// Resume an interrupted workflow from a checkpoint.
     Resume {
@@ -127,6 +130,9 @@ pub enum Commands {
         /// Enable AI error recovery on rule failure.
         #[arg(long)]
         ai_recover: bool,
+        /// Maximum AI retries (overrides [ai] config).
+        #[arg(long = "ai-max-retries", value_name = "N")]
+        ai_max_retries: Option<u32>,
     },
     /// Preview execution without running any commands.
     DryRun {
@@ -137,6 +143,9 @@ pub enum Commands {
         /// Enable AI-powered analysis of the workflow.
         #[arg(long)]
         ai: bool,
+        /// Maximum AI analysis rounds (overrides [ai] config).
+        #[arg(long = "ai-max-retries", value_name = "N")]
+        ai_max_retries: Option<u32>,
     },
     /// Validate a .oxoflow workflow file.
     Validate {
@@ -550,6 +559,7 @@ async fn main() -> Result<()> {
             config_overrides,
             extra_samples,
             ai_recover,
+            ai_max_retries,
         } => {
             let (wf, wd) = if let Some(bundle_path) = bundle {
                 let (extracted_wf, extracted_dir) =
@@ -584,6 +594,7 @@ async fn main() -> Result<()> {
                 merged_args,
                 extra_samples,
                 ai_recover,
+                ai_max_retries,
             )
             .await?
         }
@@ -591,12 +602,14 @@ async fn main() -> Result<()> {
             checkpoint,
             jobs,
             ai_recover,
-        } => resume_command(checkpoint, jobs, ai_recover).await?,
+            ai_max_retries,
+        } => resume_command(checkpoint, jobs, ai_recover, ai_max_retries).await?,
         Commands::DryRun {
             workflow,
             target,
             ai,
-        } => dry_run_command(workflow, target, cli.verbose, cli.json, ai).await?,
+            ai_max_retries,
+        } => dry_run_command(workflow, target, cli.verbose, cli.json, ai, ai_max_retries).await?,
         Commands::Validate {
             workflow,
             as_include,
@@ -776,7 +789,15 @@ async fn main() -> Result<()> {
             lint_command(workflow.clone(), false, cli.json, false).await?;
             // 3. Dry-run
             eprintln!("{} Dry-run...", "3.".bold());
-            dry_run_command(Some(workflow.clone()), vec![], cli.verbose, cli.json, false).await?;
+            dry_run_command(
+                Some(workflow.clone()),
+                vec![],
+                cli.verbose,
+                cli.json,
+                false,
+                None,
+            )
+            .await?;
             // 4. Optional: run with --run flag
             if run {
                 eprintln!("{} Execution...", "4.".bold());
@@ -800,6 +821,7 @@ async fn main() -> Result<()> {
                     vec![], // cli_args
                     vec![], // extra_samples
                     false,  // ai_recover
+                    None,   // ai_max_retries
                 )
                 .await?;
             }
