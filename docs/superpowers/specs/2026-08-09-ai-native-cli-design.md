@@ -1241,3 +1241,32 @@ fn dry_run_detects_missing_threads() {
 | Phase 3 | run --ai-recover, resume --ai-recover | ✅ |
 | Phase 4 | scope config, AI plugin traits | ✅ |
 | Phase 5 | MCP bridge, skill system | ✅ |
+
+### Post-Phase Simplification (2026-08-10)
+
+**Delivered: AI auto-detection from workflow [ai] section.**
+
+The "one line" principle: add `[ai] enabled = true` to any `.oxoflow` file
+and ALL AI-capable commands auto-activate without `--ai` flags.
+
+```toml
+[ai]
+enabled = true
+```
+
+```bash
+# No --ai flag needed — auto-detected from workflow
+oxo-flow dry-run workflow.oxoflow
+oxo-flow validate workflow.oxoflow
+oxo-flow run workflow.oxoflow        # auto-recovery on failure
+```
+
+`--ai` and `--ai-recover` flags remain as force-enable overrides for
+workflows without `[ai]` sections.
+
+**Implementation:**
+- `should_use_ai(path, cli_flag)` — checks workflow [ai] section
+- `try_resolve_ai(path, cli_flag)` — returns Some(provider) when available
+- All 7 AI commands refactored to use auto-detection
+
+**Verified:** Auto-ON with [ai] enabled=true, OFF without [ai] section.
