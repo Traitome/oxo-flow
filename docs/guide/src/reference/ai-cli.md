@@ -200,6 +200,26 @@ Every AI interaction is logged to `.oxo-flow/ai_sessions/` for audit and debuggi
 
 **Recommendation**: DeepSeek v4-pro offers the best cost-quality balance for bioinformatics workflow generation.
 
+## Complete Command Reference
+
+| Command | AI Flag | Auto-Detect | What It Does |
+|---------|---------|:-----------:|--------------|
+| `oxo-flow ai` | — | — | Show provider, model, endpoint, test connectivity, session count |
+| `oxo-flow template "X" --ai` | required | ❌ | Natural language → .oxoflow file |
+| `oxo-flow template "X" --ai --from-url URL` | required | ❌ | Generate with web page as reference |
+| `oxo-flow template "X" --ai --from-file PATH` | required | ❌ | Generate with local file as reference |
+| `oxo-flow template "X" --ai -o PATH` | required | ❌ | Write output to specific path |
+| `oxo-flow template "X" --ai --ai-max-retries N` | required | ❌ | Override max correction rounds |
+| `oxo-flow dry-run WORKFLOW` | optional | ✅ | AI analysis if [ai] enabled=true |
+| `oxo-flow dry-run WORKFLOW --ai` | force | — | Explicit AI override |
+| `oxo-flow validate WORKFLOW` | optional | ✅ | AI semantic validation |
+| `oxo-flow lint WORKFLOW` | optional | ✅ | AI best-practice linting |
+| `oxo-flow debug WORKFLOW` | optional | ✅ | AI command explanation |
+| `oxo-flow run WORKFLOW` | optional | ✅ | AI error recovery on failure |
+| `oxo-flow run WORKFLOW --ai-recover` | force | — | Explicit recovery override |
+| `oxo-flow run WORKFLOW --ai-max-retries N` | optional | — | Max fix attempts |
+| `oxo-flow resume CHECKPOINT --ai-recover` | required | — | Diagnose + fix on restart |
+
 ## AI Command Explanation (`debug --ai`)
 
 Analyze expanded shell commands with AI:
