@@ -212,8 +212,10 @@ Your TOML must include:
 
     user.push_str("\n## Task\nGenerate the optimized .oxoflow TOML configuration now. Output inside ```toml fences.");
 
-    // Call AI
+    // Call AI with session tracking
     println!("{}", "  Generating workflow...".bold().cyan());
+    let cmd_session =
+        crate::commands::ai_session::AiCommandSession::begin("template", intent, provider);
     let response = provider
         .chat(&system, &user)
         .await
@@ -263,6 +265,7 @@ Your TOML must include:
         .filter(|l| l.trim().starts_with("[[rules]]"))
         .count();
     println!("  Rules: {rule_count}");
+    cmd_session.complete(0.90);
     println!(
         "{}",
         "Done! Review the generated workflow before running.".bold()

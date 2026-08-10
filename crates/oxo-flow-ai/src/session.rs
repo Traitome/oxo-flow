@@ -193,8 +193,8 @@ pub struct Modification {
 
 // ── Session persistence ────────────────────────────────────────────────────
 
-/// Directory for session JSON files.
-fn sessions_dir() -> PathBuf {
+/// Directory for session JSON files (public for status/listing commands).
+pub fn sessions_dir() -> PathBuf {
     resolve_oxo_flow_dir().join("ai_sessions")
 }
 
