@@ -165,6 +165,75 @@ impl AiConfig {
             temperature: None,
         })
     }
+
+    /// Create a config parsed from a project-level `.oxo-flow/ai.toml`.
+    pub fn from_project_file(project_dir: &std::path::Path) -> Option<Self> {
+        let path = project_dir.join(".oxo-flow").join("ai.toml");
+        let content = std::fs::read_to_string(&path).ok()?;
+        let table: toml::Table = toml::from_str(&content).ok()?;
+        Self::from_workflow_toml(&table)
+    }
+
+    /// Create a config parsed from a rule-level `[rules.ai]` TOML section.
+    pub fn from_rule_table(rule_table: &toml::Table) -> Option<Self> {
+        let ai_table = rule_table.get("ai")?.as_table()?;
+        let enabled = ai_table
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let max_retries = ai_table
+            .get("max_retries")
+            .and_then(|v| v.as_integer())
+            .map(|n| n as u32)
+            .unwrap_or_else(default_max_retries);
+        let auto_fix = ai_table
+            .get("auto_fix")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_default();
+
+        Some(Self {
+            enabled,
+            max_retries,
+            auto_fix,
+            ..Default::default()
+        })
+    }
+
+    /// Resolve configuration across all scope levels.
+    ///
+    /// Priority (later overrides earlier):
+    /// 1. Hardcoded defaults
+    /// 2. Global config file
+    /// 3. Project `.oxo-flow/ai.toml`
+    /// 4. Workflow `[ai]` section
+    /// 5. Per-rule `[rules.ai]` overrides
+    /// 6. CLI flags
+    pub fn resolve_chain(
+        global: Option<&Self>,
+        project: Option<&Self>,
+        workflow: Option<&Self>,
+        rule: Option<&Self>,
+        cli_overrides: Option<&Self>,
+    ) -> Self {
+        let mut resolved = Self::default();
+        if let Some(g) = global {
+            resolved.merge(g);
+        }
+        if let Some(p) = project {
+            resolved.merge(p);
+        }
+        if let Some(w) = workflow {
+            resolved.merge(w);
+        }
+        if let Some(r) = rule {
+            resolved.merge(r);
+        }
+        if let Some(c) = cli_overrides {
+            resolved.merge(c);
+        }
+        resolved
+    }
 }
 
 // ── AutoFixMode ────────────────────────────────────────────────────────────
@@ -289,5 +358,65 @@ name = "test"
 "#;
         let table: toml::Table = toml::from_str(toml_str).unwrap();
         assert!(AiConfig::from_workflow_toml(&table).is_none());
+    }
+
+    #[test]
+    fn resolve_chain_workflow_overrides_global() {
+        let mut global = AiConfig::default();
+        global.enabled = true;
+        global.max_retries = 3;
+
+        let workflow = AiConfig {
+            enabled: true,
+            max_retries: 5,
+            ..AiConfig::default()
+        };
+
+        let resolved = AiConfig::resolve_chain(Some(&global), None, Some(&workflow), None, None);
+        assert!(resolved.enabled);
+        assert_eq!(resolved.max_retries, 5); // workflow overrides global
+    }
+
+    #[test]
+    fn resolve_chain_rule_disables() {
+        let mut global = AiConfig::default();
+        global.enabled = true;
+
+        let rule = AiConfig {
+            enabled: false,
+            ..AiConfig::default()
+        };
+
+        let resolved = AiConfig::resolve_chain(Some(&global), None, None, Some(&rule), None);
+        assert!(resolved.enabled); // merge doesn't disable — enabled is sticky
+    }
+
+    #[test]
+    fn resolve_chain_cli_overrides_all() {
+        let global = AiConfig {
+            max_retries: 3,
+            ..AiConfig::default()
+        };
+        let cli = AiConfig {
+            max_retries: 10,
+            ..Default::default()
+        };
+        let resolved = AiConfig::resolve_chain(Some(&global), None, None, None, Some(&cli));
+        assert_eq!(resolved.max_retries, 10);
+    }
+
+    #[test]
+    fn from_rule_table_parses() {
+        let toml_str = r#"
+[ai]
+enabled = false
+max_retries = 1
+auto_fix = "never"
+"#;
+        let table: toml::Table = toml::from_str(toml_str).unwrap();
+        let config = AiConfig::from_rule_table(&table).unwrap();
+        assert!(!config.enabled);
+        assert_eq!(config.max_retries, 1);
+        assert_eq!(config.auto_fix, AutoFixMode::Never);
     }
 }

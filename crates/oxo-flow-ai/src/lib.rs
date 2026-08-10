@@ -33,6 +33,7 @@ pub mod agent;
 pub mod config;
 pub mod error;
 pub mod knowledge;
+pub mod plugin;
 pub mod provider;
 pub mod session;
 pub mod tools;
