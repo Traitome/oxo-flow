@@ -471,7 +471,7 @@ jobs:
           set -euxo pipefail
           TAG="${GITHUB_REF_NAME#v}"
           echo "Tag version: $TAG"
-          for crate in oxo-flow-core oxo-flow-web oxo-flow-cli; do
+          for crate in oxo-flow-core oxo-flow-ai oxo-flow-web oxo-flow-cli; do
             VER=$(cargo metadata --no-deps --format-version=1 \
               | python3 -c "import sys,json; pkgs=json.load(sys.stdin)['packages']; print(next(p['version'] for p in pkgs if p['name']=='$crate'))")
             echo "$crate version: $VER"
@@ -500,6 +500,23 @@ jobs:
       # crates.io sparse-index propagation typically completes within 30-60 s.
       # We use 60 s to give a comfortable margin before dependent crates publish.
       - name: Wait for crates.io index (oxo-flow-core)
+        run: sleep 60
+
+      - name: Publish oxo-flow-ai
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          STATUS=$(curl -sf "https://crates.io/api/v1/crates/oxo-flow-ai/${VERSION}" \
+            -H "User-Agent: oxo-flow-ci/1.0 (github.com/Traitome/oxo-flow)" \
+            -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
+          if [ "$STATUS" = "200" ]; then
+            echo "oxo-flow-ai ${VERSION} already on crates.io, skipping"
+          else
+            [ "$STATUS" = "000" ] && echo "::warning::crates.io reachability check failed, attempting publish anyway"
+            cargo publish -p oxo-flow-ai
+          fi
+
+      - name: Wait for crates.io index (oxo-flow-ai)
         run: sleep 60
 
       - name: Publish oxo-flow-web

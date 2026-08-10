@@ -10,33 +10,40 @@ oxo-flow can use AI (DeepSeek, Claude, OpenAI, or Ollama) to help you create, va
 
 ### 1. Configure Your AI Provider
 
-DeepSeek supports **two** API formats — both verified working:
-
-#### OpenAI-compatible format (recommended)
+oxo-flow supports any AI provider with an OpenAI-compatible or Anthropic-compatible API.
+Set the provider and your API key via environment variables:
 
 ```bash
-export DEEPSEEK_API_KEY="sk-..."
+# DeepSeek (OpenAI-compatible)
 export OXO_FLOW_AI_PROVIDER=deepseek
-```
+export DEEPSEEK_API_KEY="sk-..."
 
-#### Anthropic-compatible format
-
-```bash
-export ANTHROPIC_AUTH_TOKEN="sk-..."
-export ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
-export ANTHROPIC_MODEL="deepseek-chat"
+# Claude (Anthropic)
 export OXO_FLOW_AI_PROVIDER=claude
+export ANTHROPIC_AUTH_TOKEN="sk-ant-..."
+
+# OpenAI
+export OXO_FLOW_AI_PROVIDER=openai
+export OPENAI_API_KEY="sk-..."
+
+# Any OpenAI-compatible service (Groq, Together, Azure, Fireworks, etc.)
+export OXO_FLOW_AI_PROVIDER=openai
+export OPENAI_BASE_URL="https://api.groq.com/openai/v1"
+export OPENAI_API_KEY="gsk_..."
+export OPENAI_MODEL="llama-3.1-70b"
+
+# Any Anthropic-compatible service
+export OXO_FLOW_AI_PROVIDER=claude
+export ANTHROPIC_BASE_URL="https://your-custom-endpoint"
+export ANTHROPIC_AUTH_TOKEN="..."
+
+# Local Ollama (no API key needed)
+export OXO_FLOW_AI_PROVIDER=ollama
+export OLLAMA_HOST="http://localhost:11434"
+export OLLAMA_MODEL="llama3"
 ```
 
-#### Other providers
-
-```bash
-# DeepSeek (recommended for cost + quality balance)
-export DEEPSEEK_API_KEY="sk-..."
-export OXO_FLOW_AI_PROVIDER=deepseek
-```
-
-Configuration persists to `~/.oxo-flow/ai_config.json`.
+Configuration persists to `~/.oxo-flow/ai_config.json` after first use.
 
 ### 2. Enable AI in Your Workflow
 
@@ -164,12 +171,15 @@ model = "deepseek-v4-flash"
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `OXO_FLOW_AI_PROVIDER` | Provider: `deepseek`, `claude`, `openai`, `ollama` | `disabled` |
-| `DEEPSEEK_API_KEY` | DeepSeek API key | — |
-| `DEEPSEEK_BASE_URL` | Custom DeepSeek endpoint | `https://api.deepseek.com/v1/chat/completions` |
-| `DEEPSEEK_MODEL` | DeepSeek model | `deepseek-v4-pro` |
-| `ANTHROPIC_AUTH_TOKEN` | Claude API key | — |
-| `OPENAI_API_KEY` | OpenAI API key | — |
-| `OXO_FLOW_AI_API_KEY` | Generic API key (all providers) | — |
+| `OXO_FLOW_AI_API_KEY` | Generic API key (fallback for all providers) | — |
+| `OXO_FLOW_AI_API_URL` | Custom API endpoint URL | (provider default) |
+| `OXO_FLOW_AI_MODEL` | Model name override | (provider default) |
+| `DEEPSEEK_API_KEY` | DeepSeek (OpenAI-compatible) | — |
+| `ANTHROPIC_AUTH_TOKEN` | Anthropic-compatible API key | — |
+| `ANTHROPIC_BASE_URL` | Custom Anthropic endpoint | `https://api.anthropic.com` |
+| `OPENAI_API_KEY` | OpenAI-compatible API key | — |
+| `OPENAI_BASE_URL` | Custom OpenAI-compatible endpoint | `https://api.openai.com/v1` |
+| `OLLAMA_HOST` | Ollama server address | `http://localhost:11434` |
 
 ---
 
@@ -210,15 +220,13 @@ Every AI interaction is logged to `.oxo-flow/ai_sessions/` for audit and debuggi
 
 ## Provider Comparison
 
-| Provider | Model | Cost (per 1M tokens) | Quality | Setup |
-|----------|-------|----------------------|---------|-------|
-| DeepSeek | v4-pro | $0.28 in / $1.10 out | High | API key |
-| DeepSeek | v4-flash | $0.14 in / $0.55 out | Good | API key |
-| Claude | Sonnet 4 | ~$3 in / $15 out | Best | API key |
-| OpenAI | GPT-4o | ~$2.50 in / $10 out | High | API key |
-| Ollama | llama3 | Free (local) | Moderate | Local install |
+| Provider | Model Examples | Cost (per 1M tokens) | Quality | Setup |
+|----------|---------------|----------------------|---------|-------|
+| OpenAI-compatible | DeepSeek v4-pro, Groq LLaMA, Together, Azure | Varies ($0.14–$2.50 in) | High | API key |
+| Anthropic-compatible | Claude Sonnet 4, DeepSeek (alt endpoint) | Varies ($3–$15 in) | Best | API key |
+| Local | Ollama (llama3, mistral, etc.) | Free | Moderate | Local install |
 
-**Recommendation**: DeepSeek v4-pro offers the best cost-quality balance for bioinformatics workflow generation.
+**Recommendation**: An OpenAI-compatible provider with high throughput (e.g., DeepSeek, Groq) offers the best cost-quality balance for bioinformatics workflows.
 
 ## Complete Command Reference
 
@@ -314,13 +322,13 @@ oxo-flow run workflow.oxoflow --ai-recover
 ### "AI provider not configured"
 
 ```bash
-# Check your environment variables
-echo $OXO_FLOW_AI_PROVIDER
-echo $DEEPSEEK_API_KEY
+# Check your configuration
+oxo-flow ai                    # Shows provider status and connectivity
+echo $OXO_FLOW_AI_PROVIDER     # Should not be empty or "disabled"
 
-# Or set them explicitly
-export OXO_FLOW_AI_PROVIDER=deepseek
-export DEEPSEEK_API_KEY="sk-..."
+# Set up any provider
+export OXO_FLOW_AI_PROVIDER=<provider>
+export <PROVIDER>_API_KEY="sk-..."
 ```
 
 ### "AI response did not contain valid TOML"
@@ -329,7 +337,7 @@ The AI returned a response without valid `.oxoflow` TOML content. This is rare �
 
 ### Rate Limiting
 
-If you see "Rate limited by deepseek", wait a few seconds and retry. For production use, consider upgrading your DeepSeek API plan.
+If you see rate limit errors, wait a few seconds and retry. For production use, consider upgrading your API plan or switching to a provider with higher rate limits.
 
 ---
 

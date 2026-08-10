@@ -152,50 +152,60 @@ The AI provider system (`ai_provider.rs`) supports three backends via an enum-ba
 
 Providers are selected at startup via `OXO_FLOW_AI_PROVIDER` env var and initialized once through `AiProviderRegistry::global()`. The `try_ai_generate()` function in `handlers/ai.rs` uses the configured provider, falling back to template matching if AI is disabled or fails.
 
-## 🤖 AI CLI Integration (Phase 1, v0.9.5+)
+## 🤖 AI CLI Integration (v0.9.5+)
 
-The `oxo-flow-ai` crate provides shared AI infrastructure for CLI and web:
+The `oxo-flow-ai` crate provides shared AI infrastructure for CLI and web.
 
-```
-crates/oxo-flow-ai/   — AI provider abstraction, agent framework, knowledge system
-```
-
-### AI-Powered Template Generation
+### Quick Start
 
 ```bash
-# Set up DeepSeek (one-time)
+# Configure any AI provider
+export OXO_FLOW_AI_PROVIDER=deepseek    # or claude, openai, ollama
 export DEEPSEEK_API_KEY="sk-..."
-export OXO_FLOW_AI_PROVIDER=deepseek
 
-# Generate workflow from natural language
-oxo-flow template "RNA-seq with STAR and featureCounts" --ai
+# Check status
+oxo-flow ai                            # Shows provider, endpoint, test connectivity
 
-# With external reference materials
-oxo-flow template "variant calling" --ai --from-url https://example.com/protocol \
-    --from-file data/experiment.csv
+# One-line enable in .oxoflow file
+[ai]
+enabled = true                          # All AI commands auto-activate
+
+# Generate workflows
+oxo-flow template "RNA-seq with STAR" --ai
+oxo-flow template "variant calling" --ai --from-url https://example.com/protocol
+
+# Analyze workflows (auto-detect — no --ai needed if [ai] enabled)
+oxo-flow dry-run workflow.oxoflow      # AI resource/safety audit
+oxo-flow validate workflow.oxoflow     # AI semantic validation
+oxo-flow lint workflow.oxoflow         # AI best-practice check
+oxo-flow debug workflow.oxoflow        # AI command explanation
+
+# Error recovery (auto-detect from [ai] section)
+oxo-flow run workflow.oxoflow          # AI diagnoses + fixes on failure
+oxo-flow run workflow.oxoflow --ai-recover --ai-max-retries 3
 ```
 
 ### Architecture
 
 | Crate | Role |
 |-------|------|
-| `oxo-flow-ai` | Provider abstraction, Agent framework, Tool system, Knowledge base |
-| `oxo-flow-cli` | Command integration (`--ai` flag), TemplateAgent |
+| `oxo-flow-ai` | L1 Provider (4 backends) + L2 Knowledge + L3 Agent/Tools |
+| `oxo-flow-cli` | L4 Command integration: template, dry-run, validate, lint, debug, run, resume, ai |
 | `oxo-flow-web` | Compatibility shim over oxo-flow-ai |
 
 ### Key Design Decisions
 
 - **AI is optional**: no `[ai]` section → zero AI overhead
-- **One flag**: `--ai` activates AI on any suitable command
-- **Provider-agnostic**: DeepSeek, Claude, OpenAI, Ollama — swap via config
-- **Everything archived**: AI sessions + modifications in `.oxo-flow/ai_sessions/`
+- **One line to enable**: `[ai] enabled = true` in .oxoflow → all commands auto-detect
+- **Provider-agnostic**: OpenAI-compatible (DeepSeek, Groq, Together), Anthropic-compatible (Claude), Ollama local
+- **Everything archived**: AI sessions + modifications auto-saved to `.oxo-flow/ai_sessions/`
+- **5-layer architecture**: L1 Provider → L2 Knowledge/Config → L3 Agent/Tools → L4 Commands → Session
 
 ## 📚 Documentation
-- `docs/guide/` — MkDocs user guide
-- `docs/guide/src/reference/ai-cli.md` — AI CLI features
+- `docs/guide/src/reference/ai-cli.md` — Complete AI CLI reference (16 commands/scenarios)
+- `docs/superpowers/specs/2026-08-09-ai-native-cli-design.md` — Full 5-layer design spec
 - `docs/guide/src/reference/web-api.md` — REST API reference
 - `docs/guide/src/reference/web-system-architecture.md` — Web system architecture
-- `docs/superpowers/specs/2026-08-09-ai-native-cli-design.md` — Full design spec
 - `docs/schema/openapi.yaml` — OpenAPI 3.0 schema
 
 ### Frontend Architecture
