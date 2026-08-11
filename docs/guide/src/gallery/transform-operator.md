@@ -41,11 +41,11 @@ by = "chr"
 values_from = "config.chromosomes"
 
 [rules.transform]
-map = "gatk HaplotypeCaller -R {config.reference} -I {input} -L {chr} -O .oxo-flow/chunks/{chr}.g.vcf.gz -ERC GVCF"
+map = "gatk HaplotypeCaller -R {config.reference} -I {input} -L {chr} -O {output} -ERC GVCF"
 cleanup = true
 
 [rules.transform.combine]
-shell = "gatk GatherVcfs .oxo-flow/chunks/*.g.vcf.gz -O {output}"
+shell = "gatk GatherVcfs {chunks} -O {output}"
 
 # ── Mode B: Split → Map (no combine) ────────────────────────────────────────────
 # Parallel processing without merging - each split produces independent output
@@ -60,7 +60,7 @@ by = "chr"
 values_from = "config.chromosomes"
 
 [rules.transform]
-map = "samtools flagstat {input} > qc/{chr}.flagstat.txt"
+map = "samtools flagstat {input} > {output}"
 # No combine - produces separate qc/chr1.flagstat.txt, qc/chr2.flagstat.txt, etc.
 ```
 

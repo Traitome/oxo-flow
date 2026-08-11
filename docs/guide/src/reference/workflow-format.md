@@ -1366,7 +1366,7 @@ by = "chr"
 values_from = "config.chromosomes"
 
 [rules.transform]
-map = "gatk HaplotypeCaller -I {input} -L {chr} -O .oxo-flow/chunks/{chr}.g.vcf.gz"
+map = "gatk HaplotypeCaller -I {input} -L {chr} -O {output}"
 cleanup = true
 
 [rules.transform.combine]
@@ -1415,7 +1415,7 @@ by = "chr"
 values_from = "config.chromosomes"
 
 [rules.transform]
-map = "gatk HaplotypeCaller -I {input} -L {chr} -O .oxo-flow/chunks/{chr}.g.vcf.gz"
+map = "gatk HaplotypeCaller -I {input} -L {chr} -O {output}"
 
 [rules.transform.combine]
 shell = "gatk GatherVcfs {chunks} -O {output}"
