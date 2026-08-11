@@ -40,19 +40,6 @@ oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It 
 - 🗄️ **Checkpoint & resume** — JSON-persisted execution state; resume interrupted workflows from the last completed rule
 - 🚀 **Three deployment modes** — Personal workstation, team server with OAuth2, or HPC submit panel — same binary
 
-## Three-Mode Deployment
-
-```bash
-# Mode 1: Personal workstation (default) — SQLite, localhost, no auth
-oxo-flow serve
-
-# Mode 2: Team server — SQLite/PG, 0.0.0.0, ORCID/GitHub OAuth2
-oxo-flow serve --mode team --db postgres://...
-
-# Mode 3: HPC submit panel — Web UI for cluster job submission
-oxo-flow serve --mode hpc --scheduler slurm
-```
-
 ## Why oxo-flow?
 
 | Feature | **oxo-flow** | Snakemake | Nextflow |
@@ -293,6 +280,19 @@ oxo-flow/
 | `skill.rs` | ai | Skill registry and discovery system |
 | `agent/` | ai | Agent orchestration and tool-calling framework |
 | `mcp.rs` | ai | MCP (Model Context Protocol) server integration |
+
+## Three-Mode Deployment
+
+```bash
+# Mode 1: Personal workstation (default) — SQLite, localhost, no auth
+oxo-flow serve
+
+# Mode 2: Team server — SQLite/PG, 0.0.0.0, ORCID/GitHub OAuth2
+oxo-flow serve --mode team --db postgres://...
+
+# Mode 3: HPC submit panel — Web UI for cluster job submission
+oxo-flow serve --mode hpc --scheduler slurm
+```
 
 ## Documentation
 
