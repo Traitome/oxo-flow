@@ -54,19 +54,27 @@ impl AiCommandSession {
 
     /// Complete the session successfully and save to disk.
     pub fn complete(mut self, confidence: f64) {
-        let cost = self.session.estimated_cost();
         self.session = self.session.complete(confidence);
         if let Err(e) = oxo_flow_ai::session::save_session(&self.session) {
             tracing::warn!("Failed to save AI session: {e}");
         }
-        println!(
-            "{} AI session: {} | tokens: {} in + {} out | cost: ${:.4}",
-            "  ✓".green(),
-            self.session.id,
-            self.session.total_usage.prompt_tokens,
-            self.session.total_usage.completion_tokens,
-            cost
-        );
+        let input_tokens = self.session.total_usage.prompt_tokens;
+        let output_tokens = self.session.total_usage.completion_tokens;
+        if input_tokens > 0 || output_tokens > 0 {
+            println!(
+                "{} AI session: {} | tokens: {} in + {} out",
+                "  ✓".green(),
+                self.session.id,
+                input_tokens,
+                output_tokens
+            );
+        } else {
+            println!(
+                "{} AI session: {}",
+                "  ✓".green(),
+                self.session.id
+            );
+        }
     }
 
     /// Mark the session as failed and save to disk.

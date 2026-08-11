@@ -45,16 +45,27 @@ pub async fn analyze_workflow(
     );
 
     println!("{}", "  Analyzing...".bold().cyan());
-    let response = provider.chat(&system, &user).await?;
+
+    use oxo_flow_ai::types::Message;
+    let messages = vec![Message::system(&system), Message::user(&user)];
+    let response = provider.chat_with_tools(&messages, &[]).await?;
+    let response_text = response.content.unwrap_or_default();
+
+    // Record token usage for observability
+    tracing::info!(
+        tokens_in = response.usage.prompt_tokens,
+        tokens_out = response.usage.completion_tokens,
+        "AI analysis completed"
+    );
 
     // Display analysis
     println!("\n{}\n", "Analysis Results".bold().underline());
-    println!("{response}");
+    println!("{response_text}");
 
     // Count issues by severity
-    let errors = response.lines().filter(|l| l.contains("[ERROR]")).count();
-    let warnings = response.lines().filter(|l| l.contains("[WARNING]")).count();
-    let infos = response.lines().filter(|l| l.contains("[INFO]")).count();
+    let errors = response_text.lines().filter(|l| l.contains("[ERROR]")).count();
+    let warnings = response_text.lines().filter(|l| l.contains("[WARNING]")).count();
+    let infos = response_text.lines().filter(|l| l.contains("[INFO]")).count();
 
     println!("\n{}", "Summary".bold().underline());
     println!(
@@ -111,7 +122,7 @@ resource waste, or safety hazards. Be thorough — a missed issue could waste da
 ### Phase 4 — DAG Correctness
 13. Verify every input file is either: (a) produced by a dependency rule, or (b) part of [config] external data
 14. Check for race conditions: two rules writing to the same output
-15. Verify wildcards like {{{{config.sample}}}} are used consistently across rules
+15. Verify wildcards like `{{config.sample}}` are used consistently across rules
 
 ## Tool Reference
 {tool_table}

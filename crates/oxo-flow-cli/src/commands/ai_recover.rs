@@ -50,17 +50,29 @@ pub async fn diagnose_failure(
     );
 
     println!("{}", "  Diagnosing...".bold().cyan());
-    let response = provider.chat(&system, &user).await?;
+
+    use oxo_flow_ai::types::Message;
+    let messages = vec![Message::system(&system), Message::user(&user)];
+    let response = provider.chat_with_tools(&messages, &[]).await?;
+    let response_text = response.content.unwrap_or_default();
+
+    // Record token usage
+    tracing::info!(
+        tokens_in = response.usage.prompt_tokens,
+        tokens_out = response.usage.completion_tokens,
+        "AI recovery analysis completed"
+    );
 
     // Parse the AI response
-    let root_cause = extract_section(&response, "Root Cause")
+    let root_cause = extract_section(&response_text, "Root Cause")
         .unwrap_or_else(|| "Unknown — see full analysis".into());
     let fix_action =
-        extract_section(&response, "Fix").unwrap_or_else(|| "Manual review needed".into());
-    let safe = response.contains("safe to auto-apply") || response.contains("Safe to auto-apply");
+        extract_section(&response_text, "Fix").unwrap_or_else(|| "Manual review needed".into());
+    let safe =
+        response_text.contains("safe to auto-apply") || response_text.contains("Safe to auto-apply");
 
     // Extract modified TOML
-    let modified_toml = extract_toml_block(&response);
+    let modified_toml = extract_toml_block(&response_text);
 
     println!("\n{}\n{}", "Root Cause:".bold().red(), root_cause);
     println!("{}\n{}", "Suggested Fix:".bold().yellow(), fix_action);
