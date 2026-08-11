@@ -68,8 +68,8 @@ pub async fn diagnose_failure(
         .unwrap_or_else(|| "Unknown — see full analysis".into());
     let fix_action =
         extract_section(&response_text, "Fix").unwrap_or_else(|| "Manual review needed".into());
-    let safe =
-        response_text.contains("safe to auto-apply") || response_text.contains("Safe to auto-apply");
+    let safe = response_text.contains("safe to auto-apply")
+        || response_text.contains("Safe to auto-apply");
 
     // Extract modified TOML
     let modified_toml = extract_toml_block(&response_text);

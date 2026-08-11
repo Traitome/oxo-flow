@@ -587,10 +587,10 @@ impl WorkflowDag {
                     }
                     std::cmp::Ordering::Equal => {
                         // Deterministic tiebreaker: prefer alphabetically first name.
-                        if let Some(ref current_best) = best_parent {
-                            if parent_name < &self.graph[*current_best].name {
-                                best_parent = Some(parent);
-                            }
+                        if let Some(ref current_best) = best_parent
+                            && parent_name < &self.graph[*current_best].name
+                        {
+                            best_parent = Some(parent);
                         }
                     }
                     std::cmp::Ordering::Less => {}

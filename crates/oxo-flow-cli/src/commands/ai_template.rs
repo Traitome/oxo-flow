@@ -266,9 +266,9 @@ Your TOML MUST include:
         .chat_with_tools(&messages, &[])
         .await
         .context("AI provider call failed")?;
-    let response_text = response.content.ok_or_else(|| {
-        anyhow::anyhow!("AI response contained no text content")
-    })?;
+    let response_text = response
+        .content
+        .ok_or_else(|| anyhow::anyhow!("AI response contained no text content"))?;
 
     // Record token usage
     cmd_session.record_usage(&response.usage);

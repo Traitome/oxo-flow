@@ -63,9 +63,18 @@ pub async fn analyze_workflow(
     println!("{response_text}");
 
     // Count issues by severity
-    let errors = response_text.lines().filter(|l| l.contains("[ERROR]")).count();
-    let warnings = response_text.lines().filter(|l| l.contains("[WARNING]")).count();
-    let infos = response_text.lines().filter(|l| l.contains("[INFO]")).count();
+    let errors = response_text
+        .lines()
+        .filter(|l| l.contains("[ERROR]"))
+        .count();
+    let warnings = response_text
+        .lines()
+        .filter(|l| l.contains("[WARNING]"))
+        .count();
+    let infos = response_text
+        .lines()
+        .filter(|l| l.contains("[INFO]"))
+        .count();
 
     println!("\n{}", "Summary".bold().underline());
     println!(
@@ -100,6 +109,15 @@ You are a senior bioinformatics pipeline auditor for oxo-flow. Your job is to an
 workflows and identify every issue that could cause runtime failures, irreproducible results,
 resource waste, or safety hazards. Be thorough — a missed issue could waste days of compute.
 
+## oxo-flow TOML Quick Reference
+- `[[rules]]` is an array of tables — each entry is one rule
+- `[rules.environment]` appearing AFTER a `[[rules]]` block IS VALID — it is a TOML sub-table
+  that attaches to the most recently declared `[[rules]]` entry. Do NOT flag this as an error.
+- `[rules.resources]`, `[rules.resource_hint]`, `[rules.envvars]` are also valid sub-tables
+- Template variables `{{config.key}}`, `{{input[N]}}`, `{{output[N]}}`, `{{threads}}`,
+  `{{memory}}`, `{{params.key}}` are expanded at runtime — do NOT flag them as unexpanded
+- Inline environment syntax `environment = {{ conda = "..." }}` is also valid but optional
+
 ## Audit Protocol (Execute in Order)
 ### Phase 1 — Structural Integrity
 1. Verify [workflow] header contains name, version, description
@@ -115,14 +133,20 @@ resource waste, or safety hazards. Be thorough — a missed issue could waste da
 
 ### Phase 3 — Safety & Best Practices
 9. Scan ALL shell commands for destructive patterns: `rm -rf`, `>|`, `unlink`, `mv` overwriting outputs
-10. Verify [rules.environment] exists for every rule that executes external tools
+10. Verify environment declarations exist for every rule that executes external tools
+    (either `[rules.environment]` sub-table OR inline `environment = {{ ... }}`)
 11. Check conda/docker declarations include version pins
 12. Ensure QC steps exist at critical junctures: post-alignment, pre-variant-calling
 
 ### Phase 4 — DAG Correctness
 13. Verify every input file is either: (a) produced by a dependency rule, or (b) part of [config] external data
 14. Check for race conditions: two rules writing to the same output
-15. Verify wildcards like `{{config.sample}}` are used consistently across rules
+15. Verify wildcards are used consistently across rules
+
+## IMPORTANT: Do NOT flag these as errors
+- `[rules.environment]` sub-tables — VALID TOML, attaches to the preceding [[rules]] block
+- `{{config.*}}`, `{{input[N]}}`, `{{threads}}` in shell commands — runtime template expansion, not literal
+- Sub-tables like `[rules.resources]`, `[rules.envvars]` — also valid TOML
 
 ## Tool Reference
 {tool_table}

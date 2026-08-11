@@ -627,7 +627,8 @@ pub async fn run_command(
                         if !output.contains('{') {
                             let expanded =
                                 oxo_flow_core::executor::checkpoint::expand_config_in_path(
-                                    output, &wildcard_values,
+                                    output,
+                                    &wildcard_values,
                                 );
                             if !workdir_actual.join(&expanded).exists() {
                                 outputs_ok = false;
@@ -668,9 +669,8 @@ pub async fn run_command(
                          submitted: &std::collections::HashSet<String>|
      -> Result<Vec<String>, anyhow::Error> {
         let mut ready = sched.ready_rules(&dag)?;
-        ready.retain(|name| {
-            order_set.contains(name.as_str()) && !submitted.contains(name.as_str())
-        });
+        ready
+            .retain(|name| order_set.contains(name.as_str()) && !submitted.contains(name.as_str()));
         // Sort by priority (descending), then name.
         ready.sort_by(|a, b| {
             let pa = config.get_rule(a).map(|r| r.priority).unwrap_or(0);
@@ -687,8 +687,7 @@ pub async fn run_command(
         if !sched.is_complete() && sched.running_count() == 0 && join_set.is_empty() {
             sched.check_deadlock(
                 &dag,
-                exec_max_threads
-                    .unwrap_or(oxo_flow_core::executor::available_threads()),
+                exec_max_threads.unwrap_or(oxo_flow_core::executor::available_threads()),
                 exec_max_memory_mb
                     .unwrap_or_else(|| oxo_flow_core::executor::available_memory_gb() * 1024),
                 &config.rules,
@@ -964,6 +963,88 @@ pub async fn run_command(
             }
 
             return Err(anyhow::anyhow!("workflow execution failed"));
+        }
+
+        // With keep_going, propagate failure transitively: every rule that
+        // (transitively) depends on a failed rule is marked as skipped/blocked.
+        // Uses a worklist to ensure transitive propagation (grandchild of a
+        // failed rule is also blocked).
+        if fc > 0 && keep_going {
+            // Seed the worklist with every rule that directly depends on a
+            // failed rule and has not been submitted yet.
+            let frs = failed_rules_set.lock().await;
+            let mut worklist: Vec<String> = Vec::new();
+            for rule_name in &rule_names {
+                if submitted.contains(*rule_name) {
+                    continue;
+                }
+                let deps = dag.dependencies(rule_name).unwrap_or_default();
+                if deps.iter().any(|d| frs.contains(d.as_str())) {
+                    worklist.push(rule_name.to_string());
+                }
+            }
+            drop(frs);
+
+            // Process transitively: when a rule is blocked, its own dependents
+            // may also become blockable.
+            let mut idx = 0;
+            while idx < worklist.len() {
+                let name = &worklist[idx];
+                if submitted.contains(name.as_str()) {
+                    idx += 1;
+                    continue;
+                }
+                submitted.insert(name.clone());
+                skipped_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                {
+                    let mut frs = failed_rules_set.lock().await;
+                    frs.insert(name.clone());
+                }
+                sched.mark_completed(oxo_flow_core::executor::JobRecord {
+                    rule: name.clone(),
+                    status: oxo_flow_core::executor::JobStatus::Skipped,
+                    started_at: None,
+                    finished_at: None,
+                    exit_code: None,
+                    stdout: None,
+                    stderr: None,
+                    command: None,
+                    retries: 0,
+                    timeout: None,
+                    skip_reason: Some("blocked by failed upstream dependency".into()),
+                });
+                progress.inc(1);
+                if !is_tty {
+                    eprintln!("  {} {} (blocked by failed dependency)", "⊘".yellow(), name);
+                }
+
+                // Find transitive dependents of this newly-blocked rule.
+                {
+                    let frs = failed_rules_set.lock().await;
+                    for other in &rule_names {
+                        if submitted.contains(*other) || worklist.contains(&other.to_string()) {
+                            continue;
+                        }
+                        let deps = dag.dependencies(other).unwrap_or_default();
+                        if deps.iter().any(|d| frs.contains(d.as_str())) {
+                            worklist.push(other.to_string());
+                        }
+                    }
+                }
+
+                idx += 1;
+            }
+
+            // Record blocked rules for final summary
+            {
+                let frs = failed_rules_set.lock().await;
+                for name in &worklist {
+                    let deps = dag.dependencies(name).unwrap_or_default();
+                    if let Some(dep) = deps.into_iter().find(|d| frs.contains(d.as_str())) {
+                        blocked.lock().await.push((name.clone(), dep));
+                    }
+                }
+            }
         }
     }
 
@@ -1278,6 +1359,15 @@ pub async fn debug_command(workflow: PathBuf, rule_name: Option<String>, ai: boo
 
     // AI: auto-detect from workflow [ai] or explicit --ai flag
     if let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(&workflow), ai) {
+        // Build wildcard values from config so template variables expand
+        let mut debug_wildcards = std::collections::HashMap::new();
+        for (key, value) in &config.config {
+            let string_val = match value {
+                toml::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            debug_wildcards.insert(format!("config.{key}"), string_val);
+        }
         let expanded: Vec<String> = config
             .rules
             .iter()
@@ -1286,7 +1376,7 @@ pub async fn debug_command(workflow: PathBuf, rule_name: Option<String>, ai: boo
                 let shell = oxo_flow_core::executor::process::render_shell_command(
                     shell_cmd,
                     r,
-                    &std::collections::HashMap::new(),
+                    &debug_wildcards,
                 );
                 format!(
                     "## {}\nthreads={}, memory={}, env={:?}\n```bash\n{}\n```",

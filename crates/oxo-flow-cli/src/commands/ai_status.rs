@@ -153,13 +153,18 @@ shell = "echo ok > out.txt"
 pub async fn ai_setup_command() -> Result<()> {
     // Detect non-interactive environments (CI, pipes, cargo run without TTY)
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-        println!("{}", "AI Setup — Non-Interactive Mode".bold().green().underline());
+        println!(
+            "{}",
+            "AI Setup — Non-Interactive Mode".bold().green().underline()
+        );
         println!();
         println!("  The interactive wizard requires a terminal.");
         println!();
         println!("  To configure AI non-interactively, set environment variables:");
         println!("    export OXO_FLOW_AI_PROVIDER=<deepseek|openai|claude|ollama>");
-        println!("    export DEEPSEEK_API_KEY=sk-...     # or OPENAI_API_KEY, ANTHROPIC_AUTH_TOKEN");
+        println!(
+            "    export DEEPSEEK_API_KEY=sk-...     # or OPENAI_API_KEY, ANTHROPIC_AUTH_TOKEN"
+        );
         println!();
         println!("  Or edit the config file directly:");
         println!("    {}", "~/.oxo-flow/ai_config.json".dimmed());

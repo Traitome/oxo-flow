@@ -69,11 +69,7 @@ impl AiCommandSession {
                 output_tokens
             );
         } else {
-            println!(
-                "{} AI session: {}",
-                "  ✓".green(),
-                self.session.id
-            );
+            println!("{} AI session: {}", "  ✓".green(), self.session.id);
         }
     }
 
