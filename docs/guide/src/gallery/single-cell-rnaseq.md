@@ -110,7 +110,7 @@ scRNA-seq workflows are significantly more resource-intensive than bulk RNA-seq:
 
 ```bash
 $ oxo-flow validate examples/gallery/09_single_cell_rnaseq.oxoflow
-✓ examples/gallery/09_single_cell_rnaseq.oxoflow — 3 rules, 2 dependencies
+✓ examples/gallery/09_single_cell_rnaseq.oxoflow — 3 rules, 3 dependencies
 ```
 
 ## Further Reading

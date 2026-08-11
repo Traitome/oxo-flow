@@ -64,7 +64,7 @@ project's design decisions, priorities, and architecture.
 
 1. **DAG is the fundamental abstraction** — Every bioinformatics workflow is a directed acyclic graph of tasks. The engine must natively construct, validate, optimize, and execute DAGs with maximum parallelism.
 
-2. **Environment isolation is non-negotiable** — Bioinformatics tools have conflicting dependencies. Each task must run in its own isolated environment (conda, pixi, docker, singularity, venv).
+2. **Environment isolation is non-negotiable** — Bioinformatics tools have conflicting dependencies. Each task must run in its own isolated environment (conda, mamba, pixi, docker, singularity, venv, modules, system).
 
 3. **Reproducibility through determinism** — Given the same inputs, configuration, and environment specifications, the pipeline must produce identical outputs. Lock files, checksums, and container pinning ensure this.
 
@@ -200,7 +200,7 @@ sections = ["summary", "variants", "coverage", "qc_metrics"]
 
 ## Phase 2: Environment Management
 
-**Goal**: Full support for conda, pixi, docker, singularity, venv environments.
+**Goal**: Full support for all eight environment backends: conda, mamba, pixi, docker, singularity, venv, modules, system.
 
 ### Milestone 2.1: Environment Abstraction
 - [x] Environment trait with detect/create/activate/run interface
@@ -435,7 +435,7 @@ framework extensibility, code quality, and documentation.
 **Goal**: Refactor to a deterministic core with AI translation layer, collaboration primitives, and three-mode deployment.
 
 ### Phase 11.1: Deterministic Core
-- [x] Domain-driven module structure (6 domains + infra layer)
+- [x] Domain-driven module structure (8 domains + infra layer)
 - [x] `StorageBackend` trait + SQLite backend + PostgreSQL backend (feature-gated)
 - [x] Pipeline lifecycle API (parse, validate, prepare, DAG, format, lint, stats, diff, export, search)
 - [x] Execution API (runs CRUD, status, DAG status, diagnostics, logs, results, retry, cancel)
@@ -454,7 +454,7 @@ framework extensibility, code quality, and documentation.
 - [x] `/api/ai/explain` — failure diagnosis with human-readable explanations
 - [x] `/api/ai/interpret` — result interpretation with caveats
 - [x] `/api/ai/optimize` — parameter optimization
-- [x] AI provider architecture with fallback chain (Claude → OpenAI → Ollama → template)
+- [x] AI provider architecture with fallback chain (Claude → OpenAI → DeepSeek → Ollama → template)
 - [x] AI service zero-write-permission enforcement
 
 ### Phase 11.3: Collaboration & Multi-Mode
@@ -462,8 +462,8 @@ framework extensibility, code quality, and documentation.
 - [x] `oxo+https://` import/export protocol
 - [x] HPC submission backend (SLURM, PBS)
 - [x] Three-mode deployment (personal/team/hpc)
-- [x] Full API coverage: 53 endpoints across 7 domains
-- [x] 1,025+ tests passing, zero failures
+- [x] Full API coverage: 50+ endpoints across 8 domains
+- [x] 1,280+ tests passing, zero failures
 
 ---
 

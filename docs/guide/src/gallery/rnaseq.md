@@ -164,7 +164,7 @@ The `featureCounts -s 2` flag specifies reverse-strand counting, appropriate for
 
 ```bash
 $ oxo-flow validate examples/gallery/06_rnaseq_quantification.oxoflow
-✓ examples/gallery/06_rnaseq_quantification.oxoflow — 5 rules, 6 dependencies
+✓ examples/gallery/06_rnaseq_quantification.oxoflow — 5 rules, 7 dependencies
 ```
 
 ### Resource Summary

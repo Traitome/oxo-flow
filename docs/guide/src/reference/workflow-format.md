@@ -142,7 +142,6 @@ author = "Your Name"
 | `sample_groups_file` | String | No | — | External TSV/JSON file defining sample groups |
 | `pairs_pattern` | String | No | — | File glob pattern for auto-discovering pairs (e.g., `"aligned/{pair_id}/{exp}_vs_{ctrl}.bam"`) |
 | `sample_pattern` | String | No | — | File glob pattern for auto-discovering samples (e.g., `"raw/{sample}_R1.fastq.gz"`) |
-| `format_version` | String | No | — | .oxoflow format specification version for compatibility checking |
 
 ### Custom Interpreters (`interpreter_map`)
 

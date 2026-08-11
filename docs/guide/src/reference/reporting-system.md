@@ -12,6 +12,7 @@ graph TD
     Execution["Execution Results"] --> Report
     Report --> HTML["HTML Output"]
     Report --> JSON["JSON Output"]
+    Report --> PDF["PDF Output (via wkhtmltopdf)"]
     Templates["Tera Templates"] --> HTML
 ```
 
@@ -103,6 +104,25 @@ The JSON output mirrors the report structure and is suitable for:
 - Downstream processing scripts
 - Database ingestion
 - API responses
+
+### PDF
+
+PDF export is supported via `wkhtmltopdf`:
+
+```rust
+let cmd: String = report.to_pdf_command("report.pdf", vec!["--enable-local-file-access"]);
+report.to_pdf(Path::new("report.pdf")).await?;
+```
+
+The implementation writes the print-optimized HTML to a temporary file and
+invokes `wkhtmltopdf --encoding utf-8` on it. **Prerequisite**: `wkhtmltopdf`
+must be installed separately on the system.
+
+From the CLI:
+
+```bash
+oxo-flow report pipeline.oxoflow -f pdf -o report.pdf
+```
 
 ---
 

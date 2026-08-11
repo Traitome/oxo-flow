@@ -41,6 +41,7 @@ make ci
 oxo-flow/
 ├── crates/
 │   ├── oxo-flow-core/   # Core library: DAG, executor, environments, reporting
+│   ├── oxo-flow-ai/     # AI companion — provider abstraction, skill system, agent framework
 │   ├── oxo-flow-cli/    # CLI binary (oxo-flow command)
 │   ├── oxo-flow-web/    # Web REST API (axum-based)
 ├── pipelines/           # Pipeline definitions (.oxoflow files)

@@ -4,8 +4,9 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.8.x   | ✅ Active          |
-| < 0.8   | ❌ No longer supported |
+| 0.10.x  | ✅ Active          |
+| 0.9.x   | ✅ Security fixes  |
+| < 0.9   | ❌ No longer supported |
 
 ## Reporting a Vulnerability
 
@@ -15,7 +16,7 @@ Response within 48 hours. Fixes published within 7 days.
 
 ## Security Design
 
-- **`#![forbid(unsafe_code)]`** — No unsafe Rust in core, CLI, or web
+- **`#![forbid(unsafe_code)]`** — No unsafe Rust in core and web crates
 - **Shell injection prevention** — Commands parsed and sanitized before execution
 - **Path traversal protection** — I/O paths validated against workspace boundaries
 - **API key encryption** — Provider keys encrypted at rest

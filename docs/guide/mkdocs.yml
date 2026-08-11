@@ -124,14 +124,17 @@ nav:
       - "07 — WGS Germline Calling": gallery/wgs-germline.md
       - "08 — Multi-Omics Integration": gallery/multiomics.md
       - "09 — Single-Cell RNA-seq": gallery/single-cell-rnaseq.md
+      - "10 — Transform Operator": gallery/transform-operator.md
   - How-to Guides:
       - Create a Workflow: how-to/create-workflow.md
       - Use Environments: how-to/use-environments.md
       - Run on a Cluster: how-to/run-on-cluster.md
+      - Resource Tuning: how-to/resource-tuning.md
       - Generate Reports: how-to/generate-reports.md
       - Experiment-Control Pairing: how-to/experiment-control-pairing.md
       - Cohort Sample Groups: how-to/cohort-sample-groups.md
       - Conditional Rules: how-to/conditional-rules.md
+      - China Mirrors: how-to/china-mirrors.md
       - Troubleshooting: how-to/troubleshooting.md
   - Command Reference:
       - batch: commands/batch.md
@@ -146,31 +149,43 @@ nav:
       - export: commands/export.md
       - format: commands/format.md
       - graph: commands/graph.md
+      - history: commands/history.md
       - init: commands/init.md
+      - license: commands/license.md
       - lint: commands/lint.md
       - package: commands/package.md
       - profile: commands/profile.md
+      - provenance: commands/provenance.md
       - publish: commands/publish.md
       - pull: commands/pull.md
       - report: commands/report.md
+      - resume: commands/resume.md
       - run: commands/run.md
+      - schema: commands/schema.md
       - serve: commands/serve.md
       - status: commands/status.md
+      - template: commands/template.md
+      - test: commands/test.md
       - touch: commands/touch.md
       - validate: commands/validate.md
+      - watch: commands/watch.md
   - Architecture & Design:
       - System Architecture: reference/architecture.md
       - Workflow Format: reference/workflow-format.md
       - Wildcards: reference/wildcards.md
       - DAG Engine: reference/dag-engine.md
+      - DAG Edit API: reference/dag-edit-api.md
       - Environment System: reference/environment-system.md
       - Reporting System: reference/reporting-system.md
       - Webhooks: reference/webhook.md
       - Web API: reference/web-api.md
       - Web System Architecture: reference/web-system-architecture.md
       - AI Translation Layer: reference/ai-translation.md
+      - AI-Powered CLI: reference/ai-cli.md
       - Diagnostics Engine: reference/diagnostics-engine.md
       - Cloud Storage: reference/cloud-storage.md
+      - Plugin System: reference/plugin-system.md
+      - Glossary: reference/glossary.md
       - Licensing: reference/license.md
   - Deployment:
       - Deployment Modes: how-to/deploy-modes.md

@@ -1,16 +1,19 @@
 # AI Agent Context & Instructions: oxo-flow
 
-This document serves as the primary source of truth for AI agents (Copilot, Gemini, Cursor, etc.) to ensure consistency, reliability, and adherence to project standards.
+This document is the primary source of truth for AI agents working on oxo-flow.
+
+**⚠️ CHANGE MANAGEMENT: When you make any structural change (new crate, new subcommand, renamed flag, version bump, port change, provider change, domain change), you MUST update this file AND the corresponding docs in `docs/guide/src/`. Cross-reference README.md for consistency. This is not optional — stale docs cause cascading errors in AI-assisted development.**
 
 ## 🎯 Project Overview
-`oxo-flow` is a clinical-grade bioinformatics pipeline engine built in Rust. It focuses on performance, reproducibility, and rigorous environment management.
+`oxo-flow` is a high-performance bioinformatics pipeline engine built in Rust. It focuses on reproducibility, environment isolation, and AI-assisted workflow development.
 
 ## 🏗️ Workspace Layout
-- `crates/oxo-flow-core`: The heart of the engine. DAG resolution, execution logic, environment management, and core types.
-- `crates/oxo-flow-cli`: Command-line interface.
-- `crates/oxo-flow-web`: Axum-based web server and API.
-- `examples/`: Reference `.oxoflow` (TOML-based) pipeline files.
-- `tests/`: Integration tests covering CLI and core functionality.
+- `crates/oxo-flow-core`: DAG engine, executor, environment management, config, scheduling, reporting
+- `crates/oxo-flow-ai`: AI companion — provider abstraction, skill system, agent orchestration, MCP
+- `crates/oxo-flow-cli`: CLI binary (`oxo-flow`) — 33 subcommands via clap derive
+- `crates/oxo-flow-web`: Axum web server + React 19 SPA, 50+ REST endpoints across 7 domains
+- `examples/`: Reference `.oxoflow` (TOML-based) pipeline files
+- `tests/`: Integration tests covering CLI and core functionality
 
 ## 🛠️ Tech Stack & Conventions
 - **Language:** Rust (Edition 2024).
@@ -30,9 +33,9 @@ make ci
 
 ## 🧠 Key Design Principles
 1. **DAG-First Execution:** Everything is a graph. Validate dependencies before execution.
-2. **Environment Agnostic:** Support Conda, Pixi, Docker, and Venv seamlessly.
-3. **Wildcard Expansion:** Native support for `{sample}`, `{chr}` patterns.
-4. **Clinical Rigor:** Every execution must be reproducible and auditable.
+2. **Environment Agnostic:** Support 8 backends: conda, mamba, pixi, docker, singularity, venv, system, HPC modules.
+3. **Wildcard Expansion:** Native support for `{sample}`, `{chr}` patterns with regex constraints.
+4. **Reproducibility First:** Every execution must be reproducible and auditable via provenance.
 
 ## 📝 Coding Standards
 - **Type Safety:** No `unsafe` unless strictly justified.
@@ -44,9 +47,11 @@ make ci
 ## 📚 Documentation System
 - `docs/guide/` — MkDocs-based user guide (run `mkdocs serve` in `docs/guide/` to preview)
 - `docs/guide/src/reference/web-api.md` — REST API reference (structured errors, endpoints)
-- `docs/guide/src/reference/web-system-architecture.md` — Web system architecture and AI-native API design
+- `docs/guide/src/reference/web-system-architecture.md` — Web system architecture
 - `docs/guide/src/reference/architecture.md` — Overall system architecture
-- `docs/schema/` — OpenAPI 3.1 schema and workflow JSON schema
+- `docs/guide/src/reference/ai-cli.md` — Complete AI CLI reference
+- `docs/schema/openapi.yaml` — OpenAPI 3.1 schema
+- `docs/schema/oxoflow-v1.schema.json` — Workflow format JSON Schema
 
 ## 🌐 Web System (AI-Native API)
 The web crate (`oxo-flow-web`) is designed as an AI-native API surface:
@@ -62,25 +67,25 @@ The frontend is a React/TypeScript SPA built with Vite, located in `frontend/`:
 
 ```bash
 # Development mode (two terminals):
-cd frontend && npm run dev    # Vite dev server on :5173, proxies /api to :3000
-cargo run -p oxo-flow-web      # API server on :3000
+cd frontend && npm run dev    # Vite dev server on :5173, proxies /api to :8080
+cargo run -p oxo-flow-web      # API server on :8080
 
 # Build for production:
 cd frontend && npm run build   # Outputs to frontend/dist/
 ```
 
-### v0.8 Web Module Structure
+### Web Module Structure
 
-The web crate uses a domain-driven modular monolith pattern:
+The web crate uses a domain-driven modular monolith with 8 domains:
 
-- `domains/workflow/` — Pipeline parsing, validation, DAG building, formatting, data discovery
-- `domains/execution/` — Run lifecycle, diagnostics engine (30+ error patterns), retry logic
-- `domains/ai/` — AI translation layer (copilot prompts + service orchestration + handlers)
-- `domains/auth/` — Authentication service, OAuth stubs, license endpoints
+- `domains/workflow/` — Pipeline parsing, validation, DAG building, formatting
+- `domains/execution/` — Run lifecycle, diagnostics engine (30+ patterns), retry logic
+- `domains/ai/` — AI copilot prompts, service orchestration, handlers, agents
+- `domains/auth/` — Authentication, OAuth stubs, license endpoints
 - `domains/collaboration/` — Pipeline fork, share, import
 - `domains/observability/` — Health checks, system info, metrics
-- `infra/db/` — StorageBackend trait, SqliteBackend, PostgreSQL backend (feature-gated)
-- `server.rs` — Router assembly with all v0.8 API endpoints
+- `domains/dag/` — DAG-specific types and operations
+- `domains/chat/` — Real-time chat and SSE streaming
 
 Each domain follows: `types.rs` (data) → `service.rs` (pure logic) → `handlers.rs` (HTTP adapters).
 
@@ -93,14 +98,14 @@ docker compose up -d
 
 # Or build manually
 docker build -t oxo-flow .
-docker run -d -p 3000:3000 -v oxo-flow-data:/app/data oxo-flow
+docker run -d -p 8080:8080 -v oxo-flow-data:/app/data oxo-flow
 ```
 
 ### Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `OXO_FLOW_AI_PROVIDER` | No | `disabled` | `"claude"`, `"openai"`, `"ollama"`, or `"disabled"` |
+| `OXO_FLOW_AI_PROVIDER` | No | `disabled` | `"claude"`, `"openai"`, `"deepseek"`, `"ollama"`, or `"disabled"` |
 | `OXO_FLOW_AI_API_KEY` | No | — | Generic API key fallback |
 | `OXO_FLOW_AI_API_URL` | No | (provider default) | Custom API endpoint URL |
 | `OXO_FLOW_AI_MODEL` | No | (provider default) | Model name override |
@@ -144,15 +149,16 @@ OXO_FLOW_AI_PROVIDER=ollama docker compose up -d
 
 ## 🔧 AI Provider Architecture
 
-The AI provider system (`ai_provider.rs`) supports three backends via an enum-based dispatcher:
+The AI provider system supports four backends via an enum-based dispatcher:
 
 - **Claude** — Anthropic Messages API (including Anthropic-compatible third-party endpoints)
 - **OpenAI** — OpenAI Chat Completions API (compatible with DeepSeek, Groq, Azure, Together, etc.)
+- **DeepSeek** — Native DeepSeek API (default provider, auto-detected at startup)
 - **Ollama** — Local Ollama API (default: `http://localhost:11434`)
 
 Providers are selected at startup via `OXO_FLOW_AI_PROVIDER` env var and initialized once through `AiProviderRegistry::global()`. The `try_ai_generate()` function in `handlers/ai.rs` uses the configured provider, falling back to template matching if AI is disabled or fails.
 
-## 🤖 AI CLI Integration (v0.9.5+)
+## 🤖 AI CLI Integration (v0.10.0+)
 
 The `oxo-flow-ai` crate provides shared AI infrastructure for CLI and web.
 
@@ -201,20 +207,13 @@ oxo-flow run workflow.oxoflow --ai-recover --ai-max-retries 3
 - **Everything archived**: AI sessions + modifications auto-saved to `.oxo-flow/ai_sessions/`
 - **5-layer architecture**: L1 Provider → L2 Knowledge/Config → L3 Agent/Tools → L4 Commands → Session
 
-## 📚 Documentation
-- `docs/guide/src/reference/ai-cli.md` — Complete AI CLI reference (16 commands/scenarios)
-- `docs/superpowers/specs/2026-08-09-ai-native-cli-design.md` — Full 5-layer design spec
-- `docs/guide/src/reference/web-api.md` — REST API reference
-- `docs/guide/src/reference/web-system-architecture.md` — Web system architecture
-- `docs/schema/openapi.yaml` — OpenAPI 3.0 schema
-
 ### Frontend Architecture
 - **Framework**: React 19 + TypeScript, Vite build
 - **Routing**: React Router (client-side SPA routing)
 - **DAG Visualization**: Cytoscape.js with dagre layout
 - **API Integration**: Fetch-based client with structured error handling
 - **Real-time**: SSE via EventSource for run lifecycle events
-- **Styling**: CSS custom properties, dark theme, responsive layout
+- **Styling**: CSS custom properties, light theme, responsive layout
 
 ### Pages
 | Route | Page | Description |

@@ -98,7 +98,7 @@ The `[defaults]` section provides fallback values for rules that don't specify r
 
 ```bash
 $ oxo-flow validate examples/gallery/03_parallel_samples.oxoflow
-✓ examples/gallery/03_parallel_samples.oxoflow — 3 rules, 2 dependencies
+✓ examples/gallery/03_parallel_samples.oxoflow — 3 rules, 1 dependency
 ```
 
 ### DAG Structure

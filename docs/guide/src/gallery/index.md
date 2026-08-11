@@ -19,6 +19,7 @@ Use this gallery to learn oxo-flow incrementally — each example builds on conc
 | 07 | [WGS Germline Calling](wgs-germline.md) | ⭐⭐⭐⭐⭐ | GATK best practices, BQSR, HaplotypeCaller, VEP annotation |
 | 08 | [Multi-Omics Integration](multiomics.md) | ⭐⭐⭐⭐⭐ | WGS + RNA-seq + Methylation, branching DAG, cross-omics integration |
 | 09 | [Single-Cell RNA-seq](single-cell-rnaseq.md) | ⭐⭐⭐⭐ | Droplet-based scRNA-seq, 10x Genomics, CellRanger, Seurat |
+| 10 | [Transform Operator](transform-operator.md) | ⭐⭐⭐ | Unified split → map → combine, scatter-gather in a single rule |
 
 ---
 
@@ -50,8 +51,8 @@ Learn the fundamental building blocks: rules, shell commands, inputs, outputs, a
 ### Intermediate (Workflows 03–05)
 Master wildcards for multi-sample processing, scatter-gather parallelism patterns, and per-rule environment isolation with conda, docker, and singularity.
 
-### Advanced (Workflows 06–09)
-Build production-grade bioinformatics pipelines covering RNA-seq, whole-genome sequencing, multi-omics integration, and single-cell analysis with clinical-grade reporting and complex DAG topologies.
+### Advanced (Workflows 06–10)
+Build production-grade bioinformatics pipelines covering RNA-seq, whole-genome sequencing, multi-omics integration, and single-cell analysis with clinical-grade reporting and complex DAG topologies — plus the unified `transform` operator for scatter-gather parallelism.
 
 ---
 

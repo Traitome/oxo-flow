@@ -1,6 +1,6 @@
 # Environment Management
 
-oxo-flow supports five software environment backends. This tutorial shows how to use each one, how to mix them in a single workflow, and how to check that required environments are available.
+oxo-flow supports eight software environment backends. This tutorial shows how to use each one, how to mix them in a single workflow, and how to check that required environments are available.
 
 ---
 
@@ -9,10 +9,13 @@ oxo-flow supports five software environment backends. This tutorial shows how to
 | Backend | Keyword | Use case |
 |---|---|---|
 | **Conda** | `conda` | General bioinformatics tools via Bioconda |
+| **Mamba** | `mamba` | Faster conda-compatible solver (libmamba) — drop-in conda replacement |
 | **Pixi** | `pixi` | Fast conda-compatible package management |
 | **Docker** | `docker` | Containerized, reproducible execution |
 | **Singularity** | `singularity` | HPC-friendly containers (no root required) |
 | **Python venv** | `venv` | Lightweight Python-only environments |
+| **System** | `system` | Host shell environment — no isolation (default when no environment is set) |
+| **Modules** | `modules` | HPC environment modules (Lmod/Environment Modules) for cluster toolchains |
 
 ---
 

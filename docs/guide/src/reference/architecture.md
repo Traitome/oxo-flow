@@ -1,6 +1,6 @@
 # System Architecture
 
-oxo-flow is organized as a Cargo workspace with three crates that form a layered architecture.
+oxo-flow is organized as a Cargo workspace with four crates that form a layered architecture.
 
 ---
 
@@ -10,6 +10,7 @@ oxo-flow is organized as a Cargo workspace with three crates that form a layered
 oxo-flow/
 ├── crates/
 │   ├── oxo-flow-core/    # Core library
+│   ├── oxo-flow-ai/      # AI companion — provider abstraction, skill system, agent framework
 │   ├── oxo-flow-cli/     # CLI binary
 │   └── oxo-flow-web/     # Web API server
 ├── pipelines/            # Pipeline definitions
@@ -27,7 +28,8 @@ graph TD
     Web[oxo-flow-web] --> Core
 ```
 
-- **oxo-flow-core** is the foundation — all other crates depend on it
+- **oxo-flow-core** is the foundation of the CLI and web crates
+- **oxo-flow-ai** is the AI companion crate — provider abstraction, skill system, agent framework
 - **oxo-flow-cli** is the user-facing binary that ties everything together
 - **oxo-flow-web** provides the REST API layer on top of core
 
@@ -44,7 +46,7 @@ The `oxo-flow-core` crate is organized into focused modules:
 | `dag` | Build and validate the dependency DAG, topological sorting |
 | `executor` | Execute rules locally with checkpointing, resource enforcement |
 | `scheduler` | Resource-aware job scheduling with ResourcePool |
-| `environment` | Resolve and activate conda, docker, singularity, pixi, venv; cache setup state |
+| `environment` | Resolve and activate conda, mamba, pixi, docker, singularity, venv, system, modules; cache setup state |
 | `wildcard` | Expand `{sample}` patterns in file paths |
 | `report` | Generate HTML and JSON reports from templates |
 | `container` | Generate Dockerfile and Singularity definitions |
@@ -120,7 +122,7 @@ This prevents over-subscription of system resources when running multiple jobs c
 
 Every rule can declare its own software environment. The executor:
 
-1. **Resolve**: Maps environment spec to backend (conda, docker, singularity, pixi, venv)
+1. **Resolve**: Maps environment spec to backend (conda, mamba, pixi, docker, singularity, venv, system, modules)
 2. **Setup**: Runs setup command on first use (e.g., `conda env create -f env.yaml`)
 3. **Cache**: Marks environment as ready to skip setup on subsequent rules
 4. **Wrap**: Wraps shell command through environment (e.g., `conda activate ...; <cmd>`)

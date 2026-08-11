@@ -353,4 +353,4 @@ If you see rate limit errors, wait a few seconds and retry. For production use, 
 | Phase 4 | Scope-level AI config, AI plugin types | ✅ Complete |
 | Phase 5 | MCP/Skill ecosystem | ✅ Complete |
 
-See the [full design spec](../../../../docs/superpowers/specs/2026-08-09-ai-native-cli-design.md) for architecture details.
+See the full design spec at `docs/superpowers/specs/2026-08-09-ai-native-cli-design.md` (repository root, not included in the published docs) for architecture details.

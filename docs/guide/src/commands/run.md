@@ -41,6 +41,8 @@ oxo-flow run [OPTIONS] [WORKFLOW]
 | `--arg` | — | — | Legacy form: set a workflow config value (`KEY=VALUE`). Repeatable. See `[config]` in workflow-format |
 | `--sample` | — | — | Add a sample to the run. Repeatable. Merges with sample_pattern/CSV sources |
 | `--bundle` | — | — | Execute from a published `.tar.zst` bundle (extract → verify → run) |
+| `--ai-recover` | — | — | Enable AI error recovery on rule failure |
+| `--ai-max-retries` | — | — | Maximum AI retries (overrides `[ai]` config) |
 | `--verbose` | `-v` | — | Enable debug-level logging |
 
 ---

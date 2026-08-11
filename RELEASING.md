@@ -116,6 +116,7 @@ Publish workspace members in dependency order:
 
 ```bash
 cargo publish -p oxo-flow-core
+cargo publish -p oxo-flow-ai
 cargo publish -p oxo-flow-cli
 cargo publish -p oxo-flow-web
 ```

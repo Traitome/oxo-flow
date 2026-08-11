@@ -63,7 +63,7 @@ The `manifest.json` inside each bundle:
 {
   "format": "oxoflow-bundle-v1",
   "workflow": "my_pipeline.oxoflow",
-  "oxo_flow_version": "0.9.0",
+  "oxo_flow_version": "0.10.0",
   "created_at_epoch": 1234567890,
   "entrypoint": "my_pipeline.oxoflow",
   "files": [

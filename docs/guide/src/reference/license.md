@@ -8,6 +8,7 @@ oxo-flow uses a per-crate licensing model with dual licensing for the web server
 |-------|---------|-------|
 | `oxo-flow-core` | Apache 2.0 | Free for all uses |
 | `oxo-flow-cli` | Apache 2.0 | Free for all uses |
+| `oxo-flow-ai` | Apache 2.0 | Free for all uses |
 | `oxo-flow-web` | Dual License | Academic: free / Commercial: paid |
 
 ## oxo-flow-web Dual License
@@ -66,7 +67,7 @@ The license is prominently displayed in three locations:
 
 ```
 X-OxoFlow-License: oxo-flow-core,oxo-flow-cli:Apache-2.0; oxo-flow-web:Dual(Academic|Commercial)
-X-OxoFlow-Version: 0.8.0
+X-OxoFlow-Version: 0.10.0
 ```
 
 ## Key Principles

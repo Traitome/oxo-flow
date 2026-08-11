@@ -1,6 +1,6 @@
 # Introduction
 
-**oxo-flow** is a Rust-native bioinformatics pipeline engine built from first principles for performance, reproducibility, and clinical-grade rigor. It compiles workflows into a Directed Acyclic Graph, manages software environments automatically, and runs jobs in parallel — all from a single, fast binary with no external runtime required.
+**oxo-flow** is a Rust-native bioinformatics pipeline engine built from first principles for performance, reproducibility, and environment isolation. It compiles workflows into a Directed Acyclic Graph, manages software environments automatically, and runs jobs in parallel — all from a single, fast binary with no external runtime required.
 
 ```bash
 # Define your workflow in TOML
@@ -32,7 +32,7 @@ oxo-flow is a high-performance workflow engine built from the ground up in Rust 
 | Capability | Description |
 |---|---|
 | **DAG engine** | Automatic dependency resolution, topological sorting, cycle detection, and parallel execution groups |
-| **Environment management** | First-class support for conda, pixi, docker, singularity, and Python venv — per rule |
+| **Environment management** | First-class support for 8 backends: conda, mamba, pixi, docker, singularity, venv, system, HPC modules — per rule |
 | **Clinical reporting** | Generate structured HTML and JSON reports with Tera templates for clinical and research use |
 | **Web API** | Built-in REST API (axum-based) for building, validating, and monitoring workflows remotely |
 | **Container packaging** | Package entire workflows into Docker or Singularity images for portable, reproducible execution |
@@ -69,7 +69,7 @@ Start with the **Tutorials** in order:
 
 ### If you want to learn by example
 
-Explore the **[Workflow Gallery](./gallery/index.md)** — 9 curated workflows from hello-world to multi-omics integration, each with validation output, DAG visualizations, and scientific context:
+Explore the **[Workflow Gallery](./gallery/index.md)** — 10 curated workflows from hello-world to multi-omics integration, each with validation output, DAG visualizations, and scientific context:
 
 1. [Hello World](./gallery/hello-world.md) ⭐ — Minimal rule structure
 2. [File Pipeline](./gallery/file-pipeline.md) ⭐⭐ — Multi-rule dependencies
@@ -80,6 +80,7 @@ Explore the **[Workflow Gallery](./gallery/index.md)** — 9 curated workflows f
 7. [WGS Germline Calling](./gallery/wgs-germline.md) ⭐⭐⭐⭐⭐ — GATK best practices
 8. [Multi-Omics Integration](./gallery/multiomics.md) ⭐⭐⭐⭐⭐ — WGS + RNA-seq + Methylation
 9. [Single-Cell RNA-seq](./gallery/single-cell-rnaseq.md) ⭐⭐⭐⭐ — scRNA-seq analysis
+10. [Transform Operator](./gallery/transform-operator.md) ⭐⭐⭐ — Unified scatter-gather
 
 ### If you need to accomplish a specific task
 
@@ -92,7 +93,7 @@ Jump to the **How-to Guides**:
 
 ### If you need exact syntax and options
 
-See the **Command Reference** for all 31 CLI subcommands with usage, options, and examples.
+See the **Command Reference** for all 33 CLI subcommands with usage, options, and examples.
 
 ### If you want the full technical details
 

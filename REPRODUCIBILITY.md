@@ -89,7 +89,7 @@ mechanisms:
 
 The `ExecutionProvenance` type captures `config_checksum`, `input_checksums`,
 `output_checksums`, `software_versions`, `hostname`, and timing information.
-Run workflows with `--enable-provenance` to generate full provenance records.
+Run workflows with `--provenance` to generate full provenance records.
 
 Provenance records are stored as structured JSON alongside workflow outputs and
 can be used to:

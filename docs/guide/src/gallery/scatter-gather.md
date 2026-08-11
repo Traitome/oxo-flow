@@ -97,7 +97,7 @@ Changing this value scales the parallelism without modifying any rules.
 
 ```bash
 $ oxo-flow validate examples/gallery/04_scatter_gather.oxoflow
-✓ examples/gallery/04_scatter_gather.oxoflow — 4 rules, 3 dependencies
+✓ examples/gallery/04_scatter_gather.oxoflow — 2 rules, 0 dependencies
 ```
 
 ### DAG Structure

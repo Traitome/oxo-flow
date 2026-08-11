@@ -115,7 +115,7 @@ Upload a commercial license file for validation and activation.
 POST /api/pipelines/parse
 Content-Type: application/json
 
-{"toml_content": "<workflow TOML>", "format_version": "0.8"}
+{"toml_content": "<workflow TOML>", "format_version": "1.0"}
 ```
 Returns structured pipeline: `pipeline_id`, `name`, `version`, `rules` (with summaries), `dag` (nodes + edges), `stats`. Pure function, zero side effects.
 

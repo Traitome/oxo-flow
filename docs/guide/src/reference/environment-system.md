@@ -22,10 +22,13 @@ Each rule can declare an environment specification. Before a rule's shell comman
 graph TD
     Rule["Rule (environment spec)"] --> Resolver["EnvironmentResolver"]
     Resolver --> Conda["CondaBackend"]
+    Resolver --> Mamba["MambaBackend"]
     Resolver --> Pixi["PixiBackend"]
     Resolver --> Docker["DockerBackend"]
     Resolver --> Singularity["SingularityBackend"]
     Resolver --> Venv["VenvBackend"]
+    Resolver --> Modules["ModulesBackend"]
+    Resolver --> System["SystemBackend"]
     Resolver --> Cache["EnvironmentCache"]
     Cache --> File["Cache File (JSON)"]
 ```
@@ -41,7 +44,7 @@ The central coordinator that:
 
 ```rust
 let resolver = EnvironmentResolver::new();
-let available = resolver.available_backends(); // ["conda", "docker", "venv"]
+let available = resolver.available_backends(); // ["conda", "mamba", "pixi", "docker", "singularity", "venv", "modules", "system"]
 resolver.validate_spec(&rule.environment)?;
 ```
 
@@ -79,6 +82,8 @@ Before executing a rule with an environment specification:
 | Docker | `docker pull <image>` |
 | Singularity | `singularity pull <image>` |
 | Venv | `python -m venv <path> && pip install -r <requirements>` |
+| Modules | None (no setup — modules are loaded at execution time) |
+| System | None (no setup needed — commands run directly in the current shell) |
 
 ### Skipping Setup
 
@@ -136,6 +141,20 @@ oxo-flow run pipeline.oxoflow --skip-env-setup
 - **Activation**: Creates a venv (if needed) and activates it before the command
 - **Caching**: Venvs are stored in a cache directory keyed by the requirements hash
 
+### HPC Modules
+
+- **Detection**: Checks for `modulecmd` or `module` on `$PATH`
+- **Resolution**: Parses the module list (comma-separated) from `environment.modules`
+- **Activation**: Initializes the module system (sources `/etc/profile.d/modules.sh` or common Lmod/Modules init scripts), then runs `module load <modules>` before the command. Fails with a clear error if the `module` command is unavailable.
+- **Usage**: Set `environment.modules = ["gcc/11.2", "cuda/11.7"]` in the rule. Modules are loaded regardless of the primary backend if the executor supports them.
+
+### System
+
+- **Detection**: Always available
+- **Resolution**: No environment spec required
+- **Activation**: No-op — the command runs directly in the current shell environment
+- **Usage**: This is the default backend for rules without an `environment` field
+
 ---
 
 ## Environment Specification
@@ -145,6 +164,7 @@ The `EnvironmentSpec` struct supports one backend per rule:
 ```rust
 pub struct EnvironmentSpec {
     pub conda: Option<String>,
+    pub mamba: Option<String>,
     pub pixi: Option<String>,
     pub docker: Option<String>,
     pub singularity: Option<String>,
@@ -163,7 +183,7 @@ environment = { venv = "envs/requirements.txt" }
 environment = { modules = ["gcc/11.2", "cuda/11.7"] }
 ```
 
-If multiple backends are specified, the first one found is used in this priority order: mamba, conda, pixi, docker, singularity, venv. HPC `modules` are loaded regardless of the primary backend if the executor supports them.
+If multiple backends are specified, the first one found is used in this priority order: mamba, conda, pixi, docker, singularity, venv. HPC `modules` are loaded regardless of the primary backend if the executor supports them, and the `system` backend is used when a rule declares no environment spec.
 
 ---
 

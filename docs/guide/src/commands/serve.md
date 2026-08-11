@@ -48,7 +48,7 @@ oxo-flow serve --base-path /oxo-flow
 When using `--base-path`, all API endpoints will be prefixed:
 ```
 GET /oxo-flow/api/health
-POST /oxo-flow/api/workflows/validate
+POST /oxo-flow/api/pipelines/validate
 ```
 
 ---
@@ -64,15 +64,74 @@ Starting web server at 127.0.0.1:8080 ...
 
 ## API Endpoints
 
-Once the server is running, the following REST endpoints are available:
+Once the server is running, the following REST endpoints are available. The full specification is served at `/api/openapi.json`.
+
+!!! warning "Legacy `/api/workflows/*` routes"
+    Older documentation referenced `GET /api/workflows`, `POST /api/workflows/validate`,
+    `POST /api/workflows/graph`, and `GET /api/environments`. These routes come from a
+    legacy router and are **not served** by `oxo-flow serve`. Use the `/api/pipelines/*`
+    endpoints below instead.
+
+### Pipeline routes
 
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/api/health` | Health check (status + version) |
-| `GET` | `/api/workflows` | List loaded workflows |
-| `POST` | `/api/workflows/validate` | Validate TOML workflow content |
-| `POST` | `/api/workflows/graph` | Get DAG in DOT format |
-| `GET` | `/api/environments` | List available environment backends |
+| `GET` | `/api/openapi.json` | OpenAPI 3.1 specification |
+| `GET` / `POST` | `/api/pipelines` | List / save pipelines |
+| `POST` | `/api/pipelines/parse` | Parse TOML content into a structured pipeline |
+| `POST` | `/api/pipelines/validate` | Validate pipeline TOML and DAG |
+| `POST` | `/api/pipelines/prepare` | Expand wildcards and resolve environments |
+| `POST` | `/api/pipelines/dag` | Build the DAG as JSON |
+| `POST` | `/api/pipelines/format` | Canonical TOML formatting |
+| `POST` | `/api/pipelines/lint` | Lint pipelines |
+| `POST` | `/api/pipelines/stats` | Aggregate pipeline statistics |
+| `POST` | `/api/pipelines/diff` | Diff two pipelines |
+| `POST` | `/api/pipelines/export` | Export Docker/Singularity packaging |
+| `POST` | `/api/pipelines/search` | Search pipelines by name, tags, content |
+| `GET` / `PUT` / `DELETE` | `/api/pipelines/{id}` | Get / update / delete a pipeline |
+| `POST` | `/api/pipelines/{id}/fork` | Fork a pipeline |
+| `POST` | `/api/pipelines/{id}/share` | Share a pipeline |
+| `POST` | `/api/pipelines/import` | Import a pipeline from a URL |
+
+### Run routes
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` / `POST` | `/api/runs` | List / create runs |
+| `GET` | `/api/runs/{id}` | Run detail |
+| `GET` | `/api/runs/{id}/status` | Real-time status (nodes, timeline, resources) |
+| `GET` | `/api/runs/{id}/dag-status` | DAG JSON + per-node live status |
+| `GET` | `/api/runs/{id}/diagnostics` | Diagnostic engine results (30+ error patterns) |
+| `GET` | `/api/runs/{id}/logs` | Execution logs |
+| `GET` | `/api/runs/{id}/results` | Output files and QC metrics |
+| `POST` | `/api/runs/{id}/retry` | Smart retry (failed + downstream only) |
+| `POST` | `/api/runs/{id}/cancel` | Cancel a running workflow |
+| `POST` | `/api/runs/{id}/pause` | Pause a running workflow |
+| `POST` | `/api/runs/{id}/resume` | Resume a paused workflow |
+| `GET` | `/api/runs/{id}/report` | Run report |
+| `POST` | `/api/runs/{id}/report/ask` | Ask a question about the report |
+| `POST` | `/api/runs/{id}/report/visualize` | Visualize report data |
+
+### Other routes
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/auth/login` | Login (username/password) |
+| `GET` | `/api/auth/me` | Current session info |
+| `GET` | `/api/license` | License status |
+| `POST` | `/api/license/upload` | Upload a commercial license file |
+| `POST` | `/api/ai/translate` | Natural language → validated pipeline (SSE: `/api/ai/translate/stream`) |
+| `POST` | `/api/ai/explain` | Explain a run failure and suggest a fix |
+| `POST` | `/api/ai/interpret` | Interpret results |
+| `POST` | `/api/ai/optimize` | Optimize pipeline parameters |
+| `GET` / `POST` | `/api/ai/config` | Get / update AI configuration |
+| `POST` | `/api/chat/send` | Chat with the AI companion |
+| `POST` | `/api/data/analyze` | Scan files → detect format, suggest pipeline |
+| `GET` / `POST` | `/api/templates` | List / create templates |
+| `POST` | `/api/plugins/validate` | Validate plugin manifest + signature |
+| `GET` | `/api/events` | SSE event stream (real-time execution updates) |
+| `GET` | `/api/hpc` | HPC scheduler status (hpc mode only) |
 
 ### Example: Health check
 
@@ -87,10 +146,10 @@ curl http://127.0.0.1:8080/api/health
 }
 ```
 
-### Example: Validate a workflow
+### Example: Validate a pipeline
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/workflows/validate \
+curl -X POST http://127.0.0.1:8080/api/pipelines/validate \
   -H "Content-Type: application/json" \
   -d '{"toml_content": "[workflow]\nname = \"test\"\n[[rules]]\nname = \"s1\"\ninput = []\noutput = [\"out.txt\"]\nshell = \"echo hi > out.txt\""}'
 ```
@@ -98,9 +157,7 @@ curl -X POST http://127.0.0.1:8080/api/workflows/validate \
 ```json
 {
   "valid": true,
-  "errors": [],
-  "rules_count": 1,
-  "edges_count": 0
+  "errors": []
 }
 ```
 
