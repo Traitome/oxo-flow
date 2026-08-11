@@ -579,9 +579,21 @@ impl WorkflowDag {
                 .neighbors_directed(node_idx, petgraph::Direction::Incoming)
             {
                 let parent_d = depth.get(&parent).copied().unwrap_or(0) + 1;
-                if parent_d > best_depth {
-                    best_depth = parent_d;
-                    best_parent = Some(parent);
+                let parent_name = &self.graph[parent].name;
+                match parent_d.cmp(&best_depth) {
+                    std::cmp::Ordering::Greater => {
+                        best_depth = parent_d;
+                        best_parent = Some(parent);
+                    }
+                    std::cmp::Ordering::Equal => {
+                        // Deterministic tiebreaker: prefer alphabetically first name.
+                        if let Some(ref current_best) = best_parent {
+                            if parent_name < &self.graph[*current_best].name {
+                                best_parent = Some(parent);
+                            }
+                        }
+                    }
+                    std::cmp::Ordering::Less => {}
                 }
             }
 
@@ -696,8 +708,10 @@ impl WorkflowDag {
                     output.push_str("     ");
                 }
 
-                // Get dependencies for this rule
-                let deps = self.dependencies(rule)?;
+                // Get dependencies for this rule (deduplicated).
+                let mut deps = self.dependencies(rule)?;
+                deps.sort();
+                deps.dedup();
                 if deps.is_empty() {
                     output.push_str(&format!("{}{}{}\n", cyan, rule, reset));
                 } else {
@@ -752,7 +766,9 @@ impl WorkflowDag {
         ));
 
         for (i, rule_name) in order.iter().enumerate() {
-            let deps = self.dependencies(rule_name)?;
+            let mut deps = self.dependencies(rule_name)?;
+            deps.sort();
+            deps.dedup();
             let dep_str = if deps.is_empty() {
                 " ──●".to_string()
             } else {

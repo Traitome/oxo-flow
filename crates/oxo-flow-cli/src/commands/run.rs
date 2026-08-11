@@ -431,6 +431,8 @@ pub async fn run_command(
         ));
     }
 
+    let exec_max_threads = exec_config.max_threads;
+    let exec_max_memory_mb = exec_config.max_memory_mb;
     let executor = Arc::new(LocalExecutor::new(exec_config));
     let success_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let fail_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -593,43 +595,116 @@ pub async fn run_command(
         }
     }
 
-    // Rule `when` conditions are evaluated by the executor itself, which reports
-    // them back as JobStatus::Skipped. Pre-evaluating them here as well would
-    // count every condition-skipped rule twice.
-
-    // Execute rules in parallel groups (topological levels).
-    // Rules within a group have no dependencies on each other and can run concurrently.
-    // Filter groups to only include rules in the execution order (respects --target).
+    // Event-driven fine-grained scheduler.
+    //
+    // Instead of group barriers (wait for ALL rules at depth N before starting
+    // ANY at depth N+1), each rule is submitted as soon as all its individual
+    // dependencies complete.  SchedulerState tracks per-rule status and
+    // re-evaluates readiness after every completion event.  This eliminates the
+    // "tail latency" problem where a single slow rule in a parallel group delays
+    // downstream rules that only depend on already-finished fast rules.
+    //
+    // Concurrency is still bounded by -j (tokio Semaphore).  ResourcePool
+    // (threads/memory/groups) is checked per-rule inside execute_rule_with_config.
+    let rule_names: Vec<&str> = order.iter().map(String::as_str).collect();
+    let mut sched = oxo_flow_core::scheduler::SchedulerState::new(&rule_names);
     let order_set: std::collections::HashSet<&str> = order.iter().map(String::as_str).collect();
-    let groups: Vec<Vec<String>> = dag
-        .parallel_groups()
-        .context("failed to compute parallel groups")?
-        .into_iter()
-        .map(|g| {
-            g.into_iter()
-                .filter(|name| order_set.contains(name.as_str()))
-                .collect()
-        })
-        .filter(|g: &Vec<String>| !g.is_empty())
-        .collect();
     let semaphore = Arc::new(tokio::sync::Semaphore::new(jobs.max(1)));
+    let mut join_set = tokio::task::JoinSet::new();
+    let mut submitted: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    for group in &groups {
-        let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+    // Pre-process checkpoint-completed rules so they are never re-submitted.
+    {
+        let ck = checkpoint.lock().await;
+        for rule_name in &order {
+            if ck.is_completed(rule_name)
+                && order_set.contains(rule_name.as_str())
+                && !submitted.contains(rule_name.as_str())
+            {
+                let mut outputs_ok = true;
+                if let Some(rule) = config.get_rule(rule_name) {
+                    for output in &rule.output {
+                        if !output.contains('{') {
+                            let expanded =
+                                oxo_flow_core::executor::checkpoint::expand_config_in_path(
+                                    output, &wildcard_values,
+                                );
+                            if !workdir_actual.join(&expanded).exists() {
+                                outputs_ok = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if outputs_ok {
+                    submitted.insert(rule_name.clone());
+                    sched.mark_completed(oxo_flow_core::executor::JobRecord {
+                        rule: rule_name.clone(),
+                        status: oxo_flow_core::executor::JobStatus::Success,
+                        started_at: None,
+                        finished_at: None,
+                        exit_code: Some(0),
+                        stdout: None,
+                        stderr: None,
+                        command: None,
+                        retries: 0,
+                        timeout: None,
+                        skip_reason: None,
+                    });
+                    skipped_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if !is_tty {
+                        eprintln!("  {} {} (already completed)", "⊝".dimmed(), rule_name);
+                    }
+                    progress.inc(1);
+                }
+            }
+        }
+    }
 
-        for rule_name in group {
-            // Skip if any direct dependency failed or was itself blocked.
-            // `dag.dependencies()` returns direct predecessors only, so a blocked
-            // rule must join the failed set for the block to reach its own
-            // dependents. Groups are processed in topological order, so a rule's
-            // dependencies are always resolved before the rule is considered.
+    // Returns rules that are ready to run: dependencies satisfied, not yet
+    // submitted, and not blocked by a failed upstream rule.  Sorted by
+    // priority (descending) then name for determinism.
+    let compute_ready = |sched: &oxo_flow_core::scheduler::SchedulerState,
+                         submitted: &std::collections::HashSet<String>|
+     -> Result<Vec<String>, anyhow::Error> {
+        let mut ready = sched.ready_rules(&dag)?;
+        ready.retain(|name| {
+            order_set.contains(name.as_str()) && !submitted.contains(name.as_str())
+        });
+        // Sort by priority (descending), then name.
+        ready.sort_by(|a, b| {
+            let pa = config.get_rule(a).map(|r| r.priority).unwrap_or(0);
+            let pb = config.get_rule(b).map(|r| r.priority).unwrap_or(0);
+            pb.cmp(&pa).then_with(|| a.cmp(b))
+        });
+        Ok(ready)
+    };
+
+    // ---- main event loop -------------------------------------------------
+
+    loop {
+        // Check deadlock before each scheduling round.
+        if !sched.is_complete() && sched.running_count() == 0 && join_set.is_empty() {
+            sched.check_deadlock(
+                &dag,
+                exec_max_threads
+                    .unwrap_or(oxo_flow_core::executor::available_threads()),
+                exec_max_memory_mb
+                    .unwrap_or_else(|| oxo_flow_core::executor::available_memory_gb() * 1024),
+                &config.rules,
+            )?;
+        }
+
+        // Submit every rule whose dependencies are now satisfied.
+        let ready = compute_ready(&sched, &submitted)?;
+        for rule_name in &ready {
+            // Skip rules blocked by a failed upstream dependency.
             let blocked_by = {
                 let frs = failed_rules_set.lock().await;
                 dag.dependencies(rule_name)
                     .ok()
                     .and_then(|deps| deps.into_iter().find(|d| frs.contains(d.as_str())))
             };
-
             if let Some(dep) = blocked_by {
                 skipped_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 {
@@ -637,6 +712,20 @@ pub async fn run_command(
                     frs.insert(rule_name.clone());
                 }
                 blocked.lock().await.push((rule_name.clone(), dep));
+                submitted.insert(rule_name.clone());
+                sched.mark_completed(oxo_flow_core::executor::JobRecord {
+                    rule: rule_name.clone(),
+                    status: oxo_flow_core::executor::JobStatus::Skipped,
+                    started_at: None,
+                    finished_at: None,
+                    exit_code: None,
+                    stdout: None,
+                    stderr: None,
+                    command: None,
+                    retries: 0,
+                    timeout: None,
+                    skip_reason: Some("blocked by failed upstream dependency".into()),
+                });
                 if !is_tty {
                     eprintln!(
                         "  {} {} (blocked by failed dependency)",
@@ -648,46 +737,10 @@ pub async fn run_command(
                 continue;
             }
 
-            // Check if already checkpoint-completed
-            let should_skip = {
-                let ck = checkpoint.lock().await;
-                if ck.is_completed(rule_name) {
-                    // Verify outputs still exist
-                    if let Some(rule) = config.get_rule(rule_name) {
-                        let mut outputs_exist = true;
-                        for output in &rule.output {
-                            if !output.contains('{') {
-                                let expanded =
-                                    oxo_flow_core::executor::checkpoint::expand_config_in_path(
-                                        output,
-                                        &wildcard_values,
-                                    );
-                                if !workdir_actual.join(&expanded).exists() {
-                                    outputs_exist = false;
-                                    break;
-                                }
-                            }
-                        }
-                        outputs_exist
-                    } else {
-                        true
-                    }
-                } else {
-                    false
-                }
-            };
+            submitted.insert(rule_name.clone());
+            sched.mark_running(rule_name);
 
-            if should_skip {
-                skipped_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                progress.set_message("skipping already completed");
-                if !is_tty {
-                    eprintln!("  {} {} (already completed)", "⊝".dimmed(), rule_name);
-                }
-                progress.inc(1);
-                continue;
-            }
-
-            // Clone shared state for the spawned task
+            // ---- spawn task (identical logic to pre-scheduler version) -----
             let rule = config
                 .get_rule(rule_name)
                 .ok_or_else(|| anyhow::anyhow!("rule '{}' not found in workflow", rule_name))
@@ -713,13 +766,14 @@ pub async fn run_command(
             }
 
             let typed_config = config.config.clone();
-            let handle = tokio::spawn(async move {
+            join_set.spawn(async move {
                 let _permit = semaphore.acquire().await;
 
-                match executor
+                let result = executor
                     .execute_rule_with_config(&rule, &wildcard_values, &typed_config)
-                    .await
-                {
+                    .await;
+
+                match result {
                     Ok(record) => {
                         let duration = record
                             .finished_at
@@ -732,20 +786,22 @@ pub async fn run_command(
                             if !is_tty {
                                 eprintln!("  {} {} ({:.1}s)", "✓".green(), rule_name, duration);
                             }
-                            let benchmark = oxo_flow_core::executor::checkpoint::BenchmarkRecord {
-                                rule: rule_name.clone(),
-                                wall_time_secs: duration,
-                                max_memory_mb: None,
-                                cpu_seconds: None,
-                                retries: record.retries,
-                            };
+                            let benchmark =
+                                oxo_flow_core::executor::checkpoint::BenchmarkRecord {
+                                    rule: rule_name.clone(),
+                                    wall_time_secs: duration,
+                                    max_memory_mb: None,
+                                    cpu_seconds: None,
+                                    retries: record.retries,
+                                };
                             let mut ck = checkpoint.lock().await;
                             ck.mark_completed(&rule_name, benchmark);
                             if provenance {
                                 for output in &rule.output {
                                     let output_path = workdir_actual.join(output);
                                     if output_path.exists()
-                                        && let Ok(checksum) = oxo_flow_core::executor::checkpoint::compute_file_checksum(&output_path)
+                                        && let Ok(checksum) =
+                                            oxo_flow_core::executor::checkpoint::compute_file_checksum(&output_path)
                                     {
                                         ck.record_checksum(output, checksum);
                                     }
@@ -754,8 +810,10 @@ pub async fn run_command(
                             if let Err(e) = ck.save_to_file(&checkpoint_path) {
                                 tracing::warn!("Failed to save checkpoint: {e}");
                             }
+                            (rule_name, oxo_flow_core::executor::JobStatus::Success, record)
                         } else if record.status == oxo_flow_core::executor::JobStatus::Skipped {
                             skipped_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            (rule_name, oxo_flow_core::executor::JobStatus::Skipped, record)
                         } else {
                             fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             {
@@ -777,17 +835,18 @@ pub async fn run_command(
                             if let Some(code) = record.exit_code {
                                 err_msg.push_str(&format!("\nexit code: {}", code));
                             }
-                            if !keep_going {
-                                eprintln!("  {} {}", "✗".red(), err_msg);
-                            } else {
-                                eprintln!("  {} {}", "✗".red(), err_msg);
+                            eprintln!("  {} {}", "✗".red(), err_msg);
+                            if keep_going {
                                 let mut reason = String::new();
                                 if let Some(code) = record.exit_code {
                                     reason.push_str(&format!("exit code {}", code));
                                 }
                                 if let Some(ref stderr) = record.stderr
-                                    && let Some(last) =
-                                        stderr.trim().lines().next_back().filter(|l| !l.is_empty())
+                                    && let Some(last) = stderr
+                                        .trim()
+                                        .lines()
+                                        .next_back()
+                                        .filter(|l| !l.is_empty())
                                 {
                                     if !reason.is_empty() {
                                         reason.push_str(" — ");
@@ -800,6 +859,11 @@ pub async fn run_command(
                                 let mut f = failures.lock().await;
                                 f.push((rule_name.clone(), reason));
                             }
+                            (
+                                rule_name,
+                                record.status, // Failed or TimedOut
+                                record,
+                            )
                         }
                     }
                     Err(e) => {
@@ -815,31 +879,65 @@ pub async fn run_command(
                         }
                         if !keep_going {
                             eprintln!("  {} rule '{}' failed: {}", "✗".red(), rule_name, e);
-                        } else {
+                        }
+                        let record = oxo_flow_core::executor::JobRecord {
+                            rule: rule_name.clone(),
+                            status: oxo_flow_core::executor::JobStatus::Failed,
+                            started_at: None,
+                            finished_at: None,
+                            exit_code: Some(-1),
+                            stdout: None,
+                            stderr: Some(e.to_string()),
+                            command: None,
+                            retries: 0,
+                            timeout: None,
+                            skip_reason: None,
+                        };
+                        if keep_going {
                             let mut f = failures.lock().await;
                             f.push((rule_name.clone(), e.to_string()));
                         }
+                        (rule_name, oxo_flow_core::executor::JobStatus::Failed, record)
                     }
                 }
-                progress.inc(1);
             });
-            handles.push(handle);
         }
 
-        // Wait for all rules in this group before proceeding to next group
-        for handle in handles {
-            if let Err(e) = handle.await {
-                tracing::error!("Task panicked: {e}");
+        // ---- wait for completions -----------------------------------------
+
+        // If nothing is in-flight, we're done (all rules completed, failed, or blocked).
+        if join_set.is_empty() {
+            break;
+        }
+
+        // Wait for the next rule to finish.
+        let (_completed_rule, status, record) = match join_set.join_next().await {
+            Some(Ok(v)) => v,
+            Some(Err(e)) => {
+                if e.is_panic() {
+                    tracing::error!("Task panicked: {e}");
+                }
                 fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                continue;
             }
-        }
+            None => break,
+        };
 
-        // After each group, check if we should abort (non-keep-going mode)
+        sched.mark_completed(record);
+        progress.inc(1);
+
+        // Abort on first failure when not in keep_going mode.
         let fc = fail_count.load(std::sync::atomic::Ordering::Relaxed);
-        if fc > 0 && !keep_going {
+        if fc > 0
+            && !keep_going
+            && (status == oxo_flow_core::executor::JobStatus::Failed
+                || status == oxo_flow_core::executor::JobStatus::TimedOut
+                || status == oxo_flow_core::executor::JobStatus::Cancelled)
+        {
             progress.finish_and_clear();
+            join_set.abort_all();
 
-            // AI error recovery: auto-detect from workflow [ai] or explicit --ai-recover
+            // AI error recovery
             let should_recover =
                 ai_recover || crate::commands::ai_template::should_use_ai(Some(&workflow), false);
             if should_recover {
