@@ -4,26 +4,24 @@ Scale transcriptome analysis to individual cells using droplet-based single-cell
 
 !!! info "Concepts Covered"
     - Droplet-based scRNA-seq processing (10x Genomics style)
-    - Custom rule templates for repetitive preprocessing
-    - High-concurrency scatter across cell barcodes
-    - Resource-intensive alignment with splice-aware aligners
-    - Integration with specialized scRNA-seq R/Python environments
+    - Resource-intensive quantification with CellRanger
+    - Cell clustering and visualization with Seurat
+    - Per-sample report generation with RMarkdown
+    - Mixed environments: Docker (CellRanger) and Conda (R)
 
 ## Pipeline Overview
 
 ```mermaid
 graph TD
     A[cellranger_count] --> B[clustering_analysis]
-    B --> C[trajectory_inference]
-    C --> D[generate_sc_report]
+    B --> C[generate_sc_report]
 ```
 
 **Steps:**
 
-1. **Quantification** — Align reads to transcriptome and count UMI/barcodes (e.g., CellRanger)
-2. **Analysis** — Quality control, normalization, and cell clustering (e.g., Seurat/Scanpy)
-3. **Inference** — Developmental trajectory and cell type identification
-4. **Report** — Generate an interactive single-cell analysis report
+1. **Quantification** — Align reads to the transcriptome and count UMI/barcodes with CellRanger
+2. **Analysis** — Quality control, normalization, and cell clustering with Seurat
+3. **Report** — Generate an interactive single-cell analysis report
 
 ## Workflow Definition
 
@@ -34,11 +32,11 @@ graph TD
 name = "sc-rnaseq-pipeline"
 version = "1.0.0"
 description = "Single-cell RNA-seq pipeline: CellRanger + Seurat"
-author = "oxo-flow examples"
+author = "Traitome"
 
 [config]
 reference = "/data/references/GRCh38/cellranger_index"
-samples = "sc_samples.csv"
+samples = ["sample1", "sample2"]
 
 [defaults]
 threads = 8
@@ -48,8 +46,6 @@ memory = "32G"
 name = "cellranger_count"
 input = ["raw/{sample}_R1.fastq.gz", "raw/{sample}_R2.fastq.gz"]
 output = ["counts/{sample}/outs/filtered_feature_bc_matrix.h5"]
-threads = 16
-memory = "64G"
 description = "scRNA-seq quantification with CellRanger"
 shell = """
 cellranger count --id={sample} \
@@ -60,6 +56,10 @@ cellranger count --id={sample} \
                  --localmem=60
 """
 
+[rules.resources]
+threads = 16
+memory = "64G"
+
 [rules.environment]
 docker = "10xgenomics/cellranger:7.1.0"
 
@@ -67,10 +67,12 @@ docker = "10xgenomics/cellranger:7.1.0"
 name = "clustering_analysis"
 input = ["counts/{sample}/outs/filtered_feature_bc_matrix.h5"]
 output = ["analysis/{sample}/seurat_object.rds", "analysis/{sample}/tsne_plot.png"]
-threads = 4
-memory = "16G"
 description = "Cell clustering and visualization with Seurat"
 shell = "Rscript scripts/seurat_analysis.R --input {input[0]} --output-dir analysis/{sample}/"
+
+[rules.resources]
+threads = 4
+memory = "16G"
 
 [rules.environment]
 conda = "envs/seurat.yaml"

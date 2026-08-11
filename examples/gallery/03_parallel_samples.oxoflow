@@ -32,8 +32,6 @@ sed '/^$/d' {input[0]} | sort > {output[0]}
 name = "analyze"
 input = ["processed/{sample}.clean.txt"]
 output = ["analysis/{sample}.stats.txt"]
-threads = 4
-memory = "8G"
 shell = """
 mkdir -p analysis
 lines=$(wc -l < {input[0]})
@@ -44,6 +42,10 @@ echo "lines: $lines" >> {output[0]}
 echo "words: $words" >> {output[0]}
 echo "chars: $chars" >> {output[0]}
 """
+
+[rules.resources]
+threads = 4
+memory = "8G"
 
 [[rules]]
 name = "aggregate"

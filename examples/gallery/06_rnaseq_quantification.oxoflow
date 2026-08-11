@@ -22,7 +22,6 @@ memory = "8G"
 name = "fastp_trim"
 input = ["raw/{sample}_R1.fastq.gz", "raw/{sample}_R2.fastq.gz"]
 output = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz", "qc/{sample}_fastp.json"]
-threads = 8
 description = "Adapter trimming and quality filtering with fastp"
 shell = """
 mkdir -p trimmed qc
@@ -34,6 +33,9 @@ fastp -i {input[0]} -I {input[1]} \
       --length_required 50
 """
 
+[rules.resources]
+threads = 8
+
 [rules.environment]
 conda = "envs/fastp.yaml"
 
@@ -41,8 +43,6 @@ conda = "envs/fastp.yaml"
 name = "star_align"
 input = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz"]
 output = ["aligned/{sample}/Aligned.sortedByCoord.out.bam", "aligned/{sample}/ReadsPerGene.out.tab"]
-threads = 16
-memory = "32G"
 description = "Splice-aware alignment with STAR"
 shell = """
 mkdir -p aligned/{sample}
@@ -54,6 +54,10 @@ STAR --runThreadN {threads} \
      --quantMode GeneCounts \
      --outFileNamePrefix aligned/{sample}/
 """
+
+[rules.resources]
+threads = 16
+memory = "32G"
 
 [rules.environment]
 conda = "envs/star.yaml"
@@ -72,7 +76,6 @@ conda = "envs/samtools.yaml"
 name = "featurecounts"
 input = ["aligned/{sample}/Aligned.sortedByCoord.out.bam"]
 output = ["counts/{sample}.counts.txt"]
-threads = 4
 description = "Gene-level read counting with featureCounts"
 shell = """
 mkdir -p counts
@@ -83,6 +86,9 @@ featureCounts -T {threads} \
               -s 2 \
               {input[0]}
 """
+
+[rules.resources]
+threads = 4
 
 [rules.environment]
 conda = "envs/subread.yaml"

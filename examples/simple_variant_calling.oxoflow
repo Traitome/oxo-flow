@@ -36,8 +36,10 @@ output = [
     "qc/{sample}_R2_fastqc.html",
 ]
 shell = "fastqc {input} -o qc/"
-threads = 2
 description = "Quality control check on raw sequencing reads"
+
+[rules.resources]
+threads = 2
 
 [rules.environment]
 conda = "envs/qc.yaml"
@@ -56,8 +58,10 @@ output = [
 shell = """
 fastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]} --json {output[2]} --thread {threads}
 """
-threads = 8
 description = "Adapter trimming and quality filtering"
+
+[rules.resources]
+threads = 8
 
 [rules.environment]
 conda = "envs/fastp.yaml"
@@ -73,9 +77,11 @@ shell = '''
 bwa-mem2 mem -t {threads} -R '@RG\tID:{sample}\tSM:{sample}\tPL:ILLUMINA' {config.reference} {input[0]} {input[1]} | samtools sort -@ 4 -o {output[0]}
 samtools index {output[0]}
 '''
+description = "Read alignment to reference genome"
+
+[rules.resources]
 threads = 16
 memory = "32G"
-description = "Read alignment to reference genome"
 
 [rules.environment]
 docker = "biocontainers/bwa-mem2:2.2.1"
@@ -90,9 +96,11 @@ output = [
 shell = """
 gatk MarkDuplicates -I {input[0]} -O {output[0]} -M {output[1]} --CREATE_INDEX true
 """
+description = "Mark PCR duplicate reads"
+
+[rules.resources]
 threads = 4
 memory = "16G"
-description = "Mark PCR duplicate reads"
 
 [rules.environment]
 singularity = "docker://broadinstitute/gatk:4.5.0.0"
@@ -104,9 +112,11 @@ output = ["recal/{sample}.recal_data.table"]
 shell = """
 gatk BaseRecalibrator -I {input[0]} -R {config.reference} --known-sites {config.known_sites} -O {output[0]}
 """
+description = "Base quality score recalibration table"
+
+[rules.resources]
 threads = 4
 memory = "16G"
-description = "Base quality score recalibration table"
 
 [rules.environment]
 singularity = "docker://broadinstitute/gatk:4.5.0.0"
@@ -121,9 +131,11 @@ output = ["recal/{sample}.recal.bam"]
 shell = """
 gatk ApplyBQSR -I {input[0]} -R {config.reference} --bqsr-recal-file {input[1]} -O {output[0]}
 """
+description = "Apply base quality score recalibration"
+
+[rules.resources]
 threads = 4
 memory = "16G"
-description = "Apply base quality score recalibration"
 
 [rules.environment]
 singularity = "docker://broadinstitute/gatk:4.5.0.0"
@@ -135,9 +147,11 @@ output = ["variants/{sample}.g.vcf.gz"]
 shell = """
 gatk HaplotypeCaller -R {config.reference} -I {input[0]} -O {output[0]} -ERC GVCF --native-pair-hmm-threads {threads}
 """
+description = "Germline variant calling"
+
+[rules.resources]
 threads = 4
 memory = "16G"
-description = "Germline variant calling"
 
 [rules.environment]
 singularity = "docker://broadinstitute/gatk:4.5.0.0"

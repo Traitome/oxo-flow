@@ -26,8 +26,6 @@ memory = "8G"
 name = "fastp_qc"
 input = ["raw/{sample}_R1.fastq.gz", "raw/{sample}_R2.fastq.gz"]
 output = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz", "qc/{sample}_fastp.json"]
-threads = 8
-memory = "16G"
 description = "Read QC and adapter trimming"
 shell = """
 mkdir -p trimmed qc
@@ -37,6 +35,10 @@ fastp -i {input[0]} -I {input[1]} \
       --qualified_quality_phred 20 --length_required 50
 """
 
+[rules.resources]
+threads = 8
+memory = "16G"
+
 [rules.environment]
 conda = "envs/fastp.yaml"
 
@@ -44,8 +46,6 @@ conda = "envs/fastp.yaml"
 name = "bwa_mem2_align"
 input = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz"]
 output = ["aligned/{sample}.sorted.bam"]
-threads = 16
-memory = "32G"
 description = "Paired-end alignment with BWA-MEM2 and coordinate sorting"
 shell = """
 mkdir -p aligned
@@ -55,6 +55,10 @@ bwa-mem2 mem -t {threads} -R '@RG\\tID:{sample}\\tSM:{sample}\\tPL:ILLUMINA' \
 samtools index {output[0]}
 """
 
+[rules.resources]
+threads = 16
+memory = "32G"
+
 [rules.environment]
 docker = "biocontainers/bwa-mem2:2.2.1"
 
@@ -62,8 +66,6 @@ docker = "biocontainers/bwa-mem2:2.2.1"
 name = "mark_duplicates"
 input = ["aligned/{sample}.sorted.bam"]
 output = ["dedup/{sample}.dedup.bam", "dedup/{sample}.dedup.metrics.txt"]
-threads = 4
-memory = "16G"
 description = "Mark PCR and optical duplicates"
 shell = """
 mkdir -p dedup
@@ -74,6 +76,10 @@ gatk MarkDuplicates \
     --CREATE_INDEX true
 """
 
+[rules.resources]
+threads = 4
+memory = "16G"
+
 [rules.environment]
 singularity = "docker://broadinstitute/gatk:4.5.0.0"
 
@@ -81,8 +87,6 @@ singularity = "docker://broadinstitute/gatk:4.5.0.0"
 name = "base_recalibration"
 input = ["dedup/{sample}.dedup.bam"]
 output = ["bqsr/{sample}.recal.bam"]
-threads = 4
-memory = "16G"
 description = "Base quality score recalibration (BQSR)"
 shell = """
 mkdir -p bqsr
@@ -98,6 +102,10 @@ gatk ApplyBQSR \
     -O {output[0]}
 """
 
+[rules.resources]
+threads = 4
+memory = "16G"
+
 [rules.environment]
 singularity = "docker://broadinstitute/gatk:4.5.0.0"
 
@@ -105,8 +113,6 @@ singularity = "docker://broadinstitute/gatk:4.5.0.0"
 name = "haplotype_caller"
 input = ["bqsr/{sample}.recal.bam"]
 output = ["variants/{sample}.g.vcf.gz"]
-threads = 4
-memory = "16G"
 description = "Per-sample variant calling in GVCF mode"
 shell = """
 mkdir -p variants
@@ -118,6 +124,10 @@ gatk HaplotypeCaller \
     -L {config.intervals}
 """
 
+[rules.resources]
+threads = 4
+memory = "16G"
+
 [rules.environment]
 singularity = "docker://broadinstitute/gatk:4.5.0.0"
 
@@ -128,8 +138,6 @@ expand_inputs = [
     { pattern = "variants/{sample}.g.vcf.gz", variables = { sample = "config.samples_list" } }
 ]
 output = ["variants/cohort.g.vcf.gz"]
-threads = 4
-memory = "16G"
 description = "Combine per-sample GVCFs into a multi-sample GVCF"
 shell = """
 gatk CombineGVCFs \
@@ -138,6 +146,10 @@ gatk CombineGVCFs \
     -O {output[0]}
 """
 
+[rules.resources]
+threads = 4
+memory = "16G"
+
 [rules.environment]
 singularity = "docker://broadinstitute/gatk:4.5.0.0"
 
@@ -145,8 +157,6 @@ singularity = "docker://broadinstitute/gatk:4.5.0.0"
 name = "genotype_gvcfs"
 input = ["variants/cohort.g.vcf.gz"]
 output = ["variants/cohort.genotyped.vcf.gz"]
-threads = 4
-memory = "16G"
 description = "Joint genotyping across the cohort"
 shell = """
 gatk GenotypeGVCFs \
@@ -154,6 +164,10 @@ gatk GenotypeGVCFs \
     -V {input[0]} \
     -O {output[0]}
 """
+
+[rules.resources]
+threads = 4
+memory = "16G"
 
 [rules.environment]
 singularity = "docker://broadinstitute/gatk:4.5.0.0"
@@ -165,8 +179,6 @@ output = [
     "variants/cohort.snps.recal",
     "variants/cohort.snps.tranches"
 ]
-threads = 4
-memory = "16G"
 description = "Variant Quality Score Recalibration (VQSR) for SNPs"
 shell = """
 gatk VariantRecalibrator \
@@ -179,6 +191,10 @@ gatk VariantRecalibrator \
     --tranches-file {output[1]}
 """
 
+[rules.resources]
+threads = 4
+memory = "16G"
+
 [rules.environment]
 singularity = "docker://broadinstitute/gatk:4.5.0.0"
 
@@ -190,8 +206,6 @@ input = [
     "variants/cohort.snps.tranches"
 ]
 output = ["variants/cohort.filtered.vcf.gz"]
-threads = 4
-memory = "8G"
 description = "Apply VQSR model to filter SNPs"
 shell = """
 gatk ApplyVQSR \
@@ -204,6 +218,10 @@ gatk ApplyVQSR \
     -mode SNP
 """
 
+[rules.resources]
+threads = 4
+memory = "8G"
+
 [rules.environment]
 singularity = "docker://broadinstitute/gatk:4.5.0.0"
 
@@ -211,8 +229,6 @@ singularity = "docker://broadinstitute/gatk:4.5.0.0"
 name = "annotate_variants"
 input = ["variants/cohort.filtered.vcf.gz"]
 output = ["annotation/cohort.annotated.vcf.gz"]
-threads = 4
-memory = "16G"
 description = "Functional variant annotation with VEP"
 shell = """
 mkdir -p annotation
@@ -224,6 +240,10 @@ vep --input_file {input[0]} \
     --total_length --canonical --ccds \
     --force_overwrite --fork {threads}
 """
+
+[rules.resources]
+threads = 4
+memory = "16G"
 
 [rules.environment]
 conda = "envs/vep.yaml"

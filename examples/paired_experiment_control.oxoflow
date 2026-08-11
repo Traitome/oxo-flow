@@ -40,6 +40,8 @@ output = [
     "qc/EXP_01_fastp.json",
 ]
 shell = "fastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]} --json {output[2]} --thread {threads}"
+
+[rules.resources]
 threads = 8
 
 [rules.environment]
@@ -57,6 +59,8 @@ output = [
     "qc/CTRL_01_fastp.json",
 ]
 shell = "fastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]} --json {output[2]} --thread {threads}"
+
+[rules.resources]
 threads = 8
 
 [rules.environment]
@@ -70,6 +74,8 @@ input = [
 ]
 output = ["aligned/EXP_01.sorted.bam"]
 shell = "bwa-mem2 mem -t {threads} /data/references/GRCh38/genome.fa {input[0]} {input[1]} | samtools sort -@ {threads} -o {output[0]}"
+
+[rules.resources]
 threads = 16
 memory = "32G"
 
@@ -84,6 +90,8 @@ input = [
 ]
 output = ["aligned/CTRL_01.sorted.bam"]
 shell = "bwa-mem2 mem -t {threads} /data/references/GRCh38/genome.fa {input[0]} {input[1]} | samtools sort -@ {threads} -o {output[0]}"
+
+[rules.resources]
 threads = 16
 memory = "32G"
 
@@ -98,6 +106,8 @@ output = [
     "dedup/EXP_01.metrics.txt",
 ]
 shell = "gatk MarkDuplicates -I {input[0]} -O {output[0]} -M {output[1]}"
+
+[rules.resources]
 threads = 4
 memory = "16G"
 
@@ -112,6 +122,8 @@ output = [
     "dedup/CTRL_01.metrics.txt",
 ]
 shell = "gatk MarkDuplicates -I {input[0]} -O {output[0]} -M {output[1]}"
+
+[rules.resources]
 threads = 4
 memory = "16G"
 
@@ -123,6 +135,8 @@ name = "bqsr_experiment"
 input = ["dedup/EXP_01.dedup.bam"]
 output = ["recal/EXP_01.recal.bam"]
 shell = "gatk BaseRecalibrator -I {input[0]} -R /data/references/GRCh38/genome.fa --known-sites /data/references/GRCh38/dbsnp_146.hg38.vcf.gz -O recal/EXP_01.recal.table && gatk ApplyBQSR -I {input[0]} -R /data/references/GRCh38/genome.fa --bqsr-recal-file recal/EXP_01.recal.table -O {output[0]}"
+
+[rules.resources]
 threads = 4
 memory = "16G"
 
@@ -134,6 +148,8 @@ name = "bqsr_control"
 input = ["dedup/CTRL_01.dedup.bam"]
 output = ["recal/CTRL_01.recal.bam"]
 shell = "gatk BaseRecalibrator -I {input[0]} -R /data/references/GRCh38/genome.fa --known-sites /data/references/GRCh38/dbsnp_146.hg38.vcf.gz -O recal/CTRL_01.recal.table && gatk ApplyBQSR -I {input[0]} -R /data/references/GRCh38/genome.fa --bqsr-recal-file recal/CTRL_01.recal.table -O {output[0]}"
+
+[rules.resources]
 threads = 4
 memory = "16G"
 
@@ -148,6 +164,8 @@ input = [
 ]
 output = ["variants/EXP_01.mutect2.vcf.gz"]
 shell = "gatk Mutect2 -I {input[0]} -I {input[1]} -normal CTRL_01 -R /data/references/GRCh38/genome.fa -O {output[0]}"
+
+[rules.resources]
 threads = 4
 memory = "16G"
 
@@ -159,9 +177,11 @@ name = "filter_mutect_calls"
 input = ["variants/EXP_01.mutect2.vcf.gz"]
 output = ["variants/EXP_01.mutect2.filtered.vcf.gz"]
 shell = "gatk FilterMutectCalls -V {input[0]} -R /data/references/GRCh38/genome.fa -O {output[0]}"
+description = "Filter raw Mutect2 calls"
+
+[rules.resources]
 threads = 2
 memory = "8G"
-description = "Filter raw Mutect2 calls"
 
 [rules.environment]
 conda = "envs/gatk.yaml"
@@ -171,9 +191,11 @@ name = "haplotype_caller"
 input = ["recal/CTRL_01.recal.bam"]
 output = ["variants/CTRL_01.g.vcf.gz"]
 shell = "gatk HaplotypeCaller -I {input[0]} -R /data/references/GRCh38/genome.fa -O {output[0]} -ERC GVCF"
+description = "Variant calling for control sample"
+
+[rules.resources]
 threads = 4
 memory = "16G"
-description = "Variant calling for control sample"
 
 [rules.environment]
 conda = "envs/gatk.yaml"
@@ -183,6 +205,8 @@ name = "annotate_variants"
 input = ["variants/EXP_01.mutect2.filtered.vcf.gz"]
 output = ["annotated/EXP_01.annotated.vcf.gz"]
 shell = "vep --input_file {input[0]} --output_file {output[0]} --format vcf --vcf --offline --cache"
+
+[rules.resources]
 threads = 4
 memory = "8G"
 
@@ -194,9 +218,11 @@ name = "clinical_report"
 input = ["annotated/EXP_01.annotated.vcf.gz"]
 output = ["reports/EXP_01_report.html"]
 shell = "python scripts/generate_report.py --input {input[0]} --output {output[0]} --sample EXP_01"
+description = "Generate variant report"
+
+[rules.resources]
 threads = 1
 memory = "4G"
-description = "Generate variant report"
 
 [rules.environment]
 conda = "envs/report.yaml"

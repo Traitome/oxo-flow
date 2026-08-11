@@ -25,6 +25,8 @@ output = [
     "qc/{experiment}_fastp.json",
 ]
 shell = "fastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]} --json {output[2]} --thread {threads}"
+
+[rules.resources]
 threads = 8
 
 [rules.environment]
@@ -42,6 +44,8 @@ output = [
     "qc/{control}_fastp.json",
 ]
 shell = "fastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]} --json {output[2]} --thread {threads}"
+
+[rules.resources]
 threads = 8
 
 [rules.environment]
@@ -55,6 +59,8 @@ input = [
 ]
 output = ["aligned/{experiment}.sorted.bam"]
 shell = "bwa-mem2 mem -t {threads} {config.reference_fasta} {input[0]} {input[1]} | samtools sort -@ {threads} -o {output[0]}"
+
+[rules.resources]
 threads = 16
 memory = "32G"
 
@@ -69,6 +75,8 @@ input = [
 ]
 output = ["aligned/{control}.sorted.bam"]
 shell = "bwa-mem2 mem -t {threads} {config.reference_fasta} {input[0]} {input[1]} | samtools sort -@ {threads} -o {output[0]}"
+
+[rules.resources]
 threads = 16
 memory = "32G"
 
@@ -83,6 +91,8 @@ output = [
     "dedup/{experiment}.metrics.txt",
 ]
 shell = "gatk MarkDuplicates -I {input[0]} -O {output[0]} -M {output[1]}"
+
+[rules.resources]
 threads = 4
 memory = "16G"
 
@@ -97,6 +107,8 @@ output = [
     "dedup/{control}.metrics.txt",
 ]
 shell = "gatk MarkDuplicates -I {input[0]} -O {output[0]} -M {output[1]}"
+
+[rules.resources]
 threads = 4
 memory = "16G"
 
@@ -110,6 +122,8 @@ output = ["recal/{experiment}.recal.bam"]
 shell = """
   gatk BaseRecalibrator -I {input[0]} -R {config.reference_fasta} --known-sites {config.known_sites} -O recal/{experiment}.recal.table && gatk ApplyBQSR -I {input[0]} -R {config.reference_fasta} --bqsr-recal-file recal/{experiment}.recal.table -O {output[0]}
 """
+
+[rules.resources]
 threads = 4
 memory = "16G"
 
@@ -123,6 +137,8 @@ output = ["recal/{control}.recal.bam"]
 shell = """
   gatk BaseRecalibrator -I {input[0]} -R {config.reference_fasta} --known-sites {config.known_sites} -O recal/{control}.recal.table && gatk ApplyBQSR -I {input[0]} -R {config.reference_fasta} --bqsr-recal-file recal/{control}.recal.table -O {output[0]}
 """
+
+[rules.resources]
 threads = 4
 memory = "16G"
 
@@ -139,6 +155,8 @@ output = ["variants/{pair_id}.mutect2.vcf.gz"]
 shell = """
   gatk Mutect2 -I {input[0]} -I {input[1]} -normal {control} -R {config.reference_fasta} -O {output[0]}
 """
+
+[rules.resources]
 threads = 4
 memory = "16G"
 
@@ -150,6 +168,8 @@ name = "filter_mutect_calls"
 input = ["variants/{pair_id}.mutect2.vcf.gz"]
 output = ["variants/{pair_id}.mutect2.filtered.vcf.gz"]
 shell = "gatk FilterMutectCalls -V {input[0]} -R {config.reference_fasta} -O {output[0]}"
+
+[rules.resources]
 threads = 2
 memory = "8G"
 
@@ -161,6 +181,8 @@ name = "annotate_somatic"
 input = ["variants/{pair_id}.mutect2.filtered.vcf.gz"]
 output = ["annotated/{pair_id}.annotated.vcf.gz"]
 shell = "vep --input_file {input[0]} --output_file {output[0]} --format vcf --vcf --offline --cache"
+
+[rules.resources]
 threads = 4
 memory = "8G"
 
@@ -172,9 +194,11 @@ name = "clinical_report"
 input = ["annotated/{pair_id}.annotated.vcf.gz"]
 output = ["reports/{pair_id}_clinical_report.html"]
 shell = "python scripts/generate_report.py --input {input[0]} --output {output[0]} --pair {pair_id}"
+description = "Generate clinical-grade variant report for a experiment-control pair"
+
+[rules.resources]
 threads = 1
 memory = "4G"
-description = "Generate clinical-grade variant report for a experiment-control pair"
 
 [rules.environment]
 conda = "envs/report.yaml"

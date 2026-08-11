@@ -41,9 +41,11 @@ conda = "envs/qc.yaml"
 name = "align_sequences"
 input = ["data/sequences.fasta"]
 output = ["aligned/alignment.bam"]
+shell = "echo 'Alignment placeholder' > {output[0]}"
+
+[rules.resources]
 threads = 8
 memory = "16G"
-shell = "echo 'Alignment placeholder' > {output[0]}"
 
 [rules.environment]
 docker = "biocontainers/bwa-mem2:2.2.1"

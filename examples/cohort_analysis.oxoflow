@@ -25,6 +25,8 @@ output = [
     "qc/{sample}_fastp.json",
 ]
 shell = "fastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]} --json {output[2]} --thread {threads}"
+
+[rules.resources]
 threads = 4
 
 [rules.environment]
@@ -38,6 +40,8 @@ input = [
 ]
 output = ["aligned/{sample}.sorted.bam"]
 shell = "bwa-mem2 mem -t {threads} {config.reference_fasta} {input[0]} {input[1]} | samtools sort -@ {threads} -o {output[0]}"
+
+[rules.resources]
 threads = 8
 memory = "16G"
 
@@ -52,6 +56,8 @@ output = [
     "qc/{sample}.markdup_metrics.txt",
 ]
 shell = "gatk MarkDuplicates -I {input[0]} -O {output[0]} -M {output[1]}"
+
+[rules.resources]
 threads = 4
 memory = "16G"
 
@@ -63,9 +69,11 @@ name = "haplotype_caller"
 input = ["dedup/{sample}.dedup.bam"]
 output = ["gvcf/{sample}.g.vcf.gz"]
 shell = "gatk HaplotypeCaller -I {input[0]} -R {config.reference_fasta} -O {output[0]} -ERC GVCF"
+description = "Per-sample GVCF generation for joint genotyping"
+
+[rules.resources]
 threads = 4
 memory = "16G"
-description = "Per-sample GVCF generation for joint genotyping"
 
 [rules.environment]
 conda = "envs/gatk.yaml"
@@ -75,9 +83,11 @@ name = "multiqc"
 input = ["qc/"]
 output = ["reports/multiqc_report.html"]
 shell = "multiqc qc/ -o reports/"
+description = "Aggregate QC metrics for the entire cohort"
+
+[rules.resources]
 threads = 1
 memory = "4G"
-description = "Aggregate QC metrics for the entire cohort"
 
 [rules.environment]
 conda = "envs/multiqc.yaml"

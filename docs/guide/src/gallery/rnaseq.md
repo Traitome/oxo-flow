@@ -16,6 +16,7 @@ graph TD
     B --> C[index_bam]
     B --> D[featurecounts]
     A --> E[multiqc]
+    C --> E
     D --> E
 ```
 
@@ -25,7 +26,7 @@ graph TD
 2. **star_align** — Splice-aware alignment to reference genome with STAR
 3. **index_bam** — Index aligned BAM for downstream tools
 4. **featurecounts** — Gene-level read counting
-5. **multiqc** — Aggregate QC metrics into a single interactive report
+5. **multiqc** — Aggregate QC metrics into a single interactive report (runs once after all per-sample rules complete via `depends_on`)
 
 ## Workflow Definition
 
@@ -51,12 +52,7 @@ memory = "8G"
 [[rules]]
 name = "fastp_trim"
 input = ["raw/{sample}_R1.fastq.gz", "raw/{sample}_R2.fastq.gz"]
-output = [
-    "trimmed/{sample}_R1.fastq.gz",
-    "trimmed/{sample}_R2.fastq.gz",
-    "qc/{sample}_fastp.json"
-]
-threads = 8
+output = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz", "qc/{sample}_fastp.json"]
 description = "Adapter trimming and quality filtering with fastp"
 shell = """
 mkdir -p trimmed qc
@@ -68,18 +64,16 @@ fastp -i {input[0]} -I {input[1]} \
       --length_required 50
 """
 
+[rules.resources]
+threads = 8
+
 [rules.environment]
 conda = "envs/fastp.yaml"
 
 [[rules]]
 name = "star_align"
 input = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz"]
-output = [
-    "aligned/{sample}/Aligned.sortedByCoord.out.bam",
-    "aligned/{sample}/ReadsPerGene.out.tab"
-]
-threads = 16
-memory = "32G"
+output = ["aligned/{sample}/Aligned.sortedByCoord.out.bam", "aligned/{sample}/ReadsPerGene.out.tab"]
 description = "Splice-aware alignment with STAR"
 shell = """
 mkdir -p aligned/{sample}
@@ -91,6 +85,10 @@ STAR --runThreadN {threads} \
      --quantMode GeneCounts \
      --outFileNamePrefix aligned/{sample}/
 """
+
+[rules.resources]
+threads = 16
+memory = "32G"
 
 [rules.environment]
 conda = "envs/star.yaml"
@@ -109,7 +107,6 @@ conda = "envs/samtools.yaml"
 name = "featurecounts"
 input = ["aligned/{sample}/Aligned.sortedByCoord.out.bam"]
 output = ["counts/{sample}.counts.txt"]
-threads = 4
 description = "Gene-level read counting with featureCounts"
 shell = """
 mkdir -p counts
@@ -121,12 +118,19 @@ featureCounts -T {threads} \
               {input[0]}
 """
 
+[rules.resources]
+threads = 4
+
 [rules.environment]
 conda = "envs/subread.yaml"
 
 [[rules]]
 name = "multiqc"
-input = ["qc/{sample}_fastp.json", "counts/{sample}.counts.txt"]
+# Explicitly depends on all per-sample rules so multiqc runs once after
+# all samples have been processed, regardless of wildcard expansion.
+# Using directory paths as inputs avoids creating one multiqc instance
+# per sample when [[sample_groups]] is defined.
+depends_on = ["fastp_trim", "featurecounts", "index_bam"]
 output = ["results/multiqc_report.html"]
 description = "Aggregate QC metrics into a single report"
 shell = """
@@ -157,6 +161,10 @@ The `featureCounts -s 2` flag specifies reverse-strand counting, appropriate for
 
 - **Phred ≥ 20**: Only bases with ≥99% accuracy are retained
 - **Length ≥ 50**: Reads shorter than 50 bp after trimming are discarded to ensure reliable alignment
+
+### `config.samples` Is Inert
+
+The `samples = "samples.csv"` key in `[config]` is inert: no rule references it, and it does not control wildcard expansion. Sample expansion is driven by `[[sample_groups]]` (see [Parallel Samples](parallel-samples.md)); the `multiqc` rule's `depends_on` ensures it runs exactly once regardless of how samples are expanded.
 
 ## Running the Workflow
 

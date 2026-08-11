@@ -1,10 +1,11 @@
 # 07 — WGS Germline Variant Calling
 
-A complete whole-genome sequencing (WGS) germline variant calling pipeline following GATK best practices: QC → alignment → deduplication → BQSR → variant calling → filtration → annotation.
+A complete whole-genome sequencing (WGS) germline variant calling pipeline following GATK best practices: QC → alignment → deduplication → BQSR → variant calling → joint genotyping → VQSR → annotation.
 
 !!! info "Concepts Covered"
     - GATK best-practices workflow
-    - Eight-step DAG with strict linear dependencies
+    - Ten-rule cohort DAG with a branching VQSR path
+    - Cohort joint genotyping with CombineGVCFs
     - Mixed environments (conda, docker, singularity)
     - Clinical-grade variant annotation with VEP
     - Report configuration with provenance tracking
@@ -17,9 +18,12 @@ graph TD
     B --> C[mark_duplicates]
     C --> D[base_recalibration]
     D --> E[haplotype_caller]
-    E --> F[genotype_gvcfs]
-    F --> G[variant_filtration]
-    G --> H[annotate_variants]
+    E --> F[combine_gvcfs]
+    F --> G[genotype_gvcfs]
+    G --> H[vqsr_snps]
+    G --> I[apply_vqsr_snps]
+    H --> I
+    I --> J[annotate_variants]
 ```
 
 **Steps:**
@@ -29,9 +33,11 @@ graph TD
 3. **mark_duplicates** — Mark PCR and optical duplicates with GATK MarkDuplicates
 4. **base_recalibration** — Base quality score recalibration (BQSR) using known variant sites
 5. **haplotype_caller** — Per-sample variant calling in GVCF mode
-6. **genotype_gvcfs** — Genotype GVCFs to produce final variant calls
-7. **variant_filtration** — Hard-filter variants using GATK recommended thresholds
-8. **annotate_variants** — Functional annotation with Ensembl VEP
+6. **combine_gvcfs** — Combine the per-sample GVCFs into a cohort GVCF
+7. **genotype_gvcfs** — Joint genotyping across the cohort
+8. **vqsr_snps** — Variant Quality Score Recalibration (VQSR) for SNPs
+9. **apply_vqsr_snps** — Apply the VQSR model to filter the cohort's SNPs
+10. **annotate_variants** — Functional annotation with Ensembl VEP
 
 ## Workflow Definition
 
@@ -49,7 +55,10 @@ reference = "/data/references/GRCh38/genome.fa"
 known_sites = "/data/references/GRCh38/dbsnp_146.hg38.vcf.gz"
 known_indels = "/data/references/GRCh38/Mills_and_1000G.indels.hg38.vcf.gz"
 intervals = "/data/references/GRCh38/wgs_calling_regions.hg38.interval_list"
-samples = "samples.csv"
+
+[[sample_groups]]
+name = "cohort"
+samples = ["NA12878", "NA12879", "NA12880"]
 
 [defaults]
 threads = 4
@@ -58,13 +67,7 @@ memory = "8G"
 [[rules]]
 name = "fastp_qc"
 input = ["raw/{sample}_R1.fastq.gz", "raw/{sample}_R2.fastq.gz"]
-output = [
-    "trimmed/{sample}_R1.fastq.gz",
-    "trimmed/{sample}_R2.fastq.gz",
-    "qc/{sample}_fastp.json"
-]
-threads = 8
-memory = "16G"
+output = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz", "qc/{sample}_fastp.json"]
 description = "Read QC and adapter trimming"
 shell = """
 mkdir -p trimmed qc
@@ -74,6 +77,10 @@ fastp -i {input[0]} -I {input[1]} \
       --qualified_quality_phred 20 --length_required 50
 """
 
+[rules.resources]
+threads = 8
+memory = "16G"
+
 [rules.environment]
 conda = "envs/fastp.yaml"
 
@@ -81,17 +88,18 @@ conda = "envs/fastp.yaml"
 name = "bwa_mem2_align"
 input = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz"]
 output = ["aligned/{sample}.sorted.bam"]
-threads = 16
-memory = "32G"
 description = "Paired-end alignment with BWA-MEM2 and coordinate sorting"
 shell = """
 mkdir -p aligned
-bwa-mem2 mem -t {threads} \
-    -R '@RG\\tID:{sample}\\tSM:{sample}\\tPL:ILLUMINA' \
+bwa-mem2 mem -t {threads} -R '@RG\\tID:{sample}\\tSM:{sample}\\tPL:ILLUMINA' \
     {config.reference} {input[0]} {input[1]} \
     | samtools sort -@ 4 -m 2G -o {output[0]}
 samtools index {output[0]}
 """
+
+[rules.resources]
+threads = 16
+memory = "32G"
 
 [rules.environment]
 docker = "biocontainers/bwa-mem2:2.2.1"
@@ -105,15 +113,19 @@ docker = "biocontainers/bwa-mem2:2.2.1"
 name = "mark_duplicates"
 input = ["aligned/{sample}.sorted.bam"]
 output = ["dedup/{sample}.dedup.bam", "dedup/{sample}.dedup.metrics.txt"]
-threads = 4
-memory = "16G"
 description = "Mark PCR and optical duplicates"
 shell = """
 mkdir -p dedup
 gatk MarkDuplicates \
-    -I {input[0]} -O {output[0]} -M {output[1]} \
+    -I {input[0]} \
+    -O {output[0]} \
+    -M {output[1]} \
     --CREATE_INDEX true
 """
+
+[rules.resources]
+threads = 4
+memory = "16G"
 
 [rules.environment]
 singularity = "docker://broadinstitute/gatk:4.5.0.0"
@@ -122,8 +134,6 @@ singularity = "docker://broadinstitute/gatk:4.5.0.0"
 name = "base_recalibration"
 input = ["dedup/{sample}.dedup.bam"]
 output = ["bqsr/{sample}.recal.bam"]
-threads = 4
-memory = "16G"
 description = "Base quality score recalibration (BQSR)"
 shell = """
 mkdir -p bqsr
@@ -132,11 +142,16 @@ gatk BaseRecalibrator \
     --known-sites {config.known_sites} \
     --known-sites {config.known_indels} \
     -O bqsr/{sample}.recal_data.table
+
 gatk ApplyBQSR \
     -I {input[0]} -R {config.reference} \
     --bqsr-recal-file bqsr/{sample}.recal_data.table \
     -O {output[0]}
 """
+
+[rules.resources]
+threads = 4
+memory = "16G"
 
 [rules.environment]
 singularity = "docker://broadinstitute/gatk:4.5.0.0"
@@ -145,72 +160,137 @@ singularity = "docker://broadinstitute/gatk:4.5.0.0"
 name = "haplotype_caller"
 input = ["bqsr/{sample}.recal.bam"]
 output = ["variants/{sample}.g.vcf.gz"]
-threads = 4
-memory = "16G"
 description = "Per-sample variant calling in GVCF mode"
 shell = """
 mkdir -p variants
 gatk HaplotypeCaller \
     -I {input[0]} -R {config.reference} \
-    -O {output[0]} -ERC GVCF \
+    -O {output[0]} \
+    -ERC GVCF \
     --native-pair-hmm-threads {threads} \
     -L {config.intervals}
 """
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "combine_gvcfs"
+input = []
+expand_inputs = [
+    { pattern = "variants/{sample}.g.vcf.gz", variables = { sample = "config.samples_list" } }
+]
+output = ["variants/cohort.g.vcf.gz"]
+description = "Combine per-sample GVCFs into a multi-sample GVCF"
+shell = """
+gatk CombineGVCFs \
+    -R {config.reference} \
+    $(for f in {input}; do echo "-V $f "; done) \
+    -O {output[0]}
+"""
+
+[rules.resources]
+threads = 4
+memory = "16G"
 
 [rules.environment]
 singularity = "docker://broadinstitute/gatk:4.5.0.0"
 
 [[rules]]
 name = "genotype_gvcfs"
-input = ["variants/{sample}.g.vcf.gz"]
-output = ["variants/{sample}.genotyped.vcf.gz"]
-threads = 4
-memory = "16G"
-description = "Genotype GVCFs to produce final variant calls"
+input = ["variants/cohort.g.vcf.gz"]
+output = ["variants/cohort.genotyped.vcf.gz"]
+description = "Joint genotyping across the cohort"
 shell = """
 gatk GenotypeGVCFs \
     -R {config.reference} \
-    -V {input[0]} -O {output[0]}
+    -V {input[0]} \
+    -O {output[0]}
 """
+
+[rules.resources]
+threads = 4
+memory = "16G"
 
 [rules.environment]
 singularity = "docker://broadinstitute/gatk:4.5.0.0"
 
 [[rules]]
-name = "variant_filtration"
-input = ["variants/{sample}.genotyped.vcf.gz"]
-output = ["variants/{sample}.filtered.vcf.gz"]
-threads = 2
-memory = "8G"
-description = "Hard-filter variants with GATK recommended thresholds"
+name = "vqsr_snps"
+input = ["variants/cohort.genotyped.vcf.gz"]
+output = [
+    "variants/cohort.snps.recal",
+    "variants/cohort.snps.tranches"
+]
+description = "Variant Quality Score Recalibration (VQSR) for SNPs"
 shell = """
-gatk VariantFiltration \
-    -R {config.reference} -V {input[0]} -O {output[0]} \
-    --filter-expression 'QD < 2.0' --filter-name 'LowQD' \
-    --filter-expression 'MQ < 40.0' --filter-name 'LowMQ' \
-    --filter-expression 'FS > 60.0' --filter-name 'HighFS' \
-    --filter-expression 'SOR > 3.0' --filter-name 'HighSOR'
+gatk VariantRecalibrator \
+    -R {config.reference} \
+    -V {input[0]} \
+    -resource:hapmap,known=false,training=true,truth=true,prior=15.0 {config.known_sites} \
+    -an QD -an MQ -an MQRankSum -an ReadPosRankSum -an FS -an SOR \
+    -mode SNP \
+    -O {output[0]} \
+    --tranches-file {output[1]}
 """
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "apply_vqsr_snps"
+input = [
+    "variants/cohort.genotyped.vcf.gz",
+    "variants/cohort.snps.recal",
+    "variants/cohort.snps.tranches"
+]
+output = ["variants/cohort.filtered.vcf.gz"]
+description = "Apply VQSR model to filter SNPs"
+shell = """
+gatk ApplyVQSR \
+    -R {config.reference} \
+    -V {input[0]} \
+    -O {output[0]} \
+    --truth-sensitivity-filter-level 99.0 \
+    --tranches-file {input[2]} \
+    --recal-file {input[1]} \
+    -mode SNP
+"""
+
+[rules.resources]
+threads = 4
+memory = "8G"
 
 [rules.environment]
 singularity = "docker://broadinstitute/gatk:4.5.0.0"
 
 [[rules]]
 name = "annotate_variants"
-input = ["variants/{sample}.filtered.vcf.gz"]
-output = ["annotation/{sample}.annotated.vcf.gz"]
-threads = 4
-memory = "16G"
+input = ["variants/cohort.filtered.vcf.gz"]
+output = ["annotation/cohort.annotated.vcf.gz"]
 description = "Functional variant annotation with VEP"
 shell = """
 mkdir -p annotation
-vep --input_file {input[0]} --output_file {output[0]} \
+vep --input_file {input[0]} \
+    --output_file {output[0]} \
     --format vcf --vcf --compress_output bgzip \
     --assembly GRCh38 --offline --cache \
     --sift b --polyphen b --symbol --numbers --biotype \
     --total_length --canonical --ccds \
     --force_overwrite --fork {threads}
 """
+
+[rules.resources]
+threads = 4
+memory = "16G"
 
 [rules.environment]
 conda = "envs/vep.yaml"
@@ -231,18 +311,16 @@ BQSR corrects systematic errors in base quality scores assigned by the sequencer
 
 HaplotypeCaller runs in GVCF mode (`-ERC GVCF`) to produce genomic VCFs that contain information about both variant and reference-confident sites. This enables downstream joint genotyping across cohorts without re-running variant calling.
 
-### Hard Filtering Thresholds
+The `combine_gvcfs` rule merges the per-sample GVCFs into a single cohort GVCF (`variants/cohort.g.vcf.gz`), and `genotype_gvcfs` performs joint genotyping across the cohort in one run.
 
-The variant filtration step applies GATK-recommended hard filters:
+### VQSR (Variant Quality Score Recalibration)
 
-| Filter | Threshold | Meaning |
-|--------|-----------|---------|
-| QD | < 2.0 | Variant quality normalized by depth |
-| MQ | < 40.0 | Root mean square mapping quality |
-| FS | > 60.0 | Fisher strand bias |
-| SOR | > 3.0 | Symmetric odds ratio strand bias |
+Instead of fixed hard filters, the pipeline applies VQSR for clinical-grade variant calling:
 
-For production use, consider VQSR (Variant Quality Score Recalibration) instead of hard filters when sufficient training data is available.
+1. **vqsr_snps** — GATK VariantRecalibrator builds a recalibration model from annotation features (QD, MQ, MQRankSum, ReadPosRankSum, FS, SOR), using dbSNP as a training/truth resource.
+2. **apply_vqsr_snps** — GATK ApplyVQSR applies the model at `--truth-sensitivity-filter-level 99.0`, retaining high sensitivity while filtering false positives.
+
+VQSR adaptively models the variant quality profile rather than applying fixed thresholds, which generally preserves more true variants than hard filtering.
 
 ## Running the Workflow
 
@@ -265,7 +343,7 @@ $ oxo-flow validate examples/gallery/07_wgs_germline.oxoflow
 | combine_gvcfs | 4 | 16G | singularity |
 | genotype_gvcfs | 4 | 16G | singularity |
 | vqsr_snps | 4 | 16G | singularity |
-| apply_vqsr_snps | 2 | 8G | singularity |
+| apply_vqsr_snps | 4 | 8G | singularity |
 | annotate_variants | 4 | 16G | conda |
 
 ## What's Next?

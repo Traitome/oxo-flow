@@ -1,11 +1,11 @@
 # 04 — Scatter-Gather
 
-Split a dataset into chunks, process each chunk in parallel, then merge the results. This pattern is essential for parallelizing compute-intensive steps over large datasets.
+Call variants per chromosome in parallel, then merge the per-chromosome GVCFs into a single file. This pattern is essential for parallelizing compute-intensive steps over large datasets.
 
 !!! info "Concepts Covered"
-    - Data partitioning (scatter)
-    - Parallel chunk processing
-    - Result merging (gather)
+    - Per-chromosome variant calling (scatter)
+    - Parallel chromosome processing
+    - Result merging with a `gather` rule
     - Config-driven parameterization
 
 ## Workflow Definition
@@ -14,59 +14,31 @@ Split a dataset into chunks, process each chunk in parallel, then merge the resu
 # examples/gallery/04_scatter_gather.oxoflow
 
 [workflow]
-name = "scatter-gather"
+name = "scatter-gather-chromosomes"
 version = "1.0.0"
-description = "Scatter-gather parallel processing pattern"
-author = "oxo-flow examples"
+description = "Per-chromosome scatter-gather processing"
+author = "Traitome"
 
 [config]
-chunks = "4"
+chromosomes = ["chr1", "chr2", "chr3", "chr4", "chr5"]
+reference = "/data/references/GRCh38/genome.fa"
 
 [defaults]
-threads = 1
-memory = "2G"
+threads = 4
+memory = "8G"
 
 [[rules]]
-name = "prepare_input"
-output = ["data/full_dataset.txt"]
-shell = """
-mkdir -p data
-for i in $(seq 1 1000); do
-    echo "record_$i,$((RANDOM % 100)),$((RANDOM % 50))"
-done > {output[0]}
-"""
+name = "haplotype_caller"
+input = ["aligned/sample.bam"]
+output = ["variants/sample.{chr}.g.vcf.gz"]
+scatter = { variable = "chr", values_from = "config.chromosomes", gather = "gather_gvcf" }
+shell = "gatk HaplotypeCaller -R {config.reference} -I {input[0]} -L {chr} -O {output[0]} -ERC GVCF"
 
 [[rules]]
-name = "scatter"
-input = ["data/full_dataset.txt"]
-output = ["chunks/chunk_{chunk}.txt"]
-shell = """
-mkdir -p chunks
-split -n l/{config.chunks} {input[0]} chunks/chunk_
-ls chunks/chunk_* | head -1 | while read f; do mv "$f" {output[0]}; done
-"""
-
-[[rules]]
-name = "process_chunk"
-input = ["chunks/chunk_{chunk}.txt"]
-output = ["processed/chunk_{chunk}.result.txt"]
-threads = 2
-shell = """
-mkdir -p processed
-awk -F',' '{sum += $2; count++} END {print "count=" count, "mean=" sum/count}' \
-    {input[0]} > {output[0]}
-"""
-
-[[rules]]
-name = "gather"
-input = ["processed/chunk_{chunk}.result.txt"]
-output = ["results/merged_result.txt"]
-shell = """
-mkdir -p results
-echo "=== Scatter-Gather Results ===" > {output[0]}
-cat {input[0]} >> {output[0]}
-echo "Processing complete." >> {output[0]}
-"""
+name = "gather_gvcf"
+# The gather rule receives the output of all scattered rules as inputs
+output = ["variants/sample.g.vcf.gz"]
+shell = "gatk GatherVcfs $(for f in {input}; do echo \"-I $f \"; done) -O {output[0]}"
 ```
 
 ## Key Concepts
@@ -75,21 +47,28 @@ echo "Processing complete." >> {output[0]}
 
 This is a classic parallel computing pattern:
 
-1. **Prepare**: Generate or load the full dataset
-2. **Scatter**: Partition the data into independent chunks
-3. **Process**: Apply compute-intensive operations to each chunk in parallel
-4. **Gather**: Merge the per-chunk results into a final output
+1. **Scatter**: The `haplotype_caller` rule declares a `scatter` key with `variable = "chr"` and `values_from = "config.chromosomes"`. oxo-flow expands one job per chromosome, and all jobs run in parallel.
+2. **Process**: Each scattered job runs GATK HaplotypeCaller restricted to a single chromosome (`-L {chr}`), producing one per-chromosome GVCF.
+3. **Gather**: The `gather_gvcf` rule receives the outputs of all scattered jobs as its `{input}` and merges them with GATK GatherVcfs.
 
 ### Config-Driven Parallelism
 
-The number of chunks is controlled by a config variable:
+The chromosomes to scatter over are controlled by a config variable:
 
 ```toml
 [config]
-chunks = "4"
+chromosomes = ["chr1", "chr2", "chr3", "chr4", "chr5"]
 ```
 
-Changing this value scales the parallelism without modifying any rules.
+Changing this list scales the parallelism without modifying any rules.
+
+### How the Gather Rule Works
+
+The gather rule has no `input` of its own — oxo-flow automatically wires the outputs of every scattered instance into its `{input}` wildcard. The shell command iterates over them:
+
+```bash
+gatk GatherVcfs $(for f in {input}; do echo "-I $f "; done) -O {output[0]}
+```
 
 ## Running the Workflow
 
@@ -104,22 +83,18 @@ $ oxo-flow validate examples/gallery/04_scatter_gather.oxoflow
 
 ```mermaid
 graph TD
-    A[prepare_input] --> B[scatter]
-    B --> C1[process_chunk<br/>chunk=1]
-    B --> C2[process_chunk<br/>chunk=2]
-    B --> C3[process_chunk<br/>chunk=3]
-    B --> C4[process_chunk<br/>chunk=4]
-    C1 --> D[gather]
-    C2 --> D
-    C3 --> D
-    C4 --> D
+    A1[haplotype_caller<br/>chr=chr1] --> G[gather_gvcf]
+    A2[haplotype_caller<br/>chr=chr2] --> G
+    A3[haplotype_caller<br/>chr=chr3] --> G
+    A4[haplotype_caller<br/>chr=chr4] --> G
+    A5[haplotype_caller<br/>chr=chr5] --> G
 ```
 
 ## Use Cases
 
 The scatter-gather pattern is widely used in bioinformatics:
 
-- **Per-chromosome variant calling** — scatter by chromosome, call variants in parallel, merge VCFs
+- **Per-chromosome variant calling** — scatter by chromosome, call variants in parallel, merge GVCFs
 - **Parallel BLAST** — split query sequences, search in parallel, combine hits
 - **Large-scale annotation** — partition a VCF, annotate chunks, merge results
 
