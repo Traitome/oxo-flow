@@ -125,8 +125,8 @@ cargo build --release --workspace
 cargo install --path crates/oxo-flow-cli
 
 # Binaries are in target/release/
-# - oxo-flow        (CLI)
-# - oxo-flow-web    (Web server)
+# - oxo-flow        (CLI, includes `oxo-flow serve` for web UI)
+# - oxo-flow-web    (Standalone web server)
 ```
 
 ### First workflow
@@ -283,9 +283,12 @@ oxo-flow/
 
 ## Three-Mode Deployment
 
+`oxo-flow serve` starts the web interface with an embedded REST API and React SPA. Run it without arguments for local experimentation:
+
 ```bash
-# Mode 1: Personal workstation (default) — SQLite, localhost, no auth
+# Mode 1: Personal workstation (default) — SQLite, localhost:8080, no auth
 oxo-flow serve
+# → Open http://127.0.0.1:8080 in your browser
 
 # Mode 2: Team server — SQLite/PG, 0.0.0.0, ORCID/GitHub OAuth2
 oxo-flow serve --mode team --db postgres://...
