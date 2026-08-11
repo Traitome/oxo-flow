@@ -415,3 +415,14 @@ oxo-flow aims to work reliably across diverse computing environments — laptops
 **Built with 🧬 by [Traitome](https://github.com/Traitome)**
 
 </div>
+
+---
+
+## Contributors
+
+Thanks goes to these wonderful people:
+
+<a href="https://github.com/ShixiangWang"><img src="https://github.com/ShixiangWang.png" width="50" height="50" alt="Shixiang Wang" title="Shixiang Wang (王诗翔)" style="border-radius:50%"/></a>
+<a href="https://github.com/andrewcbudge"><img src="https://github.com/andrewcbudge.png" width="50" height="50" alt="Andrew Budge" title="Andrew Budge" style="border-radius:50%"/></a>
+
+> Run `make contributors` to refresh the contributor list from git history.

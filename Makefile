@@ -1,4 +1,4 @@
-.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit
+.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit contributors
 
 ## Run all local CI quality-gate checks (mirrors the "Test" job in ci.yml).
 ci: fmt clippy build test audit
@@ -47,3 +47,8 @@ dev: frontend-build
 	@echo "Starting oxo-flow-web on :3000 and frontend on :5173..."
 	@cd frontend && npm run dev & \
 	cd crates/oxo-flow-web && cargo run -- --port 3000
+
+## List human contributors from git history (excludes bots and AI tools).
+contributors:
+	@echo "Human contributors (from git log):"
+	@git log --format="%aN" --all | grep -v "Claude\|noreply\|bot\|Copilot" | sort -u
