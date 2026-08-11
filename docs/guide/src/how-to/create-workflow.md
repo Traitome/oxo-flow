@@ -139,16 +139,68 @@ oxo-flow expands `{sample}` from the available input files or from explicit conf
 
 oxo-flow infers dependencies automatically: if rule B's input matches rule A's output, B depends on A. You do not need to declare dependencies explicitly.
 
+### How dependency inference works
+
+When the DAG is built, oxo-flow examines every rule's `input` and `output` fields and creates edges wherever a match is found:
+
 ```toml
 [[rules]]
 name = "step1"
 output = ["intermediate.txt"]
-# ...
 
 [[rules]]
 name = "step2"
-input = ["intermediate.txt"]   # ← automatically depends on step1
-# ...
+input = ["intermediate.txt"]   # ← matches step1's output → step2 depends on step1
+```
+
+Step-by-step, the engine:
+
+1. **Registers outputs**: Each rule's `output` paths are recorded — "rule X produces file Y"
+2. **Matches inputs**: Each rule's `input` paths are checked against the output registry
+3. **Creates edges**: Every match creates a dependency edge (producer → consumer)
+4. **Adds explicit deps**: Any `depends_on` entries also create edges
+5. **Validates**: The resulting graph is checked for cycles
+
+### Explicit vs inferred dependencies
+
+| Mechanism | How it works | When to use |
+|---|---|---|
+| **File-based (inferred)** | `input`/`output` path matching | Standard pipeline steps — the default |
+| **`depends_on` (explicit)** | Direct rule name reference | Ordering without shared files (e.g., `mkdir` before downstream tools) |
+
+**Example — when to use `depends_on`:**
+
+```toml
+# Setup rule creates directories — no shared output files
+[[rules]]
+name = "setup_dirs"
+shell = "mkdir -p results/qc results/aligned"
+output = []  # No output files!
+
+# Downstream rule doesn't consume setup's output, but must run after
+[[rules]]
+name = "align"
+depends_on = ["setup_dirs"]   # ← explicit ordering, no file to match
+input = ["raw/sample.fastq.gz"]
+output = ["results/aligned/sample.bam"]
+shell = "bwa mem ref.fa {input} > {output}"
+```
+
+**Tip:** Prefer file-based dependencies whenever possible — they make the data flow explicit and self-documenting. Use `depends_on` only when the ordering can't be expressed through files.
+
+### Verifying your DAG
+
+After writing your workflow, inspect the dependency structure:
+
+```bash
+# See the execution order and dependency graph
+oxo-flow graph workflow.oxoflow
+
+# See just the execution plan without running
+oxo-flow dry-run workflow.oxoflow
+
+# Check for structural issues (cycles, orphans, collisions)
+oxo-flow validate workflow.oxoflow
 ```
 
 ---

@@ -174,21 +174,108 @@ module avail cuda
 
 ### Cycle detected
 
-**Symptom**: `cycle detected in workflow DAG: A -> B -> A`
+**Symptom**: `cycle detected in workflow DAG: A → B → C → A`
 
-**Solution**: Your rules have circular dependencies. Use `oxo-flow graph`
-to visualize the DAG and identify the cycle. Break the cycle by:
+**Solution**: Your rules have circular dependencies. The error message shows the full cycle path with `→` arrows connecting each rule in the loop.
 
-- Removing unnecessary input/output connections
-- Splitting a rule into separate steps
-- Using `depends_on` for explicit ordering instead of file-based dependencies
+1. Use `oxo-flow graph workflow.oxoflow` to visualize the DAG
+2. Pick one edge in the cycle and decide how to break it:
+   - **File-based edge**: If `A` produces a file that `B` consumes, and `B` produces a file that `A` consumes, rename one output to break the match
+   - **Explicit `depends_on`**: Remove the `depends_on` entry that closes the cycle
+3. If the cycle is intentional (e.g., iterative refinement), split the rule into separate pre/post steps
+4. Re-validate: `oxo-flow validate workflow.oxoflow`
 
 ### Missing input
 
 **Symptom**: `missing input for rule 'step2': intermediate.txt`
 
-**Solution**: Ensure that some other rule produces `intermediate.txt` as an
-output, or that the file already exists before the workflow runs.
+**Solution**: Ensure that some other rule produces `intermediate.txt` as an output, or that the file already exists before the workflow runs.
+
+### Rule not found
+
+**Symptom**: `rule not found: 'algn'` with a list of available rule names
+
+**Solution**: The target name passed to `-t` or referenced in `depends_on` doesn't match any rule. oxo-flow supports **prefix matching** — try a shorter prefix:
+
+```bash
+# Instead of guessing the exact name
+oxo-flow run pipeline.oxoflow -t align  # matches "align_reads", "align_bwa", etc.
+```
+
+Use `oxo-flow graph workflow.oxoflow` to see all rule names.
+
+### Rules not running in parallel
+
+**Symptom**: Workflow executes rules one-at-a-time despite `-j 8`
+
+**Causes and solutions**:
+
+1. **DAG is naturally sequential**: Run `oxo-flow graph workflow.oxoflow` and check **Width** in the header. If width=1, every rule depends on the previous one — no parallelism is possible. Consider splitting large rules into independent sub-tasks.
+2. **Resource constraints**: If rules declare high thread/memory requirements (e.g., 32 threads each on a 64-thread machine), the resource pool may only allow 1-2 concurrent jobs. Either reduce declarations or increase `--max-threads`/`--max-memory`.
+3. **Implicit file dependencies**: Check that intermediate output files use unique names — if two independent rules produce files with the same wildcard expansion, the engine may serialize them.
+
+### Orphan rules (rules that never connect)
+
+**Symptom**: A rule exists in the workflow but has no connections to other rules — neither consuming their outputs nor producing inputs for them.
+
+**Detection**: Use `oxo-flow graph workflow.oxoflow -f tree` and look for rules with no upstream or downstream indicators. Or run `oxo-flow validate` — orphan rules are reported as warnings.
+
+**Solution**: Check input/output paths for typos. An orphan is usually a misspelled file path that prevents the engine from matching it to other rules.
+
+### Output collisions
+
+**Symptom**: `Output pattern collision: rules 'caller_a' and 'caller_b' both produce '{sample}.vcf'`
+
+**Solution**: Two rules produce files matching the same pattern. This is dangerous — the second rule to finish will overwrite the first rule's output. Give each rule distinct output directories:
+
+```toml
+# Before (collision)
+[[rules]]
+name = "caller_a"
+output = ["variants/{sample}.vcf"]
+
+[[rules]]
+name = "caller_b"
+output = ["variants/{sample}.vcf"]  # ❌ Same pattern!
+
+# After (fixed)
+[[rules]]
+name = "caller_a"
+output = ["variants/caller_a/{sample}.vcf"]  # ✅ Unique path
+
+[[rules]]
+name = "caller_b"
+output = ["variants/caller_b/{sample}.vcf"]  # ✅ Unique path
+```
+
+### Deadlock detected
+
+**Symptom**: `Deadlock detected: 3 rules stuck. Stuck rules: align_S001, align_S002, align_S003. Check resource constraints (threads/memory) and dependencies.`
+
+**Solution**: Pending rules have dependencies satisfied but can never fit in the available resource pool. This typically means:
+
+1. Each pending rule requires more resources than `--max-threads`/`--max-memory` allows (check the `ResourceExhausted` error that often precedes this)
+2. Multiple rules each fit individually but together exceed the pool when running concurrently
+3. Solution:
+   - Increase `--max-threads` and/or `--max-memory`
+   - Reduce declared resources in the rule definitions
+   - Lower `-j` to reduce concurrent demand
+
+### Resource budget exceeded
+
+**Symptom**: `rule 'bwa_align' requires 64 threads but --max-threads caps the run at 32`
+
+**Solution**: The pre-flight budget check caught a rule whose requirements exceed the explicit limits. Either:
+
+```bash
+# Increase the budget
+oxo-flow run pipeline.oxoflow --max-threads 64
+
+# Or reduce the rule's requirement in the .oxoflow file
+threads = 32
+```
+
+Note: This check only fires when `--max-threads`/`--max-memory` are explicitly set on the CLI. Auto-detected system resources don't trigger budget failures (only warnings).
 
 ## Checkpoint and Resume
 

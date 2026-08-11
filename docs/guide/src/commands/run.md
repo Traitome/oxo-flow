@@ -203,6 +203,9 @@ A progress bar shows execution progress with:
 - The `--retry` flag re-runs failed jobs up to N times before marking them as failed
 - A timeout of `0` means no timeout
 - Resource constraints (`threads`, `memory`) in rules are checked against available resources before execution
+- **Pre-flight budget check:** When `--max-threads` or `--max-memory` is explicitly set, the engine checks all rules *before* execution starts. Any rule whose requirements exceed the budget is reported immediately (fast-fail), preventing mid-pipeline failures. Rules that exceed auto-detected system resources produce warnings but don't block execution.
+- **Deadlock detection:** If pending rules can never fit in the available resource pool (e.g., every pending rule requires 64 threads but `--max-threads=32`), the engine reports `Deadlock detected: N rules stuck` with the stuck rule names and guidance on resolution.
+- **Target-aware execution:** The `-t` flag supports prefix matching — `-t al` matches all rules whose names start with "al". Use this to run a subset of the workflow, similar to `make <target>`. Only the named targets and their transitive upstream dependencies are executed; downstream rules are excluded.
 - Setting `--max-threads 0` or `--max-memory 0` auto-detects system resources
 - Environment setup is performed automatically before first use of each environment (conda, pixi, docker, singularity, venv)
 - Use `--skip-env-setup` when environments are pre-built to avoid redundant setup

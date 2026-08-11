@@ -76,6 +76,50 @@ The implementation uses Kahn's algorithm (BFS-based topological sort), which als
 
 ---
 
+## Target-Aware Execution
+
+### `execution_order_for_targets()`
+
+oxo-flow supports running only a subset of the workflow — similar to `make <target>` or `just <recipe>`. When you pass `-t <target>` to `oxo-flow run` or `oxo-flow dry-run`, the DAG engine computes the **minimal set of rules** needed to produce those targets.
+
+```rust
+let order: Vec<String> = dag.execution_order_for_targets(&["align", "sort_bam"])?;
+// Returns align, sort_bam, and all upstream rules they transitively depend on
+```
+
+The returned list includes the specified targets **and every upstream rule they transitively depend on**, in valid execution order. Downstream rules (those that depend on the targets) are excluded.
+
+#### Prefix Matching
+
+Target names support prefix matching for convenience:
+
+```bash
+# Matches all rules whose names start with "qc_"
+oxo-flow run pipeline.oxoflow -t qc_
+
+# Disambiguates: "qc_fastqc", "qc_fastp", "qc_multiqc" all match
+```
+
+If a target name doesn't match any rule exactly, the engine checks whether any rule names start with the target. If multiple rules match, all are included. If no rules match, a `RuleNotFound` error is returned with a list of available rule names.
+
+#### Use Cases
+
+| Scenario | Command | Effect |
+|---|---|---|
+| Run only QC steps | `-t multiqc` | Executes fastqc → trim → align → multiqc |
+| Run up to alignment | `-t align` | Stops after alignment, skips variant calling |
+| Re-run a specific branch | `-t left -t right` | Runs source → left, source → right, skips merge |
+| Resume from a checkpoint | `-t final_output` | Only runs what's needed to produce `final_output` |
+
+#### How It Works
+
+1. **Validate** all target names (with prefix fallback)
+2. **Collect** transitive upstream dependencies via reverse BFS/DFS from each target
+3. **Filter** the full topological order to include only the collected nodes
+4. Return the filtered order — targets and their dependencies, in correct execution sequence
+
+---
+
 ## Parallel Groups
 
 ### `parallel_groups()`
@@ -88,6 +132,60 @@ let groups: Vec<Vec<String>> = dag.parallel_groups()?;
 ```
 
 This is used by the executor to determine which rules can be launched simultaneously within the `-j` concurrency limit.
+
+---
+
+## Critical Path Analysis
+
+### `critical_path()`
+
+The **critical path** is the longest chain of sequential dependencies through the DAG — the sequence of rules that determines the **minimum possible execution time** even with unlimited parallelism.
+
+```rust
+let path: Vec<String> = dag.critical_path()?;
+// e.g., ["fastqc", "trim_reads", "align", "call_variants"]
+```
+
+#### Why It Matters
+
+| Concept | Meaning |
+|---|---|
+| **Critical path length** | Minimum number of sequential steps — cannot be parallelized away |
+| **Non-critical rules** | Can be delayed or run in parallel without affecting total runtime |
+| **Bottleneck identification** | The rules on the critical path are your optimization targets |
+
+#### Critical-Path-Prioritized Scheduling
+
+The scheduler can prioritize rules on the critical path so they execute before non-critical rules at the same level:
+
+```rust
+let ready: Vec<String> = state.ready_rules_critical_path(&dag, &rules)?;
+```
+
+Sort order:
+1. **Critical path membership** — critical rules first
+2. **Explicit priority** (`priority` field, higher first)
+3. **Alphabetical name** (deterministic tie-breaker)
+
+This minimizes total workflow wall-clock time by ensuring the bottleneck chain never waits.
+
+#### Example
+
+In a diamond DAG (`source → left, source → right → merge`):
+
+- Critical path: `source → left → merge` (3 steps)
+- `right` is not on the critical path — it can be scheduled after `left` without affecting total time
+- The `graph` command shows the critical path in ASCII output:
+
+```
+Critical path: source → left → merge
+```
+
+#### Interpreting the Output
+
+- **Short critical path** (= shallow DAG): Good — more opportunities for parallelism
+- **Long critical path** (= deep DAG): Focus optimization on the critical rules — faster tools, more threads, larger instances
+- **Critical path ≈ total rules**: Your workflow is mostly sequential — look for opportunities to split rules or parallelize
 
 ---
 
@@ -124,15 +222,150 @@ digraph workflow {
 | `execution_order()` | `Vec<String>` | Topologically sorted rule names |
 | `parallel_groups()` | `Vec<Vec<String>>` | Rules grouped by execution level |
 | `to_dot()` | `String` | Graphviz DOT output |
+| `root_rules()` | `Vec<String>` | Entry-point rules (no upstream dependencies) |
+| `leaf_rules()` | `Vec<String>` | Terminal rules (no downstream dependents) |
+| `orphan_rules()` | `Vec<&str>` | Rules with neither inputs nor outputs connected to others |
+| `dependencies(name)` | `Vec<String>` | Direct upstream dependencies of a rule |
+| `dependents(name)` | `Vec<String>` | Direct downstream dependents of a rule |
+| `critical_path()` | `Vec<String>` | Longest chain of sequential dependencies |
+| `metrics()` | `DagMetrics` | Structural metrics (depth, width, critical path length) |
+| `detect_output_collisions(rules)` | `Vec<String>` | Warnings for overlapping output patterns |
+
+---
+
+## Priority Scheduling
+
+Rules can declare a `priority` field (integer, default `0`). When multiple rules are ready to execute, the scheduler sorts them by priority (higher values first), then by name for deterministic tie-breaking:
+
+```toml
+[[rules]]
+name = "critical_qc"
+priority = 10   # Runs before other ready rules
+```
+
+```rust
+let ready: Vec<String> = state.ready_rules_prioritized(&dag, &rules)?;
+// ["critical_qc", "fastqc", "trim_reads"]  — sorted by priority desc, then name asc
+```
+
+**Important:** Priority only affects ordering *among ready rules at the same time*. A low-priority rule with all dependencies satisfied will still run before a high-priority rule waiting on a dependency. Priority does not override topological constraints.
+
+---
+
+## Deadlock Detection
+
+The scheduler includes automatic deadlock detection. A deadlock occurs when pending rules exist but none can run — either because their resource requirements exceed the available pool, or because of unresolvable dependency cycles.
+
+### `check_deadlock()`
+
+After each scheduling cycle, the engine checks:
+
+1. Are there pending rules?
+2. Are any rules currently running?
+3. If no rules are running and pending rules can *never* fit in the available resources → **Resource Deadlock**
+
+```rust
+state.check_deadlock(&dag, available_threads, available_memory_mb, &rules)?;
+```
+
+### Deadlock Scenarios
+
+| Scenario | Error | Resolution |
+|---|---|---|
+| Rule requires 64 threads, `--max-threads=32` | `ResourceExhausted` — lists required vs available | Increase `--max-threads`, reduce rule's thread declaration, or run on larger hardware |
+| Rule requires 256GB, system has 128GB | `ResourceExhausted` — lists required vs available memory | Increase `--max-memory`, reduce memory declaration, or split the rule |
+| Circular dependency | `CycleDetected` — shows the cycle path | Use `oxo-flow graph` to find and break the cycle |
+| Rules stuck with no clear cause | `Config` error — "N rules stuck" with stuck rule names | Check all resource constraints and dependency declarations |
+
+### Stuck Rule Detection
+
+If no single rule exceeds the resource budget but no progress is being made (e.g., multiple rules each require resources that together exceed the pool), the engine reports:
+
+```
+Deadlock detected: 5 rules stuck. Stuck rules: align_NA12878, align_NA12891, ...
+Check resource constraints (threads/memory) and dependencies.
+```
+
+This typically means you need to reduce `-j` parallelism or increase `--max-threads`/`--max-memory`.
+
+---
+
+## DAG Analysis Utilities
+
+### Root & Leaf Rules
+
+```rust
+let entry_points = dag.root_rules();  // Rules with no upstream deps — start here first
+let final_outputs = dag.leaf_rules(); // Rules with no downstream deps — your end products
+```
+
+Use these to understand workflow structure: root rules are your entry points (typically consuming raw data), and leaf rules produce your final deliverables.
+
+### Orphan Rules
+
+```rust
+let orphans = dag.orphan_rules();  // Rules not connected to any other rule
+```
+
+Orphan rules have no dependencies and no dependents — they are isolated islands in the DAG. This is often a configuration mistake (misspelled input/output file paths) rather than intentional. Run `oxo-flow validate` to check for orphans — they will still execute but may indicate wiring errors.
+
+### Output Collision Detection
+
+```rust
+let warnings = WorkflowDag::detect_output_collisions(&rules);
+```
+
+When multiple rules produce outputs with overlapping wildcard patterns (e.g., two rules both produce `{sample}.vcf`), this function emits warnings. Output collisions can cause non-deterministic behavior or data corruption:
+
+```
+Output pattern collision: rules 'caller_a' and 'caller_b' both produce '{sample}.vcf' with overlapping wildcards
+```
+
+Resolve by giving each rule distinct output paths (e.g., `caller_a/{sample}.vcf`, `caller_b/{sample}.vcf`).
 
 ---
 
 ## Error Conditions
 
-| Error | Cause |
-|---|---|
-| `Cycle detected` | Two or more rules form a circular dependency |
-| `Duplicate rule name` | Two rules share the same `name` field |
+| Error | Cause | Resolution |
+|---|---|---|
+| `Cycle detected: A → B → A` | Two or more rules form a circular dependency | Use `oxo-flow graph` to visualize; break the cycle by removing an input/output connection or using `depends_on` to express the intended ordering |
+| `Duplicate rule name` | Two rules share the same `name` field | Rename one rule; use `namespace` with `[[include]]` to avoid conflicts |
+| `Rule not found: 'name'` | `-t` target or `depends_on` references a non-existent rule | Check spelling; try prefix matching (`-t al` may match `align`); use `oxo-flow graph` to list all rule names |
+| `ResourceExhausted` | Rule's resource requirements exceed available pool | Increase `--max-threads`/`--max-memory`, reduce rule's declared resources, or lower `-j` |
+| `Deadlock detected: N rules stuck` | Pending rules can never fit in available resources | Reduce job parallelism or increase resource limits |
+
+---
+
+## Troubleshooting Common DAG Issues
+
+### "My rules aren't running in parallel"
+
+1. Check `oxo-flow graph` — look at **Width** in the header. If width=1, your DAG is purely sequential (no parallelism possible)
+2. Verify your `-j` setting is > 1
+3. Check that rules at the same depth level don't have implicit file dependencies between them
+4. Resource constraints may serialize execution — check `--max-threads`/`--max-memory` aren't too restrictive
+
+### "A rule I expect to run is being skipped"
+
+1. Check `depends_on` — does the rule have unresolved explicit dependencies?
+2. Check `when` conditions — is the condition evaluating to `false`?
+3. Use `oxo-flow dry-run -t <rule_name>` to see if the rule appears in the execution plan
+4. Check if the rule is an orphan (its inputs don't match any other rule's outputs)
+
+### "Why does my workflow have so many dependencies?"
+
+- Each file-based input→output match creates one edge. A merge rule consuming outputs from 3 parallel branches will have 3 incoming edges
+- Explicit `depends_on` entries also create edges
+- The dependency count in `oxo-flow graph` header counts all edges — a high number is expected for complex workflows
+
+### "My cycle error shows a confusing path"
+
+The cycle path `A → B → C → A` shows you the circular chain. To break it:
+1. Pick one edge in the cycle (e.g., `C → A`)
+2. If it's file-based: rename one of the files so they don't match
+3. If it's `depends_on`: remove the explicit dependency
+4. Re-validate with `oxo-flow validate`
 
 ---
 
@@ -150,3 +383,6 @@ digraph workflow {
 - [System Architecture](./architecture.md) — how the DAG engine fits into the system
 - [`graph` command](../commands/graph.md) — CLI for DAG visualization
 - [Workflow Format](./workflow-format.md) — how rules define the DAG structure
+- [DAG Edit API](./dag-edit-api.md) — programmatic DAG manipulation (Web UI editor)
+- [Troubleshooting](../how-to/troubleshooting.md) — common DAG issues and solutions
+- [Resource Tuning](../how-to/resource-tuning.md) — using DAG metrics to optimize performance

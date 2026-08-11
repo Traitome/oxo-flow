@@ -195,7 +195,54 @@ If warnings appear but workflow succeeds, you can:
 2. Keep declarations and accept warnings
 3. Increase system resources
 
+## Optimizing with DAG Metrics
+
+Use `oxo-flow graph` to get structural insights before tuning resources:
+
+```bash
+oxo-flow graph pipeline.oxoflow
+```
+
+The header shows key metrics:
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ Workflow DAG: 12 rules, 15 dependencies                   │
+│ Depth: 5, Width: 4, Critical path: 5 steps               │
+└──────────────────────────────────────────────────────────┘
+```
+
+### Interpreting metrics for resource planning
+
+| Metric | What it tells you | Resource implication |
+|---|---|---|
+| **Depth** | Number of sequential stages | Determines minimum wall-clock time; each level is a synchronization barrier |
+| **Width** | Max rules at any single level | Your peak parallelism — set `-j` to at least this value |
+| **Critical path** | Longest chain of dependencies | The bottleneck — focus optimization efforts here |
+| **Rules** | Total workflow nodes | Overall scope; large counts may benefit from cluster backends |
+
+### Actionable guidance
+
+- **Width = 1**: Your DAG is fully sequential. Before adding more threads, consider whether you can split large rules into independent sub-tasks to create parallelism.
+- **Width > `-j`**: Some parallel rules will queue. Increase `-j` to match or exceed width for maximum throughput.
+- **Critical path ≈ Depth**: All levels are equally deep — no obvious bottleneck branch. If runtime is too high, optimize the slowest rule at each level.
+- **Critical path < Depth**: Some branches are shallower. The critical path rules are your optimization priority — give them more threads/memory.
+
+### Example: tuning a diamond workflow
+
+```bash
+oxo-flow graph pipeline.oxoflow
+# Depth: 3, Width: 2, Critical path: source → left → merge
+```
+
+Insights:
+- Maximum parallelism is 2 (width) — `-j 2` is sufficient
+- The critical path is `source → left → merge` — `right` is not on it
+- If `left` takes 2 hours, that's your bottleneck regardless of `right`'s speed
+- Optimize `left` (more threads, faster tool) before worrying about `right`
+
 ## See Also
 
 - [Workflow Format Reference](../reference/workflow-format.md)
 - [DAG Engine](../reference/dag-engine.md)
+- [DAG Edit API](../reference/dag-edit-api.md)
