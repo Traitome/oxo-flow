@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! oxo-flow-ai — AI provider abstraction, agent framework, and knowledge system.
 //!
 //! This crate is the shared AI foundation for all oxo-flow tools:

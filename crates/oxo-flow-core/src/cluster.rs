@@ -317,8 +317,14 @@ fn generate_slurm_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig
         lines.push(format!("#SBATCH --time={formatted}"));
     }
 
-    if let Some(ref queue) = config.queue {
-        lines.push(format!("#SBATCH --partition={queue}"));
+    // Partition: rule-level overrides CLI flag
+    let partition = rule
+        .resources
+        .partition
+        .as_deref()
+        .or(config.queue.as_deref());
+    if let Some(part) = partition {
+        lines.push(format!("#SBATCH --partition={part}"));
     }
     if let Some(ref account) = config.account {
         lines.push(format!("#SBATCH --account={account}"));
@@ -401,8 +407,14 @@ fn generate_pbs_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
     }
     lines.push(format!("#PBS -l {}", resource_parts.join(",")));
 
-    if let Some(ref queue) = config.queue {
-        lines.push(format!("#PBS -q {queue}"));
+    // Queue: rule-level partition overrides CLI flag
+    let queue = rule
+        .resources
+        .partition
+        .as_deref()
+        .or(config.queue.as_deref());
+    if let Some(q) = queue {
+        lines.push(format!("#PBS -q {q}"));
     }
     if let Some(ref account) = config.account {
         lines.push(format!("#PBS -A {account}"));
@@ -463,8 +475,14 @@ fn generate_sge_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
         }
     }
 
-    if let Some(ref queue) = config.queue {
-        lines.push(format!("#$ -q {queue}"));
+    // Queue: rule-level partition overrides CLI flag
+    let queue = rule
+        .resources
+        .partition
+        .as_deref()
+        .or(config.queue.as_deref());
+    if let Some(q) = queue {
+        lines.push(format!("#$ -q {q}"));
     }
     lines.push(format!("#$ -o logs/{}.out", rule.name));
     lines.push(format!("#$ -e logs/{}.err", rule.name));
@@ -521,8 +539,14 @@ fn generate_lsf_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
         }
     }
 
-    if let Some(ref queue) = config.queue {
-        lines.push(format!("#BSUB -q {queue}"));
+    // Queue: rule-level partition overrides CLI flag
+    let queue = rule
+        .resources
+        .partition
+        .as_deref()
+        .or(config.queue.as_deref());
+    if let Some(q) = queue {
+        lines.push(format!("#BSUB -q {q}"));
     }
     lines.push(format!("#BSUB -o logs/{}.out", rule.name));
     lines.push(format!("#BSUB -e logs/{}.err", rule.name));
