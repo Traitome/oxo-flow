@@ -33,19 +33,19 @@ oxo-flow is a high-performance, modular bioinformatics pipeline engine built fro
 - 🔀 **DAG-based execution** — Automatic dependency resolution, topological ordering, and parallel execution
 - 🤖 **AI Companion** — Contextual AI across the full workflow lifecycle: natural language pipeline generation (Dashboard), intelligent refinement suggestions (Editor), failure diagnosis (Monitor), and results interpretation (Report). Powered by Claude, OpenAI, DeepSeek, or local Ollama.
 - 💬 **Natural language to pipeline** — Describe your analysis in plain English; AI generates validated `.oxoflow` pipelines with step-by-step explanations, tool recommendations, and alternative approaches
-- 📦 **Environment management** — First-class support for conda, pixi, docker, singularity, and venv with per-rule isolation
+- 📦 **Environment management** — First-class support for conda, mamba, pixi, docker, singularity, venv, system, and HPC modules — with per-rule isolation
 - 🧬 **Bioinformatics-first** — Purpose-built for genomics workflows with reproducible execution
-- 📊 **Workflow reporting** — Modular HTML/JSON report generation with execution summaries, resource metrics, and output file browsers
+- 📊 **Workflow reporting** — Modular HTML/JSON/PDF report generation with execution summaries, resource metrics, and output file browsers
 - 🌐 **Professional Web UI** — React 19 SPA with contextual ChatUI, cytoscape.js DAG visualization, CodeMirror 6 TOML editor, Vega-Lite charts. Light theme, system fonts, WCAG AA contrast, responsive to mobile.
 - 🔄 **Cross-page state persistence** — PipelineSession context: chat messages, TOML edits, dry-run results survive all navigation. Single source of truth synchronized across views.
-- ⚡ **Rust performance** — Fearless concurrency, zero-cost abstractions, `#![forbid(unsafe_code)]` across all crates
+- ⚡ **Rust performance** — Fearless concurrency, zero-cost abstractions, `#![forbid(unsafe_code)]` in core and web crates
 - 🔧 **Resource-aware scheduling** — Jobs declare CPU, memory, GPU, and disk; the scheduler respects constraints across local and cluster backends (SLURM, PBS, SGE, LSF)
 - 🔒 **Security hardened** — Shell injection prevention, path traversal protection, secret scanning, and per-IP rate limiting
 - 🗄️ **Persistent State** — Checkpoint-based execution history with JSON persistence; resume interrupted workflows from the last completed rule
-- 🔬 **Deterministic diagnostics engine** — 30+ error patterns cover tool failures, resource exhaustion, data corruption, and config issues — with auto-fix suggestions
+- 🔬 **Deterministic diagnostics engine** — 30+ diagnostic patterns cover tool failures, resource exhaustion, data corruption, and config issues — with auto-fix suggestions
 - 👥 **Collaboration primitives** — Fork, diff, share, and import pipelines via `oxo+https://` links; full audit trail for compliance
 - 🚀 **Three deployment modes** — Personal workstation, team server with OAuth2, or HPC submit panel — all from the same binary
-- 🌐 **Domain-driven web API** — 48 RESTful endpoints across 7 domains (workflow, execution, AI, auth, collaboration, observability, data)
+- 🌐 **Domain-driven web API** — 50+ RESTful endpoints across 7 domains (observability, pipeline, execution, AI, auth, data, ops)
 
 ## Three-Mode Deployment (v0.8)
 
@@ -64,12 +64,12 @@ oxo-flow serve --mode hpc --scheduler slurm
 
 | Feature | **oxo-flow** | Snakemake | Nextflow |
 |---------|------------|-----------|----------|
-| **Language** | Rust — compiled, type-safe, `#![forbid(unsafe_code)]` | Python | Groovy/JVM |
+| **Language** | Rust — compiled, type-safe, `#![forbid(unsafe_code)]` (core + web) | Python | Groovy/JVM |
 | **Performance** | Native binary, zero interpreter overhead | Python startup overhead | JVM startup overhead |
 | **Workflow format** | TOML (`.oxoflow`) — declarative, composable | Snakefile / `.smk` (Python DSL) | Nextflow DSL (`.nf`) (Groovy DSL) |
-| **Environment support** | conda, pixi, docker, singularity, venv — per-rule | conda, singularity, docker | conda, docker, singularity, modules |
+| **Environment support** | conda, mamba, pixi, docker, singularity, venv, system, modules — per-rule | conda, singularity, docker | conda, docker, singularity, modules |
 | **Web interface** | Built-in REST API with session auth and rate limiting | External Snakemake-UI | Nextflow Tower (commercial) |
-| **Reporting** | Built-in HTML/JSON run reports with metrics | Via MultiQC | Via Nextflow Tower |
+| **Reporting** | Built-in HTML/JSON/PDF run reports with metrics | Via MultiQC | Via Nextflow Tower |
 | **Container packaging** | Multi-stage builds, rootless containers | Singularity/Docker | Docker/Singularity |
 | **Cluster backends** | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF, k8s |
 | **Type safety** | Type-state lifecycle, `RuleBuilder`, newtypes | Dynamic Python | Dynamic Groovy |
@@ -78,23 +78,21 @@ oxo-flow serve --mode hpc --scheduler slurm
 | **Reproducibility** | Config checksums, execution provenance, deterministic DAG | Checksums, provenance | Checksums, provenance |
 | **AI Companion** | Built-in contextual AI (generate, refine, diagnose, interpret) | Not built-in | Not built-in |
 | **Web UI** | React 19 SPA with DAG visualization, TOML editor, live monitor | External Snakemake-UI | Nextflow Tower (commercial) |
-| **Testing** | 890 unit tests + 100 browser E2E scenarios | pytest-based | Varied |
+| **Testing** | 1,280+ tests (unit, integration, doc) | pytest-based | Varied |
 
 ## Design Principles
 
-oxo-flow is built on six engineering and scientific principles:
+oxo-flow is built on five engineering and scientific principles:
 
 1. **DAG is the fundamental abstraction** — Every bioinformatics workflow is a directed acyclic graph of tasks. The engine natively constructs, validates, optimizes, and executes DAGs with maximum parallelism.
 
-2. **Environment isolation is non-negotiable** — Bioinformatics tools have conflicting dependencies. Each task runs in its own isolated environment (conda, pixi, docker, singularity, venv).
+2. **Environment isolation is non-negotiable** — Bioinformatics tools have conflicting dependencies. Each task runs in its own isolated environment (conda, mamba, pixi, docker, singularity, venv, system, or HPC modules).
 
-3. **Reproducibility through determinism** — Given the same inputs, configuration, and environment specifications, the pipeline produces identical outputs. Config checksums, execution provenance, and container pinning guarantee this.
+3. **Reproducible by design** — Every step logs its provenance, inputs, outputs, software versions, and execution environment. Config checksums, execution provenance, and container pinning guarantee that given the same inputs and configuration, the pipeline produces identical outputs.
 
 4. **Performance through Rust** — Zero-cost abstractions, fearless concurrency, and efficient memory management make Rust the ideal foundation for orchestrating thousands of concurrent bioinformatics tasks.
 
-5. **Reproducible by design** — Every step logs its provenance, inputs, outputs, software versions, and execution environment. Config checksums and container pinning guarantee consistent results.
-
-6. **Outcome-driven design** — Workflows are structured around the desired deliverables (report, publication figure, QC dashboard). The DAG engine's target-aware execution (`-t` flag) computes the minimal set of rules needed to produce specific outputs.
+5. **Outcome-driven design** — Workflows are structured around the desired deliverables (report, publication figure, QC dashboard). The DAG engine's target-aware execution (`-t` flag) computes the minimal set of rules needed to produce specific outputs.
 
 ## Workflow Gallery
 
@@ -218,7 +216,7 @@ oxo-flow uses a TOML-based workflow format that is human-readable, composable, a
 ```toml
 [workflow]
 name = "variant-calling"
-version = "0.6.0"
+version = "1.0.0"
 
 [config]
 reference = "/data/ref/GRCh38.fa"
@@ -308,133 +306,7 @@ shell = "process-dir {input} -o {output}"
 
 ## CLI Commands
 
-The `oxo-flow` binary provides **31 subcommands** covering the complete workflow lifecycle: `run`, `validate`, `dry-run`, `resume`, `graph`, `report`, `init`, `cluster`, `serve`, `completions`, and more. See the full [CLI Reference](https://traitome.github.io/oxo-flow/documentation/commands/run/) for details.
-
-## Cluster / HPC
-
-oxo-flow supports job submission to HPC cluster schedulers including SLURM, PBS/PBS Pro, SGE/UGE, and LSF. The `oxo-flow cluster` subcommand manages the full submission lifecycle.
-
-```bash
-# Submit a workflow to a SLURM cluster
-oxo-flow cluster submit workflow.oxoflow --backend slurm --queue short -o jobs/
-
-# Check submission status
-oxo-flow cluster status --id <job-id>
-
-# Cancel a submitted job
-oxo-flow cluster cancel --id <job-id>
-```
-
-**Supported backends:** `slurm`, `pbs`, `sge`, `lsf`. Configure cluster profiles with `oxo-flow profile` for reusable queue, walltime, and resource defaults.
-
-Workflows can also be executed directly on a cluster without the submit subcommand by using a profile:
-
-```bash
-# List available profiles
-oxo-flow profile list
-
-# Run a workflow using a SLURM profile
-oxo-flow run workflow.oxoflow --profile slurm
-```
-
-## Workflow Format (`.oxoflow`)
-
-oxo-flow uses a TOML-based workflow format that is human-readable, composable, and declarative:
-
-```toml
-[workflow]
-name = "variant-calling"
-version = "0.6.0"
-
-[config]
-reference = "/data/ref/GRCh38.fa"
-
-[[rules]]
-name = "fastp"
-input = ["raw/{sample}_R1.fastq.gz", "raw/{sample}_R2.fastq.gz"]
-output = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz"]
-threads = 8
-shell = "fastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]}"
-
-[rules.environment]
-conda = "envs/fastp.yaml"
-
-[[rules]]
-name = "bwa_align"
-input = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz"]
-output = ["aligned/{sample}.bam"]
-threads = 16
-memory = "32G"
-shell = "bwa-mem2 mem -t {threads} {config.reference} {input[0]} {input[1]} | samtools sort -o {output[0]}"
-
-[rules.environment]
-docker = "biocontainers/bwa-mem2:2.2.1"
-```
-
-Wildcards like `{sample}` are expanded automatically based on input file discovery or explicit configuration, enabling concise and powerful pattern-based pipeline definitions.
-
-### Reference Directory Convention
-
-Set a base directory and let oxo-flow derive standard paths:
-
-```toml
-reference_dir = "/data/references/GRCh38"
-
-# Auto-derived:
-# - reference_fasta → /data/references/GRCh38/genome.fa
-# - gene_annotation → /data/references/GRCh38/genes.gtf
-# - bwa_index → /data/references/GRCh38/bwa/genome.fa
-# ... etc.
-
-# Override specific paths:
-reference_fasta = "/custom/path/genome.fa"
-```
-
-### Environment Groups
-
-Share environments across multiple rules:
-
-```toml
-[env_groups.qc]
-conda = "envs/qc.yaml"
-
-[[rules]]
-name = "fastqc"
-env_group = "qc"
-
-[[rules]]
-name = "multiqc"
-env_group = "qc"  # Reuses same environment
-```
-
-### Optional Rules
-
-Rules can be marked as optional to skip execution when inputs are missing:
-
-```toml
-[[rules]]
-name = "optional_qc"
-input = ["{sample}_extra.fastq"]  # May not exist for all samples
-output = ["{sample}_extra_qc.html"]
-shell = "fastqc {input}"
-optional = true  # Skip gracefully if input missing
-```
-
-### Directory Input
-
-Track all files in a directory for modification detection:
-
-```toml
-[[rules]]
-name = "process_dir"
-input = { dir = "data/raw/", pattern = "*.fastq" }  # Optional glob pattern
-output = ["results/processed/"]
-shell = "process-dir {input} -o {output}"
-```
-
-## CLI Commands
-
-The `oxo-flow` binary provides 31 subcommands for the complete workflow lifecycle:
+The `oxo-flow` binary provides **33 subcommands** covering the complete workflow lifecycle. See the full [CLI Reference](https://traitome.github.io/oxo-flow/documentation/commands/run/) for details.
 
 | Command | Description |
 |---------|-------------|
@@ -442,7 +314,7 @@ The `oxo-flow` binary provides 31 subcommands for the complete workflow lifecycl
 | `oxo-flow dry-run` | Simulate execution — show what would run without executing |
 | `oxo-flow validate` | Validate an `.oxoflow` file for syntax and semantic correctness (`--as-include` for sub-workflows) |
 | `oxo-flow graph` | Output the workflow DAG for visualization (`-f ascii\|dot\|dot-clustered\|tree`) |
-| `oxo-flow report` | Generate execution reports (`-f html\|json`, `-o` output path) |
+| `oxo-flow report` | Generate execution reports (`-f html\|json\|pdf`, `-o` output path) |
 | `oxo-flow batch` | Execute command templates in parallel across multiple items (lightweight alternative to full workflows) |
 | `oxo-flow env` | Manage software environments (list, check) |
 | `oxo-flow package` | Package workflow into a container image (`-f docker\|singularity`) |
@@ -460,13 +332,17 @@ The `oxo-flow` binary provides 31 subcommands for the complete workflow lifecycl
 | `oxo-flow diff` | Compare two `.oxoflow` workflow files and show differences |
 | `oxo-flow debug` | Show expanded commands after variable substitution |
 | `oxo-flow touch` | Mark workflow outputs as up-to-date without re-executing |
-| `oxo-flow template` | Generate a workflow from a gallery template (`oxo-flow template` lists all) |
-| `oxo-flow watch` | Watch a workflow file for changes and re-validate automatically |
+| `oxo-flow template` | Generate a workflow from a gallery template or via AI |
+| `oxo-flow watch` | Watch a workflow file for changes and re-validate/re-run |
 | `oxo-flow resume` | Resume an interrupted workflow from a checkpoint file |
 | `oxo-flow provenance` | Verify output file integrity against stored checksums |
 | `oxo-flow schema` | Output the JSON Schema for the `.oxoflow` format |
 | `oxo-flow test` | Run a workflow in test mode: validate + lint + dry-run |
 | `oxo-flow publish` | Bundle a workflow with its environment files for sharing |
+| `oxo-flow ai` | AI status, test, and setup (`oxo-flow ai status\|test\|setup`) |
+| `oxo-flow pull` | Pull a published workflow bundle from a remote source |
+| `oxo-flow history` | Show execution history from checkpoints |
+| `oxo-flow license` | Verify or display license status |
 
 ### Validate Sub-Workflows
 
@@ -480,17 +356,18 @@ This skips DAG validation since fragments don't have complete dependency graphs.
 
 ## Web API
 
-The `oxo-flow serve` command starts an [axum](https://github.com/tokio-rs/axum)-powered REST server with **48 endpoints** across 7 domains (Observability, Pipeline, Execution, AI, Auth, Data, Ops). Full API reference at the [OpenAPI 3.1 spec](https://traitome.github.io/oxo-flow/documentation/reference/api/).
+The `oxo-flow serve` command starts an [axum](https://github.com/tokio-rs/axum)-powered REST server with **50+ endpoints** across 7 domains (observability, pipeline, execution, AI, auth, data, ops). Full API reference at the [OpenAPI 3.1 spec](https://traitome.github.io/oxo-flow/documentation/reference/api/).
 
 
-oxo-flow is organized as a Cargo workspace with three crates:
+oxo-flow is organized as a Cargo workspace with four crates:
 
 ```
 oxo-flow/
 ├── crates/
 │   ├── oxo-flow-core/     # Core library: DAG engine, executor, environment mgmt,
 │   │                      # config parsing, scheduler, wildcard expansion, reporting
-│   ├── oxo-flow-cli/      # CLI binary ("oxo-flow") — Clap-based, 31 subcommands
+│   ├── oxo-flow-ai/       # AI companion: provider abstraction, skill system, agents
+│   ├── oxo-flow-cli/      # CLI binary ("oxo-flow") — Clap-based, 33 subcommands
 │   └── oxo-flow-web/      # Web server ("oxo-flow-web") — axum REST API + frontend
 ├── examples/              # Example .oxoflow workflows
 ├── tests/                 # Integration tests
@@ -500,26 +377,32 @@ oxo-flow/
 | Crate | Type | Binary | License |
 |-------|------|--------|---------|
 | `oxo-flow-core` | Library | — | Apache-2.0 |
+| `oxo-flow-ai` | Library | — | Apache-2.0 |
 | `oxo-flow-cli` | Binary | `oxo-flow` | Apache-2.0 |
 | `oxo-flow-web` | Binary | `oxo-flow-web` | Dual Academic / Commercial |
 
-### Core modules
+### Key modules
 
-| Module | Responsibility |
-|--------|----------------|
-| `dag.rs` | DAG construction, validation, topological sort |
-| `executor.rs` | Task execution (local, cluster, cloud) |
-| `environment.rs` | Environment management (conda, pixi, docker, singularity, venv) |
-| `config.rs` | Workflow configuration and `.oxoflow` file parsing |
-| `rule.rs` | Rule/step definitions with inputs, outputs, shell, resources |
-| `scheduler.rs` | Job scheduling with resource constraints |
-| `wildcard.rs` | Wildcard pattern expansion (`{sample}`, `{chr}`, etc.) |
-| `report.rs` | Modular report generation (HTML/PDF/JSON from Tera templates) |
-| `diagnostics.rs` | Deterministic error pattern matching (30+ patterns) |
-| `ai_provider.rs` | Multi-provider AI abstraction (Claude, OpenAI, DeepSeek, Ollama) |
-| `domains/ai/` | AI translation, chat SSE streaming, agent orchestration |
-| `domains/execution/` | Run lifecycle, diagnostics, pause/resume, retry |
-| `domains/workflow/` | Pipeline CRUD, validation, DAG building, templating |
+| Module | Crate | Responsibility |
+|--------|-------|----------------|
+| `dag.rs` | core | DAG construction, validation, topological sort |
+| `executor.rs` | core | Task execution (local, cluster, cloud) |
+| `environment.rs` | core | Environment management (conda, mamba, pixi, docker, singularity, venv, system, modules) |
+| `config.rs` | core | Workflow configuration and `.oxoflow` file parsing |
+| `rule.rs` | core | Rule/step definitions with inputs, outputs, shell, resources |
+| `scheduler.rs` | core | Job scheduling with resource constraints |
+| `wildcard.rs` | core | Wildcard pattern expansion (`{sample}`, `{chr}`, etc.) |
+| `report.rs` | core | Modular report generation (HTML, JSON, PDF via wkhtmltopdf) |
+| `format.rs` | core | Workflow formatting, linting, and 30+ diagnostic patterns |
+| `plugin.rs` | core | Plugin system for MCP servers and custom tools |
+| `ai_provider.rs` | web | Multi-provider AI abstraction (Claude, OpenAI, DeepSeek, Ollama) |
+| `domains/ai/` | web | AI translation, chat SSE streaming, agent orchestration |
+| `domains/execution/` | web | Run lifecycle, diagnostics, pause/resume, retry |
+| `domains/workflow/` | web | Pipeline CRUD, validation, DAG building, templating |
+| `provider.rs` | ai | Multi-provider AI client abstraction with auto-detection |
+| `skill.rs` | ai | Skill registry and discovery system |
+| `agent/` | ai | Agent orchestration and tool-calling framework |
+| `mcp.rs` | ai | MCP (Model Context Protocol) server integration |
 
 ## Documentation
 
@@ -580,10 +463,11 @@ This project uses a **split licensing model**:
 | Crate | License | Details |
 |-------|---------|---------|
 | `oxo-flow-core` | [Apache-2.0](LICENSE) | Free and open-source |
+| `oxo-flow-ai` | [Apache-2.0](LICENSE) | Free and open-source |
 | `oxo-flow-cli` | [Apache-2.0](LICENSE) | Free and open-source |
 | `oxo-flow-web` | [Academic](LICENSE-ACADEMIC) / [Commercial](LICENSE-COMMERCIAL) | Free for academic and non-commercial use; commercial use requires a separate license |
 
-The core library and CLI are licensed under the **Apache License 2.0** — you are free to use, modify, and distribute them without restriction.
+The core library, AI companion, and CLI are licensed under the **Apache License 2.0** — you are free to use, modify, and distribute them without restriction.
 
 The **web interface** (`oxo-flow-web`) is available under a **dual license**: free for academic and non-commercial use under the Academic License, and requiring a commercial license for commercial deployments. See [LICENSE-ACADEMIC](LICENSE-ACADEMIC) and [LICENSE-COMMERCIAL](LICENSE-COMMERCIAL) for details.
 
