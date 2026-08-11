@@ -191,8 +191,31 @@ pub fn handle_report(
     let content = match format.as_str() {
         "html" | "htm" => report.to_html(),
         "json" => report.to_json().map_err(|e| anyhow::anyhow!(e))?,
+        "pdf" => {
+            let pdf_output = output
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(format!("{}_report.pdf", config.workflow.name)));
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async { report.to_pdf(&pdf_output).await })?;
+            eprintln!(
+                "{} PDF report written to {}",
+                "✓".green(),
+                pdf_output.display()
+            );
+            return Ok(());
+        }
+        "pdf-command" => {
+            let pdf_output = output
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(format!("{}_report.pdf", config.workflow.name)));
+            println!(
+                "{}",
+                report.to_pdf_command(&pdf_output.to_string_lossy(), vec![])
+            );
+            return Ok(());
+        }
         other => anyhow::bail!(
-            "unsupported report format: '{}'. Supported formats: html, json",
+            "unsupported report format: '{}'. Supported formats: html, json, pdf, pdf-command",
             other
         ),
     };

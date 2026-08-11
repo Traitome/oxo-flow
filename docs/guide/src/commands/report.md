@@ -24,7 +24,7 @@ oxo-flow report [OPTIONS] <WORKFLOW>
 
 | Option | Short | Default | Description |
 |---|---|---|---|
-| `--format` | `-f` | `html` | Output format: `html` or `json` |
+| `--format` | `-f` | `html` | Output format: `html`, `json`, `pdf`, or `pdf-command` |
 | `--output` | `-o` | stdout | Output file path |
 | `--checkpoint` | — | `.oxo-flow/checkpoint.json` | Path to checkpoint file for execution metrics |
 | `--verbose` | `-v` | — | Enable debug-level logging |
@@ -49,6 +49,20 @@ oxo-flow report pipeline.oxoflow -o report.html
 
 ```bash
 oxo-flow report pipeline.oxoflow -f json -o report.json
+```
+
+### Generate PDF report
+
+```bash
+# Requires wkhtmltopdf: brew install wkhtmltopdf (macOS) or apt install wkhtmltopdf (Linux)
+oxo-flow report pipeline.oxoflow -f pdf -o report.pdf
+```
+
+### Output PDF command (for scripting)
+
+```bash
+# Outputs the wkhtmltopdf command for custom processing
+oxo-flow report pipeline.oxoflow -f pdf-command
 ```
 
 ---
@@ -83,7 +97,11 @@ oxo-flow's `VariantClassification` enum models both the somatic (Tier I–IV, pe
 
 ## Notes
 
-- If `--output` is not specified, the report is written to stdout
+- If `--output` is not specified, the HTML/JSON report is written to stdout
 - HTML reports can be opened directly in any web browser
 - JSON reports are suitable for programmatic processing and integration with other tools
+- PDF reports use `wkhtmltopdf` for conversion — install it first: `brew install wkhtmltopdf` (macOS) or `apt install wkhtmltopdf` (Linux)
+- `pdf-command` outputs the raw `wkhtmltopdf` command for scripting or custom processing
+- Reports include dark-mode support via `prefers-color-scheme` CSS media queries
+- With a checkpoint file, reports include execution metrics (wall time, memory, CPU, per-rule status)
 - The `[report]` section in the `.oxoflow` file can customize report templates and sections

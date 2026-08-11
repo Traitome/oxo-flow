@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { HealthResponse, SystemInfo, RunItem, Template } from '../api/types';
 import ChatUI from '../components/ChatUI';
+import VegaChart from '../components/VegaChart';
 import { usePipelineSession } from '../context/PipelineSession';
 
 export default function Dashboard() {
@@ -84,6 +85,31 @@ export default function Dashboard() {
         <div className="stat-card"><div className="stat-value" style={{ color: activeRuns > 0 ? '#D97706' : '#059669' }}>{activeRuns}</div><div className="stat-label">Active</div></div>
         <div className="stat-card"><div className="stat-value">{sys ? `${sys.os}/${sys.arch}` : '-'}</div><div className="stat-label">Platform</div></div>
       </div>
+
+      {/* Resource Usage Chart */}
+      {health?.resources && (
+        <VegaChart
+          title="System Resources"
+          spec={{
+            mark: { type: 'bar' as const, tooltip: true },
+            encoding: {
+              x: { field: 'resource', type: 'nominal', title: null, axis: { labelAngle: 0 } },
+              y: { field: 'pct', type: 'quantitative', title: 'Usage %', scale: { domain: [0, 100] } },
+              color: {
+                field: 'resource',
+                type: 'nominal',
+                scale: { domain: ['CPU', 'Memory', 'Disk'], range: ['#3B82F6', '#10B981', '#F59E0B'] },
+                legend: null,
+              },
+            },
+          }}
+          data={[
+            { resource: 'CPU', pct: Math.round(health.resources.cpu_pct * 100) },
+            { resource: 'Memory', pct: Math.round(health.resources.memory_used_pct * 100) },
+            { resource: 'Disk', pct: Math.round(health.resources.disk_used_pct * 100) },
+          ]}
+        />
+      )}
     </div>
   );
 }
