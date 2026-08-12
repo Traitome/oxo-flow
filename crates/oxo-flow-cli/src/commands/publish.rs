@@ -216,36 +216,43 @@ pub fn publish_command(
     let manifest_path = temp_dir.join("manifest.json");
     std::fs::write(&manifest_path, &manifest_json)?;
 
-    // ── Build archive ─────────────────────────────────────────────────────
+    // ── Build archive (two concrete formats, finalized via match below) ───
 
     let archive_file = std::fs::File::create(&output_archive)
         .with_context(|| format!("failed to create archive: {}", output_archive.display()))?;
-    let writer: Box<dyn std::io::Write> = match bundle_format {
-        crate::commands::bundle::BundleFormat::TarZst => Box::new(
-            zstd::stream::write::Encoder::new(archive_file, 3)
-                .context("failed to create zstd encoder")?,
-        ),
-        crate::commands::bundle::BundleFormat::TarGz => Box::new(flate2::write::GzEncoder::new(
-            archive_file,
-            flate2::Compression::default(),
-        )),
-    };
-    let mut tar_builder = tar::Builder::new(writer);
 
-    // Add manifest first, then workflow, then all referenced files
-    tar_builder.append_path_with_name(&manifest_path, "manifest.json")?;
-    tar_builder.append_path_with_name(&wf_dest, wf_filename)?;
-    for (rel_path, _) in &referenced_files {
-        let src = temp_dir.join(rel_path);
-        if src.exists() {
-            tar_builder.append_path_with_name(&src, rel_path)?;
-        }
+    // Helper macro to add files to whichever builder we end up with.
+    macro_rules! add_files {
+        ($builder:expr) => {{
+            // Add manifest first, then workflow, then all referenced files
+            $builder.append_path_with_name(&manifest_path, "manifest.json")?;
+            // Add workflow file
+            $builder.append_path_with_name(&wf_dest, wf_filename)?;
+            // Add all env/script files
+            for (rel_path, _abs_path) in &referenced_files {
+                let dest = temp_dir.join(rel_path);
+                $builder.append_path_with_name(&dest, rel_path)?;
+            }
+        }};
     }
 
-    // Finalize tar + compression (drop flushes both formats).
-    let _writer = tar_builder.into_inner().context("failed to finalize tar")?;
-    // Writer is dropped here — for GzEncoder this calls finish(), for zstd
-    // encoder finalization happens on drop.
+    match bundle_format {
+        crate::commands::bundle::BundleFormat::TarZst => {
+            let enc = zstd::stream::write::Encoder::new(archive_file, 3)
+                .context("failed to create zstd encoder")?;
+            let mut builder = tar::Builder::new(enc);
+            add_files!(builder);
+            let enc = builder.into_inner().context("failed to finalize tar")?;
+            enc.finish().context("failed to finalize zstd compression")?;
+        }
+        crate::commands::bundle::BundleFormat::TarGz => {
+            let enc = flate2::write::GzEncoder::new(archive_file, flate2::Compression::default());
+            let mut builder = tar::Builder::new(enc);
+            add_files!(builder);
+            let enc = builder.into_inner().context("failed to finalize tar")?;
+            enc.finish().context("failed to finalize gzip compression")?;
+        }
+    }
 
     // Cleanup temp dir
     let _ = std::fs::remove_dir_all(&temp_dir);
