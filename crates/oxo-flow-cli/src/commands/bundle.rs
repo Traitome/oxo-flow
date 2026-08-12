@@ -163,3 +163,13 @@ fn compute_sha256(path: &Path) -> Result<String> {
 }
 
 use colored::Colorize;
+
+/// Find manifest.json in an extracted bundle directory.
+pub fn find_manifest_in_dir(dir: &Path) -> Result<PathBuf> {
+    let manifest_path = dir.join("manifest.json");
+    if manifest_path.exists() {
+        Ok(manifest_path)
+    } else {
+        anyhow::bail!("manifest.json not found in extracted bundle: {}", dir.display())
+    }
+}

@@ -96,6 +96,11 @@ pub enum Commands {
         #[arg(long, help = "Execute from a published .tar.zst bundle")]
         bundle: Option<PathBuf>,
         #[arg(
+            long = "yes",
+            help = "Skip the confirmation prompt when running from a bundle (for CI/scripts)"
+        )]
+        yes: bool,
+        #[arg(
             long = "arg",
             value_name = "KEY=VALUE",
             help = "Set a workflow config value (overrides [config] defaults). Repeatable."
@@ -562,17 +567,76 @@ async fn main() -> Result<()> {
             cache_dir,
             provenance,
             bundle,
+            yes,
             args,
             config_overrides,
             extra_samples,
             ai_recover,
             ai_max_retries,
         } => {
+            use anyhow::Context as _;
+            use colored::Colorize as _;
+            use std::io::BufRead as _;
             let (wf, wd) = if let Some(bundle_path) = bundle {
                 let (extracted_wf, extracted_dir) =
                     crate::commands::bundle::extract_and_verify_bundle(&bundle_path)?;
                 // Respect explicit -d flag; otherwise use extracted dir
                 let effective_wd = workdir.unwrap_or(extracted_dir);
+
+                // Confirmation gate for bundle execution (remote code safety).
+                // After checksum verification, print what's about to run and
+                // require explicit confirmation unless --yes is set.
+                if !yes {
+                    let manifest_path =
+                        crate::commands::bundle::find_manifest_in_dir(&effective_wd)?;
+                    let manifest_json = std::fs::read_to_string(&manifest_path)
+                        .context("failed to read bundle manifest")?;
+                    let manifest: serde_json::Value = serde_json::from_str(&manifest_json)
+                        .context("failed to parse manifest")?;
+
+                    eprintln!();
+                    eprintln!("{}", "Bundle Verification Complete".bold().green());
+                    eprintln!("  Workflow: {}", manifest["workflow"].as_str().unwrap_or("unknown"));
+                    eprintln!("  Format:   {}", manifest["format"].as_str().unwrap_or("unknown"));
+                    eprintln!("  Version:  {}", manifest["oxo_flow_version"].as_str().unwrap_or("unknown"));
+                    if let Some(ref resources) = manifest.get("resources")
+                        && let Some(ref recommendations) = resources.get("recommendations")
+                    {
+                        eprintln!("  Resources:");
+                        if let Some(t) = recommendations["min_threads"].as_u64() {
+                            eprintln!("    Min threads: {}", t.to_string().cyan());
+                        }
+                        if let Some(m) = recommendations["min_memory_mb"].as_u64() {
+                            eprintln!("    Min memory:  {} MB ({:.1} GB)", m.to_string().cyan(), m as f64 / 1024.0);
+                        }
+                        if let Some(g) = recommendations["min_gpu"].as_u64() && g > 0 {
+                            eprintln!("    Min GPU:     {}", g.to_string().cyan());
+                        }
+                    }
+                    eprintln!("  Source:   {}", bundle_path.display());
+
+                    let is_tty = std::io::IsTerminal::is_terminal(&std::io::stderr());
+                    if !is_tty {
+                        anyhow::bail!(
+                            "Running a bundle requires confirmation. Use --yes to skip the prompt in CI/scripts.\n\
+                             Bundle: {}",
+                            bundle_path.display()
+                        );
+                    }
+
+                    eprintln!();
+                    eprint!("  {} Proceed with execution? [y/N] ", "⚠".yellow());
+                    use std::io::Write as _;
+                    std::io::stderr().flush().ok();
+                    let mut input = String::new();
+                    std::io::stdin().read_line(&mut input)?;
+                    if !input.trim().eq_ignore_ascii_case("y")
+                        && !input.trim().eq_ignore_ascii_case("yes")
+                    {
+                        anyhow::bail!("execution cancelled by user");
+                    }
+                }
+
                 (Some(extracted_wf), Some(effective_wd))
             } else {
                 (workflow, workdir)

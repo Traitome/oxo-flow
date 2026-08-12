@@ -2363,6 +2363,7 @@ fn cli_publish_then_run_bundle_roundtrip() {
             "run",
             "--bundle",
             bundle.to_str().unwrap(),
+            "--yes",
             "-d",
             dir.path().to_str().unwrap(),
             "-j",
@@ -2902,7 +2903,7 @@ fn cli_run_bundle_extracts_to_unpredictable_dir() {
     assert!(archive.exists(), "bundle should exist");
 
     let output = oxo_flow_cmd()
-        .args(["run", "--bundle", archive.to_str().unwrap()])
+        .args(["run", "--bundle", archive.to_str().unwrap(), "--yes"])
         .current_dir(dir.path())
         .output()
         .unwrap();
