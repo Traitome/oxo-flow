@@ -1316,9 +1316,22 @@ pub async fn dry_run_command(
         );
     }
 
-    let suggested_jobs = std::thread::available_parallelism()
-        .map(|n| n.get().min(16).to_string())
-        .unwrap_or_else(|_| "4".to_string());
+    // Suggest -j based on system threads DIVIDED by the workflow's max
+    // per-rule thread declaration, so concurrent jobs don't oversubscribe
+    // the CPU. E.g. 10 threads / rules-with-4-threads = 2 concurrent jobs.
+    let max_threads_per_rule = config
+        .rules
+        .iter()
+        .map(|r| r.effective_threads())
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let system_threads = std::thread::available_parallelism()
+        .map(|n| n.get() as u32)
+        .unwrap_or(4);
+    let suggested_jobs = (system_threads / max_threads_per_rule)
+        .clamp(1, 16)
+        .to_string();
     eprintln!(
         "\n{}  oxo-flow run {} -j {}",
         "To execute:".bold().cyan(),

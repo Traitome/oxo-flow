@@ -235,15 +235,16 @@ DAG: (dry-run) 4 rules would execute
      outputs: ["results/multiqc/multiqc_report.html"]
      command: mkdir -p results/multiqc
 multiqc results -o results/multiqc --force
-```
 
 Summary: 4 rules, total 13 threads declared, max 4 threads/rule
          4 rule(s) with memory requirements
 
-To execute:  oxo-flow run qc-pipeline.oxoflow -j 10
+To execute:  oxo-flow run qc-pipeline.oxoflow -j 2
 ```
 
 The dry-run expands `{config.*}` variables but leaves `{sample}` wildcards unexpanded. Unlike concrete input paths (reported as `input ✓`/`input ✗`), wildcard inputs are not checked for existence in dry-run mode.
+
+The suggested `-j 2` comes from dividing the machine's CPU threads by the workflow's maximum per-rule thread declaration (10 ÷ 4 = 2) — running more jobs than that would oversubscribe the CPU. If your rules are I/O-bound you can raise it.
 
 !!! note "Listing order reflects parallel levels"
     `fastp_trim` and `fastqc_raw` are listed adjacent because they are independent and will run **in parallel** at the same DAG level. Rules within a level are sorted alphabetically; `fastqc_trimmed` waits for `fastp_trim`, and `multiqc` waits for all three.

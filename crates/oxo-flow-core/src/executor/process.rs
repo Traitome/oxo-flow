@@ -287,6 +287,8 @@ pub struct LocalExecutor {
     semaphore: Arc<Semaphore>,
     env_resolver: EnvironmentResolver,
     resource_pool: Arc<Mutex<ResourcePool>>,
+    /// Wakes waiters when resources are released back to the pool.
+    resource_notify: Arc<tokio::sync::Notify>,
     /// Detected system thread count (respects cgroup limits on Linux).
     system_threads: u32,
     /// Detected system total memory in MB (respects cgroup limits on Linux).
@@ -356,6 +358,7 @@ impl LocalExecutor {
             semaphore,
             env_resolver,
             resource_pool,
+            resource_notify: Arc::new(tokio::sync::Notify::new()),
             system_threads: max_threads,
             system_memory_mb: max_memory_mb,
         }
@@ -542,29 +545,38 @@ impl LocalExecutor {
         }
     }
 
+    /// Wait until the resource pool can accommodate the rule, then reserve
+    /// atomically.  Rules that can never fit in the total pool capacity fail
+    /// fast instead of waiting forever.
     async fn check_resources(&self, rule: &Rule) -> Result<()> {
-        let pool = self.resource_pool.lock().await;
-        if !pool.can_accommodate(rule) {
-            let required_threads = rule.effective_threads();
-            let required_memory = rule
-                .effective_memory()
-                .and_then(crate::scheduler::parse_memory_mb)
-                .unwrap_or(0);
+        let required_threads = rule.effective_threads();
+        let required_memory = rule
+            .effective_memory()
+            .and_then(crate::scheduler::parse_memory_mb)
+            .unwrap_or(0);
 
+        // Fast-fail: requirement exceeds TOTAL capacity — waiting is futile.
+        if required_threads > self.system_threads || required_memory > self.system_memory_mb {
             return Err(OxoFlowError::ResourceExhausted {
                 rule: rule.name.clone(),
                 required_threads,
-                available_threads: pool.threads,
+                available_threads: self.system_threads,
                 required_memory_mb: required_memory,
-                available_memory_mb: pool.memory_mb,
+                available_memory_mb: self.system_memory_mb,
             });
         }
-        Ok(())
-    }
 
-    async fn reserve_resources(&self, rule: &Rule) {
-        let mut pool = self.resource_pool.lock().await;
-        pool.reserve(rule);
+        loop {
+            {
+                let mut pool = self.resource_pool.lock().await;
+                if pool.can_accommodate(rule) {
+                    pool.reserve(rule);
+                    return Ok(());
+                }
+            }
+            // Resources busy — wait for a release notification.
+            self.resource_notify.notified().await;
+        }
     }
 
     async fn release_resources(&self, rule: &Rule) {
@@ -577,6 +589,9 @@ impl LocalExecutor {
             max_memory_mb,
             &self.config.resource_groups,
         );
+        drop(pool);
+        // Wake all waiters — released capacity may satisfy multiple rules.
+        self.resource_notify.notify_waiters();
     }
 
     fn get_timeout(&self, rule: &Rule) -> Option<std::time::Duration> {
@@ -718,6 +733,7 @@ impl LocalExecutor {
         }
 
         self.ensure_environment_ready(rule).await?;
+        // check_resources waits for availability AND reserves atomically.
         self.check_resources(rule).await?;
 
         let _permit = self
@@ -728,8 +744,6 @@ impl LocalExecutor {
                 rule: rule.name.clone(),
                 message: format!("semaphore error: {e}"),
             })?;
-
-        self.reserve_resources(rule).await;
 
         // Hooks logic (simplified here for brevity, keeping it inline in execute_rule as in original)
         if let Some(ref pre_cmd) = rule.pre_exec {

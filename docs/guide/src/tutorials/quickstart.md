@@ -96,7 +96,7 @@ DAG: (dry-run) 2 rules would execute
 
 Summary: 2 rules, total 4 threads declared, max 2 threads/rule
 
-To execute:  oxo-flow run my-pipeline.oxoflow -j 10
+To execute:  oxo-flow run my-pipeline.oxoflow -j 5
 ```
 
 ---
