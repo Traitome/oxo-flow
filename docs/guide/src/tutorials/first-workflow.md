@@ -128,8 +128,7 @@ fastqc {input} -o {config.results_dir}/fastqc_trimmed -t {threads}
 name = "multiqc"
 input = [
     "{config.results_dir}/fastqc/{sample}_R1_fastqc.html",
-    "{config.results_dir}/fastqc_trimmed/{sample}_R1_fastqc.html",
-    "{config.results_dir}/trimmed/{sample}_R1.fastq.gz"
+    "{config.results_dir}/fastqc_trimmed/{sample}_R1_fastqc.html"
 ]
 output = [
     "{config.results_dir}/multiqc/multiqc_report.html"
@@ -152,18 +151,20 @@ The workflow forms this DAG:
 graph TD
     A[fastqc_raw] --> D[multiqc]
     B[fastp_trim] --> C[fastqc_trimmed]
-    B --> D
     C --> D
 ```
 
 - `fastqc_raw` and `fastp_trim` can run in parallel (no dependency between them)
 - `fastqc_trimmed` depends on `fastp_trim`'s output — inferred automatically because its `input` files match `fastp_trim`'s `output` files
-- `multiqc` depends on all three upstream rules — inferred automatically because each of its three input files matches the output of a different upstream rule. No explicit declaration was needed.
+- `multiqc` aggregates the two QC rounds — its two inputs are the report files produced by `fastqc_raw` and `fastqc_trimmed`. Note that `fastp_trim` has **no direct edge** to `multiqc`: the trimmed data itself is not a multiqc input; multiqc implicitly waits for it via `fastqc_trimmed`'s transitive dependency.
+
+!!! tip "Parallel scheduling"
+    The engine does not serialize the whole pipeline. `fastqc_raw` starts **immediately, in parallel with `fastp_trim`** — it never waits for trimmed data. Only `fastqc_trimmed` waits for `fastp_trim` to finish, and `multiqc` waits for both QC rounds. On a multi-core machine, raw QC and trimming run simultaneously.
 
 !!! info "Two dependency mechanisms"
     oxo-flow supports two ways to declare dependencies:
 
-    1. **File-based (automatic)** — if rule B's `input` matches rule A's `output`, the edge is inferred. This tutorial uses only this mechanism: `fastp_trim → fastqc_trimmed` (trimmed reads) and `fastqc_raw / fastp_trim / fastqc_trimmed → multiqc` (QC reports).
+    1. **File-based (automatic)** — if rule B's `input` matches rule A's `output`, the edge is inferred. This tutorial uses only this mechanism: `fastp_trim → fastqc_trimmed` (trimmed reads) and `fastqc_raw / fastqc_trimmed → multiqc` (QC reports).
     2. **`depends_on` (explicit)** — list rule names that must finish first, even when no direct file match exists. Use this for setup rules with no outputs:
 
     ```toml
@@ -201,7 +202,7 @@ echo "@test2" | gzip > raw_data/sample2_R2.fastq.gz
 
 ```bash
 oxo-flow validate qc-pipeline.oxoflow
-# ✓ qc-pipeline.oxoflow — 4 rules, 5 dependencies
+# ✓ qc-pipeline.oxoflow — 4 rules, 4 dependencies
 
 oxo-flow dry-run qc-pipeline.oxoflow
 ```
