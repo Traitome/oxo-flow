@@ -14,7 +14,7 @@ oxo-flow supports eight software environment backends. This tutorial shows how t
 | **Docker** | `docker` | Containerized, reproducible execution |
 | **Singularity** | `singularity` | HPC-friendly containers (no root required) |
 | **Python venv** | `venv` | Lightweight Python-only environments |
-| **System** | `system` | Host shell environment — no isolation (default when no environment is set) |
+| **System** | *(no environment field)* | Host shell environment — no isolation (default) |
 | **Modules** | `modules` | HPC environment modules (Lmod/Environment Modules) for cluster toolchains |
 
 ---
@@ -61,6 +61,18 @@ dependencies:
     The `bioconda` channel is a community-maintained repository for bioinformatics software. It provides thousands of pre-compiled binaries for tools like `bwa`, `samtools`, and `GATK`, which can otherwise be difficult to install from source.
 
 oxo-flow activates the conda environment before running the rule's shell command and deactivates it afterward.
+
+---
+
+## Mamba
+
+Mamba (or micromamba) uses the same YAML format as conda with a faster solver. oxo-flow auto-detects which binary is available:
+
+```toml
+environment = { mamba = "envs/tools.yaml" }
+```
+
+Mamba is a drop-in conda replacement — the YAML file is identical. If only conda is installed, the `mamba` keyword falls back to conda automatically.
 
 ---
 
@@ -115,6 +127,18 @@ environment = { singularity = "docker://biocontainers/bwa:0.7.17--h7132678_3" }
 ```
 
 Singularity can pull images directly from Docker registries. The working directory is bound automatically.
+
+---
+
+## HPC Modules
+
+On clusters using Lmod / Environment Modules, load toolchain modules for the rule:
+
+```toml
+environment = { modules = ["gcc/11.2.0", "openmpi/4.1.1", "samtools/1.19"] }
+```
+
+The rule's shell command runs after all listed modules are loaded, and the module environment is cleaned up afterward. This is the standard way to use cluster-administered software stacks.
 
 ---
 
