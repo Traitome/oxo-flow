@@ -317,7 +317,7 @@
         <div class="feature-card">
           <div class="icon">📦</div>
           <h3>Environment Management</h3>
-          <p>First-class support for conda, pixi, Docker, Singularity, Python venv, and HPC modules. Each rule declares its own isolated environment.</p>
+          <p>First-class support for 8 backends: conda, mamba, pixi, Docker, Singularity, Python venv, system, and HPC modules. Each rule declares its own isolated environment.</p>
         </div>
         <div class="feature-card">
           <div class="icon">🖥️</div>
@@ -472,12 +472,18 @@ version = <span class="str">"1.0.0"</span>
 [<span class="str">config</span>]
 reference = <span class="str">"/data/ref/GRCh38.fa"</span>
 
+[<span class="str">defaults</span>]
+threads = <span class="cmd">4</span>
+memory  = <span class="str">"8G"</span>
+
 [[<span class="str">rules</span>]]
 name = <span class="str">"fastp"</span>
 input  = [<span class="str">"raw/{sample}_R1.fastq.gz"</span>, <span class="str">"raw/{sample}_R2.fastq.gz"</span>]
 output = [<span class="str">"trimmed/{sample}_R1.fastq.gz"</span>, <span class="str">"trimmed/{sample}_R2.fastq.gz"</span>]
-threads = <span class="cmd">8</span>
 shell = <span class="str">"fastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]}"</span>
+
+[<span class="str">rules.resources</span>]
+threads = <span class="cmd">8</span>
 
 [<span class="str">rules.environment</span>]
 conda = <span class="str">"envs/fastp.yaml"</span>
@@ -486,9 +492,11 @@ conda = <span class="str">"envs/fastp.yaml"</span>
 name = <span class="str">"bwa_align"</span>
 input  = [<span class="str">"trimmed/{sample}_R1.fastq.gz"</span>, <span class="str">"trimmed/{sample}_R2.fastq.gz"</span>]
 output = [<span class="str">"aligned/{sample}.bam"</span>]
-threads = <span class="cmd">16</span>
-memory = <span class="str">"32G"</span>
 shell = <span class="str">"bwa-mem2 mem -t {threads} {config.reference} {input[0]} {input[1]} | samtools sort -o {output[0]}"</span>
+
+[<span class="str">rules.resources</span>]
+threads = <span class="cmd">16</span>
+memory  = <span class="str">"32G"</span>
 
 [<span class="str">rules.environment</span>]
 docker = <span class="str">"biocontainers/bwa-mem2:2.2.1"</span>

@@ -33,7 +33,7 @@ oxo-flow is a high-performance workflow engine built from the ground up in Rust 
 |---|---|
 | **DAG engine** | Automatic dependency resolution, topological sorting, cycle detection, and parallel execution groups |
 | **Environment management** | First-class support for 8 backends: conda, mamba, pixi, docker, singularity, venv, system, HPC modules — per rule |
-| **Clinical reporting** | Generate structured HTML and JSON reports with Tera templates for clinical and research use |
+| **Reporting** | Generate structured HTML, JSON, and PDF reports with Tera templates for clinical and research use |
 | **Web API** | Built-in REST API (axum-based) for building, validating, and monitoring workflows remotely |
 | **Container packaging** | Package entire workflows into Docker or Singularity images for portable, reproducible execution |
 | **Cluster backends** | Submit jobs to SLURM, PBS, SGE, and LSF clusters with resource-aware scheduling |
@@ -65,7 +65,7 @@ Start with the **Tutorials** in order:
 2. [Quick Start](./tutorials/quickstart.md) — run your first workflow in 5 minutes
 3. [Your First Workflow](./tutorials/first-workflow.md) — build a pipeline from scratch
 4. [Variant Calling Pipeline](./tutorials/variant-calling.md) — complete NGS analysis
-5. [Environment Management](./tutorials/environment-management.md) — use conda, docker, and more
+5. [Environment Management](./tutorials/environment-management.md) — conda, mamba, pixi, docker, singularity, venv, system, HPC modules
 
 ### If you want to learn by example
 
@@ -122,10 +122,12 @@ memory = "8G"
 name = "bwa_align"
 input = ["{sample}_R1.fastq.gz", "{sample}_R2.fastq.gz"]
 output = ["aligned/{sample}.bam"]
-threads = 16
-memory = "32G"
 environment = { docker = "biocontainers/bwa:0.7.17" }
 shell = "bwa mem -t {threads} {config.reference} {input} | samtools sort -o {output}"
+
+[rules.resources]
+threads = 16
+memory = "32G"
 
 [[rules]]
 name = "index_bam"
