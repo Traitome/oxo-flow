@@ -171,6 +171,9 @@ graph TD
 
     Prefer file-based inference when possible — it makes the data flow self-documenting. Use `depends_on` when the ordering can't be expressed through file matching alone.
 
+!!! note "Redundant edges are harmless"
+    In this tutorial, each upstream rule has **both** a file-based edge and a `depends_on` edge to `multiqc` — the mermaid diagram shows the logical structure, while the engine records both mechanisms (8 raw edges for 4 rules). Duplicate edges don't change execution order; `oxo-flow graph` deduplicates them in the display. This overlap is deliberate so you can see both mechanisms at work — in your own workflows, pick one or the other, not both.
+
 ---
 
 ## 5. Prepare Test Data

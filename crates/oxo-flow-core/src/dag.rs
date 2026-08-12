@@ -778,8 +778,10 @@ impl WorkflowDag {
             // Draw position indicator
             output.push_str(&format!("{:3}. {}{}\n", i + 1, rule_name, dep_str));
 
-            // Show downstream if exists
-            let downstream = self.dependents(rule_name)?;
+            // Show downstream if exists (deduplicated)
+            let mut downstream = self.dependents(rule_name)?;
+            downstream.sort();
+            downstream.dedup();
             if !downstream.is_empty() {
                 output.push_str(&format!("      ↓ {}\n", downstream.join(", ")));
             }
