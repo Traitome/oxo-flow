@@ -109,7 +109,6 @@ oxo-flow 0.10.2 — Bioinformatics Pipeline Engine
 DAG: 2 rules in execution order
   1. create_data
   2. transform
-  INFO Detected system resources threads=10 memory_mb=24576
   Running: create_data
   ✓ create_data (0.0s)
   Running: transform
