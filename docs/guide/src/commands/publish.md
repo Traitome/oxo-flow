@@ -83,9 +83,39 @@ The `manifest.json` inside each bundle:
       "type": "docker",
       "image": "biocontainers/bwa:0.7.17"
     }
-  ]
+  ],
+  "signatures": []
 }
 ```
+
+`signatures` is reserved for future bundle signing and is always empty today.
+It is present so that adding signatures later is an additive change rather than
+a manifest format bump.
+
+## Reproducibility Caveats
+
+A bundle captures the workflow, its environment specifications, and checksums for
+every file. That makes a bundle *verifiable* — you can prove you received exactly
+what was published. It does not make execution *identical* everywhere, and it is
+worth being explicit about the limits:
+
+- **Environment specs are resolved on the consumer's machine.** `publish` bundles
+  `environment.yaml` / `pixi.toml` spec files, not solved environments. A solve
+  run months later, or against different channels, can pick different package
+  versions. Use `--with-lockfiles` to pin the resolution.
+- **Lockfiles still are not binaries.** Even an exact package set can behave
+  differently across glibc versions, CPU features, or filesystem layouts. Tools
+  built against a newer glibc will not run on an older host.
+- **Container images are referenced, not vendored.** The manifest records image
+  type and tag. The image is pulled at run time, so a mutable tag can resolve to
+  different content later. Prefer digest-pinned references where it matters.
+- **Containers do not normalise resources.** An image that runs fine on the
+  publisher's machine can be OOM-killed on a smaller host, and thread counts vary
+  with the available CPUs.
+
+None of these are specific to oxo-flow — they apply to Snakemake and Nextflow
+bundles equally. The goal is honest reproducibility, not a guarantee we cannot
+make.
 
 ## See Also
 

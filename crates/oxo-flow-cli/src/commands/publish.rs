@@ -120,6 +120,11 @@ pub fn publish_command(
         "entrypoint": workflow_path.file_name().and_then(|s| s.to_str()),
         "files": &manifest_files,
         "containers": &container_refs,
+        // Reserved for bundle signing. Always empty today — present so that adding
+        // signatures later is an additive change rather than a manifest format bump.
+        // Consumers read the manifest field-by-field, so an empty array is ignored
+        // by older versions of oxo-flow.
+        "signatures": serde_json::Value::Array(Vec::new()),
     });
 
     let manifest_json = serde_json::to_string_pretty(&manifest)?;

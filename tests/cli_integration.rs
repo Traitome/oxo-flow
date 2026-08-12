@@ -2809,3 +2809,98 @@ fn cli_run_when_condition_matches_config_and_runs() {
         "output file should exist when rule executed"
     );
 }
+
+/// The manifest reserves an empty `signatures` array so that adding bundle
+/// signing later is an additive change rather than a manifest format bump.
+#[test]
+fn cli_publish_manifest_reserves_signatures_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("sig.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"sig\"\nversion = \"1.0.0\"\n\n\
+         [[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo done > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["publish", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "publish failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let archive = dir.path().join("sig-bundle.tar.zst");
+    let file = std::fs::File::open(&archive).unwrap();
+    let decoder = zstd::stream::read::Decoder::new(file).unwrap();
+    let mut tar = tar::Archive::new(decoder);
+
+    let mut manifest_json = String::new();
+    for entry in tar.entries().unwrap() {
+        let mut entry = entry.unwrap();
+        if entry.path().unwrap().to_string_lossy() == "manifest.json" {
+            use std::io::Read as _;
+            entry.read_to_string(&mut manifest_json).unwrap();
+        }
+    }
+    assert!(!manifest_json.is_empty(), "manifest.json should be present");
+
+    let manifest: serde_json::Value = serde_json::from_str(&manifest_json).unwrap();
+    let signatures = manifest
+        .get("signatures")
+        .unwrap_or_else(|| panic!("manifest should reserve a signatures field: {manifest_json}"));
+    assert!(
+        signatures.is_array(),
+        "signatures should be an array, got: {signatures}"
+    );
+    assert!(
+        signatures.as_array().unwrap().is_empty(),
+        "signatures should be empty until signing is implemented"
+    );
+}
+
+/// Bundles must not extract to a predictable path. The old
+/// `temp_dir()/oxo-bundle-<pid>` location could be pre-created by another user
+/// on a shared machine, and PIDs are reused.
+#[test]
+fn cli_run_bundle_extracts_to_unpredictable_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("tmp.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"tmp\"\nversion = \"1.0.0\"\n\n\
+         [[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo done > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    oxo_flow_cmd()
+        .args(["publish", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let archive = dir.path().join("tmp-bundle.tar.zst");
+    assert!(archive.exists(), "bundle should exist");
+
+    let output = oxo_flow_cmd()
+        .args(["run", "--bundle", archive.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "bundle run failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // The pid-derived path must no longer be the extraction target.
+    let legacy = std::env::temp_dir().join(format!("oxo-bundle-{}", std::process::id()));
+    assert!(
+        !legacy.exists(),
+        "extraction must not use the predictable pid-based path: {}",
+        legacy.display()
+    );
+}

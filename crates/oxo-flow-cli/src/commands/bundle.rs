@@ -17,9 +17,22 @@ pub fn extract_and_verify_bundle(bundle_path: &Path) -> Result<(PathBuf, PathBuf
     let bundle_abs = std::path::absolute(bundle_path)
         .with_context(|| format!("failed to resolve bundle path: {}", bundle_path.display()))?;
 
-    // Extract to a temp directory
-    let extract_dir = std::env::temp_dir().join(format!("oxo-bundle-{}", std::process::id()));
-    std::fs::create_dir_all(&extract_dir)?;
+    // Extract to a freshly created temp directory.
+    //
+    // The previous `temp_dir()/oxo-bundle-<pid>` path was predictable and created
+    // with `create_dir_all`, which succeeds against a directory that already
+    // exists — on a shared machine another user can pre-create it, and PIDs are
+    // reused. `tempdir()` creates a uniquely named directory with 0700
+    // permissions, failing if it cannot create it exclusively.
+    //
+    // The directory is deliberately kept rather than dropped: it becomes the
+    // working directory for the run and holds the workflow's output files, so it
+    // has to outlive this function.
+    let extract_dir = tempfile::Builder::new()
+        .prefix("oxo-bundle-")
+        .tempdir()
+        .context("failed to create temporary directory for bundle extraction")?
+        .keep();
 
     // Open and decompress
     let file = std::fs::File::open(&bundle_abs)
