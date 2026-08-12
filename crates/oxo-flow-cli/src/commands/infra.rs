@@ -294,8 +294,9 @@ pub fn package_command(workflow: PathBuf, format: String, output: Option<PathBuf
         format: match format.as_str() {
             "docker" => oxo_flow_core::container::ContainerFormat::Docker,
             "singularity" => oxo_flow_core::container::ContainerFormat::Singularity,
+            "compose" => oxo_flow_core::container::ContainerFormat::Compose,
             other => anyhow::bail!(
-                "unsupported package format '{}'. Supported formats: docker, singularity",
+                "unsupported package format '{}'. Supported formats: docker, singularity, compose",
                 other
             ),
         },
@@ -308,6 +309,9 @@ pub fn package_command(workflow: PathBuf, format: String, output: Option<PathBuf
         }
         oxo_flow_core::container::ContainerFormat::Singularity => {
             oxo_flow_core::container::generate_singularity_def(&config, &pkg_config)?
+        }
+        oxo_flow_core::container::ContainerFormat::Compose => {
+            oxo_flow_core::container::generate_compose_file(&config, &pkg_config)?
         }
     };
 

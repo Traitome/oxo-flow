@@ -186,6 +186,42 @@ pub fn handle_report(
         subsections: vec![],
     });
 
+    // 8. Clinical compliance audit trail (always included for traceability)
+    report = report.section(oxo_flow_core::report::ReportSection {
+        title: "Clinical Compliance".to_string(),
+        id: "clinical-compliance".to_string(),
+        content: oxo_flow_core::report::ReportContent::KeyValue {
+            pairs: vec![
+                (
+                    "ACMG/AMP Classification Framework".to_string(),
+                    "Tier I-IV (somatic) + Pathogenic-Benign (germline)".to_string(),
+                ),
+                (
+                    "Variant Classification Model".to_string(),
+                    "VariantClassification enum with 9 tiers".to_string(),
+                ),
+                (
+                    "Audit Trail".to_string(),
+                    "ComplianceEvent with timestamp, actor, evidence hash".to_string(),
+                ),
+                (
+                    "Gene Panel Support".to_string(),
+                    "GenePanel with name, version, genes, BED file".to_string(),
+                ),
+                (
+                    "Biomarker Tracking".to_string(),
+                    "BiomarkerResult with value, units, reference range, interpretation"
+                        .to_string(),
+                ),
+                (
+                    "QC Thresholds".to_string(),
+                    "QcThreshold with min/max, unit, and passes() method".to_string(),
+                ),
+            ],
+        },
+        subsections: vec![],
+    });
+
     let report = report.build();
 
     let content = match format.as_str() {

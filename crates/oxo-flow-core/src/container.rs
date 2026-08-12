@@ -13,6 +13,8 @@ pub enum ContainerFormat {
     Docker,
     /// Singularity definition file.
     Singularity,
+    /// Docker Compose file for multi-service orchestration.
+    Compose,
 }
 
 impl std::fmt::Display for ContainerFormat {
@@ -20,6 +22,7 @@ impl std::fmt::Display for ContainerFormat {
         match self {
             Self::Docker => write!(f, "docker"),
             Self::Singularity => write!(f, "singularity"),
+            Self::Compose => write!(f, "compose"),
         }
     }
 }
@@ -78,6 +81,12 @@ impl Default for PackageConfig {
 
 /// Generate a `docker run` command string with resource limits.
 #[must_use]
+/// Returns `true` if a conda environment spec is a package specifier
+/// (e.g., "bioconda::fastp=0.23.4") rather than a YAML file path.
+fn is_package_specifier(env_spec: &str) -> bool {
+    env_spec.contains("::") && !env_spec.ends_with(".yaml") && !env_spec.ends_with(".yml")
+}
+
 pub fn generate_docker_run_command(
     image_name: &str,
     resources: &crate::rule::Resources,
@@ -129,15 +138,25 @@ fn write_env_setup(
         for rule in &workflow.rules {
             if let Some(ref conda_env) = rule.environment.conda {
                 dockerfile.push_str(&format!("# Conda environment for rule: {}\n", rule.name));
-                dockerfile.push_str(&format!("COPY {conda_env} /workflow/envs/\n"));
-                let env_filename = std::path::Path::new(conda_env)
-                    .file_name()
-                    .map(|f| f.to_string_lossy().to_string())
-                    .unwrap_or_else(|| conda_env.clone());
-                dockerfile.push_str(&format!(
-                    "RUN conda env create -f /workflow/envs/{env_filename} -n {}\n\n",
-                    rule.name
-                ));
+                if is_package_specifier(conda_env) {
+                    // Package specifier like "bioconda::fastp=0.23.4" —
+                    // install directly, no YAML file needed.
+                    dockerfile.push_str(&format!(
+                        "RUN conda create -n {} {} -y\n\n",
+                        rule.name, conda_env
+                    ));
+                } else {
+                    // YAML file path — copy and create from file.
+                    dockerfile.push_str(&format!("COPY {conda_env} /workflow/envs/\n"));
+                    let env_filename = std::path::Path::new(conda_env)
+                        .file_name()
+                        .map(|f| f.to_string_lossy().to_string())
+                        .unwrap_or_else(|| conda_env.clone());
+                    dockerfile.push_str(&format!(
+                        "RUN conda env create -f /workflow/envs/{env_filename} -n {}\n\n",
+                        rule.name
+                    ));
+                }
             }
         }
     }
@@ -562,14 +581,23 @@ pub fn generate_singularity_def(
 
         for rule in &workflow.rules {
             if let Some(ref conda_env) = rule.environment.conda {
-                let env_filename = std::path::Path::new(conda_env)
-                    .file_name()
-                    .map(|f| f.to_string_lossy().to_string())
-                    .unwrap_or_else(|| conda_env.clone());
-                def.push_str(&format!(
-                    "    /opt/conda/bin/conda env create -f /workflow/envs/{env_filename} -n {}\n",
-                    rule.name
-                ));
+                if is_package_specifier(conda_env) {
+                    // Package specifier — install directly.
+                    def.push_str(&format!(
+                        "    /opt/conda/bin/conda create -n {} {} -y\n",
+                        rule.name, conda_env
+                    ));
+                } else {
+                    // YAML file path.
+                    let env_filename = std::path::Path::new(conda_env)
+                        .file_name()
+                        .map(|f| f.to_string_lossy().to_string())
+                        .unwrap_or_else(|| conda_env.clone());
+                    def.push_str(&format!(
+                        "    /opt/conda/bin/conda env create -f /workflow/envs/{env_filename} -n {}\n",
+                        rule.name
+                    ));
+                }
             }
         }
     }
