@@ -189,7 +189,7 @@ oxo-flow dry-run qc-pipeline.oxoflow
 ```
 
 ```
-oxo-flow 0.10.1 — Bioinformatics Pipeline Engine
+oxo-flow 0.10.2 — Bioinformatics Pipeline Engine
 DAG: (dry-run) 4 rules would execute
   1. multiqc
      threads=1
