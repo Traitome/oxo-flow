@@ -284,3 +284,66 @@ mod tests {
         std::fs::remove_file(&tmp).ok();
     }
 }
+
+/// Look up tools in the embedded Bioconda CLI database (6103 tools).
+///
+/// Query by exact name, name prefix/substring, or summary keyword.
+/// Returns real tool names, current Bioconda versions, descriptions,
+/// and supported platforms.
+#[derive(Default)]
+pub struct LookupTool;
+
+impl LookupTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl Tool for LookupTool {
+    fn def(&self) -> ToolDef {
+        ToolDef {
+            name: "lookup_tool".into(),
+            description: "Search the embedded Bioconda CLI database (6103 tools) for bioinformatics tools. \
+                          Query by tool name, name fragment, or purpose keyword (e.g. 'star', 'align', 'variant calling'). \
+                          Returns tool names, current Bioconda versions, descriptions, and platform support. \
+                          Use this to pick the right tool and pin its current version instead of guessing.".into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Tool name or purpose keyword to search for"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of results (default 10)"
+                    }
+                },
+                "required": ["query"]
+            }),
+        }
+    }
+
+    fn name(&self) -> &str {
+        "lookup_tool"
+    }
+
+    async fn execute(&self, arguments: &str) -> Result<String, AiError> {
+        let args: serde_json::Value =
+            serde_json::from_str(arguments).map_err(|e| AiError::ToolError {
+                tool: "lookup_tool".into(),
+                message: format!("invalid arguments: {e}"),
+            })?;
+
+        let query = args["query"].as_str().ok_or_else(|| AiError::ToolError {
+            tool: "lookup_tool".into(),
+            message: "missing 'query' argument".into(),
+        })?;
+        let limit = args["limit"].as_u64().unwrap_or(10).min(20) as usize;
+
+        Ok(crate::knowledge::bioconda::format_search_results(
+            query, limit,
+        ))
+    }
+}

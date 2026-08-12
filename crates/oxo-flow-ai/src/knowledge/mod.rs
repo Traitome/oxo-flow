@@ -7,4 +7,5 @@
 //! - Context assembly for different agent scenarios
 
 pub mod assembler;
+pub mod bioconda;
 pub mod builtin;

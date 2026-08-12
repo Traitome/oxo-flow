@@ -402,12 +402,46 @@ async fn create_env_from_ai(description: &std::path::Path, name: Option<String>)
     );
     println!("  Description: {description}\n");
 
+    // Pre-resolve tools mentioned in the description against the embedded
+    // Bioconda database — inject real names + current versions so the model
+    // pins accurately instead of guessing.
+    let mut matched = String::new();
+    let mut seen = std::collections::HashSet::new();
+    for word in description
+        .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
+        .filter(|w| w.len() >= 3)
+    {
+        for tool in oxo_flow_ai::knowledge::bioconda::search_tools(word, 3) {
+            if seen.insert(tool.name.clone()) {
+                matched.push_str(&format!(
+                    "- {} {} — {}\n",
+                    tool.name,
+                    tool.version,
+                    if tool.summary.is_empty() {
+                        "(no description)"
+                    } else {
+                        &tool.summary
+                    }
+                ));
+            }
+        }
+    }
+    if !matched.is_empty() {
+        eprintln!("{}", "  Matched Bioconda tools:".bold().cyan());
+        for line in matched.lines() {
+            eprintln!("    {line}");
+        }
+    }
+
     let system = format!(
         r#"## Role
 You are a bioinformatics environment specialist. Generate a conda environment
 YAML file from the user's natural-language description.
 
 ## Tool Reference
+{}
+
+## Matched Bioconda Tools (real names + current versions)
 {}
 
 ## Output Requirements
@@ -424,12 +458,17 @@ dependencies:
 ```
 
 Rules:
-- Pin EVERY tool version (from the reference table where available)
+- Pin every tool version using the Matched Bioconda Tools above when present; otherwise use your knowledge of current stable versions
 - Include all tools the user mentions; add common companions if clearly needed
 - channels order: bioconda first, conda-forge second
 - Do NOT add comments beyond the file header
 "#,
-        oxo_flow_ai::knowledge::builtin::format_tool_table()
+        oxo_flow_ai::knowledge::builtin::format_tool_table(),
+        if matched.is_empty() {
+            "(none matched)"
+        } else {
+            &matched
+        }
     );
 
     println!("{}", "  Generating...".bold().cyan());
