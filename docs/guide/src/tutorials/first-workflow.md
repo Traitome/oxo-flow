@@ -134,15 +134,12 @@ input = [
 output = [
     "{config.results_dir}/multiqc/multiqc_report.html"
 ]
-depends_on = ["fastqc_raw", "fastp_trim", "fastqc_trimmed"]
+threads = 1  # override [defaults] threads = 4 — aggregation is I/O-light
 environment = { conda = "envs/qc.yaml" }
 shell = """
 mkdir -p {config.results_dir}/multiqc
 multiqc {config.results_dir} -o {config.results_dir}/multiqc --force
 """
-
-[rules.resources]
-threads = 1
 ```
 
 ---
@@ -161,18 +158,27 @@ graph TD
 
 - `fastqc_raw` and `fastp_trim` can run in parallel (no dependency between them)
 - `fastqc_trimmed` depends on `fastp_trim`'s output — inferred automatically because its `input` files match `fastp_trim`'s `output` files
-- `multiqc` depends on all three upstream rules — declared explicitly via `depends_on` because its inputs are QC report files spread across multiple directories
+- `multiqc` depends on all three upstream rules — inferred automatically because each of its three input files matches the output of a different upstream rule. No explicit declaration was needed.
 
 !!! info "Two dependency mechanisms"
     oxo-flow supports two ways to declare dependencies:
 
-    1. **File-based (automatic)** — if rule B's `input` matches rule A's `output`, the edge is inferred. `fastp_trim → fastqc_trimmed` works this way.
-    2. **`depends_on` (explicit)** — list rule names that must finish first, even when no direct file match exists. `multiqc` uses this because its inputs are a mix of files from three different upstream rules.
+    1. **File-based (automatic)** — if rule B's `input` matches rule A's `output`, the edge is inferred. This tutorial uses only this mechanism: `fastp_trim → fastqc_trimmed` (trimmed reads) and `fastqc_raw / fastp_trim / fastqc_trimmed → multiqc` (QC reports).
+    2. **`depends_on` (explicit)** — list rule names that must finish first, even when no direct file match exists. Use this for setup rules with no outputs:
 
-    Prefer file-based inference when possible — it makes the data flow self-documenting. Use `depends_on` when the ordering can't be expressed through file matching alone.
+    ```toml
+    [[rules]]
+    name = "setup_dirs"
+    output = []                  # no files to match!
+    shell = "mkdir -p results"
 
-!!! note "Redundant edges are harmless"
-    In this tutorial, each upstream rule has **both** a file-based edge and a `depends_on` edge to `multiqc` — the mermaid diagram shows the logical structure, while the engine records both mechanisms (8 raw edges for 4 rules). Duplicate edges don't change execution order; `oxo-flow graph` deduplicates them in the display. This overlap is deliberate so you can see both mechanisms at work — in your own workflows, pick one or the other, not both.
+    [[rules]]
+    name = "align"
+    depends_on = ["setup_dirs"]  # ← explicit ordering, no file to match
+    shell = "bwa mem ..."
+    ```
+
+    Prefer file-based inference when possible — it makes the data flow self-documenting. Use `depends_on` only when the ordering can't be expressed through file matching alone.
 
 ---
 
@@ -195,7 +201,7 @@ echo "@test2" | gzip > raw_data/sample2_R2.fastq.gz
 
 ```bash
 oxo-flow validate qc-pipeline.oxoflow
-# ✓ qc-pipeline.oxoflow — 4 rules, 8 dependencies
+# ✓ qc-pipeline.oxoflow — 4 rules, 5 dependencies
 
 oxo-flow dry-run qc-pipeline.oxoflow
 ```
@@ -203,23 +209,23 @@ oxo-flow dry-run qc-pipeline.oxoflow
 ```
 oxo-flow 0.10.2 — Bioinformatics Pipeline Engine
 DAG: (dry-run) 4 rules would execute
-  1. fastqc_raw
-     threads=4
-     env=conda
-     memory=8G
-     outputs: ["results/fastqc/{sample}_R1_fastqc.html", ...]
-
-  2. fastp_trim
+  1. fastp_trim
      threads=4
      env=conda
      memory=8G
      outputs: ["results/trimmed/{sample}_R1.fastq.gz", "results/trimmed/{sample}_R2.fastq.gz", ...]
 
-  3. fastqc_trimmed
+  2. fastqc_trimmed
      threads=4
      env=conda
      memory=8G
      outputs: ["results/fastqc_trimmed/{sample}_R1_fastqc.html", ...]
+
+  3. fastqc_raw
+     threads=4
+     env=conda
+     memory=8G
+     outputs: ["results/fastqc/{sample}_R1_fastqc.html", ...]
 
   4. multiqc
      threads=1
@@ -265,11 +271,12 @@ The `-j 4` flag allows up to 4 jobs to run concurrently. oxo-flow will execute `
 | **Workflow metadata** | `[workflow]` section with name, version, description |
 | **Configuration variables** | `[config]` section referenced as `{config.samples_dir}` |
 | **Defaults** | `[defaults]` section applied to all rules |
-| **Per-rule overrides** | `multiqc` rule overrides `threads = 1` in `[rules.resources]` |
+| **Per-rule overrides** | `multiqc` rule overrides `threads = 1`, superseding `[defaults] threads = 4` |
 | **Environment specs** | `environment = { conda = "envs/qc.yaml" }` |
 | **Wildcard patterns** | `{sample}` in file paths |
 | **Multi-line shell** | Triple-quoted strings with `"""` |
-| **Automatic dependencies** | Input/output matching across rules |
+| **Automatic dependencies** | Input/output matching across rules (all edges in this tutorial) |
+| **Explicit dependencies** | `depends_on` field — shown in the info box as an alternative for output-less rules |
 
 ---
 

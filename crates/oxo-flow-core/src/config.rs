@@ -1768,12 +1768,16 @@ impl WorkflowConfig {
     /// Apply global defaults to all rules that don't have explicit overrides.
     pub fn apply_defaults(&mut self) {
         for rule in &mut self.rules {
-            // Apply default threads if rule doesn't specify one
-            if rule.threads.is_none() {
+            // Apply default threads if rule doesn't specify one (either field).
+            // resources.threads defaults to 1 via serde, and 1 means "unset"
+            // in the engine's own convention (skip_serializing_if), so values
+            // > 1 are treated as explicit rule-level declarations.
+            if rule.threads.is_none() && rule.resources.threads <= 1 {
                 rule.threads = self.defaults.threads;
             }
-            // Apply default memory if rule doesn't specify one
+            // Apply default memory if rule doesn't specify one (either field)
             if rule.memory.is_none()
+                && rule.resources.memory.is_none()
                 && let Some(ref mem) = self.defaults.memory
             {
                 rule.memory = Some(mem.clone());
@@ -2978,6 +2982,55 @@ mod tests {
         assert_eq!(step2.threads, Some(2));
         assert_eq!(step2.memory.as_deref(), Some("4G"));
         assert_eq!(step2.environment.kind(), "docker");
+    }
+
+    #[test]
+    fn apply_defaults_respects_resources_field() {
+        // resources.threads / resources.memory (non-deprecated style) must
+        // take precedence over [defaults]. A rule that declares only
+        // resources.threads = 16 must not be overwritten by defaults.threads.
+        let toml_str = r#"
+            [workflow]
+            name = "test"
+
+            [defaults]
+            threads = 8
+            memory = "16G"
+
+            [[rules]]
+            name = "wide_rule"
+            shell = "echo wide"
+
+            [rules.resources]
+            threads = 16
+            memory = "32G"
+
+            [[rules]]
+            name = "inherit_rule"
+            shell = "echo inherit"
+        "#;
+
+        let mut config = WorkflowConfig::parse(toml_str).unwrap();
+        config.apply_defaults();
+
+        // wide_rule declares resources.threads=16/resources.memory=32G —
+        // defaults must NOT override these.
+        let wide = config.get_rule("wide_rule").unwrap();
+        assert_eq!(
+            wide.effective_threads(),
+            16,
+            "resources.threads must win over defaults"
+        );
+        assert_eq!(
+            wide.effective_memory(),
+            Some("32G"),
+            "resources.memory must win over defaults"
+        );
+
+        // inherit_rule has neither field — defaults apply.
+        let inherit = config.get_rule("inherit_rule").unwrap();
+        assert_eq!(inherit.effective_threads(), 8);
+        assert_eq!(inherit.effective_memory(), Some("16G"));
     }
 
     #[test]
