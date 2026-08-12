@@ -127,13 +127,14 @@ fastqc {input} -o {config.results_dir}/fastqc_trimmed -t {threads}
 [[rules]]
 name = "multiqc"
 input = [
-    "{config.results_dir}/fastqc/",
-    "{config.results_dir}/fastqc_trimmed/",
-    "{config.results_dir}/trimmed/"
+    "{config.results_dir}/fastqc/{sample}_R1_fastqc.html",
+    "{config.results_dir}/fastqc_trimmed/{sample}_R1_fastqc.html",
+    "{config.results_dir}/trimmed/{sample}_R1.fastq.gz"
 ]
 output = [
     "{config.results_dir}/multiqc/multiqc_report.html"
 ]
+depends_on = ["fastqc_raw", "fastp_trim", "fastqc_trimmed"]
 environment = { conda = "envs/qc.yaml" }
 shell = """
 mkdir -p {config.results_dir}/multiqc
@@ -159,8 +160,16 @@ graph TD
 ```
 
 - `fastqc_raw` and `fastp_trim` can run in parallel (no dependency between them)
-- `fastqc_trimmed` depends on `fastp_trim`'s output
-- `multiqc` depends on all three upstream rules
+- `fastqc_trimmed` depends on `fastp_trim`'s output — inferred automatically because its `input` files match `fastp_trim`'s `output` files
+- `multiqc` depends on all three upstream rules — declared explicitly via `depends_on` because its inputs are QC report files spread across multiple directories
+
+!!! info "Two dependency mechanisms"
+    oxo-flow supports two ways to declare dependencies:
+
+    1. **File-based (automatic)** — if rule B's `input` matches rule A's `output`, the edge is inferred. `fastp_trim → fastqc_trimmed` works this way.
+    2. **`depends_on` (explicit)** — list rule names that must finish first, even when no direct file match exists. `multiqc` uses this because its inputs are a mix of files from three different upstream rules.
+
+    Prefer file-based inference when possible — it makes the data flow self-documenting. Use `depends_on` when the ordering can't be expressed through file matching alone.
 
 ---
 
@@ -183,7 +192,7 @@ echo "@test2" | gzip > raw_data/sample2_R2.fastq.gz
 
 ```bash
 oxo-flow validate qc-pipeline.oxoflow
-# ✓ qc-pipeline.oxoflow — 4 rules, 2 dependencies
+# ✓ qc-pipeline.oxoflow — 4 rules, 8 dependencies
 
 oxo-flow dry-run qc-pipeline.oxoflow
 ```
@@ -191,38 +200,32 @@ oxo-flow dry-run qc-pipeline.oxoflow
 ```
 oxo-flow 0.10.2 — Bioinformatics Pipeline Engine
 DAG: (dry-run) 4 rules would execute
-  1. multiqc
+  1. fastqc_raw
+     threads=4
+     env=conda
+     memory=8G
+     outputs: ["results/fastqc/{sample}_R1_fastqc.html", ...]
+
+  2. fastp_trim
+     threads=4
+     env=conda
+     memory=8G
+     outputs: ["results/trimmed/{sample}_R1.fastq.gz", "results/trimmed/{sample}_R2.fastq.gz", ...]
+
+  3. fastqc_trimmed
+     threads=4
+     env=conda
+     memory=8G
+     outputs: ["results/fastqc_trimmed/{sample}_R1_fastqc.html", ...]
+
+  4. multiqc
      threads=1
      env=conda
      memory=8G
      outputs: ["results/multiqc/multiqc_report.html"]
      command: mkdir -p results/multiqc
 multiqc results -o results/multiqc --force
-
-  2. fastp_trim
-     threads=4
-     env=conda
-     memory=8G
-     outputs: ["results/trimmed/{sample}_R1.fastq.gz", "results/trimmed/{sample}_R2.fastq.gz", "results/trimmed/{sample}_fastp.html", "results/trimmed/{sample}_fastp.json"]
-     command: mkdir -p results/trimmed
-fastp --in1 raw_data/{sample}_R1.fastq.gz --in2 raw_data/{sample}_R2.fastq.gz --out1 results/trimmed/{sample}_R1.fastq.gz --out2 results/trimmed/{sample}_R2.fastq.gz --html results/trimmed/{sample}_fastp.html --json results/trimmed/{sample}_fastp.json --thread 4
-
-  3. fastqc_trimmed
-     threads=4
-     env=conda
-     memory=8G
-     outputs: ["results/fastqc_trimmed/{sample}_R1_fastqc.html", "results/fastqc_trimmed/{sample}_R1_fastqc.zip"]
-     command: mkdir -p results/fastqc_trimmed
-fastqc results/trimmed/{sample}_R1.fastq.gz results/trimmed/{sample}_R2.fastq.gz -o results/fastqc_trimmed -t 4
-
-  4. fastqc_raw
-     threads=4
-     env=conda
-     memory=8G
-     outputs: ["results/fastqc/{sample}_R1_fastqc.html", "results/fastqc/{sample}_R1_fastqc.zip", "results/fastqc/{sample}_R2_fastqc.html", "results/fastqc/{sample}_R2_fastqc.zip"]
-     command: mkdir -p results/fastqc
-fastqc raw_data/{sample}_R1.fastq.gz raw_data/{sample}_R2.fastq.gz -o results/fastqc -t 4
-
+```
 
 Summary: 4 rules, total 13 threads declared, max 4 threads/rule
          4 rule(s) with memory requirements
