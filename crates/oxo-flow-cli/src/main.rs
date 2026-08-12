@@ -63,35 +63,61 @@ pub struct Cli {
 pub enum Commands {
     /// Execute a workflow.
     Run {
-        #[arg(value_name = "WORKFLOW")]
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: Option<PathBuf>,
-        #[arg(short = 'j', long, default_value = "1")]
+        #[arg(
+            short = 'j',
+            long,
+            default_value = "1",
+            help = "Maximum number of concurrent jobs"
+        )]
         jobs: usize,
-        #[arg(short = 'k', long)]
+        #[arg(short = 'k', long, help = "Continue execution when a job fails")]
         keep_going: bool,
-        #[arg(short = 'd', long)]
+        #[arg(short = 'd', long, help = "Working directory for execution")]
         workdir: Option<PathBuf>,
-        #[arg(short = 't', long)]
+        #[arg(
+            short = 't',
+            long,
+            help = "Run only specific target rules (repeatable, prefix matching)"
+        )]
         target: Vec<String>,
-        #[arg(short = 'r', long, default_value = "0")]
+        #[arg(
+            short = 'r',
+            long,
+            default_value = "0",
+            help = "Number of times to retry failed jobs"
+        )]
         retry: u32,
-        #[arg(long, default_value = "0")]
+        #[arg(
+            long,
+            default_value = "0",
+            help = "Timeout per job in seconds (0 = disabled)"
+        )]
         timeout: String,
-        #[arg(long)]
+        #[arg(long, help = "Resume only failed rules from a previous run")]
         resume_failed: bool,
-        #[arg(long)]
+        #[arg(long, help = "Execution profile: local, slurm, pbs, sge, or lsf")]
         profile: Option<String>,
-        #[arg(long, default_value = "0")]
+        #[arg(
+            long,
+            default_value = "0",
+            help = "Maximum CPU threads available for execution (0 = auto-detect)"
+        )]
         max_threads: u32,
-        #[arg(long, default_value = "0")]
+        #[arg(
+            long,
+            default_value = "0",
+            help = "Maximum memory in MB available for execution (0 = auto-detect)"
+        )]
         max_memory: u64,
-        #[arg(long)]
+        #[arg(long, help = "Skip environment setup (assume environments are ready)")]
         skip_env_setup: bool,
         #[arg(long, help = "Skip automatic reference/index building")]
         skip_ref_build: bool,
-        #[arg(long)]
+        #[arg(long, help = "Directory for caching environment setup state")]
         cache_dir: Option<PathBuf>,
-        #[arg(long)]
+        #[arg(long, help = "Track output file checksums for later verification")]
         provenance: bool,
         #[arg(long, help = "Execute from a published .tar.zst bundle")]
         bundle: Option<PathBuf>,
@@ -128,9 +154,17 @@ pub enum Commands {
     },
     /// Resume an interrupted workflow from a checkpoint.
     Resume {
-        #[arg(value_name = "CHECKPOINT")]
+        #[arg(
+            value_name = "CHECKPOINT",
+            help = "Path to the checkpoint file (.oxo-flow/checkpoint.json)"
+        )]
         checkpoint: PathBuf,
-        #[arg(short = 'j', long, default_value = "1")]
+        #[arg(
+            short = 'j',
+            long,
+            default_value = "1",
+            help = "Maximum number of concurrent jobs"
+        )]
         jobs: usize,
         /// Enable AI error recovery on rule failure.
         #[arg(long)]
@@ -141,9 +175,13 @@ pub enum Commands {
     },
     /// Preview execution without running any commands.
     DryRun {
-        #[arg(value_name = "WORKFLOW")]
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: Option<PathBuf>,
-        #[arg(short = 't', long)]
+        #[arg(
+            short = 't',
+            long,
+            help = "Run only specific target rules (repeatable, prefix matching)"
+        )]
         target: Vec<String>,
         /// Enable AI-powered analysis of the workflow.
         #[arg(long)]
@@ -154,7 +192,7 @@ pub enum Commands {
     },
     /// Validate a .oxoflow workflow file.
     Validate {
-        #[arg(value_name = "WORKFLOW")]
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
         #[arg(
             long,
@@ -167,16 +205,19 @@ pub enum Commands {
     },
     /// Initialize a new workflow project.
     Init {
-        #[arg(value_name = "NAME")]
+        #[arg(value_name = "NAME", help = "Project name (no path separators)")]
         name: String,
-        #[arg(short = 'd', long)]
+        #[arg(short = 'd', long, help = "Target directory")]
         dir: Option<PathBuf>,
     },
     /// Generate a workflow from a predefined template or via AI.
     Template {
-        #[arg(value_name = "TEMPLATE")]
+        #[arg(
+            value_name = "TEMPLATE",
+            help = "Template name or natural-language description (with --ai)"
+        )]
         template: Option<String>,
-        #[arg(short = 'o', long)]
+        #[arg(short = 'o', long, help = "Output file path")]
         output: Option<PathBuf>,
         /// Enable AI-powered workflow generation from natural language.
         #[arg(long)]
@@ -204,23 +245,29 @@ pub enum Commands {
 
     /// Output the workflow DAG for visualization.
     Graph {
-        #[arg(value_name = "WORKFLOW")]
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
-        #[arg(short = 'f', long, default_value = "ascii")]
+        #[arg(short = 'f', long, default_value = "ascii", help = "Output format")]
         format: String,
-        #[arg(short = 'o', long)]
+        #[arg(short = 'o', long, help = "Output file path")]
         output: Option<PathBuf>,
     },
     /// Show execution status from a checkpoint file.
     Status {
-        #[arg(value_name = "CHECKPOINT")]
+        #[arg(
+            value_name = "CHECKPOINT",
+            help = "Path to the checkpoint file (.oxo-flow/checkpoint.json)"
+        )]
         checkpoint: PathBuf,
     },
     /// Pull a published bundle from a remote source.
     Pull {
-        #[arg(value_name = "URL")]
+        #[arg(
+            value_name = "URL",
+            help = "Bundle URL (gh:owner/repo@tag, https://, or file://)"
+        )]
         url: String,
-        #[arg(short = 'o', long)]
+        #[arg(short = 'o', long, help = "Output file path")]
         output: Option<PathBuf>,
     },
     /// Inspect and manage workflow configuration.
@@ -230,14 +277,14 @@ pub enum Commands {
     },
     /// Compare two .oxoflow workflow files and show differences.
     Diff {
-        #[arg(value_name = "WORKFLOW_A")]
+        #[arg(value_name = "WORKFLOW_A", help = "First workflow file to compare")]
         workflow_a: PathBuf,
-        #[arg(value_name = "WORKFLOW_B")]
+        #[arg(value_name = "WORKFLOW_B", help = "Second workflow file to compare")]
         workflow_b: PathBuf,
     },
     /// Debug a workflow: show expanded commands after variable substitution.
     Debug {
-        #[arg(value_name = "WORKFLOW")]
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
         #[arg(short = 'r', long = "rule")]
         rule_name: Option<String>,
@@ -247,9 +294,9 @@ pub enum Commands {
     },
     /// Clean workflow outputs and temporary files.
     Clean {
-        #[arg(value_name = "WORKFLOW")]
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
-        #[arg(short = 'n', long)]
+        #[arg(short = 'n', long, help = "Generate scripts without submitting")]
         dry_run: bool,
         #[arg(long)]
         force: bool,
@@ -263,16 +310,16 @@ pub enum Commands {
     },
     /// Reformat a .oxoflow file into canonical TOML form.
     Format {
-        #[arg(value_name = "WORKFLOW")]
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
-        #[arg(short = 'o', long)]
+        #[arg(short = 'o', long, help = "Output file path")]
         output: Option<PathBuf>,
-        #[arg(long)]
+        #[arg(long, help = "Only check formatting, don't write")]
         check: bool,
     },
     /// Run best-practice linting checks on a .oxoflow file.
     Lint {
-        #[arg(value_name = "WORKFLOW")]
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
         #[arg(long)]
         strict: bool,
@@ -282,27 +329,32 @@ pub enum Commands {
     },
     /// Watch workflow file for changes and re-validate/re-run.
     Watch {
-        #[arg(value_name = "WORKFLOW")]
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
         #[arg(long)]
         run: bool,
-        #[arg(short = 'j', long, default_value = "1")]
+        #[arg(
+            short = 'j',
+            long,
+            default_value = "1",
+            help = "Maximum number of concurrent jobs"
+        )]
         jobs: usize,
     },
     /// Mark workflow outputs as up-to-date without re-executing rules.
     Touch {
-        #[arg(value_name = "WORKFLOW")]
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
-        #[arg(short = 'r', long = "rule")]
+        #[arg(short = 'r', long = "rule", help = "Rule names to touch")]
         rules: Vec<String>,
     },
     /// Generate reports from workflow execution.
     Report {
-        #[arg(value_name = "WORKFLOW")]
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
-        #[arg(short = 'f', long, default_value = "html")]
+        #[arg(short = 'f', long, default_value = "html", help = "Output format")]
         format: String,
-        #[arg(short = 'o', long)]
+        #[arg(short = 'o', long, help = "Output file path")]
         output: Option<PathBuf>,
         #[arg(
             long = "checkpoint",
@@ -313,11 +365,11 @@ pub enum Commands {
     },
     /// Package a workflow into a container image.
     Package {
-        #[arg(value_name = "WORKFLOW")]
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
-        #[arg(short = 'f', long, default_value = "docker")]
+        #[arg(short = 'f', long, default_value = "docker", help = "Output format")]
         format: String,
-        #[arg(short = 'o', long)]
+        #[arg(short = 'o', long, help = "Output file path")]
         output: Option<PathBuf>,
     },
     /// Start the web interface server.
@@ -344,11 +396,11 @@ pub enum Commands {
     },
     /// Export a workflow to a container definition or standalone TOML.
     Export {
-        #[arg(value_name = "WORKFLOW")]
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
-        #[arg(short = 'f', long, default_value = "docker")]
+        #[arg(short = 'f', long, default_value = "docker", help = "Output format")]
         format: String,
-        #[arg(short = 'o', long)]
+        #[arg(short = 'o', long, help = "Output file path")]
         output: Option<PathBuf>,
     },
     /// Manage cluster job submission and monitoring.
@@ -358,11 +410,22 @@ pub enum Commands {
     },
     /// Execute a command template in parallel across multiple items.
     Batch {
-        #[arg(value_name = "TEMPLATE")]
+        #[arg(
+            value_name = "TEMPLATE",
+            help = "Shell command template with {item} placeholder"
+        )]
         template: String,
-        #[arg(value_name = "ITEMS")]
+        #[arg(
+            value_name = "ITEMS",
+            help = "Files or items to process (glob patterns supported)"
+        )]
         items: Vec<String>,
-        #[arg(short = 'j', long, default_value = "1")]
+        #[arg(
+            short = 'j',
+            long,
+            default_value = "1",
+            help = "Maximum number of concurrent jobs"
+        )]
         jobs: usize,
         #[arg(short = 'x', long)]
         stop_on_error: bool,
@@ -370,9 +433,9 @@ pub enum Commands {
         file: Option<PathBuf>,
         #[arg(long = "json-output", help = "Output results as formatted JSON")]
         json_output: bool,
-        #[arg(short = 'n', long)]
+        #[arg(short = 'n', long, help = "Generate scripts without submitting")]
         dry_run: bool,
-        #[arg(short = 'd', long)]
+        #[arg(short = 'd', long, help = "Working directory for execution")]
         workdir: Option<PathBuf>,
         #[arg(short = 'e', long)]
         environment: Option<String>,
@@ -380,7 +443,7 @@ pub enum Commands {
         checksum: bool,
         #[arg(long)]
         generate_workflow: bool,
-        #[arg(short = 'o', long)]
+        #[arg(short = 'o', long, help = "Output file path")]
         output: Option<PathBuf>,
     },
     /// Verify output file integrity using stored checksums.
@@ -392,27 +455,32 @@ pub enum Commands {
     Schema,
     /// Show execution history from checkpoints.
     History {
-        #[arg(value_name = "DIR")]
+        #[arg(value_name = "DIR", help = "Directory path")]
         dir: Option<PathBuf>,
         #[arg(short = 'n', long, default_value = "10")]
         limit: usize,
     },
     /// Run a workflow in test mode, validating and verifying outputs.
     Test {
-        #[arg(value_name = "WORKFLOW")]
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
-        #[arg(long)]
+        #[arg(long, help = "Output file path")]
         output: Option<PathBuf>,
         #[arg(long)]
         run: bool,
-        #[arg(short = 'j', long, default_value = "1")]
+        #[arg(
+            short = 'j',
+            long,
+            default_value = "1",
+            help = "Maximum number of concurrent jobs"
+        )]
         jobs: usize,
     },
     /// Publish a workflow with its environment files into a bundle.
     Publish {
-        #[arg(value_name = "WORKFLOW")]
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
-        #[arg(short = 'o', long)]
+        #[arg(short = 'o', long, help = "Output file path")]
         output: Option<PathBuf>,
         #[arg(long, help = "Generate conda lockfiles for reproducible environments")]
         with_lockfiles: bool,
@@ -425,7 +493,7 @@ pub enum Commands {
     /// Verify or display license status.
     License {
         /// Path to license file to verify (optional; checks current status if omitted)
-        #[arg(value_name = "LICENSE_PATH")]
+        #[arg(value_name = "LICENSE_PATH", help = "License file path")]
         path: Option<PathBuf>,
     },
 }
@@ -433,18 +501,21 @@ pub enum Commands {
 #[derive(Subcommand, Debug)]
 pub enum EnvAction {
     List {
-        #[arg(value_name = "WORKFLOW")]
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: Option<PathBuf>,
     },
     Check {
-        #[arg(value_name = "WORKFLOW")]
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: Option<PathBuf>,
     },
     /// Create a new environment from a spec file.
     Create {
-        #[arg(value_name = "SPEC")]
+        #[arg(
+            value_name = "SPEC",
+            help = "Environment spec file (.yaml/.yml/.toml/.lock), or a description with --ai"
+        )]
         spec: PathBuf,
-        #[arg(short = 'n', long)]
+        #[arg(short = 'n', long, help = "Environment or profile name")]
         name: Option<String>,
         #[arg(
             long = "ai",
@@ -458,7 +529,7 @@ pub enum EnvAction {
 pub enum ProfileAction {
     List,
     Show {
-        #[arg(value_name = "NAME")]
+        #[arg(value_name = "NAME", help = "Profile name")]
         name: String,
     },
     Current,
@@ -467,18 +538,18 @@ pub enum ProfileAction {
 #[derive(Subcommand, Debug)]
 pub enum ConfigAction {
     Show {
-        #[arg(value_name = "WORKFLOW")]
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
     },
     #[command(alias = "check")]
     Stats {
-        #[arg(value_name = "WORKFLOW")]
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
     },
     Get {
-        #[arg(value_name = "WORKFLOW")]
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
-        #[arg(value_name = "KEY")]
+        #[arg(value_name = "KEY", help = "Config key")]
         key: String,
     },
 }
@@ -486,40 +557,49 @@ pub enum ConfigAction {
 #[derive(Subcommand, Debug)]
 pub enum ClusterAction {
     Submit {
-        #[arg(value_name = "WORKFLOW")]
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
-        #[arg(short = 'b', long)]
+        #[arg(short = 'b', long, help = "Cluster backend: slurm, pbs, sge, or lsf")]
         backend: String,
-        #[arg(short = 'q', long)]
+        #[arg(short = 'q', long, help = "Cluster queue or partition name")]
         queue: Option<String>,
-        #[arg(short = 'a', long)]
+        #[arg(short = 'a', long, help = "Cluster billing account")]
         account: Option<String>,
-        #[arg(short = 'o', long, default_value = "cluster_scripts")]
+        #[arg(
+            short = 'o',
+            long,
+            default_value = "cluster_scripts",
+            help = "Output file path"
+        )]
         output: PathBuf,
-        #[arg(short = 't', long)]
+        #[arg(
+            short = 't',
+            long,
+            help = "Run only specific target rules (repeatable, prefix matching)"
+        )]
         target: Vec<String>,
-        #[arg(long)]
+        #[arg(long, help = "Generate scripts without submitting")]
         dry_run: bool,
         /// Generate job scripts with dependency support and a wrapper script
-        #[arg(long)]
+        #[arg(long, help = "Generate job scripts with dependency support")]
         with_dependencies: bool,
     },
     Status {
-        #[arg(short = 'b', long)]
+        #[arg(short = 'b', long, help = "Cluster backend: slurm, pbs, sge, or lsf")]
         backend: String,
-        #[arg(value_name = "JOB_IDS")]
+        #[arg(value_name = "JOB_IDS", help = "Job ID(s)")]
         job_ids: Vec<String>,
     },
     Cancel {
-        #[arg(short = 'b', long)]
+        #[arg(short = 'b', long, help = "Cluster backend: slurm, pbs, sge, or lsf")]
         backend: String,
-        #[arg(value_name = "JOB_IDS")]
+        #[arg(value_name = "JOB_IDS", help = "Job ID(s)")]
         job_ids: Vec<String>,
     },
     Logs {
-        #[arg(short = 'b', long)]
+        #[arg(short = 'b', long, help = "Cluster backend: slurm, pbs, sge, or lsf")]
         backend: String,
-        #[arg(value_name = "JOB_ID")]
+        #[arg(value_name = "JOB_ID", help = "Cluster job ID")]
         job_id: String,
     },
 }
@@ -528,7 +608,7 @@ pub enum ClusterAction {
 pub enum ProvenanceAction {
     /// Verify output file checksums from a checkpoint or provenance file.
     Verify {
-        #[arg(value_name = "CHECKPOINT_PATH")]
+        #[arg(value_name = "CHECKPOINT_PATH", help = "Path to the checkpoint file")]
         checkpoint: PathBuf,
     },
 }
