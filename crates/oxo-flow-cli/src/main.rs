@@ -721,10 +721,15 @@ async fn main() -> Result<()> {
                     }
                     eprintln!("  Source:   {}", bundle_path.display());
 
-                    let is_tty = std::io::IsTerminal::is_terminal(&std::io::stderr());
-                    if !is_tty {
+                    let can_prompt = crate::commands::bundle::can_prompt_for_confirmation(
+                        cli.json,
+                        std::io::IsTerminal::is_terminal(&std::io::stderr()),
+                        std::io::IsTerminal::is_terminal(&std::io::stdin()),
+                    );
+                    if !can_prompt {
                         anyhow::bail!(
-                            "Running a bundle requires confirmation. Use --yes to skip the prompt in CI/scripts.\n\
+                            "Running a bundle requires confirmation, and this session cannot prompt for it. \
+                             Use --yes to confirm in CI, scripts, or with --json.\n\
                              Bundle: {}",
                             bundle_path.display()
                         );

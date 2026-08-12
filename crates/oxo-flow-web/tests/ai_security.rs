@@ -1,10 +1,10 @@
-/// Verify AI service has zero write access and security boundaries are enforced.
-///
-/// Tests:
-/// 1. Static: AI module source code must not import DB write, FS write, or process spawn
-/// 2. Runtime: Path traversal prevention in sandbox
-/// 3. Runtime: SQL injection prevention (parameterized queries)
-/// 4. Runtime: Auth bypass prevention
+//! Verify AI service has zero write access and security boundaries are enforced.
+//!
+//! Tests:
+//! 1. Static: AI module source code must not import DB write, FS write, or process spawn
+//! 2. Runtime: Path traversal prevention in sandbox
+//! 3. Runtime: SQL injection prevention (parameterized queries)
+//! 4. Runtime: Auth bypass prevention
 
 /// Strip Rust comments from source so comment text does not trigger false positives.
 fn strip_comments(source: &str) -> String {
@@ -86,12 +86,7 @@ fn test_ai_copilot_no_write_imports() {
 #[test]
 fn test_path_traversal_prevention() {
     // Test the sandbox sanitize function
-    let func = |s: &str| -> String {
-        s.replace("..", "_")
-            .replace('/', "_")
-            .replace('\\', "_")
-            .replace('\0', "_")
-    };
+    let func = |s: &str| -> String { s.replace("..", "_").replace(['/', '\\', '\0'], "_") };
 
     // Normal paths should pass through
     assert_eq!(func("run-123"), "run-123");

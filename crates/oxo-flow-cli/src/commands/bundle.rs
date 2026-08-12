@@ -212,3 +212,40 @@ pub fn find_manifest_in_dir(dir: &Path) -> Result<PathBuf> {
         )
     }
 }
+
+/// Whether the bundle confirmation prompt can be shown and answered.
+///
+/// Writing the prompt needs a terminal on stderr, and reading the answer needs
+/// an interactive stdin — a redirected stdin reaches `read_line`, hits EOF, and
+/// looks like a cancellation the user never made. `--json` marks the invocation
+/// as machine-driven, so it is never interactive regardless of the terminal.
+pub fn can_prompt_for_confirmation(json: bool, stderr_is_tty: bool, stdin_is_tty: bool) -> bool {
+    !json && stderr_is_tty && stdin_is_tty
+}
+
+#[cfg(test)]
+mod tests {
+    use super::can_prompt_for_confirmation;
+
+    #[test]
+    fn prompts_only_on_a_fully_interactive_terminal() {
+        assert!(can_prompt_for_confirmation(false, true, true));
+    }
+
+    #[test]
+    fn redirected_stdin_is_not_promptable() {
+        // `oxo-flow run --bundle b.tar.zst < /dev/null` from a terminal: stderr
+        // is still a tty, but there is nobody to answer.
+        assert!(!can_prompt_for_confirmation(false, true, false));
+    }
+
+    #[test]
+    fn piped_stderr_is_not_promptable() {
+        assert!(!can_prompt_for_confirmation(false, false, true));
+    }
+
+    #[test]
+    fn json_is_never_promptable() {
+        assert!(!can_prompt_for_confirmation(true, true, true));
+    }
+}

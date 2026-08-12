@@ -3437,10 +3437,36 @@ mod tests {
 
     #[test]
     fn resolve_includes_depth_limit() {
-        // Verify the depth constant is reasonable
+        let dir = tempfile::tempdir().unwrap();
+
+        // A file that includes itself recurses forever unless the depth guard
+        // stops it — each level re-reads the same content from disk.
+        let circular = r#"
+            [workflow]
+            name = "circular"
+
+            [[include]]
+            path = "circular.oxoflow"
+
+            [[rules]]
+            name = "step"
+            shell = "echo hi"
+        "#;
+        std::fs::write(dir.path().join("circular.oxoflow"), circular).unwrap();
+
+        let mut config: WorkflowConfig = toml::from_str(circular).unwrap();
+        let err = config
+            .resolve_includes(dir.path())
+            .expect_err("self-including workflow should hit the depth limit");
+
+        let message = err.to_string();
         assert!(
-            MAX_INCLUDE_DEPTH >= 8,
-            "include depth limit should be at least 8"
+            message.contains(&MAX_INCLUDE_DEPTH.to_string()),
+            "error should name the depth limit, got: {message}"
+        );
+        assert!(
+            message.contains("circular includes"),
+            "error should point at circular includes, got: {message}"
         );
     }
 

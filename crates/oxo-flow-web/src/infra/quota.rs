@@ -176,8 +176,10 @@ mod tests {
 
     #[test]
     fn test_quota_concurrent_limit() {
-        let mut config = QuotaConfig::default();
-        config.max_concurrent_runs = 1;
+        let config = QuotaConfig {
+            max_concurrent_runs: 1,
+            ..QuotaConfig::default()
+        };
         let tracker = QuotaTracker::new(config);
         tracker.record_start("user1", 1, 1024);
         let result = tracker.check("user1", 1, 1024);
