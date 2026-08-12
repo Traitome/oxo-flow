@@ -222,6 +222,7 @@ oxo-flow serve --mode hpc
 ```
 
 Open `http://localhost:8080` to access the web UI with:
+
 - DAG visualization with live status
 - Pipeline validation and execution monitoring
 - AI-powered pipeline generation from natural language
@@ -229,9 +230,11 @@ Open `http://localhost:8080` to access the web UI with:
 
 See [Deployment Modes](../how-to/deploy-modes.md) for detailed configuration.
 
+---
+
 ## Next Steps
 
 - [Your First Workflow](./first-workflow.md) — build a real bioinformatics pipeline with environments
-- [Deployment Modes](../how-to/deploy-modes.md) — configure personal/team/HPC modes
 - [Variant Calling Pipeline](./variant-calling.md) — complete NGS analysis tutorial
+- [Create a Workflow](../how-to/create-workflow.md) — reference guide for `.oxoflow` authoring
 - [Command Reference](../commands/run.md) — explore all CLI options
