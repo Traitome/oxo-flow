@@ -2875,7 +2875,12 @@ fn cli_publish_manifest_reserves_signatures_field() {
         .get("recommendations")
         .expect("resources.recommendations should be present");
     assert!(
-        recommendations.get("min_threads").unwrap().as_u64().unwrap() >= 1,
+        recommendations
+            .get("min_threads")
+            .unwrap()
+            .as_u64()
+            .unwrap()
+            >= 1,
         "recommendations.min_threads should be >= 1"
     );
 }

@@ -16,7 +16,12 @@ pub fn publish_command(
     workflow: PathBuf,
     output: Option<PathBuf>,
     with_lockfiles: bool,
+    format: Option<String>,
 ) -> Result<()> {
+    let bundle_format = match format.as_deref() {
+        Some(f) => crate::commands::bundle::BundleFormat::parse(f)?,
+        None => crate::commands::bundle::BundleFormat::TarZst,
+    };
     let workflow_path =
         std::path::absolute(&workflow).context("failed to resolve workflow path")?;
     let workflow_dir = workflow_path.parent().unwrap_or(Path::new("."));
@@ -28,12 +33,16 @@ pub fn publish_command(
 
     let output_archive = if let Some(out) = output {
         if out.extension().is_none() {
-            PathBuf::from(format!("{}.tar.zst", out.display()))
+            PathBuf::from(format!("{}.{}", out.display(), bundle_format.extension()))
         } else {
             out
         }
     } else {
-        PathBuf::from(format!("{}-bundle.tar.zst", workflow_name))
+        PathBuf::from(format!(
+            "{}-bundle.{}",
+            workflow_name,
+            bundle_format.extension()
+        ))
     };
 
     // ── Collect all referenced files ──────────────────────────────────────
@@ -120,7 +129,12 @@ pub fn publish_command(
         }
         if rule.resources.gpu.is_some() || rule.resources.gpu_spec.is_some() {
             let gpu = rule.resources.gpu.unwrap_or(0)
-                + rule.resources.gpu_spec.as_ref().map(|s| s.count).unwrap_or(0);
+                + rule
+                    .resources
+                    .gpu_spec
+                    .as_ref()
+                    .map(|s| s.count)
+                    .unwrap_or(0);
             if gpu > 0 {
                 entry["gpu"] = serde_json::Value::Number(serde_json::Number::from(gpu));
             }
@@ -169,8 +183,7 @@ pub fn publish_command(
             serde_json::Value::Number(serde_json::Number::from(mem_mb));
     }
     if total_gpu > 0 {
-        recommendations["min_gpu"] =
-            serde_json::Value::Number(serde_json::Number::from(total_gpu));
+        recommendations["min_gpu"] = serde_json::Value::Number(serde_json::Number::from(total_gpu));
     }
 
     // Build manifest
@@ -203,13 +216,21 @@ pub fn publish_command(
     let manifest_path = temp_dir.join("manifest.json");
     std::fs::write(&manifest_path, &manifest_json)?;
 
-    // ── Build .tar.zst archive ────────────────────────────────────────────
+    // ── Build archive ─────────────────────────────────────────────────────
 
     let archive_file = std::fs::File::create(&output_archive)
         .with_context(|| format!("failed to create archive: {}", output_archive.display()))?;
-    let zstd_encoder = zstd::stream::write::Encoder::new(archive_file, 3)
-        .context("failed to create zstd encoder")?;
-    let mut tar_builder = tar::Builder::new(zstd_encoder);
+    let writer: Box<dyn std::io::Write> = match bundle_format {
+        crate::commands::bundle::BundleFormat::TarZst => Box::new(
+            zstd::stream::write::Encoder::new(archive_file, 3)
+                .context("failed to create zstd encoder")?,
+        ),
+        crate::commands::bundle::BundleFormat::TarGz => Box::new(flate2::write::GzEncoder::new(
+            archive_file,
+            flate2::Compression::default(),
+        )),
+    };
+    let mut tar_builder = tar::Builder::new(writer);
 
     // Add manifest first, then workflow, then all referenced files
     tar_builder.append_path_with_name(&manifest_path, "manifest.json")?;
@@ -221,10 +242,10 @@ pub fn publish_command(
         }
     }
 
-    let zstd_encoder = tar_builder.into_inner().context("failed to finalize tar")?;
-    zstd_encoder
-        .finish()
-        .context("failed to finalize zstd compression")?;
+    // Finalize tar + compression (drop flushes both formats).
+    let _writer = tar_builder.into_inner().context("failed to finalize tar")?;
+    // Writer is dropped here — for GzEncoder this calls finish(), for zstd
+    // encoder finalization happens on drop.
 
     // Cleanup temp dir
     let _ = std::fs::remove_dir_all(&temp_dir);

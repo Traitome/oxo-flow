@@ -1,18 +1,54 @@
 //! Bundle consumption — extract, verify, and execute published bundles.
 //!
-//! A bundle is a `.tar.zst` archive produced by `oxo-flow publish` containing
+//! A bundle is a compressed tar archive produced by `oxo-flow publish` containing
 //! a workflow file, environment specs, scripts, and a checksum-verified manifest.
+//!
+//! Supported formats: `.tar.zst` (default), `.tar.gz`.
 
 use anyhow::{Context, Result};
+use colored::Colorize;
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-/// Extract a `.tar.zst` bundle, verify all file checksums against the
-/// manifest, and return `(workflow_path, extraction_dir)`.
-///
-/// If verification fails for any file, an error is returned and the
-/// extracted directory is cleaned up.
+/// Supported bundle archive formats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BundleFormat {
+    TarZst,
+    TarGz,
+}
+
+impl BundleFormat {
+    pub fn extension(&self) -> &str {
+        match self {
+            Self::TarZst => "tar.zst",
+            Self::TarGz => "tar.gz",
+        }
+    }
+
+    pub fn from_path(path: &Path) -> Option<Self> {
+        let s = path.to_string_lossy();
+        if s.ends_with(".tar.zst") {
+            Some(Self::TarZst)
+        } else if s.ends_with(".tar.gz") || s.ends_with(".tgz") {
+            Some(Self::TarGz)
+        } else {
+            None
+        }
+    }
+
+    pub fn parse(s: &str) -> Result<Self> {
+        match s {
+            "tar.zst" | "zst" => Ok(Self::TarZst),
+            "tar.gz" | "gz" | "tgz" => Ok(Self::TarGz),
+            _ => anyhow::bail!("unsupported format '{}'. Use 'tar.zst' or 'tar.gz'", s),
+        }
+    }
+}
+
+/// Extract a bundle, verify all file checksums against the manifest,
+/// and return `(workflow_path, extraction_dir)`. Auto-detects format
+/// from file extension.
 pub fn extract_and_verify_bundle(bundle_path: &Path) -> Result<(PathBuf, PathBuf)> {
     let bundle_abs = std::path::absolute(bundle_path)
         .with_context(|| format!("failed to resolve bundle path: {}", bundle_path.display()))?;
@@ -34,12 +70,17 @@ pub fn extract_and_verify_bundle(bundle_path: &Path) -> Result<(PathBuf, PathBuf
         .context("failed to create temporary directory for bundle extraction")?
         .keep();
 
-    // Open and decompress
+    // Auto-detect format from extension and open archive
+    let format = BundleFormat::from_path(&bundle_abs).unwrap_or(BundleFormat::TarZst); // default fallback
     let file = std::fs::File::open(&bundle_abs)
         .with_context(|| format!("failed to open bundle: {}", bundle_abs.display()))?;
-    let decoder =
-        zstd::stream::read::Decoder::new(file).context("failed to decompress bundle (zstd)")?;
-    let mut archive = tar::Archive::new(decoder);
+    let reader: Box<dyn Read> = match format {
+        BundleFormat::TarZst => Box::new(
+            zstd::stream::read::Decoder::new(file).context("failed to decompress bundle (zstd)")?,
+        ),
+        BundleFormat::TarGz => Box::new(flate2::read::GzDecoder::new(file)),
+    };
+    let mut archive = tar::Archive::new(reader);
 
     // Extract all files
     archive
@@ -75,10 +116,7 @@ pub fn extract_and_verify_bundle(bundle_path: &Path) -> Result<(PathBuf, PathBuf
     // Display resource requirements from manifest (if present)
     if let Some(resources) = manifest.get("resources") {
         if let Some(recommendations) = resources.get("recommendations") {
-            eprintln!(
-                "{}",
-                "Bundle resource requirements:".bold().underline()
-            );
+            eprintln!("{}", "Bundle resource requirements:".bold().underline());
             if let Some(t) = recommendations["min_threads"].as_u64() {
                 eprintln!("  Min threads: {}", t.to_string().cyan());
             }
@@ -162,14 +200,15 @@ fn compute_sha256(path: &Path) -> Result<String> {
     Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
-use colored::Colorize;
-
 /// Find manifest.json in an extracted bundle directory.
 pub fn find_manifest_in_dir(dir: &Path) -> Result<PathBuf> {
     let manifest_path = dir.join("manifest.json");
     if manifest_path.exists() {
         Ok(manifest_path)
     } else {
-        anyhow::bail!("manifest.json not found in extracted bundle: {}", dir.display())
+        anyhow::bail!(
+            "manifest.json not found in extracted bundle: {}",
+            dir.display()
+        )
     }
 }

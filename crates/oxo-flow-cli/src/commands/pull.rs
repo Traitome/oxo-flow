@@ -1,9 +1,9 @@
 //! Pull — download a published oxo-flow bundle from a remote source.
 //!
 //! Supports three URL schemes:
-//! - `https://example.com/path/to/bundle.tar.zst` — direct download
-//! - `gh:owner/repo@v1.0.0` — GitHub release asset (tag → release → asset)
-//! - `file:///path/to/bundle.tar.zst` — local file (copy)
+//! - `https://example.com/path/to/bundle.tar.zst` — direct download (.tar.zst or .tar.gz)
+//! - `gh:owner/repo@v1.0.0` — GitHub release asset (finds .tar.zst or .tar.gz)
+//! - `file:///path/to/bundle.tar.zst` — local file copy
 
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -97,11 +97,15 @@ async fn pull_github_release(url: &str) -> Result<Vec<u8>> {
         .as_array()
         .context("GitHub release has no assets")?;
 
-    // Find the first .tar.zst asset
+    // Find the first bundle asset (.tar.zst or .tar.gz)
     let asset = assets
         .iter()
-        .find(|a| a["name"].as_str().is_some_and(|n| n.ends_with(".tar.zst")))
-        .context("no .tar.zst asset found in GitHub release")?;
+        .find(|a| {
+            a["name"]
+                .as_str()
+                .is_some_and(|n| n.ends_with(".tar.zst") || n.ends_with(".tar.gz"))
+        })
+        .context("no .tar.zst or .tar.gz asset found in GitHub release")?;
 
     let download_url = asset["browser_download_url"]
         .as_str()

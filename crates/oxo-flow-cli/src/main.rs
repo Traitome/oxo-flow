@@ -416,6 +416,11 @@ pub enum Commands {
         output: Option<PathBuf>,
         #[arg(long, help = "Generate conda lockfiles for reproducible environments")]
         with_lockfiles: bool,
+        #[arg(
+            long = "format",
+            help = "Bundle archive format: tar.zst (default) or tar.gz"
+        )]
+        format: Option<String>,
     },
     /// Verify or display license status.
     License {
@@ -576,6 +581,7 @@ async fn main() -> Result<()> {
         } => {
             use anyhow::Context as _;
             use colored::Colorize as _;
+            #[allow(unused_imports)]
             use std::io::BufRead as _;
             let (wf, wd) = if let Some(bundle_path) = bundle {
                 let (extracted_wf, extracted_dir) =
@@ -591,25 +597,40 @@ async fn main() -> Result<()> {
                         crate::commands::bundle::find_manifest_in_dir(&effective_wd)?;
                     let manifest_json = std::fs::read_to_string(&manifest_path)
                         .context("failed to read bundle manifest")?;
-                    let manifest: serde_json::Value = serde_json::from_str(&manifest_json)
-                        .context("failed to parse manifest")?;
+                    let manifest: serde_json::Value =
+                        serde_json::from_str(&manifest_json).context("failed to parse manifest")?;
 
                     eprintln!();
                     eprintln!("{}", "Bundle Verification Complete".bold().green());
-                    eprintln!("  Workflow: {}", manifest["workflow"].as_str().unwrap_or("unknown"));
-                    eprintln!("  Format:   {}", manifest["format"].as_str().unwrap_or("unknown"));
-                    eprintln!("  Version:  {}", manifest["oxo_flow_version"].as_str().unwrap_or("unknown"));
-                    if let Some(ref resources) = manifest.get("resources")
-                        && let Some(ref recommendations) = resources.get("recommendations")
+                    eprintln!(
+                        "  Workflow: {}",
+                        manifest["workflow"].as_str().unwrap_or("unknown")
+                    );
+                    eprintln!(
+                        "  Format:   {}",
+                        manifest["format"].as_str().unwrap_or("unknown")
+                    );
+                    eprintln!(
+                        "  Version:  {}",
+                        manifest["oxo_flow_version"].as_str().unwrap_or("unknown")
+                    );
+                    if let Some(resources) = manifest.get("resources")
+                        && let Some(recommendations) = resources.get("recommendations")
                     {
                         eprintln!("  Resources:");
                         if let Some(t) = recommendations["min_threads"].as_u64() {
                             eprintln!("    Min threads: {}", t.to_string().cyan());
                         }
                         if let Some(m) = recommendations["min_memory_mb"].as_u64() {
-                            eprintln!("    Min memory:  {} MB ({:.1} GB)", m.to_string().cyan(), m as f64 / 1024.0);
+                            eprintln!(
+                                "    Min memory:  {} MB ({:.1} GB)",
+                                m.to_string().cyan(),
+                                m as f64 / 1024.0
+                            );
                         }
-                        if let Some(g) = recommendations["min_gpu"].as_u64() && g > 0 {
+                        if let Some(g) = recommendations["min_gpu"].as_u64()
+                            && g > 0
+                        {
                             eprintln!("    Min GPU:     {}", g.to_string().cyan());
                         }
                     }
@@ -923,7 +944,8 @@ async fn main() -> Result<()> {
             workflow,
             output,
             with_lockfiles,
-        } => publish_command(workflow, output, with_lockfiles)?,
+            format,
+        } => publish_command(workflow, output, with_lockfiles, format)?,
         Commands::License { path } => {
             use colored::Colorize;
             let status = oxo_flow_web::check_license();

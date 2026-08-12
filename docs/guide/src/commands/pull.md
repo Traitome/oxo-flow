@@ -11,10 +11,10 @@ oxo-flow pull [OPTIONS] <URL>
 
 ## Description
 
-Downloads a `.tar.zst` bundle archive from the specified URL, verifies every
-file's SHA-256 checksum against the bundle's `manifest.json`, and saves the
-verified archive to disk. The downloaded bundle can then be executed directly
-with `oxo-flow run --bundle`.
+Downloads a bundle archive from the specified URL, verifies every file's
+SHA-256 checksum against the bundle's `manifest.json`, and saves the verified
+archive to disk. Supports `.tar.zst` (default) and `.tar.gz` formats.
+The downloaded bundle can then be executed directly with `oxo-flow run --bundle`.
 
 ### Supported URL Schemes
 
@@ -22,11 +22,11 @@ with `oxo-flow run --bundle`.
 |---|---|---|
 | GitHub Release | `gh:owner/repo@tag` | `gh:WangLabCSU/oxo-flow-circrna@v0.10.1` |
 | HTTPS | `https://host/path` | `https://example.com/bundle.tar.zst` |
-| HTTP | `http://host/path` | `http://example.com/bundle.tar.zst` |
+| HTTP | `http://host/path` | `http://example.com/bundle.tar.gz` |
 | Local file | `file:///path` | `file:///data/bundles/pipeline.tar.zst` |
 
 For `gh:` URLs, the command resolves the GitHub release by tag and downloads
-the first `.tar.zst` asset listed in the release.
+the first `.tar.zst` or `.tar.gz` asset listed in the release.
 
 ---
 
@@ -42,14 +42,31 @@ the first `.tar.zst` asset listed in the release.
 # Pull from a GitHub release
 oxo-flow pull gh:WangLabCSU/oxo-flow-circrna@v0.10.1
 
-# Pull from an HTTPS URL
+# Pull from an HTTPS URL (.tar.zst format)
 oxo-flow pull https://example.com/pipelines/circrna-bundle.tar.zst
+
+# Pull from an HTTPS URL (.tar.gz format)
+oxo-flow pull https://example.com/pipelines/align-bundle.tar.gz
 
 # Pull to a custom path
 oxo-flow pull gh:user/repo@v2 -o my-pipeline.tar.zst
 
 # Pull and execute in one step
-oxo-flow pull gh:user/repo@v1 && oxo-flow run --bundle repo-bundle.tar.zst
+oxo-flow pull gh:user/repo@v1 && oxo-flow run --bundle repo-bundle.tar.zst -j 16 --yes
+
+# Pull and review resources before running
+oxo-flow pull gh:user/repo@v1
+oxo-flow run --bundle repo-bundle.tar.zst --yes
+```
+
+### Publishing with Format Selection
+
+```bash
+# Publish with zstd compression (default, smaller files)
+oxo-flow publish pipeline.oxoflow
+
+# Publish with gzip compression (universal compatibility)
+oxo-flow publish pipeline.oxoflow --format tar.gz
 ```
 
 ## Verification
