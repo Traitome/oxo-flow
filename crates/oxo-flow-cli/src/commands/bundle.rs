@@ -72,6 +72,35 @@ pub fn extract_and_verify_bundle(bundle_path: &Path) -> Result<(PathBuf, PathBuf
         );
     }
 
+    // Display resource requirements from manifest (if present)
+    if let Some(resources) = manifest.get("resources") {
+        if let Some(recommendations) = resources.get("recommendations") {
+            eprintln!(
+                "{}",
+                "Bundle resource requirements:".bold().underline()
+            );
+            if let Some(t) = recommendations["min_threads"].as_u64() {
+                eprintln!("  Min threads: {}", t.to_string().cyan());
+            }
+            if let Some(m) = recommendations["min_memory_mb"].as_u64() {
+                let gb = m as f64 / 1024.0;
+                eprintln!("  Min memory:  {} ({:.1} GB)", m.to_string().cyan(), gb);
+            }
+            if let Some(g) = recommendations["min_gpu"].as_u64()
+                && g > 0
+            {
+                eprintln!("  Min GPU:     {}", g.to_string().cyan());
+            }
+        }
+        if let Some(rules) = resources.get("rules").and_then(|r| r.as_array()) {
+            eprintln!(
+                "  {} rules with resource declarations",
+                rules.len().to_string().cyan()
+            );
+        }
+        eprintln!();
+    }
+
     // Verify checksums
     let files = manifest["files"]
         .as_array()

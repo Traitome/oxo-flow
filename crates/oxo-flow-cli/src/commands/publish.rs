@@ -105,6 +105,74 @@ pub fn publish_command(
         }));
     }
 
+    // ── Build per-rule resource summary for the manifest ──────────────────
+    // Helps bundle consumers assess hardware requirements before running.
+    let config = oxo_flow_core::config::WorkflowConfig::from_file(&workflow_path)
+        .with_context(|| format!("failed to parse {}", workflow_path.display()))?;
+    let mut resource_summary = Vec::new();
+    for rule in &config.rules {
+        let mut entry = serde_json::json!({
+            "rule": rule.name,
+            "threads": rule.effective_threads(),
+        });
+        if let Some(mem) = rule.effective_memory() {
+            entry["memory"] = serde_json::Value::String(mem.to_string());
+        }
+        if rule.resources.gpu.is_some() || rule.resources.gpu_spec.is_some() {
+            let gpu = rule.resources.gpu.unwrap_or(0)
+                + rule.resources.gpu_spec.as_ref().map(|s| s.count).unwrap_or(0);
+            if gpu > 0 {
+                entry["gpu"] = serde_json::Value::Number(serde_json::Number::from(gpu));
+            }
+        }
+        if let Some(ref disk) = rule.resources.disk {
+            entry["disk"] = serde_json::Value::String(disk.clone());
+        }
+        if let Some(ref time_limit) = rule.resources.time_limit {
+            entry["time_limit"] = serde_json::Value::String(time_limit.clone());
+        }
+        resource_summary.push(entry);
+    }
+
+    // Compute aggregate minimum requirements
+    let max_threads = config
+        .rules
+        .iter()
+        .map(|r| r.effective_threads())
+        .max()
+        .unwrap_or(1);
+    let max_memory = config
+        .rules
+        .iter()
+        .filter_map(|r: &oxo_flow_core::rule::Rule| {
+            r.effective_memory()
+                .and_then(oxo_flow_core::scheduler::parse_memory_mb)
+        })
+        .max();
+    let total_gpu = config
+        .rules
+        .iter()
+        .filter_map(|r| {
+            let simple = r.resources.gpu.unwrap_or(0);
+            let spec = r.resources.gpu_spec.as_ref().map(|s| s.count).unwrap_or(0);
+            let total = simple + spec;
+            if total > 0 { Some(total) } else { None }
+        })
+        .max()
+        .unwrap_or(0);
+
+    let mut recommendations = serde_json::json!({
+        "min_threads": max_threads,
+    });
+    if let Some(mem_mb) = max_memory {
+        recommendations["min_memory_mb"] =
+            serde_json::Value::Number(serde_json::Number::from(mem_mb));
+    }
+    if total_gpu > 0 {
+        recommendations["min_gpu"] =
+            serde_json::Value::Number(serde_json::Number::from(total_gpu));
+    }
+
     // Build manifest
     let checksum_count = manifest_files.len();
     let timestamp = std::time::SystemTime::now()
@@ -120,6 +188,10 @@ pub fn publish_command(
         "entrypoint": workflow_path.file_name().and_then(|s| s.to_str()),
         "files": &manifest_files,
         "containers": &container_refs,
+        "resources": {
+            "rules": &resource_summary,
+            "recommendations": &recommendations,
+        },
         // Reserved for bundle signing. Always empty today — present so that adding
         // signatures later is an additive change rather than a manifest format bump.
         // Consumers read the manifest field-by-field, so an empty array is ignored

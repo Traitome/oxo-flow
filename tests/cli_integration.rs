@@ -2861,6 +2861,22 @@ fn cli_publish_manifest_reserves_signatures_field() {
         signatures.as_array().unwrap().is_empty(),
         "signatures should be empty until signing is implemented"
     );
+
+    // Verify resources field is present with per-rule and recommendation data
+    let resources = manifest
+        .get("resources")
+        .unwrap_or_else(|| panic!("manifest should include a resources field: {manifest_json}"));
+    assert!(
+        resources.get("rules").unwrap().is_array(),
+        "resources.rules should be an array"
+    );
+    let recommendations = resources
+        .get("recommendations")
+        .expect("resources.recommendations should be present");
+    assert!(
+        recommendations.get("min_threads").unwrap().as_u64().unwrap() >= 1,
+        "recommendations.min_threads should be >= 1"
+    );
 }
 
 /// Bundles must not extract to a predictable path. The old
