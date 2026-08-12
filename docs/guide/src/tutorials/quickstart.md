@@ -40,13 +40,13 @@ threads = 2
 name = "create_data"
 input = []
 output = ["data/greeting.txt"]
-shell = "mkdir -p data && echo 'Hello from oxo-flow!' > data/greeting.txt"
+shell = "echo 'Hello from oxo-flow!' > data/greeting.txt"
 
 [[rules]]
 name = "transform"
 input = ["data/greeting.txt"]
 output = ["results/uppercase.txt"]
-shell = "mkdir -p results && tr '[:lower:]' '[:upper:]' < data/greeting.txt > results/uppercase.txt"
+shell = "tr '[:lower:]' '[:upper:]' < data/greeting.txt > results/uppercase.txt"
 ```
 
 This workflow has two rules:
@@ -55,6 +55,9 @@ This workflow has two rules:
 2. **transform** — converts the file to uppercase (depends on `create_data`'s output)
 
 oxo-flow infers the dependency automatically because `transform`'s input matches `create_data`'s output.
+
+!!! tip "Output directories are created automatically"
+    oxo-flow creates parent directories for every declared `output` before running the rule — no `mkdir -p` needed in your shell commands. The `data/` and `results/` directories above are created by the engine.
 
 ---
 
@@ -84,11 +87,11 @@ DAG: (dry-run) 2 rules would execute
   1. create_data
      threads=2
      outputs: ["data/greeting.txt"]
-     command: mkdir -p data && echo 'Hello from oxo-flow!' > data/greeting.txt
+     command: echo 'Hello from oxo-flow!' > data/greeting.txt
   2. transform
      threads=2
      outputs: ["results/uppercase.txt"]
-     command: mkdir -p results && tr '[:lower:]' '[:upper:]' < data/greeting.txt > results/uppercase.txt
+     command: tr '[:lower:]' '[:upper:]' < data/greeting.txt > results/uppercase.txt
      input ✗: data/greeting.txt
 
 Summary: 2 rules, total 4 threads declared, max 2 threads/rule
