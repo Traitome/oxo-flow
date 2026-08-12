@@ -84,143 +84,42 @@ pub fn handle_report(
             .sum::<Option<f64>>()
     });
 
-    // ── Build report (works for ANY workflow type: bioinformatics, shell, ETL, etc.) ──
+    // ── Build report using the pluggable section system ──
+    // Domain auto-detection tailors sections to the workflow type.
+    // Users can override via [report].sections in their .oxoflow file.
+
+    let domain = oxo_flow_core::report::WorkflowDomain::detect(&config.rules);
+    let ctx = oxo_flow_core::report::ReportContext {
+        config: &config,
+        checkpoint: checkpoint.as_ref(),
+        domain,
+    };
+
+    // Resolve section filter from [report].sections config (if present).
+    let section_filter: Option<std::collections::HashSet<String>> =
+        config.report.as_ref().and_then(|r| {
+            let sections = &r.sections;
+            if sections.is_empty() {
+                None
+            } else {
+                Some(sections.iter().cloned().collect())
+            }
+        });
+
+    let registry = oxo_flow_core::report::SectionRegistry::with_defaults();
+    let sections = registry.generate(&ctx, section_filter.as_ref());
 
     let mut report = ReportBuilder::new(
         &format!("{} Report", config.workflow.name),
         &config.workflow.name,
         &config.workflow.version,
     );
+    for section in sections {
+        report = report.section(section);
+    }
 
-    // 1. Generic dashboard (works for any task type)
-    report = report.generic_dashboard(total_rules, completed, failed, total_runtime);
-
-    // 2. Workflow metadata
-    let mut info_pairs = vec![
-        ("Name".to_string(), config.workflow.name.clone()),
-        ("Version".to_string(), config.workflow.version.clone()),
-        ("Total Rules".to_string(), config.rules.len().to_string()),
-    ];
-    if let Some(ref desc) = config.workflow.description {
-        info_pairs.push(("Description".to_string(), desc.clone()));
-    }
-    if let Some(ref author) = config.workflow.author {
-        info_pairs.push(("Author".to_string(), author.clone()));
-    }
-    if let Some(ref genome) = config.workflow.genome_build {
-        info_pairs.push(("Genome Build".to_string(), genome.clone()));
-    }
-    if !config.config.is_empty() {
-        info_pairs.push((
-            "Config Variables".to_string(),
-            config.config.keys().cloned().collect::<Vec<_>>().join(", "),
-        ));
-    }
-    // Sample/pair info
-    let sample_count: usize = config.sample_groups.iter().map(|g| g.samples.len()).sum();
-    let pair_count = config.pairs.len();
-    if sample_count > 0 {
-        info_pairs.push(("Samples".to_string(), sample_count.to_string()));
-    }
-    if pair_count > 0 {
-        info_pairs.push(("Pairs".to_string(), pair_count.to_string()));
-    }
-    report = report.section(oxo_flow_core::report::ReportSection {
-        title: "Workflow Information".to_string(),
-        id: "workflow-info".to_string(),
-        content: oxo_flow_core::report::ReportContent::KeyValue { pairs: info_pairs },
-        subsections: vec![],
-    });
-
-    // 3. Task summary (works for shell scripts, bioinfo tools, ETL, anything)
+    // Always add a Task Summary table for quick reference
     report = report.task_summary(&config.rules);
-
-    // 4. Command manifest (shows exactly what each task executes)
-    report = report.command_manifest(&config.rules);
-
-    // 5. I/O file manifest
-    report = report.io_manifest(&config.rules);
-
-    // 6. Execution status (if checkpoint exists)
-    if let Some(ref cp) = checkpoint {
-        report = report.execution_status(&cp.completed_rules, &cp.failed_rules, &cp.benchmarks);
-
-        // Resource usage
-        let usage: Vec<oxo_flow_core::report::ResourceUsage> = cp
-            .benchmarks
-            .iter()
-            .map(|(name, b)| oxo_flow_core::report::ResourceUsage {
-                rule: name.clone(),
-                wall_time_secs: b.wall_time_secs,
-                max_memory_mb: b.max_memory_mb,
-                cpu_seconds: b.cpu_seconds,
-                threads: 0,
-                status: if cp.completed_rules.contains(name) {
-                    "success".into()
-                } else {
-                    "failed".into()
-                },
-            })
-            .collect();
-        if !usage.is_empty() {
-            report = report.resource_usage(&usage);
-        }
-    }
-
-    // 7. Environment info
-    report = report.section(oxo_flow_core::report::ReportSection {
-        title: "Environment".to_string(),
-        id: "environment".to_string(),
-        content: oxo_flow_core::report::ReportContent::KeyValue {
-            pairs: vec![
-                (
-                    "Available Backends".to_string(),
-                    "conda, pixi, docker, singularity, venv, system".to_string(),
-                ),
-                (
-                    "oxo-flow Version".to_string(),
-                    env!("CARGO_PKG_VERSION").to_string(),
-                ),
-            ],
-        },
-        subsections: vec![],
-    });
-
-    // 8. Clinical compliance audit trail (always included for traceability)
-    report = report.section(oxo_flow_core::report::ReportSection {
-        title: "Clinical Compliance".to_string(),
-        id: "clinical-compliance".to_string(),
-        content: oxo_flow_core::report::ReportContent::KeyValue {
-            pairs: vec![
-                (
-                    "ACMG/AMP Classification Framework".to_string(),
-                    "Tier I-IV (somatic) + Pathogenic-Benign (germline)".to_string(),
-                ),
-                (
-                    "Variant Classification Model".to_string(),
-                    "VariantClassification enum with 9 tiers".to_string(),
-                ),
-                (
-                    "Audit Trail".to_string(),
-                    "ComplianceEvent with timestamp, actor, evidence hash".to_string(),
-                ),
-                (
-                    "Gene Panel Support".to_string(),
-                    "GenePanel with name, version, genes, BED file".to_string(),
-                ),
-                (
-                    "Biomarker Tracking".to_string(),
-                    "BiomarkerResult with value, units, reference range, interpretation"
-                        .to_string(),
-                ),
-                (
-                    "QC Thresholds".to_string(),
-                    "QcThreshold with min/max, unit, and passes() method".to_string(),
-                ),
-            ],
-        },
-        subsections: vec![],
-    });
 
     let report = report.build();
 

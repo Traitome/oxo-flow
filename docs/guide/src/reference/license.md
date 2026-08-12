@@ -49,12 +49,12 @@ The web server verifies its license at startup:
 export OXO_FLOW_LICENSE=/path/to/license.oxo.json
 
 # Upload via API
-curl -X POST http://localhost:3000/api/license/upload \
+curl -X POST http://localhost:8080/api/license/upload \
   -H "Content-Type: application/json" \
   -d '{"license_data": "..."}'
 
 # Check status
-curl http://localhost:3000/api/license
+curl http://localhost:8080/api/license
 ```
 
 ## License Visibility
@@ -67,7 +67,7 @@ The license is prominently displayed in three locations:
 
 ```
 X-OxoFlow-License: oxo-flow-core,oxo-flow-cli:Apache-2.0; oxo-flow-web:Dual(Academic|Commercial)
-X-OxoFlow-Version: 0.10.0
+X-OxoFlow-Version: 0.10.1
 ```
 
 ## Key Principles

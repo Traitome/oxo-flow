@@ -1,6 +1,6 @@
 # Collaboration
 
-oxo-flow v0.8 introduces collaboration primitives for sharing and versioning
+oxo-flow v0.10.x introduces collaboration primitives for sharing and versioning
 pipelines across users and teams.
 
 ## Overview
@@ -19,7 +19,7 @@ copy — changes to the original do not affect the fork, and vice versa.
 
 ```bash
 # API
-curl -X POST http://localhost:3000/api/pipelines/pipeline-abc/fork \
+curl -X POST http://localhost:8080/api/pipelines/pipeline-abc/fork \
   -H "Content-Type: application/json" \
   -d '{"user_id": "alice"}'
 
@@ -37,7 +37,7 @@ Forks record their lineage — the `forked_from` field tracks the source pipelin
 Compare two pipelines and see what changed:
 
 ```bash
-curl -X POST http://localhost:3000/api/pipelines/diff \
+curl -X POST http://localhost:8080/api/pipelines/diff \
   -H "Content-Type: application/json" \
   -d '{"pipeline_a_id": "pipeline-abc", "pipeline_b_id": "pipeline-def"}'
 
@@ -60,19 +60,19 @@ Share a pipeline via a link or within your workspace:
 
 ```bash
 # Share via link (anyone with the link can view)
-curl -X POST http://localhost:3000/api/pipelines/pipeline-abc/share \
+curl -X POST http://localhost:8080/api/pipelines/pipeline-abc/share \
   -H "Content-Type: application/json" \
   -d '{"visibility": "link", "expires_in_days": 30}'
 
 # Response
 {
-  "share_url": "oxo+https://lab.example.com:3000/share/abc123",
+  "share_url": "oxo+https://lab.example.com:8080/share/abc123",
   "access_token": "abc123",
   "expires_at": "2024-02-12T00:00:00Z"
 }
 
 # Share within workspace (visible to all workspace members)
-curl -X POST http://localhost:3000/api/pipelines/pipeline-abc/share \
+curl -X POST http://localhost:8080/api/pipelines/pipeline-abc/share \
   -H "Content-Type: application/json" \
   -d '{"visibility": "workspace"}'
 ```
@@ -86,9 +86,9 @@ curl -X POST http://localhost:3000/api/pipelines/pipeline-abc/share \
 Import a pipeline from an `oxo+https://` share link:
 
 ```bash
-curl -X POST http://localhost:3000/api/pipelines/import \
+curl -X POST http://localhost:8080/api/pipelines/import \
   -H "Content-Type: application/json" \
-  -d '{"url": "oxo+https://lab.example.com:3000/share/abc123"}'
+  -d '{"url": "oxo+https://lab.example.com:8080/share/abc123"}'
 
 # Response
 {

@@ -147,13 +147,13 @@ try using SSH to clone as a first alternative — SSH often bypasses the same
 network issues that affect HTTPS:
 
 ```bash
-git clone git@github.com:oxoflow/oxo-flow.git
+git clone git@github.com:Traitome/oxo-flow.git
 ```
 
 To convert an existing HTTPS remote to SSH:
 
 ```bash
-git remote set-url origin git@github.com:oxoflow/oxo-flow.git
+git remote set-url origin git@github.com:Traitome/oxo-flow.git
 ```
 
 You can also configure Git to always rewrite HTTPS URLs to SSH globally:

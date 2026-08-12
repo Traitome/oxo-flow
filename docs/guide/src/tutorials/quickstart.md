@@ -184,7 +184,7 @@ oxo-flow graph my-pipeline.oxoflow -f dot | dot -Tpng -o dag.png
 
 ---
 
-## Web Interface (v0.8)
+## Web Interface
 
 Start the web server for a browser-based workflow experience:
 
@@ -195,11 +195,11 @@ oxo-flow serve
 # Team mode (multi-user, OAuth2)
 oxo-flow serve --mode team
 
-# HPC mode (cluster submit panel)
-oxo-flow serve --mode hpc --scheduler slurm
+# HPC mode (cluster submit panel, scheduler auto-detected)
+oxo-flow serve --mode hpc
 ```
 
-Open `http://localhost:3000` to access the web UI with:
+Open `http://localhost:8080` to access the web UI with:
 - DAG visualization with live status
 - Pipeline validation and execution monitoring
 - AI-powered pipeline generation from natural language
