@@ -47,6 +47,9 @@ Replace `qc-pipeline.oxoflow` with:
 !!! tip "Configuration Syntax"
     `{config.samples_dir}` refers to the `samples_dir` variable defined in the `[config]` section. This allows you to centralize paths and settings.
 
+!!! info "Wildcard Patterns"
+    The `{sample}` in the file paths below is a **wildcard**. oxo-flow will scan your `raw_data` directory for files matching the pattern `{sample}_R1.fastq.gz`, extract the sample name, and automatically generate a task for every sample it finds.
+
 ```toml
 [workflow]
 name = "qc-pipeline"
@@ -61,9 +64,6 @@ results_dir = "results"
 [defaults]
 threads = 4
 memory = "8G"
-
-!!! info "Wildcard Patterns"
-    The `{sample}` in the file paths below is a **wildcard**. oxo-flow will scan your `raw_data` directory for files matching the pattern `{sample}_R1.fastq.gz`, extract the sample name, and automatically generate a task for every sample it finds.
 
 [[rules]]
 name = "fastqc_raw"
