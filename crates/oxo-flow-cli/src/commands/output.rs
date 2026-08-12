@@ -68,22 +68,6 @@ pub fn handle_report(
         }
     };
 
-    let completed = checkpoint
-        .as_ref()
-        .map(|c| c.completed_rules.len())
-        .unwrap_or(0);
-    let failed = checkpoint
-        .as_ref()
-        .map(|c| c.failed_rules.len())
-        .unwrap_or(0);
-    let total_rules = config.rules.len();
-    let total_runtime = checkpoint.as_ref().and_then(|c| {
-        c.benchmarks
-            .values()
-            .map(|b| Some(b.wall_time_secs))
-            .sum::<Option<f64>>()
-    });
-
     // ── Build report using the pluggable section system ──
     // Domain auto-detection tailors sections to the workflow type.
     // Users can override via [report].sections in their .oxoflow file.

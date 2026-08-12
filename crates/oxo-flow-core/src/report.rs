@@ -1827,10 +1827,10 @@ impl SectionRegistry {
     ) -> Vec<ReportSection> {
         let mut sections = Vec::new();
         for generator in &self.generators {
-            if let Some(ref filter_set) = filter {
-                if !filter_set.contains(generator.name()) {
-                    continue;
-                }
+            if let Some(filter_set) = filter
+                && !filter_set.contains(generator.name())
+            {
+                continue;
             }
             if generator.applicable(ctx) {
                 sections.extend(generator.generate(ctx));
