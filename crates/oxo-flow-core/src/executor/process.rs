@@ -342,9 +342,9 @@ impl LocalExecutor {
             EnvironmentResolver::with_cache_dir(&cache_dir)
         };
         let (max_threads, max_memory_mb) = Self::detect_system_resources(&config);
-        tracing::info!(
+        tracing::debug!(
             threads = max_threads,
-            memory_mb = max_memory_mb,
+            memory_gb = format!("{:.1}", max_memory_mb as f64 / 1024.0),
             "Detected system resources"
         );
         let mut resource_pool = ResourcePool::new(max_threads, max_memory_mb);
