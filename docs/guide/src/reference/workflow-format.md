@@ -335,18 +335,36 @@ environment = { conda = "envs/base.yaml" }
 
 ## `[report]` — Report Configuration
 
+Configure report generation behavior. Reports are built by a pluggable section system — each section is produced by a `ReportSectionGenerator`. Use `sections` to control which generators run.
+
 ```toml
 [report]
 template = "clinical"
 format = ["html", "json"]
-sections = ["summary", "variants", "quality"]
+sections = ["universal", "workflow-info", "commands", "clinical-compliance"]
 ```
 
 | Field | Type | Description |
 |---|---|---|
 | `template` | String | Report template name |
 | `format` | Array | Output formats to generate |
-| `sections` | Array | Report sections to include |
+| `sections` | Array | Report sections to include. If empty (or omitted), all applicable generators run. Available built-in IDs: `universal`, `execution-status`, `clinical-compliance`, `workflow-info`, `commands`, `file-manifest`, `environment` |
+
+### How Sections Work
+
+Each section ID maps to a registered `ReportSectionGenerator`:
+
+| Section ID | Description | When Active |
+|-----------|-------------|-------------|
+| `universal` | Dashboard with QC indicators and task counts | Always |
+| `workflow-info` | Name, version, author, config, sample/pair counts | Always |
+| `commands` | Expanded shell commands for every rule | Always |
+| `file-manifest` | Input and output file listings | Always |
+| `environment` | Available backends and oxo-flow version | Always |
+| `clinical-compliance` | ACMG/AMP classification, audit trail, biomarkers | Always |
+| `execution-status` | Per-rule execution status and benchmark metrics | Only with checkpoint |
+
+The domain (DNA-seq, RNA-seq, epigenomics, clinical, generic) is auto-detected from tool names in the workflow. Custom generators can be registered programmatically.
 
 ---
 
