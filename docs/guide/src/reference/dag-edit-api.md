@@ -13,7 +13,9 @@ The DAG Edit domain (`crates/oxo-flow-web/src/domains/dag/service.rs`) provides 
 3. **Formatted** — the config is serialized back to canonical TOML
 4. **Validated** — the result is validated through the workflow validation pipeline
 
-Edits that produce invalid workflows are rejected before the TOML is persisted.
+Edits that produce invalid workflows are still applied and persisted — the
+response reports `success: false` with the `validation_errors` populated, so the
+problematic state can be inspected and fixed with a follow-up edit.
 
 ---
 

@@ -36,7 +36,7 @@ oxo-flow run [OPTIONS] [WORKFLOW]
 | `--skip-ref-build` | — | — | Skip automatic reference/index building (assume pre-built) |
 | `--cache-dir` | — | — | Directory for caching environment setup state |
 | `--resume-failed` | — | — | Resume only failed rules from a previous run |
-| `--profile` | — | `local` | Execution profile: `local`, `slurm`, `pbs`, `sge`, or `lsf` |
+| `--profile` | — | — | Execution profile: `local`, `slurm`, `pbs`, `sge`, or `lsf` |
 | `--provenance` | — | — | Track output file checksums for later verification |
 | `--arg` | — | — | Legacy form: set a workflow config value (`KEY=VALUE`). Repeatable. See `[config]` in workflow-format |
 | `--sample` | — | — | Add a sample to the run. Repeatable. Merges with sample_pattern/CSV sources |
@@ -159,7 +159,7 @@ oxo-flow automatically persists execution state to a **checkpoint file** after e
 
 By default, checkpoints are saved in a hidden `.oxo-flow/` directory located in the same folder as the workflow file.
 
-- **Filename**: `checkpoint_<workflow_name>.json`
+- **Filename**: `checkpoint.json` (the name is always the same regardless of workflow name)
 
 ### Forcing Execution
 

@@ -63,6 +63,8 @@ name   = "align_experiment"
 input  = ["raw/{experiment}_R1.fq.gz", "raw/{experiment}_R2.fq.gz"]
 output = ["aligned/{experiment}.bam"]
 shell  = "bwa mem -t 8 {config.reference} {input[0]} {input[1]} | samtools sort -o {output[0]}"
+
+[rules.resources]
 threads = 8
 
 [[rules]]
@@ -70,6 +72,8 @@ name   = "align_control"
 input  = ["raw/{control}_R1.fq.gz", "raw/{control}_R2.fq.gz"]
 output = ["aligned/{control}.bam"]
 shell  = "bwa mem -t 8 {config.reference} {input[0]} {input[1]} | samtools sort -o {output[0]}"
+
+[rules.resources]
 threads = 8
 
 [[rules]]
@@ -77,6 +81,8 @@ name   = "mutect2"
 input  = ["aligned/{experiment}.bam", "aligned/{control}.bam"]
 output = ["variants/{pair_id}.vcf.gz"]
 shell  = "gatk Mutect2 -R {config.reference} -I {input[0]} -I {input[1]} -normal {control} -O {output[0]}"
+
+[rules.resources]
 threads = 4
 ```
 

@@ -21,6 +21,8 @@ Match threads to the tool's actual parallelism capability. Oversubscribing waste
 # Example: BWA alignment
 [[rules]]
 name = "bwa_align"
+
+[rules.resources]
 threads = 16
 memory = "32G"  # 2× expected input size
 ```
@@ -52,6 +54,8 @@ memory = "32G"  # 2× expected input size
 # Example: WGS variant calling
 [[rules]]
 name = "haplotype_caller"
+
+[rules.resources]
 threads = 8
 memory = "64G"
 ```
@@ -63,6 +67,8 @@ memory = "64G"
 ```toml
 [[rules]]
 name = "gpu_training"
+
+[rules.resources]
 threads = 8
 memory = "64G"
 
@@ -84,11 +90,13 @@ Generated SLURM directive: `--gres=gpu:a100:2:40g --mem-per-gpu=40G`
 
 ### PBS/SGE GPU
 
-GPU syntax varies by site. Use `extra_args`:
+GPU syntax varies by site. Use `extra_args` in the `[cluster]` section:
 
 ```toml
 [rules.resources]
 gpu = 2
+
+[cluster]
 extra_args = ["-l ngpus=2:type=a100"]  # Site-specific
 ```
 
@@ -137,12 +145,16 @@ Useful for shared servers or when running multiple workflows.
 # Local development (undersubscribe)
 [[rules]]
 name = "align"
+
+[rules.resources]
 threads = 4
 memory = "8G"
 
 # HPC production (full allocation)
 [[rules]]
 name = "align"
+
+[rules.resources]
 threads = 32
 memory = "128G"
 partition = "highmem"

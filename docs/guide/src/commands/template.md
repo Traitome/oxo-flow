@@ -22,6 +22,10 @@ from a one-rule hello-world to production-grade multi-omics pipelines.
 | Option | Description |
 |--------|-------------|
 | `-o, --output <OUTPUT>` | Output path (file or directory). Defaults to current directory with template name |
+| `--ai` | Generate the workflow with AI from a natural language description |
+| `--from-url <URL>` | URL(s) to use as reference material for AI generation (repeatable) |
+| `--from-file <PATH>` | File(s) to use as reference material for AI generation (repeatable) |
+| `--ai-max-retries <N>` | Maximum AI correction rounds (overrides config) |
 
 ## Examples
 

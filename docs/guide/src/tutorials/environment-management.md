@@ -196,11 +196,14 @@ oxo-flow env list
 ```
 oxo-flow 0.10.1 — Bioinformatics Pipeline Engine
 Available environment backends:
+  ✓ system
+  ✓ mamba
   ✓ conda
   ✓ docker
-  ✓ singularity
   ✓ venv
 ```
+
+The output is system-dependent — only backends installed on the current machine are listed (unavailable ones are omitted entirely).
 
 Check that all environments in a specific workflow are valid:
 
@@ -209,7 +212,8 @@ oxo-flow env check my-pipeline.oxoflow
 ```
 
 ```
-  ✓ align (conda)
+oxo-flow 0.10.1 — Bioinformatics Pipeline Engine
+  ✓ align (docker)
   ✓ call_variants (conda)
   ✓ plot_results (venv)
 ```

@@ -361,10 +361,12 @@ Each `[[rules]]` entry defines a pipeline step. The double brackets indicate a T
 name = "align"
 input = ["{sample}_R1.fastq.gz", "{sample}_R2.fastq.gz"]
 output = ["aligned/{sample}.bam"]
-threads = 16
-memory = "32G"
 environment = { conda = "envs/alignment.yaml" }
 shell = "bwa mem -t {threads} {config.reference} {input} | samtools sort -o {output}"
+
+[rules.resources]
+threads = 16
+memory = "32G"
 ```
 
 ### All fields
@@ -561,11 +563,11 @@ For rules needing GPU, disk, or time limits, use the `resources` sub-table:
 name = "gpu_task"
 input = ["data.h5"]
 output = ["model.pt"]
-threads = 8
-memory = "64G"
 shell = "python train.py"
 
 [rules.resources]
+threads = 8
+memory = "64G"
 gpu = 1
 disk = "200G"
 time_limit = "48h"
@@ -815,13 +817,17 @@ checksum = "sha256"
 ```toml
 [[rules]]
 name = "align_default"
+tags = ["alignment", "production"]
+
+[rules.resources]
 threads = 8
 memory = "32G"
-tags = ["alignment", "production"]
 
 [[rules]]
 name = "align_fast"
 extends = "align_default"  # Inherits threads, memory, tags
+
+[rules.resources]
 threads = 16  # Override inherited value
 ```
 
@@ -905,8 +911,8 @@ protocol = "Illumina_NovaSeq_6000"
 ### Scatter-Gather (Legacy)
 
 The `scatter` field provides fan-out parallelism over a variable with optional
-gather. For new workflows, prefer the unified [`transform`](#transform-operator)
-operator.
+gather. For new workflows, prefer the unified
+[`transform`](#transform-unified-scatter-gather-operator) operator.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -1431,7 +1437,7 @@ by = "chunk"
 n = "5"
 
 [rules.transform]
-map = "process {input} > .oxo-flow/chunks/{chunk}.txt"
+map = "process {input} > {output}"
 
 [rules.transform.combine]
 aggregate = true
@@ -1448,7 +1454,7 @@ by = "chr"
 values_from = "config.chromosomes"
 
 [rules.transform]
-map = "samtools flagstat {input} > qc/{chr}.flagstat.txt"
+map = "samtools flagstat {input} > {output}"
 # No combine section
 ```
 
@@ -1531,10 +1537,12 @@ shell = "fastp --in1 {input[0]} --in2 {input[1]} --out1 {output[0]} --thread {th
 name = "align"
 input = ["{config.results}/trimmed/{sample}_R1.fastq.gz"]
 output = ["{config.results}/aligned/{sample}.bam"]
-threads = 16
-memory = "32G"
 environment = { conda = "envs/alignment.yaml" }
 shell = "bwa mem -t {threads} {config.reference} {input} | samtools sort -o {output}"
+
+[rules.resources]
+threads = 16
+memory = "32G"
 ```
 
 ---

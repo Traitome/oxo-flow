@@ -95,8 +95,6 @@ output = [
     "{config.results}/trimmed/{sample}_R1.fastq.gz",
     "{config.results}/trimmed/{sample}_R2.fastq.gz"
 ]
-threads = 4
-memory = "8G"
 environment = { conda = "envs/alignment.yaml" }
 shell = """
 mkdir -p {config.results}/trimmed
@@ -108,6 +106,10 @@ fastp \
   --thread {threads}
 """
 
+[rules.resources]
+threads = 4
+memory = "8G"
+
 [[rules]]
 name = "align"
 input = [
@@ -115,8 +117,6 @@ input = [
     "{config.results}/trimmed/{sample}_R2.fastq.gz"
 ]
 output = ["{config.results}/aligned/{sample}.bam"]
-threads = 16
-memory = "32G"
 environment = { conda = "envs/alignment.yaml" }
 shell = """
 mkdir -p {config.results}/aligned
@@ -128,6 +128,10 @@ bwa mem -t {threads} -R '@RG\\tID:{sample}\\tSM:{sample}\\tPL:ILLUMINA' \
 samtools index {config.results}/aligned/{sample}.bam
 """
 
+[rules.resources]
+threads = 16
+memory = "32G"
+
 [[rules]]
 name = "mark_duplicates"
 input = ["{config.results}/aligned/{sample}.bam"]
@@ -135,8 +139,6 @@ output = [
     "{config.results}/dedup/{sample}.dedup.bam",
     "{config.results}/dedup/{sample}.metrics.txt"
 ]
-threads = 4
-memory = "16G"
 environment = { conda = "envs/gatk.yaml" }
 shell = """
 mkdir -p {config.results}/dedup
@@ -147,12 +149,14 @@ gatk MarkDuplicates \
   --CREATE_INDEX true
 """
 
+[rules.resources]
+threads = 4
+memory = "16G"
+
 [[rules]]
 name = "base_recalibration"
 input = ["{config.results}/dedup/{sample}.dedup.bam"]
 output = ["{config.results}/recal/{sample}.recal.table"]
-threads = 4
-memory = "16G"
 environment = { conda = "envs/gatk.yaml" }
 shell = """
 mkdir -p {config.results}/recal
@@ -163,6 +167,10 @@ gatk BaseRecalibrator \
   -O {config.results}/recal/{sample}.recal.table
 """
 
+[rules.resources]
+threads = 4
+memory = "16G"
+
 [[rules]]
 name = "apply_bqsr"
 input = [
@@ -170,8 +178,6 @@ input = [
     "{config.results}/recal/{sample}.recal.table"
 ]
 output = ["{config.results}/recal/{sample}.recal.bam"]
-threads = 4
-memory = "16G"
 environment = { conda = "envs/gatk.yaml" }
 shell = """
 gatk ApplyBQSR \
@@ -181,12 +187,14 @@ gatk ApplyBQSR \
   -O {config.results}/recal/{sample}.recal.bam
 """
 
+[rules.resources]
+threads = 4
+memory = "16G"
+
 [[rules]]
 name = "mutect2"
 input = ["{config.results}/recal/{sample}.recal.bam"]
 output = ["{config.results}/variants/{sample}.vcf.gz"]
-threads = 4
-memory = "16G"
 environment = { conda = "envs/gatk.yaml" }
 shell = """
 mkdir -p {config.results}/variants
@@ -196,12 +204,14 @@ gatk Mutect2 \
   -O {config.results}/variants/{sample}.vcf.gz
 """
 
+[rules.resources]
+threads = 4
+memory = "16G"
+
 [[rules]]
 name = "filter_variants"
 input = ["{config.results}/variants/{sample}.vcf.gz"]
 output = ["{config.results}/filtered/{sample}.filtered.vcf.gz"]
-threads = 2
-memory = "8G"
 environment = { conda = "envs/bcftools.yaml" }
 shell = """
 mkdir -p {config.results}/filtered
@@ -211,6 +221,10 @@ bcftools filter \
   bcftools view -f PASS -Oz -o {config.results}/filtered/{sample}.filtered.vcf.gz
 bcftools index -t {config.results}/filtered/{sample}.filtered.vcf.gz
 """
+
+[rules.resources]
+threads = 2
+memory = "8G"
 ```
 
 ---

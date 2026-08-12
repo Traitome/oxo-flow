@@ -1,6 +1,6 @@
 # Generate Reports
 
-This guide explains how to use oxo-flow's reporting system to produce structured HTML and JSON reports from workflow executions.
+This guide explains how to use oxo-flow's reporting system to produce structured HTML, JSON, and PDF reports from workflow executions.
 
 ---
 
@@ -47,16 +47,23 @@ Add a `[report]` section to your workflow file to customize report output:
 ```toml
 [report]
 template = "clinical"
-format = ["html", "json"]
+format = ["html", "json", "pdf"]
 sections = ["summary", "variants", "quality"]
 ```
+
+> **Note — planned, not yet active**: the `[report]` section is parsed by the
+> core library but **not yet consumed by any code path**. It is planned
+> functionality; report output is currently controlled entirely via the
+> `oxo-flow report` CLI flags (`-f`, `-o`). Likewise, there are no built-in
+> report templates such as `"clinical"` or `"research"` yet — the `template`
+> field is a free-form string reserved for future use.
 
 ### Fields
 
 | Field | Type | Description |
 |---|---|---|
-| `template` | String | Report template name (e.g., `"clinical"`, `"research"`) |
-| `format` | Array | Output formats to generate (`"html"`, `"json"`) |
+| `template` | String | Report template name (free-form; no built-in templates such as `"clinical"`/`"research"` exist yet) |
+| `format` | Array | Output formats to generate (`"html"`, `"json"`, `"pdf"`) |
 | `sections` | Array | Sections to include in the report |
 
 ---
@@ -104,6 +111,28 @@ Example output structure:
     }
   ]
 }
+```
+
+---
+
+## PDF Reports
+
+PDF reports are converted from the HTML report via `wkhtmltopdf`. Install it first:
+
+```bash
+brew install wkhtmltopdf   # macOS
+apt install wkhtmltopdf    # Linux
+```
+
+```bash
+oxo-flow report pipeline.oxoflow -f pdf -o report.pdf
+```
+
+You can also output the raw `wkhtmltopdf` command for scripting or custom
+processing:
+
+```bash
+oxo-flow report pipeline.oxoflow -f pdf-command
 ```
 
 ---

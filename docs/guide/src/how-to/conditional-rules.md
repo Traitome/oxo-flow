@@ -8,7 +8,7 @@ A single pipeline often needs to adapt to different inputs: WGS vs. WES sequenci
 
 ## Solution: `when` expressions
 
-Add a `when` field to any rule.  The expression is evaluated against your `[config]` section before the DAG is built.  When `when` evaluates to `false`, the rule is **removed from the DAG entirely** — its outputs are not expected and downstream rules that depend on them are handled accordingly.
+Add a `when` field to any rule.  The expression is evaluated against your `[config]` section at execution time.  When `when` evaluates to `false`, the rule is **not removed from the DAG** — it stays in the graph but is **skipped at execution time** (reported as `Skipped` in the run output), so its outputs are not produced.
 
 ```toml
 [[rules]]
@@ -113,13 +113,15 @@ With `sequencing_mode = "WGS"` and `run_qc = true` and `min_coverage = 35`:
 
 ## Checking Which Rules Will Run
 
-Use `oxo-flow dry-run` to preview the effective DAG after condition evaluation:
+Use `oxo-flow dry-run` to preview the execution plan:
 
 ```bash
 oxo-flow dry-run my-pipeline.oxoflow
 ```
 
-Skipped rules are listed separately in the dry-run output.
+Note that dry-run does **not** evaluate `when` conditions — all rules appear in
+the plan. `when` is evaluated at execution time: rules whose condition is false
+are skipped and reported as `Skipped` in the run output.
 
 ## Full Example
 

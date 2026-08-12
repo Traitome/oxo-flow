@@ -134,12 +134,14 @@ input = [
 output = [
     "{config.results_dir}/multiqc/multiqc_report.html"
 ]
-threads = 1
 environment = { conda = "envs/qc.yaml" }
 shell = """
 mkdir -p {config.results_dir}/multiqc
 multiqc {config.results_dir} -o {config.results_dir}/multiqc --force
 """
+
+[rules.resources]
+threads = 1
 ```
 
 ---
@@ -181,10 +183,54 @@ echo "@test2" | gzip > raw_data/sample2_R2.fastq.gz
 
 ```bash
 oxo-flow validate qc-pipeline.oxoflow
-# ✓ qc-pipeline.oxoflow — 4 rules, 4 dependencies
+# ✓ qc-pipeline.oxoflow — 4 rules, 2 dependencies
 
 oxo-flow dry-run qc-pipeline.oxoflow
 ```
+
+```
+oxo-flow 0.10.1 — Bioinformatics Pipeline Engine
+DAG: (dry-run) 4 rules would execute
+  1. multiqc
+     threads=1
+     env=conda
+     memory=8G
+     outputs: ["results/multiqc/multiqc_report.html"]
+     command: mkdir -p results/multiqc
+multiqc results -o results/multiqc --force
+
+  2. fastp_trim
+     threads=4
+     env=conda
+     memory=8G
+     outputs: ["results/trimmed/{sample}_R1.fastq.gz", "results/trimmed/{sample}_R2.fastq.gz", "results/trimmed/{sample}_fastp.html", "results/trimmed/{sample}_fastp.json"]
+     command: mkdir -p results/trimmed
+fastp --in1 raw_data/{sample}_R1.fastq.gz --in2 raw_data/{sample}_R2.fastq.gz --out1 results/trimmed/{sample}_R1.fastq.gz --out2 results/trimmed/{sample}_R2.fastq.gz --html results/trimmed/{sample}_fastp.html --json results/trimmed/{sample}_fastp.json --thread 4
+
+  3. fastqc_trimmed
+     threads=4
+     env=conda
+     memory=8G
+     outputs: ["results/fastqc_trimmed/{sample}_R1_fastqc.html", "results/fastqc_trimmed/{sample}_R1_fastqc.zip"]
+     command: mkdir -p results/fastqc_trimmed
+fastqc results/trimmed/{sample}_R1.fastq.gz results/trimmed/{sample}_R2.fastq.gz -o results/fastqc_trimmed -t 4
+
+  4. fastqc_raw
+     threads=4
+     env=conda
+     memory=8G
+     outputs: ["results/fastqc/{sample}_R1_fastqc.html", "results/fastqc/{sample}_R1_fastqc.zip", "results/fastqc/{sample}_R2_fastqc.html", "results/fastqc/{sample}_R2_fastqc.zip"]
+     command: mkdir -p results/fastqc
+fastqc raw_data/{sample}_R1.fastq.gz raw_data/{sample}_R2.fastq.gz -o results/fastqc -t 4
+
+
+Summary: 4 rules, total 13 threads declared, max 4 threads/rule
+         4 rule(s) with memory requirements
+
+To execute:  oxo-flow run qc-pipeline.oxoflow -j 10
+```
+
+The dry-run expands `{config.*}` variables but leaves `{sample}` wildcards unexpanded. Unlike concrete input paths (reported as `input ✓`/`input ✗`), wildcard inputs are not checked for existence in dry-run mode.
 
 ---
 
@@ -213,7 +259,7 @@ The `-j 4` flag allows up to 4 jobs to run concurrently. oxo-flow will execute `
 | **Workflow metadata** | `[workflow]` section with name, version, description |
 | **Configuration variables** | `[config]` section referenced as `{config.samples_dir}` |
 | **Defaults** | `[defaults]` section applied to all rules |
-| **Per-rule overrides** | `multiqc` rule overrides `threads = 1` |
+| **Per-rule overrides** | `multiqc` rule overrides `threads = 1` in `[rules.resources]` |
 | **Environment specs** | `environment = { conda = "envs/qc.yaml" }` |
 | **Wildcard patterns** | `{sample}` in file paths |
 | **Multi-line shell** | Triple-quoted strings with `"""` |

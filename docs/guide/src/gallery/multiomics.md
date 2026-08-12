@@ -66,8 +66,6 @@ memory = "8G"
 name = "wgs_align"
 input = ["wgs/{sample}_R1.fastq.gz", "wgs/{sample}_R2.fastq.gz"]
 output = ["wgs_aligned/{sample}.sorted.bam"]
-threads = 16
-memory = "32G"
 description = "WGS read alignment with BWA-MEM2"
 shell = """
 mkdir -p wgs_aligned
@@ -76,6 +74,10 @@ bwa-mem2 mem -t {threads} {config.reference} {input[0]} {input[1]} \
 samtools index {output[0]}
 """
 
+[rules.resources]
+threads = 16
+memory = "32G"
+
 [rules.environment]
 docker = "biocontainers/bwa-mem2:2.2.1"
 
@@ -83,8 +85,6 @@ docker = "biocontainers/bwa-mem2:2.2.1"
 name = "wgs_call_variants"
 input = ["wgs_aligned/{sample}.sorted.bam"]
 output = ["wgs_variants/{sample}.vcf.gz"]
-threads = 8
-memory = "16G"
 description = "Variant calling with GATK HaplotypeCaller"
 shell = """
 mkdir -p wgs_variants
@@ -92,6 +92,10 @@ gatk HaplotypeCaller \
     -I {input[0]} -R {config.reference} \
     -O {output[0]} --native-pair-hmm-threads {threads}
 """
+
+[rules.resources]
+threads = 8
+memory = "16G"
 
 [rules.environment]
 singularity = "docker://broadinstitute/gatk:4.5.0.0"
@@ -102,8 +106,6 @@ singularity = "docker://broadinstitute/gatk:4.5.0.0"
 name = "rnaseq_align"
 input = ["rnaseq/{sample}_R1.fastq.gz", "rnaseq/{sample}_R2.fastq.gz"]
 output = ["rnaseq_aligned/{sample}/Aligned.sortedByCoord.out.bam"]
-threads = 16
-memory = "32G"
 description = "RNA-seq splice-aware alignment with STAR"
 shell = """
 mkdir -p rnaseq_aligned/{sample}
@@ -115,6 +117,10 @@ STAR --runThreadN {threads} \
      --outFileNamePrefix rnaseq_aligned/{sample}/
 """
 
+[rules.resources]
+threads = 16
+memory = "32G"
+
 [rules.environment]
 conda = "envs/star.yaml"
 
@@ -122,7 +128,6 @@ conda = "envs/star.yaml"
 name = "rnaseq_quantify"
 input = ["rnaseq_aligned/{sample}/Aligned.sortedByCoord.out.bam"]
 output = ["expression/{sample}.counts.txt"]
-threads = 4
 description = "Gene expression quantification with featureCounts"
 shell = """
 mkdir -p expression
@@ -131,6 +136,9 @@ featureCounts -T {threads} \
               -o {output[0]} -p --countReadPairs \
               {input[0]}
 """
+
+[rules.resources]
+threads = 4
 
 [rules.environment]
 conda = "envs/subread.yaml"
@@ -141,8 +149,6 @@ conda = "envs/subread.yaml"
 name = "bismark_align"
 input = ["methyl/{sample}_R1.fastq.gz", "methyl/{sample}_R2.fastq.gz"]
 output = ["methyl_aligned/{sample}.deduplicated.bam"]
-threads = 8
-memory = "32G"
 description = "Bisulfite-seq alignment with Bismark"
 shell = """
 mkdir -p methyl_aligned
@@ -153,6 +159,10 @@ deduplicate_bismark --bam methyl_aligned/{sample}_R1_bismark_bt2_pe.bam \
         -o methyl_aligned/{sample}
 """
 
+[rules.resources]
+threads = 8
+memory = "32G"
+
 [rules.environment]
 conda = "envs/bismark.yaml"
 
@@ -160,8 +170,6 @@ conda = "envs/bismark.yaml"
 name = "methylation_extract"
 input = ["methyl_aligned/{sample}.deduplicated.bam"]
 output = ["methylation/{sample}.CpG_report.txt"]
-threads = 4
-memory = "16G"
 description = "Extract CpG methylation calls"
 shell = """
 mkdir -p methylation
@@ -170,6 +178,10 @@ bismark_methylation_extractor --paired-end --comprehensive \
     --parallel {threads} --CX --cytosine_report \
     -o methylation/ {input[0]}
 """
+
+[rules.resources]
+threads = 4
+memory = "16G"
 
 [rules.environment]
 conda = "envs/bismark.yaml"
@@ -184,8 +196,6 @@ input = [
     "methylation/{sample}.CpG_report.txt"
 ]
 output = ["integration/{sample}.integrated.json"]
-threads = 4
-memory = "16G"
 description = "Integrate multi-omics data layers for each sample"
 shell = """
 mkdir -p integration
@@ -199,6 +209,10 @@ echo '  "methylation_file": "{input[2]}",' >> {output[0]}
 echo '  "status": "integrated"' >> {output[0]}
 echo '}' >> {output[0]}
 """
+
+[rules.resources]
+threads = 4
+memory = "16G"
 
 [[rules]]
 name = "generate_report"

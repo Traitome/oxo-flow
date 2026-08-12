@@ -1,6 +1,6 @@
 # Deployment Modes
 
-oxo-flow v0.8 supports three deployment modes from a single binary.
+oxo-flow v0.10.x supports three deployment modes from a single binary.
 Choose the mode that fits your team size and infrastructure.
 
 ## Quick Reference
@@ -13,7 +13,7 @@ oxo-flow serve
 oxo-flow serve --mode team
 
 # HPC submit panel
-oxo-flow serve --mode hpc --scheduler slurm
+oxo-flow serve --mode hpc
 ```
 
 ## Mode 1: Personal (Default)
@@ -22,7 +22,7 @@ oxo-flow serve --mode hpc --scheduler slurm
 
 | Setting | Value |
 |---------|-------|
-| Network | `127.0.0.1:3000` (localhost only) |
+| Network | `127.0.0.1:8080` (localhost only) |
 | Database | SQLite file (`oxo-flow.db`) |
 | Auth | None (single user) |
 | Workspace | `workspace/personal/` |
@@ -35,7 +35,7 @@ oxo-flow serve
 oxo-flow serve -p 9090
 
 # Open browser
-open http://localhost:3000
+open http://localhost:8080
 ```
 
 ## Mode 2: Team
@@ -44,17 +44,14 @@ open http://localhost:3000
 
 | Setting | Value |
 |---------|-------|
-| Network | `0.0.0.0:3000` (all interfaces) |
+| Network | `0.0.0.0:8080` (all interfaces) |
 | Database | SQLite (default) or PostgreSQL |
 | Auth | ORCID OAuth2 → GitHub OAuth2 → Invite Code → Basic |
 | Workspace | `workspace/users/<username>/` |
 
 ```bash
-# Start with SQLite (default for <15 users)
+# Start with SQLite (default)
 oxo-flow serve --mode team
-
-# Start with PostgreSQL (recommended for >15 users)
-oxo-flow serve --mode team --db postgres://user:pass@localhost/oxoflow
 
 # Set auth credentials
 export OXO_ORCID_CLIENT_ID=...
@@ -86,20 +83,14 @@ workspace/
 
 | Setting | Value |
 |---------|-------|
-| Network | `0.0.0.0:3000` |
+| Network | `0.0.0.0:8080` |
 | Database | SQLite or PostgreSQL |
 | Auth | Same as Team mode |
 | Executor | SLURM / PBS / LSF / SGE |
 | Resources | Scheduler-managed |
 
 ```bash
-# Start with SLURM
-oxo-flow serve --mode hpc --scheduler slurm
-
-# Start with PBS
-oxo-flow serve --mode hpc --scheduler pbs
-
-# The CLI auto-detects the scheduler if --scheduler is omitted
+# The scheduler (SLURM / PBS / LSF / SGE) is auto-detected
 oxo-flow serve --mode hpc
 ```
 
@@ -121,17 +112,18 @@ oxo-flow serve
 
 ## Startup Verification
 
-On startup, oxo-flow prints the license banner and mode info:
+On startup, oxo-flow prints the version banner, the serve mode and address, and tracing log lines:
 
 ```
-oxo-flow v0.10.1
-oxo-flow-core, oxo-flow-cli: Apache 2.0
-oxo-flow-web: Dual license — LICENSE-ACADEMIC / LICENSE-COMMERCIAL
-Contact: Shixiang Wang <w_shixiang@163.com>
-
-Starting oxo-flow-web in team mode on 0.0.0.0:3000
-HPC scheduler detected: slurm (version: 23.02.7)
+oxo-flow 0.10.1 — Bioinformatics Pipeline Engine
+Serve: Starting oxo-flow web server in personal mode on 127.0.0.1:8080
+ INFO Logging initialized at logs
+ INFO AI registry initialized: provider=disabled, model=default, enabled=false
+ INFO Building router for mode: personal
+ INFO Starting oxo-flow web server in personal mode on 127.0.0.1:8080
 ```
+
+Log lines carry timestamps in a terminal, and the mode, host, and port follow `--mode`/`--host`/`-p`.
 
 ## Performance
 

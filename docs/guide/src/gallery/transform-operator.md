@@ -34,6 +34,8 @@ memory = "8G"
 name = "variant_calling"
 input = ["aligned/sample.bam"]
 output = ["variants/sample.vcf.gz"]
+
+[rules.resources]
 threads = 8
 
 [rules.transform.split]
@@ -53,6 +55,8 @@ shell = "gatk GatherVcfs {chunks} -O {output}"
 [[rules]]
 name = "parallel_qc"
 input = ["aligned/sample.bam"]
+
+[rules.resources]
 threads = 4
 
 [rules.transform.split]

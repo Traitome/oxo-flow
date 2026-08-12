@@ -74,6 +74,8 @@ name   = "align"
 input  = ["raw/{sample}_R1.fq.gz", "raw/{sample}_R2.fq.gz"]
 output = ["aligned/{sample}.bam"]
 shell  = "bwa mem -t {threads} {config.reference} {input[0]} {input[1]} | samtools sort -o {output[0]}"
+
+[rules.resources]
 threads = 8
 
 [[rules]]
@@ -81,6 +83,8 @@ name   = "haplotype_caller"
 input  = ["aligned/{sample}.bam"]
 output = ["gvcf/{sample}.g.vcf.gz"]
 shell  = "gatk HaplotypeCaller -I {input[0]} -R {config.reference} -O {output[0]} -ERC GVCF"
+
+[rules.resources]
 threads = 4
 
 # Aggregation step — runs ONCE for all samples

@@ -32,12 +32,12 @@ Set resource requirements per rule:
 name = "align"
 input = ["{sample}_R1.fastq.gz"]
 output = ["aligned/{sample}.bam"]
-threads = 16
-memory = "32G"
 environment = { singularity = "docker://biocontainers/bwa:0.7.17" }
 shell = "bwa mem -t {threads} ref.fa {input} | samtools sort -o {output}"
 
 [rules.resources]
+threads = 16
+memory = "32G"
 gpu = 0
 disk = "100G"
 time_limit = "24h"
@@ -164,12 +164,12 @@ When generating cluster scripts, oxo-flow automatically wraps commands through t
 name = "train_model"
 input = ["data/train.h5"]
 output = ["models/trained.pt"]
-threads = 8
-memory = "64G"
 environment = { conda = "envs/pytorch.yaml" }
 shell = "python train.py --input {input} --output {output} --gpus {resources.gpu}"
 
 [rules.resources]
+threads = 8
+memory = "64G"
 gpu = 2
 time_limit = "24h"
 ```
@@ -181,13 +181,15 @@ time_limit = "24h"
 name = "variant_call"
 input = ["aligned/{sample}.bam"]
 output = ["variants/{sample}.vcf"]
-threads = 16
-memory = "32G"
 environment = { 
     singularity = "docker://broadinstitute/gatk:4.4.0.0",
     modules = ["cuda/11.8"]  # Load CUDA module first
 }
 shell = "gatk HaplotypeCaller -I {input} -O {output}"
+
+[rules.resources]
+threads = 16
+memory = "32G"
 ```
 
 **Pixi for reproducible environments:**
@@ -197,9 +199,11 @@ shell = "gatk HaplotypeCaller -I {input} -O {output}"
 name = "qc_check"
 input = ["{sample}.fastq.gz"]
 output = ["qc/{sample}_fastqc.html"]
-threads = 4
 environment = { pixi = "pixi.toml" }
 shell = "fastqc -t {threads} -o qc/ {input}"
+
+[rules.resources]
+threads = 4
 ```
 
 **Pure Module-based (traditional HPC):**
@@ -209,10 +213,12 @@ shell = "fastqc -t {threads} -o qc/ {input}"
 name = "align"
 input = ["reads/{sample}.fq"]
 output = ["aligned/{sample}.bam"]
-threads = 32
-memory = "64G"
 environment = { modules = ["bwa/0.7.17", "samtools/1.17", "gcc/11"] }
 shell = "bwa mem -t {threads} ref.fa {input} | samtools sort -o {output}"
+
+[rules.resources]
+threads = 32
+memory = "64G"
 ```
 
 !!! tip "Pre-build environments on cluster nodes"

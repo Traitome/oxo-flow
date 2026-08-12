@@ -272,6 +272,7 @@ output = ["variants/caller_b/{sample}.vcf"]  # ✅ Unique path
 oxo-flow run pipeline.oxoflow --max-threads 64
 
 # Or reduce the rule's requirement in the .oxoflow file
+[rules.resources]
 threads = 32
 ```
 

@@ -222,8 +222,9 @@ Every AI interaction is logged to `.oxo-flow/ai_sessions/` for audit and debuggi
 
 | Provider | Model Examples | Cost (per 1M tokens) | Quality | Setup |
 |----------|---------------|----------------------|---------|-------|
-| OpenAI-compatible | DeepSeek v4-pro, Groq LLaMA, Together, Azure | Varies ($0.14–$2.50 in) | High | API key |
-| Anthropic-compatible | Claude Sonnet 4, DeepSeek (alt endpoint) | Varies ($3–$15 in) | Best | API key |
+| DeepSeek | DeepSeek v4-pro, DeepSeek v4-flash | ~$0.14–$2.50 in | High | API key (`DEEPSEEK_API_KEY`) |
+| OpenAI-compatible | Groq LLaMA, Together, Azure | Varies ($0.14–$2.50 in) | High | API key |
+| Anthropic-compatible | Claude Sonnet 4 | Varies ($3–$15 in) | Best | API key |
 | Local | Ollama (llama3, mistral, etc.) | Free | Moderate | Local install |
 
 **Recommendation**: An OpenAI-compatible provider with high throughput (e.g., DeepSeek, Groq) offers the best cost-quality balance for bioinformatics workflows.

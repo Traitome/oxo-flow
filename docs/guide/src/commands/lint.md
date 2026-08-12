@@ -25,6 +25,7 @@ oxo-flow lint [OPTIONS] <WORKFLOW>
 | Option | Short | Default | Description |
 |---|---|---|---|
 | `--strict` | — | — | Treat warnings as errors (non-zero exit) |
+| `--ai` | — | — | Enable AI-powered semantic linting |
 
 ---
 

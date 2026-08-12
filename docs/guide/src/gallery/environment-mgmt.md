@@ -53,9 +53,11 @@ conda = "envs/qc.yaml"
 name = "align_sequences"
 input = ["data/sequences.fasta"]
 output = ["aligned/alignment.bam"]
+shell = "echo 'Alignment placeholder' > {output[0]}"
+
+[rules.resources]
 threads = 8
 memory = "16G"
-shell = "echo 'Alignment placeholder' > {output[0]}"
 
 [rules.environment]
 docker = "biocontainers/bwa-mem2:2.2.1"
@@ -77,15 +79,18 @@ conda = "envs/analysis.yaml"
 
 ### Per-Rule Environment Isolation
 
-Each rule can declare its own isolated software environment. oxo-flow supports five environment backends:
+Each rule can declare its own isolated software environment. oxo-flow supports eight environment backends:
 
 | Backend | Declaration | Use Case |
 |---------|-------------|----------|
 | **Conda** | `conda = "envs/tool.yaml"` | Tool-specific environments with precise version pinning |
+| **Mamba** | `mamba = "envs/tool.yaml"` | Fast C++ reimplementation of conda with parallel dependency solving |
+| **Pixi** | `pixi = "pixi.toml"` | Fast conda alternative with lockfile support |
 | **Docker** | `docker = "image:tag"` | Container-based isolation with full reproducibility |
 | **Singularity** | `singularity = "docker://image:tag"` | HPC-compatible containers (no root required) |
-| **Pixi** | `pixi = "pixi.toml"` | Fast conda alternative with lockfile support |
 | **Venv** | `venv = "path/to/venv"` | Python virtual environments |
+| **System** | *(no declaration — default)* | Use the system's default tools without isolation |
+| **Modules** | `modules = "tool/1.0"` | HPC environment modules (Lmod/Environment Modules) |
 
 ### Why Per-Rule Environments?
 
@@ -131,14 +136,16 @@ $ oxo-flow validate examples/gallery/05_conda_environments.oxoflow
 
 ```bash
 $ oxo-flow env list
+oxo-flow 0.10.1 — Bioinformatics Pipeline Engine
 Available environment backends:
-  ✓ system   — Default system shell
-  ✓ conda    — Conda package manager
-  ✓ docker   — Docker containers
-  ✓ singularity — Singularity/Apptainer containers
-  ✗ pixi     — Not found
-  ✗ venv     — Not configured
+  ✓ system
+  ✓ mamba
+  ✓ conda
+  ✓ docker
+  ✓ venv
 ```
+
+Only backends installed on the current system are listed, so the output varies from machine to machine.
 
 ## What's Next?
 

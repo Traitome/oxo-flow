@@ -25,6 +25,8 @@ oxo-flow dry-run [OPTIONS] [WORKFLOW]
 | Option | Short | Description |
 |---|---|---|
 | `--target` | `-t` | Preview only specific target rules and their dependencies (repeatable) |
+| `--ai` | — | Enable AI-powered analysis of the workflow |
+| `--ai-max-retries <N>` | — | Maximum AI analysis rounds (overrides `[ai]` config) |
 | `--verbose` | `-v` | Enable debug-level logging |
 
 ---

@@ -71,12 +71,14 @@ Output: { optimized_toml, changes, estimated_impact }
 The AI layer uses an enum-based dispatch system:
 
 ```
-Claude (Anthropic) → OpenAI → Ollama (local) → Template keyword match
+DeepSeek (default) → Claude (Anthropic) → OpenAI → Ollama (local) → Template keyword match
 ```
 
-**Fallback chain**: If Claude is unavailable, falls back to OpenAI. If OpenAI is
-unavailable, falls back to local Ollama. If all AI providers are unavailable,
-falls back to template keyword matching (deterministic).
+**Fallback chain**: DeepSeek is the default provider. If DeepSeek is
+unavailable, falls back to Claude. If Claude is unavailable, falls back to
+OpenAI. If OpenAI is unavailable, falls back to local Ollama. If all AI
+providers are unavailable, falls back to template keyword matching
+(deterministic).
 
 **Request dedup**: Same intent + same data characteristics → cached result,
 avoiding redundant API calls.
@@ -103,8 +105,8 @@ the deterministic core API implements after human confirmation.
 
 ```bash
 # Set AI provider
-export OXO_AI_PROVIDER=claude    # claude | openai | ollama | noop
-export OXO_AI_API_KEY=sk-...
+export OXO_FLOW_AI_PROVIDER=claude    # claude | openai | deepseek | ollama
+export OXO_FLOW_AI_API_KEY=sk-...
 
 # Or via API
 POST /api/ai/config { "provider": "claude", "api_key": "..." }

@@ -26,6 +26,8 @@ oxo-flow/
 graph TD
     CLI[oxo-flow-cli] --> Core[oxo-flow-core]
     Web[oxo-flow-web] --> Core
+    CLI[oxo-flow-cli] --> AI[oxo-flow-ai]
+    Web[oxo-flow-web] --> AI
 ```
 
 - **oxo-flow-core** is the foundation of the CLI and web crates
@@ -198,7 +200,7 @@ crates/oxo-flow-web/src/
 │   │   ├── diagnostics.rs # Deterministic error pattern matching (30+ patterns)
 │   │   └── runner.rs      # Background process spawn + monitor
 │   ├── ai/                # AI translation layer (calls core APIs only)
-│   │   └── provider.rs    # Claude/OpenAI/Ollama enum dispatch
+│   │   └── service.rs     # DeepSeek/Claude/OpenAI/Ollama enum dispatch
 │   ├── collaboration/     # Fork, diff, share, import
 │   ├── auth/              # Authentication + OAuth2 (ORCID, GitHub)
 │   └── observability/     # Health, metrics, structured logging, SSE

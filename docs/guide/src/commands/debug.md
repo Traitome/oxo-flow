@@ -27,6 +27,7 @@ oxo-flow debug <WORKFLOW> [OPTIONS]
 | Option | Short | Description |
 |---|---|---|
 | `--rule <NAME>` | `-r` | Show only a specific rule (by name) |
+| `--ai` | — | Enable AI-powered command explanation |
 | `--verbose` | `-v` | Enable debug-level logging |
 
 ---

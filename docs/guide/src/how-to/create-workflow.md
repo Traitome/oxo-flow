@@ -89,10 +89,12 @@ Each `[[rules]]` entry defines one step in the pipeline:
 name = "step_name"
 input = ["path/to/input1.txt", "path/to/input2.txt"]
 output = ["path/to/output.txt"]
-threads = 8
-memory = "16G"
 environment = { conda = "envs/tools.yaml" }
 shell = "my-tool --threads {threads} {input} > {output}"
+
+[rules.resources]
+threads = 8
+memory = "16G"
 ```
 
 ### Rule fields
@@ -103,10 +105,8 @@ shell = "my-tool --threads {threads} {input} > {output}"
 | `input` | Yes | Array | Input file paths (may contain wildcards) |
 | `output` | Yes | Array | Output file paths (may contain wildcards) |
 | `shell` | Yes | String | Shell command to execute |
-| `threads` | No | Integer | CPU threads (overrides `[defaults]`) |
-| `memory` | No | String | Memory requirement (e.g., `"16G"`) |
 | `environment` | No | Table | Environment specification |
-| `resources` | No | Table | Additional resources (GPU, disk, time_limit) |
+| `resources` | No | Table | Resource specification (threads, memory, GPU, disk, time_limit) |
 
 ---
 

@@ -18,6 +18,7 @@ oxo-flow serve [OPTIONS]
 |---|---|---|---|
 | `--host` | — | `127.0.0.1` | Host address to bind to |
 | `--port` | `-p` | `8080` | Port to listen on |
+| `--mode` | — | `personal` | Deployment mode: `personal`, `team`, or `hpc` (env: `OXO_FLOW_MODE`) |
 | `--base-path` | — | `/` | Base path for mounting under a sub-path (e.g., `/oxo-flow`) |
 | `--verbose` | `-v` | — | Enable debug-level logging |
 | `--quiet` | — | — | Suppress non-essential output (errors only) |

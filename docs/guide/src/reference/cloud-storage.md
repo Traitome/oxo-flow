@@ -67,6 +67,8 @@ name = "align"
 input = ["s3://genomics-bucket/raw/{sample}.fastq.gz"]
 output = ["s3://genomics-bucket/aligned/{sample}.bam"]
 shell = "bwa mem reference.fa {input[0]} | samtools sort -o {output[0]}"
+
+[rules.resources]
 threads = 8
 ```
 
@@ -100,6 +102,8 @@ name = "qc"
 input = ["gs://my-bucket/raw/{sample}.fastq.gz"]
 output = ["gs://my-bucket/qc/{sample}_report.html"]
 shell = "fastqc {input[0]} -o {output[0]}"
+
+[rules.resources]
 threads = 2
 ```
 

@@ -68,7 +68,7 @@ Sets of rules that can run simultaneously because they have no dependencies on e
 
 A persistent record of which rules have completed. Checkpoints enable resuming workflows after failures without re-running successful rules.
 
-**File location**: `.oxo-flow/checkpoint_<workflow-name>.json`
+**File location**: `.oxo-flow/checkpoint.json`
 
 ---
 
@@ -81,10 +81,13 @@ A system for managing software dependencies. oxo-flow supports:
 | Backend | Use Case |
 |---------|----------|
 | **conda** | Bioinformatics tools with complex dependencies |
+| **mamba** | Faster, C++ reimplementation of conda with parallel dependency solving |
 | **pixi** | Fast, modern alternative to conda |
 | **docker** | Full container isolation |
 | **singularity** | HPC-friendly containers |
 | **venv** | Python-only tools |
+| **system** | Default system shell — no isolation (used when no backend is declared) |
+| **modules** | HPC environment modules (Lmod/Environment Modules) |
 
 ---
 
@@ -218,7 +221,7 @@ A configuration variable from the `[config]` section.
 
 ### Report
 
-A structured output document (HTML, JSON) summarizing workflow execution, QC metrics, and results. Clinical reports include variant classifications and audit trails.
+A structured output document (HTML, JSON, PDF) summarizing workflow execution, QC metrics, and results. Clinical reports include variant classifications and audit trails.
 
 ---
 

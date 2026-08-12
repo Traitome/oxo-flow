@@ -25,6 +25,7 @@ oxo-flow validate <WORKFLOW>
 | Option | Short | Description |
 |---|---|---|
 | `--as-include` | — | Validate as a sub-workflow fragment (skips DAG and input-existence checks) |
+| `--ai` | — | Enable AI-powered semantic validation |
 | `--verbose` | `-v` | Enable debug-level logging |
 
 ---

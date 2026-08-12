@@ -93,13 +93,13 @@ If a pattern contains multiple wildcards, oxo-flow generates the **Cartesian pro
 
 ## Wildcard Constraints (Regex)
 
-You can restrict what a wildcard can match using regular expressions in the `[workflow]` section. This is useful for preventing wildcards from matching across directory boundaries or ensuring specific naming conventions.
+You can restrict what a wildcard can match using regular expressions in the top-level `[wildcard_constraints]` section. This is useful for preventing wildcards from matching across directory boundaries or ensuring specific naming conventions.
 
 ```toml
 [workflow]
 name = "constrained-pipeline"
 
-[workflow.wildcard_constraints]
+[wildcard_constraints]
 sample = "[A-Z0-9]+"
 read = "[12]"
 ```

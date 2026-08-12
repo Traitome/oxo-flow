@@ -65,7 +65,7 @@ oxo-flow validate my-pipeline.oxoflow
 ```
 
 ```
-✓ my-pipeline.oxoflow — 2 rules, 1 dependency
+✓ my-pipeline.oxoflow — 2 rules, 1 dependencies
 ```
 
 ---
@@ -80,11 +80,20 @@ oxo-flow dry-run my-pipeline.oxoflow
 
 ```
 oxo-flow 0.10.1 — Bioinformatics Pipeline Engine
-Dry-run: 2 rules would execute:
-  1. create_data [threads=2, env=none]
-     $ mkdir -p data && echo 'Hello from oxo-flow!' > data/greeting.txt
-  2. transform [threads=2, env=none]
-     $ mkdir -p results && tr '[:lower:]' '[:upper:]' < data/greeting.txt > results/uppercase.txt
+DAG: (dry-run) 2 rules would execute
+  1. create_data
+     threads=2
+     outputs: ["data/greeting.txt"]
+     command: mkdir -p data && echo 'Hello from oxo-flow!' > data/greeting.txt
+  2. transform
+     threads=2
+     outputs: ["results/uppercase.txt"]
+     command: mkdir -p results && tr '[:lower:]' '[:upper:]' < data/greeting.txt > results/uppercase.txt
+     input ✗: data/greeting.txt
+
+Summary: 2 rules, total 4 threads declared, max 2 threads/rule
+
+To execute:  oxo-flow run my-pipeline.oxoflow -j 10
 ```
 
 ---
@@ -100,10 +109,14 @@ oxo-flow 0.10.1 — Bioinformatics Pipeline Engine
 DAG: 2 rules in execution order
   1. create_data
   2. transform
-  ✓ create_data
-  ✓ transform
+  INFO Detected system resources threads=10 memory_mb=24576
+  Running: create_data
+  ✓ create_data (0.0s)
+  Running: transform
+  ✓ transform (0.0s)
 
-Done: 2 succeeded, 0 failed
+Done: 2 succeeded, 0 skipped, 0 failed
+✓ 2 output files verified (42B total)
 ```
 
 ---
@@ -142,12 +155,20 @@ oxo-flow graph my-pipeline.oxoflow
 ```
 
 ```text
-┌─────────────────────────────────────────────────────────────────────┐
-│ Workflow: my-pipeline                                               │
-│ Rules: 2, Dependencies: 1                                           │
-└─────────────────────────────────────────────────────────────────────┘
+oxo-flow 0.10.1 — Bioinformatics Pipeline Engine
+┌──────────────────────────────────────────────┐
+│  Workflow DAG: 2 rules, 1 dependencies       │
+│  Depth: 2, Width: 1, Critical path: 2 steps  │
+└──────────────────────────────────────────────┘
 
-  create_data ──► transform
+Level 0 (sequential)
+     create_data
+     │
+     ▼
+Level 1 (sequential)
+     transform [depends: create_data]
+
+Critical path: create_data → transform
 ```
 
 ### Graphviz (DOT) Export
@@ -159,10 +180,11 @@ oxo-flow graph my-pipeline.oxoflow --format dot
 ```
 
 ```dot
-digraph workflow {
-    rankdir = TB;
-    node [shape=box, style="rounded,filled", fillcolor="#e8f4f8"];
-    "create_data" -> "transform";
+oxo-flow 0.10.1 — Bioinformatics Pipeline Engine
+digraph {
+    0 [ label = "create_data"]
+    1 [ label = "transform"]
+    0 -> 1 [ ]
 }
 ```
 

@@ -88,7 +88,7 @@ The web crate follows a **domain-driven modular monolith** pattern. Each domain 
 |--------|------|---------------|
 | **workflow** | `domains/workflow/` | Pipeline parse, validate, prepare, DAG, format, lint, stats, diff, export, search, data discovery, plugin validation |
 | **execution** | `domains/execution/` | Run create/status/cancel/retry, diagnostics engine (30+ error patterns), sandbox workspace, background runner |
-| **ai** | `domains/ai/` | AI translate, explain, interpret, optimize; provider dispatch (Claude/OpenAI/Ollama) |
+| **ai** | `domains/ai/` | AI translate, explain, interpret, optimize; provider dispatch (DeepSeek/Claude/OpenAI/Ollama) |
 | **collaboration** | `domains/collaboration/` | Fork, diff, share, import pipelines |
 | **auth** | `domains/auth/` | Login, session management, ORCID/GitHub OAuth2, RBAC |
 | **observability** | `domains/observability/` | Health check, system info, runtime metrics, structured logging (3-layer), audit, SSE |
@@ -247,7 +247,6 @@ GET /api/openapi.json
 4. POST /api/workflows/run      # Execute the pipeline
 5. GET  /api/events             # SSE real-time progress (optional)
 6. GET  /api/runs/{id}/results  # Get structured results
-7. GET  /api/runs/compare       # Compare different runs
 ```
 
 ### API Streaming

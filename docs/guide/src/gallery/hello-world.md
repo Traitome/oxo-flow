@@ -62,9 +62,15 @@ $ oxo-flow validate examples/gallery/01_hello_world.oxoflow
 ```bash
 $ oxo-flow dry-run examples/gallery/01_hello_world.oxoflow
 oxo-flow 0.10.1 — Bioinformatics Pipeline Engine
-Dry-run: 1 rules would execute:
-  1. greet [threads=1, env=system]
-     $ echo 'Hello from oxo-flow!' > {output[0]}
+DAG: (dry-run) 1 rules would execute
+  1. greet
+     threads=1
+     outputs: ["hello.txt"]
+     command: echo 'Hello from oxo-flow!' > hello.txt
+
+Summary: 1 rules, total 1 threads declared, max 1 threads/rule
+
+To execute:  oxo-flow run examples/gallery/01_hello_world.oxoflow -j 10
 ```
 
 ### Execute
@@ -75,12 +81,13 @@ $ oxo-flow run examples/gallery/01_hello_world.oxoflow
 
 ### DAG Visualization
 
-Since this is a single rule, the DAG is trivial:
+Since this is a single rule, the DAG is trivial. The default `graph` output is an ASCII level-based tree; use `-f dot` to export Graphviz DOT format:
 
 ```bash
-$ oxo-flow graph examples/gallery/01_hello_world.oxoflow
+$ oxo-flow graph -f dot examples/gallery/01_hello_world.oxoflow
+oxo-flow 0.10.1 — Bioinformatics Pipeline Engine
 digraph {
-    0 [ label = "greet" ]
+    0 [ label = "greet"]
 }
 ```
 
