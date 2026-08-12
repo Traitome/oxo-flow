@@ -12,7 +12,7 @@ Instead of a `shell` command, a rule can declare a `script` field that points to
 
 ## A Complete Example
 
-Here is a minimal, runnable workflow that calls a Python script:
+Here is a runnable two-step pipeline where each step is a Python script. Every rule declares its `input` and `output` arrays — that is what connects script-based rules into the DAG.
 
 ### 1. The workflow (`count.oxoflow`)
 
@@ -35,9 +35,22 @@ min_q = 20   # ← defines {params.min_q} used above
 
 [rules.environment]
 conda = "envs/py.yaml"
+
+[[rules]]
+name = "summarize"
+input = ["counts/{config.sample}.count.txt"]   # ← consumes count's output: DAG edge
+output = ["reports/{config.sample}.summary.txt"]
+script = "scripts/summarize.py {input[0]} -o {output[0]}"
+
+[rules.environment]
+conda = "envs/py.yaml"
 ```
 
-### 2. The script (`scripts/count_reads.py`)
+`summarize` depends on `count` automatically — its `input` matches `count`'s `output`, so the DAG engine infers the edge. No explicit declaration needed.
+
+### 2. The scripts
+
+`scripts/count_reads.py`:
 
 ```python
 #!/usr/bin/env python3
@@ -61,12 +74,33 @@ with open(args.out, "w") as f:
 print(f"counted {count} reads")
 ```
 
+`scripts/summarize.py`:
+
+```python
+#!/usr/bin/env python3
+"""Turn a count file into a one-line summary."""
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument("count_file", help="input count file")
+parser.add_argument("-o", dest="out", required=True, help="output file")
+args = parser.parse_args()
+
+with open(args.count_file) as f:
+    n = f.read().strip()
+
+with open(args.out, "w") as f:
+    f.write(f"total reads: {n}\n")
+print(f"wrote summary: {n} reads")
+```
+
 ### 3. Run it
 
 ```bash
 oxo-flow run count.oxoflow
 # ✓ count (0.1s)
-cat counts/SAMPLE_01.count.txt
+# ✓ summarize (0.1s)
+cat reports/SAMPLE_01.summary.txt
 ```
 
 ---
