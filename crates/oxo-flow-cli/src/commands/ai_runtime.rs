@@ -62,6 +62,7 @@ impl AiRuntime {
         tool_registry.register(Box::new(builtin::ReadFileTool::new()));
         tool_registry.register(Box::new(builtin::FetchUrlTool::new()));
         tool_registry.register(Box::new(builtin::LookupTool::new()));
+        tool_registry.register(Box::new(builtin::LookupSkillTool::new()));
         register_discovered_tools(&mut tool_registry);
 
         let orchestrator = Orchestrator::new(provider.clone(), config.max_retries);

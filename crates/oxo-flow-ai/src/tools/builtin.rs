@@ -347,3 +347,61 @@ impl Tool for LookupTool {
         ))
     }
 }
+
+/// Look up embedded bioinformatics skills (562 Agent Skills from bioSkills).
+///
+/// Query by domain, tool name, or task keyword. Returns skill descriptions
+/// with primary tools and procedure previews — curated agent expertise
+/// for specific bioinformatics tasks.
+#[derive(Default)]
+pub struct LookupSkillTool;
+
+impl LookupSkillTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl Tool for LookupSkillTool {
+    fn def(&self) -> ToolDef {
+        ToolDef {
+            name: "lookup_skill".into(),
+            description: "Search the embedded bioinformatics skills library (562 Agent Skills curated from the bioSkills project) by domain, tool, or task keyword (e.g. 'rna-seq', 'variant-calling', 'samtools'). Returns domain expertise: correct commands, parameters, caveats, and procedure guidance for specific bioinformatics tasks. Use this before designing workflow rules for a domain you are less certain about.".into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Domain, tool, or task keyword to search for"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of results (default 5)"
+                    }
+                },
+                "required": ["query"]
+            }),
+        }
+    }
+
+    fn name(&self) -> &str {
+        "lookup_skill"
+    }
+
+    async fn execute(&self, arguments: &str) -> Result<String, AiError> {
+        let args: serde_json::Value =
+            serde_json::from_str(arguments).map_err(|e| AiError::ToolError {
+                tool: "lookup_skill".into(),
+                message: format!("invalid arguments: {e}"),
+            })?;
+
+        let query = args["query"].as_str().ok_or_else(|| AiError::ToolError {
+            tool: "lookup_skill".into(),
+            message: "missing 'query' argument".into(),
+        })?;
+        let limit = args["limit"].as_u64().unwrap_or(5).min(15) as usize;
+
+        Ok(crate::knowledge::skills::format_skills(query, limit))
+    }
+}

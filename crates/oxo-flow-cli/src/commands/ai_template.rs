@@ -254,7 +254,49 @@ Your TOML MUST include:
         format_tool_table()
     );
 
+    // Inject domain-matched bioinformatics skills (bioSkills) so the
+    // generated workflow follows curated domain expertise: correct tool
+    // choice, parameters, and known caveats.
+    let intent_domains = oxo_flow_ai::knowledge::skills::domains_for_intent(intent);
+    let mut skill_context = String::new();
+    let mut seen_skills = std::collections::HashSet::new();
+    for domain in &intent_domains {
+        for skill in oxo_flow_ai::knowledge::skills::skills_in_domain(domain)
+            .into_iter()
+            .take(3)
+        {
+            if seen_skills.insert(skill.name.clone()) {
+                skill_context.push_str(&format!(
+                    "- [{}] {}: {} ({})\n",
+                    skill.domain,
+                    skill.name,
+                    skill.description,
+                    if skill.primary_tool.is_empty() {
+                        "general"
+                    } else {
+                        &skill.primary_tool
+                    }
+                ));
+            }
+        }
+    }
+    if !intent_domains.is_empty() {
+        println!(
+            "{} Matched domains: {}",
+            "  •".dimmed(),
+            intent_domains.join(", ").cyan()
+        );
+    }
+
     let mut user = format!("## User Request\nGenerate a .oxoflow pipeline for: {intent}\n\n");
+
+    if !skill_context.is_empty() {
+        user.push_str("## Domain Expertise (bioSkills)\n");
+        user.push_str(&skill_context);
+        user.push_str(
+            "\nFollow these domain procedures for tool choice, parameters, and caveats where applicable.\n\n",
+        );
+    }
 
     if !external_context.is_empty() {
         user.push_str("## Reference Materials\n\n");
