@@ -31,15 +31,20 @@ each environment YAML, ensuring exact reproducibility across time.
 
 | Option | Short | Description |
 |---|---|---|
-| `--output` | `-o` | Output path for the bundle archive (default: `<name>-bundle.tar.zst`) |
+| `--output` | `-o` | Output path for the bundle archive (default: `<name>-bundle.<ext>`) |
 | `--with-lockfiles` | | Generate `conda-lock` lockfiles for reproducible environments |
+| `--format` | | Archive format: `tar.zst` (default, better compression) or `tar.gz` (universal compatibility) |
 
 ## Examples
 
 ```bash
-# Publish a workflow
+# Publish a workflow (zstd compression, default)
 oxo-flow publish my_pipeline.oxoflow
 # → my_pipeline-bundle.tar.zst
+
+# Publish with gzip compression (universal compatibility)
+oxo-flow publish my_pipeline.oxoflow --format tar.gz
+# → my_pipeline-bundle.tar.gz
 
 # Publish with custom output path
 oxo-flow publish my_pipeline.oxoflow -o /path/to/bundle.tar.zst
@@ -47,12 +52,15 @@ oxo-flow publish my_pipeline.oxoflow -o /path/to/bundle.tar.zst
 # Publish with deterministic lockfiles
 oxo-flow publish my_pipeline.oxoflow --with-lockfiles
 
-# Run a published bundle (extract → verify → execute)
+# Run a published bundle (extract → verify → confirm → execute)
 oxo-flow run --bundle my_pipeline-bundle.tar.zst -j 16
+
+# Run with --yes to skip confirmation (CI/scripts)
+oxo-flow run --bundle my_pipeline-bundle.tar.zst -j 16 --yes
 
 # Pull a remote bundle and run it
 oxo-flow pull gh:user/repo@v0.10.1
-oxo-flow run --bundle repo-bundle.tar.zst
+oxo-flow run --bundle repo-bundle.tar.zst --yes
 ```
 
 ## Manifest Format

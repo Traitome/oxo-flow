@@ -40,7 +40,8 @@ oxo-flow run [OPTIONS] [WORKFLOW]
 | `--provenance` | — | — | Track output file checksums for later verification |
 | `--arg` | — | — | Legacy form: set a workflow config value (`KEY=VALUE`). Repeatable. See `[config]` in workflow-format |
 | `--sample` | — | — | Add a sample to the run. Repeatable. Merges with sample_pattern/CSV sources |
-| `--bundle` | — | — | Execute from a published `.tar.zst` bundle (extract → verify → run) |
+| `--bundle` | — | — | Execute from a published bundle (`.tar.zst` or `.tar.gz`). Extracts, verifies checksums, shows resource requirements, and prompts for confirmation |
+| `--yes` | — | — | Skip the confirmation prompt when running a bundle (required for CI/non-TTY) |
 | `--ai-recover` | — | — | Enable AI error recovery on rule failure |
 | `--ai-max-retries` | — | — | Maximum AI retries (overrides `[ai]` config) |
 | `--verbose` | `-v` | — | Enable debug-level logging |
@@ -142,8 +143,18 @@ oxo-flow run pipeline.oxoflow --arg database=refs/nt --arg threshold=1e-3
 ### Execute a published bundle
 
 ```bash
-# Run directly from a bundle archive (extracts, verifies checksums, executes)
+# Run from a bundle (extracts, verifies checksums, shows resource requirements,
+# prompts for confirmation before executing)
 oxo-flow run --bundle pipeline-bundle.tar.zst -j 16
+
+# Skip confirmation for CI/scripts
+oxo-flow run --bundle pipeline-bundle.tar.zst -j 16 --yes
+
+# .tar.gz format also supported
+oxo-flow run --bundle pipeline-bundle.tar.gz -j 16 --yes
+
+# Pull from remote and execute in one step
+oxo-flow pull gh:user/repo@v1 && oxo-flow run --bundle repo-bundle.tar.zst -j 16 --yes
 ```
 
 ---

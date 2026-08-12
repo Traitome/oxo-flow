@@ -243,14 +243,16 @@ pub fn publish_command(
             let mut builder = tar::Builder::new(enc);
             add_files!(builder);
             let enc = builder.into_inner().context("failed to finalize tar")?;
-            enc.finish().context("failed to finalize zstd compression")?;
+            enc.finish()
+                .context("failed to finalize zstd compression")?;
         }
         crate::commands::bundle::BundleFormat::TarGz => {
             let enc = flate2::write::GzEncoder::new(archive_file, flate2::Compression::default());
             let mut builder = tar::Builder::new(enc);
             add_files!(builder);
             let enc = builder.into_inner().context("failed to finalize tar")?;
-            enc.finish().context("failed to finalize gzip compression")?;
+            enc.finish()
+                .context("failed to finalize gzip compression")?;
         }
     }
 
