@@ -241,6 +241,7 @@ Every AI interaction is logged to `.oxo-flow/ai_sessions/` for audit and debuggi
 | `oxo-flow template "X" --ai --from-file PATH` | required | ❌ | Generate with local file as reference |
 | `oxo-flow template "X" --ai -o PATH` | required | ❌ | Write output to specific path |
 | `oxo-flow template "X" --ai --ai-max-retries N` | required | ❌ | Override max correction rounds |
+| `oxo-flow env create "X" --ai` | required | ❌ | Natural language → pinned conda environment YAML |
 | `oxo-flow dry-run WORKFLOW` | optional | ✅ | AI analysis if [ai] enabled=true |
 | `oxo-flow dry-run WORKFLOW --ai` | force | — | Explicit AI override |
 | `oxo-flow validate WORKFLOW` | optional | ✅ | AI semantic validation |
