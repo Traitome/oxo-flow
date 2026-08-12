@@ -1190,8 +1190,23 @@ pub async fn dry_run_command(
 
     let dag = WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;
 
+    // Compute the execution set (respects --target), then display it in
+    // parallel-group order — the same grouping `run` uses for scheduling.
+    // Independent rules at the same level appear adjacent, so the listing
+    // reflects actual concurrency instead of an arbitrary topological order.
     let order = if target.is_empty() {
-        dag.execution_order()?
+        let order_set: std::collections::HashSet<String> =
+            dag.execution_order()?.into_iter().collect();
+        let mut ordered: Vec<String> = Vec::new();
+        for group in dag.parallel_groups()? {
+            let mut level: Vec<String> = group
+                .into_iter()
+                .filter(|name| order_set.contains(name))
+                .collect();
+            level.sort();
+            ordered.extend(level);
+        }
+        ordered
     } else {
         let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
         dag.execution_order_for_targets(&target_refs)

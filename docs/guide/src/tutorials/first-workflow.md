@@ -215,17 +215,17 @@ DAG: (dry-run) 4 rules would execute
      memory=8G
      outputs: ["results/trimmed/{sample}_R1.fastq.gz", "results/trimmed/{sample}_R2.fastq.gz", ...]
 
-  2. fastqc_trimmed
-     threads=4
-     env=conda
-     memory=8G
-     outputs: ["results/fastqc_trimmed/{sample}_R1_fastqc.html", ...]
-
-  3. fastqc_raw
+  2. fastqc_raw
      threads=4
      env=conda
      memory=8G
      outputs: ["results/fastqc/{sample}_R1_fastqc.html", ...]
+
+  3. fastqc_trimmed
+     threads=4
+     env=conda
+     memory=8G
+     outputs: ["results/fastqc_trimmed/{sample}_R1_fastqc.html", ...]
 
   4. multiqc
      threads=1
@@ -243,6 +243,9 @@ To execute:  oxo-flow run qc-pipeline.oxoflow -j 10
 ```
 
 The dry-run expands `{config.*}` variables but leaves `{sample}` wildcards unexpanded. Unlike concrete input paths (reported as `input ✓`/`input ✗`), wildcard inputs are not checked for existence in dry-run mode.
+
+!!! note "Listing order reflects parallel levels"
+    `fastp_trim` and `fastqc_raw` are listed adjacent because they are independent and will run **in parallel** at the same DAG level. Rules within a level are sorted alphabetically; `fastqc_trimmed` waits for `fastp_trim`, and `multiqc` waits for all three.
 
 ---
 
