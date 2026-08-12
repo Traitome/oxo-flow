@@ -7,7 +7,7 @@ use crate::commands::print_banner;
 
 use crate::{ConfigAction, EnvAction, ProfileAction};
 
-pub fn env_command(action: EnvAction) -> Result<()> {
+pub async fn env_command(action: EnvAction) -> Result<()> {
     print_banner();
     match action {
         EnvAction::List { workflow } => match workflow {
@@ -89,7 +89,11 @@ pub fn env_command(action: EnvAction) -> Result<()> {
                 }
             }
         }
-        EnvAction::Create { spec, name } => {
+        EnvAction::Create { spec, name, ai } => {
+            // AI mode: SPEC is a natural-language description, not a file path.
+            if ai {
+                return create_env_from_ai(&spec, name).await;
+            }
             let name_str = name.clone().unwrap_or_else(|| {
                 spec.file_stem()
                     .unwrap_or_default()
@@ -381,4 +385,113 @@ pub fn profile_command(action: ProfileAction) -> Result<()> {
         }
     }
     Ok(())
+}
+
+// ── AI-powered environment spec generation ────────────────────────────────
+
+/// Generate a conda environment YAML from a natural-language description
+/// using the AI provider + built-in tool reference table.
+async fn create_env_from_ai(description: &std::path::Path, name: Option<String>) -> Result<()> {
+    let description = description.to_string_lossy().to_string();
+    let provider = crate::commands::ai_template::resolve_ai_provider()?;
+
+    println!("{}", "AI Environment Generator".bold().green());
+    println!(
+        "  Model: {}",
+        provider.model().unwrap_or_else(|| "default".into())
+    );
+    println!("  Description: {description}\n");
+
+    let system = format!(
+        r#"## Role
+You are a bioinformatics environment specialist. Generate a conda environment
+YAML file from the user's natural-language description.
+
+## Tool Reference
+{}
+
+## Output Requirements
+Generate ONLY valid conda environment YAML inside ```yaml code fences:
+
+```yaml
+# envs/<name>.yaml
+name: <kebab-case-env-name>
+channels:
+  - bioconda
+  - conda-forge
+dependencies:
+  - <tool>=<pinned-version>
+```
+
+Rules:
+- Pin EVERY tool version (from the reference table where available)
+- Include all tools the user mentions; add common companions if clearly needed
+- channels order: bioconda first, conda-forge second
+- Do NOT add comments beyond the file header
+"#,
+        oxo_flow_ai::knowledge::builtin::format_tool_table()
+    );
+
+    println!("{}", "  Generating...".bold().cyan());
+    use oxo_flow_ai::types::Message;
+    let messages = vec![Message::system(&system), Message::user(&description)];
+    let response = provider.chat_with_tools(&messages, &[]).await?;
+    let response_text = response.content.unwrap_or_default();
+
+    // Extract YAML from code fence
+    let yaml_content = extract_yaml(&response_text)
+        .ok_or_else(|| anyhow::anyhow!("AI response did not contain valid conda YAML"))?;
+
+    // Basic structural validation
+    if !yaml_content.contains("dependencies") {
+        anyhow::bail!("generated YAML missing 'dependencies' section");
+    }
+
+    // Determine output path: -n <name> → envs/<name>.yaml; else envs/generated.yaml
+    let env_name = name.unwrap_or_else(|| {
+        yaml_content
+            .lines()
+            .find_map(|l| l.strip_prefix("name:"))
+            .map(|n| n.trim().trim_matches('"').trim_matches('\'').to_string())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| "generated".to_string())
+    });
+    let out_path = std::path::PathBuf::from("envs").join(format!("{env_name}.yaml"));
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&out_path, &yaml_content)?;
+
+    println!(
+        "{} Environment spec written to {}",
+        "✓".green(),
+        out_path.display()
+    );
+    println!();
+    println!(
+        "  Review the spec: {}",
+        out_path.display().to_string().dimmed()
+    );
+    println!(
+        "  Then create it with: oxo-flow env create {}",
+        out_path.display().to_string().dimmed()
+    );
+    Ok(())
+}
+
+/// Extract YAML content from an AI response (```yaml fence or raw).
+fn extract_yaml(response: &str) -> Option<String> {
+    if let Some(start) = response.find("```yaml") {
+        let start = start + 7;
+        if let Some(end) = response[start..].find("```") {
+            let content = response[start..start + end].trim().to_string();
+            if !content.is_empty() {
+                return Some(content);
+            }
+        }
+    }
+    if let Some(pos) = response.find("name:") {
+        return Some(response[pos..].trim().to_string());
+    }
+    None
 }

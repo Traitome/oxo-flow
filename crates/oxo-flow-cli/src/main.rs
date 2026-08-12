@@ -446,6 +446,11 @@ pub enum EnvAction {
         spec: PathBuf,
         #[arg(short = 'n', long)]
         name: Option<String>,
+        #[arg(
+            long = "ai",
+            help = "Generate the environment spec from a natural-language description (SPEC is the description)"
+        )]
+        ai: bool,
     },
 }
 
@@ -746,7 +751,7 @@ async fn main() -> Result<()> {
             force,
             orphans,
         } => clean_command(workflow, dry_run, force, orphans)?,
-        Commands::Env { action } => env_command(action)?,
+        Commands::Env { action } => env_command(action).await?,
         Commands::Format {
             workflow,
             output,
