@@ -118,6 +118,7 @@ mod tests {
             external_sources: vec![],
             max_rounds: 3,
             tool_registry: ToolRegistry::new(),
+            tool_approver: None,
             session: AiSession::new("test", "test", "noop", "none"),
         }
     }

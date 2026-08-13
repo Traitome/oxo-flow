@@ -7,6 +7,7 @@
 use std::path::Path;
 
 use anyhow::Result;
+use colored::Colorize as _;
 use oxo_flow_ai::agent::orchestrator::Orchestrator;
 use oxo_flow_ai::agent::{AgentContext, ExternalSource};
 use oxo_flow_ai::config::AiConfig;
@@ -29,7 +30,7 @@ impl AiRuntime {
     ///
     /// Resolution chain: env vars → global config → project .oxo-flow/ai.toml →
     /// workflow [ai] section → CLI overrides.
-    pub fn new(
+    pub async fn new(
         workflow_path: Option<&Path>,
         project_dir: Option<&Path>,
         cli_max_retries: Option<u32>,
@@ -71,6 +72,60 @@ impl AiRuntime {
         let project = project_dir.or_else(|| workflow_path.and_then(|p| p.parent()));
         let skill_context = activated_skill_context(project, &config);
 
+        // Activated tool skills reference MCP servers via
+        // `requires = ["mcp://host:port"]` — connect and register their
+        // tools through the MCP bridge. A failing server warns and is
+        // skipped; it never blocks the run.
+        let discovered = oxo_flow_ai::skill::discover_skills(project);
+        let mut mcp_tools = 0usize;
+        for skill in discovered {
+            if skill.skill_type != "tool" || !config.skills.iter().any(|name| name == &skill.name) {
+                continue;
+            }
+            let Some(url) = skill
+                .requires
+                .as_ref()
+                .and_then(|r| r.iter().find(|s| s.starts_with("mcp://")))
+            else {
+                tracing::warn!(
+                    "tool skill '{}' has no mcp:// requirement — skipped",
+                    skill.name
+                );
+                continue;
+            };
+            match oxo_flow_ai::mcp::McpHttpClient::new(url) {
+                Ok(client) => {
+                    match oxo_flow_ai::mcp::McpToolBridge::discover(std::sync::Arc::new(client))
+                        .await
+                    {
+                        Ok(bridges) => {
+                            for bridge in bridges {
+                                mcp_tools += 1;
+                                tool_registry.register(Box::new(bridge));
+                            }
+                            tracing::info!(
+                                "skill '{}': registered {} MCP tool(s) from {url}",
+                                skill.name,
+                                mcp_tools
+                            );
+                        }
+                        Err(e) => tracing::warn!(
+                            "skill '{}': failed to discover MCP tools at {url}: {e}",
+                            skill.name
+                        ),
+                    }
+                }
+                Err(e) => tracing::warn!("skill '{}': {e}", skill.name),
+            }
+        }
+        if mcp_tools > 0 {
+            eprintln!(
+                "  {} {} MCP tool(s) from activated tool skill(s) (non-read-only calls require approval)",
+                "•".cyan(),
+                mcp_tools
+            );
+        }
+
         let orchestrator = Orchestrator::new(provider.clone(), config.max_retries);
 
         Ok(Self {
@@ -98,6 +153,7 @@ impl AiRuntime {
             external_sources,
             max_rounds: self.config.max_retries,
             tool_registry: self.tool_registry.clone(),
+            tool_approver: None,
             session: AiSession::new(
                 command,
                 intent,
@@ -138,4 +194,33 @@ pub fn activated_skill_context(project_dir: Option<&Path>, config: &AiConfig) ->
         }
     }
     registry.prompt_context().to_string()
+}
+
+/// Interactive human approval for a non-read-only tool call. Prompts on
+/// stderr and reads stdin; non-interactive sessions are denied (the safe
+/// default — matching the trust boundary: AI never executes autonomously).
+pub async fn prompt_tool_approval(tool_name: &str, arguments: &str) -> bool {
+    let can_prompt = std::io::IsTerminal::is_terminal(&std::io::stderr())
+        && std::io::IsTerminal::is_terminal(&std::io::stdin());
+    if !can_prompt {
+        return false;
+    }
+    eprintln!();
+    eprintln!("  {} tool '{}' is not read-only:", "⚠".yellow(), tool_name);
+    eprintln!("  Arguments: {arguments}");
+    eprint!("  Allow execution? [y/N] ");
+    use std::io::Write as _;
+    std::io::stderr().flush().ok();
+
+    tokio::task::spawn_blocking(|| {
+        let mut input = String::new();
+        if std::io::stdin().read_line(&mut input).is_ok() {
+            let trimmed = input.trim();
+            trimmed.eq_ignore_ascii_case("y") || trimmed.eq_ignore_ascii_case("yes")
+        } else {
+            false
+        }
+    })
+    .await
+    .unwrap_or(false)
 }

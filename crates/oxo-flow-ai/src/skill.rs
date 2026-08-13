@@ -150,15 +150,87 @@ pub fn discover_skills_from(
     if let Some(home) = home {
         let user_dir = home.join(".oxo-flow").join("skills");
         manifests.extend(scan_skill_dir(&user_dir));
+        manifests.extend(scan_skill_md_dir(&user_dir));
     }
 
     // Project-level skills
     if let Some(proj) = project_dir {
         let proj_dir = proj.join(".oxo-flow").join("skills");
         manifests.extend(scan_skill_dir(&proj_dir));
+        manifests.extend(scan_skill_md_dir(&proj_dir));
     }
 
     manifests
+}
+
+/// Scan a skills directory for `SKILL.md` files (the emerging skill
+/// standard): `<skills>/<name>/SKILL.md` with YAML frontmatter
+/// (`name`, `description`) and a markdown body that becomes the skill's
+/// prompt content. Complements `.skill.toml` — the TOML form remains the
+/// place for activation metadata (MCP `requires`, read-only flags).
+fn scan_skill_md_dir(dir: &std::path::Path) -> Vec<SkillManifest> {
+    let mut manifests = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return manifests;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let skill_md = path.join("SKILL.md");
+        let Ok(content) = std::fs::read_to_string(&skill_md) else {
+            continue;
+        };
+        if let Some(manifest) = parse_skill_md(&content) {
+            manifests.push(manifest);
+        }
+    }
+    manifests
+}
+
+/// Parse a `SKILL.md` file: YAML frontmatter (top-level scalar keys only)
+/// followed by a markdown body. Returns None if the frontmatter lacks the
+/// required `name`/`description` fields.
+pub fn parse_skill_md(content: &str) -> Option<SkillManifest> {
+    let body = content.strip_prefix("---")?;
+    let (frontmatter, markdown) = body.split_once("---")?;
+
+    let mut name = None;
+    let mut description = None;
+    let mut version = None;
+    for line in frontmatter.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        // Frontmatter values: quoted strings or bare scalars. Nested
+        // (metadata, license) entries are ignored deliberately.
+        let value = value.trim().trim_matches(['"', '\'']);
+        match key.trim() {
+            "name" => name = Some(value.to_string()),
+            "description" => description = Some(value.to_string()),
+            "version" => version = Some(value.to_string()),
+            _ => {}
+        }
+    }
+
+    let body = markdown.trim();
+    if body.is_empty() {
+        return None;
+    }
+
+    Some(SkillManifest {
+        name: name?,
+        version: version.unwrap_or_else(|| "0.1.0".to_string()),
+        description: description?,
+        author: None,
+        domains: Vec::new(),
+        skill_type: "knowledge".to_string(),
+        // The whole markdown body is the skill's guidance.
+        prompt_additions: Some(vec![body.to_string()]),
+        requires: None,
+        entry: None,
+    })
 }
 
 fn scan_skill_dir(dir: &std::path::Path) -> Vec<SkillManifest> {
@@ -286,6 +358,47 @@ prompt_additions = [
         assert_eq!(manifest.domains.len(), 3);
         assert_eq!(manifest.prompt_additions.unwrap().len(), 2);
     }
+    #[test]
+    fn parse_skill_md_reads_frontmatter_and_body() {
+        let content = "---\nname: rnaseq-reviewer\ndescription: Reviews RNA-seq pipelines for strandedness mistakes\nversion: 1.2.0\nlicense: MIT\n---\n# Guidance\nAlways check featureCounts -s matches the library prep.\n";
+        let manifest = parse_skill_md(content).expect("valid SKILL.md");
+        assert_eq!(manifest.name, "rnaseq-reviewer");
+        assert_eq!(manifest.version, "1.2.0");
+        assert_eq!(manifest.skill_type, "knowledge");
+        let additions = manifest.prompt_additions.as_ref().unwrap();
+        assert_eq!(additions.len(), 1);
+        assert!(additions[0].contains("featureCounts -s"));
+        assert!(!additions[0].contains("frontmatter"));
+    }
+
+    #[test]
+    fn parse_skill_md_rejects_missing_required_fields() {
+        assert!(parse_skill_md("---\nname: x\n---\nbody").is_none());
+        assert!(parse_skill_md("---\ndescription: d\n---\nbody").is_none());
+        assert!(parse_skill_md("no frontmatter here").is_none());
+        assert!(parse_skill_md("---\nname: x\ndescription: d\n---\n").is_none());
+    }
+
+    #[test]
+    fn discover_skills_from_finds_skill_md() {
+        let home = tempfile::tempdir().unwrap();
+        let skill_dir = home
+            .path()
+            .join(".oxo-flow")
+            .join("skills")
+            .join("qc-reviewer");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: qc-reviewer\ndescription: Checks QC thresholds\n---\nPrefer fastp with phred 20.\n",
+        )
+        .unwrap();
+
+        let found = discover_skills_from(Some(home.path().to_path_buf()), None);
+        let names: Vec<&str> = found.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"qc-reviewer"));
+    }
+
     #[test]
     fn discover_skills_from_finds_user_and_project_level() {
         let home = tempfile::tempdir().unwrap();

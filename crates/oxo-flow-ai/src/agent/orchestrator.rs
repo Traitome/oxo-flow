@@ -79,7 +79,25 @@ impl Orchestrator {
 
                 for tc in tool_calls {
                     let start = std::time::Instant::now();
-                    let result = ctx.tool_registry.execute(&tc.name, &tc.arguments).await;
+
+                    // Human-approval gate: non-read-only tools (e.g. MCP
+                    // tools without a readOnlyHint) execute only when an
+                    // approver is provided AND approves this invocation.
+                    let approver_ref = ctx.tool_approver.as_ref().map(|a| a.as_ref());
+                    let approved = tool_call_approved(
+                        &ctx.tool_registry,
+                        approver_ref,
+                        &tc.name,
+                        &tc.arguments,
+                    );
+                    let result = if !approved {
+                        Err(AiError::ToolError {
+                            tool: tc.name.clone(),
+                            message: "execution requires human approval".to_string(),
+                        })
+                    } else {
+                        ctx.tool_registry.execute(&tc.name, &tc.arguments).await
+                    };
                     let duration_ms = start.elapsed().as_millis() as u64;
 
                     match &result {
@@ -223,6 +241,23 @@ impl Orchestrator {
     }
 }
 
+/// Approval policy for a single tool call: read-only tools always run;
+/// non-read-only tools run only when an approver is present and approves.
+pub(crate) fn tool_call_approved(
+    registry: &crate::tools::ToolRegistry,
+    approver: Option<&crate::agent::ToolApprover>,
+    name: &str,
+    arguments: &str,
+) -> bool {
+    if registry.is_read_only(name) {
+        return true;
+    }
+    match (registry.get(name), approver) {
+        (Some(tool), Some(approve)) => approve(&tool.def(), arguments),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,6 +294,7 @@ mod tests {
             external_sources: vec![],
             max_rounds: 3,
             tool_registry: ToolRegistry::new(),
+            tool_approver: None,
             session: AiSession::new("test", "test", "noop", "none"),
         }
     }
@@ -267,6 +303,67 @@ mod tests {
     fn orchestrator_new_has_correct_max_rounds() {
         let orch = Orchestrator::new(AiProvider::Noop, 5);
         assert_eq!(orch.max_rounds, 5);
+    }
+
+    /// A tool whose read-only flag can be scripted for approval tests.
+    struct ScriptedTool {
+        name: &'static str,
+        read_only: bool,
+    }
+    #[async_trait]
+    impl crate::tools::Tool for ScriptedTool {
+        fn def(&self) -> crate::types::ToolDef {
+            crate::types::ToolDef {
+                name: self.name.to_string(),
+                description: "scripted".into(),
+                parameters: serde_json::json!({}),
+            }
+        }
+        async fn execute(&self, _arguments: &str) -> Result<String, crate::error::AiError> {
+            Ok("done".into())
+        }
+        fn is_read_only(&self) -> bool {
+            self.read_only
+        }
+        fn name(&self) -> &str {
+            self.name
+        }
+    }
+
+    #[test]
+    fn approval_gate_policy() {
+        let mut registry = crate::tools::ToolRegistry::new();
+        registry.register(Box::new(ScriptedTool {
+            name: "read_only_tool",
+            read_only: true,
+        }));
+        registry.register(Box::new(ScriptedTool {
+            name: "write_tool",
+            read_only: false,
+        }));
+
+        // Read-only tools always run.
+        assert!(tool_call_approved(&registry, None, "read_only_tool", "{}"));
+        // Non-read-only without an approver: refused.
+        assert!(!tool_call_approved(&registry, None, "write_tool", "{}"));
+        // Unknown tools: refused.
+        assert!(!tool_call_approved(&registry, None, "ghost", "{}"));
+        // Rejecting approver: refused.
+        let deny = |_: &crate::types::ToolDef, _: &str| false;
+        assert!(!tool_call_approved(
+            &registry,
+            Some(&deny),
+            "write_tool",
+            "{}"
+        ));
+        // Approving approver: allowed.
+        let allow = |_: &crate::types::ToolDef, _: &str| true;
+        assert!(tool_call_approved(
+            &registry,
+            Some(&allow),
+            "write_tool",
+            "{}"
+        ));
     }
 
     #[tokio::test]

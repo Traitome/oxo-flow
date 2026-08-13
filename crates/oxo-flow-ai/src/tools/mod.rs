@@ -84,6 +84,15 @@ impl ToolRegistry {
         self.tools.get(name).map(|t| t.as_ref())
     }
 
+    /// Whether a tool is read-only (safe to auto-execute).
+    /// Unknown tools are treated as NOT read-only — deny by default.
+    pub fn is_read_only(&self, name: &str) -> bool {
+        self.tools
+            .get(name)
+            .map(|t| t.is_read_only())
+            .unwrap_or(false)
+    }
+
     /// Execute a tool by name with JSON-encoded arguments.
     pub async fn execute(&self, name: &str, arguments: &str) -> Result<String, AiError> {
         let tool = self.tools.get(name).ok_or_else(|| AiError::ToolNotFound {

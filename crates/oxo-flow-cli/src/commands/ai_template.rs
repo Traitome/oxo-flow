@@ -57,7 +57,8 @@ pub async fn generate_workflow(
     // L1-L3: Initialize AI runtime with scope config + tools
     let project_dir = std::env::current_dir().ok();
     let runtime =
-        crate::commands::ai_runtime::AiRuntime::new(None, project_dir.as_deref(), ai_max_retries)?;
+        crate::commands::ai_runtime::AiRuntime::new(None, project_dir.as_deref(), ai_max_retries)
+            .await?;
     let provider = &runtime.provider;
 
     println!("{}", "AI Template Generator".bold().green());
@@ -320,17 +321,74 @@ Your TOML MUST include:
         crate::commands::ai_session::AiCommandSession::begin("template", intent, provider);
 
     use oxo_flow_ai::types::Message;
-    let messages = vec![Message::system(&system), Message::user(&user)];
-    let response = provider
-        .chat_with_tools(&messages, &[])
-        .await
-        .context("AI provider call failed")?;
-    let response_text = response
-        .content
-        .ok_or_else(|| anyhow::anyhow!("AI response contained no text content"))?;
 
-    // Record token usage
-    cmd_session.record_usage(&response.usage);
+    // Tool-calling loop: the model may query the embedded knowledge tools
+    // (lookup_tool / lookup_skill / lookup_pipeline) or MCP tools from
+    // activated tool skills. Non-read-only tools require interactive
+    // approval; without a terminal they are refused.
+    let tool_defs = runtime.tool_registry.to_defs();
+    let mut messages = vec![Message::system(&system), Message::user(&user)];
+    let max_rounds = runtime.config.max_retries.max(1);
+    let mut response_text: Option<String> = None;
+    for _round in 0..max_rounds {
+        let response = provider
+            .chat_with_tools(&messages, &tool_defs)
+            .await
+            .context("AI provider call failed")?;
+        cmd_session.record_usage(&response.usage);
+
+        match response.tool_calls {
+            Some(tool_calls) if !tool_calls.is_empty() => {
+                messages.push(Message::assistant_with_tools(tool_calls.clone()));
+                for tc in tool_calls {
+                    let approved = runtime.tool_registry.is_read_only(&tc.name)
+                        || crate::commands::ai_runtime::prompt_tool_approval(
+                            &tc.name,
+                            &tc.arguments,
+                        )
+                        .await;
+                    let result = if approved {
+                        runtime.tool_registry.execute(&tc.name, &tc.arguments).await
+                    } else {
+                        Err(oxo_flow_ai::error::AiError::ToolError {
+                            tool: tc.name.clone(),
+                            message: "execution requires human approval".to_string(),
+                        })
+                    };
+                    let content = match result {
+                        Ok(content) => content,
+                        Err(e) => format!("tool error: {e}"),
+                    };
+                    cmd_session.record_tool_call(
+                        &tc.name,
+                        &tc.arguments,
+                        &content,
+                        !content.starts_with("tool error"),
+                    );
+                    messages.push(Message::tool(&tc.id, &tc.name, &content));
+                }
+            }
+            _ => {
+                response_text = response.content;
+                break;
+            }
+        }
+    }
+    let response_text = match response_text {
+        Some(text) => text,
+        None => {
+            // The model kept calling tools without finalizing — force one
+            // plain answer without any tools.
+            let final_response = provider
+                .chat_with_tools(&messages, &[])
+                .await
+                .context("AI provider call failed during final (tool-free) round")?;
+            cmd_session.record_usage(&final_response.usage);
+            final_response
+                .content
+                .ok_or_else(|| anyhow::anyhow!("AI response contained no text content"))?
+        }
+    };
 
     // Extract TOML
     let toml_content =

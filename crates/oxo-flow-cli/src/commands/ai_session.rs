@@ -52,6 +52,26 @@ impl AiCommandSession {
         self.session.add_usage(usage);
     }
 
+    /// Record a tool invocation made during the agent loop.
+    pub fn record_tool_call(
+        &mut self,
+        name: &str,
+        arguments: &str,
+        result_preview: &str,
+        success: bool,
+    ) {
+        self.session
+            .tool_calls
+            .push(oxo_flow_ai::session::ToolCallRecord {
+                timestamp: chrono::Utc::now(),
+                tool_name: name.to_string(),
+                arguments: arguments.to_string(),
+                result_preview: result_preview.chars().take(200).collect(),
+                success,
+                duration_ms: 0,
+            });
+    }
+
     /// Complete the session successfully and save to disk.
     pub fn complete(mut self, confidence: f64) {
         self.session = self.session.complete(confidence);

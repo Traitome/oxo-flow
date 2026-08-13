@@ -35,6 +35,12 @@ pub enum AiError {
     #[error("Configuration error: {message}")]
     Config { message: String },
 
+    #[error("MCP transport error: {message}")]
+    Transport { message: String },
+
+    #[error("MCP protocol error: {message}")]
+    Protocol { message: String },
+
     #[error("Network error: {message}")]
     Network { message: String },
 

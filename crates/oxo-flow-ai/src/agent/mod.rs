@@ -37,9 +37,19 @@ pub struct AgentContext {
     pub max_rounds: u32,
     /// Tools available to the agent.
     pub tool_registry: ToolRegistry,
+    /// Human approval callback for non-read-only tools. When `None`,
+    /// non-read-only tools are always refused. The callback receives the
+    /// tool definition and the JSON-encoded arguments, and returns whether
+    /// execution is allowed.
+    pub tool_approver: Option<std::sync::Arc<ToolApprover>>,
     /// Session for recording this agent run.
     pub session: crate::session::AiSession,
 }
+
+/// Human approval callback for non-read-only tool invocations.
+/// Receives the tool definition and JSON-encoded arguments; returns
+/// whether the invocation is allowed.
+pub type ToolApprover = dyn Fn(&crate::types::ToolDef, &str) -> bool + Send + Sync;
 
 /// An external knowledge source provided by the user.
 #[derive(Debug, Clone)]

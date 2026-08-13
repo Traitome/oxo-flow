@@ -103,6 +103,9 @@ impl AiConfig {
         if other.temperature.is_some() {
             self.temperature = other.temperature;
         }
+        if !other.skills.is_empty() {
+            self.skills = other.skills.clone();
+        }
     }
 
     /// Create a config from environment variables.
