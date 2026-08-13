@@ -144,6 +144,90 @@ oxo-flow template "RNA-seq" --ai --ai-max-retries 5
 
 ---
 
+## Workflow Explanation (`ai explain`)
+
+Explain a workflow in plain language — for newcomers reading an inherited
+pipeline, and for experienced users evaluating one. Three layers:
+
+1. **Overview** — what the workflow does, its assay domains, entry and final rules
+2. **Step-by-step** — each rule's tool, purpose, inputs/outputs, and resources
+3. **Scientific review** — deterministic, evidence-backed findings (GATK best
+   practices etc.) explained in plain language
+
+```bash
+oxo-flow ai explain workflow.oxoflow              # beginner-level prose (default)
+oxo-flow ai explain workflow.oxoflow --step bwa_mem2_align   # focus one rule
+oxo-flow ai explain workflow.oxoflow --level expert          # parameter-level, efficiency-focused
+oxo-flow ai explain workflow.oxoflow --json       # machine-readable output
+```
+
+`ai explain` complements `dry-run`: **dry-run shows the mechanism** (what will
+execute), **explain shows the principle** (why each step exists). Every fact
+in the explanation is computed deterministically from the workflow definition
+plus the embedded knowledge bases (tool table, bioSkills, pipeline graph,
+scientific preflight) — the model only writes prose over those verified
+facts, so it cannot invent parameters, versions, or caveats. The deterministic
+findings are always printed separately (stderr, or the `review` array in
+`--json`), so nothing critical is silently dropped even if the model omits it.
+
+`--json` emits the deterministic skeleton (rule metadata, I/O, resources,
+matched knowledge, findings) with model-written prose in dedicated fields —
+safe for documentation generators. `--level` defaults to `beginner` because
+the audience cannot be inferred from the workflow itself; experts opt in.
+
+```json
+{
+  "workflow_name": "wgs-germline-calling",
+  "level": "beginner",
+  "domains": ["read-alignment", "variant-calling"],
+  "steps": [
+    {
+      "order": 1,
+      "name": "fastp_qc",
+      "depends_on": [],
+      "inputs": ["raw/{sample}_R1.fastq.gz"],
+      "outputs": ["trimmed/{sample}_R1.fq.gz"],
+      "threads": 4,
+      "tools": ["fastp"],
+      "explanation": "Trims adapters and low-quality bases..."
+    }
+  ],
+  "review": [
+    {
+      "code": "SCI-VQSR-COHORT",
+      "rule": "vqsr_snps",
+      "message": "VariantRecalibrator trains on the cohort, but only 3 sample(s) are in this run...",
+      "suggestion": "stop the pilot before VQSR (-t <rule>) or use hard filtering..."
+    }
+  ],
+  "provenance": {"model": "deepseek-v4-pro", "bio_skills": 562, "pipeline_graph_nodes": 79}
+}
+```
+
+---
+
+## AI Robustness
+
+The provider layer treats model failures explicitly — nothing is silently dropped:
+
+- **Broken tool-call arguments are repaired**: if a model (e.g. DeepSeek under
+  load) truncates a tool call's arguments JSON, it is repaired to `{}` and the
+  call still executes; structurally broken calls (missing id/name) raise a
+  `ToolError` instead of being ignored.
+- **Context overflows are classified and recovered**: HTTP 400/413 responses
+  with context-window markers map to `ContextOverflow`; the transcript is
+  compressed (system + recent turns kept, middle turns replaced by a marker)
+  and retried **once**. A second overflow returns readable guidance instead of
+  burning quota.
+- **Tool results are bounded**: every tool result entering a transcript is
+  capped at 16 KiB with a UTF-8-safe head+tail truncation marker, so long
+  lookups cannot silently blow up the context window.
+- **Offline replay for tests**: a scripted provider replays serialized
+  completions (tool calls, errors, delays) through the real code path, so CI
+  covers multi-turn tool-calling and error recovery without an API key.
+
+---
+
 ## Configuration
 
 ### Global Config (`~/.config/oxo-flow/ai_config.json`)
@@ -247,6 +331,10 @@ Every AI interaction is logged to `.oxo-flow/ai_sessions/` for audit and debuggi
 | `oxo-flow ai` | — | — | Quick status: provider, model, endpoint, connectivity, session count |
 | `oxo-flow ai test` | — | — | Comprehensive self-test: connectivity + generation + analysis |
 | `oxo-flow ai setup` | — | — | Interactive wizard: choose provider, enter key, save config |
+| `oxo-flow ai explain WORKFLOW` | — | — | Three-layer workflow explanation (overview → steps → scientific review) |
+| `oxo-flow ai explain WORKFLOW --step RULE` | — | — | Focus the explanation on one rule |
+| `oxo-flow ai explain WORKFLOW --level beginner\|expert` | — | — | Explanation depth (default `beginner`) |
+| `oxo-flow ai explain WORKFLOW --json` | — | — | Machine-readable skeleton + prose (stdout is pure JSON) |
 | `oxo-flow template "X" --ai` | required | ❌ | Natural language → .oxoflow file |
 | `oxo-flow template "X" --ai --from-url URL` | required | ❌ | Generate with web page as reference |
 | `oxo-flow template "X" --ai --from-file PATH` | required | ❌ | Generate with local file as reference |
@@ -365,5 +453,7 @@ If you see rate limit errors, wait a few seconds and retry. For production use, 
 | Phase 3 | AI error recovery (`--ai-recover`) | ✅ Complete |
 | Phase 4 | Scope-level AI config, AI plugin types | ✅ Complete |
 | Phase 5 | MCP/Skill ecosystem | ✅ Complete |
+| Phase 6 | Workflow explanation (`ai explain`) | ✅ Complete |
+| Phase 7 | Provider robustness (tool-call repair, overflow recovery, bounded results) | ✅ Complete |
 
 See the full design spec at `docs/superpowers/specs/2026-08-09-ai-native-cli-design.md` (repository root, not included in the published docs) for architecture details.
