@@ -362,6 +362,11 @@ pub enum Commands {
             help = "Path to checkpoint file (default: .oxo-flow/checkpoint.json)"
         )]
         checkpoint_path: Option<PathBuf>,
+        #[arg(
+            long = "ai",
+            help = "AI result interpretation — plain-language summary of execution outcomes, caveats, and next steps"
+        )]
+        ai: bool,
     },
     /// Package a workflow into a container image.
     Package {
@@ -859,7 +864,8 @@ async fn main() -> Result<()> {
             format,
             output,
             checkpoint_path,
-        } => handle_report(workflow, format, output, checkpoint_path)?,
+            ai,
+        } => handle_report(workflow, format, output, checkpoint_path, ai).await?,
         Commands::Package {
             workflow,
             format,

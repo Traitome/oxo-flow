@@ -33,11 +33,12 @@ pub fn handle_graph(workflow: PathBuf, format: String, output: Option<PathBuf>) 
     Ok(())
 }
 
-pub fn handle_report(
+pub async fn handle_report(
     workflow: PathBuf,
     format: String,
     output: Option<PathBuf>,
     checkpoint_path: Option<PathBuf>,
+    ai: bool,
 ) -> Result<()> {
     use oxo_flow_core::{executor::CheckpointState, report::ReportBuilder};
 
@@ -67,6 +68,13 @@ pub fn handle_report(
             None
         }
     };
+
+    // AI result interpretation: plain-language summary of outcomes,
+    // caveats, and next steps — printed before the report body.
+    if let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(&workflow), ai) {
+        interpret_report_with_ai(&workflow, &config, checkpoint.as_ref(), &provider).await?;
+        println!();
+    }
 
     // ── Build report using the pluggable section system ──
     // Domain auto-detection tailors sections to the workflow type.
@@ -231,5 +239,77 @@ pub fn handle_export(workflow: PathBuf, format: String, output: Option<PathBuf>)
         }
     }
 
+    Ok(())
+}
+
+// ── AI result interpretation ───────────────────────────────────────────────
+
+/// Plain-language interpretation of execution outcomes: what succeeded,
+/// what the key metrics mean, caveats, and suggested next steps.
+async fn interpret_report_with_ai(
+    _workflow: &std::path::Path,
+    config: &WorkflowConfig,
+    checkpoint: Option<&oxo_flow_core::executor::CheckpointState>,
+    provider: &oxo_flow_ai::provider::AiProvider,
+) -> Result<()> {
+    println!("{}", "AI Result Interpretation".bold().green().underline());
+    println!(
+        "  Model: {}\n",
+        provider.model().unwrap_or_else(|| "default".into())
+    );
+
+    // Compact execution summary for the prompt
+    let (completed, failed, total) = match checkpoint {
+        Some(cp) => (
+            cp.completed_rules.len(),
+            cp.failed_rules.len(),
+            config.rules.len(),
+        ),
+        None => (0usize, 0usize, config.rules.len()),
+    };
+    let benchmarks: Vec<String> = checkpoint
+        .map(|cp| {
+            cp.benchmarks
+                .iter()
+                .map(|(n, b)| format!("- {n}: {:.1}s", b.wall_time_secs))
+                .take(20)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let system = r#"## Role
+You are a senior bioinformatics analyst. Interpret workflow execution results
+in plain language for a user who may not be a bioinformatics expert.
+
+## Output Requirements
+Provide:
+1. **Summary** — 1-2 sentences: what ran and whether it succeeded
+2. **Key metrics** — the 2-3 most important numbers and what they mean in plain language
+3. **Caveats** — 1-2 limitations or things to check before trusting the results
+4. **Next steps** — 1-2 concrete suggestions
+
+Keep the total under 200 words. Use simple language; explain jargon.
+"#;
+
+    let user = format!(
+        "## Workflow: {} (v{})\nDescription: {}\nRules: {total}, succeeded: {completed}, failed: {failed}\n\n## Per-rule timings\n{}\n\nInterpret these results.",
+        config.workflow.name,
+        config.workflow.version,
+        config.workflow.description.as_deref().unwrap_or("(none)"),
+        if benchmarks.is_empty() {
+            "(no checkpoint benchmarks available — run the workflow first)".to_string()
+        } else {
+            benchmarks.join("\n")
+        }
+    );
+
+    println!("{}", "  Interpreting...".bold().cyan());
+    use oxo_flow_ai::types::Message;
+    let messages = vec![Message::system(system), Message::user(&user)];
+    let response = provider.chat_with_tools(&messages, &[]).await?;
+    let text = response.content.unwrap_or_default();
+
+    println!();
+    println!("{text}");
     Ok(())
 }
