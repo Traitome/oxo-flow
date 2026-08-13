@@ -127,7 +127,8 @@ async fn restore_ai_config_from_db_reconfigures_registry() {
     let pool = oxo_flow_web::infra::db::sqlite::pool();
     sqlx::query(
         "INSERT INTO ai_provider_config (id, user_id, provider, api_key, api_url, model, search_enabled, monitor_enabled, auto_retry_enabled, max_correction_rounds, created_at, updated_at)
-         VALUES (?, 'default', 'deepseek', 'sk-live-test-key', 'https://api.deepseek.com/v1', 'deepseek-v4-pro', 0, 0, 0, 3, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+         VALUES (?, 'default', 'deepseek', 'sk-live-test-key', 'https://api.deepseek.com/v1', 'deepseek-v4-pro', 0, 0, 0, 3, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+         ON CONFLICT(user_id) DO UPDATE SET provider=excluded.provider, api_key=excluded.api_key, updated_at=excluded.updated_at",
     )
     .bind(uuid::Uuid::new_v4().to_string())
     .execute(pool)
