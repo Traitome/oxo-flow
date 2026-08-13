@@ -51,9 +51,31 @@ export default function PipelineEditor() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
-  // Load a template when navigated with ?template=<id> (dashboard quick-start).
+  // Load a template or a saved pipeline when navigated with
+  // ?template=<id> / ?pipeline=<id> (dashboard quick-start, My Pipelines).
   useEffect(() => {
     const templateId = searchParams.get('template');
+    const pipelineId = searchParams.get('pipeline');
+    if (pipelineId) {
+      let cancelled = false;
+      api
+        .getPipeline(pipelineId)
+        .then((pl) => {
+          if (cancelled) return;
+          setToml(pl.toml_content);
+          session.setRunResult({
+            message: `Opened saved pipeline "${pl.name}"`,
+            type: 'success',
+          });
+        })
+        .catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : 'Pipeline not found';
+          session.setRunResult({ message: `Pipeline load failed: ${msg}`, type: 'error' });
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
     if (!templateId) return;
     let cancelled = false;
     api
