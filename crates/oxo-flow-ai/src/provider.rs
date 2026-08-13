@@ -370,56 +370,76 @@ fn to_anthropic_messages(messages: &[Message]) -> (String, Vec<serde_json::Value
         .map(|m| m.content.clone())
         .unwrap_or_default();
 
-    let anthropic_msgs: Vec<serde_json::Value> = messages
-        .iter()
-        .filter(|m| m.role != MessageRole::System)
-        .filter_map(|m| {
-            let role = match m.role {
-                MessageRole::User => "user",
-                MessageRole::Assistant => "assistant",
-                MessageRole::Tool => "user", // Anthropic flattens tool results
-                MessageRole::System => return None,
-            };
-            // Assistant messages with tool calls must emit the tool_use
-            // blocks — Anthropic rejects tool_result blocks whose
-            // tool_use_id was never declared in a prior assistant turn.
-            if m.role == MessageRole::Assistant
-                && let Some(tool_calls) = &m.tool_calls
-                && !tool_calls.is_empty()
-            {
-                let mut blocks: Vec<serde_json::Value> = Vec::new();
-                if !m.content.is_empty() {
-                    blocks.push(serde_json::json!({"type": "text", "text": m.content}));
-                }
-                for tc in tool_calls {
-                    let input: serde_json::Value =
-                        serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
-                    blocks.push(serde_json::json!({
-                        "type": "tool_use",
-                        "id": tc.id,
-                        "name": tc.name,
-                        "input": input,
-                    }));
-                }
-                return Some(serde_json::json!({"role": role, "content": blocks}));
+    // Convert internal messages to Anthropic's wire format. Consecutive tool
+    // results coalesce into ONE user message: Anthropic requires ALL
+    // tool_result blocks for an assistant turn's tool_use blocks to appear in
+    // the message that immediately follows it.
+    let mut anthropic_msgs: Vec<serde_json::Value> = Vec::new();
+    for m in messages.iter().filter(|m| m.role != MessageRole::System) {
+        let role = match m.role {
+            MessageRole::User => "user",
+            MessageRole::Assistant => "assistant",
+            MessageRole::Tool => "user", // Anthropic flattens tool results
+            MessageRole::System => unreachable!("filtered above"),
+        };
+        // Assistant messages with tool calls must emit the tool_use
+        // blocks — Anthropic rejects tool_result blocks whose
+        // tool_use_id was never declared in a prior assistant turn.
+        if m.role == MessageRole::Assistant
+            && let Some(tool_calls) = &m.tool_calls
+            && !tool_calls.is_empty()
+        {
+            let mut blocks: Vec<serde_json::Value> = Vec::new();
+            if !m.content.is_empty() {
+                blocks.push(serde_json::json!({"type": "text", "text": m.content}));
             }
-            // Tool result messages (Anthropic wraps them in a user turn).
-            if let Some(ref tc_id) = m.tool_call_id {
-                return Some(serde_json::json!({
-                    "role": "user",
-                    "content": [{
-                        "type": "tool_result",
-                        "tool_use_id": tc_id,
-                        "content": m.content,
-                    }]
+            for tc in tool_calls {
+                let input: serde_json::Value =
+                    serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
+                blocks.push(serde_json::json!({
+                    "type": "tool_use",
+                    "id": tc.id,
+                    "name": tc.name,
+                    "input": input,
                 }));
             }
-            Some(serde_json::json!({
-                "role": role,
-                "content": m.content,
-            }))
-        })
-        .collect();
+            anthropic_msgs.push(serde_json::json!({"role": role, "content": blocks}));
+            continue;
+        }
+        // Tool result: append to the previous user message when it is a
+        // tool-result message (coalescing), else start a new one.
+        if m.role == MessageRole::Tool {
+            let block = match &m.tool_call_id {
+                Some(tc_id) => serde_json::json!({
+                    "type": "tool_result",
+                    "tool_use_id": tc_id,
+                    "content": m.content,
+                }),
+                None => serde_json::json!({
+                    "type": "text",
+                    "text": m.content,
+                }),
+            };
+            if let Some(last) = anthropic_msgs.last_mut()
+                && last["role"] == "user"
+                && last["content"]
+                    .as_array()
+                    .is_some_and(|a| a.iter().all(|b| b["type"] == "tool_result"))
+            {
+                last["content"].as_array_mut().unwrap().push(block);
+            } else {
+                anthropic_msgs.push(serde_json::json!({
+                    "role": "user",
+                    "content": [block],
+                }));
+            }
+            continue;
+        }
+        anthropic_msgs.push(serde_json::json!({
+            "role": role,
+            "content": m.content,
+        }));
+    }
 
     (system, anthropic_msgs)
 }
@@ -1452,6 +1472,94 @@ mod tests {
         let result = &msgs[2];
         assert_eq!(result["role"], "user");
         assert_eq!(result["content"][0]["tool_use_id"], "tc-1");
+    }
+
+    #[test]
+    fn two_round_tool_transcript_pairs_every_tool_use() {
+        // Mirror the orchestrator's two-round transcript exactly.
+        let messages = vec![
+            Message::system("sys"),
+            Message::user("make a pipeline"),
+            Message::assistant_with_tools(vec![ToolCall {
+                id: "call_00".into(),
+                name: "lookup_tool".into(),
+                arguments: "{\"query\":\"fastqc\"}".into(),
+            }]),
+            Message::tool("call_00", "lookup_tool", "found 8"),
+            Message::assistant_with_tools(vec![ToolCall {
+                id: "call_01".into(),
+                name: "lookup_skill".into(),
+                arguments: "{\"query\":\"fastqc qc\"}".into(),
+            }]),
+            Message::tool("call_01", "lookup_skill", "no skills"),
+        ];
+        let (_system, msgs) = to_anthropic_messages(&messages);
+        // Every tool_use block must be immediately followed by a matching
+        // tool_result block in the NEXT message (Anthropic's pairing rule).
+        for (i, msg) in msgs.iter().enumerate() {
+            if msg["role"] != "assistant" {
+                continue;
+            }
+            let uses: Vec<&serde_json::Value> = msg["content"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|b| b["type"] == "tool_use")
+                .collect();
+            if uses.is_empty() {
+                continue;
+            }
+            let next = &msgs[i + 1];
+            assert_eq!(next["role"], "user", "tool_result must follow tool_use");
+            let results: Vec<&serde_json::Value> = next["content"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|b| b["type"] == "tool_result")
+                .collect();
+            for u in &uses {
+                assert!(
+                    results.iter().any(|r| r["tool_use_id"] == u["id"]),
+                    "tool_use {} has no immediate tool_result.\nassistant={}\nnext={}",
+                    u["id"],
+                    msg,
+                    next
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn multi_tool_round_coalesces_results_into_one_message() {
+        // A single assistant round may carry MULTIPLE tool_use blocks;
+        // Anthropic requires ALL their tool_result blocks in the ONE message
+        // that immediately follows.
+        let messages = vec![
+            Message::system("sys"),
+            Message::user("make a pipeline"),
+            Message::assistant_with_tools(vec![
+                ToolCall {
+                    id: "call_00".into(),
+                    name: "lookup_tool".into(),
+                    arguments: "{}".into(),
+                },
+                ToolCall {
+                    id: "call_01".into(),
+                    name: "lookup_skill".into(),
+                    arguments: "{}".into(),
+                },
+            ]),
+            Message::tool("call_00", "lookup_tool", "found 8"),
+            Message::tool("call_01", "lookup_skill", "none"),
+        ];
+        let (_system, msgs) = to_anthropic_messages(&messages);
+        // [user, assistant(2 tool_use), user(2 tool_result)]
+        assert_eq!(msgs.len(), 3, "results must coalesce: {msgs:#?}");
+        let results = &msgs[2]["content"];
+        let results = results.as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().any(|r| r["tool_use_id"] == "call_00"));
+        assert!(results.iter().any(|r| r["tool_use_id"] == "call_01"));
     }
 
     #[test]
