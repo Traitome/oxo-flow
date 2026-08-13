@@ -4643,3 +4643,210 @@ fn cli_concurrent_runs_get_clear_lock_error() {
         "completed rule must be skipped after the first run"
     );
 }
+
+// ─── Input manifest invalidation (issue #72) ───────────────────────────────
+
+/// A completed rule whose glob inputs gained a new matching file must be
+/// re-executed together with its DAG downstream; an unchanged file set
+/// keeps the checkpoint skip.
+#[test]
+fn cli_glob_input_change_rebuilds_rule_and_downstream() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("data")).unwrap();
+    fs::write(dir.path().join("data/a.txt"), "a").unwrap();
+    fs::write(dir.path().join("data/b.txt"), "b").unwrap();
+    let wf = dir.path().join("glob72.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"glob72\"\n\n\
+         [[rules]]\nname = \"gather\"\ninput = [\"data/*.txt\"]\noutput = [\"out.txt\"]\n\
+         shell = \"cat data/*.txt > out.txt\"\n\n\
+         [[rules]]\nname = \"downstream\"\ninput = [\"out.txt\"]\noutput = [\"down.txt\"]\n\
+         shell = \"cp out.txt down.txt\"\n",
+    )
+    .unwrap();
+
+    // Run 1: both rules execute.
+    let run1 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        run1.status.success(),
+        "run1 failed: {}",
+        String::from_utf8_lossy(&run1.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("out.txt")).unwrap(),
+        "ab"
+    );
+
+    // Run 2: unchanged inputs — both rules hit the checkpoint.
+    let run2 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run2.status.success());
+    let stderr2 = String::from_utf8_lossy(&run2.stderr);
+    assert!(
+        stderr2.contains("2 skipped"),
+        "unchanged inputs must keep the checkpoint skip: {stderr2}"
+    );
+    assert!(
+        !stderr2.contains("input changes invalidated"),
+        "no invalidation expected: {stderr2}"
+    );
+
+    // Run 3: a new file appears in the glob — gather and downstream rebuild.
+    fs::write(dir.path().join("data/c.txt"), "c").unwrap();
+    let run3 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        run3.status.success(),
+        "run3 failed: {}",
+        String::from_utf8_lossy(&run3.stderr)
+    );
+    let stderr3 = String::from_utf8_lossy(&run3.stderr);
+    assert!(
+        stderr3.contains("input changes invalidated 2 rule(s)"),
+        "gather and downstream must be invalidated: {stderr3}"
+    );
+    assert!(
+        stderr3.contains("Running: gather"),
+        "gather must re-run: {stderr3}"
+    );
+    assert!(
+        stderr3.contains("Running: downstream"),
+        "downstream must re-run: {stderr3}"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("out.txt")).unwrap(),
+        "abc"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("down.txt")).unwrap(),
+        "abc"
+    );
+
+    // Run 4: converged — everything skips again.
+    let run4 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run4.status.success());
+    assert!(
+        String::from_utf8_lossy(&run4.stderr).contains("2 skipped"),
+        "converged run must skip everything"
+    );
+}
+
+/// A completed rule whose input is a directory must rebuild when a file is
+/// added inside that directory (the multiqc-style aggregation case).
+#[test]
+fn cli_dir_input_change_rebuilds_rule() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("results")).unwrap();
+    fs::write(dir.path().join("results/a.txt"), "aaa\n").unwrap();
+    let wf = dir.path().join("dir72.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"dir72\"\n\n\
+         [[rules]]\nname = \"aggregate\"\ninput = [\"results\"]\noutput = [\"total.txt\"]\n\
+         shell = \"cat results/*.txt > total.txt\"\n",
+    )
+    .unwrap();
+
+    let run = |tag: &str| {
+        let out = oxo_flow_cmd()
+            .args(["run", wf.to_str().unwrap()])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{tag} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        out
+    };
+
+    let _ = run("run1");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("total.txt")).unwrap(),
+        "aaa\n"
+    );
+
+    let run2 = run("run2");
+    assert!(
+        String::from_utf8_lossy(&run2.stderr).contains("1 skipped"),
+        "unchanged directory must skip"
+    );
+
+    fs::write(dir.path().join("results/b.txt"), "bbb\n").unwrap();
+    let run3 = run("run3");
+    let stderr3 = String::from_utf8_lossy(&run3.stderr);
+    assert!(
+        stderr3.contains("input changes invalidated"),
+        "directory change must invalidate: {stderr3}"
+    );
+    assert!(
+        stderr3.contains("Running: aggregate"),
+        "aggregate must re-run: {stderr3}"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("total.txt")).unwrap(),
+        "aaa\nbbb\n"
+    );
+}
+
+/// Regression for the broader hole behind issue #72: plain-file inputs were
+/// equally unprotected (mutation left outputs silently stale).
+#[test]
+fn cli_plain_input_change_rebuilds_rule() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("data")).unwrap();
+    fs::write(dir.path().join("data/a.txt"), "hello\n").unwrap();
+    let wf = dir.path().join("plain72.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"plain72\"\n\n\
+         [[rules]]\nname = \"copy\"\ninput = [\"data/a.txt\"]\noutput = [\"out.txt\"]\n\
+         shell = \"cp data/a.txt out.txt\"\n",
+    )
+    .unwrap();
+
+    let run1 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run1.status.success());
+
+    // Mutate the input — the completed rule must rebuild, not reuse.
+    fs::write(dir.path().join("data/a.txt"), "mutated\n").unwrap();
+    let run2 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        run2.status.success(),
+        "run2 failed: {}",
+        String::from_utf8_lossy(&run2.stderr)
+    );
+    let stderr2 = String::from_utf8_lossy(&run2.stderr);
+    assert!(
+        stderr2.contains("input changes invalidated"),
+        "mutated plain input must invalidate: {stderr2}"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("out.txt")).unwrap(),
+        "mutated\n"
+    );
+}

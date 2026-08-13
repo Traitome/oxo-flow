@@ -335,6 +335,61 @@ correctly when the split values change.
   exits (even on a crash). `clean` refuses to delete while a run is active
   unless `--force` is given.
 
+### Input changes and manifest invalidation
+
+The checkpoint also records an **input manifest** for every completed rule:
+the file set its inputs resolved to at completion time, with each file's
+path, size, and modification time. On every run, oxo-flow re-resolves the
+inputs and compares:
+
+- **Literal glob inputs** (`data/*.txt`) detect added and removed files —
+  a new file matching the glob rebuilds the rule (and its DAG downstream).
+- **Directory inputs** (e.g. `input = ["results"]` — a path that resolves
+  to a directory) are listed recursively, so files added or changed anywhere
+  inside invalidate the rule. `Dir` inputs with a `pattern` filter track
+  only matching files.
+- **Plain file inputs** detect edits through their size and mtime, closing
+  the same stale-reuse hole for ordinary files.
+
+```console
+# a new file appears in data/ after the last run
+oxo-flow run pipeline.oxoflow
+```
+
+```console
+  ↻ input changes invalidated 2 rule(s): gather, report
+  Running: gather
+  Running: report
+  …
+```
+
+Invalidated rules bypass the executor's freshness gate and re-execute even
+when their outputs exist and look recent; downstream rules that consumed
+their outputs rebuild in the same run.
+
+**Limitations** (correctness-first, documented deliberately):
+
+- Detection is metadata-based (path + size + mtime), like `make` and
+  Snakemake's default mode — not content hashes. Hashing every input on
+  every run would cost O(total input bytes), prohibitive for
+  bioinformatics-scale files. A file rewritten with an identical size and a
+  deliberately preserved mtime is not detected; use `--rerun` to force.
+- Only one glob level is tracked per input pattern; brace-expansion
+  patterns (`*.{txt,log}`) are not expanded by the manifest scanner, so
+  their matched set is not tracked (the shell still expands them at
+  runtime).
+- Symlinked directories are recorded as single entries, never traversed
+  (cycle-safe), so changes inside a symlinked directory are tracked at the
+  symlink's own metadata level.
+- Rules that clean up their inputs at the end of a successful run
+  (`transform.cleanup = true` chunk consumers) are not manifest-tracked:
+  their inputs are engine-managed intermediates governed by the
+  upstream-cascade invalidation instead.
+- A checkpoint written before input tracking was introduced adopts the
+  current file set as a one-time baseline (the first post-upgrade run
+  reuses everything); changes made before that baseline cannot be
+  detected.
+
 ### Forcing Execution
 
 To bypass checkpoints and re-execute rules that have already completed, use

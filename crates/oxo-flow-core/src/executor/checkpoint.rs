@@ -1,8 +1,25 @@
 use crate::error::{OxoFlowError, Result};
-use crate::rule::Rule;
+use crate::rule::{FilePatterns, Rule};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+
+/// One file in an input manifest: part of the file set a rule's inputs
+/// resolved to when the rule completed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputManifestEntry {
+    /// Path relative to the working directory.
+    pub path: String,
+    /// File size in bytes at snapshot time.
+    pub size: u64,
+    /// Last-modified time (nanoseconds since the Unix epoch) at snapshot time.
+    pub mtime_nanos: i128,
+}
+
+/// Sorted, deduplicated snapshot of a rule's resolved input files.
+/// Two manifests are equal iff the file set and every file's size + mtime
+/// are unchanged.
+pub type InputManifest = Vec<InputManifestEntry>;
 
 /// Performance metrics recorded after executing a rule.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +81,13 @@ pub struct CheckpointState {
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub rule_fingerprints: HashMap<String, String>,
+    /// Per-rule input manifests at completion time (issue #72).
+    /// Maps rule name → sorted list of (relative path, size, mtime) for every
+    /// file the rule's inputs resolved to. A mismatch with the current file
+    /// set invalidates the rule and its downstream.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub input_manifests: HashMap<String, InputManifest>,
 }
 
 impl CheckpointState {
@@ -78,12 +102,18 @@ impl CheckpointState {
             checksums: HashMap::new(),
             config_snapshot: HashMap::new(),
             rule_fingerprints: HashMap::new(),
+            input_manifests: HashMap::new(),
         }
     }
 
     /// Record a checksum for an output file (provenance tracking).
     pub fn record_checksum(&mut self, path: &str, checksum: String) {
         self.checksums.insert(path.to_string(), checksum);
+    }
+
+    /// Record the input manifest for a rule (issue #72).
+    pub fn record_input_manifest(&mut self, rule: &str, manifest: InputManifest) {
+        self.input_manifests.insert(rule.to_string(), manifest);
     }
 
     /// Set the workflow path that generated this checkpoint.
@@ -374,6 +404,234 @@ pub fn compute_input_checksums(rule: &Rule, workdir: &Path) -> HashMap<String, S
     checksums
 }
 
+/// Snapshot the file set a rule's inputs resolve to (issue #72).
+///
+/// Returns `Ok(None)` when the rule has no resolvable inputs: the input list
+/// is empty, every pattern still contains an engine wildcard (`{sample}`,
+/// `{threads}`, …) after config expansion, or the rule declares
+/// `cleanup_chunks` / consumes engine-managed `.oxo-flow/chunks/` files
+/// (ephemeral intermediates whose lifecycle the engine already governs).
+///
+/// Otherwise returns the sorted, deduplicated list of (relative path, size,
+/// mtime) entries covering:
+///
+/// - plain file inputs (one entry each),
+/// - literal glob inputs (`*`, `?`, `[`) expanded with `glob`-crate
+///   semantics (the same expander used by sample discovery),
+/// - `FilePatterns::Dir` inputs — a recursive listing, optionally filtered
+///   by the Dir `pattern` glob,
+/// - plain paths that resolve to directories (recursive listing).
+///
+/// Symlinked directories are recorded as single entries, never traversed —
+/// the `walkdir` default — which keeps walks cycle-safe.
+///
+/// Returns `Err` when an input cannot be resolved (missing file/dir,
+/// unreadable metadata, invalid glob pattern). Callers treat that as "cannot
+/// verify" and invalidate the rule rather than reuse it.
+pub fn snapshot_input_manifest(
+    rule: &Rule,
+    workdir: &Path,
+    wildcard_values: &HashMap<String, String>,
+) -> Result<Option<InputManifest>> {
+    if rule.input.is_empty() {
+        return Ok(None);
+    }
+    // Chunk consumers clean their inputs at the end of a successful run —
+    // snapshotting them would flag every completed transform as "inputs
+    // deleted" on the next run. The engine's own invalidation (upstream
+    // re-runs cascade downstream) already governs those intermediates.
+    if rule.cleanup_chunks {
+        return Ok(None);
+    }
+
+    // The Dir variant carries an optional filter glob that to_vec() omits.
+    let dir_filter = match &rule.input {
+        FilePatterns::Dir { pattern, .. } => pattern
+            .as_ref()
+            .map(|p| expand_config_in_path(p, wildcard_values)),
+        _ => None,
+    };
+
+    let mut entries: std::collections::BTreeMap<String, InputManifestEntry> =
+        std::collections::BTreeMap::new();
+    let mut saw_resolvable = false;
+    for pattern in rule.input.to_vec() {
+        let expanded = expand_config_in_path(&pattern, wildcard_values);
+        if expanded.contains('{') {
+            // Engine wildcard ({sample}, {threads}, …) — expanded per
+            // instance before checkpointing, not resolvable here.
+            continue;
+        }
+        if expanded.starts_with(".oxo-flow/chunks") {
+            // Engine-managed ephemeral intermediates — see cleanup_chunks.
+            continue;
+        }
+        saw_resolvable = true;
+        collect_pattern_entries(&expanded, dir_filter.as_deref(), workdir, &mut entries)?;
+    }
+
+    if !saw_resolvable {
+        return Ok(None);
+    }
+    Ok(Some(entries.into_values().collect()))
+}
+
+/// Literal glob characters — distinct from `{engine}` wildcards
+/// (`crate::wildcard::has_wildcards` only matches braces).
+fn is_glob_pattern(pattern: &str) -> bool {
+    pattern.contains('*') || pattern.contains('?') || pattern.contains('[')
+}
+
+fn collect_pattern_entries(
+    pattern: &str,
+    dir_filter: Option<&str>,
+    workdir: &Path,
+    entries: &mut std::collections::BTreeMap<String, InputManifestEntry>,
+) -> Result<()> {
+    let full = workdir.join(pattern);
+
+    // A Dir input with a filter globs inside the directory; the directory
+    // itself must exist or the rule cannot be verified.
+    if let Some(filter) = dir_filter {
+        let glob_pattern = full.join(filter);
+        if !full.exists() {
+            return Err(OxoFlowError::Execution {
+                rule: String::new(),
+                message: format!(
+                    "cannot verify input directory {}: it does not exist",
+                    full.display()
+                ),
+            });
+        }
+        for matched in
+            glob::glob(&glob_pattern.to_string_lossy()).map_err(|e| OxoFlowError::Execution {
+                rule: String::new(),
+                message: format!("invalid glob pattern '{}': {}", glob_pattern.display(), e),
+            })?
+        {
+            let matched = matched.map_err(|e| OxoFlowError::Execution {
+                rule: String::new(),
+                message: format!("glob error: {}", e),
+            })?;
+            insert_manifest_entry(&matched, workdir, entries)?;
+        }
+        return Ok(());
+    }
+
+    if is_glob_pattern(pattern) {
+        for matched in glob::glob(&full.to_string_lossy()).map_err(|e| OxoFlowError::Execution {
+            rule: String::new(),
+            message: format!("invalid glob pattern '{}': {}", full.display(), e),
+        })? {
+            let matched = matched.map_err(|e| OxoFlowError::Execution {
+                rule: String::new(),
+                message: format!("glob error: {}", e),
+            })?;
+            insert_manifest_entry(&matched, workdir, entries)?;
+        }
+        // A glob matching nothing is a legitimate (if degenerate) input set.
+        return Ok(());
+    }
+
+    insert_manifest_entry(&full, workdir, entries)
+}
+
+/// Record one path (file or directory) in the manifest.
+///
+/// Symlinked directories are recorded as single entries, never traversed
+/// (cycle-safe, `walkdir` semantics); real directories are walked
+/// recursively.
+fn insert_manifest_entry(
+    path: &Path,
+    workdir: &Path,
+    entries: &mut std::collections::BTreeMap<String, InputManifestEntry>,
+) -> Result<()> {
+    let smd = std::fs::symlink_metadata(path).map_err(|e| OxoFlowError::Execution {
+        rule: String::new(),
+        message: format!("cannot stat input {}: {}", path.display(), e),
+    })?;
+    if smd.file_type().is_dir() {
+        return walk_dir(path, workdir, entries);
+    }
+    if smd.file_type().is_symlink() {
+        // Stat the target (size/mtime) without traversing into it.
+        let md = std::fs::metadata(path).map_err(|e| OxoFlowError::Execution {
+            rule: String::new(),
+            message: format!("cannot stat symlink target {}: {}", path.display(), e),
+        })?;
+        record_manifest_file(path, workdir, &md, entries);
+        return Ok(());
+    }
+    record_manifest_file(path, workdir, &smd, entries);
+    Ok(())
+}
+
+/// Recursively list regular files under `dir` (no symlink traversal).
+fn walk_dir(
+    dir: &Path,
+    workdir: &Path,
+    entries: &mut std::collections::BTreeMap<String, InputManifestEntry>,
+) -> Result<()> {
+    let rd = std::fs::read_dir(dir).map_err(|e| OxoFlowError::Execution {
+        rule: String::new(),
+        message: format!("cannot list input directory {}: {}", dir.display(), e),
+    })?;
+    for item in rd {
+        let item = item.map_err(|e| OxoFlowError::Execution {
+            rule: String::new(),
+            message: format!("cannot read directory {}: {}", dir.display(), e),
+        })?;
+        let path = item.path();
+        let ft = item.file_type().map_err(|e| OxoFlowError::Execution {
+            rule: String::new(),
+            message: format!("cannot stat {}: {}", path.display(), e),
+        })?;
+        if ft.is_dir() {
+            walk_dir(&path, workdir, entries)?;
+        } else if ft.is_symlink() {
+            let md = std::fs::metadata(&path).map_err(|e| OxoFlowError::Execution {
+                rule: String::new(),
+                message: format!("cannot stat symlink target {}: {}", path.display(), e),
+            })?;
+            record_manifest_file(&path, workdir, &md, entries);
+        } else {
+            let md = item.metadata().map_err(|e| OxoFlowError::Execution {
+                rule: String::new(),
+                message: format!("cannot stat {}: {}", path.display(), e),
+            })?;
+            record_manifest_file(&path, workdir, &md, entries);
+        }
+    }
+    Ok(())
+}
+
+fn record_manifest_file(
+    path: &Path,
+    workdir: &Path,
+    md: &std::fs::Metadata,
+    entries: &mut std::collections::BTreeMap<String, InputManifestEntry>,
+) {
+    let rel = path
+        .strip_prefix(workdir)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .to_string();
+    let mtime_nanos = md
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as i128)
+        .unwrap_or(0);
+    entries.insert(
+        rel.clone(),
+        InputManifestEntry {
+            path: rel,
+            size: md.len(),
+            mtime_nanos,
+        },
+    );
+}
+
 /// Check if a rule should be skipped based on output freshness.
 ///
 /// Returns true if all outputs exist and are newer than all inputs.
@@ -578,5 +836,226 @@ mod tests {
         let loaded: CheckpointState = serde_json::from_str(json).unwrap();
         assert_eq!(loaded.workdir, None);
         assert_eq!(loaded.workflow_path.as_deref(), Some("/wf/p.oxoflow"));
+    }
+
+    // ─── Input manifest snapshots (issue #72) ─────────────────────────────
+
+    fn temp_workdir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("oxo-manifest-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_file(workdir: &Path, rel: &str, content: &str) {
+        let path = workdir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    }
+
+    fn list_rule(name: &str, inputs: &[&str]) -> Rule {
+        Rule {
+            name: name.to_string(),
+            input: FilePatterns::List(inputs.iter().map(|s| s.to_string()).collect()),
+            ..Default::default()
+        }
+    }
+
+    fn snapshot(rule: &Rule, workdir: &Path) -> Option<InputManifest> {
+        snapshot_input_manifest(rule, workdir, &HashMap::new()).unwrap()
+    }
+
+    #[test]
+    fn manifest_plain_file_records_path_size_and_mtime() {
+        let wd = temp_workdir("plain");
+        write_file(&wd, "data/a.txt", "hello");
+        let rule = list_rule("r", &["data/a.txt"]);
+        let manifest = snapshot(&rule, &wd).expect("plain input is trackable");
+        assert_eq!(manifest.len(), 1);
+        assert_eq!(manifest[0].path, "data/a.txt");
+        assert_eq!(manifest[0].size, 5);
+        assert!(manifest[0].mtime_nanos > 0);
+        let _ = std::fs::remove_dir_all(&wd);
+    }
+
+    #[test]
+    fn manifest_glob_matches_only_matching_files_sorted_and_deduped() {
+        let wd = temp_workdir("glob");
+        write_file(&wd, "data/a.txt", "a");
+        write_file(&wd, "data/b.txt", "b");
+        write_file(&wd, "data/c.log", "c");
+        let rule = list_rule("r", &["data/*.txt"]);
+        let manifest = snapshot(&rule, &wd).unwrap();
+        let paths: Vec<&str> = manifest.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, ["data/a.txt", "data/b.txt"]);
+        let _ = std::fs::remove_dir_all(&wd);
+    }
+
+    #[test]
+    fn manifest_dir_input_lists_files_recursively() {
+        let wd = temp_workdir("dir");
+        write_file(&wd, "results/summary.txt", "s");
+        write_file(&wd, "results/sub/x.log", "x");
+        let rule = Rule {
+            name: "r".to_string(),
+            input: FilePatterns::Dir {
+                path: "results".to_string(),
+                pattern: None,
+            },
+            ..Default::default()
+        };
+        let manifest = snapshot(&rule, &wd).unwrap();
+        let paths: Vec<&str> = manifest.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, ["results/sub/x.log", "results/summary.txt"]);
+        let _ = std::fs::remove_dir_all(&wd);
+    }
+
+    #[test]
+    fn manifest_dir_pattern_filters_files() {
+        let wd = temp_workdir("dirpat");
+        write_file(&wd, "results/a.fastq", "a");
+        write_file(&wd, "results/b.txt", "b");
+        let rule = Rule {
+            name: "r".to_string(),
+            input: FilePatterns::Dir {
+                path: "results".to_string(),
+                pattern: Some("*.fastq".to_string()),
+            },
+            ..Default::default()
+        };
+        let manifest = snapshot(&rule, &wd).unwrap();
+        let paths: Vec<&str> = manifest.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, ["results/a.fastq"]);
+        let _ = std::fs::remove_dir_all(&wd);
+    }
+
+    #[test]
+    fn manifest_empty_inputs_return_none() {
+        let wd = temp_workdir("empty");
+        let rule = list_rule("r", &[]);
+        assert!(snapshot(&rule, &wd).is_none());
+        let _ = std::fs::remove_dir_all(&wd);
+    }
+
+    #[test]
+    fn manifest_engine_wildcards_return_none() {
+        let wd = temp_workdir("wild");
+        write_file(&wd, "data/a.txt", "a");
+        // {sample} is expanded per-instance before checkpointing — the raw
+        // pattern is not resolvable here and must not be globbed.
+        let rule = list_rule("r", &["data/{sample}.txt"]);
+        assert!(snapshot(&rule, &wd).is_none());
+        let _ = std::fs::remove_dir_all(&wd);
+    }
+
+    #[test]
+    fn manifest_cleanup_chunks_rule_returns_none() {
+        let wd = temp_workdir("cleanup");
+        write_file(&wd, "x.txt", "x");
+        let rule = Rule {
+            name: "r".to_string(),
+            input: FilePatterns::List(vec!["x.txt".to_string()]),
+            cleanup_chunks: true,
+            ..Default::default()
+        };
+        assert!(snapshot(&rule, &wd).is_none());
+        let _ = std::fs::remove_dir_all(&wd);
+    }
+
+    #[test]
+    fn manifest_chunk_inputs_are_excluded() {
+        let wd = temp_workdir("chunks");
+        write_file(&wd, "src.txt", "s");
+        write_file(&wd, ".oxo-flow/chunks/0/chunk1.txt", "c");
+        let rule = list_rule("r", &["src.txt", ".oxo-flow/chunks/0/chunk1.txt"]);
+        let manifest = snapshot(&rule, &wd).unwrap();
+        let paths: Vec<&str> = manifest.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, ["src.txt"]);
+        let _ = std::fs::remove_dir_all(&wd);
+    }
+
+    #[test]
+    fn manifest_missing_input_is_err() {
+        let wd = temp_workdir("missing");
+        let rule = list_rule("r", &["data/nope.txt"]);
+        assert!(snapshot_input_manifest(&rule, &wd, &HashMap::new()).is_err());
+        let _ = std::fs::remove_dir_all(&wd);
+    }
+
+    #[test]
+    fn manifest_comparison_detects_add_remove_and_mtime_change() {
+        // The issue #72 core comparison: a changed file set (or a changed
+        // file) invalidates; an untouched set compares equal.
+        let wd = temp_workdir("compare");
+        write_file(&wd, "data/a.txt", "a");
+        let rule = list_rule("r", &["data/*.txt"]);
+        let baseline = snapshot(&rule, &wd).unwrap();
+        assert_eq!(baseline.len(), 1);
+
+        // Unchanged → equal.
+        assert_eq!(snapshot(&rule, &wd).unwrap(), baseline);
+
+        // Added file → different.
+        write_file(&wd, "data/b.txt", "b");
+        assert_ne!(snapshot(&rule, &wd).unwrap(), baseline);
+
+        // Restore original set → equal again.
+        std::fs::remove_file(wd.join("data/b.txt")).unwrap();
+        assert_eq!(snapshot(&rule, &wd).unwrap(), baseline);
+
+        // Content change bumps mtime → different.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write_file(&wd, "data/a.txt", "longer content");
+        assert_ne!(snapshot(&rule, &wd).unwrap(), baseline);
+
+        // Removed file → different.
+        let with_b = {
+            write_file(&wd, "data/b.txt", "b");
+            snapshot(&rule, &wd).unwrap()
+        };
+        std::fs::remove_file(wd.join("data/a.txt")).unwrap();
+        assert_ne!(snapshot(&rule, &wd).unwrap(), with_b);
+        let _ = std::fs::remove_dir_all(&wd);
+    }
+
+    #[test]
+    fn manifest_expands_config_placeholders() {
+        let wd = temp_workdir("cfg");
+        write_file(&wd, "out/x.txt", "x");
+        let rule = list_rule("r", &["{config.results_dir}/x.txt"]);
+        let mut values = HashMap::new();
+        values.insert("config.results_dir".to_string(), "out".to_string());
+        let manifest = snapshot_input_manifest(&rule, &wd, &values)
+            .unwrap()
+            .unwrap();
+        assert_eq!(manifest[0].path, "out/x.txt");
+        let _ = std::fs::remove_dir_all(&wd);
+    }
+
+    #[test]
+    fn manifest_roundtrip_and_legacy_compat() {
+        let mut state = CheckpointState::new();
+        state.record_input_manifest(
+            "r",
+            vec![InputManifestEntry {
+                path: "data/a.txt".to_string(),
+                size: 7,
+                mtime_nanos: 42,
+            }],
+        );
+        let json = state.to_json().unwrap();
+        let loaded: CheckpointState = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            loaded.input_manifests["r"],
+            vec![InputManifestEntry {
+                path: "data/a.txt".to_string(),
+                size: 7,
+                mtime_nanos: 42,
+            }]
+        );
+        // Older checkpoints without input_manifests still load.
+        let legacy = r#"{"completed_rules":["r"],"failed_rules":[],"benchmarks":{}}"#;
+        let loaded: CheckpointState = serde_json::from_str(legacy).unwrap();
+        assert!(loaded.input_manifests.is_empty());
     }
 }

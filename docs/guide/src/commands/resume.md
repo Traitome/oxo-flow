@@ -30,6 +30,10 @@ Resuming goes through the same config-change impact analysis as `run`: if the
 workflow config or a rule definition changed since the checkpoint was written,
 only the affected rules and their downstream re-execute. See
 [Config changes and precise invalidation](run.md#config-changes-and-precise-invalidation).
+Input changes are detected the same way — glob, directory, and plain-file
+inputs are compared against the recorded manifests, and changed inputs
+re-execute the affected rules (see
+[Input changes and manifest invalidation](run.md#input-changes-and-manifest-invalidation)).
 
 ## Options
 

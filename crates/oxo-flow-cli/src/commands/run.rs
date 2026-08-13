@@ -262,6 +262,33 @@ fn validate_config_value(
     Ok(())
 }
 
+/// Remove `seeds` and every transitive DAG dependent from the completed set
+/// (issue #72; also used by the reference-rebuild path). Returns the sorted
+/// names of all invalidated rules.
+fn invalidate_with_downstream(
+    ck: &mut CheckpointState,
+    dag: &WorkflowDag,
+    seeds: &HashSet<String>,
+) -> Vec<String> {
+    let mut invalidated: HashSet<String> = seeds.clone();
+    let mut frontier: Vec<String> = seeds.iter().cloned().collect();
+    while let Some(name) = frontier.pop() {
+        if let Ok(dependents) = dag.dependents(&name) {
+            for dependent in dependents {
+                if invalidated.insert(dependent.clone()) {
+                    frontier.push(dependent);
+                }
+            }
+        }
+    }
+    for name in &invalidated {
+        ck.completed_rules.remove(name);
+    }
+    let mut names: Vec<String> = invalidated.into_iter().collect();
+    names.sort();
+    names
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_command(
     workflow: Option<PathBuf>,
@@ -580,7 +607,7 @@ pub async fn run_command(
         let ck = checkpoint.lock().await;
         ck.config_snapshot.clone()
     };
-    let (change_report, force_rules, completed_in_run) = {
+    let (change_report, mut force_rules, completed_in_run) = {
         let mut ck = checkpoint.lock().await;
         let report = oxo_flow_core::config_impact::detect_config_changes(
             &mut ck,
@@ -614,6 +641,83 @@ pub async fn run_command(
         completed_in_run,
         rerun,
     );
+
+    let mut wildcard_values: HashMap<String, String> = HashMap::new();
+    // All config values (including CLI --arg overrides) become {config.key} in templates.
+    for (key, value) in &config.config {
+        let string_val = match value {
+            toml::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        wildcard_values.insert(format!("config.{key}"), string_val);
+    }
+    let wildcard_values: Arc<HashMap<String, String>> = Arc::new(wildcard_values);
+    let workdir_actual = Arc::new(workdir.as_ref().unwrap_or(&workflow_dir).clone());
+
+    // ── Input manifest comparison (issue #72) ──────────────────────────────
+    // A completed rule is reused only when the file set its inputs resolved
+    // to at completion time (paths + size + mtime) still matches. Globs and
+    // Dir inputs detect added/removed files; plain files detect edits. A
+    // mismatch invalidates the rule and its DAG downstream (the same cascade
+    // as config changes); legacy checkpoints (no manifest recorded) adopt
+    // the current set as a one-time baseline — the same policy as the config
+    // snapshot (issue #62).
+    {
+        let mut ck = checkpoint.lock().await;
+        let mut mismatched: HashSet<String> = HashSet::new();
+        let mut baselined = 0usize;
+        for name in &order {
+            if !ck.completed_rules.contains(name) {
+                continue;
+            }
+            let Some(rule) = config.get_rule(name) else {
+                continue;
+            };
+            match oxo_flow_core::executor::checkpoint::snapshot_input_manifest(
+                rule,
+                workdir_actual.as_ref(),
+                &wildcard_values,
+            ) {
+                Ok(Some(current)) => match ck.input_manifests.get(name) {
+                    Some(recorded) if *recorded == current => {}
+                    Some(_) => {
+                        mismatched.insert(name.clone());
+                    }
+                    None => {
+                        // Legacy baseline: adopt the current set.
+                        ck.record_input_manifest(name, current);
+                        baselined += 1;
+                    }
+                },
+                Ok(None) => {}
+                Err(_) => {
+                    // Inputs cannot be resolved — cannot verify, so don't reuse.
+                    mismatched.insert(name.clone());
+                }
+            }
+        }
+        if !mismatched.is_empty() {
+            let invalidated = invalidate_with_downstream(&mut ck, &dag, &mismatched);
+            force_rules.extend(invalidated.iter().cloned());
+            eprintln!(
+                "  {} input changes invalidated {} rule(s): {}",
+                "↻".yellow(),
+                invalidated.len(),
+                invalidated.join(", ")
+            );
+        }
+        if baselined > 0 {
+            eprintln!(
+                "  Note: checkpoint predates input tracking: recorded baseline input manifests for {} completed rule(s); future input changes will invalidate them automatically",
+                baselined
+            );
+        }
+        if (!mismatched.is_empty() || baselined > 0)
+            && let Err(e) = ck.save_to_file(&checkpoint_path)
+        {
+            tracing::warn!(error = %e, "failed to save checkpoint after input-manifest detection");
+        }
+    }
 
     // indicatif's stderr draw target auto-hides when stderr is not a terminal,
     // which makes every per-rule progress message silently disappear under pipes,
@@ -733,18 +837,6 @@ pub async fn run_command(
             failed_count
         );
     }
-
-    let mut wildcard_values: HashMap<String, String> = HashMap::new();
-    // All config values (including CLI --arg overrides) become {config.key} in templates.
-    for (key, value) in &config.config {
-        let string_val = match value {
-            toml::Value::String(s) => s.clone(),
-            other => other.to_string(),
-        };
-        wildcard_values.insert(format!("config.{key}"), string_val);
-    }
-    let wildcard_values: Arc<HashMap<String, String>> = Arc::new(wildcard_values);
-    let workdir_actual = Arc::new(workdir.as_ref().unwrap_or(&workflow_dir).clone());
 
     // ── Auto-build references (indexes, data files) ──────────────────────
 
@@ -912,35 +1004,16 @@ pub async fn run_command(
                 }
             }
             if !consumers.is_empty() {
-                let mut invalidated: HashSet<String> = consumers.clone();
-                let mut frontier: Vec<String> = consumers.iter().cloned().collect();
-                while let Some(name) = frontier.pop() {
-                    if let Ok(dependents) = dag.dependents(&name) {
-                        for dependent in dependents {
-                            if invalidated.insert(dependent.clone()) {
-                                frontier.push(dependent);
-                            }
-                        }
-                    }
-                }
                 let mut ck = checkpoint.lock().await;
-                for name in &invalidated {
-                    ck.completed_rules.remove(name);
-                }
+                let invalidated = invalidate_with_downstream(&mut ck, &dag, &consumers);
                 if let Err(e) = ck.save_to_file(&checkpoint_path) {
                     tracing::warn!(error = %e, "failed to save checkpoint after reference rebuild");
                 }
-                let mut names: Vec<&String> = invalidated.iter().collect();
-                names.sort();
                 eprintln!(
                     "  {} reference rebuild invalidated {} rule(s): {}",
                     "↻".yellow(),
-                    names.len(),
-                    names
-                        .iter()
-                        .map(|n| n.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    invalidated.len(),
+                    invalidated.join(", ")
                 );
             }
         }
@@ -1123,6 +1196,18 @@ pub async fn run_command(
             join_set.spawn(async move {
                 let _permit = semaphore.acquire().await;
 
+                // Snapshot the input file set BEFORE execution (issue #72):
+                // the manifest records what the rule is about to consume, so
+                // files added mid-run are not silently baked into the
+                // recorded baseline.
+                let input_manifest = oxo_flow_core::executor::checkpoint::snapshot_input_manifest(
+                    &rule,
+                    workdir_actual.as_ref(),
+                    &wildcard_values,
+                )
+                .ok()
+                .flatten();
+
                 let result = executor
                     .execute_rule_with_config(&rule, &wildcard_values, &typed_config)
                     .await;
@@ -1150,6 +1235,9 @@ pub async fn run_command(
                                 };
                             let mut ck = checkpoint.lock().await;
                             ck.mark_completed(&rule_name, benchmark);
+                            if let Some(ref manifest) = input_manifest {
+                                ck.record_input_manifest(&rule_name, manifest.clone());
+                            }
                             if provenance {
                                 for output in &rule.output {
                                     let output_path = workdir_actual.join(output);
