@@ -37,12 +37,12 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--skip-ref-build` | — | — | Skip automatic reference/index building (assume pre-built) |
 | `--cache-dir` | — | — | Directory for caching environment setup state |
 | `--resume-failed` | — | — | Resume only failed rules from a previous run |
-| `--profile` | — | — | Execution profile: `local`, `slurm`, `pbs`, `sge`, or `lsf` |
+| `--profile` | — | — | Execution profile name, loaded from `profiles/<NAME>.toml` (use `oxo-flow profile` to manage) |
 | `--provenance` | — | — | Track output file checksums for later verification |
 | `--arg` | — | — | Legacy form: set a workflow config value (`KEY=VALUE`). Repeatable. See `[config]` in workflow-format |
 | `--sample` | — | — | Add a sample to the run. Repeatable. Merges with sample_pattern/CSV sources |
 | `--bundle` | — | — | Execute from a published bundle (`.tar.zst` or `.tar.gz`). Extracts, verifies checksums, shows resource requirements, and prompts for confirmation |
-| `--yes` | — | — | Skip the confirmation prompt when running a bundle (required for CI/non-TTY) |
+| `--yes` | — | — | Skip the confirmation prompt when running a bundle (required in non-interactive sessions: CI, scripts, redirected input, or `--json`) |
 | `--ai-recover` | — | — | Enable AI error recovery on rule failure |
 | `--ai-max-retries` | — | — | Maximum AI retries (overrides `[ai]` config) |
 | `--verbose` | `-v` | — | Enable debug-level logging |
@@ -145,10 +145,12 @@ oxo-flow run pipeline.oxoflow --arg database=refs/nt --arg threshold=1e-3
 
 ```bash
 # Run from a bundle (extracts, verifies checksums, shows resource requirements,
-# prompts for confirmation before executing)
+# then prompts for confirmation — requires an interactive terminal on both
+# stdin and stderr)
 oxo-flow run --bundle pipeline-bundle.tar.zst -j 16
 
-# Skip confirmation for CI/scripts
+# Skip confirmation for CI/scripts (also required when stdin is redirected
+# or with --json, which is always non-interactive)
 oxo-flow run --bundle pipeline-bundle.tar.zst -j 16 --yes
 
 # .tar.gz format also supported

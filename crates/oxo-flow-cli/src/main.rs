@@ -126,7 +126,7 @@ pub enum Commands {
         bundle: Option<PathBuf>,
         #[arg(
             long = "yes",
-            help = "Skip the confirmation prompt when running from a bundle (for CI/scripts)"
+            help = "Skip the confirmation prompt when running from a bundle (required in non-interactive sessions: CI, scripts, redirected input, or --json)"
         )]
         yes: bool,
         #[arg(
