@@ -352,7 +352,11 @@ Resolve by giving each rule distinct output paths (e.g., `caller_a/{sample}.vcf`
 
 1. Check `depends_on` — does the rule have unresolved explicit dependencies?
 2. Check `when` conditions — is the condition evaluating to `false`?
-3. Use `oxo-flow dry-run -t <rule_name>` to see if the rule appears in the execution plan
+3. Use `oxo-flow dry-run -t <rule_name>` to see whether the rule appears in
+   the execution plan — with a checkpoint present, the per-rule markers
+   show exactly why it would run or skip (`[run: input changed]`,
+   `[rerun: downstream of X]`, `[skip: up to date]`); see
+   [Checkpoint-Aware Rerun Preview](../commands/dry-run.md#checkpoint-aware-rerun-preview)
 4. Check if the rule is an orphan (its inputs don't match any other rule's outputs)
 5. Check the checkpoint — a rule marked `completed` is skipped while its
    recorded input file set is unchanged; changed inputs invalidate it

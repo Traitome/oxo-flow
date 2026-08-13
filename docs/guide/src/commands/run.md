@@ -207,7 +207,9 @@ oxo-flow run pipeline.oxoflow --samples first:2,NA12899
 # Scale up: no flag needed — completed samples are skipped automatically
 oxo-flow run pipeline.oxoflow
 
-# Preview the pilot plan without executing
+# Preview the pilot plan without executing — with a checkpoint present,
+# dry-run also predicts what will actually re-run (and what stays
+# protected); see dry-run's "Checkpoint-Aware Rerun Preview"
 oxo-flow dry-run pipeline.oxoflow --samples first:2
 
 # Fix a config bug found by the pilot — only affected rules re-run
