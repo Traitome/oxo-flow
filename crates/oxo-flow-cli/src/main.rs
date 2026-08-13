@@ -271,19 +271,39 @@ pub enum Commands {
         #[arg(long = "ai-max-retries", value_name = "N")]
         ai_max_retries: Option<u32>,
     },
-    /// AI status, test, and setup.
+    /// AI status, test, setup, and workflow explanation.
     ///
     /// Run without args for quick status.
     /// Use 'ai test' for comprehensive self-test.
     /// Use 'ai setup' for interactive wizard.
+    /// Use 'ai explain <workflow>' for a three-layer explanation
+    /// (overview → per-step detail → scientific review).
     #[command(name = "ai")]
     Ai {
         #[arg(
-            num_args = 0..=1,
             value_name = "ACTION",
-            help = "Action to run: 'test' (comprehensive self-test) or 'setup' (interactive wizard); omit for a quick status"
+            help = "Action to run: 'test' (comprehensive self-test), 'setup' (interactive wizard), or 'explain' (workflow explanation); omit for a quick status"
         )]
         action: Option<String>,
+
+        /// Workflow file to explain (with action 'explain').
+        #[arg(value_name = "WORKFLOW")]
+        workflow: Option<PathBuf>,
+
+        /// Explain a single rule by name (with action 'explain').
+        #[arg(long, value_name = "RULE")]
+        step: Option<String>,
+
+        /// Explanation depth (with action 'explain'). Default: beginner
+        /// prose that defines jargon; 'expert' is parameter-level and
+        /// efficiency-focused.
+        #[arg(long, value_enum, default_value_t = crate::commands::ai_explain::ExplainLevel::Beginner)]
+        level: crate::commands::ai_explain::ExplainLevel,
+
+        /// Machine-readable JSON output (with action 'explain'): the
+        /// deterministic skeleton plus model-written prose fields.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Output the workflow DAG for visualization.
@@ -984,11 +1004,57 @@ async fn main() -> Result<()> {
             from_file,
             ai_max_retries,
         } => template_command(template, output, ai, from_url, from_file, ai_max_retries).await?,
-        Commands::Ai { action } => match action.as_deref() {
-            Some("test") => ai_test_command().await?,
-            Some("setup") => ai_setup_command().await?,
-            _ => ai_status_command().await?,
-        },
+        Commands::Ai {
+            action,
+            workflow,
+            step,
+            level,
+            json,
+        } => {
+            // --step/--level/--json/workflow only make sense with 'explain'.
+            let explain_args = workflow.is_some() || step.is_some() || json;
+            match action.as_deref() {
+                Some("explain") => {
+                    let Some(workflow) = workflow else {
+                        anyhow::bail!(
+                            "'ai explain' requires a workflow file:\n  oxo-flow ai explain <workflow.oxoflow> [--step <rule>] [--level beginner|expert] [--json]"
+                        );
+                    };
+                    crate::commands::ai_explain::ai_explain_command(
+                        &workflow,
+                        step.as_deref(),
+                        level,
+                        json,
+                    )
+                    .await?
+                }
+                Some("test") => {
+                    if explain_args {
+                        anyhow::bail!("'ai test' takes no workflow/--step/--json arguments");
+                    }
+                    ai_test_command().await?
+                }
+                Some("setup") => {
+                    if explain_args {
+                        anyhow::bail!("'ai setup' takes no workflow/--step/--json arguments");
+                    }
+                    ai_setup_command().await?
+                }
+                None => {
+                    if explain_args {
+                        anyhow::bail!(
+                            "workflow/--step/--json require the 'explain' action:\n  oxo-flow ai explain <workflow.oxoflow>"
+                        );
+                    }
+                    ai_status_command().await?
+                }
+                Some(other) => {
+                    anyhow::bail!(
+                        "unknown ai action '{other}' — expected one of: test, setup, explain"
+                    )
+                }
+            }
+        }
         Commands::Graph {
             workflow,
             format,

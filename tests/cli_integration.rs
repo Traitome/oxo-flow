@@ -262,7 +262,6 @@ fn cli_ai_status_lists_discovered_skills() {
 
     let out = oxo_flow_cmd()
         .arg("ai")
-        .arg("status")
         .current_dir(dir.path())
         // No AI provider configured in tests — the listing must still appear.
         .output()
@@ -277,6 +276,66 @@ fn cli_ai_status_lists_discovered_skills() {
         stdout.contains("Custom skills"),
         "ai status should have a Custom skills section: {stdout}"
     );
+}
+
+// ─── ai explain (issue #65) ─────────────────────────────────────────────────
+
+#[test]
+fn cli_ai_explain_requires_workflow() {
+    oxo_flow_cmd()
+        .args(["ai", "explain"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("requires a workflow file"));
+}
+
+#[test]
+fn cli_ai_explain_unknown_step_fails_fast_without_provider() {
+    // Step validation is deterministic and must not need a configured
+    // provider — isolate HOME so no saved config can be found.
+    let dir = tempfile::tempdir().unwrap();
+    oxo_flow_cmd()
+        .env("HOME", dir.path())
+        .args([
+            "ai",
+            "explain",
+            "examples/simple_variant_calling.oxoflow",
+            "--step",
+            "no_such_rule",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no_such_rule"));
+}
+
+#[test]
+fn cli_ai_explain_without_provider_fails_cleanly() {
+    let dir = tempfile::tempdir().unwrap();
+    oxo_flow_cmd()
+        .env("HOME", dir.path())
+        .args(["ai", "explain", "examples/simple_variant_calling.oxoflow"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("AI provider not configured"))
+        .stderr(predicate::str::contains("ai setup"));
+}
+
+#[test]
+fn cli_ai_unknown_action_errors() {
+    oxo_flow_cmd()
+        .args(["ai", "frobnicate"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown ai action"));
+}
+
+#[test]
+fn cli_ai_test_rejects_workflow_arg() {
+    oxo_flow_cmd()
+        .args(["ai", "test", "examples/simple_variant_calling.oxoflow"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("takes no workflow"));
 }
 
 // ─── oxo-flow CLI: basic flags ──────────────────────────────────────────────

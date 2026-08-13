@@ -73,12 +73,9 @@ impl AiCommandSession {
             });
     }
 
-    /// Complete the session successfully and save to disk.
+    /// Complete the session successfully, save to disk, and print a summary.
     pub fn complete(mut self, confidence: f64) {
-        self.session = self.session.complete(confidence);
-        if let Err(e) = oxo_flow_ai::session::save_session(&self.session) {
-            tracing::warn!("Failed to save AI session: {e}");
-        }
+        self.finish_successfully(confidence);
         let input_tokens = self.session.total_usage.prompt_tokens;
         let output_tokens = self.session.total_usage.completion_tokens;
         if input_tokens > 0 || output_tokens > 0 {
@@ -91,6 +88,20 @@ impl AiCommandSession {
             );
         } else {
             println!("{} AI session: {}", "  ✓".green(), self.session.id);
+        }
+    }
+
+    /// Complete the session successfully and save to disk, without
+    /// printing — for commands whose stdout must stay machine-readable.
+    pub fn complete_quiet(mut self, confidence: f64) {
+        self.finish_successfully(confidence);
+    }
+
+    fn finish_successfully(&mut self, confidence: f64) {
+        // complete() consumes the session; clone keeps the borrow simple.
+        self.session = self.session.clone().complete(confidence);
+        if let Err(e) = oxo_flow_ai::session::save_session(&self.session) {
+            tracing::warn!("Failed to save AI session: {e}");
         }
     }
 

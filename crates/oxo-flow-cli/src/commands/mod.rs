@@ -188,6 +188,7 @@ pub fn run_batch_command(cmd: &str, workdir: &Path) -> Result<i32> {
 }
 
 pub mod ai_check;
+pub mod ai_explain;
 pub mod ai_recover;
 pub mod ai_runtime;
 pub mod ai_session;

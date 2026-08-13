@@ -166,6 +166,10 @@ pub fn find_path(from: &str, to: &str) -> Option<Vec<(String, String, u64)>> {
 }
 
 /// Format graph query results for AI prompts.
+///
+/// Upstream rows name the feeding skill (`← X via [BAM]`), downstream rows
+/// name the consuming skill (`→ X via [VCF]`) — the queried node itself is
+/// never repeated.
 pub fn format_transitions(skill_id: &str, direction: &str) -> String {
     let node = match find_node(skill_id) {
         Some(n) => n,
@@ -175,16 +179,33 @@ pub fn format_transitions(skill_id: &str, direction: &str) -> String {
         "## {} (`{}`) — {} tools\n{}\n\n",
         node.name, node.id, node.tools, node.overview
     );
-    let edges = match direction {
-        "upstream" => upstream(&node.id),
-        "downstream" => downstream(&node.id),
-        _ => {
-            let mut both = upstream(&node.id);
-            both.extend(downstream(&node.id));
-            both
+
+    let show_upstream = direction != "downstream";
+    let show_downstream = direction != "upstream";
+    let mut rows: Vec<String> = Vec::new();
+    if show_upstream {
+        for e in upstream(&node.id) {
+            let name = find_node(&e.from)
+                .map(|n| n.name.clone())
+                .unwrap_or_else(|| e.from.clone());
+            rows.push(format!(
+                "← {name} (`{}`) via [{}] — {} papers",
+                e.from, e.data_types, e.papers
+            ));
         }
-    };
-    if edges.is_empty() {
+    }
+    if show_downstream {
+        for e in downstream(&node.id) {
+            let name = find_node(&e.to)
+                .map(|n| n.name.clone())
+                .unwrap_or_else(|| e.to.clone());
+            rows.push(format!(
+                "→ {name} (`{}`) via [{}] — {} papers",
+                e.to, e.data_types, e.papers
+            ));
+        }
+    }
+    if rows.is_empty() {
         s.push_str("No transitions found.\n");
         return s;
     }
@@ -194,14 +215,9 @@ pub fn format_transitions(skill_id: &str, direction: &str) -> String {
         _ => "Transitions",
     };
     s.push_str(&format!("{}:\n", label));
-    for e in edges {
-        let name = find_node(&e.to)
-            .map(|n| n.name.clone())
-            .unwrap_or_else(|| e.to.clone());
-        s.push_str(&format!(
-            "- {} (`{}`) via [{}] — {} papers\n",
-            name, e.to, e.data_types, e.papers
-        ));
+    for row in rows {
+        s.push_str(&row);
+        s.push('\n');
     }
     s
 }
@@ -278,6 +294,34 @@ mod tests {
         let path = path.unwrap();
         assert_eq!(path.first().unwrap().0, "wgs-alignment");
         assert_eq!(path.last().unwrap().0, "variant-calling");
+    }
+
+    #[test]
+    fn format_transitions_upstream_names_the_source_skill() {
+        // Upstream transitions must name the feeding skill (e.from), not
+        // repeat the queried node itself (e.to).
+        let text = format_transitions("variant-calling", "upstream");
+        assert!(
+            text.contains("wgs-alignment"),
+            "upstream transitions should mention wgs-alignment: {text}"
+        );
+        assert!(
+            text.contains("BAM"),
+            "upstream transitions should carry data types: {text}"
+        );
+    }
+
+    #[test]
+    fn format_transitions_both_directions_are_distinct() {
+        let text = format_transitions("variant-calling", "");
+        assert!(
+            text.contains("wgs-alignment"),
+            "both should include upstream: {text}"
+        );
+        assert!(
+            text.contains("variant-annotation") || text.contains("somatic-variants"),
+            "both should include downstream: {text}"
+        );
     }
 
     #[test]
