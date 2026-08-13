@@ -2777,6 +2777,7 @@ dependencies = [
  "dashmap",
  "futures",
  "maud",
+ "nix",
  "num_cpus",
  "oxo-flow-ai",
  "oxo-flow-core",

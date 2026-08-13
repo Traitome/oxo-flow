@@ -15,6 +15,7 @@ pub mod executor;
 pub mod handlers;
 pub mod hpc;
 pub mod infra;
+pub mod process_control;
 pub mod rate_limit;
 pub mod server;
 pub mod sse;
