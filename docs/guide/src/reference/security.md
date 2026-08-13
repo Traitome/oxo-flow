@@ -58,7 +58,7 @@ Hardcoded credentials in workflow TOML content are detected by the `oxo-flow lin
 
 | Pattern | Examples |
 |---------|----------|
-| API keys / tokens | `API_KEY=sk-...`, `AUTH_TOKEN=...` |
+| API keys / tokens | `API_KEY=sk-<YOUR-KEY>`, `AUTH_TOKEN=<YOUR-KEY>` |
 | Passwords | `password = "hunter2"`, `pwd = "..."` |
 | Anthropic keys | `sk-ant-api03-...`, `sk-proj-...` |
 | OpenAI / DeepSeek keys | `sk-<32+ chars>` |

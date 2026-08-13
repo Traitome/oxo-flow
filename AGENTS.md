@@ -121,14 +121,14 @@ docker run -d -p 8080:8080 -v oxo-flow-data:/app/data oxo-flow
 
 **Claude (Anthropic):**
 ```bash
-OXO_FLOW_AI_PROVIDER=claude ANTHROPIC_AUTH_TOKEN=sk-ant-... docker compose up -d
+OXO_FLOW_AI_PROVIDER=claude ANTHROPIC_AUTH_TOKEN=sk-ant-<YOUR-KEY> docker compose up -d
 ```
 
 **DeepSeek via Anthropic-compatible API:**
 ```bash
 OXO_FLOW_AI_PROVIDER=claude \
   ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic \
-  ANTHROPIC_AUTH_TOKEN=sk-... \
+  ANTHROPIC_AUTH_TOKEN=sk-<YOUR-KEY> \
   ANTHROPIC_MODEL=deepseek-chat \
   docker compose up -d
 ```
@@ -137,7 +137,7 @@ OXO_FLOW_AI_PROVIDER=claude \
 ```bash
 OXO_FLOW_AI_PROVIDER=openai \
   OPENAI_BASE_URL=https://api.deepseek.com/v1 \
-  OPENAI_API_KEY=sk-... \
+  OPENAI_API_KEY=sk-<YOUR-KEY> \
   OPENAI_MODEL=deepseek-chat \
   docker compose up -d
 ```
@@ -167,7 +167,7 @@ The `oxo-flow-ai` crate provides shared AI infrastructure for CLI and web.
 ```bash
 # Configure any AI provider
 export OXO_FLOW_AI_PROVIDER=deepseek    # or claude, openai, ollama
-export DEEPSEEK_API_KEY="sk-..."
+export DEEPSEEK_API_KEY="sk-<YOUR-KEY>"
 
 # Check status
 oxo-flow ai                            # Shows provider, endpoint, test connectivity

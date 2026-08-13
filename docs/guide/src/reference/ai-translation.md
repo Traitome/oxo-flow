@@ -106,7 +106,7 @@ the deterministic core API implements after human confirmation.
 ```bash
 # Set AI provider
 export OXO_FLOW_AI_PROVIDER=claude    # claude | openai | deepseek | ollama
-export OXO_FLOW_AI_API_KEY=sk-...
+export OXO_FLOW_AI_API_KEY=sk-<YOUR-KEY>
 
 # Or via API
 POST /api/ai/config { "provider": "claude", "api_key": "..." }

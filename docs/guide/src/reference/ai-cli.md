@@ -16,26 +16,26 @@ Set the provider and your API key via environment variables:
 ```bash
 # DeepSeek (OpenAI-compatible)
 export OXO_FLOW_AI_PROVIDER=deepseek
-export DEEPSEEK_API_KEY="sk-..."
+export DEEPSEEK_API_KEY="sk-<YOUR-KEY>"
 
 # Claude (Anthropic)
 export OXO_FLOW_AI_PROVIDER=claude
-export ANTHROPIC_AUTH_TOKEN="sk-ant-..."
+export ANTHROPIC_AUTH_TOKEN="sk-ant-<YOUR-KEY>"
 
 # OpenAI
 export OXO_FLOW_AI_PROVIDER=openai
-export OPENAI_API_KEY="sk-..."
+export OPENAI_API_KEY="sk-<YOUR-KEY>"
 
 # Any OpenAI-compatible service (Groq, Together, Azure, Fireworks, etc.)
 export OXO_FLOW_AI_PROVIDER=openai
 export OPENAI_BASE_URL="https://api.groq.com/openai/v1"
-export OPENAI_API_KEY="gsk_..."
+export OPENAI_API_KEY="gsk_<YOUR-KEY>"
 export OPENAI_MODEL="llama-3.1-70b"
 
 # Any Anthropic-compatible service
 export OXO_FLOW_AI_PROVIDER=claude
 export ANTHROPIC_BASE_URL="https://your-custom-endpoint"
-export ANTHROPIC_AUTH_TOKEN="..."
+export ANTHROPIC_AUTH_TOKEN="<YOUR-KEY>"
 
 # Local Ollama (no API key needed)
 export OXO_FLOW_AI_PROVIDER=ollama
@@ -152,7 +152,7 @@ oxo-flow template "RNA-seq" --ai --ai-max-retries 5
 {
   "provider": "deepseek",
   "model": "deepseek-v4-pro",
-  "api_key": "sk-..."
+  "api_key": "sk-<YOUR-KEY>"
 }
 ```
 
@@ -336,7 +336,7 @@ echo $OXO_FLOW_AI_PROVIDER     # Should not be empty or "disabled"
 
 # Set up any provider
 export OXO_FLOW_AI_PROVIDER=<provider>
-export <PROVIDER>_API_KEY="sk-..."
+export <PROVIDER>_API_KEY="sk-<YOUR-KEY>"
 ```
 
 ### "AI response did not contain valid TOML"
