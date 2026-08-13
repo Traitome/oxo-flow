@@ -886,17 +886,16 @@ impl OpenAiBackend {
                     buffer.drain(..pos + 2);
                     let events = parse_openai_sse(&frame);
                     // capture usage from the final frames (best-effort)
-                    if let Some(line) = frame.lines().find(|l| l.contains("\"usage\"")) {
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(
+                    if let Some(line) = frame.lines().find(|l| l.contains("\"usage\""))
+                        && let Ok(v) = serde_json::from_str::<serde_json::Value>(
                             line.trim().strip_prefix("data:").unwrap_or("").trim(),
-                        ) {
-                            if let (Some(p), Some(c)) = (
-                                v["usage"]["prompt_tokens"].as_u64(),
-                                v["usage"]["completion_tokens"].as_u64(),
-                            ) {
-                                usage = Some(Usage { prompt_tokens: p, completion_tokens: c });
-                            }
-                        }
+                        )
+                        && let (Some(p), Some(c)) = (
+                            v["usage"]["prompt_tokens"].as_u64(),
+                            v["usage"]["completion_tokens"].as_u64(),
+                        )
+                    {
+                        usage = Some(Usage { prompt_tokens: p, completion_tokens: c });
                     }
                     for event in events {
                         match event {
