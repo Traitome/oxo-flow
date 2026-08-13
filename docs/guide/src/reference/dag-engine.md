@@ -354,6 +354,11 @@ Resolve by giving each rule distinct output paths (e.g., `caller_a/{sample}.vcf`
 2. Check `when` conditions — is the condition evaluating to `false`?
 3. Use `oxo-flow dry-run -t <rule_name>` to see if the rule appears in the execution plan
 4. Check if the rule is an orphan (its inputs don't match any other rule's outputs)
+5. Check the checkpoint — a rule marked `completed` is skipped while its
+   recorded input file set is unchanged; changed inputs invalidate it
+   automatically. Force execution with `--rerun` or by deleting
+   `.oxo-flow/checkpoint.json` (see
+   [Input changes and manifest invalidation](../commands/run.md#input-changes-and-manifest-invalidation))
 
 ### "Why does my workflow have so many dependencies?"
 

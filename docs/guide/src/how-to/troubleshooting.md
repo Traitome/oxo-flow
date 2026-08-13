@@ -298,6 +298,15 @@ rm -rf .oxo-flow/checkpoint.json
 oxo-flow run workflow.oxoflow
 ```
 
+### Changed inputs rebuild automatically
+
+Re-running does not blindly reuse completed rules: the checkpoint records the
+file set each rule's inputs resolved to (paths + size + mtime). When a glob or
+directory input gained or lost files, or a plain input file was edited, the
+rule and its downstream re-execute — even though their outputs still exist —
+and the console prints `input changes invalidated N rule(s)`. See
+[Input changes and manifest invalidation](../commands/run.md#input-changes-and-manifest-invalidation).
+
 ## Performance Tips
 
 ### Workflow runs slowly
