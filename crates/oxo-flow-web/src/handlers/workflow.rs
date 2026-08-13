@@ -505,6 +505,7 @@ pub async fn build_dag_json(
                 edges.push(DagJsonEdge {
                     from: prev.clone(),
                     to: name.clone(),
+                    kind: "declared".into(),
                 });
             }
         }

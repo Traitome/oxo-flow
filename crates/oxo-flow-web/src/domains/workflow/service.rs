@@ -80,8 +80,14 @@ pub fn parse_pipeline(
                 .unwrap_or_default()
                 .into_iter()
                 .map(|dep| DagJsonEdge {
-                    from: dep,
+                    from: dep.clone(),
                     to: r.name.clone(),
+                    kind: if r.depends_on.contains(&dep) {
+                        "declared"
+                    } else {
+                        "file"
+                    }
+                    .to_string(),
                 })
                 .collect::<Vec<_>>()
         })
@@ -323,8 +329,14 @@ pub fn build_dag(toml_content: &str) -> Result<DagJsonResponse, String> {
                 .unwrap_or_default()
                 .into_iter()
                 .map(|dep| DagJsonEdge {
-                    from: dep,
+                    from: dep.clone(),
                     to: r.name.clone(),
+                    kind: if r.depends_on.contains(&dep) {
+                        "declared"
+                    } else {
+                        "file"
+                    }
+                    .to_string(),
                 })
                 .collect::<Vec<_>>()
         })
@@ -486,4 +498,27 @@ pub fn validate_plugin_manifest(
         signature_valid,
         errors,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dag_edges_carry_kind() {
+        let toml = "[workflow]\nname = \"e\"\n\n[[rules]]\nname = \"a\"\ninput = [\"x\"]\noutput = [\"a.txt\"]\nshell = \"echo a > a.txt\"\n\n[[rules]]\nname = \"b\"\ninput = [\"a.txt\", \"y.txt\"]\noutput = [\"b.txt\"]\nshell = \"cat a.txt > b.txt\"\ndepends_on = [\"c\"]\n\n[[rules]]\nname = \"c\"\ninput = [\"y.txt\"]\noutput = [\"y.out\"]\nshell = \"cat y.txt > y.out\"\n";
+        let dag = build_dag(toml).unwrap();
+        let file_edge = dag
+            .edges
+            .iter()
+            .find(|e| e.from == "a" && e.to == "b")
+            .expect("a→b inferred from file matching");
+        assert_eq!(file_edge.kind, "file");
+        let declared_edge = dag
+            .edges
+            .iter()
+            .find(|e| e.from == "c" && e.to == "b")
+            .expect("c→b declared via depends_on");
+        assert_eq!(declared_edge.kind, "declared");
+    }
 }

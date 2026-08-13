@@ -41,6 +41,9 @@ pub struct DagJsonNode {
 pub struct DagJsonEdge {
     pub from: String,
     pub to: String,
+    /// `"declared"` = explicit `depends_on`; `"file"` = inferred from an
+    /// exact input/output string match (engine DAG semantics).
+    pub kind: String,
 }
 
 /// Full DAG representation: nodes, edges, parallel groups, critical path, metrics.
@@ -283,6 +286,7 @@ mod tests {
                 edges: vec![DagJsonEdge {
                     from: "n1".into(),
                     to: "n2".into(),
+                    kind: "file".into(),
                 }],
                 parallel_groups: vec![vec!["n1".into()]],
                 critical_path: vec!["n1".into()],
