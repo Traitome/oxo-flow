@@ -320,6 +320,7 @@ Your TOML MUST include:
     let mut cmd_session =
         crate::commands::ai_session::AiCommandSession::begin("template", intent, provider);
 
+    use oxo_flow_ai::agent::orchestrator::tool_call_approved;
     use oxo_flow_ai::types::Message;
 
     // Tool-calling loop: the model may query the embedded knowledge tools
@@ -341,12 +342,17 @@ Your TOML MUST include:
             Some(tool_calls) if !tool_calls.is_empty() => {
                 messages.push(Message::assistant_with_tools(tool_calls.clone()));
                 for tc in tool_calls {
-                    let approved = runtime.tool_registry.is_read_only(&tc.name)
-                        || crate::commands::ai_runtime::prompt_tool_approval(
-                            &tc.name,
-                            &tc.arguments,
-                        )
-                        .await;
+                    // Shared approval policy (orchestrator + template loop):
+                    // read-only tools auto-run; anything else needs an
+                    // interactive approval before execution.
+                    let approved =
+                        tool_call_approved(&runtime.tool_registry, None, &tc.name, &tc.arguments)
+                            || crate::commands::ai_runtime::prompt_tool_approval(
+                                &tc.name,
+                                &tc.arguments,
+                            )
+                            .await;
+                    let start = std::time::Instant::now();
                     let result = if approved {
                         runtime.tool_registry.execute(&tc.name, &tc.arguments).await
                     } else {
@@ -355,6 +361,7 @@ Your TOML MUST include:
                             message: "execution requires human approval".to_string(),
                         })
                     };
+                    let duration_ms = start.elapsed().as_millis() as u64;
                     let content = match result {
                         Ok(content) => content,
                         Err(e) => format!("tool error: {e}"),
@@ -364,6 +371,7 @@ Your TOML MUST include:
                         &tc.arguments,
                         &content,
                         !content.starts_with("tool error"),
+                        duration_ms,
                     );
                     messages.push(Message::tool(&tc.id, &tc.name, &content));
                 }
@@ -376,7 +384,7 @@ Your TOML MUST include:
     }
     let response_text = match response_text {
         Some(text) => text,
-        None => {
+        _ => {
             // The model kept calling tools without finalizing — force one
             // plain answer without any tools.
             let final_response = provider

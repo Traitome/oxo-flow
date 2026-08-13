@@ -99,14 +99,14 @@ impl AiRuntime {
                         .await
                     {
                         Ok(bridges) => {
+                            let count = bridges.len();
                             for bridge in bridges {
-                                mcp_tools += 1;
                                 tool_registry.register(Box::new(bridge));
                             }
+                            mcp_tools += count;
                             tracing::info!(
-                                "skill '{}': registered {} MCP tool(s) from {url}",
-                                skill.name,
-                                mcp_tools
+                                "skill '{}': registered {count} MCP tool(s) from {url}",
+                                skill.name
                             );
                         }
                         Err(e) => tracing::warn!(

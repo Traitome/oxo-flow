@@ -59,6 +59,7 @@ impl AiCommandSession {
         arguments: &str,
         result_preview: &str,
         success: bool,
+        duration_ms: u64,
     ) {
         self.session
             .tool_calls
@@ -68,7 +69,7 @@ impl AiCommandSession {
                 arguments: arguments.to_string(),
                 result_preview: result_preview.chars().take(200).collect(),
                 success,
-                duration_ms: 0,
+                duration_ms,
             });
     }
 

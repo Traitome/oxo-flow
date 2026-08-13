@@ -254,7 +254,7 @@ fn parse_rpc_response(text: &str) -> Result<serde_json::Value, String> {
                 serde_json::from_str(payload).map_err(|e| format!("invalid SSE payload: {e}"))?;
             extract_rpc_result(value)
         }
-        None => Err(format!(
+        _ => Err(format!(
             "unparseable MCP response: {}",
             &text[..text.len().min(200)]
         )),
@@ -285,16 +285,21 @@ impl McpClient for McpHttpClient {
             }),
         )
         .await?;
-        let _ = self
+        // Spec: once initialize returns an mcp-session-id, every
+        // subsequent request — the initialized notification included —
+        // must carry it.
+        let mut note_req = self
             .http
             .post(&self.base_url)
             .header("Accept", "application/json, text/event-stream")
             .json(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "method": "notifications/initialized",
-            }))
-            .send()
-            .await;
+            }));
+        if let Some(sid) = self.session_id.lock().unwrap().clone() {
+            note_req = note_req.header("mcp-session-id", sid);
+        }
+        let _ = note_req.send().await;
 
         let result = self.rpc(2, "tools/list", serde_json::json!({})).await?;
         let tools: Vec<McpToolDef> = serde_json::from_value(

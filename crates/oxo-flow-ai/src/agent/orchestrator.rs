@@ -243,7 +243,10 @@ impl Orchestrator {
 
 /// Approval policy for a single tool call: read-only tools always run;
 /// non-read-only tools run only when an approver is present and approves.
-pub(crate) fn tool_call_approved(
+///
+/// Shared by the orchestrator's agent loop and the CLI template loop —
+/// keep the policy in this one place so the two call paths cannot drift.
+pub fn tool_call_approved(
     registry: &crate::tools::ToolRegistry,
     approver: Option<&crate::agent::ToolApprover>,
     name: &str,
