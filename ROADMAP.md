@@ -302,7 +302,7 @@ sections = ["summary", "variants", "coverage", "qc_metrics"]
 **Goal**: Package entire workflows into portable containers.
 
 ### Milestone 6.1: Workflow Packaging
-- [x] `oxo-flow package` command
+- [x] `oxo-flow package` command (merged into `export` as `-f compose`, issue #76)
 - [x] Dockerfile generation from .oxoflow
 - [x] Singularity definition file generation
 - [x] Multi-stage build optimization

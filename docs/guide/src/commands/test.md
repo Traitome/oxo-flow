@@ -136,3 +136,10 @@ oxo-flow test pipeline.oxoflow --deep --json   # CI preflight gate
 - [oxo-flow lint](lint.md) — lint only
 - [oxo-flow dry-run](dry-run.md) — preview execution
 - [oxo-flow env](env.md) — check environment backends
+
+!!! note "Not to be confused with `oxo-flow ai test`"
+
+    This command tests a **workflow** (validate + lint + dry-run, optionally
+    `--deep` and `--run`). The separate `oxo-flow ai test` command tests the
+    **AI integration itself** (provider connectivity, generation, analysis) —
+    see [AI-Powered CLI](../reference/ai-cli.md).

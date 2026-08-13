@@ -48,7 +48,11 @@ oxo-flow license /path/to/license.key
 | `-v, --verbose` | Enable verbose (debug-level) logging |
 | `--quiet` | Suppress non-essential output (errors only) |
 | `--no-color` | Disable colored output |
-| `--json` | Output machine-readable JSON to stdout |
+
+!!! note "No `--json` output"
+
+    `license` always prints human-readable text; the global `--json` flag
+    is not honored here.
 
 ## Notes
 

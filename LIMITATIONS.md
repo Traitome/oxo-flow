@@ -58,8 +58,8 @@ WDL, and no importers for those formats are currently available.
   consume significant memory. File checksums use streaming I/O (64KB buffer)
   to handle large files without loading them entirely into memory.
 - **Hot-reload of `.oxoflow` files** — Changes to workflow files during
-  execution are not detected. The `oxo-flow watch` command provides
-  edit-time re-validation but does not automatically re-execute.
+  execution are not detected; the workflow must be re-validated and
+  re-executed explicitly.
 
 ## Roadmap
 

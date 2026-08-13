@@ -40,7 +40,7 @@ Containers are the strongest reproducibility mechanism available:
    configurations.
 3. **Offline execution** — Pre-pulled container images allow workflows to run
    without network access, eliminating variability from upstream repositories.
-4. **Packaging** — The `oxo-flow package` command generates a Dockerfile or
+4. **Packaging** — The `oxo-flow export` command generates a Dockerfile or
    Singularity definition file that captures the workflow, environment setup,
    and execution entrypoint. The generated files can be built into container
    images with standard tools (`docker build`, `singularity build`).

@@ -55,6 +55,29 @@ Summary: 2 matched, 1 mismatched, 0 missing
   (BAM, FASTQ >100GB) without excessive memory usage.
 - Mismatches exit with code 1 (useful for CI/CD pipelines).
 
+### Verify without stored checksums
+
+When the checkpoint contains no checksums (the run was executed without
+`--provenance`), `verify` **degrades to a status summary**: it prints a
+note explaining that checksum tracking was not enabled and lists the
+completed rules from the checkpoint, then exits with code 0. This keeps
+`provenance verify` safe to run on any checkpoint while signaling clearly
+that integrity was not verified.
+
+```
+Provenance Verify .oxo-flow/checkpoint.json
+
+  Note: No stored checksums found. Run workflow with --provenance to enable tracking.
+  Found 3 completed rules:
+  ✓ align
+  ✓ sort_bam
+  ✓ trim_reads
+
+  Hint: To verify integrity, provide a checksums file.
+```
+
+To get real integrity verification, re-run with `--provenance`.
+
 ## See Also
 
 - [oxo-flow run](run.md) — use `--provenance` to enable checksum tracking

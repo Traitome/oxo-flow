@@ -73,3 +73,5 @@ oxo-flow validate pipeline.oxoflow
   definition files D002 and PATH binaries D003) or `oxo-flow env check`
   for environment validation
 - Run `validate` before `run` to catch errors early without consuming compute resources
+- [`lint`](lint.md) is a strict superset: it runs all `validate` checks plus
+  style linting and secret scanning

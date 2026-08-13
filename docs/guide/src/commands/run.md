@@ -37,7 +37,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--skip-ref-build` | — | — | Skip automatic reference/index building (assume pre-built) |
 | `--cache-dir` | — | — | Directory for caching environment setup state (entries untouched for 30 days are cleaned up after each run) |
 | `--resume-failed` | — | — | Resume only failed rules from a previous run |
-| `--profile` | — | — | Execution profile name, loaded from `profiles/<NAME>.toml` (use `oxo-flow profile` to manage) |
+| `--profile` | — | — | Execution profile name, loaded from `profiles/<NAME>.toml` or `profiles/<NAME>.oxoflow` (see [Execution profiles](#execution-profiles)) |
 | `--provenance` | — | — | Track output file checksums for later verification |
 | `--arg` | — | — | Legacy form: set a workflow config value (`KEY=VALUE`). Repeatable. See `[config]` in workflow-format |
 | `--sample` | — | — | Add a sample to the run. Repeatable. Merges with sample_pattern/CSV sources |
@@ -172,6 +172,37 @@ oxo-flow run pipeline.oxoflow --arg database=refs/nt --arg threshold=1e-3
       Run flags must come before KEY=VALUE overrides, e.g.:
       oxo-flow run <workflow.oxoflow> --json min_quality=30
     ```
+
+### Execution profiles
+
+`--profile <NAME>` applies a reusable config supplement to a run. Profiles
+are plain TOML (or `.oxoflow`) files placed in the workflow's own
+`profiles/` directory; `.toml` is tried before `.oxoflow`:
+
+```console
+<workflow-dir>/profiles/<NAME>.toml     # preferred
+<workflow-dir>/profiles/<NAME>.oxoflow
+```
+
+```toml
+# profiles/cluster.toml
+[config]
+threads = "32"
+memory_mb = "128000"
+```
+
+```bash
+oxo-flow run pipeline.oxoflow --profile cluster
+```
+
+The profile's `[config]` table **fills in keys the workflow does not set
+itself** — values already present in the workflow are never overwritten.
+This lets one workflow carry per-environment fallback defaults (laptop,
+cluster, cloud). If the named profile file does not exist, `run` prints a
+warning and proceeds with the workflow's own config.
+
+Cluster scheduler submission (SLURM, PBS, SGE, LSF) is configured
+separately — see the [`cluster`](cluster.md) command.
 
 ### Execute a published bundle
 

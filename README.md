@@ -168,15 +168,13 @@ oxo-flow cluster status --id <job-id>
 oxo-flow cluster cancel --id <job-id>
 ```
 
-**Supported backends:** `slurm`, `pbs`, `sge`, `lsf`. Configure cluster profiles with `oxo-flow profile` for reusable queue, walltime, and resource defaults.
+**Supported backends:** `slurm`, `pbs`, `sge`, `lsf`. Cluster submissions are configured inline via `oxo-flow cluster submit` flags.
 
-Workflows can also be executed directly on a cluster without the submit subcommand by using a profile:
+Workflows can also carry reusable config supplements (e.g. per-cluster thread
+and memory defaults) in `profiles/<NAME>.toml` next to the workflow:
 
 ```bash
-# List available profiles
-oxo-flow profile list
-
-# Run a workflow using a SLURM profile
+# Run a workflow with a config supplement profile
 oxo-flow run workflow.oxoflow --profile slurm
 ```
 
@@ -218,14 +216,14 @@ Wildcards like `{sample}` expand automatically via input file discovery. Feature
 
 ## CLI Commands
 
-The `oxo-flow` binary provides **33 subcommands** covering the complete workflow lifecycle. See the full [CLI Reference](https://traitome.github.io/oxo-flow/documentation/commands/run/) for details.
+The `oxo-flow` binary provides **29 subcommands** covering the complete workflow lifecycle. See the full [CLI Reference](https://traitome.github.io/oxo-flow/documentation/commands/run/) for details.
 
 | Category | Commands |
 |----------|----------|
-| **Execution** | `run`, `resume`, `dry-run`, `test`, `watch`, `batch` |
+| **Execution** | `run`, `resume`, `dry-run`, `test`, `batch` |
 | **Development** | `init`, `validate`, `format`, `lint`, `debug`, `template` |
-| **Inspection** | `graph`, `report`, `status`, `config`, `diff`, `history`, `provenance`, `schema` |
-| **Environment** | `env`, `package`, `export`, `profile`, `clean`, `touch` |
+| **Inspection** | `graph`, `report`, `status`, `config`, `diff`, `provenance`, `schema` |
+| **Environment** | `env`, `export`, `clean`, `touch` |
 | **Deployment** | `serve`, `cluster`, `publish`, `pull` |
 | **AI & System** | `ai`, `completions`, `license` |
 

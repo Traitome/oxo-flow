@@ -64,6 +64,9 @@ Summary: 0 error(s), 2 warning(s), 1 info
 
 ## Notes
 
+- `lint` is a strict superset of [`validate`](validate.md): it runs every
+  validate check (parsing, DAG, input existence) plus style linting and
+  secret scanning — running `validate` separately after `lint` adds nothing
 - Linting checks for common mistakes, missing metadata, and potential performance issues
 - Rules are checked for valid input/output patterns and environment declarations
 - Use `--strict` to ensure high-quality workflow definitions in production environments

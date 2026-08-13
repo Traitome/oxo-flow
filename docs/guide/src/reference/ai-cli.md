@@ -329,7 +329,7 @@ Every AI interaction is logged to `.oxo-flow/ai_sessions/` for audit and debuggi
 | Command | AI Flag | Auto-Detect | What It Does |
 |---------|---------|:-----------:|--------------|
 | `oxo-flow ai` | — | — | Quick status: provider, model, endpoint, connectivity, session count |
-| `oxo-flow ai test` | — | — | Comprehensive self-test: connectivity + generation + analysis |
+| `oxo-flow ai test` | — | — | Comprehensive self-test: connectivity + generation + analysis (tests the AI integration itself — not a workflow; for workflow testing use [`oxo-flow test`](../commands/test.md)) |
 | `oxo-flow ai setup` | — | — | Interactive wizard: choose provider, enter key, save config |
 | `oxo-flow ai explain WORKFLOW` | — | — | Three-layer workflow explanation (overview → steps → scientific review) |
 | `oxo-flow ai explain WORKFLOW --step RULE` | — | — | Focus the explanation on one rule |

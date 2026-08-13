@@ -1,6 +1,7 @@
 # `oxo-flow export`
 
-Export a workflow to a container definition or standalone TOML.
+Export a workflow to a container definition (Dockerfile, Singularity
+definition, Docker Compose) or a standalone TOML file.
 
 ---
 
@@ -24,7 +25,7 @@ oxo-flow export [OPTIONS] <WORKFLOW>
 
 | Option | Short | Default | Description |
 |---|---|---|---|
-| `--format` | `-f` | `docker` | Export format (`docker`, `singularity`, `toml`) |
+| `--format` | `-f` | `docker` | Export format (`docker`, `singularity`, `compose`, `toml`) |
 | `--output` | `-o` | stdout | Output file path |
 
 ---
@@ -41,6 +42,12 @@ oxo-flow export pipeline.oxoflow -f docker
 
 ```bash
 oxo-flow export pipeline.oxoflow -f singularity -o Singularity.def
+```
+
+### Export to Docker Compose
+
+```bash
+oxo-flow export pipeline.oxoflow -f compose -o compose.yml
 ```
 
 ### Export to standalone TOML
@@ -77,4 +84,5 @@ message is printed instead: `✓ Exported docker to <path>`.
 
 - Container exports include all environment requirements specified in the workflow
 - TOML export bundles all includes into a single, standalone workflow file
+  (equivalent to the `format` command without its `--check` mode)
 - Useful for archiving workflows or deploying to restricted environments

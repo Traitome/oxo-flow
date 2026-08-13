@@ -1,13 +1,15 @@
 # `oxo-flow status`
 
-Show execution status from a checkpoint file. Displays which rules completed successfully and which failed.
+Show execution status from a checkpoint file. Displays which rules completed
+successfully, which failed, and — with `--timing` — per-rule wall-clock times
+and total runtime.
 
 ---
 
 ## Usage
 
 ```
-oxo-flow status [OPTIONS] <CHECKPOINT>
+oxo-flow status [OPTIONS] [CHECKPOINT]
 ```
 
 ---
@@ -16,7 +18,7 @@ oxo-flow status [OPTIONS] <CHECKPOINT>
 
 | Argument | Description |
 |---|---|
-| `<CHECKPOINT>` | Path to a checkpoint JSON file (e.g., `.oxo-flow/checkpoint.json`) |
+| `[CHECKPOINT]` | Path to a checkpoint JSON file. Defaults to `.oxo-flow/checkpoint.json` in the current directory |
 
 ---
 
@@ -24,6 +26,9 @@ oxo-flow status [OPTIONS] <CHECKPOINT>
 
 | Option | Short | Description |
 |---|---|---|
+| `--timing` | | Show per-rule wall-clock times and total runtime, slowest first |
+| `--limit <LIMIT>` | `-n` | Maximum number of rules in the `--timing` view (default: 10; requires `--timing`) |
+| `--json` | | Output machine-readable JSON to stdout |
 | `--verbose` | `-v` | Enable debug-level logging |
 
 ---
@@ -31,7 +36,17 @@ oxo-flow status [OPTIONS] <CHECKPOINT>
 ## Examples
 
 ```bash
+# Status from the default checkpoint in the current directory
+oxo-flow status
+
+# Status from an explicit checkpoint
 oxo-flow status .oxo-flow/checkpoint.json
+
+# Per-rule timings, slowest 5 rules
+oxo-flow status --timing -n 5
+
+# Machine-readable output including timings
+oxo-flow status --timing --json
 ```
 
 ---
@@ -52,6 +67,39 @@ Completed rules:
 Failed rules:
   ✗ mark_duplicates
 ```
+
+With `--timing`, the rule list is replaced by a wall-time view (slowest
+first):
+
+```
+  Completed: 3
+  Failed:    0
+
+Rule timings: (top 3, total 45.2s)
+  ✓ align (30.1s)
+  ✓ sort_bam (12.3s)
+  ✓ trim_reads (2.8s)
+```
+
+With `--json`, output goes to stdout:
+
+```json
+{
+  "command": "status",
+  "checkpoint": ".oxo-flow/checkpoint.json",
+  "workflow": "pipeline.oxoflow",
+  "completed": ["align", "sort_bam", "trim_reads"],
+  "failed": [],
+  "timings": {
+    "align": 30.1,
+    "sort_bam": 12.3,
+    "trim_reads": 2.8
+  },
+  "total_time_secs": 45.2
+}
+```
+
+`timings` and `total_time_secs` are only present with `--timing`.
 
 ---
 
@@ -95,3 +143,5 @@ drive [precise invalidation](run.md#config-changes-and-precise-invalidation).
 - Use `status` to inspect progress of long-running pipelines, especially on clusters
 - The checkpoint file is not updated after the pipeline completes — it reflects the state at the last write
 - Exits with code `0` regardless of the pipeline's success or failure
+- Rule order in `--timing` output is by wall-clock time descending, so the
+  most expensive rules surface first
