@@ -80,17 +80,6 @@ pub trait StorageBackend: Send + Sync {
     ) -> Result<Paginated<models::RunRow>, String>;
     async fn cancel_run(&self, id: &str) -> Result<(), String>;
 
-    async fn create_run_node(&self, node: &models::RunNodeRow) -> Result<(), String>;
-    async fn update_run_node(
-        &self,
-        run_id: &str,
-        rule_name: &str,
-        status: &str,
-        exit_code: Option<i32>,
-        error_pattern: Option<&str>,
-    ) -> Result<(), String>;
-    async fn get_run_nodes(&self, run_id: &str) -> Result<Vec<models::RunNodeRow>, String>;
-
     async fn create_session(
         &self,
         user_id: &str,

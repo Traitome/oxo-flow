@@ -4,6 +4,7 @@
 //! diagnostics (30+ error patterns), smart retry (DAG dependency analysis),
 //! sandbox workspace management, and background process execution.
 
+pub mod checkpoint_status;
 pub mod diagnostics;
 pub mod handlers;
 pub mod sandbox;

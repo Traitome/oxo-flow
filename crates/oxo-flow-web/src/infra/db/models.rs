@@ -43,18 +43,6 @@ pub struct RunRow {
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
-pub struct RunNodeRow {
-    pub run_id: String,
-    pub rule_name: String,
-    pub status: String, // "pending"|"running"|"success"|"failed"|"skipped"
-    pub started_at: Option<String>,
-    pub finished_at: Option<String>,
-    pub exit_code: Option<i32>,
-    pub attempt: i64,
-    pub error_pattern: Option<String>,
-}
-
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct SessionRow {
     pub token: String,
     pub user_id: String,

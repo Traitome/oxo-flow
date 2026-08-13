@@ -41,7 +41,11 @@ pub fn unregister(run_id: &str) {
 
 /// Current process group id for `run_id`, if the subprocess is still tracked.
 pub fn pgid(run_id: &str) -> Option<i32> {
-    registry().read().expect("registry poisoned").get(run_id).copied()
+    registry()
+        .read()
+        .expect("registry poisoned")
+        .get(run_id)
+        .copied()
 }
 
 /// Send `sig` to the entire process group identified by `pgid`.

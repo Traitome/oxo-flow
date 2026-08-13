@@ -8,6 +8,7 @@ use crate::domains::ai::agents::report_agent;
 use crate::domains::ai::agents::types::ReportFile;
 use axum::{Json, extract::Path, http::StatusCode};
 
+use super::checkpoint_status;
 use super::service;
 use super::types::*;
 use crate::domains::workflow::handlers::ApiError;
@@ -302,50 +303,21 @@ pub async fn get_run_status(Path(id): Path<String>) -> ApiResult<RunStatusRespon
         )
     })?;
 
-    let nodes: Vec<models::RunNodeRow> =
-        sqlx::query_as("SELECT * FROM run_nodes WHERE run_id = ? ORDER BY attempt ASC")
-            .bind(&id)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error fetching run nodes for status: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
-
-    let node_items: Vec<NodeStatusItem> = nodes
-        .into_iter()
-        .map(|n| {
-            let status = match n.status.as_str() {
-                "pending" => NodeStatus::Pending,
-                "running" => NodeStatus::Running,
-                "success" => NodeStatus::Success,
-                "failed" => NodeStatus::Failed,
-                "skipped" => NodeStatus::Skipped,
-                _ => NodeStatus::Pending,
-            };
-            let started_at = n.started_at.clone();
-            let finished_at = n.finished_at.clone();
-            let duration_ms = finished_at.as_ref().and_then(|f| {
-                started_at.as_ref().and_then(|s| {
-                    let sf = chrono::NaiveDateTime::parse_from_str(s, "%+").ok()?;
-                    let ff = chrono::NaiveDateTime::parse_from_str(f, "%+").ok()?;
-                    Some((ff - sf).num_milliseconds().max(0) as u64)
-                })
-            });
-            NodeStatusItem {
-                rule: n.rule_name,
-                status,
-                started_at: n.started_at,
-                duration_ms,
-                exit_code: n.exit_code,
-                progress_pct: None,
-            }
-        })
-        .collect();
+    // Node status comes from the engine's checkpoint state (single source of
+    // truth), merged with the full rule list so unrun rules show as pending.
+    let dag = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
+        .ok()
+        .and_then(|wf| oxo_flow_core::dag::WorkflowDag::from_rules(&wf.rules).ok());
+    let node_items = checkpoint_status::load_node_statuses(
+        std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
+        run.status == "running",
+    );
+    let node_items = match &dag {
+        Some(d) => {
+            checkpoint_status::with_all_rules(node_items, &d.execution_order().unwrap_or_default())
+        }
+        None => node_items,
+    };
 
     let overall = service::compute_overall_status(&node_items);
 
@@ -394,45 +366,34 @@ pub async fn get_dag_status(Path(id): Path<String>) -> ApiResult<DagStatusRespon
         .ok()
         .and_then(|wf| oxo_flow_core::dag::WorkflowDag::from_rules(&wf.rules).ok());
 
-    let nodes: Vec<models::RunNodeRow> =
-        sqlx::query_as("SELECT * FROM run_nodes WHERE run_id = ? ORDER BY attempt ASC")
-            .bind(&id)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error fetching run nodes for DAG status: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
-
-    let dag_nodes: Vec<DagNode> = nodes
+    // Node status comes from the engine's checkpoint state, merged with the
+    // full rule list so unrun rules show as pending.
+    let node_items = checkpoint_status::load_node_statuses(
+        std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
+        run.status == "running",
+    );
+    let node_items = match &dag {
+        Some(d) => {
+            checkpoint_status::with_all_rules(node_items, &d.execution_order().unwrap_or_default())
+        }
+        None => node_items,
+    };
+    let dag_nodes: Vec<DagNode> = node_items
         .iter()
         .map(|n| {
-            let color = match n.status.as_str() {
-                "success" => "green",
-                "running" => "blue",
-                "failed" => "red",
-                "skipped" => "gray",
-                _ => "lightgray",
+            let color = match n.status {
+                NodeStatus::Success => "green",
+                NodeStatus::Running => "blue",
+                NodeStatus::Failed => "red",
+                NodeStatus::Skipped => "gray",
+                NodeStatus::Pending => "lightgray",
             };
-            let started_at = n.started_at.clone();
-            let finished_at = n.finished_at.clone();
-            let duration_ms = finished_at.as_ref().and_then(|f| {
-                started_at.as_ref().and_then(|s| {
-                    let sf = chrono::NaiveDateTime::parse_from_str(s, "%+").ok()?;
-                    let ff = chrono::NaiveDateTime::parse_from_str(f, "%+").ok()?;
-                    Some((ff - sf).num_milliseconds().max(0) as u64)
-                })
-            });
             DagNode {
-                id: n.rule_name.clone(),
-                label: n.rule_name.clone(),
-                status: n.status.clone(),
+                id: n.rule.clone(),
+                label: n.rule.clone(),
+                status: n.status.to_string(),
                 color: color.to_string(),
-                duration_ms,
+                duration_ms: n.duration_ms,
                 exit_code: n.exit_code,
             }
         })
@@ -524,40 +485,10 @@ pub async fn get_diagnostics(Path(id): Path<String>) -> ApiResult<DiagnosticsRes
         )
     })?;
 
-    let nodes: Vec<models::RunNodeRow> =
-        sqlx::query_as("SELECT * FROM run_nodes WHERE run_id = ? ORDER BY attempt ASC")
-            .bind(&id)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error fetching run nodes for diagnostics: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
-
-    let node_items: Vec<NodeStatusItem> = nodes
-        .iter()
-        .map(|n| {
-            let status = match n.status.as_str() {
-                "success" => NodeStatus::Success,
-                "failed" => NodeStatus::Failed,
-                "running" => NodeStatus::Running,
-                "skipped" => NodeStatus::Skipped,
-                _ => NodeStatus::Pending,
-            };
-            NodeStatusItem {
-                rule: n.rule_name.clone(),
-                status,
-                started_at: n.started_at.clone(),
-                duration_ms: None,
-                exit_code: n.exit_code,
-                progress_pct: None,
-            }
-        })
-        .collect();
+    let node_items = checkpoint_status::load_node_statuses(
+        std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
+        run.status == "running",
+    );
 
     // Try to read log output from workdir
     let log_output = run
@@ -707,40 +638,10 @@ pub async fn retry_run(
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
 
-    let nodes: Vec<models::RunNodeRow> =
-        sqlx::query_as("SELECT * FROM run_nodes WHERE run_id = ? ORDER BY attempt ASC")
-            .bind(&id)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error fetching run nodes for retry: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
-
-    let node_items: Vec<NodeStatusItem> = nodes
-        .iter()
-        .map(|n| {
-            let status = match n.status.as_str() {
-                "success" => NodeStatus::Success,
-                "failed" => NodeStatus::Failed,
-                "running" => NodeStatus::Running,
-                "skipped" => NodeStatus::Skipped,
-                _ => NodeStatus::Pending,
-            };
-            NodeStatusItem {
-                rule: n.rule_name.clone(),
-                status,
-                started_at: n.started_at.clone(),
-                duration_ms: None,
-                exit_code: n.exit_code,
-                progress_pct: None,
-            }
-        })
-        .collect();
+    let node_items = checkpoint_status::load_node_statuses(
+        std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
+        run.status == "running",
+    );
 
     let dag = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
         .ok()
@@ -1039,36 +940,19 @@ pub async fn get_ai_status(Path(id): Path<String>) -> ApiResult<serde_json::Valu
         )
     })?;
 
-    let nodes: Vec<models::RunNodeRow> =
-        sqlx::query_as("SELECT * FROM run_nodes WHERE run_id = ? ORDER BY attempt ASC")
-            .bind(&id)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error fetching run nodes for AI status: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
-
-    let exec_nodes: Vec<NodeExecutionStatus> = nodes
-        .iter()
-        .map(|n| NodeExecutionStatus {
-            rule: n.rule_name.clone(),
-            status: n.status.clone(),
-            duration_ms: n.finished_at.as_ref().and_then(|f| {
-                n.started_at.as_ref().and_then(|s| {
-                    let sf = chrono::NaiveDateTime::parse_from_str(s, "%+").ok()?;
-                    let ff = chrono::NaiveDateTime::parse_from_str(f, "%+").ok()?;
-                    Some((ff - sf).num_milliseconds())
-                })
-            }),
-            exit_code: n.exit_code,
-            started_at: n.started_at.clone(),
-        })
-        .collect();
+    let exec_nodes: Vec<NodeExecutionStatus> = checkpoint_status::load_node_statuses(
+        std::path::Path::new(_run.workdir.as_deref().unwrap_or("")),
+        _run.status == "running",
+    )
+    .iter()
+    .map(|n| NodeExecutionStatus {
+        rule: n.rule.clone(),
+        status: n.status.to_string(),
+        duration_ms: n.duration_ms.map(|d| d as i64),
+        exit_code: n.exit_code,
+        started_at: n.started_at.clone(),
+    })
+    .collect();
 
     let resources = ResourceUsage::default();
     let status = monitor_agent::analyze_run_status(&exec_nodes, &resources);

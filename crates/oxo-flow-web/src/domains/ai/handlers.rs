@@ -133,34 +133,11 @@ pub async fn explain(Json(req): Json<ExplainRequest>) -> ApiResult<ExplainRespon
             .unwrap_or(None);
 
         if let Some(run) = run {
-            let nodes: Vec<models::RunNodeRow> =
-                sqlx::query_as("SELECT * FROM run_nodes WHERE run_id = ? ORDER BY attempt ASC")
-                    .bind(&req.run_id)
-                    .fetch_all(pool)
-                    .await
-                    .unwrap_or_default();
-
-            let node_items: Vec<crate::domains::execution::types::NodeStatusItem> = nodes
-                .iter()
-                .map(|n| {
-                    use crate::domains::execution::types::NodeStatus;
-                    let status = match n.status.as_str() {
-                        "success" => NodeStatus::Success,
-                        "failed" => NodeStatus::Failed,
-                        "running" => NodeStatus::Running,
-                        "skipped" => NodeStatus::Skipped,
-                        _ => NodeStatus::Pending,
-                    };
-                    crate::domains::execution::types::NodeStatusItem {
-                        rule: n.rule_name.clone(),
-                        status,
-                        started_at: n.started_at.clone(),
-                        duration_ms: None,
-                        exit_code: n.exit_code,
-                        progress_pct: None,
-                    }
-                })
-                .collect();
+            // Node status comes from the engine's checkpoint state.
+            let node_items = crate::domains::execution::checkpoint_status::load_node_statuses(
+                std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
+                run.status == "running",
+            );
 
             let log = run
                 .workdir

@@ -252,13 +252,14 @@ pub fn spawn_background_run(
                         .map(|n: i64| n > 0)
                         .unwrap_or(false);
                         if !cancelled {
-                            if let Err(e) =
-                                sqlx::query("UPDATE runs SET status = ?, finished_at = ? WHERE id = ?")
-                                    .bind(final_state)
-                                    .bind(end)
-                                    .bind(&run_id)
-                                    .execute(db::pool())
-                                    .await
+                            if let Err(e) = sqlx::query(
+                                "UPDATE runs SET status = ?, finished_at = ? WHERE id = ?",
+                            )
+                            .bind(final_state)
+                            .bind(end)
+                            .bind(&run_id)
+                            .execute(db::pool())
+                            .await
                             {
                                 error!("Failed to update final status for run {run_id}: {e}");
                             }

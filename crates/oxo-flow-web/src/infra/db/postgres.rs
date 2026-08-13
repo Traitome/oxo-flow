@@ -107,17 +107,7 @@ impl StorageBackend for PostgresBackend {
                 created_at TEXT NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS run_nodes (
-                run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-                rule_name TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
-                started_at TEXT,
-                finished_at TEXT,
-                exit_code INTEGER,
-                attempt BIGINT NOT NULL DEFAULT 1,
-                error_pattern TEXT,
-                PRIMARY KEY (run_id, rule_name)
-            );
+            
 
             CREATE TABLE IF NOT EXISTS sessions (
                 token TEXT PRIMARY KEY,
@@ -523,86 +513,6 @@ impl StorageBackend for PostgresBackend {
             .await
             .map_err(|e| e.to_string())?;
         Ok(())
-    }
-
-    async fn create_run_node(&self, node: &models::RunNodeRow) -> Result<(), String> {
-        sqlx::query(
-            "INSERT INTO run_nodes (run_id, rule_name, status, started_at, finished_at, exit_code, attempt, error_pattern) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-        )
-        .bind(&node.run_id)
-        .bind(&node.rule_name)
-        .bind(&node.status)
-        .bind(&node.started_at)
-        .bind(&node.finished_at)
-        .bind(node.exit_code)
-        .bind(node.attempt)
-        .bind(&node.error_pattern)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    async fn update_run_node(
-        &self,
-        run_id: &str,
-        rule_name: &str,
-        status: &str,
-        exit_code: Option<i32>,
-        error_pattern: Option<&str>,
-    ) -> Result<(), String> {
-        let now = Self::now();
-        let is_terminal = status == "success" || status == "failed" || status == "skipped";
-        if is_terminal {
-            sqlx::query(
-                "UPDATE run_nodes SET status = $1, finished_at = $2, exit_code = $3, error_pattern = $4 WHERE run_id = $5 AND rule_name = $6",
-            )
-            .bind(status)
-            .bind(&now)
-            .bind(exit_code)
-            .bind(error_pattern)
-            .bind(run_id)
-            .bind(rule_name)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
-        } else if status == "running" {
-            sqlx::query(
-                "UPDATE run_nodes SET status = $1, started_at = $2, exit_code = $3, error_pattern = $4 WHERE run_id = $5 AND rule_name = $6",
-            )
-            .bind(status)
-            .bind(&now)
-            .bind(exit_code)
-            .bind(error_pattern)
-            .bind(run_id)
-            .bind(rule_name)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
-        } else {
-            sqlx::query(
-                "UPDATE run_nodes SET status = $1, exit_code = $2, error_pattern = $3 WHERE run_id = $4 AND rule_name = $5",
-            )
-            .bind(status)
-            .bind(exit_code)
-            .bind(error_pattern)
-            .bind(run_id)
-            .bind(rule_name)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
-        }
-        Ok(())
-    }
-
-    async fn get_run_nodes(&self, run_id: &str) -> Result<Vec<models::RunNodeRow>, String> {
-        sqlx::query_as::<_, models::RunNodeRow>(
-            "SELECT * FROM run_nodes WHERE run_id = $1 ORDER BY attempt ASC",
-        )
-        .bind(run_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| e.to_string())
     }
 
     async fn create_session(

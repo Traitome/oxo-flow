@@ -1012,7 +1012,7 @@ checkpoint = true
     assert_eq!(s, 200);
     assert!(
         detail["status"].as_str().unwrap() == "running"
-            || detail["status"].as_str().unwrap() == "success"
+            || detail["status"].as_str().unwrap() == "completed"
             || detail["status"].as_str().unwrap() == "pending"
     );
     // Verify run appears in the list
