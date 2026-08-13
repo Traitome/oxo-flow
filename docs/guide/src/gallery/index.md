@@ -41,6 +41,13 @@ oxo-flow graph examples/gallery/06_rnaseq_quantification.oxoflow
 oxo-flow lint examples/gallery/07_wgs_germline.oxoflow
 ```
 
+!!! note "`graph` shows the template DAG, `dry-run` shows the expanded DAG"
+    `oxo-flow graph` displays the workflow *before* wildcard/sample/scatter
+    expansion — use it to inspect the rule-level structure. `oxo-flow dry-run`
+    shows the fully expanded DAG with all per-sample/per-chromosome job
+    instances and their concrete dependencies. For gallery workflows with
+    `[[sample_groups]]`, `scatter`, or `expand_inputs`, the two views differ.
+
 ---
 
 ## Skill Progression
