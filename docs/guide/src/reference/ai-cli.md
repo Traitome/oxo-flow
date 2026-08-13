@@ -185,19 +185,23 @@ model = "deepseek-v4-flash"
 
 ## How It Works
 
-The AI agent uses oxo-flow's built-in knowledge base to generate workflows:
+The AI agent combines four embedded knowledge sources (all compiled into the binary at build time):
 
-1. **Tool Reference Table**: 10+ bioinformatics tools with optimal resource allocations (threads, memory)
-2. **Best Practices**: Mandatory checks (QC, environment declarations, no destructive commands)
-3. **Safety Rules**: Non-negotiable constraints injected into every prompt
+1. **Tool Reference Table**: 40 curated bioinformatics tools with resource allocations (threads, memory)
+2. **Bioconda Tool Database**: 6,103 CLI tools with current versions and descriptions — queried on demand via `lookup_tool`
+3. **bioSkills Library**: 562 curated Agent Skills (the emerging SKILL.md standard) with domain procedures, commands, and caveats — matched by assay type and injected into generation prompts, or queried via `lookup_skill`
+4. **Pipeline Knowledge Graph**: 78 workflow skills and 470 literature-backed data-flow transitions (BAM → VCF → annotated VCF chains) — queried via `lookup_pipeline` to design correct multi-step topologies
+
+Token efficiency: embedded data is **never added to the LLM context wholesale**. Only on-demand tool queries (~1 KB per result) and domain-matched skill summaries (≤3 per domain) are injected — the rest stays in the binary until needed.
 
 The agent:
-1. Analyzes your intent
-2. Selects appropriate tools from the reference table
-3. Designs a DAG with proper dependencies
-4. Sets resource allocations based on tool requirements
-5. Generates valid `.oxoflow` TOML
-6. Validates against the schema and reports any issues
+1. Analyzes your intent (assay type, tools mentioned)
+2. Matches relevant bioSkills domains and injects curated expertise
+3. Selects tools from the reference table, verifying current versions via the Bioconda database
+4. Designs a DAG with proper dependencies (optionally consulting the pipeline graph for topology)
+5. Sets resource allocations based on tool requirements
+6. Generates valid `.oxoflow` TOML
+7. Validates against the schema and reports any issues
 
 ### Session Logs
 
