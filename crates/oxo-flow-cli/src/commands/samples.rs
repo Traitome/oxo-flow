@@ -15,6 +15,7 @@ use oxo_flow_core::readiness::ReadinessReport;
 pub(crate) fn resolve_ready_spec(
     config: &WorkflowConfig,
     specs: &[String],
+    base_dir: &std::path::Path,
 ) -> Result<(Vec<String>, Option<ReadinessReport>)> {
     let mut resolved: Vec<String> = Vec::new();
     let mut report: Option<ReadinessReport> = None;
@@ -31,7 +32,9 @@ pub(crate) fn resolve_ready_spec(
                     scratch
                         .expand_wildcards()
                         .context("failed to expand wildcard rules")?;
-                    report = Some(oxo_flow_core::readiness::compute_readiness(&scratch));
+                    report = Some(oxo_flow_core::readiness::compute_readiness(
+                        &scratch, base_dir,
+                    ));
                 }
                 let ready_names: Vec<String> = report
                     .as_ref()
@@ -61,8 +64,9 @@ pub(crate) fn apply_samples_filter(
     config: &mut WorkflowConfig,
     specs: &[String],
     bail_on_empty: bool,
+    base_dir: &std::path::Path,
 ) -> Result<Option<ReadinessReport>> {
-    let (resolved, report) = resolve_ready_spec(config, specs)?;
+    let (resolved, report) = resolve_ready_spec(config, specs, base_dir)?;
     let pairs_before = config.pairs.len();
     let (kept, unknown) = config.filter_samples(&resolved)?;
     let pairs_dropped = pairs_before - config.pairs.len();

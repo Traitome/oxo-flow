@@ -43,7 +43,12 @@ pub struct ReadinessReport {
 }
 
 /// Compute per-sample readiness on an expanded workflow config.
-pub fn compute_readiness(config: &WorkflowConfig) -> ReadinessReport {
+///
+/// Relative input paths resolve against `base_dir` — the directory the
+/// executor runs rules from (the workflow file's directory, or `--workdir`).
+/// The executor spawns shells with that working directory, so readiness must
+/// judge existence from the same place or it predicts execution wrong.
+pub fn compute_readiness(config: &WorkflowConfig, base_dir: &std::path::Path) -> ReadinessReport {
     // Sample universe: group samples in workflow order, then pair
     // experiment/control names, deduplicated. Pairs without a control side
     // contribute only the experiment name.
@@ -108,7 +113,7 @@ pub fn compute_readiness(config: &WorkflowConfig) -> ReadinessReport {
             {
                 continue;
             }
-            if std::path::Path::new(&input).exists() {
+            if base_dir.join(&input).exists() {
                 continue;
             }
             if let Some(name) = longest_matching_sample(&input, scoped) {
@@ -184,13 +189,13 @@ mod tests {
     use super::*;
     use crate::config::WorkflowConfig;
 
-    /// Parse a TOML workflow, expand it, and compute readiness. Fixture paths
-    /// are made absolute so tests are parallel-safe (no chdir).
-    fn readiness_for(toml: &str) -> ReadinessReport {
+    /// Parse a TOML workflow, expand it, and compute readiness against `dir`.
+    /// Fixture paths are made absolute so tests are parallel-safe (no chdir).
+    fn readiness_for(toml: &str, dir: &std::path::Path) -> ReadinessReport {
         let mut config = WorkflowConfig::parse(toml).expect("parse workflow");
         config.apply_defaults();
         config.expand_wildcards().expect("expand wildcards");
-        compute_readiness(&config)
+        compute_readiness(&config, dir)
     }
 
     #[test]
@@ -220,7 +225,7 @@ mod tests {
             d = dir.path().display()
         );
 
-        let report = readiness_for(&toml);
+        let report = readiness_for(&toml, dir.path());
         assert_eq!(report.total, 1);
         assert_eq!(report.ready.len(), 1);
         assert_eq!(report.ready[0].name, "S1");
@@ -258,7 +263,7 @@ mod tests {
             d = dir.path().display()
         );
 
-        let report = readiness_for(&toml);
+        let report = readiness_for(&toml, dir.path());
         assert_eq!(report.total, 2);
         assert_eq!(report.ready.len(), 1);
         assert_eq!(report.ready[0].name, "S1");
@@ -305,7 +310,7 @@ mod tests {
             d = dir.path().display()
         );
 
-        let report = readiness_for(&toml);
+        let report = readiness_for(&toml, dir.path());
         assert_eq!(report.total, 1);
         assert_eq!(
             report.ready.len(),
@@ -352,7 +357,7 @@ mod tests {
             d = dir.path().display()
         );
 
-        let report = readiness_for(&toml);
+        let report = readiness_for(&toml, dir.path());
         assert_eq!(report.total, 1);
         assert_eq!(
             report.ready.len(),
@@ -396,7 +401,7 @@ mod tests {
             d = dir.path().display()
         );
 
-        let report = readiness_for(&toml);
+        let report = readiness_for(&toml, dir.path());
         assert_eq!(report.total, 2);
         assert_eq!(report.ready.len(), 1);
         assert_eq!(report.ready[0].name, "S1");
@@ -439,7 +444,7 @@ mod tests {
             d = dir.path().display()
         );
 
-        let report = readiness_for(&toml);
+        let report = readiness_for(&toml, dir.path());
         assert_eq!(report.total, 2, "{report:#?}");
         assert_eq!(report.ready.len(), 1);
         assert_eq!(report.ready[0].name, "T1");
@@ -478,12 +483,52 @@ mod tests {
             d = dir.path().display()
         );
 
-        let report = readiness_for(&toml);
+        let report = readiness_for(&toml, dir.path());
         assert_eq!(report.total, 1, "{report:#?}");
         assert_eq!(report.ready.len(), 1);
         assert_eq!(report.ready[0].name, "T2");
         assert!(report.waiting.is_empty());
         assert!(report.missing_global.is_empty());
+    }
+
+    #[test]
+    fn relative_inputs_resolve_against_base_dir_not_cwd() {
+        // The executor runs shells in the workflow's directory (or
+        // --workdir), not the process CWD. Readiness must judge relative
+        // paths from the same place or it predicts execution wrong.
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("S1.fq"), b"x").unwrap();
+
+        // Relative path in the workflow; only base_dir/data/S1.fq exists.
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0.0"
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1"]
+
+            [[rules]]
+            name = "qc"
+            input = ["data/{sample}.fq"]
+            output = ["results/{sample}.txt"]
+            shell = "touch {output}"
+        "#;
+
+        let report = readiness_for(toml, dir.path());
+        assert_eq!(report.total, 1);
+        assert_eq!(report.ready.len(), 1, "{report:#?}");
+        assert!(report.waiting.is_empty());
+
+        // Against an unrelated base dir the same workflow sees S1 waiting.
+        let elsewhere = tempfile::tempdir().unwrap();
+        let report = readiness_for(toml, elsewhere.path());
+        assert_eq!(report.waiting.len(), 1, "{report:#?}");
+        assert_eq!(report.waiting[0].name, "S1");
+        assert_eq!(report.waiting[0].missing, vec!["data/S1.fq".to_string()]);
     }
 
     #[test]
@@ -500,7 +545,8 @@ mod tests {
             output = ["hello.txt"]
             shell = "echo hi > hello.txt"
         "#;
-        let report = readiness_for(toml);
+        let dir = tempfile::tempdir().unwrap();
+        let report = readiness_for(toml, dir.path());
         assert_eq!(report, ReadinessReport::default());
     }
 
@@ -533,7 +579,7 @@ mod tests {
             d = dir.path().display()
         );
 
-        let report = readiness_for(&toml);
+        let report = readiness_for(&toml, dir.path());
         assert_eq!(report.total, 2, "{report:#?}");
         assert_eq!(report.ready.len(), 1);
         assert_eq!(report.ready[0].name, "S1");
@@ -570,7 +616,7 @@ mod tests {
             d = dir.path().display()
         );
 
-        let report = readiness_for(&toml);
+        let report = readiness_for(&toml, dir.path());
         assert_eq!(report.total, 1);
         assert_eq!(report.ready.len(), 1, "{report:#?}");
         assert!(report.waiting.is_empty());
@@ -605,7 +651,7 @@ mod tests {
             d = dir.path().display()
         );
 
-        let report = readiness_for(&toml);
+        let report = readiness_for(&toml, dir.path());
         assert_eq!(report.total, 1);
         assert_eq!(report.ready.len(), 1, "{report:#?}");
         assert_eq!(report.ready[0].name, "S1");

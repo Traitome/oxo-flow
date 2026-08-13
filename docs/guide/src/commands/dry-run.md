@@ -71,6 +71,9 @@ Rules are judged per sample:
   when their inputs are absent.
 - Missing files that belong to no specific sample (shared references) are
   reported as workflow-level inputs that block every sample.
+- Relative paths resolve against the workflow file's directory — the same
+  place rules run from — so the report is accurate even when you invoke
+  `dry-run` from another directory.
 - `--samples ready` previews only the ready samples, but the readiness
   section still covers the whole cohort so you can see what was left out.
 

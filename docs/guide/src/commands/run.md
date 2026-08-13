@@ -234,6 +234,8 @@ that is, every rule input (after wildcard and `{config.x}` expansion) that
 the workflow itself does not produce. Intermediate products are never
 checked (producing them is the DAG's job), and `optional = true` rules do
 not block readiness (the executor skips them when their inputs are absent).
+Relative paths resolve against the workflow file's directory (or
+`--workdir`) — the same place rules actually run from.
 
 Semantics:
 

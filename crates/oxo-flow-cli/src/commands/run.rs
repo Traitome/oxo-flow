@@ -445,7 +445,12 @@ pub async fn run_command(
     // Runs after CLI overrides so `ready` resolution sees the final config
     // values in `{config.x}` paths (issue #63).
     if !samples_filter.is_empty()
-        && let Some(readiness) = samples::apply_samples_filter(&mut config, &samples_filter, true)?
+        && let Some(readiness) = samples::apply_samples_filter(
+            &mut config,
+            &samples_filter,
+            true,
+            workdir.as_deref().unwrap_or(&workflow_dir),
+        )?
     {
         samples::print_readiness_section(&readiness);
     }
@@ -1592,6 +1597,7 @@ pub async fn dry_run_command(
 ) -> Result<()> {
     print_banner();
     let workflow = resolve_workflow(workflow)?;
+    let workflow_dir = oxo_flow_core::parent_dir(&workflow).to_path_buf();
 
     let mut config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
@@ -1601,7 +1607,7 @@ pub async fn dry_run_command(
     // the full cohort so the readiness section stays informative even when
     // the listing is filtered (issue #63).
     let ready_report = if !samples_filter.is_empty() {
-        samples::apply_samples_filter(&mut config, &samples_filter, false)?
+        samples::apply_samples_filter(&mut config, &samples_filter, false, &workflow_dir)?
     } else {
         None
     };
@@ -1684,7 +1690,10 @@ pub async fn dry_run_command(
     // (possibly filtered) expanded config.
     let readiness_report = match ready_report {
         Some(report) => Some(report),
-        None => Some(oxo_flow_core::readiness::compute_readiness(&config)),
+        None => Some(oxo_flow_core::readiness::compute_readiness(
+            &config,
+            &workflow_dir,
+        )),
     };
     if let Some(report) = &readiness_report {
         samples::print_readiness_section(report);
@@ -1737,11 +1746,15 @@ pub async fn dry_run_command(
             eprintln!("     command: {}", expanded);
         }
 
-        // Show input file status for concrete (non-wildcard) paths
+        // Show input file status for concrete (non-wildcard) paths.
+        // Relative paths resolve against the workflow's directory — the same
+        // place the executor runs shells from and readiness checks (issue #63
+        // follow-up: CWD-based checks contradicted the readiness report when
+        // invoked from another directory).
         for inp in &rule.input {
             let s = inp.to_string();
             if !s.contains('{') && !s.contains('*') && !s.starts_with('/') {
-                let exists = std::path::Path::new(&s).exists();
+                let exists = workflow_dir.join(&s).exists();
                 let icon = if exists { "✓" } else { "✗" };
                 eprintln!("     input {}: {}", icon, s);
             }
