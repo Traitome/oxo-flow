@@ -189,69 +189,71 @@ Thumbs.db
 /// The workflow gallery embedded at build time — `template` works from an
 /// installed binary, not only inside a repository checkout (issue #76).
 ///
-/// The canonical source stays `examples/gallery/*.oxoflow`; `include_str!`
-/// re-reads it on every build, so content cannot drift. A unit test guards
-/// the stem list against additions/removals in the directory.
+/// The canonical source stays `examples/gallery/*.oxoflow`; this crate
+/// mirrors it under `templates/` because `cargo package`/`cargo publish`
+/// can only bundle files inside the crate root (the mirror is what makes
+/// the gallery work from installed crates.io releases). A unit test guards
+/// stems and content against the canonical directory, so drift fails CI.
 const EMBEDDED_GALLERY: &[(&str, &str)] = &[
     (
         "01_hello_world",
-        include_str!("../../../../examples/gallery/01_hello_world.oxoflow"),
+        include_str!("../../templates/01_hello_world.oxoflow"),
     ),
     (
         "02_file_pipeline",
-        include_str!("../../../../examples/gallery/02_file_pipeline.oxoflow"),
+        include_str!("../../templates/02_file_pipeline.oxoflow"),
     ),
     (
         "03_parallel_samples",
-        include_str!("../../../../examples/gallery/03_parallel_samples.oxoflow"),
+        include_str!("../../templates/03_parallel_samples.oxoflow"),
     ),
     (
         "04_scatter_gather",
-        include_str!("../../../../examples/gallery/04_scatter_gather.oxoflow"),
+        include_str!("../../templates/04_scatter_gather.oxoflow"),
     ),
     (
         "05_conda_environments",
-        include_str!("../../../../examples/gallery/05_conda_environments.oxoflow"),
+        include_str!("../../templates/05_conda_environments.oxoflow"),
     ),
     (
         "06_rnaseq_quantification",
-        include_str!("../../../../examples/gallery/06_rnaseq_quantification.oxoflow"),
+        include_str!("../../templates/06_rnaseq_quantification.oxoflow"),
     ),
     (
         "07_wgs_germline",
-        include_str!("../../../../examples/gallery/07_wgs_germline.oxoflow"),
+        include_str!("../../templates/07_wgs_germline.oxoflow"),
     ),
     (
         "08_multiomics_integration",
-        include_str!("../../../../examples/gallery/08_multiomics_integration.oxoflow"),
+        include_str!("../../templates/08_multiomics_integration.oxoflow"),
     ),
     (
         "09_single_cell_rnaseq",
-        include_str!("../../../../examples/gallery/09_single_cell_rnaseq.oxoflow"),
+        include_str!("../../templates/09_single_cell_rnaseq.oxoflow"),
     ),
     (
         "10_transform_operator",
-        include_str!("../../../../examples/gallery/10_transform_operator.oxoflow"),
+        include_str!("../../templates/10_transform_operator.oxoflow"),
     ),
     (
         "11_conditional_workflow",
-        include_str!("../../../../examples/gallery/11_conditional_workflow.oxoflow"),
+        include_str!("../../templates/11_conditional_workflow.oxoflow"),
     ),
     (
         "12_cohort_analysis",
-        include_str!("../../../../examples/gallery/12_cohort_analysis.oxoflow"),
+        include_str!("../../templates/12_cohort_analysis.oxoflow"),
     ),
     (
         "13_simple_variant_calling",
-        include_str!("../../../../examples/gallery/13_simple_variant_calling.oxoflow"),
+        include_str!("../../templates/13_simple_variant_calling.oxoflow"),
     ),
     (
         "14_paired_experiment_control",
-        include_str!("../../../../examples/gallery/14_paired_experiment_control.oxoflow"),
+        include_str!("../../templates/14_paired_experiment_control.oxoflow"),
     ),
     (
         "15_paired_experiment_control_pairs",
-        include_str!("../../../../examples/gallery/15_paired_experiment_control_pairs.oxoflow"),
+        include_str!("../../templates/15_paired_experiment_control_pairs.oxoflow"),
     ),
 ];
 

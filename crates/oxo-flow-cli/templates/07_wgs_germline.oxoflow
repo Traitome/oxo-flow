@@ -1,0 +1,319 @@
+# 07 — Whole-Genome Germline Variant Calling
+# Complete WGS pipeline: QC → alignment → dedup → BQSR → variant calling → annotation.
+# Demonstrates: GATK best practices, per-chromosome scatter, clinical environments.
+
+[workflow]
+name = "wgs-germline-calling"
+version = "1.0.0"
+description = "GATK best-practices whole-genome germline variant calling pipeline"
+author = "oxo-flow examples"
+
+[config]
+reference = "/data/references/GRCh38/genome.fa"
+known_sites = "/data/references/GRCh38/dbsnp_146.hg38.vcf.gz"
+known_indels = "/data/references/GRCh38/Mills_and_1000G_gold_standard.indels.hg38.vcf.gz"
+intervals = "/data/references/GRCh38/wgs_calling_regions.hg38.interval_list"
+hapmap = "/data/references/GRCh38/hapmap_3.3.hg38.vcf.gz"
+omni = "/data/references/GRCh38/1000G_omni2.5.hg38.vcf.gz"
+thousand_g = "/data/references/GRCh38/1000G_phase1.snps.high_confidence.hg38.vcf.gz"
+
+[[sample_groups]]
+name = "cohort"
+samples = ["NA12878", "NA12879", "NA12880"]
+
+[defaults]
+threads = 4
+memory = "8G"
+
+[[rules]]
+name = "fastp_qc"
+input = ["raw/{sample}_R1.fastq.gz", "raw/{sample}_R2.fastq.gz"]
+output = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz", "qc/{sample}_fastp.json"]
+description = "Read QC and adapter trimming"
+shell = """
+mkdir -p trimmed qc
+fastp -i {input[0]} -I {input[1]} \
+      -o {output[0]} -O {output[1]} \
+      --json {output[2]} --thread {threads} \
+      --qualified_quality_phred 20 --length_required 50
+"""
+
+[rules.resources]
+threads = 8
+memory = "16G"
+
+[rules.environment]
+conda = "envs/fastp.yaml"
+
+[[rules]]
+name = "bwa_mem2_align"
+input = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz"]
+output = ["aligned/{sample}.sorted.bam"]
+description = "Paired-end alignment with BWA-MEM2 and coordinate sorting"
+shell = """
+mkdir -p aligned
+bwa-mem2 mem -M -t {threads} -R '@RG\tID:{sample}\tSM:{sample}\tLB:WGS\tPL:ILLUMINA\tPU:{sample}' \
+    {config.reference} {input[0]} {input[1]} \
+    | samtools sort -@ 4 -m 2G -o {output[0]}
+samtools index {output[0]}
+"""
+
+[rules.resources]
+threads = 16
+memory = "32G"
+
+# The pipe needs BOTH bwa-mem2 and samtools; single-tool docker images
+# cannot run it — use a conda environment that ships the pair.
+[rules.environment]
+conda = "envs/alignment.yaml"
+
+[[rules]]
+name = "mark_duplicates"
+input = ["aligned/{sample}.sorted.bam"]
+output = ["dedup/{sample}.dedup.bam", "dedup/{sample}.dedup.metrics.txt"]
+description = "Mark PCR and optical duplicates"
+shell = """
+mkdir -p dedup
+gatk MarkDuplicates \
+    -I {input[0]} \
+    -O {output[0]} \
+    -M {output[1]} \
+    --CREATE_INDEX true
+"""
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "base_recalibration"
+input = ["dedup/{sample}.dedup.bam"]
+output = ["bqsr/{sample}.recal.bam"]
+description = "Base quality score recalibration (BQSR)"
+shell = """
+mkdir -p bqsr
+gatk BaseRecalibrator \
+    -I {input[0]} -R {config.reference} \
+    --known-sites {config.known_sites} \
+    --known-sites {config.thousand_g} \
+    --known-sites {config.known_indels} \
+    -O bqsr/{sample}.recal_data.table
+
+gatk ApplyBQSR \
+    -I {input[0]} -R {config.reference} \
+    --bqsr-recal-file bqsr/{sample}.recal_data.table \
+    -O {output[0]}
+"""
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "haplotype_caller"
+input = ["bqsr/{sample}.recal.bam"]
+output = ["variants/{sample}.g.vcf.gz"]
+description = "Per-sample variant calling in GVCF mode"
+shell = """
+mkdir -p variants
+gatk HaplotypeCaller \
+    -I {input[0]} -R {config.reference} \
+    -O {output[0]} \
+    -ERC GVCF \
+    --native-pair-hmm-threads {threads} \
+    -L {config.intervals}
+"""
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "combine_gvcfs"
+input = []
+expand_inputs = [
+    { pattern = "variants/{sample}.g.vcf.gz", variables = { sample = "config.samples_list" } }
+]
+output = ["variants/cohort.g.vcf.gz"]
+description = "Combine per-sample GVCFs into a multi-sample GVCF"
+shell = """
+gatk CombineGVCFs \
+    -R {config.reference} \
+    $(for f in {input}; do echo "-V $f "; done) \
+    -O {output[0]}
+"""
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "genotype_gvcfs"
+input = ["variants/cohort.g.vcf.gz"]
+output = ["variants/cohort.genotyped.vcf.gz"]
+description = "Joint genotyping across the cohort"
+shell = """
+gatk GenotypeGVCFs \
+    -R {config.reference} \
+    -V {input[0]} \
+    -O {output[0]}
+"""
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "vqsr_snps"
+input = ["variants/cohort.genotyped.vcf.gz"]
+output = [
+    "variants/cohort.snps.recal",
+    "variants/cohort.snps.tranches"
+]
+description = "Variant Quality Score Recalibration (VQSR) for SNPs"
+shell = """
+gatk VariantRecalibrator \
+    -R {config.reference} \
+    -V {input[0]} \
+    -resource:hapmap,known=false,training=true,truth=true,prior=15.0 {config.hapmap} \
+    -resource:omni,known=false,training=true,truth=false,prior=12.0 {config.omni} \
+    -resource:1000G,known=false,training=true,truth=false,prior=10.0 {config.thousand_g} \
+    -resource:dbsnp,known=true,training=false,truth=false,prior=2.0 {config.known_sites} \
+    -an QD -an MQ -an MQRankSum -an ReadPosRankSum -an FS -an SOR \
+    -mode SNP \
+    -O {output[0]} \
+    --tranches-file {output[1]}
+"""
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "apply_vqsr_snps"
+input = [
+    "variants/cohort.genotyped.vcf.gz",
+    "variants/cohort.snps.recal",
+    "variants/cohort.snps.tranches"
+]
+output = ["variants/cohort.snps.filtered.vcf.gz"]
+description = "Apply VQSR model to filter SNPs"
+shell = """
+gatk ApplyVQSR \
+    -R {config.reference} \
+    -V {input[0]} \
+    -O {output[0]} \
+    --truth-sensitivity-filter-level 99.7 \
+    --tranches-file {input[2]} \
+    --recal-file {input[1]} \
+    -mode SNP \
+    --create-output-variant-index true
+"""
+
+[rules.resources]
+threads = 4
+memory = "8G"
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "vqsr_indels"
+input = ["variants/cohort.snps.filtered.vcf.gz"]
+output = [
+    "variants/cohort.indels.recal",
+    "variants/cohort.indels.tranches"
+]
+description = "Variant Quality Score Recalibration (VQSR) for INDELs"
+shell = """
+gatk VariantRecalibrator \
+    -R {config.reference} \
+    -V {input[0]} \
+    -resource:mills,known=false,training=true,truth=true,prior=12.0 {config.known_indels} \
+    -resource:dbsnp,known=true,training=false,truth=false,prior=2.0 {config.known_sites} \
+    -an QD -an FS -an SOR -an MQRankSum -an ReadPosRankSum \
+    -mode INDEL \
+    -O {output[0]} \
+    --tranches-file {output[1]}
+"""
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "apply_vqsr_indels"
+input = [
+    "variants/cohort.snps.filtered.vcf.gz",
+    "variants/cohort.indels.recal",
+    "variants/cohort.indels.tranches"
+]
+output = ["variants/cohort.filtered.vcf.gz"]
+description = "Apply VQSR model to filter INDELs"
+shell = """
+gatk ApplyVQSR \
+    -R {config.reference} \
+    -V {input[0]} \
+    -O {output[0]} \
+    --truth-sensitivity-filter-level 99.7 \
+    --tranches-file {input[2]} \
+    --recal-file {input[1]} \
+    -mode INDEL \
+    --create-output-variant-index true
+"""
+
+[rules.resources]
+threads = 4
+memory = "8G"
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "annotate_variants"
+input = ["variants/cohort.filtered.vcf.gz"]
+output = ["annotation/cohort.annotated.vcf.gz"]
+description = "Functional variant annotation with VEP"
+shell = """
+mkdir -p annotation
+vep --input_file {input[0]} \
+    --output_file {output[0]} \
+    --format vcf --vcf --compress_output bgzip \
+    --assembly GRCh38 --offline --cache \
+    --sift b --polyphen b --symbol --numbers --biotype \
+    --total_length --canonical --ccds \
+    --force_overwrite --fork {threads}
+"""
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+conda = "envs/vep.yaml"
+
+[report]
+template = "germline_report"
+format = ["html", "json"]
+sections = ["summary", "qc_metrics", "coverage", "variants", "annotations", "provenance"]
