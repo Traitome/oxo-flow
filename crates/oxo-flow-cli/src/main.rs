@@ -267,7 +267,11 @@ pub enum Commands {
     /// Use 'ai setup' for interactive wizard.
     #[command(name = "ai")]
     Ai {
-        #[arg(num_args = 0..=1, value_name = "ACTION", help = "test | setup")]
+        #[arg(
+            num_args = 0..=1,
+            value_name = "ACTION",
+            help = "Action to run: 'test' (comprehensive self-test) or 'setup' (interactive wizard); omit for a quick status"
+        )]
         action: Option<String>,
     },
 
@@ -438,7 +442,7 @@ pub enum Commands {
     },
     /// Generate shell completions for oxo-flow.
     Completions {
-        #[arg(value_enum)]
+        #[arg(value_enum, help = "Shell to generate completions for")]
         shell: clap_complete::Shell,
     },
     /// Manage execution profiles.
@@ -572,10 +576,12 @@ pub enum Commands {
 
 #[derive(Subcommand, Debug)]
 pub enum EnvAction {
+    /// List environments declared by a workflow (or available backends without one).
     List {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: Option<PathBuf>,
     },
+    /// Check whether a workflow's environments are ready to use.
     Check {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: Option<PathBuf>,
@@ -605,25 +611,31 @@ pub enum EnvAction {
 
 #[derive(Subcommand, Debug)]
 pub enum ProfileAction {
+    /// List all available execution profiles.
     List,
+    /// Show the contents of a named profile.
     Show {
         #[arg(value_name = "NAME", help = "Profile name")]
         name: String,
     },
+    /// Show the profile that would be used by default.
     Current,
 }
 
 #[derive(Subcommand, Debug)]
 pub enum ConfigAction {
+    /// Show a workflow's declared configuration values.
     Show {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
     },
+    /// Summarize a workflow's configuration (alias: check).
     #[command(alias = "check")]
     Stats {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
     },
+    /// Get a single configuration key's value.
     Get {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
@@ -634,6 +646,7 @@ pub enum ConfigAction {
 
 #[derive(Subcommand, Debug)]
 pub enum ClusterAction {
+    /// Generate and submit job scripts for a workflow to the cluster.
     Submit {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
@@ -662,18 +675,21 @@ pub enum ClusterAction {
         #[arg(long, help = "Generate job scripts with dependency support")]
         with_dependencies: bool,
     },
+    /// Show the status of submitted cluster jobs.
     Status {
         #[arg(short = 'b', long, help = "Cluster backend: slurm, pbs, sge, or lsf")]
         backend: String,
         #[arg(value_name = "JOB_IDS", help = "Job ID(s)")]
         job_ids: Vec<String>,
     },
+    /// Cancel submitted cluster jobs.
     Cancel {
         #[arg(short = 'b', long, help = "Cluster backend: slurm, pbs, sge, or lsf")]
         backend: String,
         #[arg(value_name = "JOB_IDS", help = "Job ID(s)")]
         job_ids: Vec<String>,
     },
+    /// Fetch logs for a submitted cluster job.
     Logs {
         #[arg(short = 'b', long, help = "Cluster backend: slurm, pbs, sge, or lsf")]
         backend: String,
