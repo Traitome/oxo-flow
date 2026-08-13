@@ -68,10 +68,21 @@ fn print_config_change_summary(
         eprintln!("  {key}: (removed)");
     }
     if !report.fingerprint_mismatches.is_empty() {
-        eprintln!(
-            "  rule definition changed: {}",
-            report.fingerprint_mismatches.join(", ")
-        );
+        // Truncate the list — a cohort-wide shell edit can mismatch hundreds
+        // of expanded rule instances (e.g. step5 × 100 samples).
+        let shown: Vec<&str> = report
+            .fingerprint_mismatches
+            .iter()
+            .take(3)
+            .map(String::as_str)
+            .collect();
+        let extra = report.fingerprint_mismatches.len().saturating_sub(3);
+        let suffix = if extra > 0 {
+            format!(", … (+{extra} more)")
+        } else {
+            String::new()
+        };
+        eprintln!("  rule definition changed: {}{}", shown.join(", "), suffix);
     }
 
     let order_set: HashSet<&str> = order.iter().map(String::as_str).collect();
