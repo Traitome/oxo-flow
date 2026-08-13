@@ -53,7 +53,7 @@ prompt_additions = [           # optional — appended to the system prompt
 |---|---|---|
 | `name` | ✅ | Unique; must match the activation entry |
 | `version` | ✅ | Semantic version |
-| `description` | ✅ | Shown in `oxo-flow ai status` |
+| `description` | ✅ | Shown in `oxo-flow ai` (status output) |
 | `skill_type` | ✅ | `"knowledge"` now; `"tool"` is reserved for the MCP phase |
 | `author`, `domains`, `prompt_additions`, `requires`, `entry` | — | Optional |
 
@@ -86,7 +86,7 @@ Project-level activation can also live in `<project>/.oxo-flow/ai.toml`
 
 ```bash
 # Lists discovered skills (user + project level) — no AI provider needed
-oxo-flow ai status
+oxo-flow ai
 ```
 
 ```
