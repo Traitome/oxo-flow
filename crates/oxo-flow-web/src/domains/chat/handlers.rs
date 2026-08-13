@@ -26,26 +26,12 @@ fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)>
 
 /// POST /api/chat/send — SSE streaming chat endpoint.
 ///
-/// Sends a message to the AI companion and streams the response as SSE events.
-/// Events: agent (status updates) → text (response chunks) → action (structured actions) → done (completion).
+/// Runs the REAL agent loop (oxo-flow-ai Orchestrator with the web tool
+/// registry) and forwards its events as typed SSE:
+/// `status` → `tool_call` → `tool_result` → `text` → `action` → `done` | `error`.
 pub async fn chat_send(
     Json(req): Json<ChatRequest>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
-    // Load templates
-    let templates: Vec<String> = if let Ok(pool) = get_pool() {
-        sqlx::query_as::<_, models::TemplateRow>(
-            "SELECT * FROM templates ORDER BY usage_count DESC LIMIT 20",
-        )
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|t| t.name)
-        .collect()
-    } else {
-        vec![]
-    };
-
     let message = req.message.clone();
     let context = req.context.clone();
     let session_id = req
@@ -53,120 +39,94 @@ pub async fn chat_send(
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
+    let run = service::spawn_chat_agent(message, session_id.clone(), context);
+
     let stream = async_stream::stream! {
-        // Event: processing started
-        yield Ok::<_, Infallible>(Event::default()
-            .event("agent")
-            .data(serde_json::json!({
-                "agent": "Orchestrator",
-                "status": "Understanding your intent...",
-                "progress": 0.1
-            }).to_string()));
-
-        let intent = if let Some(ref ctx) = context {
-            if let Some(ref i) = ctx.intent { i.clone() } else {
-                service::infer_intent(&message)
-            }
-        } else {
-            service::infer_intent(&message)
-        };
-
-        yield Ok::<_, Infallible>(Event::default()
-            .event("agent")
-            .data(serde_json::json!({
-                "agent": "Orchestrator",
-                "status": format!("Detected intent: {intent}"),
-                "progress": 0.2
-            }).to_string()));
-
-        // Data Agent if paths provided
-        if let Some(ref ctx) = context
-            && let Some(ref paths) = ctx.data_paths
-            && !paths.is_empty()
-        {
-                    yield Ok::<_, Infallible>(Event::default()
-                        .event("agent")
-                        .data(serde_json::json!({
-                            "agent": "DataAgent",
-                            "status": "Scanning data files...",
-                            "progress": 0.3
-                        }).to_string()));
-
-                    let data_report = service::analyze_data_paths(paths);
-                    if let Some(ref report) = data_report {
-                        yield Ok::<_, Infallible>(Event::default()
-                            .event("action")
-                            .data(serde_json::json!({
-                                "action_type": "data_report",
-                                "data": report
-                            }).to_string()));
-                    }
-        }
-
-        // Generate pipeline
-        yield Ok::<_, Infallible>(Event::default()
-            .event("agent")
-            .data(serde_json::json!({
-                "agent": "ToolExpert",
-                "status": "Generating pipeline...",
-                "progress": 0.5
-            }).to_string()));
-
-        let result = service::process_chat(&message, Some(&session_id), context.as_ref(), &templates).await;
-
-        match result {
-            Ok((ai_text, pipeline_data)) => {
-                // Stream the AI response text in chunks
-                let chunks: Vec<&str> = ai_text.split_inclusive(['.', '\n']).collect();
-                for chunk in chunks {
-                    if !chunk.trim().is_empty() {
-                        yield Ok::<_, Infallible>(Event::default()
-                            .event("text")
-                            .data(serde_json::json!({"chunk": chunk}).to_string()));
+        let mut events = run.events;
+        let mut outcome_rx = Some(run.outcome);
+        loop {
+            tokio::select! {
+                event = events.recv() => {
+                    match event {
+                        Some(oxo_flow_ai::agent::events::AgentEvent::Status(msg)) => {
+                            yield Ok::<_, Infallible>(Event::default()
+                                .event("status")
+                                .data(serde_json::json!({"message": msg}).to_string()));
+                        }
+                        Some(oxo_flow_ai::agent::events::AgentEvent::ToolCall { name, args }) => {
+                            yield Ok::<_, Infallible>(Event::default()
+                                .event("tool_call")
+                                .data(serde_json::json!({"name": name, "args": args}).to_string()));
+                        }
+                        Some(oxo_flow_ai::agent::events::AgentEvent::ToolResult { name, summary }) => {
+                            yield Ok::<_, Infallible>(Event::default()
+                                .event("tool_result")
+                                .data(serde_json::json!({"name": name, "summary": summary}).to_string()));
+                        }
+                        Some(oxo_flow_ai::agent::events::AgentEvent::Text(text)) => {
+                            yield Ok::<_, Infallible>(Event::default()
+                                .event("text")
+                                .data(serde_json::json!({"chunk": text}).to_string()));
+                        }
+                        Some(other) => {
+                            yield Ok::<_, Infallible>(Event::default()
+                                .event("status")
+                                .data(serde_json::json!({"message": format!("{other:?}")}).to_string()));
+                        }
+                        None => break,
                     }
                 }
-
-                // Validate
-                yield Ok::<_, Infallible>(Event::default()
-                    .event("agent")
-                    .data(serde_json::json!({
-                        "agent": "ValidatorAgent",
-                        "status": "Validating pipeline...",
-                        "progress": 0.85
-                    }).to_string()));
-
-                let valid = pipeline_data["validation"]["valid"].as_bool().unwrap_or(false);
-                yield Ok::<_, Infallible>(Event::default()
-                    .event("agent")
-                    .data(serde_json::json!({
-                        "agent": "ValidatorAgent",
-                        "status": if valid { "Pipeline valid ✓" } else { "Pipeline has warnings" },
-                        "progress": 0.9
-                    }).to_string()));
-
-                // Send the pipeline action
-                yield Ok::<_, Infallible>(Event::default()
-                    .event("action")
-                    .data(serde_json::json!({
-                        "action_type": "pipeline_ready",
-                        "data": pipeline_data
-                    }).to_string()));
-
-                // Done
-                yield Ok::<_, Infallible>(Event::default()
-                    .event("done")
-                    .data(serde_json::json!({
-                        "session_id": session_id,
-                        "pipeline_id": pipeline_data["pipeline_id"]
-                    }).to_string()));
-            }
-            Err(e) => {
-                yield Ok::<_, Infallible>(Event::default()
-                    .event("error")
-                    .data(serde_json::json!({
-                        "code": "CHAT_ERROR",
-                        "message": e
-                    }).to_string()));
+                result = async {
+                    match outcome_rx.as_mut() {
+                        Some(rx) => rx.await.ok(),
+                        // Already consumed: never resolve again — the stream
+                        // terminates when the event channel drains (None).
+                        None => std::future::pending::<
+                            Option<Result<oxo_flow_ai::agent::AgentOutcome, String>>,
+                        >()
+                        .await,
+                    }
+                }, if outcome_rx.is_some() => {
+                    outcome_rx = None;
+                    match result {
+                        Some(Ok(outcome)) => {
+                            if let Some(toml) = outcome.content.as_deref() {
+                                let validation = crate::domains::workflow::service::validate_pipeline(toml)
+                                    .map(|v| serde_json::json!({
+                                        "valid": v.valid,
+                                        "errors": v.errors.iter().map(|e| serde_json::json!({
+                                            "code": e.code, "message": e.message, "suggestion": e.suggestion
+                                        })).collect::<Vec<_>>()
+                                    }))
+                                    .unwrap_or(serde_json::json!({"valid": false, "errors": []}));
+                                yield Ok::<_, Infallible>(Event::default()
+                                    .event("action")
+                                    .data(serde_json::json!({
+                                        "action_type": "pipeline_ready",
+                                        "data": {
+                                            "toml_content": toml,
+                                            "validation": validation,
+                                        }
+                                    }).to_string()));
+                            }
+                            yield Ok::<_, Infallible>(Event::default()
+                                .event("done")
+                                .data(serde_json::json!({
+                                    "session_id": session_id,
+                                    "rounds": outcome.rounds,
+                                }).to_string()));
+                        }
+                        Some(Err(e)) => {
+                            yield Ok::<_, Infallible>(Event::default()
+                                .event("error")
+                                .data(serde_json::json!({
+                                    "code": "CHAT_ERROR",
+                                    "message": e
+                                }).to_string()));
+                        }
+                        None => unreachable!("pending future never resolves"),
+                    }
+                }
             }
         }
     };

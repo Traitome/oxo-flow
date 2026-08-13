@@ -122,6 +122,14 @@ impl AiRegistry {
         Ok(())
     }
 
+    /// Replace the active provider directly (test support — e.g. injecting
+    /// a `ScriptedBackend` for deterministic runs without network access).
+    pub fn set_provider(&self, provider: AiProvider) {
+        if let Ok(mut p) = AI.provider.write() {
+            *p = Some(provider);
+        }
+    }
+
     /// Check if AI features are enabled.
     ///
     /// Returns `false` if AI is disabled or not configured. All AI code
