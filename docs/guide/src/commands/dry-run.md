@@ -26,6 +26,7 @@ oxo-flow dry-run [OPTIONS] [WORKFLOW]
 |---|---|---|
 | `--target` | `-t` | Run only specific target rules and their dependencies (repeatable, prefix matching) |
 | `--samples <LIST>` | — | Preview only a subset of samples: `first:N` (pilot), explicit names, or `ready` (samples whose entry inputs are complete; repeatable, comma-separated) |
+| `--workdir <DIR>` | — | Resolve relative paths against this directory (default: the workflow file's directory) |
 | `--ai` | — | Enable AI-powered analysis of the workflow |
 | `--ai-max-retries <N>` | — | Maximum AI analysis rounds (overrides `[ai]` config) |
 | `--verbose` | `-v` | Enable debug-level logging |

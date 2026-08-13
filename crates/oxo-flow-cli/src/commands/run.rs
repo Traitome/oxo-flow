@@ -1618,10 +1618,14 @@ pub async fn dry_run_command(
     ai: bool,
     _ai_max_retries: Option<u32>,
     samples_filter: Vec<String>,
+    workdir: Option<PathBuf>,
 ) -> Result<()> {
     print_banner();
     let workflow = resolve_workflow(workflow)?;
     let workflow_dir = oxo_flow_core::parent_dir(&workflow).to_path_buf();
+    // Path resolution base: --workdir wins, default is the workflow file's
+    // directory — the same base the executor uses for run (issue #68).
+    let base_dir = workdir.as_deref().unwrap_or(&workflow_dir);
 
     let mut config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
@@ -1631,7 +1635,7 @@ pub async fn dry_run_command(
     // the full cohort so the readiness section stays informative even when
     // the listing is filtered (issue #63).
     let ready_report = if !samples_filter.is_empty() {
-        samples::apply_samples_filter(&mut config, &samples_filter, false, &workflow_dir)?
+        samples::apply_samples_filter(&mut config, &samples_filter, false, base_dir)?
     } else {
         None
     };
@@ -1715,8 +1719,7 @@ pub async fn dry_run_command(
     let readiness_report = match ready_report {
         Some(report) => Some(report),
         None => Some(oxo_flow_core::readiness::compute_readiness(
-            &config,
-            &workflow_dir,
+            &config, base_dir,
         )),
     };
     if let Some(report) = &readiness_report {
@@ -1778,7 +1781,7 @@ pub async fn dry_run_command(
         for inp in &rule.input {
             let s = inp.to_string();
             if !s.contains('{') && !s.contains('*') && !s.starts_with('/') {
-                let exists = workflow_dir.join(&s).exists();
+                let exists = base_dir.join(&s).exists();
                 let icon = if exists { "✓" } else { "✗" };
                 eprintln!("     input {}: {}", icon, s);
             }

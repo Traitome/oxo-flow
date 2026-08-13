@@ -31,6 +31,7 @@ catch issues early.
 | `--run` | — | — | Execute the workflow after validation and lint (runs for real) |
 | `--jobs` | `-j` | `1` | Number of parallel jobs (only with `--run`) |
 | `--samples` | — | — | Test only a subset of samples: `first:N` (pilot), explicit names, or `ready` (complete entry inputs; repeatable, comma-separated) |
+| `--workdir` | — | — | Working directory for the test run (default: the workflow file's directory) |
 | `--deep` | — | — | Run deep health checks (script files, env YAML files, backend binaries, reference data) |
 
 ---

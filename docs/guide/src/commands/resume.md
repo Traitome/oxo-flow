@@ -38,6 +38,7 @@ only the affected rules and their downstream re-execute. See
 | `-j, --jobs <JOBS>` | Number of parallel jobs (default: 1) |
 | `--ai-recover` | Enable AI error recovery on rule failure |
 | `--ai-max-retries <N>` | Maximum AI retries (overrides `[ai]` config) |
+| `--workdir <DIR>` | Working directory to resume in (default: the one recorded in the checkpoint) |
 
 ## Examples
 

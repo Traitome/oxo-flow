@@ -75,7 +75,10 @@ pub async fn validate_command(
                 }
             }
 
-            // Check for missing input files (skip for --as-include)
+            // Check for missing input files (skip for --as-include).
+            // Relative paths resolve against the workflow file's directory —
+            // the same base the executor uses at run time (issue #68).
+            let workflow_dir = oxo_flow_core::parent_dir(&workflow);
             let mut missing_inputs = Vec::new();
             if !as_include {
                 for rule in &cfg.rules {
@@ -83,7 +86,7 @@ pub async fn validate_command(
                         // Only check if it's not a wildcard path and doesn't exist
                         if !input.contains('{')
                             && !input.contains('}')
-                            && !Path::new(input).exists()
+                            && !workflow_dir.join(input).exists()
                         {
                             // Also check if it's an output of another rule
                             let is_generated =
@@ -667,6 +670,7 @@ pub async fn watch_command(workflow: PathBuf, auto_run: bool, jobs: usize) -> Re
                             false,  // ai
                             None,   // ai_max_retries
                             vec![], // samples_filter (watch: run everything)
+                            None,   // workdir (watch: workflow directory)
                         )
                         .await;
                     }

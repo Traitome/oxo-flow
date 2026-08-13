@@ -27,6 +27,7 @@ oxo-flow clean [OPTIONS] <WORKFLOW>
 | `--dry-run` | `-n` | — | Show what would be cleaned without deleting |
 | `--force` | — | — | Actually delete files (without it, clean defaults to dry-run) |
 | `--orphans` | — | — | Clean orphaned temporary files (chunks from interrupted transforms) |
+| `--workdir` | — | — | Working directory for `.oxo-flow` artifacts (default: the workflow file's directory) |
 | `--verbose` | `-v` | — | Enable debug-level logging |
 
 ---

@@ -193,6 +193,11 @@ pub enum Commands {
         /// Maximum AI retries (overrides [ai] config).
         #[arg(long = "ai-max-retries", value_name = "N")]
         ai_max_retries: Option<u32>,
+        #[arg(
+            long,
+            help = "Working directory to resume in (default: the one recorded in the checkpoint)"
+        )]
+        workdir: Option<PathBuf>,
     },
     /// Preview execution without running any commands.
     DryRun {
@@ -218,6 +223,11 @@ pub enum Commands {
             help = "Preview only these samples: first:N (pilot), explicit names, or ready (complete inputs; repeatable, comma-separated)"
         )]
         samples_filter: Vec<String>,
+        #[arg(
+            long,
+            help = "Working directory to resolve paths against (default: the workflow file's directory)"
+        )]
+        workdir: Option<PathBuf>,
     },
     /// Validate a .oxoflow workflow file.
     Validate {
@@ -350,6 +360,11 @@ pub enum Commands {
             help = "Remove orphaned transform chunk directories (.oxo-flow/chunks)"
         )]
         orphans: bool,
+        #[arg(
+            long,
+            help = "Working directory for .oxo-flow artifacts (default: the workflow file's directory)"
+        )]
+        workdir: Option<PathBuf>,
     },
     /// Manage software environments.
     Env {
@@ -415,6 +430,11 @@ pub enum Commands {
             help = "AI result interpretation — plain-language summary of execution outcomes, caveats, and next steps"
         )]
         ai: bool,
+        #[arg(
+            long,
+            help = "Working directory to look for .oxo-flow in (default: the workflow file's directory)"
+        )]
+        workdir: Option<PathBuf>,
     },
     /// Package a workflow into a container image.
     Package {
@@ -559,6 +579,11 @@ pub enum Commands {
             help = "Run deep checks: script files, env YAML files, backend binaries, reference data"
         )]
         deep: bool,
+        #[arg(
+            long,
+            help = "Working directory for the test run (default: the workflow file's directory)"
+        )]
+        workdir: Option<PathBuf>,
     },
     /// Publish a workflow with its environment files into a bundle.
     Publish {
@@ -921,13 +946,15 @@ async fn main() -> Result<()> {
             jobs,
             ai_recover,
             ai_max_retries,
-        } => resume_command(checkpoint, jobs, ai_recover, ai_max_retries, None).await?,
+            workdir,
+        } => resume_command(checkpoint, jobs, ai_recover, ai_max_retries, workdir).await?,
         Commands::DryRun {
             workflow,
             target,
             ai,
             ai_max_retries,
             samples_filter,
+            workdir,
         } => {
             dry_run_command(
                 workflow,
@@ -937,6 +964,7 @@ async fn main() -> Result<()> {
                 ai,
                 ai_max_retries,
                 samples_filter,
+                workdir,
             )
             .await?
         }
@@ -984,7 +1012,8 @@ async fn main() -> Result<()> {
             dry_run,
             force,
             orphans,
-        } => clean_command(workflow, dry_run, force, orphans, None)?,
+            workdir,
+        } => clean_command(workflow, dry_run, force, orphans, workdir)?,
         Commands::Env { action } => env_command(action).await?,
         Commands::Format {
             workflow,
@@ -1008,7 +1037,8 @@ async fn main() -> Result<()> {
             output,
             checkpoint_path,
             ai,
-        } => handle_report(workflow, format, output, checkpoint_path, ai, None).await?,
+            workdir,
+        } => handle_report(workflow, format, output, checkpoint_path, ai, workdir).await?,
         Commands::Package {
             workflow,
             format,
@@ -1112,6 +1142,7 @@ async fn main() -> Result<()> {
             jobs,
             samples_filter,
             deep,
+            workdir,
         } => {
             use colored::Colorize;
             eprintln!(
@@ -1135,6 +1166,7 @@ async fn main() -> Result<()> {
                 false,
                 None,
                 samples_filter.clone(),
+                workdir.clone(),
             )
             .await?;
             // 4. Optional: deep health checks (issue #64)
@@ -1149,7 +1181,7 @@ async fn main() -> Result<()> {
                     Some(workflow),
                     jobs,
                     false,           // keep_going
-                    None,            // workdir
+                    workdir.clone(), // workdir
                     vec![],          // target
                     0,               // retry
                     "0".to_string(), // timeout

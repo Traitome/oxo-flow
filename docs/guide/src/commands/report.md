@@ -28,6 +28,7 @@ oxo-flow report [OPTIONS] <WORKFLOW>
 | `--output` | `-o` | stdout | Output file path |
 | `--checkpoint` | — | `.oxo-flow/checkpoint.json` | Path to checkpoint file for execution metrics |
 | `--ai` | — | — | AI result interpretation — plain-language summary of execution outcomes, caveats, and next steps |
+| `--workdir` | — | — | Working directory to look for `.oxo-flow` in (default: the workflow file's directory) |
 | `--verbose` | `-v` | — | Enable debug-level logging |
 
 ---
