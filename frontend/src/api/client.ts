@@ -87,7 +87,7 @@ export const api = {
   analyzeData: (paths: string[], maxDepth = 2) => post<DataAnalysis>('/api/data/analyze', { paths, max_depth: maxDepth }),
   perceiveData: (paths?: string[], description?: string) => post<DataPerceptionReport>('/api/data/perceive', { paths, description }),
   discoverReference: (genome: string, components: string[]) => post<ReferenceResult>('/api/data/reference', { genome, components }),
-  referenceStatus: () => get<{ installed: any[]; missing: string[] }>('/api/data/reference/status'),
+  referenceStatus: () => get<{ installed: Array<Record<string, unknown>>; missing: string[] }>('/api/data/reference/status'),
 
   // ── Execution ──
   createRun: (
@@ -110,7 +110,7 @@ export const api = {
   // ── Report ──
   runReport: (id: string) => get<ReportData>(`/api/runs/${id}/report`),
   askReport: (id: string, question: string) => post<string>(`/api/runs/${id}/report/ask`, { question }),
-  visualizeReport: (id: string, type: string) => post<any>(`/api/runs/${id}/report/visualize`, { type }),
+  visualizeReport: (id: string, type: string) => post<{ chart_type: string; data: unknown[]; spec: Record<string, unknown> }>(`/api/runs/${id}/report/visualize`, { type }),
 
   // ── AI Companion ──
   aiConfig: () => get<AiConfig>('/api/ai/config'),
@@ -128,7 +128,7 @@ export const api = {
 
   // ── Chat ──
   chatSessions: () => get<Array<{ id: string; title: string; updated_at: string }>>('/api/chat/sessions'),
-  chatSendJson: (message: string, context?: any) => post<any>('/api/chat/send/json', { message, context }),
+  chatSendJson: (message: string, context?: Record<string, unknown>) => post<{ reply: string }>('/api/chat/send/json', { message, context }),
 
   // ── Templates ──
   listTemplates: () => get<Template[]>('/api/templates'),

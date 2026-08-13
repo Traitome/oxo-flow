@@ -3,8 +3,8 @@ import { useEffect, useRef } from 'react';
 import embed from 'vega-embed';
 
 interface VegaChartProps {
-  spec: any;
-  data?: any[];
+  spec: Record<string, unknown>;
+  data?: Array<Record<string, unknown>>;
   title?: string;
 }
 
@@ -17,7 +17,7 @@ export default function VegaChart({ spec, data, title }: VegaChartProps) {
     const fullSpec = {
       ...spec,
       data: data ? { values: data } : spec.data || { values: [] },
-      width: 'container' as any,
+      width: 'container' as unknown as number,
       height: 300,
       autosize: {
         type: 'fit' as const,
@@ -42,7 +42,7 @@ export default function VegaChart({ spec, data, title }: VegaChartProps) {
       },
     };
 
-    embed(containerRef.current, fullSpec, {
+    embed(containerRef.current, fullSpec as unknown as Parameters<typeof embed>[1], {
       actions: { export: true, source: false, compiled: false, editor: false },
       renderer: 'canvas',
     });

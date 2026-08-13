@@ -19,7 +19,7 @@ const PLACEHOLDERS: Record<ChatContextType, string> = {
 interface ChatUIProps {
   context?: ChatContextType;
   onPipelineReady?: (data: { toml_content?: string; validation?: unknown; pipeline_id?: string }) => void;
-  onDataReport?: (report: any) => void;
+  onDataReport?: (report: Record<string, unknown>) => void;
 }
 
 export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatUIProps) {
@@ -136,9 +136,10 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
         setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, agentStatus: undefined } : m));
       }
       setAgents({});
-    } catch (e: any) {
+    } catch (e: unknown) {
+      const errMsg = e instanceof Error ? e.message : 'Connection error.';
       setMessages(prev => prev.map(m =>
-        m.id === assistantId ? { ...m, content: m.content + `\n❌ ${e.message || 'Connection error.'}`, agentStatus: undefined } : m
+        m.id === assistantId ? { ...m, content: m.content + `\n❌ ${errMsg}`, agentStatus: undefined } : m
       ));
     }
     setLoading(false);

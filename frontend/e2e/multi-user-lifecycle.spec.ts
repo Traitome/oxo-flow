@@ -10,7 +10,7 @@ test.describe('Multi-User Lifecycle Simulation', () => {
       data: { username: 'admin', password: 'admin' },
     });
     expect(loginResp.ok() || loginResp.status() === 401).toBeTruthy();
-    const loginBody = await loginResp.json();
+    await loginResp.json();
 
     // If auth failed, try creating the user anyway (personal mode, no auth needed)
     const createResp = await request.post('/api/users', {

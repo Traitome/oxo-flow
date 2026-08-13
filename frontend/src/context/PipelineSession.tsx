@@ -213,6 +213,7 @@ export function PipelineSessionProvider({ children }: { children: ReactNode }) {
   return <SessionCtx.Provider value={ctx}>{children}</SessionCtx.Provider>;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function usePipelineSession(): SessionContextValue {
   const ctx = useContext(SessionCtx);
   if (!ctx) throw new Error('usePipelineSession must be used within PipelineSessionProvider');

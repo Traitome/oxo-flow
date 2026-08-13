@@ -49,7 +49,10 @@ export default function MonitorReport() {
 
   useEffect(() => {
     if (routeId && routeId !== selId) {
-      selectRun(routeId);
+      // Defer to a macrotask: selectRun triggers several state updates and
+      // must not run synchronously inside the effect body.
+      const timer = setTimeout(() => selectRun(routeId), 0);
+      return () => clearTimeout(timer);
     }
   }, [routeId, selectRun, selId]);
 
@@ -237,7 +240,7 @@ export default function MonitorReport() {
         {/* QC Stats */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.5rem', marginBottom: '1rem' }}>
           <StatCard value={`${reportData.qc_summary?.total_files || 0}`} label="Output Files" color="#059669" />
-          <StatCard value={reportData.qc_summary?.total_size_mb || '0'} label="Total Size (MB)" />
+          <StatCard value={String(reportData.qc_summary?.total_size_mb || '0')} label="Total Size (MB)" />
           <StatCard value={`${reportData.qc_summary?.directories || 0}`} label="Directories" />
           <StatCard value={reportData.key_findings.length > 0 ? `${reportData.key_findings.length}` : '0'} label="Findings" color={reportData.key_findings.length > 0 ? '#D97706' : '#059669'} />
         </div>

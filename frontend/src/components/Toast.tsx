@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 
 interface ToastItem { id: number; message: string; type: 'success' | 'error' | 'info'; }
 let toastId = 0;
+// eslint-disable-next-line react-refresh/only-export-components
 let addToastFn: ((msg: string, type: 'success' | 'error' | 'info') => void) | null = null;
 
 export function showToast(message: string, type: 'success' | 'error' | 'info' = 'info') {

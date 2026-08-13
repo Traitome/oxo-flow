@@ -608,6 +608,10 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Lint the SPA
+        working-directory: frontend
+        run: npm run lint
+
       - name: Build the SPA
         working-directory: frontend
         run: npm run build
