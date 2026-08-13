@@ -458,6 +458,37 @@ router untouched until the deferred cleanup).
 
 ---
 
+## 9b. Phase Status (updated as phases land)
+
+- **P0** — complete (see §2.2 fix table; commits df32ce1..c4a716a).
+- **P2** — complete (commits b90973a..9660f97): dag edit API full-rule
+  editing, edge kinds, knowledge endpoints, React Flow canvas + inspector +
+  grounded palette, monitor reuse, cytoscape removed. 62/62 e2e + live
+  browser verification (palette → inspector → dashed file edge).
+- **P3** — complete (commits 2be138b..9cd09b6): `AiProvider::chat_stream`
+  (openai-compatible SSE), `Orchestrator::execute_with_sink` (`AgentEvent`
+  stream + `AtomicBool` cancellation), web chat runs the real tool-calling
+  loop (`lookup_tool`/`lookup_skill`/`lookup_pipeline`/`fetch_url`) with typed
+  SSE (`status|tool_call|tool_result|text|action|done|error`), ChatUI renders
+  grounded tool-call cards, AI config restored from DB at startup
+  (was lost on restart). 404 web-crate tests + 63/63 e2e green.
+- **Deviations from §6.3** (documented honestly):
+  - Orchestrator `Text` events carry complete per-round responses, not token
+    deltas — the agent loop is full-response by design. Token streaming
+    exists via `chat_stream` for single-shot calls; wiring deltas through
+    the tool loop is future work.
+  - Cancellation is an `Arc<AtomicBool>`-style flag (spec said
+    CancellationToken) — dependency-free, same semantics.
+  - No run-diagnosis tools in the chat registry yet (run_id scoping) — the
+    registry carries the knowledge lookups; diagnosis tools are P1/P4.
+  - **Live DeepSeek round-trip NOT performed**: no API key exists in this
+    environment (the persisted config has no `api_key` and no key env var is
+    set). The streaming path is covered by ScriptedBackend integration tests
+    + SSE parser unit tests; a real-key round-trip remains a TODO for the
+    user's machine.
+- **P1/P4** — pending (run options, template loading, report stubs,
+  CI frontend job, dead-code cleanup).
+
 ## 10. Phased Roadmap
 
 | Phase | Content | Exit criteria |
