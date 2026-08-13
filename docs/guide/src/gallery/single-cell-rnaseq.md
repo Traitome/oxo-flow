@@ -60,7 +60,7 @@ cellranger count --id={sample} \
                  --sample={sample} \
                  --transcriptome={config.reference} \
                  --localcores={threads} \
-                 --localmem=60
+                 --localmem=60  # keep in sync with memory = "64G" (leave headroom)
 """
 
 [rules.resources]
@@ -73,8 +73,8 @@ docker = "10xgenomics/cellranger:7.1.0"
 [[rules]]
 name = "clustering_analysis"
 input = ["counts/{sample}/outs/filtered_feature_bc_matrix.h5"]
-output = ["analysis/{sample}/seurat_object.rds", "analysis/{sample}/tsne_plot.png"]
-description = "Cell clustering and visualization with Seurat"
+output = ["analysis/{sample}/seurat_object.rds", "analysis/{sample}/umap_plot.png"]
+description = "Cell clustering and visualization with Seurat (UMAP)"
 shell = """
 mkdir -p analysis/{sample}
 Rscript scripts/seurat_analysis.R --input {input[0]} --output-dir analysis/{sample}/
@@ -89,7 +89,7 @@ conda = "envs/seurat.yaml"
 
 [[rules]]
 name = "generate_sc_report"
-input = ["analysis/{sample}/seurat_object.rds", "analysis/{sample}/tsne_plot.png"]
+input = ["analysis/{sample}/seurat_object.rds", "analysis/{sample}/umap_plot.png"]
 output = ["results/{sample}.sc_report.html"]
 description = "Generate single-cell analysis report"
 shell = """
@@ -112,7 +112,7 @@ Traditional "bulk" RNA-seq measures the average expression across thousands of c
 - **Regulatory Networks** — Infer gene regulatory relationships from co-expression across cells
 
 !!! note "Auxiliary files"
-    This workflow expects a few user-provided files next to the `.oxoflow` definition: `scripts/seurat_analysis.R` (QC, normalization, clustering, t-SNE), `templates/sc_report.Rmd` (the report template), and the Conda environment files under `envs/`. They are omitted from the gallery to keep the example focused on the workflow structure.
+    This workflow expects a few user-provided files next to the `.oxoflow` definition: `scripts/seurat_analysis.R` (QC, normalization, clustering, UMAP), `templates/sc_report.Rmd` (the report template), and the Conda environment files under `envs/`. They are omitted from the gallery to keep the example focused on the workflow structure.
 
 ### Computational Challenges
 

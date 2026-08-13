@@ -4,7 +4,7 @@ A complete whole-genome sequencing (WGS) germline variant calling pipeline follo
 
 !!! info "Concepts Covered"
     - GATK best-practices workflow
-    - Ten-rule cohort DAG with a branching VQSR path
+    - Twelve-rule cohort DAG with a branching VQSR path
     - Cohort joint genotyping with CombineGVCFs
     - Mixed environments (conda, docker, singularity)
     - Clinical-grade variant annotation with VEP
@@ -23,7 +23,9 @@ graph TD
     G --> H[vqsr_snps]
     G --> I[apply_vqsr_snps]
     H --> I
-    I --> J[annotate_variants]
+    I --> J[vqsr_indels]
+    J --> K[apply_vqsr_indels]
+    K --> L[annotate_variants]
 ```
 
 **Steps:**
@@ -37,7 +39,9 @@ graph TD
 7. **genotype_gvcfs** — Joint genotyping across the cohort
 8. **vqsr_snps** — Variant Quality Score Recalibration (VQSR) for SNPs
 9. **apply_vqsr_snps** — Apply the VQSR model to filter the cohort's SNPs
-10. **annotate_variants** — Functional annotation with Ensembl VEP
+10. **vqsr_indels** — Variant Quality Score Recalibration (VQSR) for INDELs
+11. **apply_vqsr_indels** — Apply the VQSR model to filter the cohort's INDELs
+12. **annotate_variants** — Functional annotation with Ensembl VEP
 
 ## Workflow Definition
 
@@ -53,8 +57,11 @@ author = "oxo-flow examples"
 [config]
 reference = "/data/references/GRCh38/genome.fa"
 known_sites = "/data/references/GRCh38/dbsnp_146.hg38.vcf.gz"
-known_indels = "/data/references/GRCh38/Mills_and_1000G.indels.hg38.vcf.gz"
+known_indels = "/data/references/GRCh38/Mills_and_1000G_gold_standard.indels.hg38.vcf.gz"
 intervals = "/data/references/GRCh38/wgs_calling_regions.hg38.interval_list"
+hapmap = "/data/references/GRCh38/hapmap_3.3.hg38.vcf.gz"
+omni = "/data/references/GRCh38/1000G_omni2.5.hg38.vcf.gz"
+thousand_g = "/data/references/GRCh38/1000G_phase1.snps.high_confidence.hg38.vcf.gz"
 
 [[sample_groups]]
 name = "cohort"
@@ -91,9 +98,9 @@ output = ["aligned/{sample}.sorted.bam"]
 description = "Paired-end alignment with BWA-MEM2 and coordinate sorting"
 shell = """
 mkdir -p aligned
-bwa-mem2 mem -t {threads} -R '@RG\\tID:{sample}\\tSM:{sample}\\tPL:ILLUMINA' \
+bwa-mem2 mem -t {threads} -R '@RG\\tID:{sample}\\tSM:{sample}\\tLB:WGS\\tPL:ILLUMINA\\tPU:{sample}' \
     {config.reference} {input[0]} {input[1]} \
-    | samtools sort -@ 4 -m 2G -o {output[0]}
+    | samtools sort -@ {threads} -m 2G -o {output[0]}
 samtools index {output[0]}
 """
 
@@ -231,7 +238,10 @@ shell = """
 gatk VariantRecalibrator \
     -R {config.reference} \
     -V {input[0]} \
-    -resource:hapmap,known=false,training=true,truth=true,prior=15.0 {config.known_sites} \
+    -resource:hapmap,known=false,training=true,truth=true,prior=15.0 {config.hapmap} \
+    -resource:omni,known=false,training=true,truth=false,prior=12.0 {config.omni} \
+    -resource:1000G,known=false,training=true,truth=false,prior=10.0 {config.thousand_g} \
+    -resource:dbsnp,known=true,training=false,truth=false,prior=2.0 {config.known_sites} \
     -an QD -an MQ -an MQRankSum -an ReadPosRankSum -an FS -an SOR \
     -mode SNP \
     -O {output[0]} \
@@ -252,17 +262,73 @@ input = [
     "variants/cohort.snps.recal",
     "variants/cohort.snps.tranches"
 ]
-output = ["variants/cohort.filtered.vcf.gz"]
+output = ["variants/cohort.snps.filtered.vcf.gz"]
 description = "Apply VQSR model to filter SNPs"
 shell = """
 gatk ApplyVQSR \
     -R {config.reference} \
     -V {input[0]} \
     -O {output[0]} \
-    --truth-sensitivity-filter-level 99.0 \
+    --truth-sensitivity-filter-level 99.7 \
     --tranches-file {input[2]} \
     --recal-file {input[1]} \
-    -mode SNP
+    -mode SNP \
+    --create-output-variant-index true
+"""
+
+[rules.resources]
+threads = 4
+memory = "8G"
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "vqsr_indels"
+input = ["variants/cohort.snps.filtered.vcf.gz"]
+output = [
+    "variants/cohort.indels.recal",
+    "variants/cohort.indels.tranches"
+]
+description = "Variant Quality Score Recalibration (VQSR) for INDELs"
+shell = """
+gatk VariantRecalibrator \
+    -R {config.reference} \
+    -V {input[0]} \
+    -resource:mills,known=false,training=true,truth=true,prior=12.0 {config.known_indels} \
+    -resource:dbsnp,known=true,training=false,truth=false,prior=2.0 {config.known_sites} \
+    -an QD -an FS -an SOR -an MQRankSum -an ReadPosRankSum \
+    -mode INDEL \
+    -O {output[0]} \
+    --tranches-file {output[1]}
+"""
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "apply_vqsr_indels"
+input = [
+    "variants/cohort.snps.filtered.vcf.gz",
+    "variants/cohort.indels.recal",
+    "variants/cohort.indels.tranches"
+]
+output = ["variants/cohort.filtered.vcf.gz"]
+description = "Apply VQSR model to filter INDELs"
+shell = """
+gatk ApplyVQSR \
+    -R {config.reference} \
+    -V {input[0]} \
+    -O {output[0]} \
+    --truth-sensitivity-filter-level 99.7 \
+    --tranches-file {input[2]} \
+    --recal-file {input[1]} \
+    -mode INDEL \
+    --create-output-variant-index true
 """
 
 [rules.resources]
@@ -328,8 +394,10 @@ The `combine_gvcfs` rule merges the per-sample GVCFs into a single cohort GVCF (
 
 Instead of fixed hard filters, the pipeline applies VQSR for clinical-grade variant calling:
 
-1. **vqsr_snps** — GATK VariantRecalibrator builds a recalibration model from annotation features (QD, MQ, MQRankSum, ReadPosRankSum, FS, SOR), using dbSNP as a training/truth resource.
-2. **apply_vqsr_snps** — GATK ApplyVQSR applies the model at `--truth-sensitivity-filter-level 99.0`, retaining high sensitivity while filtering false positives.
+1. **vqsr_snps** — GATK VariantRecalibrator builds a recalibration model from annotation features (QD, MQ, MQRankSum, ReadPosRankSum, FS, SOR), using hapmap, omni, and 1000G as training/truth resources and dbSNP as a known-sites resource.
+2. **apply_vqsr_snps** — GATK ApplyVQSR applies the SNP model at `--truth-sensitivity-filter-level 99.7`, retaining high sensitivity while filtering false positives.
+3. **vqsr_indels** — VariantRecalibrator builds a recalibration model for INDELs using the Mills gold-standard indels as the training/truth resource.
+4. **apply_vqsr_indels** — GATK ApplyVQSR applies the INDEL model at `--truth-sensitivity-filter-level 99.7` to produce the final filtered variant set.
 
 VQSR adaptively models the variant quality profile rather than applying fixed thresholds, which generally preserves more true variants than hard filtering.
 
@@ -339,7 +407,7 @@ VQSR adaptively models the variant quality profile rather than applying fixed th
 
 ```bash
 $ oxo-flow validate examples/gallery/07_wgs_germline.oxoflow
-✓ examples/gallery/07_wgs_germline.oxoflow — 10 rules, 11 dependencies
+✓ examples/gallery/07_wgs_germline.oxoflow — 12 rules, 15 dependencies
 ```
 
 ### Resource Summary
@@ -355,6 +423,8 @@ $ oxo-flow validate examples/gallery/07_wgs_germline.oxoflow
 | genotype_gvcfs | 4 | 16G | singularity |
 | vqsr_snps | 4 | 16G | singularity |
 | apply_vqsr_snps | 4 | 8G | singularity |
+| vqsr_indels | 4 | 16G | singularity |
+| apply_vqsr_indels | 4 | 8G | singularity |
 | annotate_variants | 4 | 16G | conda |
 
 ## What's Next?
