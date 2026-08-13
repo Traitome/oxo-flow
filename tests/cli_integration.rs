@@ -2926,3 +2926,81 @@ fn cli_run_bundle_extracts_to_unpredictable_dir() {
         legacy.display()
     );
 }
+
+/// The dry-run -j suggestion must be capped by DAG width: a single-rule
+/// workflow has nothing to parallelize, so -j 1 is the professional
+/// suggestion regardless of machine threads.
+#[test]
+fn cli_dry_run_suggestion_capped_by_dag_width() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("single.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"single\"\n\n[[rules]]\nname = \"only\"\noutput = [\"out.txt\"]\nshell = \"echo hi > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["dry-run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "dry-run failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("-j 1"),
+        "single-rule workflow should suggest -j 1, got: {stderr}"
+    );
+}
+
+/// A two-rule sequential chain also has width 1 → -j 1.
+#[test]
+fn cli_dry_run_suggestion_sequential_chain() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("chain.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"chain\"\n\n[[rules]]\nname = \"a\"\noutput = [\"mid.txt\"]\nshell = \"echo a > {output[0]}\"\n\n[[rules]]\nname = \"b\"\ninput = [\"mid.txt\"]\noutput = [\"out.txt\"]\nshell = \"cat {input[0]} > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["dry-run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("-j 1"),
+        "sequential chain should suggest -j 1, got: {stderr}"
+    );
+}
+
+/// Two independent rules (width 2) with 1-thread declarations should
+/// suggest -j 2 on machines with >= 2 threads.
+#[test]
+fn cli_dry_run_suggestion_parallel_width() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("parallel.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"parallel\"\n\n[[rules]]\nname = \"x\"\noutput = [\"x.txt\"]\nshell = \"echo x > {output[0]}\"\n\n[[rules]]\nname = \"y\"\noutput = [\"y.txt\"]\nshell = \"echo y > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    let output = oxo_flow_cmd()
+        .args(["dry-run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Width=2, 1-thread rules: suggestion should be exactly -j 2
+    assert!(
+        stderr.contains("-j 2"),
+        "two independent rules should suggest -j 2, got: {stderr}"
+    );
+}

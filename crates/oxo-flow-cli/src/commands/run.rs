@@ -1329,7 +1329,17 @@ pub async fn dry_run_command(
     let system_threads = std::thread::available_parallelism()
         .map(|n| n.get() as u32)
         .unwrap_or(4);
+    // Professional suggestion = the smaller of:
+    //   - DAG width: the maximum number of rules that can ever run
+    //     simultaneously (suggesting -j above this is meaningless)
+    //   - Resource math: system_threads / max_threads_per_rule
+    //     (more concurrent jobs would oversubscribe the CPU)
+    let dag_width = dag
+        .parallel_groups()
+        .map(|groups| groups.iter().map(|g| g.len()).max().unwrap_or(1))
+        .unwrap_or(1) as u32;
     let suggested_jobs = (system_threads / max_threads_per_rule)
+        .min(dag_width)
         .clamp(1, 16)
         .to_string();
     eprintln!(

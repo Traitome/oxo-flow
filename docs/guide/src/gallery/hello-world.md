@@ -76,7 +76,7 @@ DAG: (dry-run) 1 rules would execute
 
 Summary: 1 rules, total 1 threads declared, max 1 threads/rule
 
-To execute:  oxo-flow run examples/gallery/01_hello_world.oxoflow -j 10
+To execute:  oxo-flow run examples/gallery/01_hello_world.oxoflow -j 1
 ```
 
 ### Execute
