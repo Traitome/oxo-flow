@@ -61,11 +61,12 @@ pub fn print_banner() {
         return;
     }
     eprintln!(
-        "{} {} — {}",
+        "{} v{} — {}",
         "oxo-flow".bold().cyan(),
         env!("CARGO_PKG_VERSION"),
-        "Bioinformatics Pipeline Engine".dimmed()
+        "Rust-native bioinformatics pipeline engine".dimmed()
     );
+    eprintln!("{}", env!("CARGO_PKG_REPOSITORY").cyan());
 }
 
 /// Expand placeholders in a command template.

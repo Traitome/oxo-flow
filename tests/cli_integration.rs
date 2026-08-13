@@ -317,6 +317,45 @@ fn cli_subcommand_help_has_no_banner() {
         .stdout(predicate::str::contains("███╗").not());
 }
 
+// ─── Run log header (print_banner) ─────────────────────────────────────────
+
+/// Long-running commands print the two-line banner (version + repository)
+/// at the top of their stderr log.
+#[test]
+fn cli_run_log_shows_banner() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("tiny.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"tiny\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"hello\"\noutput = [\"out.txt\"]\nshell = \"echo hi > {output}\"\n",
+    )
+    .unwrap();
+
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "run failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&format!("oxo-flow v{}", env!("CARGO_PKG_VERSION"))),
+        "run log should carry the banner version line: {stderr}"
+    );
+    assert!(
+        stderr.contains("Rust-native bioinformatics pipeline engine"),
+        "run log should carry the tagline: {stderr}"
+    );
+    assert!(
+        stderr.contains("https://github.com/Traitome/oxo-flow"),
+        "run log should carry the repository URL: {stderr}"
+    );
+}
+
 #[test]
 fn cli_no_args() {
     // Should print help/error when no subcommand given
