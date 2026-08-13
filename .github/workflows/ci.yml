@@ -312,6 +312,23 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install pinned toolchain with release target
+        shell: bash
+        run: |
+          # rust-toolchain.toml pins the toolchain (currently 1.92.0) and
+          # cargo resolves every build to it — including `--target` builds.
+          # dtolnay/rust-toolchain above installs "stable" only, so the
+          # release target's std must be installed into the pinned
+          # toolchain explicitly (cross-compiled targets like
+          # x86_64-apple-darwin fail with "can't find crate for core"
+          # otherwise; the host-arch target is unaffected).
+          PINNED=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          echo "rust-toolchain.toml pins: $PINNED"
+          rustup toolchain install "$PINNED" \
+            --target ${{ matrix.target }} \
+            --profile minimal \
+            --no-self-update
+
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
