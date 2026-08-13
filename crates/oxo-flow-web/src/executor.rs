@@ -370,7 +370,10 @@ mod tests {
             std::path::Path::new("dir"),
             &flags,
         );
-        let strs: Vec<String> = args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        let strs: Vec<String> = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
         assert_eq!(strs[0], "run");
         assert!(strs.contains(&"--keep-going".to_string()));
         assert!(strs.contains(&"--sample".to_string()));
@@ -379,9 +382,15 @@ mod tests {
         assert!(strs.contains(&"-t".to_string()));
         assert!(strs.contains(&"align".to_string()));
         // dry-run omits execution-only flags
-        let dry = RunFlags { dry_run: true, ..flags };
+        let dry = RunFlags {
+            dry_run: true,
+            ..flags
+        };
         let args = build_cli_args(std::path::Path::new("w"), std::path::Path::new("d"), &dry);
-        let strs: Vec<String> = args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        let strs: Vec<String> = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
         assert_eq!(strs[0], "dry-run");
         assert!(!strs.contains(&"--sample".to_string()));
     }

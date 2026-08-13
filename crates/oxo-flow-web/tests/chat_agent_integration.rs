@@ -83,3 +83,80 @@ async fn chat_send_emits_typed_agent_events() {
     );
     assert!(text.contains("event: done"), "missing done event");
 }
+
+/// Report Q&A and visualization must answer from the run's REAL data —
+/// not the empty-report stub (B7).
+#[tokio::test]
+async fn report_ask_and_visualize_use_real_run_data() {
+    // In-process DB with a run row whose workdir contains a real output file.
+    let dir = std::env::var("CARGO_TARGET_TMPDIR")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    let path = format!("{dir}/report-qa-test.db");
+    let _ = std::fs::remove_file(&path);
+    let url = format!("sqlite:{path}?mode=rwc");
+    oxo_flow_web::db::init_db(&url).await.ok();
+    oxo_flow_web::infra::db::sqlite::init_pool(&url).await;
+
+    let workdir = format!("{dir}/report-qa-workdir");
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).unwrap();
+    std::fs::write(format!("{workdir}/results.txt"), "vcf output").unwrap();
+
+    let pool = oxo_flow_web::infra::db::sqlite::pool();
+    sqlx::query(
+        "INSERT INTO runs (id, user_id, pipeline_snapshot, workflow_name, status, phase, pid, workdir, started_at, finished_at, created_at)
+         VALUES ('qa-run-1', 'default', '[workflow]\nname = \"qa\"\n', 'qa', 'completed', 'executing', NULL, ?, NULL, '2026-01-01T00:01:00Z', '2026-01-01T00:00:00Z')",
+    )
+    .bind(&workdir)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let ask = server::build_router("personal")
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/runs/qa-run-1/report/ask")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"question": "what files were produced"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ask.status(), StatusCode::OK);
+    let answer = axum::body::to_bytes(ask.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let answer = String::from_utf8_lossy(&answer);
+    assert!(
+        answer.contains("1 output files"),
+        "the answer must reflect the real run's file tree (was an empty stub): {answer}"
+    );
+
+    let viz = server::build_router("personal")
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/runs/qa-run-1/report/visualize")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"type": "files"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(viz.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(viz.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let viz_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = viz_json["data"]
+        .as_array()
+        .expect("visualization carries data");
+    assert!(
+        data.iter()
+            .any(|d| d["name"].as_str() == Some("results.txt")),
+        "visualization data must come from the run's files: {viz_json}"
+    );
+}

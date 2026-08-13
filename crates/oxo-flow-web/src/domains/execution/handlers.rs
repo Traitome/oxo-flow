@@ -981,36 +981,10 @@ pub async fn get_ai_status(Path(id): Path<String>) -> ApiResult<serde_json::Valu
 }
 
 /// GET /api/runs/{id}/report
-pub async fn get_run_report(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
-
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for report: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
-
+/// Build the deterministic report data from a run row — shared by the report
+/// page, the Q&A, and the visualization endpoints so they all answer from
+/// the SAME real data.
+fn build_report_for_run(run: &models::RunRow) -> crate::domains::ai::agents::types::ReportData {
     let pipeline_name = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
         .ok()
         .map(|c| c.workflow.name.clone())
@@ -1043,7 +1017,40 @@ pub async fn get_run_report(Path(id): Path<String>) -> ApiResult<serde_json::Val
         .and_then(|wd| std::fs::read_to_string(format!("{wd}/execution.log")).ok())
         .unwrap_or_default();
 
-    let report = report_agent::generate_report(&pipeline_name, &files, &log_summary, &[]);
+    report_agent::generate_report(&pipeline_name, &files, &log_summary, &[])
+}
+
+pub async fn get_run_report(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
+    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+
+    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error fetching run {id} for report: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
+
+    let run = run.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Run {id} not found"),
+        )
+    })?;
+
+    let report = build_report_for_run(&run);
 
     Ok(Json(serde_json::json!(report)))
 }
@@ -1077,7 +1084,7 @@ pub async fn ask_report_question(
                 "Internal database error".into(),
             )
         })?;
-    let _run = run.ok_or_else(|| {
+    let run = run.ok_or_else(|| {
         err(
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
@@ -1085,9 +1092,8 @@ pub async fn ask_report_question(
         )
     })?;
 
-    let pipeline_name = "pipeline";
-    let files = vec![];
-    let report = report_agent::generate_report(pipeline_name, &files, "", &[]);
+    // Answer from the same deterministic report the report page shows.
+    let report = build_report_for_run(&run);
     let answer = report_agent::answer_question(&report, question);
     Ok(Json(answer))
 }
@@ -1121,7 +1127,7 @@ pub async fn visualize_report(
                 "Internal database error".into(),
             )
         })?;
-    let _run = run.ok_or_else(|| {
+    let run = run.ok_or_else(|| {
         err(
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
@@ -1129,17 +1135,51 @@ pub async fn visualize_report(
         )
     })?;
 
+    // Real data sources: the run's file tree, or per-rule timings from the
+    // engine's checkpoint. No canned rows.
+    let report = build_report_for_run(&run);
+    let data: Vec<serde_json::Value> = if chart_type == "files" {
+        report
+            .file_tree
+            .iter()
+            .map(|f| serde_json::json!({"name": f.name, "size_bytes": f.size_bytes}))
+            .collect()
+    } else {
+        checkpoint_status::load_node_statuses(
+            std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
+            false,
+        )
+        .into_iter()
+        .map(|n| {
+            serde_json::json!({
+                "rule": n.rule,
+                "duration_secs": n.duration_ms.map(|d| d as f64 / 1000.0).unwrap_or(0.0),
+            })
+        })
+        .collect()
+    };
+
     let plot_json = serde_json::json!({
         "chart_type": chart_type,
-        "title": format!("{chart_type} plot"),
-        "spec": {
-            "mark": if chart_type == "bar" { "bar" } else { "point" },
-            "encoding": {
-                "x": {"field": "x", "type": "quantitative", "title": "X Axis"},
-                "y": {"field": "y", "type": "quantitative", "title": "Y Axis"},
-            }
+        "title": format!("{chart_type} chart"),
+        "spec": if chart_type == "files" {
+            serde_json::json!({
+                "mark": "bar",
+                "encoding": {
+                    "x": {"field": "name", "type": "nominal", "title": "File"},
+                    "y": {"field": "size_bytes", "type": "quantitative", "title": "Bytes"},
+                }
+            })
+        } else {
+            serde_json::json!({
+                "mark": "bar",
+                "encoding": {
+                    "x": {"field": "rule", "type": "nominal", "title": "Rule"},
+                    "y": {"field": "duration_secs", "type": "quantitative", "title": "Seconds"},
+                }
+            })
         },
-        "data": []
+        "data": data,
     });
 
     Ok(Json(plot_json))
