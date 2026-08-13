@@ -486,7 +486,7 @@ router untouched until the deferred cleanup).
     set). The streaming path is covered by ScriptedBackend integration tests
     + SSE parser unit tests; a real-key round-trip remains a TODO for the
     user's machine.
-- **P1 partial** (commits 8f9c2b3, a23ec08): run options dialog
+- **P1/P4 complete** (commits 8f9c2b3, a23ec08, 57cf28e, 226c879, 1ca9663, 017e7f8, 881a87e): run options dialog
   (samples/targets/keep-going/max jobs through `build_cli_args`), template →
   editor loading (`?template=`), report Q&A + visualization answer from the
   run's REAL data (shared `build_report_for_run`).
@@ -502,10 +502,15 @@ router untouched until the deferred cleanup).
   blocks must coalesce into ONE following message (400). Both are unit-tested
   now (ba99c60, 241361c). Chat prompt hardened (TOML array I/O, direct
   validation fixes, 6 rounds).
-- **Remaining (documented, not yet done):** saved-pipelines page UI
-  (list/search/delete/export), login page, frontend lint debt (pre-existing
-  `any`/effect errors — several died with the dead-code cleanup), legacy
-  `handlers/` + legacy router removal, run-diagnosis chat tools.
+- **All remaining items DONE (commits 226c879..881a87e):** saved-pipelines
+  page (list/open/export Dockerfile+Singularity/delete), login page (token →
+  `oxo_token`, header shows the signed-in user), frontend lint at ZERO errors
+  (lint joins the CI frontend gate), dead code removed (`Runs.tsx`,
+  `SSEClient`, legacy `handlers/` + legacy router + 20-user simulation
+  tests — net −9,044/+7,559 lines on the branch), run-diagnosis chat tools
+  (`get_run_status`/`get_run_logs`, read-only, registered when the request
+  carries `run_id`; tool failures now emit `ToolResult` events so the UI
+  never spins forever).
 
 ## 10. Phased Roadmap
 
