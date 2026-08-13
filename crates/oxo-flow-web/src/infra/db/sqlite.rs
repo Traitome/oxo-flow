@@ -371,6 +371,14 @@ impl StorageBackend for SqliteBackend {
             .await
             .ok();
 
+        // Vocabulary migration: legacy executors wrote `success` for completed
+        // runs; the canonical terminal set is completed|failed|cancelled.
+        // Idempotent — safe to run on every init.
+        sqlx::query("UPDATE runs SET status = 'completed' WHERE status = 'success'")
+            .execute(&self.pool)
+            .await
+            .ok();
+
         // Seed admin + default users if users table is empty. `default` is
         // the pseudo-user for personal-mode runs (runs.user_id is a
         // foreign key, so it must exist).
@@ -1674,6 +1682,46 @@ mod tests {
         };
         let result = backend.list_runs(&user.id, pag).await.unwrap();
         assert_eq!(result.items.len(), 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: legacy 'success' status migrates to 'completed'
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_legacy_success_status_migrates_to_completed() {
+        let backend = SqliteBackend::new("sqlite::memory:")
+            .await
+            .expect("Failed to create in-memory backend");
+        backend.init().await.expect("schema init");
+
+        sqlx::query(
+            "INSERT INTO runs (id, user_id, pipeline_snapshot, workflow_name, status, phase, pid, workdir, started_at, finished_at, created_at)
+             VALUES ('legacy-1', 'default', '', 'wf', 'success', 'executing', NULL, '', '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .execute(backend.inner_pool())
+        .await
+        .unwrap();
+
+        // Re-init is idempotent and re-runs the migration.
+        backend.init().await.expect("re-init");
+        let status: String = sqlx::query_scalar("SELECT status FROM runs WHERE id = 'legacy-1'")
+            .fetch_one(backend.inner_pool())
+            .await
+            .unwrap();
+        assert_eq!(status, "completed");
+
+        // Non-success rows are untouched.
+        sqlx::query("UPDATE runs SET status = 'failed' WHERE id = 'legacy-1'")
+            .execute(backend.inner_pool())
+            .await
+            .unwrap();
+        backend.init().await.expect("re-init again");
+        let status: String = sqlx::query_scalar("SELECT status FROM runs WHERE id = 'legacy-1'")
+            .fetch_one(backend.inner_pool())
+            .await
+            .unwrap();
+        assert_eq!(status, "failed");
     }
 
     // -----------------------------------------------------------------------

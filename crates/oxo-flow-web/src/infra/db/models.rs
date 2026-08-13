@@ -33,7 +33,7 @@ pub struct RunRow {
     pub pipeline_id: Option<String>,
     pub pipeline_snapshot: String,
     pub workflow_name: Option<String>,
-    pub status: String, // "queued"|"running"|"completed"|"failed"|"cancelled"
+    pub status: String, // "queued"|"running"|"paused"|"completed"|"failed"|"cancelled"
     pub phase: String,  // "parsing"|"validating"|"preparing"|"executing"|"reporting"
     pub pid: Option<i64>,
     pub workdir: Option<String>,
