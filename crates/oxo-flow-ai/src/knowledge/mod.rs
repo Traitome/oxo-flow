@@ -9,4 +9,5 @@
 pub mod assembler;
 pub mod bioconda;
 pub mod builtin;
+pub mod pipeline_graph;
 pub mod skills;

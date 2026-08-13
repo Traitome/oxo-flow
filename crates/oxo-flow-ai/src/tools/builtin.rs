@@ -405,3 +405,96 @@ impl Tool for LookupSkillTool {
         Ok(crate::knowledge::skills::format_skills(query, limit))
     }
 }
+
+/// Query the embedded bioinformatics pipeline knowledge graph (78 skills,
+/// 470 literature-backed transitions). Understand what feeds into or out
+/// of a workflow step, or find the pipeline path between two steps.
+#[derive(Default)]
+pub struct LookupPipelineTool;
+
+impl LookupPipelineTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl Tool for LookupPipelineTool {
+    fn def(&self) -> ToolDef {
+        ToolDef {
+            name: "lookup_pipeline".into(),
+            description: "Query the embedded bioinformatics pipeline knowledge graph (78 workflow skills, 470 data-flow transitions with data types and literature evidence). Use 'transitions' to see what feeds into/out of a step, or 'path' to find the pipeline between two steps. Use this to design correct multi-step workflow topologies (e.g. from alignment to variant calling to annotation).".into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["transitions", "path", "stats"],
+                        "description": "Query type"
+                    },
+                    "skill": {
+                        "type": "string",
+                        "description": "Skill ID or name (for transitions)"
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["upstream", "downstream", "both"],
+                        "description": "Transition direction (default: both)"
+                    },
+                    "from": {
+                        "type": "string",
+                        "description": "Starting skill (for path)"
+                    },
+                    "to": {
+                        "type": "string",
+                        "description": "Target skill (for path)"
+                    }
+                },
+                "required": ["action"]
+            }),
+        }
+    }
+
+    fn name(&self) -> &str {
+        "lookup_pipeline"
+    }
+
+    async fn execute(&self, arguments: &str) -> Result<String, AiError> {
+        use crate::knowledge::pipeline_graph;
+        let args: serde_json::Value =
+            serde_json::from_str(arguments).map_err(|e| AiError::ToolError {
+                tool: "lookup_pipeline".into(),
+                message: format!("invalid arguments: {e}"),
+            })?;
+        let action = args["action"].as_str().unwrap_or("stats");
+        let out = match action {
+            "stats" => {
+                let (n, e) = pipeline_graph::graph_stats();
+                format!(
+                    "Pipeline knowledge graph: {n} workflow skills, {e} literature-backed transitions."
+                )
+            }
+            "transitions" => {
+                let skill = args["skill"].as_str().ok_or_else(|| AiError::ToolError {
+                    tool: "lookup_pipeline".into(),
+                    message: "missing 'skill' argument".into(),
+                })?;
+                let direction = args["direction"].as_str().unwrap_or("both");
+                pipeline_graph::format_transitions(skill, direction)
+            }
+            "path" => {
+                let from = args["from"].as_str().ok_or_else(|| AiError::ToolError {
+                    tool: "lookup_pipeline".into(),
+                    message: "missing 'from' argument".into(),
+                })?;
+                let to = args["to"].as_str().ok_or_else(|| AiError::ToolError {
+                    tool: "lookup_pipeline".into(),
+                    message: "missing 'to' argument".into(),
+                })?;
+                pipeline_graph::format_path(from, to)
+            }
+            other => format!("Unknown action '{other}'. Use transitions, path, or stats."),
+        };
+        Ok(out)
+    }
+}

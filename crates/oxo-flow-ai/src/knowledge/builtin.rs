@@ -437,7 +437,7 @@ impl ToolRef {
     /// Format the tool reference as a markdown table row for prompts.
     pub fn to_table_row(&self) -> String {
         format!(
-            "| {} | {} | {} | {} threads, {} | {} |",
+            "- {} [{}]: {}; resources: {} threads/{}; {}",
             self.name,
             self.domain,
             self.key_params,
@@ -449,8 +449,7 @@ impl ToolRef {
 
     /// Format the full tool table as a markdown section.
     pub fn table_header() -> &'static str {
-        "| Tool | Domain | Key Parameters | Resources | Notes |\n\
-         |------|--------|----------------|-----------|-------|"
+        "## Tools\n"
     }
 }
 
@@ -641,7 +640,7 @@ mod tests {
         let table = format_tool_table();
         assert!(table.contains("STAR"));
         assert!(table.contains("fastp"));
-        assert!(table.contains("| Tool |"));
+        assert!(table.contains("## Tools"));
     }
 
     #[test]

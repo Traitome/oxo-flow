@@ -28,25 +28,13 @@ static BIOCONDA_DB: LazyLock<Vec<BiocondaTool>> = LazyLock::new(|| {
         .filter_map(|line| {
             let rec: serde_json::Value = serde_json::from_str(line).ok()?;
             Some(BiocondaTool {
-                name: rec.get("name")?.as_str()?.to_string(),
-                version: rec
-                    .get("version")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                summary: rec
-                    .get("text")
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("")
-                    .to_string(),
+                name: rec.get("n")?.as_str()?.to_string(),
+                version: rec.get("v")?.as_str()?.to_string(),
+                summary: rec.get("t")?.as_str()?.to_string(),
                 platforms: rec
-                    .get("subdirs")
-                    .and_then(|s| s.as_array())
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect()
-                    })
+                    .get("p")
+                    .and_then(|p| p.as_str())
+                    .map(|f| f.chars().map(String::from).collect())
                     .unwrap_or_default(),
             })
         })
