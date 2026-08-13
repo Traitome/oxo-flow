@@ -34,8 +34,9 @@ output = ["wgs_aligned/{sample}.sorted.bam"]
 description = "WGS read alignment with BWA-MEM2"
 shell = """
 mkdir -p wgs_aligned
-bwa-mem2 mem -t {threads} {config.reference} {input[0]} {input[1]} \
-    | samtools sort -@ 4 -o {output[0]}
+bwa-mem2 mem -t {threads} -R '@RG\\tID:{sample}\\tSM:{sample}\\tLB:WGS\\tPL:ILLUMINA' \
+    {config.reference} {input[0]} {input[1]} \
+    | samtools sort -@ {threads} -o {output[0]}
 samtools index {output[0]}
 """
 
@@ -120,6 +121,7 @@ mkdir -p methyl_aligned
 bismark --genome /data/references/GRCh38/bismark_index \
         -1 {input[0]} -2 {input[1]} \
         --multicore {threads} \
+        --basename {sample} \
         -o methyl_aligned/
 deduplicate_bismark --paired --bam methyl_aligned/{sample}_R1_bismark_bt2_pe.bam \
         -o methyl_aligned/{sample}
@@ -140,7 +142,7 @@ output = ["methylation/{sample}.deduplicated.CX_report.txt"]
 description = "Extract CpG methylation calls"
 shell = """
 mkdir -p methylation
-bismark_methylation_extractor --paired-end --comprehensive \
+bismark_methylation_extractor --paired-end --no_overlap --comprehensive \
     --genome_folder /data/references/GRCh38/bismark_index \
     --parallel {threads} \
     --CX --cytosine_report \

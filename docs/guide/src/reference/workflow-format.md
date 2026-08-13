@@ -442,36 +442,41 @@ memory = "32G"
 
 ### Environment specification
 
+Exactly one backend per rule (uncomment the one you need):
+
 ```toml
+[[rules]]
+name = "example"
 # Conda
 environment = { conda = "envs/tools.yaml" }
 
-# Pixi
-environment = { pixi = "envs/pixi.toml" }
+# # Pixi
+# environment = { pixi = "envs/pixi.toml" }
 
-# Docker
-environment = { docker = "biocontainers/bwa:0.7.17" }
+# # Docker
+# environment = { docker = "biocontainers/bwa:0.7.17" }
 
-# Singularity
-environment = { singularity = "docker://biocontainers/bwa:0.7.17" }
+# # Singularity
+# environment = { singularity = "docker://biocontainers/bwa:0.7.17" }
 
-# Python venv
-environment = { venv = "envs/requirements.txt" }
+# # Python venv
+# environment = { venv = "envs/requirements.txt" }
 
-# HPC modules
-environment = { modules = ["gcc/11.2.0", "openmpi/4.1.1"] }
+# # HPC modules
+# environment = { modules = ["gcc/11.2.0", "openmpi/4.1.1"] }
 
-# Conda with custom prefix
-environment = { conda = "envs/qc.yaml", conda_prefix = ".oxo-flow/envs" }
+# # Conda with custom prefix
+# environment = { conda = "envs/qc.yaml", conda_prefix = ".oxo-flow/envs" }
 
-# Mamba / micromamba (auto-detects binary, same YAML format as conda)
-environment = { mamba = "envs/qc.yaml", mamba_prefix = ".oxo-flow/envs" }
+# # Mamba / micromamba (auto-detects binary, same YAML format as conda)
+# environment = { mamba = "envs/qc.yaml", mamba_prefix = ".oxo-flow/envs" }
 
-# venv with custom requirements file
-environment = { venv = ".venv/", venv_requirements = "envs/dev-requirements.txt" }
+# # venv with custom requirements file
+# environment = { venv = ".venv/", venv_requirements = "envs/dev-requirements.txt" }
 
-# Reference a named environment group (defined in [env_groups])
-env_group = "qc_env"
+# # Reference a named environment group (defined in [env_groups])
+# env_group = "qc_env"
+shell = "tool {input} -o {output}"
 ```
 
 #### Named Environment Groups (`[env_groups]`)
@@ -953,13 +958,13 @@ product expansion.
 | Field | Type | Description |
 |-------|------|-------------|
 | `expand_inputs[].pattern` | String | Input pattern with variables |
-| `expand_inputs[].variables` | Table | Variable name → list of values or config reference |
+| `expand_inputs[].variables` | Table | Variable name → config reference (TOML array or comma-separated string) |
 
 ```toml
 [[rules]]
 name = "multi_ref_align"
 expand_inputs = [
-  { pattern = "refs/{ref_genome}.fa", variables = { ref_genome = ["hg38", "t2t"] } }
+  { pattern = "refs/{ref_genome}.fa", variables = { ref_genome = "config.ref_genomes" } }
 ]
 ```
 
@@ -1248,17 +1253,18 @@ The `[workflow]` `sample_pattern` auto-discovers samples from the filesystem:
 
 ```toml
 [workflow]
+# Exactly one pattern — uncomment the one that matches your data:
 # Paired-end reads (Illumina standard)
 sample_pattern = "raw/{sample}_R1.fastq.gz"
 
-# Paired-end reads (common variant)
-sample_pattern = "raw/{sample}_1.fq.gz"
+# # Paired-end reads (common variant)
+# sample_pattern = "raw/{sample}_1.fq.gz"
 
-# Single-end reads
-sample_pattern = "raw/{sample}.fastq.gz"
+# # Single-end reads
+# sample_pattern = "raw/{sample}.fastq.gz"
 
-# With technical replicates
-sample_pattern = "raw/{sample}_rep{replicate}_R1.fastq.gz"
+# # With technical replicates
+# sample_pattern = "raw/{sample}_rep{replicate}_R1.fastq.gz"
 ```
 
 Supported wildcards in `sample_pattern`:
@@ -1301,11 +1307,13 @@ Pairs with missing controls are supported — `control` is now optional:
 ```toml
 # Tumor-only CNV calling (no matched normals)
 [[pairs]]
+pair_id = "T1"
 experiment = "T1"
 # control omitted → {control} = ""
 
 # Pooled normal via config values
 [[pairs]]
+pair_id = "T2"
 experiment = "T2"
 # control = ""  # empty string also works
 ```
@@ -1348,7 +1356,7 @@ Supported multi-omics pair patterns:
 
 ## `when` — Conditional Rule Execution (WF-01)
 
-The optional `when` field on a rule contains an expression evaluated against `[config]` values.  When the expression evaluates to **false** the rule is skipped entirely and removed from the DAG.
+The optional `when` field on a rule contains an expression evaluated against `[config]` values. When the expression evaluates to **false** the rule is skipped at execution time (`JobStatus::Skipped`, "condition evaluated to false") — it remains in the DAG but does not run.
 
 ```toml
 [[rules]]
@@ -1434,11 +1442,11 @@ by = "chr"
 values_from = "config.chromosomes"
 
 [rules.transform]
-map = "gatk HaplotypeCaller -I {input} -L {chr} -O {output}"
+map = "gatk HaplotypeCaller -R {config.reference} -I {input} -L {chr} -O {output}"
 cleanup = true
 
 [rules.transform.combine]
-shell = "gatk GatherVcfs {chunks} -O {output}"
+shell = "gatk GatherVcfs $(for f in {chunks}; do echo \"-I $f \"; done) -O {output}"
 ```
 
 ### Split Configuration
@@ -1483,10 +1491,10 @@ by = "chr"
 values_from = "config.chromosomes"
 
 [rules.transform]
-map = "gatk HaplotypeCaller -I {input} -L {chr} -O {output}"
+map = "gatk HaplotypeCaller -R {config.reference} -I {input} -L {chr} -O {output}"
 
 [rules.transform.combine]
-shell = "gatk GatherVcfs {chunks} -O {output}"
+shell = "gatk GatherVcfs $(for f in {chunks}; do echo \"-I $f \"; done) -O {output}"
 ```
 
 **Mode B: Split → Map → Aggregate**
@@ -1591,16 +1599,22 @@ shell = "fastqc {input} -o {config.results}/qc/ -t {threads}"
 [[rules]]
 name = "trim"
 input = ["raw/{sample}_R1.fastq.gz", "raw/{sample}_R2.fastq.gz"]
-output = ["{config.results}/trimmed/{sample}_R1.fastq.gz"]
+output = [
+    "{config.results}/trimmed/{sample}_R1.fastq.gz",
+    "{config.results}/trimmed/{sample}_R2.fastq.gz"
+]
 environment = { docker = "biocontainers/fastp:0.23.4" }
-shell = "fastp --in1 {input[0]} --in2 {input[1]} --out1 {output[0]} --thread {threads}"
+shell = "fastp --in1 {input[0]} --in2 {input[1]} --out1 {output[0]} --out2 {output[1]} --thread {threads}"
 
 [[rules]]
 name = "align"
-input = ["{config.results}/trimmed/{sample}_R1.fastq.gz"]
+input = [
+    "{config.results}/trimmed/{sample}_R1.fastq.gz",
+    "{config.results}/trimmed/{sample}_R2.fastq.gz"
+]
 output = ["{config.results}/aligned/{sample}.bam"]
 environment = { conda = "envs/alignment.yaml" }
-shell = "bwa mem -t {threads} {config.reference} {input} | samtools sort -o {output}"
+shell = "bwa mem -t {threads} -R '@RG\\tID:{sample}\\tSM:{sample}' {config.reference} {input[0]} {input[1]} | samtools sort -o {output}"
 
 [rules.resources]
 threads = 16

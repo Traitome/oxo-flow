@@ -36,7 +36,7 @@ map = "gatk HaplotypeCaller -R {config.reference} -I {input} -L {chr} -O {output
 cleanup = true
 
 [rules.transform.combine]
-shell = "gatk GatherVcfs {chunks} -O {output}"
+shell = "gatk GatherVcfs $(for f in {chunks}; do echo \"-I $f \"; done) -O {output}"
 
 # ── Mode B: Split → Map (no combine) ────────────────────────────────────────────
 # Parallel processing without merging - each split produces independent output
