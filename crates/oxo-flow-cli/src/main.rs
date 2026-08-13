@@ -1172,7 +1172,7 @@ async fn main() -> Result<()> {
             // 4. Optional: deep health checks (issue #64)
             if deep {
                 eprintln!("{} Deep checks...", "4.".bold());
-                deep_check_command(&workflow, cli.json)?;
+                deep_check_command(&workflow, workdir.as_deref(), cli.json)?;
             }
             // 5. Optional: run with --run flag
             if run {

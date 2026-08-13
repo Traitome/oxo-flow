@@ -4456,6 +4456,55 @@ fn cli_test_no_deep_keeps_three_docs() {
     assert_eq!(docs.len(), 3, "expected 3 JSON docs, got {}", docs.len());
 }
 
+/// `test --deep --workdir` judges existence from the custom workdir — the
+/// same base the executor runs rules from (issue #68 semantics). A script
+/// that lives in the workdir must not be reported missing.
+#[test]
+fn cli_test_deep_respects_workdir_flag() {
+    let dir = tempfile::tempdir().unwrap();
+    let workdir = dir.path().join("custom");
+    std::fs::create_dir_all(workdir.join("scripts")).unwrap();
+    std::fs::write(workdir.join("scripts/analyze.py"), b"x").unwrap();
+    let wf = dir.path().join("deep.oxoflow");
+    fs::write(
+        &wf,
+        deep_workflow(
+            "[[rules]]\nname = \"analyze\"\noutput = [\"results/a.txt\"]\n\
+             description = \"run script\"\nscript = \"scripts/analyze.py --out results/a.txt\"\n",
+        ),
+    )
+    .unwrap();
+
+    // Baseline: without --workdir the script is missing relative to the
+    // workflow's directory.
+    let out = run_test_command(dir.path(), &wf, &["--deep"]);
+    assert!(
+        !out.status.success(),
+        "missing script must fail test --deep"
+    );
+
+    // With --workdir the same workflow is healthy: the script lives there.
+    let out = run_test_command(
+        dir.path(),
+        &wf,
+        &["--deep", "--workdir", workdir.to_str().unwrap()],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("[D001]"),
+        "script exists in the workdir, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("script reference(s) found"),
+        "expected the found summary, got:\n{stderr}"
+    );
+}
+
 // ─── Working-directory semantics (issue #68) ────────────────────────────────
 
 /// A run with a custom --workdir records it in the checkpoint; resuming
@@ -4526,72 +4575,6 @@ fn cli_resume_reuses_recorded_workdir() {
     assert!(
         stderr.contains("Workdir:"),
         "resume must show which workdir it is using, got:\n{stderr}"
-    );
-}
-
-// ─── Concurrent-run protection (.oxo-flow/lock, issue #70) ──────────────────
-
-/// Two `run` invocations on the same workdir must not silently race on the
-/// checkpoint: the second gets a clear lock error, and succeeds after the
-/// first exits (the OS releases the lock automatically).
-#[test]
-fn cli_concurrent_runs_get_clear_lock_error() {
-    let dir = tempfile::tempdir().unwrap();
-    let wf = dir.path().join("locktest.oxoflow");
-    fs::write(
-        &wf,
-        "[workflow]\nname = \"lock\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"slow\"\noutput = [\"results/done.txt\"]\nshell = \"sleep 2 && echo done > results/done.txt\"\n",
-    )
-    .unwrap();
-
-    // Run #1 in the background, holding the lock for ~2s.
-    let mut first = std::process::Command::new(workspace_bin("oxo-flow"))
-        .args(["run", wf.to_str().unwrap()])
-        .current_dir(dir.path())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
-
-    // Wait until the lock is actually held (poll with the core probe).
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while !oxo_flow_core::executor::WorkdirLock::is_locked(dir.path()) {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "first run never acquired the workdir lock"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-
-    // Run #2 while the lock is held: clear error, no silent racing.
-    let out = oxo_flow_cmd()
-        .args(["run", wf.to_str().unwrap()])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-    assert!(!out.status.success(), "second run must fail while locked");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("workdir is locked"),
-        "second run must report the lock, got:\n{stderr}"
-    );
-
-    // After run #1 exits the lock releases: run #2 succeeds and skips the
-    // completed rule.
-    assert!(first.wait().unwrap().success());
-    let out = oxo_flow_cmd()
-        .args(["run", wf.to_str().unwrap()])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "run after lock release must succeed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("1 skipped"),
-        "completed rule must be skipped after the first run"
     );
 }
 

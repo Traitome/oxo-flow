@@ -306,10 +306,14 @@ pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool)
 /// data paths (D004, warning). Exits 1 when any error-severity finding is
 /// reported; warnings are informational — PATH and reference data are
 /// machine-specific and can arrive later (issue #63).
-pub fn deep_check_command(workflow: &Path, json: bool) -> Result<()> {
+pub fn deep_check_command(workflow: &Path, workdir: Option<&Path>, json: bool) -> Result<()> {
     let config = WorkflowConfig::from_file(workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
-    let base_dir = oxo_flow_core::parent_dir(workflow).to_path_buf();
+    // Judge existence from the same base the executor runs rules from:
+    // `--workdir`, or the workflow file's directory (issue #68 semantics).
+    let base_dir = workdir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| oxo_flow_core::parent_dir(workflow).to_path_buf());
     let report = oxo_flow_core::deep_check::compute_deep_check(&config, &base_dir);
 
     print_deep_console(&report);
