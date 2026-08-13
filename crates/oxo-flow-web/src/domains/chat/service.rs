@@ -262,7 +262,7 @@ pub async fn run_chat_agent(
         workflow_path: None,
         workflow_content: None,
         external_sources: vec![],
-        max_rounds: 4,
+        max_rounds: 6,
         tool_registry: super::tools::build_chat_tool_registry(),
         tool_approver: None,
         session: oxo_flow_ai::session::AiSession::new("web-chat", "chat", "web", "web-provider"),
@@ -276,7 +276,7 @@ pub async fn run_chat_agent(
         let _ = crate::domains::workflow::data::analyze_files(paths, Some(2));
     }
 
-    let orchestrator = Orchestrator::new(provider, 4);
+    let orchestrator = Orchestrator::new(provider, 6);
     orchestrator
         .execute_with_sink(&agent, &ctx, sink, None)
         .await

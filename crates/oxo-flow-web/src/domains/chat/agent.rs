@@ -36,7 +36,10 @@ impl Agent for ChatAgent {
              2. Use well-known bioinformatics tools with correct command-line syntax\n\
              3. Include the [workflow] section with name, version, description\n\
              4. Define rules with name, input, output, shell\n\
-             5. Use {{sample}} wildcard for sample-varying paths\n",
+             5. Use {{sample}} wildcard for sample-varying paths\n\
+             6. input and output MUST be TOML arrays, e.g. input = [\"reads/{{sample}}.fastq.gz\"]\n\
+             7. When validation errors are reported back, fix the TOML directly\n\
+                from the error text — do not call more tools\n",
             self.intent
         );
         for addition in &assembled.system_additions {
