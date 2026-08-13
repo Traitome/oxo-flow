@@ -44,10 +44,50 @@ export interface ParseResponse {
   rules: Array<{ name: string; inputs: string[]; outputs: string[]; environment: string; threads: number }>;
   dag: DagJson; stats: Record<string, unknown>;
 }
+export interface DagJsonNode {
+  id: string;
+  label: string;
+  color: string;
+  environment: string;
+  /** Complete serialized rule — canvas cards and the inspector read from here. */
+  rule: Record<string, unknown>;
+}
+
+export interface DagJsonEdge {
+  from: string;
+  to: string;
+  /** "declared" = explicit depends_on; "file" = inferred from input/output match. */
+  kind: 'declared' | 'file';
+}
+
 export interface DagJson {
-  nodes: Array<{ id: string; label: string; color: string }>;
-  edges: Array<{ source: string; target: string }>;
+  nodes: DagJsonNode[];
+  edges: DagJsonEdge[];
   parallel_groups?: Array<Array<string>>; critical_path?: Array<string>;
+}
+
+export interface KnowledgeTool {
+  name: string;
+  version: string;
+  summary: string;
+  platforms: string[];
+}
+
+export interface KnowledgeToolsResponse {
+  total: number;
+  tools: KnowledgeTool[];
+}
+
+export interface KnowledgeSkill {
+  name: string;
+  description: string;
+  domain: string;
+  primary_tool: string;
+}
+
+export interface KnowledgeSkillsResponse {
+  total: number;
+  skills: KnowledgeSkill[];
 }
 
 // ── Runs ──

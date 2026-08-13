@@ -62,11 +62,9 @@ test.describe('oxo-flow v0.9 Core User Flows', () => {
 
   test('DAG view renders graph nodes', async ({ page }) => {
     await page.goto('/editor');
-    // Wait for DAG rendering
-    await page.waitForTimeout(3000);
-    // Cytoscape canvas should be visible
-    const dagContainer = page.locator('.dag-container, [style*="cytoscape"]');
-    await expect(dagContainer.first()).toBeVisible({ timeout: 10000 });
+    // React Flow canvas should be visible with the default workflow's nodes
+    const node = page.locator('.rf-rule-node', { hasText: 'fastqc' });
+    await expect(node).toBeVisible({ timeout: 10000 });
     // Node count should appear
     await expect(page.locator('.dag-counts')).toBeVisible({ timeout: 10000 });
   });

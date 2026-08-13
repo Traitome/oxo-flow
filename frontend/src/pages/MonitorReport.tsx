@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { RunItem, MonitorStatus, ReportData, DagStatus, Diagnostics } from '../api/types';
 import { Play, Pause, RotateCcw, BarChart3, Loader2, Bot } from 'lucide-react';
-import DagView from '../components/DagView';
+import WorkflowCanvas from '../components/WorkflowCanvas';
 import { usePipelineSession } from '../context/PipelineSession';
 
 type TabType = 'monitor' | 'report' | 'diagnostics' | 'dag';
@@ -393,10 +393,22 @@ export default function MonitorReport() {
             <span style={{ color: 'var(--color-text-secondary)' }}>ETA: {(dagStatus.metrics.eta_ms / 60000).toFixed(0)}min</span>
           )}
         </div>
-        <div style={{ height: '400px', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
-          <DagView
-            nodes={dagStatus.nodes.map(n => ({ id: n.id, label: n.label, color: n.color, duration_ms: n.duration_ms ?? undefined }))}
-            edges={dagStatus.edges}
+        <div style={{ height: '480px', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
+          <WorkflowCanvas
+            dag={{
+              nodes: dagStatus.nodes.map(n => ({
+                id: n.id,
+                label: n.label,
+                color: n.color,
+                environment: 'system',
+                rule: {},
+              })),
+              edges: dagStatus.edges.map(e => ({ from: e.source, to: e.target, kind: 'declared' as const })),
+            }}
+            editable={false}
+            scopeKey={`monitor-${routeId}`}
+            statusById={Object.fromEntries(dagStatus.nodes.map(n => [n.id, n.status]))}
+            context="monitor"
           />
         </div>
       </div>

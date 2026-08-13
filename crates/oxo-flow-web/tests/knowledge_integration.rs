@@ -33,7 +33,9 @@ async fn tools_search_returns_grounded_entries() {
     let tools = body["tools"].as_array().unwrap();
     assert!(!tools.is_empty(), "{body}");
     assert!(
-        tools.iter().any(|t| t["name"].as_str().unwrap().contains("fastp")),
+        tools
+            .iter()
+            .any(|t| t["name"].as_str().unwrap().contains("fastp")),
         "{body:?}"
     );
     // Entries carry the fields the palette renders.

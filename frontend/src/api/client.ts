@@ -7,6 +7,7 @@ import type {
   DataAnalysis, ReferenceResult, AuditLogResponse, SearchResponse,
   DagEditResponse, DataPerceptionReport, MonitorStatus,
   ReportData, AiConfigFull, ServerAiConfig, UserAiConfig, AiConfigUpdate,
+  KnowledgeToolsResponse, KnowledgeSkillsResponse,
 } from './types';
 
 
@@ -75,6 +76,12 @@ export const api = {
     post<DagEditResponse>(`/api/pipeline/${id}/command`, { toml_content, source: 'dag_editor', operation, payload }),
   dagUndo: (id: string) => post<{ toml_content: string }>(`/api/pipeline/${id}/undo`, {}),
   dagRedo: (id: string) => post<{ toml_content: string }>(`/api/pipeline/${id}/redo`, {}),
+
+  // ── Knowledge (editor palette) ──
+  knowledgeTools: (q: string, limit = 20) =>
+    get<KnowledgeToolsResponse>(`/api/knowledge/tools?q=${encodeURIComponent(q)}&limit=${limit}`),
+  knowledgeSkills: (q: string, limit = 20) =>
+    get<KnowledgeSkillsResponse>(`/api/knowledge/skills?q=${encodeURIComponent(q)}&limit=${limit}`),
 
   // ── Data Perception ──
   analyzeData: (paths: string[], maxDepth = 2) => post<DataAnalysis>('/api/data/analyze', { paths, max_depth: maxDepth }),
