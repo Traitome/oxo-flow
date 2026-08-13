@@ -498,3 +498,54 @@ impl Tool for LookupPipelineTool {
         Ok(out)
     }
 }
+
+#[tokio::test]
+async fn lookup_tool_handles_missing_query() {
+    let tool = LookupTool::new();
+    let result = tool.execute(r#"{}"#).await;
+    assert!(result.is_err(), "missing query should error");
+}
+
+#[tokio::test]
+async fn lookup_tool_unknown_query() {
+    let tool = LookupTool::new();
+    let result = tool
+        .execute(r#"{"query": "zzzznonexistenttool"}"#)
+        .await
+        .unwrap();
+    assert!(result.contains("No Bioconda"), "should report no matches");
+}
+
+#[tokio::test]
+async fn lookup_skill_handles_missing_query() {
+    let tool = LookupSkillTool::new();
+    let result = tool.execute(r#"{}"#).await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn lookup_pipeline_stats() {
+    let tool = LookupPipelineTool::new();
+    let result = tool.execute(r#"{"action": "stats"}"#).await.unwrap();
+    assert!(result.contains("workflow skills"));
+}
+
+#[tokio::test]
+async fn lookup_pipeline_path() {
+    let tool = LookupPipelineTool::new();
+    let result = tool
+        .execute(r#"{"action": "path", "from": "wgs-alignment", "to": "variant-calling"}"#)
+        .await
+        .unwrap();
+    assert!(
+        result.contains("wgs-alignment"),
+        "path should include start"
+    );
+}
+
+#[tokio::test]
+async fn lookup_pipeline_bad_action() {
+    let tool = LookupPipelineTool::new();
+    let result = tool.execute(r#"{"action": "bogus"}"#).await.unwrap();
+    assert!(result.contains("Unknown action"));
+}

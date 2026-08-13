@@ -138,7 +138,9 @@ pub fn domains_for_intent(intent: &str) -> Vec<String> {
         ),
         (
             "read-alignment",
-            &["align", "bwa", "star", "hisat", "bowtie"],
+            &[
+                "align", "bwa", "star", "hisat", "bowtie", "wgs", "wes", "bam", "fastq", "mapping",
+            ],
         ),
         (
             "read-qc",
@@ -241,5 +243,57 @@ mod tests {
     #[test]
     fn unknown_query_empty() {
         assert!(search_skills("zzzznonexistentdomain", 5).is_empty());
+    }
+
+    #[test]
+    fn intent_matching_broad_coverage() {
+        let cases = [
+            (
+                "WGS germline variant calling with GATK HaplotypeCaller",
+                vec!["variant-calling", "read-alignment"],
+            ),
+            (
+                "RNA-seq quantification with salmon and DESeq2 differential expression",
+                vec!["rna-quantification", "differential-expression"],
+            ),
+            (
+                "16S metagenomics taxonomic classification with Kraken2",
+                vec!["metagenomics"],
+            ),
+            (
+                "scRNA-seq clustering with Scanpy and Seurat",
+                vec!["single-cell"],
+            ),
+            (
+                "Nanopore long-read genome assembly",
+                vec!["long-read-sequencing", "genome-assembly"],
+            ),
+            (
+                "DNA methylation analysis with Bismark",
+                vec!["methylation-analysis"],
+            ),
+            (
+                "Pathway enrichment analysis with GSEA",
+                vec!["pathway-analysis"],
+            ),
+            ("ChIP-seq peak calling with MACS2", vec!["chip-seq"]),
+        ];
+        for (intent, expected) in cases {
+            let got = domains_for_intent(intent);
+            for exp in expected {
+                assert!(
+                    got.iter().any(|d| d == exp),
+                    "intent '{intent}' should match domain '{exp}', got {:?}",
+                    got
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn intent_matching_no_false_positive() {
+        // Unrelated text should match nothing
+        let domains = domains_for_intent("hello world");
+        assert!(domains.is_empty());
     }
 }

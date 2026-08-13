@@ -546,3 +546,4 @@
 {"f": "wgs-alignment", "t": "fusion-detection", "d": "BAM", "p": 6}
 {"f": "wgs-alignment", "t": "qc", "d": "BAM, SAM", "p": 0}
 {"f": "wgs-alignment", "t": "data-inspection", "d": "BAM", "p": 0}
+{"i": "qc", "n": "QC", "t": "0", "o": "Quality control for sequencing data (FastQC, MultiQC, read trimming)"}

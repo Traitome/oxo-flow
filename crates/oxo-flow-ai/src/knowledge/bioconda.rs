@@ -171,3 +171,20 @@ mod tests {
         assert!(out.contains("total)"));
     }
 }
+
+#[test]
+fn search_ranking_quality() {
+    // "bwa" should rank the exact package first
+    let results = search_tools("bwa", 5);
+    assert_eq!(results[0].name, "bwa", "exact match should rank first");
+
+    // "gatk4" should find the GATK4 package
+    let results = search_tools("gatk4", 3);
+    assert!(results.iter().any(|t| t.name == "gatk4"));
+}
+
+#[test]
+fn search_limit_respected() {
+    let results = search_tools("a", 3);
+    assert!(results.len() <= 3);
+}
