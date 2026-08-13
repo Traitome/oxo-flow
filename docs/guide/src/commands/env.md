@@ -108,3 +108,6 @@ oxo-flow env check pipeline.oxoflow
 - `env check` exits with code `1` if any environment validation fails
 - The check verifies backend availability, not that specific conda environments or Docker images exist — it confirms that the required *type* of environment manager is installed
 - Run `env check` before submitting to a cluster to catch environment issues early
+- To check that environment **definition files** exist (conda YAML, venv
+  directories, `pixi.toml`), use
+  [`oxo-flow test --deep`](test.md#deep-checks-deep) (finding `D002`)
