@@ -51,11 +51,26 @@ This is a classic parallel computing pattern:
 2. **Process**: Each scattered job runs GATK HaplotypeCaller restricted to a single chromosome (`-L {chr}`), producing one per-chromosome GVCF.
 3. **Gather**: The `gather_gvcf` rule receives the outputs of all scattered jobs as its `{input}` and merges them with GATK GatherVcfs.
 
-!!! info "Gather inference is reliable in complex workflows"
-    The gather rule's inputs are injected automatically by the expansion engine — you never declare them by hand. This stays reliable in complex scenarios:
+!!! info "Gather routing is declared, not inferred"
+    Each scatter rule **explicitly names its gather rule** via the `gather = "..."` field — the engine routes outputs by that declaration, never by guessing:
 
-    - **Multiple scatter rules feeding one gather** — all outputs accumulate (verified: two scatters with 3 + 2 values injected 5 inputs into one gather)
-    - **Explicit inputs preserved** — any inputs you DO declare on the gather rule are kept alongside the injected ones
+    ```toml
+    [[rules]]
+    name = "call_by_chr"
+    scatter = { variable = "chr", values_from = "config.chromosomes",
+                gather = "gather_variants" }   # my outputs → gather_variants
+
+    [[rules]]
+    name = "qc_by_sample"
+    scatter = { variable = "sample", values_from = "config.samples",
+                gather = "gather_qc" }          # my outputs → gather_qc
+    ```
+
+    This makes complex scenarios reliable:
+
+    - **Two scatters + two gathers** — each gather receives only its own scatter's outputs, no cross-contamination (verified: 2 chr outputs → gather_variants, 3 sample outputs → gather_qc)
+    - **Multiple scatters → one gather** — name the same gather rule in several scatter rules and their outputs accumulate
+    - **Explicit gather inputs preserved** — any `input` you declare on the gather rule is kept alongside the injected ones
     - **Independent rules unaffected** — non-scatter rules run concurrently without interference
 
     Note that `oxo-flow graph` shows the *unexpanded* template DAG (scatter rules before per-value expansion), while `oxo-flow dry-run` shows the fully expanded DAG with all per-chromosome jobs and gather edges.
