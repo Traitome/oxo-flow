@@ -163,7 +163,7 @@ The `featureCounts -s 2` flag specifies reverse-strand counting, appropriate for
 
 ### `config.samples` Is Inert
 
-The `samples = "samples.csv"` key in `[config]` is inert: no rule references it, and it does not control wildcard expansion. Sample expansion is driven by `[[sample_groups]]` (see [Parallel Samples](parallel-samples.md)); the `multiqc` rule's `depends_on` ensures it runs exactly once regardless of how samples are expanded.
+The `samples = "samples.csv"` key in `[config]` is inert: no rule references it, and it does not control wildcard expansion. Sample expansion is driven by `[[sample_groups]]` (see [Parallel Samples](parallel-samples.md) and the [wildcards reference](../reference/wildcards.md)); the `multiqc` rule's `depends_on` ensures it runs exactly once regardless of how samples are expanded.
 
 ## Running the Workflow
 

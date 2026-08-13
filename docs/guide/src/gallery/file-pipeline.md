@@ -65,6 +65,8 @@ oxo-flow builds a DAG by matching rule outputs to rule inputs:
 
 You never need to declare dependencies manually — they are inferred from file paths.
 
+How the inference engine builds and topologically sorts the DAG is covered in the [DAG engine reference](../reference/dag-engine.md).
+
 ### Config Variables
 
 The `[config]` section defines key-value pairs that are accessible in shell commands via `{config.key}`:
@@ -75,6 +77,8 @@ greeting = "Welcome to oxo-flow"
 ```
 
 In the shell: `echo '{config.greeting}'` expands to `echo 'Welcome to oxo-flow'`.
+
+`{config.x}` is one of the three substitution mechanisms; see [Wildcards](../reference/wildcards.md#fan-out-vs-fan-in) for the others.
 
 ### Multi-Line Shell Commands
 

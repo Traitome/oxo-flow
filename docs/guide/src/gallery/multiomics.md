@@ -7,6 +7,7 @@ Integrate whole-genome sequencing (WGS), RNA-seq, and bisulfite sequencing (meth
     - Cross-omics data integration (WGS + RNA-seq + Methylation)
     - Multiple environment backends in a single pipeline
     - Fan-in convergence from independent branches
+    - `{sample}` wildcard expansion ([wildcards reference](../reference/wildcards.md))
     - Multi-omics integration and reporting
 
 ## Pipeline Overview

@@ -113,6 +113,8 @@ When a rule specifies an environment, oxo-flow:
 4. **Runs** the shell command inside the environment
 5. **Deactivates** the environment after completion
 
+The full backend matrix (conda, mamba, pixi, docker, singularity, venv, modules) and activation semantics are documented in the [environment system reference](../reference/environment-system.md).
+
 ### DAG with Mixed Environments
 
 ```mermaid

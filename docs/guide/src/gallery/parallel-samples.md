@@ -82,6 +82,8 @@ The `{sample}` pattern in file paths is a wildcard. When oxo-flow encounters wil
 
 Here, the `[[sample_groups]]` table defines three samples (`sampleA`, `sampleB`, `sampleC`), so the `preprocess` rule expands into three independent jobs that can run in parallel.
 
+See the [wildcards reference](../reference/wildcards.md) for every expansion source (file discovery, pairs, sample groups) and for regex constraints.
+
 ### Resource Declarations
 
 Each rule can declare its resource requirements:
@@ -98,6 +100,8 @@ The `[defaults]` section provides fallback values for rules that don't specify r
 
 - **Fan-out**: The `preprocess` and `analyze` rules create one job per sample → parallel execution
 - **Fan-in**: The `aggregate` rule collects all per-sample results into a single output
+
+This example writes the fan-in inputs out explicitly to keep it minimal. In real workflows, [`expand_inputs`](../reference/wildcards.md#gathering-inputs-with-expand_inputs) derives them from the sample list automatically. Full mechanics: [Fan-out vs Fan-in](../reference/wildcards.md#fan-out-vs-fan-in).
 
 ## Running the Workflow
 

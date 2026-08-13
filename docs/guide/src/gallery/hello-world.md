@@ -54,6 +54,8 @@ Each rule needs:
 
 `{output[0]}` in the shell command is replaced with the first element of the `output` array at execution time. This ensures the command always writes to the declared output path.
 
+All built-in placeholders (`{input}`, `{output}`, `{threads}`, `{memory}`, `{config.x}`…) are listed in the [wildcards reference](../reference/wildcards.md#built-in-placeholders).
+
 ## Running the Workflow
 
 ### Validate

@@ -8,6 +8,7 @@ Scale transcriptome analysis to individual cells using droplet-based single-cell
     - Cell clustering and visualization with Seurat
     - Per-sample report generation with RMarkdown
     - Mixed environments: Docker (CellRanger) and Conda (R)
+    - `{sample}` cohort expansion via `[[sample_groups]]` ([wildcards reference](../reference/wildcards.md))
 
 ## Pipeline Overview
 
