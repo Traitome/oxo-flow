@@ -305,42 +305,7 @@ impl ClaudeBackend {
         messages: &[Message],
         tools: &[ToolDef],
     ) -> Result<AiResponse, AiError> {
-        // Extract system message for Anthropic's top-level "system" field
-        let system = messages
-            .iter()
-            .find(|m| m.role == MessageRole::System)
-            .map(|m| m.content.clone())
-            .unwrap_or_default();
-
-        // Convert remaining messages to Anthropic format
-        let anthropic_msgs: Vec<serde_json::Value> = messages
-            .iter()
-            .filter(|m| m.role != MessageRole::System)
-            .filter_map(|m| {
-                let role = match m.role {
-                    MessageRole::User => "user",
-                    MessageRole::Assistant => "assistant",
-                    MessageRole::Tool => "user", // Anthropic flattens tool results
-                    MessageRole::System => return None,
-                };
-                let mut obj = serde_json::json!({
-                    "role": role,
-                    "content": m.content,
-                });
-                // Attach tool results if present
-                if let Some(ref tc_id) = m.tool_call_id {
-                    obj = serde_json::json!({
-                        "role": "user",
-                        "content": [{
-                            "type": "tool_result",
-                            "tool_use_id": tc_id,
-                            "content": m.content,
-                        }]
-                    });
-                }
-                Some(obj)
-            })
-            .collect();
+        let (system, anthropic_msgs) = to_anthropic_messages(messages);
 
         let mut body = serde_json::json!({
             "model": self.model,
@@ -391,6 +356,72 @@ impl ClaudeBackend {
 
         parse_claude_response(&json)
     }
+}
+
+/// Convert internal messages to Anthropic's wire format.
+///
+/// Returns (system, messages). Assistant turns that carry tool calls emit
+/// explicit `tool_use` blocks — Anthropic rejects `tool_result` blocks whose
+/// `tool_use_id` was never declared in a prior assistant turn.
+fn to_anthropic_messages(messages: &[Message]) -> (String, Vec<serde_json::Value>) {
+    let system = messages
+        .iter()
+        .find(|m| m.role == MessageRole::System)
+        .map(|m| m.content.clone())
+        .unwrap_or_default();
+
+    let anthropic_msgs: Vec<serde_json::Value> = messages
+        .iter()
+        .filter(|m| m.role != MessageRole::System)
+        .filter_map(|m| {
+            let role = match m.role {
+                MessageRole::User => "user",
+                MessageRole::Assistant => "assistant",
+                MessageRole::Tool => "user", // Anthropic flattens tool results
+                MessageRole::System => return None,
+            };
+            // Assistant messages with tool calls must emit the tool_use
+            // blocks — Anthropic rejects tool_result blocks whose
+            // tool_use_id was never declared in a prior assistant turn.
+            if m.role == MessageRole::Assistant
+                && let Some(tool_calls) = &m.tool_calls
+                && !tool_calls.is_empty()
+            {
+                let mut blocks: Vec<serde_json::Value> = Vec::new();
+                if !m.content.is_empty() {
+                    blocks.push(serde_json::json!({"type": "text", "text": m.content}));
+                }
+                for tc in tool_calls {
+                    let input: serde_json::Value =
+                        serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
+                    blocks.push(serde_json::json!({
+                        "type": "tool_use",
+                        "id": tc.id,
+                        "name": tc.name,
+                        "input": input,
+                    }));
+                }
+                return Some(serde_json::json!({"role": role, "content": blocks}));
+            }
+            // Tool result messages (Anthropic wraps them in a user turn).
+            if let Some(ref tc_id) = m.tool_call_id {
+                return Some(serde_json::json!({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": tc_id,
+                        "content": m.content,
+                    }]
+                }));
+            }
+            Some(serde_json::json!({
+                "role": role,
+                "content": m.content,
+            }))
+        })
+        .collect();
+
+    (system, anthropic_msgs)
 }
 
 fn parse_claude_response(json: &serde_json::Value) -> Result<AiResponse, AiError> {
@@ -1077,6 +1108,7 @@ pub struct ProviderConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::*;
 
     #[test]
     fn provider_kind_parse() {
@@ -1391,6 +1423,36 @@ mod tests {
         });
         let response = parse_claude_response(&json).unwrap();
         assert_eq!(response.content.as_deref(), Some("Here is your workflow"));
+    }
+
+    #[test]
+    fn to_anthropic_messages_emits_tool_use_blocks() {
+        let messages = vec![
+            Message::system("sys"),
+            Message::user("do it"),
+            Message::assistant_with_tools(vec![ToolCall {
+                id: "tc-1".into(),
+                name: "lookup_tool".into(),
+                arguments: "{\"query\":\"fastqc\"}".into(),
+            }]),
+            Message::tool("tc-1", "lookup_tool", "found 8"),
+        ];
+        let (system, msgs) = to_anthropic_messages(&messages);
+        assert_eq!(system, "sys");
+        // msgs: [user, assistant-with-tool_use, user-with-tool_result]
+        let assistant = &msgs[1];
+        assert_eq!(assistant["role"], "assistant");
+        let blocks = assistant["content"].as_array().unwrap();
+        let tool_use = blocks
+            .iter()
+            .find(|b| b["type"] == "tool_use")
+            .expect("assistant turn must carry the tool_use block");
+        assert_eq!(tool_use["id"], "tc-1");
+        assert_eq!(tool_use["name"], "lookup_tool");
+        assert_eq!(tool_use["input"]["query"], "fastqc");
+        let result = &msgs[2];
+        assert_eq!(result["role"], "user");
+        assert_eq!(result["content"][0]["tool_use_id"], "tc-1");
     }
 
     #[test]
