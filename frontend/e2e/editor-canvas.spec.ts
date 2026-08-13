@@ -71,11 +71,15 @@ test.describe('Graphical workflow editor (canvas)', () => {
     await expect(dashedEdge.first()).toBeVisible();
   });
 
-  test('dry-run and save buttons still work from the editor', async ({ page }) => {
+  test('run dialog and dry-run still work from the editor', async ({ page }) => {
     await page.goto('/editor');
     await page.locator('.rf-rule-node', { hasText: 'fastqc' }).waitFor();
-    await expect(page.getByRole('button', { name: /Dry-Run/ })).toBeEnabled();
-    await page.getByRole('button', { name: /Dry-Run/ }).click();
+    // Run opens the options dialog; Dry-Run (preview) executes the plan only.
+    await page.getByRole('button', { name: /^Run/ }).click();
+    await expect(page.locator('#run-dialog-title')).toBeVisible();
+    // Options fields are present and honored.
+    await page.locator('.modal-dialog input[type="number"]').fill('3');
+    await page.locator('.modal-dialog').getByRole('button', { name: /Dry-Run/ }).click();
     await expect(page.locator('.result-bar')).toContainText('Dry-Run started', { timeout: 15_000 });
   });
 });

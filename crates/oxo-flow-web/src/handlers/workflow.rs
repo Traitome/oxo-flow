@@ -220,6 +220,8 @@ pub async fn run_workflow(
             dry_run: c.dry_run.unwrap_or(false),
             keep_going: c.keep_going.unwrap_or(false),
             max_jobs: c.max_jobs,
+            samples: Vec::new(),
+            targets: Vec::new(),
         })
         .unwrap_or_default();
     executor::spawn_background_run(

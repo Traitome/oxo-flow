@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Play, CheckCircle, AlertCircle, Undo2, Redo2, Save, Wand2, Blocks } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import type { DagJson, KnowledgeTool } from '../api/types';
 import ChatUI from '../components/ChatUI';
 import ToolPalette from '../components/ToolPalette';
 import WorkflowCanvas from '../components/WorkflowCanvas';
 import RuleInspector from '../components/RuleInspector';
+import RunDialog from '../components/RunDialog';
 import TomlEditor from '../components/TomlEditor';
 import { usePipelineSession } from '../context/PipelineSession';
 
@@ -46,7 +47,34 @@ export default function PipelineEditor() {
   const [pipelineId] = useState(() => 'draft-' + Math.random().toString(36).slice(2, 9));
   const [leftTab, setLeftTab] = useState<LeftTab>('palette');
   const [inspector, setInspector] = useState<InspectorState | null>(null);
+  const [showRunDialog, setShowRunDialog] = useState(false);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
+  // Load a template when navigated with ?template=<id> (dashboard quick-start).
+  useEffect(() => {
+    const templateId = searchParams.get('template');
+    if (!templateId) return;
+    let cancelled = false;
+    api
+      .getTemplate(templateId)
+      .then((tpl) => {
+        if (cancelled || !tpl.toml_content) return;
+        setToml(tpl.toml_content);
+        session.setRunResult({
+          message: `Loaded template "${tpl.name}" — edit it on the canvas, then dry-run`,
+          type: 'success',
+        });
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : 'Template not found';
+        session.setRunResult({ message: `Template load failed: ${msg}`, type: 'error' });
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   // Sync TOML and DAG to the session context.
   useEffect(() => {
@@ -72,10 +100,16 @@ export default function PipelineEditor() {
     return () => clearTimeout(timer);
   }, [toml, updateDag]);
 
-  const handleRun = async (dryRun = false) => {
+  const handleRun = async (dryRun = false, options: { maxJobs: number; keepGoing: boolean; samples: string[]; targets: string[] } = { maxJobs: 4, keepGoing: false, samples: [], targets: [] }) => {
     setRunning(true);
     try {
-      const res = await api.createRun(toml, 4, dryRun);
+      const res = await api.createRun(toml, {
+        max_jobs: options.maxJobs,
+        dry_run: dryRun,
+        keep_going: options.keepGoing,
+        samples: options.samples,
+        targets: options.targets,
+      });
       session.setRunResult({
         runId: res.run_id,
         message: `${dryRun ? 'Dry-Run' : 'Run'} started: ${res.run_id.slice(0, 8)}... | ${res.execution_plan.total_rules} rules, est. ${res.estimated_resources.estimated_duration_secs}s`,
@@ -254,10 +288,7 @@ export default function PipelineEditor() {
               <button onClick={handleSave} className="btn-sm" style={{ background: 'transparent', border: '1px solid var(--color-border)' }}>
                 <Save size={14} /> Save
               </button>
-              <button onClick={() => handleRun(true)} disabled={running || !validation?.valid} className="btn-sm" style={{ background: 'transparent', border: '1px solid var(--color-border)' }}>
-                <CheckCircle size={14} /> Dry-Run
-              </button>
-              <button onClick={() => handleRun(false)} disabled={running || !validation?.valid} className="btn-run">
+              <button onClick={() => setShowRunDialog(true)} disabled={running || !validation?.valid} className="btn-run">
                 <Play size={16} /> {running ? 'Starting...' : 'Run'}
               </button>
             </div>
@@ -275,6 +306,16 @@ export default function PipelineEditor() {
           {session.state.lastRunResult.message}
           <span style={{ marginLeft: 'auto', fontSize: '0.7rem', opacity: 0.7 }}>click to dismiss</span>
         </div>
+      )}
+
+      {showRunDialog && (
+        <RunDialog
+          onClose={() => setShowRunDialog(false)}
+          onSubmit={(dryRun, options) => {
+            setShowRunDialog(false);
+            void handleRun(dryRun, options);
+          }}
+        />
       )}
 
       {inspector && (

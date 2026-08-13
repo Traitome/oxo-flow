@@ -447,3 +447,5 @@ body{font-family:var(--font-sans);font-size:.9375rem;line-height:1.6;color:var(-
   word-break: break-word;
 }
 .chat-tool-summary { color: var(--color-text-secondary); }
+
+.run-dialog-hint { font-size: 0.75rem; color: var(--color-text-tertiary); line-height: 1.5; }

@@ -98,6 +98,46 @@ pub struct RunFlags {
     pub keep_going: bool,
     /// Explicitly requested parallelism (`-j`); `None` keeps the CLI default.
     pub max_jobs: Option<usize>,
+    /// Sample filters (`--sample <name>` each) — restrict execution to
+    /// these samples. Empty = all discovered samples.
+    pub samples: Vec<String>,
+    /// Explicit target rules (`-t <name>` each). Empty = engine default.
+    pub targets: Vec<String>,
+}
+
+/// Build the CLI argument vector for a run (pure — unit-tested).
+pub fn build_cli_args(
+    workflow_file: &std::path::Path,
+    run_dir: &std::path::Path,
+    flags: &RunFlags,
+) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = Vec::new();
+    if flags.dry_run {
+        args.push("dry-run".into());
+    } else {
+        args.push("run".into());
+    }
+    args.push(workflow_file.as_os_str().to_owned());
+    args.push("--workdir".into());
+    args.push(run_dir.as_os_str().to_owned());
+    if !flags.dry_run {
+        if flags.keep_going {
+            args.push("--keep-going".into());
+        }
+        if let Some(jobs) = flags.max_jobs {
+            args.push("-j".into());
+            args.push(jobs.to_string().into());
+        }
+        for sample in &flags.samples {
+            args.push("--sample".into());
+            args.push(sample.into());
+        }
+        for target in &flags.targets {
+            args.push("-t".into());
+            args.push(target.into());
+        }
+    }
+    args
 }
 
 /// Spawns a background task to execute the workflow in a sandboxed workspace.
@@ -159,24 +199,7 @@ pub fn spawn_background_run(
         // `dry_run` spawns the preview subcommand (nothing executes);
         // max_jobs and keep_going map to -j / -k. Only explicitly requested
         // jobs are passed — the CLI default stays in charge otherwise.
-        let mut oxo_args: Vec<std::ffi::OsString> = Vec::new();
-        if flags.dry_run {
-            oxo_args.push("dry-run".into());
-        } else {
-            oxo_args.push("run".into());
-        }
-        oxo_args.push(workflow_file.as_os_str().to_owned());
-        oxo_args.push("--workdir".into());
-        oxo_args.push(run_dir.as_os_str().to_owned());
-        if !flags.dry_run {
-            if flags.keep_going {
-                oxo_args.push("--keep-going".into());
-            }
-            if let Some(jobs) = flags.max_jobs {
-                oxo_args.push("-j".into());
-                oxo_args.push(jobs.to_string().into());
-            }
-        }
+        let oxo_args = build_cli_args(&workflow_file, &run_dir, &flags);
 
         let mut cmd = if auth_type == "sudo" && os_user != "oxo-flow" {
             let mut c = Command::new("sudo");
@@ -332,6 +355,36 @@ async fn mark_run_failed(run_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_cli_args_includes_samples_and_targets() {
+        let flags = RunFlags {
+            dry_run: false,
+            keep_going: true,
+            max_jobs: Some(4),
+            samples: vec!["S1".into(), "S2".into()],
+            targets: vec!["align".into()],
+        };
+        let args = build_cli_args(
+            std::path::Path::new("wf.oxoflow"),
+            std::path::Path::new("dir"),
+            &flags,
+        );
+        let strs: Vec<String> = args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(strs[0], "run");
+        assert!(strs.contains(&"--keep-going".to_string()));
+        assert!(strs.contains(&"--sample".to_string()));
+        assert!(strs.contains(&"S1".to_string()));
+        assert!(strs.contains(&"S2".to_string()));
+        assert!(strs.contains(&"-t".to_string()));
+        assert!(strs.contains(&"align".to_string()));
+        // dry-run omits execution-only flags
+        let dry = RunFlags { dry_run: true, ..flags };
+        let args = build_cli_args(std::path::Path::new("w"), std::path::Path::new("d"), &dry);
+        let strs: Vec<String> = args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(strs[0], "dry-run");
+        assert!(!strs.contains(&"--sample".to_string()));
+    }
 
     #[test]
     fn exit_success_maps_to_completed() {

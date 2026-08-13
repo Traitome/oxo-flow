@@ -90,7 +90,10 @@ export const api = {
   referenceStatus: () => get<{ installed: any[]; missing: string[] }>('/api/data/reference/status'),
 
   // ── Execution ──
-  createRun: (toml_content: string, maxJobs = 4, dryRun = false) => post<RunResponse>('/api/runs', { toml_content, max_jobs: maxJobs, dry_run: dryRun }),
+  createRun: (
+    toml_content: string,
+    options: { max_jobs?: number; dry_run?: boolean; keep_going?: boolean; samples?: string[]; targets?: string[] } = {},
+  ) => post<RunResponse>('/api/runs', { toml_content, max_jobs: options.max_jobs ?? 4, dry_run: options.dry_run ?? false, keep_going: options.keep_going ?? false, samples: options.samples ?? [], targets: options.targets ?? [] }),
   listRuns: () => get<RunItem[]>('/api/runs'),
   getRun: (id: string) => get<RunItem>(`/api/runs/${id}`),
   getRunStatus: (id: string) => get<RunStatus>(`/api/runs/${id}/status`),

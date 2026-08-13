@@ -176,6 +176,26 @@ pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateR
                     .get("max_jobs")
                     .and_then(|v| v.as_u64())
                     .map(|j| j as usize),
+                samples: req
+                    .get("samples")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str())
+                            .map(String::from)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                targets: req
+                    .get("targets")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str())
+                            .map(String::from)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             },
         );
     }
