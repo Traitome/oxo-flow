@@ -16,7 +16,13 @@ successfully are skipped; only incomplete or previously-failed rules are
 re-executed.
 
 The checkpoint file (`.oxo-flow/checkpoint.json`) is automatically created by
-`oxo-flow run` and stores the completion status and benchmarks of each rule.
+`oxo-flow run` and stores the completion status and benchmarks of each rule,
+plus a config snapshot and per-rule fingerprints for change detection.
+
+Resuming goes through the same config-change impact analysis as `run`: if the
+workflow config or a rule definition changed since the checkpoint was written,
+only the affected rules and their downstream re-execute. See
+[Config changes and precise invalidation](run.md#config-changes-and-precise-invalidation).
 
 ## Options
 

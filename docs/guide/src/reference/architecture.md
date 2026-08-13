@@ -45,9 +45,10 @@ The `oxo-flow-core` crate is organized into focused modules:
 | Module | Responsibility |
 |---|---|
 | `config` | Parse `.oxoflow` TOML files into `WorkflowConfig` |
+| `config_impact` | Config-change impact analysis: config key → rule reference graph, rule/reference fingerprints, precise checkpoint invalidation |
 | `rule` | Rule definitions: inputs, outputs, shell, resources, environment |
 | `dag` | Build and validate the dependency DAG, topological sorting |
-| `executor` | Execute rules locally with checkpointing, resource enforcement |
+| `executor` | Execute rules locally with checkpointing, resource enforcement; per-rule force set bypasses the freshness gate for invalidated rules |
 | `scheduler` | Resource-aware job scheduling with ResourcePool |
 | `environment` | Resolve and activate conda, mamba, pixi, docker, singularity, venv, system, modules; cache setup state |
 | `wildcard` | Expand `{sample}` patterns in file paths |

@@ -72,9 +72,20 @@ The checkpoint file is JSON with the following structure:
       "retries": 0
     }
   },
-  "workflow_path": "pipeline.oxoflow"
+  "workflow_path": "pipeline.oxoflow",
+  "config_snapshot": {
+    "min_quality": "20"
+  },
+  "rule_fingerprints": {
+    "trim_reads": "sha256:1a2b3c…",
+    "align": "sha256:4d5e6f…"
+  }
 }
 ```
+
+`config_snapshot` records the effective config values (sensitive keys stored
+as SHA-256 digests) and `rule_fingerprints` the structural fingerprints that
+drive [precise invalidation](run.md#config-changes-and-precise-invalidation).
 
 ---
 
