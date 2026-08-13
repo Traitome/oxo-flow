@@ -36,20 +36,27 @@ author = "Traitome"
 
 [config]
 reference = "/data/references/GRCh38/cellranger_index"
-samples = ["sample1", "sample2"]
 
 [defaults]
 threads = 8
 memory = "32G"
 
+# Define the sample cohort for {sample} wildcard expansion.
+# Edit this list (or pass --sample on the CLI) to match your data.
+[[sample_groups]]
+name = "cohort"
+samples = ["sample1", "sample2"]
+
 [[rules]]
 name = "cellranger_count"
-input = ["raw/{sample}_R1.fastq.gz", "raw/{sample}_R2.fastq.gz"]
+# CellRanger expects standard 10x FASTQ naming: {sample}_S1_L001_R1_001.fastq.gz
+input = ["raw/{sample}_S1_L001_R1_001.fastq.gz", "raw/{sample}_S1_L001_R2_001.fastq.gz"]
 output = ["counts/{sample}/outs/filtered_feature_bc_matrix.h5"]
 description = "scRNA-seq quantification with CellRanger"
 shell = """
+mkdir -p counts && cd counts
 cellranger count --id={sample} \
-                 --fastqs=raw/ \
+                 --fastqs=../raw/ \
                  --sample={sample} \
                  --transcriptome={config.reference} \
                  --localcores={threads} \
@@ -68,7 +75,10 @@ name = "clustering_analysis"
 input = ["counts/{sample}/outs/filtered_feature_bc_matrix.h5"]
 output = ["analysis/{sample}/seurat_object.rds", "analysis/{sample}/tsne_plot.png"]
 description = "Cell clustering and visualization with Seurat"
-shell = "Rscript scripts/seurat_analysis.R --input {input[0]} --output-dir analysis/{sample}/"
+shell = """
+mkdir -p analysis/{sample}
+Rscript scripts/seurat_analysis.R --input {input[0]} --output-dir analysis/{sample}/
+"""
 
 [rules.resources]
 threads = 4
@@ -82,7 +92,10 @@ name = "generate_sc_report"
 input = ["analysis/{sample}/seurat_object.rds", "analysis/{sample}/tsne_plot.png"]
 output = ["results/{sample}.sc_report.html"]
 description = "Generate single-cell analysis report"
-shell = "Rscript -e \"rmarkdown::render('templates/sc_report.Rmd', output_file='{output[0]}')\""
+shell = """
+mkdir -p results
+Rscript -e "rmarkdown::render('templates/sc_report.Rmd', output_file='{output[0]}')"
+"""
 
 [rules.environment]
 conda = "envs/rmarkdown.yaml"
@@ -96,7 +109,10 @@ Traditional "bulk" RNA-seq measures the average expression across thousands of c
 
 - **Cellular Heterogeneity** — Identify rare cell types and sub-populations
 - **Dynamic Processes** — Trace cell differentiation and state transitions
-- **Spatial Resolution** — Map cell types back to tissue architecture
+- **Regulatory Networks** — Infer gene regulatory relationships from co-expression across cells
+
+!!! note "Auxiliary files"
+    This workflow expects a few user-provided files next to the `.oxoflow` definition: `scripts/seurat_analysis.R` (QC, normalization, clustering, t-SNE), `templates/sc_report.Rmd` (the report template), and the Conda environment files under `envs/`. They are omitted from the gallery to keep the example focused on the workflow structure.
 
 ### Computational Challenges
 
@@ -113,6 +129,14 @@ scRNA-seq workflows are significantly more resource-intensive than bulk RNA-seq:
 ```bash
 $ oxo-flow validate examples/gallery/09_single_cell_rnaseq.oxoflow
 ✓ examples/gallery/09_single_cell_rnaseq.oxoflow — 3 rules, 3 dependencies
+```
+
+### Run
+
+Samples come from the `[[sample_groups]]` block in the workflow file (edit the list to match your data, or pass `--sample` on the CLI). CellRanger expects standard 10x demultiplexed FASTQs under `raw/`, named `{sample}_S1_L001_R1_001.fastq.gz` / `..._R2_001.fastq.gz`; `--sample={sample}` selects the matching files:
+
+```bash
+oxo-flow run examples/gallery/09_single_cell_rnaseq.oxoflow -j 2
 ```
 
 ## Further Reading

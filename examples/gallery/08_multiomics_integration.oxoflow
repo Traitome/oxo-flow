@@ -12,12 +12,18 @@ author = "oxo-flow examples"
 [config]
 reference = "/data/references/GRCh38/genome.fa"
 gene_annotation = "/data/references/GRCh38/genes.gtf"
-samples = "samples.csv"
 genome_build = "GRCh38"
 
 [defaults]
 threads = 4
 memory = "8G"
+
+# Define the sample cohort for {sample} wildcard expansion.
+# Each sample must have WGS, RNA-seq, and methylation inputs.
+# Edit this list (or pass --sample on the CLI) to match your data.
+[[sample_groups]]
+name = "cohort"
+samples = ["sampleA", "sampleB"]
 
 # === WGS Branch ===
 
@@ -113,9 +119,9 @@ shell = """
 mkdir -p methyl_aligned
 bismark --genome /data/references/GRCh38/bismark_index \
         -1 {input[0]} -2 {input[1]} \
-        --parallel {threads} \
+        --multicore {threads} \
         -o methyl_aligned/
-deduplicate_bismark --bam methyl_aligned/{sample}_R1_bismark_bt2_pe.bam \
+deduplicate_bismark --paired --bam methyl_aligned/{sample}_R1_bismark_bt2_pe.bam \
         -o methyl_aligned/{sample}
 """
 
@@ -129,7 +135,8 @@ conda = "envs/bismark.yaml"
 [[rules]]
 name = "methylation_extract"
 input = ["methyl_aligned/{sample}.deduplicated.bam"]
-output = ["methylation/{sample}.CpG_report.txt"]
+# Bismark writes <basename>.CX_report.txt for --CX --cytosine_report runs
+output = ["methylation/{sample}.deduplicated.CX_report.txt"]
 description = "Extract CpG methylation calls"
 shell = """
 mkdir -p methylation
@@ -154,7 +161,7 @@ name = "integrate_omics"
 input = [
     "wgs_variants/{sample}.vcf.gz",
     "expression/{sample}.counts.txt",
-    "methylation/{sample}.CpG_report.txt"
+    "methylation/{sample}.deduplicated.CX_report.txt"
 ]
 output = ["integration/{sample}.integrated.json"]
 description = "Integrate multi-omics data layers for each sample"
@@ -191,6 +198,6 @@ echo '</body></html>' >> {output[0]}
 """
 
 [report]
-template = "multiomics_report"
-format = ["html", "json"]
-sections = ["summary", "variants", "expression", "methylation", "integration", "provenance"]
+# Built-in section IDs: universal, execution-status, clinical-compliance,
+# workflow-info, commands, file-manifest, environment
+sections = ["universal", "workflow-info", "commands", "file-manifest", "environment"]

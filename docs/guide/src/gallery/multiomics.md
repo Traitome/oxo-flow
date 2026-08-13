@@ -7,7 +7,7 @@ Integrate whole-genome sequencing (WGS), RNA-seq, and bisulfite sequencing (meth
     - Cross-omics data integration (WGS + RNA-seq + Methylation)
     - Multiple environment backends in a single pipeline
     - Fan-in convergence from independent branches
-    - Clinical-grade multi-omics reporting
+    - Multi-omics integration and reporting
 
 ## Pipeline Overview
 
@@ -53,12 +53,18 @@ author = "oxo-flow examples"
 [config]
 reference = "/data/references/GRCh38/genome.fa"
 gene_annotation = "/data/references/GRCh38/genes.gtf"
-samples = "samples.csv"
 genome_build = "GRCh38"
 
 [defaults]
 threads = 4
 memory = "8G"
+
+# Define the sample cohort for {sample} wildcard expansion.
+# Each sample must have WGS, RNA-seq, and methylation inputs.
+# Edit this list (or pass --sample on the CLI) to match your data.
+[[sample_groups]]
+name = "cohort"
+samples = ["sampleA", "sampleB"]
 
 # === WGS Branch ===
 
@@ -154,8 +160,9 @@ shell = """
 mkdir -p methyl_aligned
 bismark --genome /data/references/GRCh38/bismark_index \
         -1 {input[0]} -2 {input[1]} \
-        --parallel {threads} -o methyl_aligned/
-deduplicate_bismark --bam methyl_aligned/{sample}_R1_bismark_bt2_pe.bam \
+        --multicore {threads} \
+        -o methyl_aligned/
+deduplicate_bismark --paired --bam methyl_aligned/{sample}_R1_bismark_bt2_pe.bam \
         -o methyl_aligned/{sample}
 """
 
@@ -169,13 +176,15 @@ conda = "envs/bismark.yaml"
 [[rules]]
 name = "methylation_extract"
 input = ["methyl_aligned/{sample}.deduplicated.bam"]
-output = ["methylation/{sample}.CpG_report.txt"]
+# Bismark writes <basename>.CX_report.txt for --CX --cytosine_report runs
+output = ["methylation/{sample}.deduplicated.CX_report.txt"]
 description = "Extract CpG methylation calls"
 shell = """
 mkdir -p methylation
 bismark_methylation_extractor --paired-end --comprehensive \
     --genome_folder /data/references/GRCh38/bismark_index \
-    --parallel {threads} --CX --cytosine_report \
+    --parallel {threads} \
+    --CX --cytosine_report \
     -o methylation/ {input[0]}
 """
 
@@ -193,7 +202,7 @@ name = "integrate_omics"
 input = [
     "wgs_variants/{sample}.vcf.gz",
     "expression/{sample}.counts.txt",
-    "methylation/{sample}.CpG_report.txt"
+    "methylation/{sample}.deduplicated.CX_report.txt"
 ]
 output = ["integration/{sample}.integrated.json"]
 description = "Integrate multi-omics data layers for each sample"
@@ -230,9 +239,9 @@ echo '</body></html>' >> {output[0]}
 """
 
 [report]
-template = "multiomics_report"
-format = ["html", "json"]
-sections = ["summary", "variants", "expression", "methylation", "integration", "provenance"]
+# Built-in section IDs: universal, execution-status, clinical-compliance,
+# workflow-info, commands, file-manifest, environment
+sections = ["universal", "workflow-info", "commands", "file-manifest", "environment"]
 ```
 
 ## Scientific Context
@@ -243,7 +252,7 @@ Single-omics analyses provide incomplete pictures:
 
 | Data Type | Information | Limitation |
 |-----------|-------------|------------|
-| **WGS** | DNA mutations, structural variants | Cannot reveal functional impact |
+| **WGS** | DNA mutations (SNVs, indels) | Cannot reveal functional impact |
 | **RNA-seq** | Gene expression levels | Cannot identify causal mutations |
 | **Methylation** | Epigenetic regulation | Cannot directly show gene activity |
 
@@ -252,6 +261,9 @@ Integrating all three layers enables:
 - **Variant-to-expression correlation** — Do mutations affect gene expression?
 - **Epigenetic-expression coupling** — Does promoter methylation silence gene expression?
 - **Multi-layer biomarker discovery** — Combine signals for stronger clinical predictions
+
+!!! note "What this example actually computes"
+    The three branches here produce the raw data layers (variants, counts, methylation calls). The `integrate_omics` and `generate_report` steps are structural placeholders — they record file provenance and build a report skeleton rather than computing correlations. A production workflow would replace them with real joint analyses (e.g., eQTL-style association tests, methylation–expression coupling models).
 
 ### DAG Parallelism
 
@@ -272,6 +284,16 @@ oxo-flow run examples/gallery/08_multiomics_integration.oxoflow -j 2
 $ oxo-flow validate examples/gallery/08_multiomics_integration.oxoflow
 ✓ examples/gallery/08_multiomics_integration.oxoflow — 8 rules, 7 dependencies
 ```
+
+### Run
+
+Samples come from the `[[sample_groups]]` block in the workflow file (edit the list to match your data, or pass `--sample` on the CLI). Each sample needs all three input pairs on disk under `wgs/`, `rnaseq/`, and `methyl/`:
+
+```bash
+oxo-flow run examples/gallery/08_multiomics_integration.oxoflow -j 2
+```
+
+`-j 2` lets the engine submit up to two rules concurrently; the resource pool schedules the rest by thread capacity.
 
 ### Resource Summary
 
