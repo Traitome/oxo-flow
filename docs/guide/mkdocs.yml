@@ -182,6 +182,7 @@ nav:
       - Web System Architecture: reference/web-system-architecture.md
       - AI Translation Layer: reference/ai-translation.md
       - AI-Powered CLI: reference/ai-cli.md
+      - Custom Skills: reference/custom-skills.md
       - Diagnostics Engine: reference/diagnostics-engine.md
       - Cloud Storage: reference/cloud-storage.md
       - Plugin System: reference/plugin-system.md

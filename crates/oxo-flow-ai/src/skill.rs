@@ -38,16 +38,21 @@ pub struct SkillManifest {
     /// Human-readable description.
     pub description: String,
     /// Author information.
+    #[serde(default)]
     pub author: Option<String>,
     /// Domains this skill applies to (e.g., "RNA-seq", "variant-calling").
+    #[serde(default)]
     pub domains: Vec<String>,
     /// Skill type: "tool", "knowledge", "validator", "composite".
     pub skill_type: String,
     /// Prompt additions to inject into the system prompt when activated.
+    #[serde(default)]
     pub prompt_additions: Option<Vec<String>>,
     /// External tool dependencies (MCP server names, URLs).
+    #[serde(default)]
     pub requires: Option<Vec<String>>,
     /// Skill entry point (reserved for future use).
+    #[serde(default)]
     pub entry: Option<String>,
 }
 
@@ -129,10 +134,20 @@ impl SkillRegistry {
 
 /// Discover skills from standard directories.
 pub fn discover_skills(project_dir: Option<&std::path::Path>) -> Vec<SkillManifest> {
+    discover_skills_from(dirs_home(), project_dir)
+}
+
+/// Discovery with an injectable home directory (testability; the home is
+/// otherwise derived from `$HOME`).
+#[doc(hidden)]
+pub fn discover_skills_from(
+    home: Option<std::path::PathBuf>,
+    project_dir: Option<&std::path::Path>,
+) -> Vec<SkillManifest> {
     let mut manifests = Vec::new();
 
     // User-level skills
-    if let Some(home) = dirs_home() {
+    if let Some(home) = home {
         let user_dir = home.join(".oxo-flow").join("skills");
         manifests.extend(scan_skill_dir(&user_dir));
     }
@@ -270,5 +285,40 @@ prompt_additions = [
         assert_eq!(manifest.name, "qc-expert");
         assert_eq!(manifest.domains.len(), 3);
         assert_eq!(manifest.prompt_additions.unwrap().len(), 2);
+    }
+    #[test]
+    fn discover_skills_from_finds_user_and_project_level() {
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let write = |dir: &std::path::Path, base_name: &str| {
+            let skills_dir = dir.join(".oxo-flow").join("skills");
+            std::fs::create_dir_all(&skills_dir).unwrap();
+            std::fs::write(
+            skills_dir.join(format!("{base_name}.skill.toml")),
+            format!(
+                "name = \"{base_name}\"\nversion = \"1.0.0\"\ndescription = \"test skill\"\nskill_type = \"knowledge\"\n"
+            ),
+        )
+        .unwrap();
+        };
+        write(home.path(), "qc-expert");
+        write(project.path(), "somatic-expert");
+
+        let found = discover_skills_from(Some(home.path().to_path_buf()), Some(project.path()));
+        let names: Vec<&str> = found.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"qc-expert"));
+        assert!(names.contains(&"somatic-expert"));
+    }
+
+    #[test]
+    fn discover_skills_ignores_invalid_manifests() {
+        let home = tempfile::tempdir().unwrap();
+        let skills_dir = home.path().join(".oxo-flow").join("skills");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        // Missing required fields — must be skipped, not fatal.
+        std::fs::write(skills_dir.join("broken.skill.toml"), "name = 42\n").unwrap();
+
+        let found = discover_skills_from(Some(home.path().to_path_buf()), None);
+        assert!(found.is_empty());
     }
 }

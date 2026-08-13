@@ -26,7 +26,20 @@ pub async fn analyze_workflow(
         provider.model().unwrap_or_else(|| "default".into())
     );
 
-    let system = build_analysis_prompt();
+    let mut system = build_analysis_prompt();
+
+    // User-defined skills explicitly activated via [ai] skills.
+    if let Ok(table) = toml_content.parse::<toml::Table>()
+        && let Some(config) = oxo_flow_ai::config::AiConfig::from_workflow_toml(&table)
+    {
+        let project_dir = workflow_path.parent();
+        let skill_context =
+            crate::commands::ai_runtime::activated_skill_context(project_dir, &config);
+        if !skill_context.is_empty() {
+            system.push_str("\n\n## Activated Custom Skills\n");
+            system.push_str(&skill_context);
+        }
+    }
 
     let context_block = if context.trim().is_empty() {
         String::new()

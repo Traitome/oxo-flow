@@ -64,6 +64,7 @@ impl AiProviderRegistry {
             max_retries: 3,
             auto_fix: AutoFixMode::Ask,
             temperature: None,
+            skills: Vec::new(),
         };
 
         oxo_flow_ai::AI.reconfigure(cfg).map_err(|e| e.to_string())

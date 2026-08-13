@@ -18,6 +18,33 @@ pub async fn ai_status_command() -> Result<()> {
     let name = provider.name();
     let model = provider.model().unwrap_or_else(|| "default".into());
 
+    // Discovered user-defined skills (read-only listing — discovery never
+    // activates; activation requires [ai] skills = [...] in the workflow).
+    let project_dir = std::env::current_dir().ok();
+    let discovered = oxo_flow_ai::skill::discover_skills(project_dir.as_deref());
+    println!();
+    println!("{}", "Custom skills:".bold().cyan());
+    if discovered.is_empty() {
+        println!(
+            "  None discovered. Add *.skill.toml files to ~/.oxo-flow/skills/\n  or <project>/.oxo-flow/skills/, then activate them with\n  [ai] skills = [...] in the workflow. See the Custom Skills reference."
+        );
+    } else {
+        for skill in &discovered {
+            println!(
+                "  {} ({}) — {}{}",
+                skill.name.cyan(),
+                skill.skill_type.dimmed(),
+                skill.description,
+                if skill.domains.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [domains: {}]", skill.domains.join(", "))
+                }
+            );
+        }
+    }
+    println!();
+
     if name == "disabled" {
         println!("  Status: {}", "DISABLED".yellow().bold());
         println!();
@@ -54,7 +81,7 @@ pub async fn ai_status_command() -> Result<()> {
         "  Storage:    {}",
         sessions_dir.display().to_string().dimmed()
     );
-    println!();
+
     println!(
         "  Run {} for comprehensive self-test.",
         "oxo-flow ai test".bold()

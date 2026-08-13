@@ -49,6 +49,12 @@ pub struct AiConfig {
     /// Model temperature (0.0 = deterministic, 1.0 = creative).
     #[serde(default)]
     pub temperature: Option<f64>,
+
+    /// Names of user-defined skills to activate (discovered from
+    /// `~/.oxo-flow/skills` and `<project>/.oxo-flow/skills`). Discovery
+    /// alone never activates — each name here is an explicit opt-in.
+    #[serde(default)]
+    pub skills: Vec<String>,
 }
 
 fn default_max_retries() -> u32 {
@@ -66,6 +72,7 @@ impl Default for AiConfig {
             max_retries: default_max_retries(),
             auto_fix: AutoFixMode::default(),
             temperature: None,
+            skills: Vec::new(),
         }
     }
 }
@@ -124,6 +131,7 @@ impl AiConfig {
             max_retries: default_max_retries(),
             auto_fix: AutoFixMode::default(),
             temperature: None,
+            skills: Vec::new(),
         }
     }
 
@@ -154,6 +162,16 @@ impl AiConfig {
             .and_then(|s| s.parse().ok())
             .unwrap_or_default();
 
+        let skills = ai_table
+            .get("skills")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         Some(Self {
             enabled,
             provider,
@@ -163,6 +181,7 @@ impl AiConfig {
             max_retries,
             auto_fix,
             temperature: None,
+            skills,
         })
     }
 

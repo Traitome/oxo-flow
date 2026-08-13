@@ -55,7 +55,9 @@ pub async fn generate_workflow(
     ai_max_retries: Option<u32>,
 ) -> Result<()> {
     // L1-L3: Initialize AI runtime with scope config + tools
-    let runtime = crate::commands::ai_runtime::AiRuntime::new(None, None, ai_max_retries)?;
+    let project_dir = std::env::current_dir().ok();
+    let runtime =
+        crate::commands::ai_runtime::AiRuntime::new(None, project_dir.as_deref(), ai_max_retries)?;
     let provider = &runtime.provider;
 
     println!("{}", "AI Template Generator".bold().green());
@@ -114,7 +116,7 @@ pub async fn generate_workflow(
     }
 
     // Assemble system prompt with knowledge
-    let system = format!(
+    let mut system = format!(
         r#"## Role & Identity
 You are an expert bioinformatics pipeline architect specializing in the oxo-flow workflow engine.
 You translate high-level scientific goals into precise, production-grade .oxoflow TOML configurations.
@@ -253,6 +255,13 @@ Your TOML MUST include:
 "#,
         format_tool_table()
     );
+
+    // User-defined skills explicitly activated via [ai] skills (pure
+    // prompt injection — never code execution).
+    if !runtime.skill_context.is_empty() {
+        system.push_str("\n\n## Activated Custom Skills\n");
+        system.push_str(&runtime.skill_context);
+    }
 
     // Inject domain-matched bioinformatics skills (bioSkills) so the
     // generated workflow follows curated domain expertise: correct tool

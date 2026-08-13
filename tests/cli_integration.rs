@@ -241,6 +241,38 @@ fn cli_scientific_preflight_and_pilot_summary() {
     );
 }
 
+/// `oxo-flow ai status` lists discovered custom skills (read-only) even when
+/// no AI provider is configured — discovery never activates anything.
+#[test]
+fn cli_ai_status_lists_discovered_skills() {
+    let dir = tempfile::tempdir().unwrap();
+    let skills_dir = dir.path().join(".oxo-flow").join("skills");
+    std::fs::create_dir_all(&skills_dir).unwrap();
+    std::fs::write(
+        skills_dir.join("qc-expert.skill.toml"),
+        "name = \"qc-expert\"\nversion = \"1.0.0\"\ndescription = \"Advises on FASTQ QC thresholds\"\nskill_type = \"knowledge\"\n",
+    )
+    .unwrap();
+
+    let out = oxo_flow_cmd()
+        .arg("ai")
+        .arg("status")
+        .current_dir(dir.path())
+        // No AI provider configured in tests — the listing must still appear.
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("qc-expert"),
+        "ai status should list the discovered skill: {stdout}"
+    );
+    assert!(
+        stdout.contains("Custom skills"),
+        "ai status should have a Custom skills section: {stdout}"
+    );
+}
+
 // ─── oxo-flow CLI: basic flags ──────────────────────────────────────────────
 
 #[test]
@@ -259,6 +291,30 @@ fn cli_version() {
         .assert()
         .success()
         .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
+}
+
+#[test]
+fn cli_help_shows_banner() {
+    // Top-level help carries the ASCII-art banner, version and repo URL.
+    oxo_flow_cmd()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("███╗"))
+        .stdout(predicate::str::contains(
+            "https://github.com/Traitome/oxo-flow",
+        ))
+        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
+}
+
+#[test]
+fn cli_subcommand_help_has_no_banner() {
+    // The banner belongs to the top-level help only.
+    oxo_flow_cmd()
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("███╗").not());
 }
 
 #[test]

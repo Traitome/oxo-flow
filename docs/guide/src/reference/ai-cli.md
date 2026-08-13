@@ -203,6 +203,13 @@ The agent:
 6. Generates valid `.oxoflow` TOML
 7. Validates against the schema and reports any issues
 
+### Custom Skills
+
+User-defined `.skill.toml` files (discovered from `~/.oxo-flow/skills` and
+`<project>/.oxo-flow/skills`) can be activated per workflow via
+`[ai] skills = [...]` — their `prompt_additions` are appended to the system
+prompt. See [Custom Skills](./custom-skills.md).
+
 ### Session Logs
 
 Every AI interaction is logged to `.oxo-flow/ai_sessions/` for audit and debugging:

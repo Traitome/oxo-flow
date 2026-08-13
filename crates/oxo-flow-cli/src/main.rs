@@ -3,6 +3,7 @@
 //!
 //! Provides subcommands for running, validating, and managing workflows.
 
+pub mod banner;
 pub mod commands;
 
 use crate::commands::ai_status::{ai_setup_command, ai_status_command, ai_test_command};
@@ -22,7 +23,7 @@ use crate::commands::run::{
     debug_command, dry_run_command, handle_status, resume_command, run_command,
 };
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use std::path::PathBuf;
 
 /// oxo-flow — A Rust-native bioinformatics pipeline engine.
@@ -692,7 +693,26 @@ pub enum ProvenanceAction {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
+    // clap prints -h/--help during parsing, so pick the banner variant up
+    // front: colors only on an interactive terminal, and never when
+    // NO_COLOR is set or --no-color was passed.
+    let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout())
+        && std::env::var_os("NO_COLOR").is_none()
+        && !std::env::args().any(|arg| arg == "--no-color");
+    let matches = {
+        let mut command = Cli::command();
+        command = command.help_template(if use_color {
+            banner::HELP_TEMPLATE
+        } else {
+            banner::HELP_TEMPLATE_PLAIN
+        });
+        if !use_color {
+            // Also disable clap's own help styling (bold headings etc.).
+            command = command.color(clap::ColorChoice::Never);
+        }
+        command.get_matches()
+    };
+    let cli = Cli::from_arg_matches(&matches)?;
 
     if cli.no_color || std::env::var_os("NO_COLOR").is_some() {
         colored::control::set_override(false);

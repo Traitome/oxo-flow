@@ -20,6 +20,8 @@ pub struct AiRuntime {
     pub config: AiConfig,
     pub tool_registry: ToolRegistry,
     pub orchestrator: Orchestrator,
+    /// Prompt context from activated user-defined skills.
+    pub skill_context: String,
 }
 
 impl AiRuntime {
@@ -64,7 +66,10 @@ impl AiRuntime {
         tool_registry.register(Box::new(builtin::LookupTool::new()));
         tool_registry.register(Box::new(builtin::LookupSkillTool::new()));
         tool_registry.register(Box::new(builtin::LookupPipelineTool::new()));
-        register_discovered_tools(&mut tool_registry);
+
+        // User-defined skills: discovery (read-only) + explicit activation.
+        let project = project_dir.or_else(|| workflow_path.and_then(|p| p.parent()));
+        let skill_context = activated_skill_context(project, &config);
 
         let orchestrator = Orchestrator::new(provider.clone(), config.max_retries);
 
@@ -73,6 +78,7 @@ impl AiRuntime {
             config,
             tool_registry,
             orchestrator,
+            skill_context,
         })
     }
 
@@ -117,18 +123,19 @@ fn load_global_config() -> Option<AiConfig> {
     })
 }
 
-fn register_discovered_tools(_registry: &mut ToolRegistry) {
-    let skills = oxo_flow_ai::skill::discover_skills(None);
-    for skill in &skills {
-        if skill.skill_type == "tool" {
-            tracing::info!("Discovered AI skill: {} v{}", skill.name, skill.version);
+/// Discover user-defined skills (home + project level) and return the
+/// assembled prompt context of those explicitly activated in the config
+/// (`[ai] skills = [...]`). Discovery is read-only — a skill is never
+/// activated unless its name appears in the config. This is the trust
+/// boundary: prompt injection only, zero code execution.
+pub fn activated_skill_context(project_dir: Option<&Path>, config: &AiConfig) -> String {
+    let discovered = oxo_flow_ai::skill::discover_skills(project_dir);
+    let mut registry = oxo_flow_ai::skill::SkillRegistry::new();
+    for skill in discovered {
+        if config.skills.iter().any(|name| name == &skill.name) {
+            tracing::info!("Activated custom skill: {} v{}", skill.name, skill.version);
+            registry.activate(skill);
         }
     }
-    if !skills.is_empty() {
-        tracing::info!(
-            "Registered {} builtin tools + {} discovered skills",
-            2,
-            skills.len()
-        );
-    }
+    registry.prompt_context().to_string()
 }

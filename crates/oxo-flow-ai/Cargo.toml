@@ -27,3 +27,4 @@ async-trait = "0.1"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "macros"] }
+tempfile = { workspace = true }
