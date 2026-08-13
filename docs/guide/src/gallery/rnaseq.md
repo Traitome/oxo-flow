@@ -30,6 +30,7 @@ graph TD
 ## Workflow Definition
 
 ```toml
+# examples/gallery/06_rnaseq_quantification.oxoflow
 # 06 — RNA-seq Quantification Pipeline
 # A complete RNA-seq analysis: QC → trimming → alignment → quantification → differential expression.
 # Demonstrates: bioinformatics workflow patterns, multi-environment, wildcards, reporting.

@@ -1,0 +1,7 @@
+# R + rmarkdown for notebook-style reports (gallery 09).
+name: rmarkdown
+channels:
+  - conda-forge
+dependencies:
+  - r-base=4.3
+  - r-rmarkdown=2.25

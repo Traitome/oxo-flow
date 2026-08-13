@@ -1,0 +1,7 @@
+# Coverage depth calculation.
+name: mosdepth
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - mosdepth=0.3.6

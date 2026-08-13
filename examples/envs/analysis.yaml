@@ -1,0 +1,7 @@
+# Generic analysis environment (gallery 05's analyze_results step).
+name: analysis
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - jq=1.7

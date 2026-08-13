@@ -12,6 +12,9 @@ Process multiple samples in parallel using wildcard expansion. This pattern is f
 
 ```toml
 # examples/gallery/03_parallel_samples.oxoflow
+# 03 — Parallel Sample Processing
+# Process multiple samples in parallel using wildcard expansion.
+# Demonstrates: {sample} wildcards, fan-out/fan-in, resource declarations.
 
 [workflow]
 name = "parallel-samples"

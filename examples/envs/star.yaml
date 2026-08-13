@@ -1,0 +1,7 @@
+# Splice-aware RNA-seq alignment.
+name: star
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - star=2.7.11b

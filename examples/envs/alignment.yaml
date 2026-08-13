@@ -1,0 +1,9 @@
+# bwa-mem2 + samtools: the alignment pair used by gallery 07/08 and the
+# top-level examples. Both tools are required for the align|sort pipe.
+name: alignment
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bwa-mem2=2.2.1
+  - samtools=1.18

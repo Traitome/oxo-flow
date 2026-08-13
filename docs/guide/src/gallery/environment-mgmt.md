@@ -13,6 +13,9 @@ Use different software environments for different pipeline steps. This is critic
 
 ```toml
 # examples/gallery/05_conda_environments.oxoflow
+# 05 — Environment Management
+# Use different software environments for different steps.
+# Demonstrates: conda, docker, and venv environment specifications per rule.
 
 [workflow]
 name = "environment-showcase"
@@ -91,6 +94,14 @@ Each rule can declare its own isolated software environment. oxo-flow supports e
 | **Venv** | `venv = "path/to/venv"` | Python virtual environments |
 | **System** | *(no declaration — default)* | Use the system's default tools without isolation |
 | **Modules** | `modules = "tool/1.0"` | HPC environment modules (Lmod/Environment Modules) |
+
+!!! note "Ready-made environment specs"
+
+    Every `envs/*.yaml` referenced by the gallery and top-level examples
+    ships in [`examples/envs/`](https://github.com/Traitome/oxo-flow/tree/main/examples/envs)
+    (18 specs, version-pinned). Copy the directory next to a workflow to
+    resolve its environment declarations; see
+    [`examples/README.md`](https://github.com/Traitome/oxo-flow/blob/main/examples/README.md).
 
 ### Why Per-Rule Environments?
 

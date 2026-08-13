@@ -28,6 +28,8 @@ graph TD
 
 ```toml
 # examples/gallery/09_single_cell_rnaseq.oxoflow
+# 09 — Single-Cell RNA-seq
+# Demonstrates high-throughput droplet-based scRNA-seq processing.
 
 [workflow]
 name = "sc-rnaseq-pipeline"

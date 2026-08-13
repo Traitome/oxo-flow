@@ -43,6 +43,7 @@ graph TD
 ## Workflow Definition
 
 ```toml
+# examples/gallery/08_multiomics_integration.oxoflow
 # 08 — Multi-Omics Integration Pipeline
 # Integrates WGS variant data, RNA-seq expression data, and methylation data.
 # Demonstrates: complex DAG with multiple input branches, conditional execution,

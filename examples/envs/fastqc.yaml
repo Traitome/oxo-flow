@@ -1,0 +1,7 @@
+# Raw read quality control.
+name: fastqc
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - fastqc=0.12.1

@@ -11,6 +11,7 @@ Call variants per chromosome in parallel, then merge the per-chromosome GVCFs in
 ## Workflow Definition
 
 ```toml
+# examples/gallery/04_scatter_gather.oxoflow
 # 04 — Scatter-Gather Pattern
 # Demonstrates chromosome-based parallel processing, a common bioinformatics pattern.
 

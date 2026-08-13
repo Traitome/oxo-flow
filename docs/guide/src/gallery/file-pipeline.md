@@ -11,6 +11,7 @@ A linear three-step pipeline that generates data, transforms it, and produces a 
 ## Workflow Definition
 
 ```toml
+# examples/gallery/02_file_pipeline.oxoflow
 # 02 — File Processing Pipeline
 # A linear three-step pipeline: generate → transform → summarize.
 # Demonstrates: multi-rule dependencies, input/output chaining, config variables.

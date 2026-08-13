@@ -1,0 +1,7 @@
+# Ensembl VEP functional annotation.
+name: vep
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - ensembl-vep=110.1

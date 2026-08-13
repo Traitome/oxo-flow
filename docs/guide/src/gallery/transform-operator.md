@@ -11,6 +11,7 @@ Unify split → map → combine scatter-gather patterns into a single rule decla
 ## Workflow Definition
 
 ```toml
+# examples/gallery/10_transform_operator.oxoflow
 # 10 — Transform Operator Demo
 # Demonstrates the unified split → map → combine pattern in a single rule.
 # Similar to dplyr's group_by() %>% summarize() or pandas' groupby().apply()

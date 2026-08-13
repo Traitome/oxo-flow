@@ -55,6 +55,7 @@ how the two expansion mechanisms differ.
 ## Workflow Definition
 
 ```toml
+# examples/gallery/07_wgs_germline.oxoflow
 # 07 — Whole-Genome Germline Variant Calling
 # Complete WGS pipeline: QC → alignment → dedup → BQSR → variant calling → annotation.
 # Demonstrates: GATK best practices, per-chromosome scatter, clinical environments.

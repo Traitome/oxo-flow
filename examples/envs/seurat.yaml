@@ -1,0 +1,9 @@
+# Single-cell analysis with Seurat (gallery 09).
+name: seurat
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - r-base=4.3
+  - r-seurat=5.1.0
+  - r-tidyverse=2.0.0

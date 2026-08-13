@@ -1,0 +1,7 @@
+# SAM/BAM manipulation (gallery 10's transform map).
+name: samtools
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - samtools=1.18

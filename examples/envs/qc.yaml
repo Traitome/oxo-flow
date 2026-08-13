@@ -1,0 +1,7 @@
+# QC environment (simple_variant_calling example's fastqc step).
+name: qc
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - fastqc=0.12.1
