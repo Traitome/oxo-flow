@@ -14,6 +14,11 @@ static DB_POOL: OnceLock<SqlitePool> = OnceLock::new();
 ///
 /// Can safely be called multiple times — subsequent calls are no-ops.
 pub async fn init_pool(database_url: &str) {
+    // Serialize concurrent callers — the runs-table migration drops and
+    // renames tables, which must not interleave with another init.
+    static INIT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _guard = INIT_LOCK.lock().await;
+
     if DB_POOL.get().is_some() {
         return;
     }
@@ -76,6 +81,64 @@ impl SqliteBackend {
 
     fn now() -> String {
         chrono::Utc::now().to_rfc3339()
+    }
+
+    /// Rebuild the legacy `runs` table (where `pipeline_id` is NOT NULL)
+    /// with the current nullable schema, normalizing invalid '' values.
+    /// SQLite cannot relax a NOT NULL constraint in place. Individual
+    /// statements (no multi-statement batches — unsupported by sqlx).
+    async fn rebuild_runs_table(&self) -> Result<(), String> {
+        // Run every statement on ONE dedicated connection: with a pool, DDL
+        // statements can land on different connections, and a connection
+        // with a stale schema cache fails the rename with "there is already
+        // another table or index with this name".
+        let mut conn = self.pool.acquire().await.map_err(|e| e.to_string())?;
+        sqlx::query("PRAGMA foreign_keys=OFF")
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        sqlx::query(
+            r#"CREATE TABLE runs_migrated (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                pipeline_id TEXT,
+                pipeline_snapshot TEXT NOT NULL,
+                workflow_name TEXT,
+                status TEXT NOT NULL DEFAULT 'queued',
+                phase TEXT NOT NULL DEFAULT 'parsing',
+                pid INTEGER,
+                workdir TEXT,
+                started_at TEXT,
+                finished_at TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE)"#,
+        )
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| e.to_string())?;
+        sqlx::query(
+            r#"INSERT INTO runs_migrated
+                (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, pid, workdir, started_at, finished_at, created_at)
+                SELECT id, user_id, NULLIF(pipeline_id, ''), pipeline_snapshot, NULL, status, phase, pid, workdir, started_at, finished_at, created_at
+                FROM runs"#,
+        )
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| e.to_string())?;
+        sqlx::query("DROP TABLE runs")
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        sqlx::query("ALTER TABLE runs_migrated RENAME TO runs")
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        sqlx::query("PRAGMA foreign_keys=ON")
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     /// Recover runs that were left in the 'running' state after a crash.
@@ -149,8 +212,9 @@ impl StorageBackend for SqliteBackend {
             CREATE TABLE IF NOT EXISTS runs (
                 id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
-                pipeline_id TEXT NOT NULL,
+                pipeline_id TEXT,
                 pipeline_snapshot TEXT NOT NULL,
+                workflow_name TEXT,
                 status TEXT NOT NULL DEFAULT 'queued',
                 phase TEXT NOT NULL DEFAULT 'parsing',
                 pid INTEGER,
@@ -270,13 +334,46 @@ impl StorageBackend for SqliteBackend {
                 .await
                 .ok();
         }
+
+        // Migration: workflow_name for ad-hoc runs (nullable)
+        sqlx::query("ALTER TABLE runs ADD COLUMN workflow_name TEXT")
+            .execute(&self.pool)
+            .await
+            .ok();
+
+        // Migration: legacy DBs have `pipeline_id TEXT NOT NULL` (ad-hoc runs
+        // have no saved pipeline, so the column must be nullable). SQLite
+        // cannot relax a NOT NULL constraint in place — rebuild the table,
+        // normalizing the legacy invalid '' value to NULL.
+        let pipeline_notnull: Option<(i64,)> = match sqlx::query_as(
+            r#"SELECT "notnull" FROM pragma_table_info('runs') WHERE name = 'pipeline_id'"#,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("runs schema check failed ({e}); skipping runs migration");
+                None
+            }
+        };
+        if pipeline_notnull == Some((1,))
+            && let Err(e) = self.rebuild_runs_table().await
+        {
+            tracing::warn!(
+                "runs table migration failed ({}); ad-hoc runs may not persist",
+                e
+            );
+        }
         // Migration: add usage_count to templates if missing
         sqlx::query("ALTER TABLE templates ADD COLUMN usage_count INTEGER NOT NULL DEFAULT 0")
             .execute(&self.pool)
             .await
             .ok();
 
-        // Seed admin user if users table is empty
+        // Seed admin + default users if users table is empty. `default` is
+        // the pseudo-user for personal-mode runs (runs.user_id is a
+        // foreign key, so it must exist).
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
             .fetch_one(&self.pool)
             .await
@@ -298,6 +395,19 @@ impl StorageBackend for SqliteBackend {
             .await
             .map_err(|e| e.to_string())?;
         }
+
+        sqlx::query(
+            "INSERT OR IGNORE INTO users (id, username, role, auth_type, os_user, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind("default")
+        .bind("default")
+        .bind("user")
+        .bind("local")
+        .bind(Some("oxo-flow"))
+        .bind(Self::now())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
 
         Ok(())
     }
@@ -494,6 +604,7 @@ impl StorageBackend for SqliteBackend {
             user_id: run.user_id.clone(),
             pipeline_id: run.pipeline_id.clone(),
             pipeline_snapshot: run.pipeline_snapshot.clone(),
+            workflow_name: run.workflow_name.clone(),
             status: run.status.clone(),
             phase: run.phase.clone(),
             pid: run.pid,
@@ -927,7 +1038,58 @@ mod tests {
     use crate::infra::db::models;
     use uuid::Uuid;
 
-    /// Create a fresh in-memory SqliteBackend with schema initialized.
+    /// A pre-fix database must be migrated on init(): runs.pipeline_id
+    /// becomes nullable and workflow_name appears.
+    #[tokio::test]
+    async fn test_legacy_runs_schema_migrated() {
+        let backend = SqliteBackend::new("sqlite::memory:")
+            .await
+            .expect("Failed to create in-memory backend");
+        // Legacy schema: pipeline_id NOT NULL, no workflow_name.
+        // Individual statements (sqlx does not batch multi-statement SQL).
+        for stmt in [
+            "CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, role TEXT NOT NULL, auth_type TEXT NOT NULL, os_user TEXT, created_at TEXT NOT NULL)",
+            "CREATE TABLE pipelines (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, version TEXT NOT NULL, toml_content TEXT NOT NULL, rules_count INTEGER NOT NULL DEFAULT 0, forked_from TEXT, visibility TEXT NOT NULL DEFAULT 'private', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)",
+            "CREATE TABLE runs (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, pipeline_id TEXT NOT NULL, pipeline_snapshot TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued', phase TEXT NOT NULL DEFAULT 'parsing', pid INTEGER, workdir TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE)",
+        ] {
+            sqlx::query(stmt)
+                .execute(backend.inner_pool())
+                .await
+                .expect("legacy schema setup");
+        }
+
+        backend.init().await.expect("migration should succeed");
+
+        // Ad-hoc run insert (the shape the handler uses) must now work.
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, pid, workdir, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind("run-1")
+        .bind("default")
+        .bind(Option::<String>::None)
+        .bind("[workflow]")
+        .bind(Some("legacy-test"))
+        .bind("queued")
+        .bind("parsing")
+        .bind(None::<i64>)
+        .bind(None::<String>)
+        .bind(None::<String>)
+        .bind(None::<String>)
+        .bind(&now)
+        .execute(backend.inner_pool())
+        .await
+        .expect("ad-hoc run insert must work after migration");
+
+        let row: (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT pipeline_id, workflow_name FROM runs WHERE id = 'run-1'")
+                .fetch_one(backend.inner_pool())
+                .await
+                .unwrap();
+        assert_eq!(row.0, None);
+        assert_eq!(row.1.as_deref(), Some("legacy-test"));
+    }
+
     async fn create_backend() -> SqliteBackend {
         let backend = SqliteBackend::new("sqlite::memory:")
             .await
@@ -1041,10 +1203,9 @@ mod tests {
         assert!(by_username.is_some());
         assert_eq!(by_username.unwrap().id, user.id);
 
-        // List users (should have admin seeded + alice)
-        // Since backend was created fresh, only alice + admin exist
+        // List users (seeded admin + default pseudo-user + alice)
         let users = backend.list_users().await.unwrap();
-        assert_eq!(users.len(), 2, "Expected admin + alice");
+        assert_eq!(users.len(), 3, "Expected admin + default + alice");
 
         // Delete user
         backend.delete_user(&user.id).await.unwrap();
@@ -1147,8 +1308,9 @@ mod tests {
         let run = models::RunRow {
             id: String::new(),
             user_id: user.id.clone(),
-            pipeline_id: pipeline.id.clone(),
+            pipeline_id: Some(pipeline.id.clone()),
             pipeline_snapshot: pipeline.toml_content.clone(),
+            workflow_name: Some("run-test".to_string()),
             status: "queued".to_string(),
             phase: "parsing".to_string(),
             pid: None,
@@ -1233,8 +1395,9 @@ mod tests {
         let run = models::RunRow {
             id: run_id.clone(),
             user_id: user.id.clone(),
-            pipeline_id: pipeline.id.clone(),
+            pipeline_id: Some(pipeline.id.clone()),
             pipeline_snapshot: pipeline.toml_content.clone(),
+            workflow_name: None,
             status: "running".to_string(),
             phase: "executing".to_string(),
             pid: Some(12345),
@@ -1449,8 +1612,9 @@ mod tests {
         let run = models::RunRow {
             id: String::new(),
             user_id: user.id.clone(),
-            pipeline_id: pipeline.id.clone(),
+            pipeline_id: Some(pipeline.id.clone()),
             pipeline_snapshot: pipeline.toml_content.clone(),
+            workflow_name: None,
             status: "running".to_string(),
             phase: "executing".to_string(),
             pid: None,
@@ -1481,8 +1645,9 @@ mod tests {
             let run = models::RunRow {
                 id: String::new(),
                 user_id: user.id.clone(),
-                pipeline_id: pipeline.id.clone(),
+                pipeline_id: Some(pipeline.id.clone()),
                 pipeline_snapshot: pipeline.toml_content.clone(),
+                workflow_name: None,
                 status: "completed".to_string(),
                 phase: "reporting".to_string(),
                 pid: None,

@@ -153,9 +153,44 @@ pub async fn diff_pipelines(Json(req): Json<DiffRequest>) -> ApiResult<DiffRespo
 }
 
 /// POST /api/pipelines/export
+///
+/// Prefers inline `toml_content`; falls back to loading the saved pipeline
+/// when only `pipeline_id` is given.
 pub async fn export_pipeline(Json(req): Json<ExportRequest>) -> ApiResult<ExportResponse> {
-    let id = req.pipeline_id.as_deref().unwrap_or("");
-    service::export_pipeline(id, req.format.as_deref())
+    let toml_content = if !req.toml_content.trim().is_empty() {
+        req.toml_content
+    } else if let Some(id) = req.pipeline_id.as_deref() {
+        let pool = get_pool()?;
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT toml_content FROM pipelines WHERE id = ?")
+                .bind(id)
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| {
+                    err(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "DB_ERROR",
+                        format!("Failed to load pipeline '{id}': {e}"),
+                    )
+                })?;
+        match row {
+            Some((toml,)) => toml,
+            None => {
+                return Err(err(
+                    StatusCode::NOT_FOUND,
+                    "NOT_FOUND",
+                    format!("pipeline '{id}' not found"),
+                ));
+            }
+        }
+    } else {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "MISSING",
+            "toml_content or pipeline_id required".into(),
+        ));
+    };
+    service::export_pipeline(&toml_content, req.format.as_deref())
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "EXPORT_ERROR", e))
 }

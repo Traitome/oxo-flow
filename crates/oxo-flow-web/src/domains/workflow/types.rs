@@ -173,8 +173,11 @@ pub struct SearchResponse {
 }
 
 /// Request to export a pipeline as Dockerfile or Singularity definition.
+///
+/// Either `toml_content` or `pipeline_id` must be provided.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportRequest {
+    #[serde(default)]
     pub toml_content: String,
     pub format: Option<String>,
     pub pipeline_id: Option<String>,

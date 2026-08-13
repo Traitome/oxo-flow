@@ -54,13 +54,16 @@ pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateR
     let resp = service::create_run(toml, &config, None)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e))?;
 
-    // Persist run to database
+    // Persist run to database. Ad-hoc runs have no saved pipeline row, so
+    // pipeline_id stays NULL (it is an FK only when a pipeline exists).
     if let Ok(pool) = crate::infra::db::sqlite::try_pool() {
-        let user_id = "default".to_string();
+        let workflow_name = oxo_flow_core::config::WorkflowConfig::parse(toml)
+            .map(|c| c.workflow.name)
+            .unwrap_or_else(|_| "unnamed".to_string());
         let run = models::RunRow {
             id: resp.run_id.clone(),
-            user_id,
-            pipeline_id: String::new(),
+            user_id: "default".to_string(),
+            pipeline_id: None,
             pipeline_snapshot: toml.to_string(),
             status: "queued".to_string(),
             phase: "parsing".to_string(),
@@ -69,8 +72,9 @@ pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateR
             started_at: None,
             finished_at: None,
             created_at: now_iso(),
+            workflow_name: Some(workflow_name),
         };
-        let _ = sqlx::query(
+        if let Err(e) = sqlx::query(
             "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, status, phase, pid, workdir, started_at, finished_at, created_at, workflow_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&run.id)
@@ -84,9 +88,12 @@ pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateR
         .bind(&run.started_at)
         .bind(&run.finished_at)
         .bind(&run.created_at)
-        .bind("my-pipeline")
+        .bind(&run.workflow_name)
         .execute(pool)
-        .await;
+        .await
+        {
+            tracing::error!("Failed to persist run {} to database: {e}", run.id);
+        }
 
         // Save pipeline TOML to run directory so executor can read it
         let run_dir = crate::workspace::get_run_directory("local_user", &resp.run_id);

@@ -69,11 +69,16 @@ pub async fn init_db(database_url: &str) -> Result<()> {
         CREATE TABLE IF NOT EXISTS runs (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
-            workflow_name TEXT NOT NULL,
+            pipeline_id TEXT,
+            pipeline_snapshot TEXT NOT NULL DEFAULT '',
+            workflow_name TEXT,
             status TEXT NOT NULL,
+            phase TEXT NOT NULL DEFAULT 'parsing',
             pid INTEGER,
+            workdir TEXT,
             started_at DATETIME,
             finished_at DATETIME,
+            created_at DATETIME,
             FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
         );
 
@@ -187,6 +192,20 @@ pub async fn init_db(database_url: &str) -> Result<()> {
         .execute(&pool)
         .await?;
     }
+
+    // `default` is the pseudo-user for personal-mode runs; runs.user_id is
+    // a foreign key, so the row must exist.
+    sqlx::query(
+        "INSERT OR IGNORE INTO users (id, username, role, auth_type, os_user, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+    )
+    .bind("default")
+    .bind("default")
+    .bind("user")
+    .bind("local")
+    .bind("oxo-flow")
+    .bind(Utc::now())
+    .execute(&pool)
+    .await?;
 
     // Seed system templates if empty
     let template_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM templates")

@@ -162,6 +162,22 @@ pub fn spawn_background_run(run_id: String, username: String, auth_type: String,
                             error!("Failed to update final status for run {run_id}: {e}");
                         }
                         info!("Run {run_id} finished: {final_state}");
+
+                        // Broadcast the terminal event (documented in the SSE
+                        // API): run_completed on success, run_failed otherwise.
+                        let event = if status.success() {
+                            "run_completed"
+                        } else {
+                            "run_failed"
+                        };
+                        broadcast_event(
+                            event,
+                            &serde_json::json!({
+                                "run_id": run_id,
+                                "status": final_state,
+                                "finished_at": end.to_rfc3339(),
+                            }),
+                        );
                     }
                     Err(e) => {
                         error!("Failed to wait on child process for run {run_id}: {e}");

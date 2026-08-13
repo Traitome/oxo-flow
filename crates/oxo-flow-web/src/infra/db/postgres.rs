@@ -95,8 +95,9 @@ impl StorageBackend for PostgresBackend {
             CREATE TABLE IF NOT EXISTS runs (
                 id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                pipeline_id TEXT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+                pipeline_id TEXT REFERENCES pipelines(id) ON DELETE CASCADE,
                 pipeline_snapshot TEXT NOT NULL,
+                workflow_name TEXT,
                 status TEXT NOT NULL DEFAULT 'queued',
                 phase TEXT NOT NULL DEFAULT 'parsing',
                 pid BIGINT,

@@ -29,8 +29,10 @@ pub struct PipelineRow {
 pub struct RunRow {
     pub id: String,
     pub user_id: String,
-    pub pipeline_id: String,
+    /// Nullable: ad-hoc runs are not linked to a saved pipeline.
+    pub pipeline_id: Option<String>,
     pub pipeline_snapshot: String,
+    pub workflow_name: Option<String>,
     pub status: String, // "queued"|"running"|"completed"|"failed"|"cancelled"
     pub phase: String,  // "parsing"|"validating"|"preparing"|"executing"|"reporting"
     pub pid: Option<i64>,
