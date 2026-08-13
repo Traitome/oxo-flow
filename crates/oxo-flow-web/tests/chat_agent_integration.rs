@@ -15,7 +15,7 @@ const VALID_TOML: &str = "[workflow]\nname = \"scripted-pipeline\"\nversion = \"
 
 /// The global AI registry is process-wide; chat tests that install
 /// scripted providers must not interleave.
-static AI_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static AI_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn install_scripted_provider_with(turns: Vec<ScriptedTurn>) {
     oxo_flow_ai::AI.set_provider(scripted_provider(turns));
@@ -46,7 +46,7 @@ fn install_scripted_provider() {
 
 #[tokio::test]
 async fn chat_send_emits_typed_agent_events() {
-    let _guard = AI_LOCK.lock().unwrap();
+    let _guard = AI_LOCK.lock().await;
     install_scripted_provider();
 
     let resp = server::build_router("personal")
@@ -173,7 +173,7 @@ async fn report_ask_and_visualize_use_real_run_data() {
 /// tools and a scripted model can call them (read-only).
 #[tokio::test]
 async fn chat_with_run_id_registers_diagnosis_tools() {
-    let _guard = AI_LOCK.lock().unwrap();
+    let _guard = AI_LOCK.lock().await;
     install_scripted_provider_with(vec![
         ScriptedTurn {
             content: None,
