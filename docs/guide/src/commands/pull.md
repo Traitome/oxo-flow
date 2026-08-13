@@ -54,7 +54,7 @@ Every failure is reported with a pointer to the
 
 ```bash
 # Pull from a GitHub release (bundle mode)
-oxo-flow pull gh:WangLabCSU/oxo-flow-circrna@v0.10.2
+oxo-flow pull gh:WangLabCSU/oxo-flow-circrna@v0.11.0
 
 # Pull from an HTTPS URL (.tar.zst format)
 oxo-flow pull https://example.com/pipelines/circrna-bundle.tar.zst

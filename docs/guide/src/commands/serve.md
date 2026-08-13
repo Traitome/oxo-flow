@@ -58,7 +58,7 @@ POST /oxo-flow/api/pipelines/validate
 ## Output
 
 ```
-oxo-flow 0.10.2 — Bioinformatics Pipeline Engine
+oxo-flow 0.11.0 — Bioinformatics Pipeline Engine
 Serve: Starting oxo-flow web server in personal mode on 127.0.0.1:8080
 ```
 
@@ -144,7 +144,7 @@ curl http://127.0.0.1:8080/api/health
 ```json
 {
   "status": "ok",
-  "version": "0.10.2"
+  "version": "0.11.0"
 }
 ```
 

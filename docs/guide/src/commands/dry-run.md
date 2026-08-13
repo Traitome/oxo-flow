@@ -192,7 +192,7 @@ oxo-flow dry-run pipeline.oxoflow -v
 ## Output
 
 ```
-oxo-flow 0.10.2 — Bioinformatics Pipeline Engine
+oxo-flow 0.11.0 — Bioinformatics Pipeline Engine
 DAG: (dry-run) 3 rules would execute
   1. generate_data
      threads=1

@@ -218,7 +218,7 @@ oxo-flow env list
 ```
 
 ```
-oxo-flow 0.10.2 — Bioinformatics Pipeline Engine
+oxo-flow 0.11.0 — Bioinformatics Pipeline Engine
 Available environment backends:
   ✓ system
   ✓ mamba
@@ -236,7 +236,7 @@ oxo-flow env check my-pipeline.oxoflow
 ```
 
 ```
-oxo-flow 0.10.2 — Bioinformatics Pipeline Engine
+oxo-flow 0.11.0 — Bioinformatics Pipeline Engine
   ✓ align (docker)
   ✓ call_variants (conda)
   ✓ plot_results (venv)
