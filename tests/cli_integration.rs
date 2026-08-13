@@ -724,6 +724,57 @@ fn cli_init_creates_project() {
     assert!(wf.contains("[workflow]"));
 }
 
+/// The gallery is embedded in the binary (issue #76): `template` must work
+/// from an arbitrary directory with no repo checkout around — the binary
+/// lives in target/, CWD is a temp dir, so filesystem discovery would fail.
+#[test]
+fn cli_template_gallery_works_without_repo_checkout() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Listing
+    let out = oxo_flow_cmd()
+        .arg("template")
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("01_hello_world") && stderr.contains("07_wgs_germline"),
+        "gallery listing should come from the binary: {stderr}"
+    );
+
+    // Applying by exact stem
+    oxo_flow_cmd()
+        .args(["template", "01_hello_world"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+    let wf = fs::read_to_string(dir.path().join("hello_world.oxoflow")).unwrap();
+    assert!(wf.contains("[workflow]"), "template content is embedded");
+    assert!(
+        wf.contains("name = \"hello_world\""),
+        "workflow name is substituted from the stem"
+    );
+
+    // Applying by descriptive suffix in a subdirectory
+    let sub = dir.path().join("sub");
+    fs::create_dir_all(&sub).unwrap();
+    oxo_flow_cmd()
+        .args(["template", "parallel_samples", "-o", sub.to_str().unwrap()])
+        .assert()
+        .success();
+    assert!(sub.join("parallel_samples.oxoflow").exists());
+
+    // Unknown template still errors cleanly.
+    oxo_flow_cmd()
+        .args(["template", "no_such_template"])
+        .current_dir(dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not found"));
+}
+
 // ─── clean subcommand ───────────────────────────────────────────────────────
 
 #[test]

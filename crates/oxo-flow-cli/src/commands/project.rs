@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::commands::print_banner;
 
@@ -186,46 +186,71 @@ Thumbs.db
 // Gallery / template helpers
 // ---------------------------------------------------------------------------
 
-/// Walk upward from `start` looking for an `examples/gallery/` directory.
-fn walk_up_for_gallery(start: &Path) -> Option<PathBuf> {
-    let mut current = Some(start);
-    while let Some(dir) = current {
-        let gallery = dir.join("examples").join("gallery");
-        if gallery.is_dir() {
-            return Some(gallery);
-        }
-        current = dir.parent();
-    }
-    None
-}
+/// The workflow gallery embedded at build time — `template` works from an
+/// installed binary, not only inside a repository checkout (issue #76).
+///
+/// The canonical source stays `examples/gallery/*.oxoflow`; `include_str!`
+/// re-reads it on every build, so content cannot drift. A unit test guards
+/// the stem list against additions/removals in the directory.
+const EMBEDDED_GALLERY: &[(&str, &str)] = &[
+    (
+        "01_hello_world",
+        include_str!("../../../../examples/gallery/01_hello_world.oxoflow"),
+    ),
+    (
+        "02_file_pipeline",
+        include_str!("../../../../examples/gallery/02_file_pipeline.oxoflow"),
+    ),
+    (
+        "03_parallel_samples",
+        include_str!("../../../../examples/gallery/03_parallel_samples.oxoflow"),
+    ),
+    (
+        "04_scatter_gather",
+        include_str!("../../../../examples/gallery/04_scatter_gather.oxoflow"),
+    ),
+    (
+        "05_conda_environments",
+        include_str!("../../../../examples/gallery/05_conda_environments.oxoflow"),
+    ),
+    (
+        "06_rnaseq_quantification",
+        include_str!("../../../../examples/gallery/06_rnaseq_quantification.oxoflow"),
+    ),
+    (
+        "07_wgs_germline",
+        include_str!("../../../../examples/gallery/07_wgs_germline.oxoflow"),
+    ),
+    (
+        "08_multiomics_integration",
+        include_str!("../../../../examples/gallery/08_multiomics_integration.oxoflow"),
+    ),
+    (
+        "09_single_cell_rnaseq",
+        include_str!("../../../../examples/gallery/09_single_cell_rnaseq.oxoflow"),
+    ),
+    (
+        "10_transform_operator",
+        include_str!("../../../../examples/gallery/10_transform_operator.oxoflow"),
+    ),
+];
 
-/// Locate the `examples/gallery/` directory using several strategies.
-fn find_gallery_directory() -> Result<PathBuf> {
-    // Strategy 1 – walk up from CWD
-    if let Ok(cwd) = std::env::current_dir()
-        && let Some(gallery) = walk_up_for_gallery(&cwd)
-    {
-        return Ok(gallery);
-    }
-
-    // Strategy 2 – walk up from the binary path
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(parent) = exe.parent()
-        && let Some(gallery) = walk_up_for_gallery(parent)
-    {
-        return Ok(gallery);
-    }
-
-    // Strategy 3 – compile-time manifest dir (works in development)
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    if let Some(gallery) = walk_up_for_gallery(&manifest_dir) {
-        return Ok(gallery);
-    }
-
-    anyhow::bail!(
-        "could not find examples/gallery/ directory.\n\
-         Make sure you are inside the oxo-flow repository."
-    )
+/// Match an embedded template by exact stem or `_<name>` suffix (the same
+/// rules the filesystem scan used); exact matches win.
+fn find_embedded_template<'a>(
+    gallery: &'a [(&'a str, &'a str)],
+    template_name: &str,
+) -> Option<(&'a str, &'a str)> {
+    gallery
+        .iter()
+        .copied()
+        .find(|(stem, _)| *stem == template_name)
+        .or_else(|| {
+            gallery
+                .iter()
+                .copied()
+                .find(|(stem, _)| stem.ends_with(&format!("_{template_name}")))
+        })
 }
 
 /// Extract a display title and one-line description from the leading comments
@@ -282,38 +307,26 @@ fn descriptive_name_from_stem(stem: &str) -> String {
 // List all available templates
 // ---------------------------------------------------------------------------
 
-fn list_templates(gallery_dir: &Path) -> Result<()> {
-    let mut entries: Vec<(String, String, String)> = Vec::new();
+fn list_templates() -> Result<()> {
+    let mut entries: Vec<(&str, String, String)> = EMBEDDED_GALLERY
+        .iter()
+        .map(|(stem, content)| {
+            let (title, description) = parse_template_header(content);
+            (*stem, title, description)
+        })
+        .collect();
 
-    for entry in std::fs::read_dir(gallery_dir)
-        .with_context(|| format!("cannot read gallery directory {}", gallery_dir.display()))?
-    {
-        let entry = entry.context("cannot read directory entry")?;
-        let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "oxoflow") {
-            let content = std::fs::read_to_string(&path)
-                .with_context(|| format!("cannot read {}", path.display()))?;
-            let (title, description) = parse_template_header(&content);
-            let filename = path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            entries.push((filename, title, description));
-        }
-    }
-
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries.sort_by(|a, b| a.0.cmp(b.0));
 
     eprintln!();
     eprintln!("{}", "Available templates:".bold().cyan());
     eprintln!();
 
-    for (filename, title, description) in &entries {
+    for (stem, title, description) in &entries {
         if !title.is_empty() {
-            eprintln!("  {}  {}", filename.bold(), title.dimmed());
+            eprintln!("  {}  {}", stem.bold(), title.dimmed());
         } else {
-            eprintln!("  {}", filename.bold());
+            eprintln!("  {}", stem.bold());
         }
         if !description.is_empty() {
             eprintln!("      {}", description.dimmed());
@@ -335,60 +348,21 @@ fn list_templates(gallery_dir: &Path) -> Result<()> {
 // Apply a single template (copy + name substitution)
 // ---------------------------------------------------------------------------
 
-fn apply_template(gallery_dir: &Path, template_name: &str, output: Option<PathBuf>) -> Result<()> {
-    // Collect candidate files matching by full stem or descriptive suffix.
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    for entry in std::fs::read_dir(gallery_dir)
-        .with_context(|| format!("cannot read gallery directory {}", gallery_dir.display()))?
-    {
-        let entry = entry.context("cannot read directory entry")?;
-        let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "oxoflow") {
-            let stem = path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            if stem == template_name || stem.ends_with(&format!("_{}", template_name)) {
-                candidates.push(path);
-            }
-        }
-    }
-
-    let template_path = match candidates.len() {
-        0 => anyhow::bail!(
+fn apply_template(template_name: &str, output: Option<PathBuf>) -> Result<()> {
+    let (template_stem, content) = match find_embedded_template(EMBEDDED_GALLERY, template_name) {
+        Some(found) => found,
+        None => anyhow::bail!(
             "template '{}' not found.\n  \
              Use 'oxo-flow template' to list available templates.",
             template_name
         ),
-        1 => candidates.into_iter().next().unwrap(),
-        _ => {
-            // Prefer an exact stem match
-            let exact: Vec<&PathBuf> = candidates
-                .iter()
-                .filter(|p| p.file_stem().is_some_and(|s| s == template_name))
-                .collect();
-            if exact.len() == 1 {
-                exact.into_iter().next().unwrap().clone()
-            } else {
-                candidates.into_iter().next().unwrap()
-            }
-        }
     };
 
-    let content = std::fs::read_to_string(&template_path)
-        .with_context(|| format!("cannot read {}", template_path.display()))?;
-
     // Derive the new workflow name from the file stem (strip number prefix)
-    let template_stem = template_path
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    let new_name = descriptive_name_from_stem(&template_stem);
+    let new_name = descriptive_name_from_stem(template_stem);
 
     // Substitute the `name` field
-    let new_content = substitute_workflow_name(&content, &new_name);
+    let new_content = substitute_workflow_name(content, &new_name);
 
     // Write to specified output path, or current directory with template name
     let output_path = match output {
@@ -419,10 +393,7 @@ fn apply_template(gallery_dir: &Path, template_name: &str, output: Option<PathBu
     eprintln!(
         "{} Created workflow from template: {}",
         "\u{2713}".green().bold(),
-        template_path
-            .file_name()
-            .map(|n| n.to_string_lossy())
-            .unwrap_or(std::borrow::Cow::Borrowed("workflow.oxoflow"))
+        template_stem
     );
     eprintln!("  {}", output_path.display());
     eprintln!();
@@ -477,10 +448,92 @@ pub async fn template_command(
         return Ok(());
     }
 
-    let gallery_dir = find_gallery_directory()?;
-
     match name {
-        None => list_templates(&gallery_dir),
-        Some(template_name) => apply_template(&gallery_dir, &template_name, output),
+        None => list_templates(),
+        Some(template_name) => apply_template(&template_name, output),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn embedded() -> Vec<(String, String)> {
+        EMBEDDED_GALLERY
+            .iter()
+            .map(|(stem, content)| (stem.to_string(), content.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn embedded_gallery_is_non_empty_and_valid() {
+        assert!(
+            !EMBEDDED_GALLERY.is_empty(),
+            "the gallery must ship inside the binary"
+        );
+        for (stem, content) in EMBEDDED_GALLERY {
+            assert!(
+                content.contains("[workflow]"),
+                "embedded template {stem} has no [workflow] section"
+            );
+            assert!(
+                !parse_template_header(content).0.is_empty(),
+                "embedded template {stem} has no title comment"
+            );
+        }
+    }
+
+    #[test]
+    fn embedded_gallery_matches_disk_gallery() {
+        // Drift guard: the embedded gallery must stay in sync with
+        // examples/gallery/ (the canonical source the docs and tests use).
+        let disk_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("examples")
+            .join("gallery");
+        let mut disk_stems: Vec<String> = std::fs::read_dir(&disk_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "oxoflow"))
+            .map(|p| {
+                p.file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect();
+        disk_stems.sort();
+
+        let mut embedded_stems: Vec<String> = EMBEDDED_GALLERY
+            .iter()
+            .map(|(s, _)| s.to_string())
+            .collect();
+        embedded_stems.sort();
+
+        assert_eq!(
+            embedded_stems, disk_stems,
+            "embedded gallery diverged from examples/gallery/ — add or remove \
+             include_str! entries in EMBEDDED_GALLERY"
+        );
+
+        // Same content check: a rebuilt binary serves the same files.
+        for (stem, content) in embedded() {
+            let disk = std::fs::read_to_string(disk_dir.join(format!("{stem}.oxoflow"))).unwrap();
+            assert_eq!(content, disk, "embedded content for {stem} diverged");
+        }
+    }
+
+    #[test]
+    fn apply_template_embedded_matches_by_stem_and_suffix() {
+        // The same matching rules as the old filesystem scan: exact stem or
+        // `_<name>` suffix.
+        let gallery: Vec<(&str, &str)> = EMBEDDED_GALLERY.iter().map(|(s, c)| (*s, *c)).collect();
+        let exact = find_embedded_template(&gallery, "03_parallel_samples");
+        assert_eq!(exact.unwrap().0, "03_parallel_samples");
+        let by_suffix = find_embedded_template(&gallery, "parallel_samples");
+        assert_eq!(by_suffix.unwrap().0, "03_parallel_samples");
+        assert!(find_embedded_template(&gallery, "no_such_template").is_none());
     }
 }

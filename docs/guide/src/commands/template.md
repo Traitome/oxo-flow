@@ -15,7 +15,9 @@ is provided, generates a `.oxoflow` file based on that template, substituting
 the workflow name appropriately.
 
 Templates are drawn from the [Workflow Gallery](../gallery/index.md) and range
-from a one-rule hello-world to production-grade multi-omics pipelines.
+from a one-rule hello-world to production-grade multi-omics pipelines. The
+gallery is embedded in the binary at build time, so it works identically
+whether oxo-flow is installed from a release or run from a source checkout.
 
 ## Options
 
