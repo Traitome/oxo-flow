@@ -170,7 +170,7 @@ pub struct AiResponse {
 }
 
 /// Token usage for a single AI call.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Usage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,

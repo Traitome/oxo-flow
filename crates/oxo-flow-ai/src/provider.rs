@@ -128,6 +128,23 @@ impl AiProvider {
     /// [`AiError::ContextOverflow`] the transcript is compressed
     /// ([`compress_transcript`]) and the request retried ONCE. A second
     /// overflow surfaces a readable error instead of wasting quota.
+    /// Stream a completion token-by-token (openai-compatible providers;
+    /// other backends return the whole response as one `Done` chunk).
+    pub async fn chat_stream(&self, system: &str, user: &str) -> Result<ChatStream, AiError> {
+        match self {
+            AiProvider::OpenAi(b) | AiProvider::DeepSeek(b) => b.chat_stream(system, user).await,
+            other => {
+                let text = other.chat(system, user).await?;
+                Ok(Box::pin(futures::stream::iter(vec![Ok(
+                    ChatStreamChunk::Done {
+                        content: text,
+                        usage: None,
+                    },
+                )])))
+            }
+        }
+    }
+
     pub async fn chat_with_tools_overflow_safe(
         &self,
         messages: &[Message],
@@ -734,6 +751,180 @@ fn build_ollama_body(messages: &[Message], tools: &[ToolDef], model: &str) -> se
     body
 }
 
+// ── Streaming (openai-compatible SSE) ──────────────────────────────────────
+
+/// One parsed SSE event from an openai-compatible streaming response.
+enum SseEvent {
+    /// A content delta (text fragment).
+    Delta(String),
+    /// The stream terminator.
+    Done,
+    /// Parsed but carries nothing actionable (e.g. a role-only frame).
+    Other,
+}
+
+/// Parse a raw SSE body (server-sent `data:` lines separated by blank lines)
+/// into deltas. `[DONE]` and unparseable lines are skipped — the stream's
+/// terminal state is signaled by the caller when the HTTP body ends.
+fn parse_openai_sse(body: &str) -> Vec<SseEvent> {
+    let mut events = Vec::new();
+    for block in body.split(
+        "
+
+",
+    ) {
+        for line in block.lines() {
+            let Some(data) = line.strip_prefix("data:") else {
+                continue;
+            };
+            let data = data.trim();
+            if data.is_empty() || data == "[DONE]" {
+                if data == "[DONE]" {
+                    events.push(SseEvent::Done);
+                }
+                continue;
+            }
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(data) else {
+                continue;
+            };
+            let Some(delta) = json["choices"][0]["delta"]["content"].as_str() else {
+                continue;
+            };
+            if delta.is_empty() {
+                events.push(SseEvent::Other);
+            } else {
+                events.push(SseEvent::Delta(delta.to_string()));
+            }
+        }
+    }
+    events
+}
+
+/// A chunk of a streamed chat completion.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChatStreamChunk {
+    /// A token delta — append to the running transcript.
+    Text(String),
+    /// The stream finished; `content` is the complete accumulated text.
+    Done {
+        content: String,
+        usage: Option<Usage>,
+    },
+}
+
+/// Boxed stream of completion chunks.
+pub type ChatStream =
+    std::pin::Pin<Box<dyn futures::Stream<Item = Result<ChatStreamChunk, AiError>> + Send>>;
+
+impl OpenAiBackend {
+    /// Stream a completion via the openai-compatible SSE protocol
+    /// (`stream: true`). Emits `Text` deltas then a final `Done` chunk.
+    pub async fn chat_stream(&self, system: &str, user: &str) -> Result<ChatStream, AiError> {
+        let messages = vec![
+            Message {
+                role: MessageRole::System,
+                content: system.to_string(),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+            Message {
+                role: MessageRole::User,
+                content: user.to_string(),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+        ];
+        let mut body = self.build_body(&messages, &[]);
+        body["stream"] = serde_json::json!(true);
+
+        let resp = self
+            .client
+            .post(&self.api_url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AiError::Provider {
+                provider: "openai".into(),
+                message: e.to_string(),
+            })?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            let err_msg = serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|j| j["error"]["message"].as_str().map(String::from))
+                .unwrap_or(text);
+            return Err(classify_http_error("openai", status.as_u16(), &err_msg));
+        }
+
+        let stream = resp.bytes_stream();
+        let stream = async_stream::stream! {
+            let mut buffer = String::new();
+            let mut content = String::new();
+            let mut usage: Option<Usage> = None;
+            for await chunk in stream {
+                let bytes = match chunk {
+                    Ok(b) => b,
+                    Err(e) => {
+                        yield Err(AiError::Provider {
+                            provider: "openai".into(),
+                            message: format!("stream read failed: {e}"),
+                        });
+                        return;
+                    }
+                };
+                buffer.push_str(&String::from_utf8_lossy(&bytes));
+                // SSE frames end with a blank line; keep any trailing partial
+                // frame in the buffer for the next read.
+                while let Some(pos) = buffer.find("\n\n") {
+                    let frame = buffer[..pos].to_string();
+                    buffer.drain(..pos + 2);
+                    let events = parse_openai_sse(&frame);
+                    // capture usage from the final frames (best-effort)
+                    if let Some(line) = frame.lines().find(|l| l.contains("\"usage\"")) {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(
+                            line.trim().strip_prefix("data:").unwrap_or("").trim(),
+                        ) {
+                            if let (Some(p), Some(c)) = (
+                                v["usage"]["prompt_tokens"].as_u64(),
+                                v["usage"]["completion_tokens"].as_u64(),
+                            ) {
+                                usage = Some(Usage { prompt_tokens: p, completion_tokens: c });
+                            }
+                        }
+                    }
+                    for event in events {
+                        match event {
+                            SseEvent::Delta(d) => {
+                                content.push_str(&d);
+                                yield Ok(ChatStreamChunk::Text(d));
+                            }
+                            SseEvent::Done => {}
+                            SseEvent::Other => {}
+                        }
+                    }
+                }
+            }
+            // Flush any remaining partial frame.
+            if !buffer.trim().is_empty() {
+                for event in parse_openai_sse(&buffer) {
+                    if let SseEvent::Delta(d) = event {
+                        content.push_str(&d);
+                        yield Ok(ChatStreamChunk::Text(d));
+                    }
+                }
+            }
+            yield Ok(ChatStreamChunk::Done { content, usage });
+        };
+        Ok(Box::pin(stream))
+    }
+}
+
 // ── Factory functions ──────────────────────────────────────────────────────
 
 /// Create an AI provider from kind and optional overrides.
@@ -1201,5 +1392,28 @@ mod tests {
         });
         let response = parse_claude_response(&json).unwrap();
         assert_eq!(response.content.as_deref(), Some("Here is your workflow"));
+    }
+
+    #[test]
+    fn parse_sse_chunks_extracts_deltas_and_done() {
+        let body = "data: {\"choices\":[{\"delta\":{\"content\":\"fast\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"p\"}}]}\n\ndata: [DONE]\n\n";
+        let chunks = parse_openai_sse(body);
+        assert_eq!(chunks.len(), 3);
+        assert!(matches!(&chunks[0], SseEvent::Delta(s) if s == "fast"));
+        assert!(matches!(&chunks[1], SseEvent::Delta(s) if s == "p"));
+        assert!(matches!(&chunks[2], SseEvent::Done));
+    }
+
+    #[test]
+    fn parse_sse_chunks_skips_usage_and_garbage_lines() {
+        let body = "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}],\"usage\":{\"total_tokens\":7}}\n\ndata: {\"garbage\": true}\n\nnot-a-data-line\n\ndata: [DONE]\n\n";
+        let chunks = parse_openai_sse(body);
+        assert!(
+            chunks
+                .iter()
+                .any(|c| matches!(c, SseEvent::Delta(s) if s == "x"))
+        );
+        assert!(chunks.iter().any(|c| matches!(c, SseEvent::Done)));
+        assert_eq!(chunks.len(), 2);
     }
 }
