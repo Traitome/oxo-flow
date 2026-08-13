@@ -417,3 +417,33 @@ body{font-family:var(--font-sans);font-size:.9375rem;line-height:1.6;color:var(-
 }
 .inspector-check { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; color: var(--color-text); }
 .inspector-check input { accent-color: var(--color-primary); }
+
+/* ── Chat tool-call cards ── */
+
+.chat-tool-cards { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+.chat-tool-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary);
+  font-size: 0.75rem;
+}
+.chat-tool-card summary {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 8px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--color-text-secondary);
+}
+.chat-tool-card summary::-webkit-details-marker { display: none; }
+.chat-tool-name { font-family: var(--font-mono); font-weight: 600; color: var(--color-text); }
+.chat-tool-done { color: var(--color-success); }
+.chat-tool-pending { color: var(--color-text-tertiary); display: inline-flex; }
+.chat-tool-body { padding: 0 8px 7px 26px; display: flex; flex-direction: column; gap: 4px; }
+.chat-tool-args, .chat-tool-summary {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--color-text-tertiary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chat-tool-summary { color: var(--color-text-secondary); }

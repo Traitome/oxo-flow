@@ -5,12 +5,21 @@ import type { DagJson } from '../api/types';
 
 export type ChatContextType = 'dashboard' | 'editor' | 'monitor' | 'report';
 
+export interface ChatMessageToolCall {
+  id: string;
+  name: string;
+  args: string;
+  summary?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'agent' | 'system';
   content: string;
   actions?: ChatAction[];
   agentStatus?: string;
+  /** Grounded tool calls the agent made (rendered as collapsible cards). */
+  toolCalls?: ChatMessageToolCall[];
 }
 
 export interface ChatAction {

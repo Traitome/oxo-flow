@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Loader2, Check } from 'lucide-react';
+import { Send, Bot, User, Loader2, Check, Wrench } from 'lucide-react';
 import { usePipelineSession, type ChatContextType, type ChatMessage, type ChatAction } from '../context/PipelineSession';
 
 const CONTEXT_LABELS: Record<ChatContextType, string> = {
@@ -88,16 +88,25 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
           
           if (currentEvent && currentData) {
             const payload = JSON.parse(currentData);
-            if (currentEvent === 'agent') {
-              setAgents(prev => ({...prev, [payload.agent]: payload.status}));
-              setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, agentStatus: `${payload.agent}: ${payload.status}` } : m));
+            if (currentEvent === 'status') {
+              setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, agentStatus: payload.message } : m));
+            } else if (currentEvent === 'tool_call') {
+              setMessages(prev => prev.map(m => m.id === assistantId ? {
+                ...m,
+                toolCalls: [...(m.toolCalls ?? []), { id: `${payload.name}-${Date.now()}`, name: payload.name, args: typeof payload.args === 'string' ? payload.args : JSON.stringify(payload.args) }],
+              } : m));
+            } else if (currentEvent === 'tool_result') {
+              setMessages(prev => prev.map(m => m.id === assistantId ? {
+                ...m,
+                toolCalls: (m.toolCalls ?? []).map((tc, i, arr) =>
+                  i === arr.length - 1 && tc.name === payload.name ? { ...tc, summary: payload.summary } : tc
+                ),
+              } : m));
             } else if (currentEvent === 'text') {
               setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: m.content + payload.chunk } : m));
             } else if (currentEvent === 'action') {
               if (payload.action_type === 'pipeline_ready') {
                 finalPipelineData = payload.data;
-              } else if (payload.action_type === 'data_report') {
-                // handle data report
               }
             } else if (currentEvent === 'done') {
               doneReading = true;
@@ -177,6 +186,27 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
               {msg.agentStatus && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 0', color: 'var(--color-text-secondary)', fontSize: '0.8rem' }}>
                   <Loader2 size={12} className="spin" /> {msg.agentStatus}
+                </div>
+              )}
+              {msg.toolCalls && msg.toolCalls.length > 0 && (
+                <div className="chat-tool-cards">
+                  {msg.toolCalls.map((tc) => (
+                    <details className="chat-tool-card" key={tc.id}>
+                      <summary>
+                        <Wrench size={12} />
+                        <span className="chat-tool-name">{tc.name}</span>
+                        {tc.summary ? (
+                          <span className="chat-tool-done">✓</span>
+                        ) : (
+                          <span className="chat-tool-pending"><Loader2 size={11} className="spin" /></span>
+                        )}
+                      </summary>
+                      <div className="chat-tool-body">
+                        <div className="chat-tool-args">{tc.args}</div>
+                        {tc.summary && <div className="chat-tool-summary">{tc.summary}</div>}
+                      </div>
+                    </details>
+                  ))}
                 </div>
               )}
               {msg.content && (
