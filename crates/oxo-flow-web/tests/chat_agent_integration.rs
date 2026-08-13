@@ -2,6 +2,9 @@
 //! tool-call round (grounded lookup) and a final validated TOML, and the SSE
 //! stream must carry typed tool_call / text / action / done events — not the
 //! old fake progress narrative.
+//!
+//! Both scripted-provider scenarios live in ONE test: the AI registry is
+//! process-wide, so parallel tests installing different providers would race.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -13,17 +16,33 @@ use tower::ServiceExt;
 
 const VALID_TOML: &str = "[workflow]\nname = \"scripted-pipeline\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"fastqc\"\ninput = [\"{sample}.fastq.gz\"]\noutput = [\"qc/{sample}_fastqc.html\"]\nshell = \"fastqc {input} -o qc/\"\n";
 
-/// The global AI registry is process-wide; chat tests that install
-/// scripted providers must not interleave.
-static AI_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 fn install_scripted_provider_with(turns: Vec<ScriptedTurn>) {
     oxo_flow_ai::AI.set_provider(scripted_provider(turns));
 }
 
-fn install_scripted_provider() {
-    let toml = VALID_TOML;
-    let provider_turns: Vec<ScriptedTurn> = vec![
+async fn post_chat(body: serde_json::Value) -> String {
+    let resp = server::build_router("personal")
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/chat/send")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 10 * 1024 * 1024)
+        .await
+        .unwrap();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+#[tokio::test]
+async fn chat_agent_loop_emits_typed_events_and_registers_run_tools() {
+    // ── Scenario 1: grounded tool call + validated TOML ──
+    install_scripted_provider_with(vec![
         ScriptedTurn {
             content: None,
             tool_calls: Some(vec![ToolCall {
@@ -35,41 +54,13 @@ fn install_scripted_provider() {
             delay_ms: 0,
         },
         ScriptedTurn {
-            content: Some(format!("```toml\n{toml}```")),
+            content: Some(format!("```toml\n{VALID_TOML}```")),
             tool_calls: None,
             error: None,
             delay_ms: 0,
         },
-    ];
-    install_scripted_provider_with(provider_turns);
-}
-
-#[tokio::test]
-async fn chat_send_emits_typed_agent_events() {
-    let _guard = AI_LOCK.lock().await;
-    install_scripted_provider();
-
-    let resp = server::build_router("personal")
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/chat/send")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({"message": "run fastqc on my samples"}).to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-
-    let body = axum::body::to_bytes(resp.into_body(), 10 * 1024 * 1024)
-        .await
-        .unwrap();
-    let text = String::from_utf8_lossy(&body);
-
-    // Typed events from the real loop.
+    ]);
+    let text = post_chat(json!({"message": "run fastqc on my samples"})).await;
     assert!(
         text.contains("event: tool_call"),
         "missing tool_call: {text}"
@@ -90,6 +81,37 @@ async fn chat_send_emits_typed_agent_events() {
         "the payload must carry the validated TOML: {text}"
     );
     assert!(text.contains("event: done"), "missing done event");
+
+    // ── Scenario 2: run_id registers the read-only diagnosis tools ──
+    install_scripted_provider_with(vec![
+        ScriptedTurn {
+            content: None,
+            tool_calls: Some(vec![ToolCall {
+                id: "tc-2".into(),
+                name: "get_run_status".into(),
+                arguments: "{}".into(),
+            }]),
+            error: None,
+            delay_ms: 0,
+        },
+        ScriptedTurn {
+            // Must validate as a workflow — the chat agent rejects non-TOML.
+            content: Some(VALID_TOML.to_string()),
+            tool_calls: None,
+            error: None,
+            delay_ms: 0,
+        },
+    ]);
+    let text =
+        post_chat(json!({"message": "why did my run fail", "run_id": "does-not-exist"})).await;
+    assert!(
+        text.contains("event: tool_call") && text.contains("get_run_status"),
+        "run-scoped tools must be registered when run_id is present: {text}"
+    );
+    assert!(
+        text.contains("run does-not-exist not found"),
+        "tool errors must surface as honest tool_result summaries: {text}"
+    );
 }
 
 /// Report Q&A and visualization must answer from the run's REAL data —
@@ -166,58 +188,5 @@ async fn report_ask_and_visualize_use_real_run_data() {
         data.iter()
             .any(|d| d["name"].as_str() == Some("results.txt")),
         "visualization data must come from the run's files: {viz_json}"
-    );
-}
-
-/// With a run_id in the request, the agent loop gains the run-diagnosis
-/// tools and a scripted model can call them (read-only).
-#[tokio::test]
-async fn chat_with_run_id_registers_diagnosis_tools() {
-    let _guard = AI_LOCK.lock().await;
-    install_scripted_provider_with(vec![
-        ScriptedTurn {
-            content: None,
-            tool_calls: Some(vec![ToolCall {
-                id: "tc-1".into(),
-                name: "get_run_status".into(),
-                arguments: "{}".into(),
-            }]),
-            error: None,
-            delay_ms: 0,
-        },
-        ScriptedTurn {
-            content: Some("The run failed; see the log.".into()),
-            tool_calls: None,
-            error: None,
-            delay_ms: 0,
-        },
-    ]);
-
-    let resp = server::build_router("personal")
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/chat/send")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({"message": "why did my run fail", "run_id": "does-not-exist"})
-                        .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 10 * 1024 * 1024)
-        .await
-        .unwrap();
-    let text = String::from_utf8_lossy(&body);
-    assert!(
-        text.contains("event: tool_call") && text.contains("get_run_status"),
-        "run-scoped tools must be registered when run_id is present: {text}"
-    );
-    assert!(
-        text.contains("run does-not-exist not found"),
-        "tool result must be honest: {text}"
     );
 }
