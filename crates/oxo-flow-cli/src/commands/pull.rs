@@ -16,13 +16,20 @@ pub async fn pull_command(url: &str, output: Option<PathBuf>) -> Result<()> {
     let bundle_path = if let Some(out) = output {
         out
     } else {
-        // Derive output name from URL
-        let name = url
+        // Derive a safe output name from the URL: the last path segment
+        // with any archive extension stripped, `@` replaced (gh: tags),
+        // then re-suffixed with `.tar.zst`.
+        let mut name = url
             .rsplit('/')
             .next()
             .unwrap_or("bundle")
-            .trim_end_matches(".tar.zst");
-        PathBuf::from(format!("{}.tar.zst", name))
+            .trim_end_matches(".tar.zst")
+            .trim_end_matches(".tar.gz")
+            .replace('@', "-");
+        if name.is_empty() {
+            name = "bundle".to_string();
+        }
+        PathBuf::from(format!("{name}.tar.zst"))
     };
 
     eprintln!("{} Pulling bundle from {}", "→".cyan().bold(), url);

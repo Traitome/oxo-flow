@@ -86,8 +86,22 @@ pub async fn handle_report(
     // AI result interpretation: plain-language summary of outcomes,
     // caveats, and next steps — printed before the report body.
     if let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(&workflow), ai) {
-        interpret_report_with_ai(&workflow, &config, checkpoint.as_ref(), &provider).await?;
-        println!();
+        // A failed AI call must not cost the user their report: warn and
+        // fall back to the standard report.
+        match interpret_report_with_ai(&workflow, &config, checkpoint.as_ref(), &provider).await {
+            Ok(()) => println!(),
+            Err(e) => eprintln!(
+                "  {} AI interpretation failed — continuing with the standard report: {e}",
+                "⚠".yellow()
+            ),
+        }
+    } else if ai {
+        // --ai was explicitly requested but no provider is configured:
+        // say so instead of silently producing an uninterpreted report.
+        anyhow::bail!(
+            "AI interpretation requested but no AI provider is configured. \
+             Set OXO_FLOW_AI_PROVIDER (and its API key) or run without --ai for the standard report."
+        );
     }
 
     // ── Build report using the pluggable section system ──

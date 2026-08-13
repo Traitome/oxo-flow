@@ -1140,6 +1140,22 @@ pub async fn run_command(
         }
     }
 
+    // Transform chunk cleanup (transform.cleanup = true): delete the chunk
+    // inputs of completed combine rules once the whole run has finished
+    // successfully. Deferred to here (instead of per-rule success) so that
+    // a failed run keeps its chunks for debugging, and a resumed run never
+    // regenerates chunks while the combine stays pre-skipped (which would
+    // orphan the freshly created chunk files).
+    if fail_count == 0 {
+        let workdir_actual = workdir.as_ref().unwrap_or(&workflow_dir);
+        for rule in &config.rules {
+            if rule.cleanup_chunks && checkpoint.is_completed(&rule.name) {
+                oxo_flow_core::executor::checkpoint::cleanup_transform_chunks(rule, workdir_actual)
+                    .await;
+            }
+        }
+    }
+
     // JSON output mode
     if json {
         let wf_path = Some(workflow.to_string_lossy().to_string());
@@ -1508,6 +1524,9 @@ logical errors. Output format per rule:
         if let Ok(deps) = dag.dependencies(&rule.name)
             && !deps.is_empty()
         {
+            let mut deps = deps;
+            deps.sort();
+            deps.dedup();
             eprintln!("  {} {:?}", "Dependencies:".dimmed(), deps);
         }
 
@@ -1518,7 +1537,6 @@ logical errors. Output format per rule:
 }
 
 pub async fn handle_status(checkpoint_path: PathBuf, json: bool) -> Result<()> {
-    let _ = &json;
     print_banner();
 
     // Detect common mistake: user passes a .oxoflow file instead of checkpoint
@@ -1550,24 +1568,42 @@ pub async fn handle_status(checkpoint_path: PathBuf, json: bool) -> Result<()> {
         )
     })?;
 
+    // Deterministic order (HashSet iteration order is arbitrary)
+    let mut completed: Vec<&str> = state.completed_rules.iter().map(String::as_str).collect();
+    completed.sort_unstable();
+    let mut failed: Vec<&str> = state.failed_rules.iter().map(String::as_str).collect();
+    failed.sort_unstable();
+
+    if json {
+        let output = serde_json::json!({
+            "command": "status",
+            "checkpoint": checkpoint_path.display().to_string(),
+            "workflow": state.workflow_path,
+            "completed": completed,
+            "failed": failed,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
+
     eprintln!(
         "{} Status for checkpoint: {}",
         "Status:".bold().cyan(),
         checkpoint_path.display()
     );
-    eprintln!("  Completed: {}", state.completed_rules.len());
-    eprintln!("  Failed:    {}", state.failed_rules.len());
+    eprintln!("  Completed: {}", completed.len());
+    eprintln!("  Failed:    {}", failed.len());
 
-    if !state.completed_rules.is_empty() {
+    if !completed.is_empty() {
         eprintln!("\n{}", "Completed rules:".bold().green());
-        for rule in &state.completed_rules {
+        for rule in &completed {
             eprintln!("  {} {}", "✓".green(), rule);
         }
     }
 
-    if !state.failed_rules.is_empty() {
+    if !failed.is_empty() {
         eprintln!("\n{}", "Failed rules:".bold().red());
-        for rule in &state.failed_rules {
+        for rule in &failed {
             eprintln!("  {} {}", "✗".red(), rule);
         }
     }
@@ -1578,8 +1614,8 @@ pub async fn handle_status(checkpoint_path: PathBuf, json: bool) -> Result<()> {
 pub async fn resume_command(
     checkpoint: PathBuf,
     jobs: usize,
-    _ai_recover: bool,
-    _ai_max_retries: Option<u32>,
+    ai_recover: bool,
+    ai_max_retries: Option<u32>,
 ) -> Result<()> {
     // resume does not produce structured JSON output
     print_banner();
@@ -1670,8 +1706,8 @@ pub async fn resume_command(
         false,           // json (resume defaults to human-readable)
         Vec::new(),      // cli_args (resume reuses checkpoint state)
         Vec::new(),      // extra_samples (resume uses existing groups)
-        false,           // ai_recover (resume doesn't support recovery)
-        None,            // ai_max_retries
+        ai_recover,
+        ai_max_retries,
     )
     .await
 }

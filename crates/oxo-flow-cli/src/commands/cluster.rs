@@ -92,7 +92,7 @@ fn generate_submit_wrapper(
                         .collect::<Vec<_>>()
                         .join(" && ");
                     script.push_str(&format!(
-                        "JOB_IDS[{}]=$({} -w '{}') {})\n",
+                        "JOB_IDS[{}]=$({} -w '{}' {})\n",
                         rule_name,
                         submit_cmd,
                         dep_str,

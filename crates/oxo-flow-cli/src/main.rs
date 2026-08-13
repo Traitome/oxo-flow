@@ -92,12 +92,15 @@ pub enum Commands {
         #[arg(
             long,
             default_value = "0",
-            help = "Timeout per job in seconds (0 = disabled)"
+            help = "Timeout per job in seconds (0 = disabled), or a duration like 1h/30m"
         )]
         timeout: String,
         #[arg(long, help = "Resume only failed rules from a previous run")]
         resume_failed: bool,
-        #[arg(long, help = "Execution profile: local, slurm, pbs, sge, or lsf")]
+        #[arg(
+            long,
+            help = "Execution profile name (loaded from profiles/<NAME>.toml; use 'oxo-flow profile' to manage)"
+        )]
         profile: Option<String>,
         #[arg(
             long,
@@ -291,7 +294,11 @@ pub enum Commands {
     Debug {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
-        #[arg(short = 'r', long = "rule")]
+        #[arg(
+            short = 'r',
+            long = "rule",
+            help = "Show the expanded command for this rule only"
+        )]
         rule_name: Option<String>,
         /// Enable AI-powered command explanation.
         #[arg(long)]
@@ -301,11 +308,17 @@ pub enum Commands {
     Clean {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
-        #[arg(short = 'n', long, help = "Generate scripts without submitting")]
+        #[arg(short = 'n', long, help = "Preview which outputs would be deleted")]
         dry_run: bool,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Actually delete outputs (without this flag, clean only previews)"
+        )]
         force: bool,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Remove orphaned transform chunk directories (.oxo-flow/chunks)"
+        )]
         orphans: bool,
     },
     /// Manage software environments.
@@ -326,7 +339,7 @@ pub enum Commands {
     Lint {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
-        #[arg(long)]
+        #[arg(long, help = "Treat warnings as errors (non-zero exit on any warning)")]
         strict: bool,
         /// Enable AI-powered semantic linting.
         #[arg(long)]
@@ -336,7 +349,7 @@ pub enum Commands {
     Watch {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
-        #[arg(long)]
+        #[arg(long, help = "Re-run the workflow automatically when the file changes")]
         run: bool,
         #[arg(
             short = 'j',
@@ -387,11 +400,15 @@ pub enum Commands {
         /// Server operation mode: personal, team, or hpc.
         #[arg(long, default_value = "personal", env = "OXO_FLOW_MODE")]
         mode: String,
-        #[arg(long, default_value = "127.0.0.1")]
+        #[arg(long, default_value = "127.0.0.1", help = "Address to bind")]
         host: String,
-        #[arg(short = 'p', long, default_value = "8080")]
+        #[arg(short = 'p', long, default_value = "8080", help = "Port to listen on")]
         port: u16,
-        #[arg(long, default_value = "/")]
+        #[arg(
+            long,
+            default_value = "/",
+            help = "Base URL path for the web interface"
+        )]
         base_path: String,
     },
     /// Generate shell completions for oxo-flow.
@@ -437,21 +454,25 @@ pub enum Commands {
             help = "Maximum number of concurrent jobs"
         )]
         jobs: usize,
-        #[arg(short = 'x', long)]
+        #[arg(short = 'x', long, help = "Stop on the first failed item")]
         stop_on_error: bool,
-        #[arg(short = 'f', long)]
+        #[arg(short = 'f', long, help = "Read items from a file (one per line)")]
         file: Option<PathBuf>,
         #[arg(long = "json-output", help = "Output results as formatted JSON")]
         json_output: bool,
-        #[arg(short = 'n', long, help = "Generate scripts without submitting")]
+        #[arg(
+            short = 'n',
+            long,
+            help = "Preview the commands without executing them"
+        )]
         dry_run: bool,
         #[arg(short = 'd', long, help = "Working directory for execution")]
         workdir: Option<PathBuf>,
-        #[arg(short = 'e', long)]
+        #[arg(short = 'e', long, help = "Environment to run each item in")]
         environment: Option<String>,
-        #[arg(long)]
+        #[arg(long, help = "Record output checksums for later verification")]
         checksum: bool,
-        #[arg(long)]
+        #[arg(long, help = "Generate a .oxoflow workflow file from the template")]
         generate_workflow: bool,
         #[arg(short = 'o', long, help = "Output file path")]
         output: Option<PathBuf>,
@@ -467,16 +488,24 @@ pub enum Commands {
     History {
         #[arg(value_name = "DIR", help = "Directory path")]
         dir: Option<PathBuf>,
-        #[arg(short = 'n', long, default_value = "10")]
+        #[arg(
+            short = 'n',
+            long,
+            default_value = "10",
+            help = "Maximum number of entries to show"
+        )]
         limit: usize,
     },
     /// Run a workflow in test mode, validating and verifying outputs.
     Test {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
-        #[arg(long, help = "Output file path")]
+        #[arg(long, help = "File whose existence is verified after the test run")]
         output: Option<PathBuf>,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Execute the workflow (default only validates and verifies outputs)"
+        )]
         run: bool,
         #[arg(
             short = 'j',
@@ -650,6 +679,9 @@ async fn main() -> Result<()> {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_level)),
         )
         .with_target(false)
+        // Logs go to stderr so machine-readable stdout (graph DOT output,
+        // --json, pipes into dot/other tools) stays clean.
+        .with_writer(std::io::stderr)
         .init();
 
     // Suppress banner in quiet mode

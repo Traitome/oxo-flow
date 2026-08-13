@@ -18,22 +18,35 @@ pub async fn validate_command(
         println!();
     }
 
-    let _ = &json;
     let config_res = WorkflowConfig::from_file(&workflow);
     match config_res {
         Ok(cfg) => {
             if cfg.rules.is_empty() {
-                eprintln!("{} {} — 0 rules", "✓".green().bold(), workflow.display());
-                eprintln!(
-                    "  {} Workflow has no rules. Add [[rules]] sections to define pipeline steps.",
-                    "⚠ Warning:".yellow().bold()
-                );
+                if json {
+                    let output = serde_json::json!({
+                        "command": "validate",
+                        "workflow": workflow.display().to_string(),
+                        "valid": true,
+                        "rules": 0,
+                        "dependencies": 0,
+                        "errors": [],
+                        "missing_inputs": [],
+                    });
+                    println!("{}", serde_json::to_string_pretty(&output)?);
+                } else {
+                    eprintln!("{} {} — 0 rules", "✓".green().bold(), workflow.display());
+                    eprintln!(
+                        "  {} Workflow has no rules. Add [[rules]] sections to define pipeline steps.",
+                        "⚠ Warning:".yellow().bold()
+                    );
+                }
                 return Ok(());
             }
 
             // Run semantic validation (E001-E008)
             let validation = oxo_flow_core::format::validate_format(&cfg);
             let mut error_count = 0usize;
+            let mut errors_json: Vec<serde_json::Value> = Vec::new();
 
             for d in &validation.diagnostics {
                 if d.severity == oxo_flow_core::format::Severity::Error {
@@ -43,12 +56,21 @@ pub async fn validate_command(
                         continue;
                     }
                     error_count += 1;
-                    eprintln!("  {} [{}]: {}", "error".red().bold(), d.code, d.message);
-                    if let Some(ref rule) = d.rule {
-                        eprintln!("    rule: {}", rule);
-                    }
-                    if let Some(ref suggestion) = d.suggestion {
-                        eprintln!("    hint: {}", suggestion);
+                    if json {
+                        errors_json.push(serde_json::json!({
+                            "code": d.code,
+                            "message": d.message,
+                            "rule": d.rule,
+                            "suggestion": d.suggestion,
+                        }));
+                    } else {
+                        eprintln!("  {} [{}]: {}", "error".red().bold(), d.code, d.message);
+                        if let Some(ref rule) = d.rule {
+                            eprintln!("    rule: {}", rule);
+                        }
+                        if let Some(ref suggestion) = d.suggestion {
+                            eprintln!("    hint: {}", suggestion);
+                        }
                     }
                 }
             }
@@ -76,14 +98,55 @@ pub async fn validate_command(
             }
 
             // Validate DAG construction (skip for --as-include)
-            if as_include {
-                // For sub-workflow fragments, skip DAG validation
+            let (rules, dependencies) = if as_include {
+                (cfg.rules.len(), 0)
+            } else {
+                match WorkflowDag::from_rules(&cfg.rules) {
+                    Ok(dag) => (dag.node_count(), dag.edge_count()),
+                    Err(e) => {
+                        if json {
+                            let output = serde_json::json!({
+                                "command": "validate",
+                                "workflow": workflow.display().to_string(),
+                                "valid": false,
+                                "rules": cfg.rules.len(),
+                                "dependencies": 0,
+                                "errors": [{"code": "DAG", "message": e.to_string()}],
+                                "missing_inputs": [],
+                            });
+                            println!("{}", serde_json::to_string_pretty(&output)?);
+                        } else {
+                            eprintln!(
+                                "{} {} — DAG error: {}",
+                                "✗".red().bold(),
+                                workflow.display(),
+                                e
+                            );
+                        }
+                        std::process::exit(1);
+                    }
+                }
+            };
+
+            if json {
+                let output = serde_json::json!({
+                    "command": "validate",
+                    "workflow": workflow.display().to_string(),
+                    "valid": error_count == 0,
+                    "rules": rules,
+                    "dependencies": dependencies,
+                    "errors": errors_json,
+                    "missing_inputs": missing_inputs,
+                });
+                println!("{}", serde_json::to_string_pretty(&output)?);
+            } else {
                 if error_count == 0 {
                     eprintln!(
-                        "{} {} — {} rules (fragment validation)",
+                        "{} {} — {} rules, {} dependencies",
                         "✓".green().bold(),
                         workflow.display(),
-                        cfg.rules.len()
+                        rules,
+                        dependencies
                     );
                 } else {
                     eprintln!(
@@ -93,44 +156,14 @@ pub async fn validate_command(
                         error_count
                     );
                 }
-            } else {
-                match WorkflowDag::from_rules(&cfg.rules) {
-                    Ok(dag) => {
-                        if error_count == 0 {
-                            eprintln!(
-                                "{} {} — {} rules, {} dependencies",
-                                "✓".green().bold(),
-                                workflow.display(),
-                                dag.node_count(),
-                                dag.edge_count()
-                            );
-                        } else {
-                            eprintln!(
-                                "{} {} — {} validation error(s)",
-                                "✗".red().bold(),
-                                workflow.display(),
-                                error_count
-                            );
-                        }
 
-                        if !missing_inputs.is_empty() {
-                            eprintln!(
-                                "\n  {} The following input files do not exist:",
-                                "⚠ Warning:".yellow().bold()
-                            );
-                            for input in missing_inputs {
-                                eprintln!("    - {}", input);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "{} {} — DAG error: {}",
-                            "✗".red().bold(),
-                            workflow.display(),
-                            e
-                        );
-                        std::process::exit(1);
+                if !missing_inputs.is_empty() {
+                    eprintln!(
+                        "\n  {} The following input files do not exist:",
+                        "⚠ Warning:".yellow().bold()
+                    );
+                    for input in missing_inputs {
+                        eprintln!("    - {}", input);
                     }
                 }
             }
@@ -141,7 +174,20 @@ pub async fn validate_command(
             }
         }
         Err(e) => {
-            eprintln!("{} {} — {}", "✗".red().bold(), workflow.display(), e);
+            if json {
+                let output = serde_json::json!({
+                    "command": "validate",
+                    "workflow": workflow.display().to_string(),
+                    "valid": false,
+                    "rules": 0,
+                    "dependencies": 0,
+                    "errors": [{"code": "PARSE", "message": e.to_string()}],
+                    "missing_inputs": [],
+                });
+                println!("{}", serde_json::to_string_pretty(&output)?);
+            } else {
+                eprintln!("{} {} — {}", "✗".red().bold(), workflow.display(), e);
+            }
             std::process::exit(1);
         }
     }

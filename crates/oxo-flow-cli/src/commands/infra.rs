@@ -186,28 +186,21 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
                     eprintln!("  Activate with: conda activate {}", name_str);
                 }
                 "pixi" => {
-                    // For pixi, create a project using the spec as a base
-                    let _pixi_toml = std::fs::read_to_string(&spec)
+                    // The generated spec is itself a complete pixi project
+                    // manifest ([project] + [dependencies]) — install it
+                    // directly. `pixi init` would create an empty project
+                    // and install nothing.
+                    let pixi_toml = std::fs::read_to_string(&spec)
                         .with_context(|| format!("cannot read pixi spec: {}", spec.display()))?;
 
-                    // Create a temporary directory for pixi project
-                    let temp_dir = std::env::temp_dir().join(format!("oxo-flow-{}", name_str));
-                    std::fs::create_dir_all(&temp_dir)?;
+                    let project_dir = std::env::temp_dir().join(format!("oxo-flow-{}", name_str));
+                    std::fs::create_dir_all(&project_dir)?;
+                    std::fs::write(project_dir.join("pixi.toml"), &pixi_toml)
+                        .with_context(|| "failed to write pixi.toml")?;
 
-                    let status = std::process::Command::new("pixi")
-                        .args(["init", "-q"])
-                        .current_dir(&temp_dir)
-                        .status()
-                        .with_context(|| "failed to run pixi init")?;
-
-                    if !status.success() {
-                        anyhow::bail!("pixi init failed");
-                    }
-
-                    // Install packages from the spec
                     let status = std::process::Command::new("pixi")
                         .args(["install"])
-                        .current_dir(&temp_dir)
+                        .current_dir(&project_dir)
                         .status()
                         .with_context(|| "failed to run pixi install")?;
 
@@ -218,9 +211,12 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
                     eprintln!(
                         "  {} Pixi project created at: {}",
                         "✓".green(),
-                        temp_dir.display()
+                        project_dir.display()
                     );
-                    eprintln!("  Activate with: cd {} && pixi shell", temp_dir.display());
+                    eprintln!(
+                        "  Activate with: cd {} && pixi shell",
+                        project_dir.display()
+                    );
                 }
                 other => {
                     anyhow::bail!(
@@ -419,14 +415,26 @@ async fn create_env_from_ai(
 
     // Pre-resolve tools mentioned in the description against the embedded
     // Bioconda database — inject real names + current versions so the model
-    // pins accurately instead of guessing.
+    // pins accurately instead of guessing. Generic words and loose summary
+    // matches are filtered out so unrelated tools don't pollute the prompt.
+    const STOP_WORDS: &[&str] = &[
+        "and", "the", "for", "with", "using", "into", "from", "your", "pipeline", "workflow",
+        "analysis", "data", "files", "output", "input", "all", "new", "this", "that", "via",
+        "then", "also", "based", "need", "want", "please",
+    ];
     let mut matched = String::new();
     let mut seen = std::collections::HashSet::new();
     for word in description
         .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
-        .filter(|w| w.len() >= 3)
+        .filter(|w| w.len() >= 3 && !STOP_WORDS.contains(&w.to_ascii_lowercase().as_str()))
     {
+        let word_lower = word.to_ascii_lowercase();
         for tool in oxo_flow_ai::knowledge::bioconda::search_tools(word, 3) {
+            // Keep only matches where the tool name actually contains the
+            // word — summary-only matches are too loose to inject.
+            if !tool.name.to_ascii_lowercase().contains(&word_lower) {
+                continue;
+            }
             if seen.insert(tool.name.clone()) {
                 matched.push_str(&format!(
                     "- {} {} — {}\n",
@@ -466,7 +474,7 @@ Generate ONLY valid pixi.toml inside ```toml code fences:
 ```toml
 [project]
 name = "env-name"
-channels = ["bioconda", "conda-forge"]
+channels = ["conda-forge", "bioconda"]
 platforms = ["linux-64"]
 
 [dependencies]
@@ -476,7 +484,7 @@ tool = "version"
 Rules:
 - Pin every tool version using the Matched Bioconda Tools above when present; otherwise use your knowledge of current stable versions
 - Include all tools the user mentions; add common companions if clearly needed
-- channels order: bioconda first, conda-forge second
+- channels order: conda-forge first, bioconda second (Bioconda's recommended channel setup)
 - Do NOT add comments beyond the file header
 "#,
             oxo_flow_ai::knowledge::builtin::format_tool_table(),
@@ -505,8 +513,8 @@ Generate ONLY valid conda environment YAML inside ```yaml code fences:
 # envs/<name>.yaml
 name: <kebab-case-env-name>
 channels:
-  - bioconda
   - conda-forge
+  - bioconda
 dependencies:
   - <tool>=<pinned-version>
 ```
@@ -514,7 +522,7 @@ dependencies:
 Rules:
 - Pin every tool version using the Matched Bioconda Tools above when present; otherwise use your knowledge of current stable versions
 - Include all tools the user mentions; add common companions if clearly needed
-- channels order: bioconda first, conda-forge second
+- channels order: conda-forge first, bioconda second (Bioconda's recommended channel setup)
 - Do NOT add comments beyond the file header
 "#,
             oxo_flow_ai::knowledge::builtin::format_tool_table(),
