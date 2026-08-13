@@ -10,7 +10,7 @@ This document is the primary source of truth for AI agents working on oxo-flow.
 ## 🏗️ Workspace Layout
 - `crates/oxo-flow-core`: DAG engine, executor, environment management, config, scheduling, reporting
 - `crates/oxo-flow-ai`: AI companion — provider abstraction, skill system, agent orchestration, MCP
-- `crates/oxo-flow-cli`: CLI binary (`oxo-flow`) — 33 subcommands via clap derive
+- `crates/oxo-flow-cli`: CLI binary (`oxo-flow`) — 29 subcommands via clap derive
 - `crates/oxo-flow-web`: Axum web server + React 19 SPA, 50+ REST endpoints across 7 domains
 - `examples/`: Reference `.oxoflow` (TOML-based) pipeline files
 - `tests/`: Integration tests covering CLI and core functionality

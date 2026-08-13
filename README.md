@@ -242,7 +242,7 @@ oxo-flow/
 │   ├── oxo-flow-core/     # Core library: DAG engine, executor, environment mgmt,
 │   │                      # config parsing, scheduler, wildcard expansion, reporting
 │   ├── oxo-flow-ai/       # AI companion: provider abstraction, skill system, agents
-│   ├── oxo-flow-cli/      # CLI binary ("oxo-flow") — Clap-based, 33 subcommands
+│   ├── oxo-flow-cli/      # CLI binary ("oxo-flow") — Clap-based, 29 subcommands
 │   └── oxo-flow-web/      # Web server ("oxo-flow-web") — axum REST API + frontend
 ├── examples/              # Example .oxoflow workflows
 ├── tests/                 # Integration tests

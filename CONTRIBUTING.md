@@ -22,7 +22,7 @@ cargo test --workspace --lib    # Tests (1,280+)
 ```
 crates/oxo-flow-core/    # DAG engine, executor, config, scheduling
 crates/oxo-flow-ai/      # AI companion: providers, skills, agents
-crates/oxo-flow-cli/     # CLI binary (33 subcommands)
+crates/oxo-flow-cli/     # CLI binary (29 subcommands)
 crates/oxo-flow-web/     # Web server (axum REST API + React SPA)
 frontend/                # React 19 TypeScript SPA
 ```
