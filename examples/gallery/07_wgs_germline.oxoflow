@@ -52,7 +52,7 @@ output = ["aligned/{sample}.sorted.bam"]
 description = "Paired-end alignment with BWA-MEM2 and coordinate sorting"
 shell = """
 mkdir -p aligned
-bwa-mem2 mem -t {threads} -R '@RG\\tID:{sample}\\tSM:{sample}\\tLB:WGS\\tPL:ILLUMINA\\tPU:{sample}' \
+bwa-mem2 mem -M -t {threads} -R '@RG\\tID:{sample}\\tSM:{sample}\\tLB:WGS\\tPL:ILLUMINA\\tPU:{sample}' \
     {config.reference} {input[0]} {input[1]} \
     | samtools sort -@ {threads} -m 2G -o {output[0]}
 samtools index {output[0]}
@@ -96,6 +96,7 @@ mkdir -p bqsr
 gatk BaseRecalibrator \
     -I {input[0]} -R {config.reference} \
     --known-sites {config.known_sites} \
+    --known-sites {config.thousand_g} \
     --known-sites {config.known_indels} \
     -O bqsr/{sample}.recal_data.table
 
