@@ -963,6 +963,36 @@ expand_inputs = [
 ]
 ```
 
+Variables may also reference the `[config]` section — either a TOML array
+or a string:
+
+```toml
+[[sample_groups]]
+name = "cohort"
+samples = ["NA12878", "NA12879", "NA12880"]
+
+[[rules]]
+name = "combine_gvcfs"
+input = []
+expand_inputs = [
+  { pattern = "variants/{sample}.g.vcf.gz", variables = { sample = "config.samples_list" } }
+]
+```
+
+**Config reference semantics:**
+
+| Config value | Expands to |
+|---|---|
+| `["a", "b"]` (array) | `a`, `b` |
+| `"a"` (string, no comma) | `a` |
+| `"a,b,c"` (comma-joined string) | `a`, `b`, `c` (split on commas, trimmed) |
+| `["a,b"]` (single-element array) | `a,b` as one value — escape hatch for comma-containing strings |
+
+Comma-joined strings are how the engine injects merged sample lists
+(`config.samples_list`, `config.samples_<group_name>` — see
+[Merging Multiple Sample Sources](#merging-multiple-sample-sources)), so
+they can be referenced directly here.
+
 ---
 
 ## Wildcards
@@ -1255,6 +1285,14 @@ oxo-flow run pipeline.oxoflow --sample EXTRA_01 --sample EXTRA_02
 
 All sources deduplicate — the same sample from multiple sources appears once.
 Per-group sample lists are available as `{config.samples_<group_name>}`.
+
+These injected values are **comma-joined strings** (e.g. `"S001,S002"`):
+
+- In `expand_inputs`, `scatter.values_from`, and `split.values_from` they
+  resolve per value (comma-split) — see
+  [Expand Inputs](#expand-inputs).
+- In shell templates, `{config.samples_list}` renders as the comma-joined
+  text, e.g. `for s in $(echo {config.samples_list} | tr ',' ' ')`.
 
 ### Partial Pair Tolerance & Tumor-Only Mode
 

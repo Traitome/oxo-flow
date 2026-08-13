@@ -2609,6 +2609,12 @@ impl WorkflowConfig {
     /// Resolve a config variable (e.g., "config.samples") into a list of strings.
     ///
     /// Accepts both the `config.<key>` form and a bare `<key>` reference.
+    ///
+    /// String values are split on commas (trimmed, empties dropped) so
+    /// engine-injected comma-joined lists like `config.samples_list` and
+    /// `config.samples_<group>` expand per value. A string without commas
+    /// still resolves to a single value; use a single-element array
+    /// (e.g. `["a,b"]`) to force a comma-containing string to stay whole.
     pub fn resolve_config_list(&self, var: &str) -> Option<Vec<String>> {
         let key = var.strip_prefix("config.").unwrap_or(var);
         let val = self.config.get(key)?;
@@ -2622,8 +2628,13 @@ impl WorkflowConfig {
                     .collect(),
             );
         } else if let Some(s) = val.as_str() {
-            // Fallback to single-item list
-            return Some(vec![s.to_string()]);
+            return Some(
+                s.split(',')
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+            );
         }
         None
     }
@@ -4395,6 +4406,98 @@ shell = "echo {config.database} > {output[0]}"
         assert_eq!(
             config.config.get("threshold").and_then(|v| v.as_str()),
             Some("1e-5")
+        );
+    }
+
+    #[test]
+    fn resolve_config_list_splits_comma_joined_strings() {
+        let config = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "test"
+
+            [config]
+            plain = "single_value"
+            comma_list = "S1,S2,S3"
+            messy_list = " S1, S2 ,,S3,"
+            string_array = ["A", "B"]
+            "#,
+        )
+        .unwrap();
+
+        // Strings without commas keep behaving as a single value.
+        assert_eq!(
+            config.resolve_config_list("config.plain"),
+            Some(vec!["single_value".to_string()])
+        );
+        // Comma-joined strings split into individual values (the form the
+        // engine uses for config.samples_list / config.samples_<group>).
+        assert_eq!(
+            config.resolve_config_list("config.comma_list"),
+            Some(vec!["S1".to_string(), "S2".to_string(), "S3".to_string()])
+        );
+        // Entries are trimmed and empty segments dropped.
+        assert_eq!(
+            config.resolve_config_list("config.messy_list"),
+            Some(vec!["S1".to_string(), "S2".to_string(), "S3".to_string()])
+        );
+        // Arrays resolve unchanged.
+        assert_eq!(
+            config.resolve_config_list("config.string_array"),
+            Some(vec!["A".to_string(), "B".to_string()])
+        );
+        // Bare keys (without the config. prefix) work too.
+        assert_eq!(
+            config.resolve_config_list("comma_list"),
+            Some(vec!["S1".to_string(), "S2".to_string(), "S3".to_string()])
+        );
+    }
+
+    #[test]
+    fn expand_inputs_resolves_injected_samples_list_per_sample() {
+        // Mirrors examples/gallery/07_wgs_germline.oxoflow: the sample
+        // group is the single source of truth and expand_inputs consumes
+        // the auto-injected config.samples_list (a comma-joined string).
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("wgs.oxoflow");
+        std::fs::write(
+            &workflow_path,
+            r#"
+            [workflow]
+            name = "wgs"
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["NA12878", "NA12879", "NA12880"]
+
+            [[rules]]
+            name = "combine_gvcfs"
+            input = []
+            expand_inputs = [
+                { pattern = "variants/{sample}.g.vcf.gz", variables = { sample = "config.samples_list" } }
+            ]
+            output = ["variants/cohort.g.vcf.gz"]
+            shell = "gatk CombineGVCFs {input} -O {output[0]}"
+            "#,
+        )
+        .unwrap();
+
+        let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+
+        let combine = config
+            .rules
+            .iter()
+            .find(|r| r.name == "combine_gvcfs")
+            .expect("combine_gvcfs rule should survive expansion");
+        assert_eq!(
+            combine.input.to_vec(),
+            vec![
+                "variants/NA12878.g.vcf.gz".to_string(),
+                "variants/NA12879.g.vcf.gz".to_string(),
+                "variants/NA12880.g.vcf.gz".to_string(),
+            ]
         );
     }
 }

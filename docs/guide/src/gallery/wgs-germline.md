@@ -301,6 +301,17 @@ format = ["html", "json"]
 sections = ["summary", "qc_metrics", "coverage", "variants", "annotations", "provenance"]
 ```
 
+### Sample Expansion
+
+The `[[sample_groups]]` table is the single source of truth for the cohort:
+
+- Rules with `{sample}` in their paths (fastp_qc through haplotype_caller)
+  are expanded once per sample: `fastp_qc_cohort_NA12878`, and so on.
+- The engine merges all sample sources into `config.samples_list`
+  (`"NA12878,NA12879,NA12880"`), and `combine_gvcfs` references it in
+  `expand_inputs` to collect the three per-sample GVCFs — no duplicate
+  sample list is needed anywhere else.
+
 ## Clinical Considerations
 
 ### BQSR (Base Quality Score Recalibration)
