@@ -492,11 +492,20 @@ router untouched until the deferred cleanup).
   run's REAL data (shared `build_report_for_run`).
 - **P4 partial** (57cf28e): CI `frontend` job (SPA build + full Playwright
   e2e against the real server).
+- **Live AI verification DONE (2026-08-14, via the user's
+  `ANTHROPIC_AUTH_TOKEN` from ~/.zshrc):** the real agent loop against the
+  real Claude provider — model called `lookup_tool` (grounded Bioconda
+  result), generated a workflow, the core engine validated it
+  (`pipeline_ready: validation.valid=true`), `done` in 3 rounds. The live
+  test also FOUND + FIXED two real Anthropic-protocol bugs: assistant
+  `tool_use` blocks were never emitted (400), and multiple `tool_result`
+  blocks must coalesce into ONE following message (400). Both are unit-tested
+  now (ba99c60, 241361c). Chat prompt hardened (TOML array I/O, direct
+  validation fixes, 6 rounds).
 - **Remaining (documented, not yet done):** saved-pipelines page UI
-  (list/search/delete/export), login page, frontend lint debt (28 pre-existing
-  errors — several die with the dead-code cleanup), dead code removal
-  (`Runs.tsx`, `SSEClient`, legacy `handlers/` + legacy router), run-diagnosis
-  chat tools, live AI round-trip on the user's machine (no key here).
+  (list/search/delete/export), login page, frontend lint debt (pre-existing
+  `any`/effect errors — several died with the dead-code cleanup), legacy
+  `handlers/` + legacy router removal, run-diagnosis chat tools.
 
 ## 10. Phased Roadmap
 
