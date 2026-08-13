@@ -315,7 +315,6 @@
 {"f": "nanopore-analysis", "t": "crispr-screen", "d": "FASTQ", "p": 3}
 {"f": "nanopore-analysis", "t": "somatic-variants", "d": "BAM", "p": 3}
 {"f": "nanopore-analysis", "t": "qc", "d": "BAM, FASTQ", "p": 0}
-{"f": "nanopore-analysis", "t": "preprocessing", "d": "FASTQ", "p": 0}
 {"f": "nanopore-analysis", "t": "cnv-analysis", "d": "BAM", "p": 0}
 {"f": "nanopore-analysis", "t": "structural-variants", "d": "BAM", "p": 0}
 {"f": "nanopore-analysis", "t": "fusion-detection", "d": "BAM, FASTQ", "p": 0}

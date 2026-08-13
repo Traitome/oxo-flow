@@ -406,7 +406,7 @@ impl Tool for LookupSkillTool {
     }
 }
 
-/// Query the embedded bioinformatics pipeline knowledge graph (78 skills,
+/// Query the embedded bioinformatics pipeline knowledge graph (79 skills,
 /// 470 literature-backed transitions). Understand what feeds into or out
 /// of a workflow step, or find the pipeline path between two steps.
 #[derive(Default)]
@@ -423,7 +423,7 @@ impl Tool for LookupPipelineTool {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "lookup_pipeline".into(),
-            description: "Query the embedded bioinformatics pipeline knowledge graph (78 workflow skills, 470 data-flow transitions with data types and literature evidence). Use 'transitions' to see what feeds into/out of a step, or 'path' to find the pipeline between two steps. Use this to design correct multi-step workflow topologies (e.g. from alignment to variant calling to annotation).".into(),
+            description: "Query the embedded bioinformatics pipeline knowledge graph (79 workflow skills, 469 data-flow transitions with data types and literature evidence). Use 'transitions' to see what feeds into/out of a step, or 'path' to find the pipeline between two steps. Use this to design correct multi-step workflow topologies (e.g. from alignment to variant calling to annotation).".into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

@@ -1,6 +1,6 @@
 //! Embedded bioinformatics pipeline knowledge graph.
 //!
-//! 78 workflow skills and 470 data-flow transitions (skill A → skill B,
+//! 79 workflow skills and 469 data-flow transitions (skill A → skill B,
 //! annotated with the data types that pass between them: BAM, VCF, FASTQ,
 //! COUNT_MATRIX, etc.) from the Pipette.bio SkillGraph — each edge backed
 //! by literature paper counts.
@@ -236,6 +236,26 @@ mod tests {
         let (nodes, edges) = graph_stats();
         assert!(nodes >= 70, "expected 70+ nodes, got {nodes}");
         assert!(edges >= 400, "expected 400+ edges, got {edges}");
+    }
+
+    #[test]
+    fn every_edge_references_real_nodes() {
+        // Dirty data in the knowledge base (edges pointing at nonexistent
+        // nodes) silently degrades path queries — guard against it.
+        let node_ids: std::collections::HashSet<&str> =
+            GRAPH.nodes.iter().map(|n| n.id.as_str()).collect();
+        for edge in &GRAPH.edges {
+            assert!(
+                node_ids.contains(edge.from.as_str()),
+                "edge from unknown node '{}'",
+                edge.from
+            );
+            assert!(
+                node_ids.contains(edge.to.as_str()),
+                "edge to unknown node '{}'",
+                edge.to
+            );
+        }
     }
 
     #[test]
