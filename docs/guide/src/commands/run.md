@@ -190,6 +190,11 @@ selected for *this* run even when outputs are up to date — combine it with
 `--samples` to re-run just the pilot subset while keeping the other
 samples' completed records.
 
+After a `--samples` run, a **pilot summary** is printed: samples run,
+wall time, per-sample time, and a linear projection for the full cohort.
+When the workflow enables `[ai]`, a plain-language pilot report (health
+assessment and scale-up advice) is appended automatically.
+
 ---
 
 ## Checkpointing and Resuming

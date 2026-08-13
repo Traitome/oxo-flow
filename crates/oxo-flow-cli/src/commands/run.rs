@@ -627,6 +627,7 @@ pub async fn run_command(
     let rule_names: Vec<&str> = order.iter().map(String::as_str).collect();
     let mut sched = oxo_flow_core::scheduler::SchedulerState::new(&rule_names);
     let order_set: std::collections::HashSet<&str> = order.iter().map(String::as_str).collect();
+    let run_started = std::time::Instant::now();
     let semaphore = Arc::new(tokio::sync::Semaphore::new(jobs.max(1)));
     let mut join_set = tokio::task::JoinSet::new();
     let mut submitted: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -1175,6 +1176,81 @@ pub async fn run_command(
         }
     }
 
+    // Pilot summary: after a --samples subset run, report what the pilot
+    // implies for the full cohort (simple linear projection). With [ai]
+    // enabled, append a plain-language interpretation.
+    if !samples_filter.is_empty() {
+        let pilot_count = oxo_flow_core::scientific_preflight::count_samples(&config);
+        let total_count = WorkflowConfig::from_file(&workflow)
+            .map(|c| oxo_flow_core::scientific_preflight::count_samples(&c))
+            .unwrap_or(pilot_count);
+        let elapsed = run_started.elapsed();
+        let elapsed_secs = elapsed.as_secs_f64();
+        let per_sample = if pilot_count > 0 {
+            elapsed_secs / pilot_count as f64
+        } else {
+            0.0
+        };
+        let projected_secs = per_sample * total_count as f64;
+
+        eprintln!("\n{}", "Pilot summary:".bold().cyan());
+        eprintln!(
+            "  Samples: {}/{} (pilot) | Wall time: {:.1}s | Per-sample: {:.1}s | Projected full run: ~{:.0}s",
+            pilot_count, total_count, elapsed_secs, per_sample, projected_secs
+        );
+        let scientific =
+            oxo_flow_core::scientific_preflight::analyze_scientific_constraints(&config);
+        if !scientific.is_empty() {
+            eprintln!(
+                "  {} scientific preflight finding(s) — see 'oxo-flow dry-run --samples ...'",
+                scientific.len()
+            );
+        }
+
+        // AI interpretation when the workflow opts in via [ai].enabled.
+        if let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(&workflow), false)
+        {
+            let warnings_text = scientific
+                .iter()
+                .map(|w| format!("- [{}] {}: {}", w.code, w.rule, w.message))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let prompt = format!(
+                "A pilot run of {} sample(s) out of {} completed in {:.1}s ({} succeeded, {} failed).\n\
+                 Per-sample wall time: {:.1}s; projected full run: ~{:.0}s.\n\
+                 Scientific preflight findings:\n{}\n\n\
+                 Write a short pilot report (3-5 sentences): whether the pilot results are\n\
+                 healthy, whether scaling up is advisable, and what to fix first.",
+                pilot_count,
+                total_count,
+                elapsed_secs,
+                success_count,
+                fail_count,
+                per_sample,
+                projected_secs,
+                if warnings_text.is_empty() {
+                    "none"
+                } else {
+                    &warnings_text
+                }
+            );
+            match provider
+                .chat(
+                    "You are a bioinformatics workflow consultant summarizing a pilot run.",
+                    &prompt,
+                )
+                .await
+            {
+                Ok(response) => {
+                    eprintln!();
+                    eprintln!("{}", "Pilot report (AI):".bold().green());
+                    eprintln!("{response}");
+                }
+                Err(e) => eprintln!("  AI pilot report failed: {e}"),
+            }
+        }
+    }
+
     // JSON output mode
     if json {
         let wf_path = Some(workflow.to_string_lossy().to_string());
@@ -1211,11 +1287,6 @@ pub async fn dry_run_command(
     print_banner();
     let workflow = resolve_workflow(workflow)?;
 
-    // AI: auto-detect from workflow [ai] or explicit --ai flag
-    if let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(&workflow), ai) {
-        crate::commands::ai_check::analyze_workflow(&workflow, &provider, "dry-run").await?;
-        println!();
-    }
     let mut config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
@@ -1231,6 +1302,43 @@ pub async fn dry_run_command(
                 "⚠".yellow(),
                 name
             );
+        }
+    }
+
+    // ── Scientific preflight (deterministic, evidence-backed) ────────────
+    // Printed for every dry-run; with --ai the findings are also passed to
+    // the model for a plain-language explanation.
+    let scientific = oxo_flow_core::scientific_preflight::analyze_scientific_constraints(&config);
+    let scientific_context = if scientific.is_empty() {
+        String::new()
+    } else {
+        let mut text = String::new();
+        for w in &scientific {
+            text.push_str(&format!(
+                "- [{}] {}: {}\n  Fix: {}\n",
+                w.code, w.rule, w.message, w.suggestion
+            ));
+        }
+        text
+    };
+
+    // AI: auto-detect from workflow [ai] or explicit --ai flag
+    if let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(&workflow), ai) {
+        crate::commands::ai_check::analyze_workflow(
+            &workflow,
+            &provider,
+            "dry-run",
+            &scientific_context,
+        )
+        .await?;
+        println!();
+    }
+
+    if !scientific.is_empty() {
+        eprintln!("\n{}", "Scientific preflight:".bold().yellow());
+        for w in &scientific {
+            eprintln!("  ⚠ [{}] {}: {}", w.code, w.rule, w.message);
+            eprintln!("    {} {}", "→".bold(), w.suggestion);
         }
     }
 

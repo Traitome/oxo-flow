@@ -14,7 +14,7 @@ pub async fn validate_command(
 ) -> Result<()> {
     // AI: auto-detect from workflow [ai] or explicit --ai flag
     if let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(&workflow), ai) {
-        crate::commands::ai_check::analyze_workflow(&workflow, &provider, "validate").await?;
+        crate::commands::ai_check::analyze_workflow(&workflow, &provider, "validate", "").await?;
         println!();
     }
 
@@ -199,7 +199,7 @@ pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool)
 
     // AI: auto-detect from workflow [ai] or explicit --ai flag
     if let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(&workflow), ai) {
-        crate::commands::ai_check::analyze_workflow(&workflow, &provider, "lint").await?;
+        crate::commands::ai_check::analyze_workflow(&workflow, &provider, "lint", "").await?;
         println!();
     }
     let config = WorkflowConfig::from_file(&workflow)

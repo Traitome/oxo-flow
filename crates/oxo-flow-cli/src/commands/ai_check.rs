@@ -11,6 +11,7 @@ pub async fn analyze_workflow(
     workflow_path: &Path,
     provider: &AiProvider,
     command: &str, // "dry-run" or "validate"
+    context: &str, // pre-computed deterministic findings to explain (may be empty)
 ) -> Result<()> {
     let toml_content = std::fs::read_to_string(workflow_path)
         .map_err(|e| anyhow::anyhow!("Cannot read {}: {e}", workflow_path.display()))?;
@@ -27,8 +28,16 @@ pub async fn analyze_workflow(
 
     let system = build_analysis_prompt();
 
+    let context_block = if context.trim().is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\n## Pre-computed scientific findings (already verified against the engine)\n\
+             Explain these in plain language and include them in your report.\n\n{context}"
+        )
+    };
     let user = format!(
-        "## Workflow to Analyze\n\nFile: {}\n\n```toml\n{toml_content}\n```\n\n\
+        "## Workflow to Analyze\n\nFile: {}\n\n```toml\n{toml_content}\n```\n{context_block}\n\
          ## Task\n\
          Analyze this workflow and report issues. For each issue, specify:\n\
          - Severity: ERROR (must fix), WARNING (should fix), or INFO (suggestion)\n\

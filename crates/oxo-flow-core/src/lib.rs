@@ -57,6 +57,7 @@ pub mod result;
 pub mod report;
 pub mod rule;
 pub mod scheduler;
+pub mod scientific_preflight;
 pub mod storage;
 #[cfg(feature = "webhook")]
 pub mod webhook;

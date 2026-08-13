@@ -197,6 +197,50 @@ fn cli_samples_and_target_intersect() {
     );
 }
 
+/// The scientific preflight warns on a small-cohort VQSR pilot and a BQSR
+/// step without known-sites resources; a pilot run prints the summary with
+/// a full-cohort projection.
+#[test]
+fn cli_scientific_preflight_and_pilot_summary() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("vqsr.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"vqsr\"\nversion = \"1.0.0\"\n\n[[sample_groups]]\nname = \"cohort\"\nsamples = [\"S1\", \"S2\", \"S3\"]\n\n[[rules]]\nname = \"vqsr_snps\"\noutput = [\"vqsr/out.vcf.gz\"]\nshell = \"echo 'gatk VariantRecalibrator -V variants.vcf.gz -O vqsr/out.vcf.gz' > {output}\"\n",
+    )
+    .unwrap();
+
+    // dry-run preflight on the pilot subset
+    let dry = oxo_flow_cmd()
+        .args(["dry-run", wf.to_str().unwrap(), "--samples", "first:2"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(dry.status.success());
+    let stderr = String::from_utf8_lossy(&dry.stderr);
+    assert!(
+        stderr.contains("SCI-VQSR-COHORT"),
+        "preflight should warn about the 2-sample VQSR pilot: {stderr}"
+    );
+
+    // run a pilot — the summary projects to the full cohort
+    let run = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--samples", "first:1"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run.status.success());
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("Pilot summary:"),
+        "pilot run should print a summary: {stderr}"
+    );
+    assert!(
+        stderr.contains("1/3 (pilot)"),
+        "summary should report 1 of 3 samples: {stderr}"
+    );
+}
+
 // ─── oxo-flow CLI: basic flags ──────────────────────────────────────────────
 
 #[test]

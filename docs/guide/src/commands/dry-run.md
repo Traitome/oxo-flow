@@ -32,6 +32,19 @@ oxo-flow dry-run [OPTIONS] [WORKFLOW]
 
 ---
 
+## Scientific Preflight
+
+Every dry-run runs deterministic, evidence-backed scientific checks on the
+workflow design and prints findings (e.g. `SCI-VQSR-COHORT`,
+`SCI-MUTECT2-TUMOR-ONLY`). With `--ai`, the findings are also passed to the
+model for a plain-language explanation.
+
+```bash
+# A 2-sample pilot of a VQSR workflow fails for scientific reasons —
+# the preflight says so before any compute is spent
+oxo-flow dry-run pipeline.oxoflow --samples first:2
+```
+
 ## Examples
 
 ### Preview with auto-discovery
