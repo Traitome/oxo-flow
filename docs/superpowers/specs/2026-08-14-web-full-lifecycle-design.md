@@ -486,8 +486,17 @@ router untouched until the deferred cleanup).
     set). The streaming path is covered by ScriptedBackend integration tests
     + SSE parser unit tests; a real-key round-trip remains a TODO for the
     user's machine.
-- **P1/P4** — pending (run options, template loading, report stubs,
-  CI frontend job, dead-code cleanup).
+- **P1 partial** (commits 8f9c2b3, a23ec08): run options dialog
+  (samples/targets/keep-going/max jobs through `build_cli_args`), template →
+  editor loading (`?template=`), report Q&A + visualization answer from the
+  run's REAL data (shared `build_report_for_run`).
+- **P4 partial** (57cf28e): CI `frontend` job (SPA build + full Playwright
+  e2e against the real server).
+- **Remaining (documented, not yet done):** saved-pipelines page UI
+  (list/search/delete/export), login page, frontend lint debt (28 pre-existing
+  errors — several die with the dead-code cleanup), dead code removal
+  (`Runs.tsx`, `SSEClient`, legacy `handlers/` + legacy router), run-diagnosis
+  chat tools, live AI round-trip on the user's machine (no key here).
 
 ## 10. Phased Roadmap
 
