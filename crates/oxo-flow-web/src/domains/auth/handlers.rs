@@ -351,6 +351,7 @@ pub async fn oauth_authorize(
         .unwrap_or("http://localhost:3000/api/auth/oauth/callback");
 
     super::service::initiate_oauth(&req.provider, redirect_uri)
+        .await
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "OAUTH_ERROR", e))
 }
@@ -378,10 +379,14 @@ pub async fn oauth_callback(
             "Missing CSRF state parameter".into(),
         ));
     }
+    // Verify + consume the CSRF state issued at authorization time, BEFORE
+    // any token exchange (single use).
+    super::service::verify_and_consume_state(&req.state)
+        .await
+        .map_err(|e| err(StatusCode::BAD_REQUEST, "OAUTH_INVALID_STATE", e))?;
     tracing::debug!(
         oauth_provider = provider,
-        oauth_state = req.state,
-        "OAuth callback received — state should be verified against stored pending request"
+        "OAuth callback state verified against the stored pending request"
     );
 
     let result =

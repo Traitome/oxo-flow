@@ -172,16 +172,50 @@ pub fn oauth_config_from_env(
     }
 }
 
+/// Persist a pending OAuth CSRF state so the callback can verify it.
+pub async fn store_pending_state(state: &str) -> Result<(), String> {
+    let pool =
+        crate::infra::db::sqlite::try_pool().map_err(|_| "Database unavailable".to_string())?;
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query("INSERT INTO oauth_states (state, created_at) VALUES (?, ?)")
+        .bind(state)
+        .bind(now)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to store OAuth state: {e}"))?;
+    Ok(())
+}
+
+/// Verify a callback's CSRF state was issued by this server and consume it
+/// (single use).
+pub async fn verify_and_consume_state(state: &str) -> Result<(), String> {
+    let pool =
+        crate::infra::db::sqlite::try_pool().map_err(|_| "Database unavailable".to_string())?;
+    let deleted = sqlx::query("DELETE FROM oauth_states WHERE state = ?")
+        .bind(state)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("State verification failed: {e}"))?
+        .rows_affected();
+    if deleted == 0 {
+        return Err("Invalid or expired CSRF state".into());
+    }
+    Ok(())
+}
+
 /// Initiate an OAuth2 authorization flow.
 ///
 /// Returns the provider's authorization URL and a CSRF state token.
-pub fn initiate_oauth(
+pub async fn initiate_oauth(
     provider: &str,
     redirect_uri: &str,
 ) -> Result<OAuthAuthorizeResponse, String> {
     let config = oauth_config_from_env(provider, redirect_uri)?;
     let state = generate_token();
     let authorize_url = config.authorize_url(&state);
+
+    // Persist the pending state so the callback can verify it (CSRF defense).
+    store_pending_state(&state).await?;
 
     Ok(OAuthAuthorizeResponse {
         authorize_url,
@@ -190,13 +224,15 @@ pub fn initiate_oauth(
 }
 
 /// Handle an OAuth2 callback: exchange code for token, fetch identity, create session.
+///
+/// Callers must verify + consume `state` via [`verify_and_consume_state`]
+/// before calling this — the handler performs the gate at the HTTP boundary.
 pub async fn handle_oauth_callback(
     provider: &str,
     code: &str,
     state: &str,
     redirect_uri: &str,
 ) -> Result<OAuthCallbackResponse, String> {
-    // In production, verify that `state` matches the one stored for this session
     let _ = state;
 
     let config = oauth_config_from_env(provider, redirect_uri)?;

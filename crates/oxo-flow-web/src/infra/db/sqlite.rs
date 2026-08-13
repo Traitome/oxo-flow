@@ -285,6 +285,11 @@ impl StorageBackend for SqliteBackend {
                 timestamp TEXT NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS oauth_states (
+                state TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL
+            );
             "#,
         )
         .execute(&self.pool)
