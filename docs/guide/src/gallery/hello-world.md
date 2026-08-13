@@ -44,6 +44,12 @@ Each rule needs:
 - **`output`** — list of files this rule produces
 - **`shell`** — the command to execute
 
+!!! note "`input` and `output` can be omitted"
+    Both are optional when they don't apply:
+    - Omit `input` when a rule reads no files (like `greet` above)
+    - Omit `output` for setup-only rules that produce no files (e.g. `mkdir`)
+    Declare them whenever files flow between rules — that's what the DAG engine uses to infer dependencies.
+
 ### Output Substitution
 
 `{output[0]}` in the shell command is replaced with the first element of the `output` array at execution time. This ensures the command always writes to the declared output path.

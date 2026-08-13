@@ -262,10 +262,10 @@ oxo-flow graph qc-pipeline.oxoflow
 ## 8. Run with parallel execution
 
 ```bash
-oxo-flow run qc-pipeline.oxoflow -j 4
+oxo-flow run qc-pipeline.oxoflow -j 2
 ```
 
-The `-j 4` flag allows up to 4 jobs to run concurrently. oxo-flow will execute `fastqc_raw` and `fastp_trim` in parallel, then `fastqc_trimmed`, then `multiqc`.
+The `-j 2` flag allows up to 2 jobs to run concurrently — matching the suggestion from dry-run (machine threads ÷ per-rule threads). oxo-flow will execute `fastqc_raw` and `fastp_trim` in parallel, then `fastqc_trimmed`, then `multiqc`.
 
 ---
 

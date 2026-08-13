@@ -146,8 +146,9 @@ oxo-flow validate align.oxoflow
 # Preview the execution plan
 oxo-flow dry-run align.oxoflow
 
-# Execute with 8 parallel jobs
-oxo-flow run align.oxoflow -j 8
+# Execute (the engine suggests -j from machine threads ÷ per-rule threads —
+# see the dry-run hint; the resource pool prevents oversubscription either way)
+oxo-flow run align.oxoflow -j 2
 
 # Visualize the DAG
 oxo-flow graph align.oxoflow | dot -Tpng -o dag.png
