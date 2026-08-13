@@ -33,7 +33,8 @@ memory = "8G"
 [[rules]]
 name = "variant_calling"
 input = ["aligned/sample.bam"]
-output = ["variants/sample.vcf.gz"]
+# GVCF mode (-ERC GVCF) — chunks inherit the full .g.vcf.gz extension
+output = ["variants/sample.g.vcf.gz"]
 
 [rules.resources]
 threads = 8
@@ -47,7 +48,8 @@ map = "gatk HaplotypeCaller -R {config.reference} -I {input} -L {chr} -O {output
 cleanup = true
 
 [rules.transform.combine]
-shell = "gatk GatherVcfs {chunks} -O {output}"
+# GATK requires -I per input; {chunks} is space-separated
+shell = "gatk GatherVcfs $(for f in {chunks}; do echo \"-I $f \"; done) -O {output}"
 
 # ── Mode B: Split → Map (no combine) ────────────────────────────────────────────
 # Parallel processing without merging - each split produces independent output
@@ -64,8 +66,9 @@ by = "chr"
 values_from = "config.chromosomes"
 
 [rules.transform]
-map = "samtools flagstat {input} > {output}"
-# No combine - produces separate qc/chr1.flagstat.txt, qc/chr2.flagstat.txt, etc.
+# Restrict each chunk to its chromosome so the stats actually differ
+map = "samtools view -b {input} {chr} | samtools flagstat - > {output}"
+# No combine — produces separate .oxo-flow/chunks/chr/chr1.out, etc.
 ```
 
 ## Key Concepts
@@ -91,6 +94,20 @@ Transform rules expand into:
 - Map rules: `{rule_name}_{split_value}` (e.g., `variant_calling_chr1`)
 - Combine rule: `{rule_name}_combine` (e.g., `variant_calling_combine`)
 
+### Chunk Outputs
+
+Each map rule writes to an internal chunk path derived from the declared
+output:
+
+- `.oxo-flow/chunks/{by}/{value}.{ext}` — where `{ext}` is the declared
+  output's *full* extension (e.g. `g.vcf.gz`), so tools can infer the file
+  format from the name. Rules without an output use `.out`.
+- The combine rule receives all chunk paths via `{chunks}` (space-separated).
+  Wrap them as your tool requires — GATK's `GatherVcfs`, for example, needs
+  `-I` before each input (the example uses a `for` loop to add them).
+- With `cleanup = true`, the chunk directory is removed after the combine
+  succeeds.
+
 ## Running the Workflow
 
 ### Validate
@@ -115,6 +132,10 @@ graph TD
     B4 --> C
     B5 --> C
 ```
+
+`parallel_qc` (Mode B) expands the same way — five chunk rules
+(`parallel_qc_chr1` … `parallel_qc_chr5`) — but has no combine step; the
+diagram shows only the Mode A expansion for readability.
 
 ## Use Cases
 

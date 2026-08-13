@@ -443,3 +443,88 @@ pub async fn cleanup_temp_outputs(rule: &Rule, workdir: &Path) {
         }
     }
 }
+
+/// Clean up transform chunk files after a successful combine.
+/// Deletes each chunk (the rule's inputs) and removes chunk directories
+/// that became empty as a result. Directories holding chunks from other
+/// rules are left untouched.
+pub async fn cleanup_transform_chunks(rule: &Rule, workdir: &Path) {
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    for chunk in rule.input.iter() {
+        let path = workdir.join(chunk);
+        if tokio::fs::try_exists(&path).await.ok() == Some(true) {
+            match tokio::fs::remove_file(&path).await {
+                Ok(()) => {
+                    tracing::debug!(file = %path.display(), "removed transform chunk");
+                    if let Some(parent) = path.parent() {
+                        dirs.push(parent.to_path_buf());
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(file = %path.display(), error = %e, "failed to remove transform chunk")
+                }
+            }
+        }
+    }
+
+    // Best-effort removal of emptied directories, deepest first.
+    // remove_dir only succeeds when the directory is empty, so chunks
+    // belonging to other rules keep their directories alive.
+    dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
+    dirs.dedup();
+    for dir in dirs {
+        let _ = tokio::fs::remove_dir(&dir).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rule::FilePatterns;
+
+    #[tokio::test]
+    async fn cleanup_transform_chunks_removes_chunk_files_and_empty_dirs() {
+        let workdir = std::env::temp_dir().join(format!("oxo-cleanup-test-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&workdir).await;
+        tokio::fs::create_dir_all(workdir.join(".oxo-flow/chunks/chr"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(workdir.join(".oxo-flow/chunks/sample"))
+            .await
+            .unwrap();
+
+        let rule = Rule {
+            name: "variant_calling_combine".to_string(),
+            input: FilePatterns::List(vec![
+                ".oxo-flow/chunks/chr/chr1.g.vcf.gz".to_string(),
+                ".oxo-flow/chunks/chr/chr2.g.vcf.gz".to_string(),
+            ]),
+            cleanup_chunks: true,
+            ..Default::default()
+        };
+
+        // Chunk files owned by the combine rule
+        tokio::fs::write(workdir.join(".oxo-flow/chunks/chr/chr1.g.vcf.gz"), b"x")
+            .await
+            .unwrap();
+        tokio::fs::write(workdir.join(".oxo-flow/chunks/chr/chr2.g.vcf.gz"), b"x")
+            .await
+            .unwrap();
+        // Unrelated chunk from another rule keeps the chunks dir alive
+        tokio::fs::write(workdir.join(".oxo-flow/chunks/sample/keep.out"), b"x")
+            .await
+            .unwrap();
+
+        cleanup_transform_chunks(&rule, &workdir).await;
+
+        assert!(!workdir.join(".oxo-flow/chunks/chr/chr1.g.vcf.gz").exists());
+        assert!(!workdir.join(".oxo-flow/chunks/chr/chr2.g.vcf.gz").exists());
+        // The {by} directory became empty and was removed
+        assert!(!workdir.join(".oxo-flow/chunks/chr").exists());
+        // Unrelated files and their directories are untouched
+        assert!(workdir.join(".oxo-flow/chunks/sample/keep.out").exists());
+        assert!(workdir.join(".oxo-flow/chunks").exists());
+
+        let _ = tokio::fs::remove_dir_all(&workdir).await;
+    }
+}

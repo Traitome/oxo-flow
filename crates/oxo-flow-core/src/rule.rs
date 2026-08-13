@@ -628,6 +628,12 @@ pub struct Rule {
     #[serde(skip_serializing_if = "FilePatterns::is_empty")]
     pub output: FilePatterns,
 
+    /// Delete the input (chunk) files after this rule succeeds.
+    /// Set on transform combine rules when `transform.cleanup = true`.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "is_false")]
+    pub cleanup_chunks: bool,
+
     /// Shell command template to execute.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]

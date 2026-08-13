@@ -331,16 +331,17 @@ fn gallery_07_wgs_germline() {
     let toml = std::fs::read_to_string("examples/gallery/07_wgs_germline.oxoflow").unwrap();
     let config = WorkflowConfig::parse(&toml).unwrap();
     assert_eq!(config.workflow.name, "wgs-germline-calling");
-    assert_eq!(config.rules.len(), 10);
+    assert_eq!(config.rules.len(), 12);
 
     let dag = WorkflowDag::from_rules(&config.rules).unwrap();
     dag.validate().unwrap();
 
     let order = dag.execution_order().unwrap();
-    assert_eq!(order.len(), 10);
+    assert_eq!(order.len(), 12);
     // Level 0: combine_gvcfs, fastp_qc (alphabetically sorted)
     assert!(order.contains(&"fastp_qc".to_string()));
-    // Level 4: annotate_variants, haplotype_caller - last alphabetically is haplotype_caller
+    // petgraph toposort tie-breaking (insertion order) puts haplotype_caller
+    // last in this DAG, even though annotate_variants is the deepest rule
     assert_eq!(order.last().unwrap(), "haplotype_caller");
 }
 

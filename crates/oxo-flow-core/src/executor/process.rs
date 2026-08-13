@@ -12,7 +12,7 @@ use std::sync::{Arc, LazyLock};
 use tokio::process::Command;
 use tokio::sync::{Mutex, Semaphore};
 
-use super::checkpoint::{cleanup_temp_outputs, validate_outputs};
+use super::checkpoint::{cleanup_temp_outputs, cleanup_transform_chunks, validate_outputs};
 use super::security::{
     sanitize_shell_command, validate_path_safety, validate_shell_safety,
     validate_wildcard_injection,
@@ -890,6 +890,9 @@ impl LocalExecutor {
             let missing = validate_outputs(rule, &self.config.workdir, wildcard_values);
             if missing.is_empty() {
                 record.status = JobStatus::Success;
+                if rule.cleanup_chunks {
+                    cleanup_transform_chunks(rule, &self.config.workdir).await;
+                }
                 if let Some(ref hook_cmd) = rule.on_success {
                     let _ = Command::new("sh")
                         .arg("-c")

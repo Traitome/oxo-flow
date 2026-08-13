@@ -2213,7 +2213,10 @@ impl WorkflowConfig {
                             .output
                             .get_index(0)
                             .expect("output non-empty: guarded by is_empty() check");
-                        let ext = base.rsplit('.').next().unwrap_or("out");
+                        // Keep the full multi-part extension (e.g. "vcf.gz", not
+                        // just "gz") so tools can infer the format from the name.
+                        let file_part = base.rsplit('/').next().unwrap_or(base);
+                        let ext = file_part.split_once('.').map(|(_, e)| e).unwrap_or("out");
                         format!(".oxo-flow/chunks/{split_var}/{value}.{ext}")
                     };
 
@@ -2298,6 +2301,7 @@ impl WorkflowConfig {
                         input: FilePatterns::List(all_chunk_outputs.clone()),
                         output: rule.output.clone(),
                         shell: Some(combine_shell),
+                        cleanup_chunks: transform.cleanup,
                         threads: rule.threads,
                         memory: rule.memory.clone(),
                         resources: rule.resources.clone(),
@@ -2416,7 +2420,10 @@ impl WorkflowConfig {
                             .output
                             .get_index(0)
                             .expect("output non-empty: guarded by is_empty() check");
-                        let ext = base.rsplit('.').next().unwrap_or("out");
+                        // Keep the full multi-part extension (e.g. "vcf.gz", not
+                        // just "gz") so tools can infer the format from the name.
+                        let file_part = base.rsplit('/').next().unwrap_or(base);
+                        let ext = file_part.split_once('.').map(|(_, e)| e).unwrap_or("out");
                         format!(".oxo-flow/chunks/{split_var}/{value}.{ext}")
                     };
 
@@ -2518,6 +2525,7 @@ impl WorkflowConfig {
                         input: FilePatterns::List(all_chunk_outputs.clone()),
                         output: rule.output.clone(),
                         shell: Some(combine_shell),
+                        cleanup_chunks: transform.cleanup,
                         threads: rule.threads,
                         memory: rule.memory.clone(),
                         resources: rule.resources.clone(),
@@ -4127,6 +4135,98 @@ mod tests {
             let expected_chr = ["chr1", "chr2", "chr3"][i];
             assert!(rule.name.contains(expected_chr));
         }
+    }
+
+    #[test]
+    fn expand_transform_keeps_full_extension_in_chunk_outputs() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [config]
+            chromosomes = ["chr1", "chr2"]
+
+            [[rules]]
+            name = "variant_calling"
+            input = ["aligned/sample.bam"]
+            output = ["variants/sample.g.vcf.gz"]
+
+            [rules.transform.split]
+            by = "chr"
+            values_from = "config.chromosomes"
+
+            [rules.transform]
+            map = "gatk HaplotypeCaller -R {config.reference} -I {input} -L {chr} -O {output}"
+            cleanup = true
+
+            [rules.transform.combine]
+            shell = "gatk GatherVcfs {chunks} -O {output}"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+
+        // 2 map rules + 1 combine rule
+        assert_eq!(config.rules.len(), 3);
+
+        // Chunk outputs must keep the full extension so tools like GATK
+        // can infer the file format (.g.vcf.gz, not a bare .gz)
+        let map1 = &config.rules[0];
+        assert_eq!(
+            map1.output.to_vec(),
+            vec![".oxo-flow/chunks/chr/chr1.g.vcf.gz".to_string()]
+        );
+        let map2 = &config.rules[1];
+        assert_eq!(
+            map2.output.to_vec(),
+            vec![".oxo-flow/chunks/chr/chr2.g.vcf.gz".to_string()]
+        );
+
+        // The combine rule keeps the declared output and consumes the chunks
+        let combine = &config.rules[2];
+        assert_eq!(
+            combine.output.to_vec(),
+            vec!["variants/sample.g.vcf.gz".to_string()]
+        );
+
+        // cleanup = true propagates to the combine rule; map rules never clean up
+        assert!(combine.cleanup_chunks);
+        assert!(!map1.cleanup_chunks);
+        assert!(!map2.cleanup_chunks);
+    }
+
+    #[test]
+    fn expand_transform_cleanup_defaults_to_false() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [config]
+            chromosomes = ["chr1"]
+
+            [[rules]]
+            name = "variant_calling"
+            input = ["sample.bam"]
+            output = ["sample.vcf.gz"]
+
+            [rules.transform.split]
+            by = "chr"
+            values_from = "config.chromosomes"
+
+            [rules.transform]
+            map = "gatk HaplotypeCaller -L {chr} -O {output}"
+
+            [rules.transform.combine]
+            shell = "gatk GatherVcfs {chunks} -O {output}"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+
+        let combine = &config.rules[1];
+        assert!(!combine.cleanup_chunks);
     }
 
     #[test]
