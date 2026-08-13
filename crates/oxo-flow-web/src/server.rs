@@ -304,6 +304,8 @@ pub fn build_router(mode: &str) -> Router {
         .route("/api/ai/config", get(ai::handlers::get_ai_config))
         .route("/api/ai/config", post(ai::handlers::update_ai_config))
         .route("/api/ai/test", post(ai::handlers::test_ai_config))
+        .route("/api/knowledge/tools", get(ai::handlers::knowledge_tools))
+        .route("/api/knowledge/skills", get(ai::handlers::knowledge_skills))
         .route("/api/ai/config/user", get(ai::handlers::get_user_ai_config))
         .route(
             "/api/ai/config/user",

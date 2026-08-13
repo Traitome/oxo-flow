@@ -516,3 +516,49 @@ pub async fn update_user_ai_config(
         serde_json::json!({"status": "updated", "provider": provider}),
     ))
 }
+
+// ---------------------------------------------------------------------------
+// Knowledge search — the editor palette's grounded tool source
+// ---------------------------------------------------------------------------
+
+/// Query parameters for the knowledge search endpoints.
+#[derive(Debug, serde::Deserialize)]
+pub struct KnowledgeQuery {
+    #[serde(default)]
+    pub q: String,
+    pub limit: Option<usize>,
+}
+
+/// GET /api/knowledge/tools — search the embedded Bioconda tool database.
+pub async fn knowledge_tools(
+    axum::extract::Query(params): axum::extract::Query<KnowledgeQuery>,
+) -> ApiResult<serde_json::Value> {
+    let limit = params.limit.unwrap_or(20).clamp(1, 50);
+    let tools = oxo_flow_ai::knowledge::bioconda::search_tools(&params.q, limit);
+    Ok(Json(serde_json::json!({
+        "total": oxo_flow_ai::knowledge::bioconda::tool_count(),
+        "tools": tools.iter().map(|t| serde_json::json!({
+            "name": t.name,
+            "version": t.version,
+            "summary": t.summary,
+            "platforms": t.platforms,
+        })).collect::<Vec<_>>(),
+    })))
+}
+
+/// GET /api/knowledge/skills — search the embedded bioSkills database.
+pub async fn knowledge_skills(
+    axum::extract::Query(params): axum::extract::Query<KnowledgeQuery>,
+) -> ApiResult<serde_json::Value> {
+    let limit = params.limit.unwrap_or(20).clamp(1, 50);
+    let skills = oxo_flow_ai::knowledge::skills::search_skills(&params.q, limit);
+    Ok(Json(serde_json::json!({
+        "total": oxo_flow_ai::knowledge::skills::skill_count(),
+        "skills": skills.iter().map(|s| serde_json::json!({
+            "name": s.name,
+            "description": s.description,
+            "domain": s.domain,
+            "primary_tool": s.primary_tool,
+        })).collect::<Vec<_>>(),
+    })))
+}
