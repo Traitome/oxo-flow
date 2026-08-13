@@ -1610,6 +1610,7 @@ pub async fn run_command(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn dry_run_command(
     workflow: Option<PathBuf>,
     target: Vec<String>,
