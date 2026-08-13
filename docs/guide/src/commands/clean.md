@@ -101,6 +101,9 @@ Done: 2 deleted, 0 failed, 1 not found, 1 wildcard skipped, 0 rejected
 - **Wildcard patterns** (containing `{` and `}`) are resolved against the filesystem as glob patterns; patterns that match no files are reported as `(no files matched)` and skipped during deletion
 - **Path Traversal Protection** — during deletion, paths that begin with `/`, `~`, or contain `..` are strictly rejected, marked as `rejected`, and never deleted
 - **Non-existent files** are silently skipped (not counted as errors)
+- While a run is active in the workdir, clean refuses to delete (the run's
+  checkpoint and outputs must not vanish mid-flight); `--force` overrides
+  with a warning
 - Without `--force`, no files are deleted — clean defaults to dry-run
 - With `--force`, files are deleted after an interactive confirmation prompt (skipped when stdin is not a terminal)
 - Use `--dry-run` to preview the list of files that would be affected before committing to a clean

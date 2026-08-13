@@ -73,6 +73,23 @@ oxo-flow run
 oxo-flow run pipeline.oxoflow
 ```
 
+### Custom working directory
+
+Relative paths in the workflow resolve against the workflow file's
+directory by default, keeping a workflow self-contained. For a shared,
+read-only workflow (a fixed reference resource), point `--workdir` at the
+analysis directory instead:
+
+```bash
+# Workflow lives in a central, read-only location; data and results
+# belong to the current analysis directory
+oxo-flow run /opt/pipelines/wgs.oxoflow --workdir .
+
+# Outputs, .oxo-flow checkpoint, and lock all land in the workdir;
+# dry-run/clean/report/resume accept --workdir too, and resume re-uses
+# the workdir recorded in the checkpoint
+```
+
 ### Parallel execution
 
 ```bash
