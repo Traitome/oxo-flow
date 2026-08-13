@@ -500,6 +500,92 @@ fn cli_dry_run_nonexistent() {
         .failure();
 }
 
+/// dry-run reads the checkpoint (read-only) and predicts the actual
+/// incremental plan: protected rules, invalidated rules, and the
+/// downstream cascade (issue #66).
+#[test]
+fn cli_dry_run_previews_checkpoint_status() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("w.oxoflow");
+    std::fs::write(
+        &wf,
+        r#"[workflow]
+name = "t"
+version = "1.0"
+
+[[rules]]
+name = "step1"
+input = ["in.txt"]
+output = ["out1.txt"]
+shell = "cp in.txt out1.txt"
+
+[[rules]]
+name = "step2"
+input = ["out1.txt"]
+output = ["out2.txt"]
+depends_on = ["step1"]
+shell = "cp out1.txt out2.txt"
+"#,
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("in.txt"), "data1").unwrap();
+
+    // Run once: both rules complete and the checkpoint records manifests.
+    oxo_flow_cmd()
+        .arg("run")
+        .arg(&wf)
+        .arg("-j")
+        .arg("2")
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    // dry-run: everything protected.
+    let out = oxo_flow_cmd()
+        .arg("dry-run")
+        .arg(&wf)
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("completed: 2"), "{stderr}");
+    assert!(
+        stderr.matches("[skip: up to date]").count() == 2,
+        "{stderr}"
+    );
+
+    // Change the input: step1 invalidates, step2 cascades.
+    std::fs::write(dir.path().join("in.txt"), "changed data").unwrap();
+    let out = oxo_flow_cmd()
+        .arg("dry-run")
+        .arg(&wf)
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("[run: input changed]"), "{stderr}");
+    assert!(stderr.contains("[rerun: downstream of step1]"), "{stderr}");
+    assert!(stderr.contains("rerun cascade: step1 → step2"), "{stderr}");
+
+    // --json exposes the same prediction machine-readably.
+    let out = oxo_flow_cmd()
+        .args(["dry-run", "--json"])
+        .arg(&wf)
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let preview = &v["checkpoint_preview"];
+    assert_eq!(preview["summary"]["will_run"], 2, "{stdout}");
+    assert_eq!(
+        preview["plan"][0]["status"], "run-input-changed",
+        "{stdout}"
+    );
+    assert_eq!(preview["plan"][1]["status"], "run-cascaded", "{stdout}");
+    assert_eq!(preview["plan"][1]["cascaded_from"], "step1", "{stdout}");
+}
+
 // ─── graph subcommand ───────────────────────────────────────────────────────
 
 #[test]

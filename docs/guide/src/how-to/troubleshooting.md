@@ -307,6 +307,11 @@ rule and its downstream re-execute — even though their outputs still exist —
 and the console prints `input changes invalidated N rule(s)`. See
 [Input changes and manifest invalidation](../commands/run.md#input-changes-and-manifest-invalidation).
 
+To see the blast radius *before* spending compute,
+[`dry-run`](../commands/dry-run.md#checkpoint-aware-rerun-preview) predicts
+exactly which rules would re-run (including the downstream cascade) and how
+much completed work stays protected.
+
 ## Performance Tips
 
 ### Workflow runs slowly

@@ -1,6 +1,6 @@
 # `oxo-flow dry-run`
 
-Simulate execution without running any commands. Shows the execution plan, rule order, and expanded shell commands.
+Simulate execution without running any commands. Shows the execution plan, rule order, and expanded shell commands — and, when a checkpoint exists, predicts the **actual incremental plan**: which rules would re-run, which cascade downstream, and which stay protected.
 
 ---
 
@@ -92,6 +92,68 @@ With `--json` the same report is machine-readable:
 See [`run`](run.md#incremental-data-arrival-samples-ready) for the matching
 `--samples ready` execution mode.
 
+## Checkpoint-Aware Rerun Preview
+
+When `.oxo-flow/checkpoint.json` exists, dry-run loads it **read-only** and
+classifies every rule in the execution set exactly the way `run` would —
+same config-impact fingerprints, same input manifests, same DAG downstream
+closure — so the preview matches what an actual `run` will do:
+
+```console
+$ oxo-flow dry-run pipeline.oxoflow --samples NA12891
+DAG: (dry-run) 12 rules would execute
+Checkpoint: ./.oxo-flow/checkpoint.json (modified 2026-08-10 14:32)
+  completed: 705 | will run: 12 | will skip: 0 | protected (outside this run): 693
+  rerun cascade: trim_cohort_NA12891 → align_cohort_NA12891 → combine_gvcfs → genotype_gvcfs → vqsr_snps
+  1. trim_cohort_NA12891  [run: input changed]
+  2. align_cohort_NA12891  [rerun: downstream of trim_cohort_NA12891]
+  ...
+  12. vqsr_snps  [rerun: downstream of trim_cohort_NA12891]
+```
+
+The other 99 samples' 693 completed rules are outside this execution set —
+their work stays untouched, counted as `protected`.
+
+Per-rule status markers:
+
+| Marker | Meaning |
+|---|---|
+| `[run: never completed]` | No checkpoint entry — it will execute |
+| `[run: input changed]` | Input files differ from the manifest recorded at completion |
+| `[run: config changed]` | Config value or rule definition changed since completion |
+| `[run: outputs missing]` | Declared outputs no longer exist |
+| `[rerun: downstream of X]` | Was completed, but sits downstream of a rule that will execute (the cascade) |
+| `[skip: up to date]` | Checkpoint hit — work stays protected |
+
+The summary line answers the two questions that matter before a targeted
+re-run: **how much will actually execute** (`will run`, including the
+cascade) and **how much prior work survives** (`protected`). The cascade
+line makes the infection chain visible — one sample's data change
+reaching the queue-level rules is exactly the part users cannot see from
+the DAG alone.
+
+The preview is strictly read-only and never mutates the checkpoint; it is
+orthogonal to `run --rerun` (which forces execution) — the preview only
+**predicts**, it changes no execution semantics. With `--json` the same
+prediction is machine-readable:
+
+```json
+"checkpoint_preview": {
+  "path": ".oxo-flow/checkpoint.json",
+  "modified": "2026-08-10 14:32:00",
+  "completed_total": 705,
+  "summary": {"will_run": 12, "will_skip": 0, "protected_outside": 693},
+  "plan": [
+    {"name": "trim_cohort_NA12891", "status": "run-input-changed", "cascaded_from": null},
+    {"name": "combine_gvcfs", "status": "run-cascaded", "cascaded_from": "trim_cohort_NA12891"}
+  ],
+  "cascade_chains": [["trim_cohort_NA12891", "combine_gvcfs", "genotype_gvcfs", "vqsr_snps"]]
+}
+```
+
+Status values: `run-never-completed`, `run-input-changed`,
+`run-config-changed`, `run-outputs-missing`, `run-cascaded`, `skip`.
+
 ## Examples
 
 ### Preview with auto-discovery
@@ -166,6 +228,11 @@ To execute:  oxo-flow run pipeline.oxoflow -j 1
 - The workflow file is optional; if not specified, auto-discovery searches for `main.oxoflow` first, then any `*.oxoflow` file alphabetically
 - If no `.oxoflow` file is found, an error message suggests running `oxo-flow init` to create one
 - No shell commands are executed — the dry-run is read-only
+- The checkpoint is loaded **read-only** too — dry-run never saves, baselines
+  nothing, and invalidates nothing on disk
+- The preview mirrors `run`'s incremental semantics; it is orthogonal to
+  `run --rerun` (which forces execution) and `run`'s config-change
+  invalidation — see [Run](run.md) for those
 - Shell commands are shown in full — they may span multiple lines
 - The environment type (conda, docker, etc.) is shown for each rule
 - Thread and resource settings are displayed per rule

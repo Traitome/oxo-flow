@@ -262,33 +262,6 @@ fn validate_config_value(
     Ok(())
 }
 
-/// Remove `seeds` and every transitive DAG dependent from the completed set
-/// (issue #72; also used by the reference-rebuild path). Returns the sorted
-/// names of all invalidated rules.
-fn invalidate_with_downstream(
-    ck: &mut CheckpointState,
-    dag: &WorkflowDag,
-    seeds: &HashSet<String>,
-) -> Vec<String> {
-    let mut invalidated: HashSet<String> = seeds.clone();
-    let mut frontier: Vec<String> = seeds.iter().cloned().collect();
-    while let Some(name) = frontier.pop() {
-        if let Ok(dependents) = dag.dependents(&name) {
-            for dependent in dependents {
-                if invalidated.insert(dependent.clone()) {
-                    frontier.push(dependent);
-                }
-            }
-        }
-    }
-    for name in &invalidated {
-        ck.completed_rules.remove(name);
-    }
-    let mut names: Vec<String> = invalidated.into_iter().collect();
-    names.sort();
-    names
-}
-
 #[allow(clippy::too_many_arguments)]
 pub async fn run_command(
     workflow: Option<PathBuf>,
@@ -664,40 +637,22 @@ pub async fn run_command(
     // snapshot (issue #62).
     {
         let mut ck = checkpoint.lock().await;
-        let mut mismatched: HashSet<String> = HashSet::new();
-        let mut baselined = 0usize;
-        for name in &order {
-            if !ck.completed_rules.contains(name) {
-                continue;
-            }
-            let Some(rule) = config.get_rule(name) else {
-                continue;
-            };
-            match oxo_flow_core::executor::checkpoint::snapshot_input_manifest(
-                rule,
+        // Shared with dry-run's read-only preview (issue #66) — keep the
+        // detection semantics in ONE place.
+        let (mismatched, baselined) =
+            crate::commands::run_preview::detect_input_manifest_invalidations(
+                &mut ck,
+                &config,
+                &order,
                 workdir_actual.as_ref(),
                 &wildcard_values,
-            ) {
-                Ok(Some(current)) => match ck.input_manifests.get(name) {
-                    Some(recorded) if *recorded == current => {}
-                    Some(_) => {
-                        mismatched.insert(name.clone());
-                    }
-                    None => {
-                        // Legacy baseline: adopt the current set.
-                        ck.record_input_manifest(name, current);
-                        baselined += 1;
-                    }
-                },
-                Ok(None) => {}
-                Err(_) => {
-                    // Inputs cannot be resolved — cannot verify, so don't reuse.
-                    mismatched.insert(name.clone());
-                }
-            }
-        }
+            );
         if !mismatched.is_empty() {
-            let invalidated = invalidate_with_downstream(&mut ck, &dag, &mismatched);
+            let invalidated = crate::commands::run_preview::invalidate_with_downstream(
+                &mut ck,
+                &dag,
+                &mismatched,
+            );
             force_rules.extend(invalidated.iter().cloned());
             eprintln!(
                 "  {} input changes invalidated {} rule(s): {}",
@@ -1005,7 +960,9 @@ pub async fn run_command(
             }
             if !consumers.is_empty() {
                 let mut ck = checkpoint.lock().await;
-                let invalidated = invalidate_with_downstream(&mut ck, &dag, &consumers);
+                let invalidated = crate::commands::run_preview::invalidate_with_downstream(
+                    &mut ck, &dag, &consumers,
+                );
                 if let Err(e) = ck.save_to_file(&checkpoint_path) {
                     tracing::warn!(error = %e, "failed to save checkpoint after reference rebuild");
                 }
@@ -1047,24 +1004,17 @@ pub async fn run_command(
                 && order_set.contains(rule_name.as_str())
                 && !submitted.contains(rule_name.as_str())
             {
-                let mut outputs_ok = true;
-                if let Some(rule) = config.get_rule(rule_name) {
-                    for output in &rule.output {
-                        // Expand {config.x} placeholders BEFORE the wildcard
-                        // check — previously rules with {config.x} outputs were
-                        // never existence-checked, so deleting their files
-                        // still left them silently "already completed"
-                        // (issue #62 review).
-                        let expanded = oxo_flow_core::executor::checkpoint::expand_config_in_path(
-                            output,
+                // Shared with dry-run's read-only preview (issue #66).
+                let outputs_ok = config
+                    .get_rule(rule_name)
+                    .map(|rule| {
+                        crate::commands::run_preview::rule_outputs_exist(
+                            rule,
+                            workdir_actual.as_ref(),
                             &wildcard_values,
-                        );
-                        if !expanded.contains('{') && !workdir_actual.join(&expanded).exists() {
-                            outputs_ok = false;
-                            break;
-                        }
-                    }
-                }
+                        )
+                    })
+                    .unwrap_or(true);
                 if outputs_ok {
                     submitted.insert(rule_name.clone());
                     sched.mark_completed(oxo_flow_core::executor::JobRecord {
@@ -1802,6 +1752,89 @@ pub async fn dry_run_command(
         order.len()
     );
 
+    // All config values (including CLI --arg overrides) become {config.key} in templates.
+    let mut wildcard_values: HashMap<String, String> = HashMap::new();
+    for (key, value) in &config.config {
+        let string_val = match value {
+            toml::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        wildcard_values.insert(format!("config.{key}"), string_val);
+    }
+
+    // ── Checkpoint-aware rerun preview (issue #66) ────────────────────────
+    // Read-only: the preview classifies every rule in the execution set
+    // exactly as `run` would — invalidation sources, downstream cascade,
+    // and the protected remainder — without touching the checkpoint on disk.
+    let checkpoint_path = base_dir.join(".oxo-flow/checkpoint.json");
+    let preview = match oxo_flow_core::executor::checkpoint::CheckpointState::load_from_file(
+        &checkpoint_path,
+    ) {
+        Ok(ck) => {
+            let sensitive_keys: std::collections::HashSet<String> = config
+                .config_meta
+                .iter()
+                .filter(|(_, def)| def.sensitive)
+                .map(|(key, _)| key.clone())
+                .collect();
+            let interpreter_map = config.workflow.interpreter_map.clone();
+            Some(crate::commands::run_preview::preview_run_plan(
+                &ck,
+                &config,
+                &dag,
+                &order,
+                base_dir,
+                &wildcard_values,
+                &sensitive_keys,
+                &interpreter_map,
+                &checkpoint_path,
+            ))
+        }
+        Err(e) => {
+            eprintln!(
+                "  {} unreadable checkpoint {}: {e}",
+                "⚠".yellow(),
+                checkpoint_path.display()
+            );
+            None
+        }
+    };
+    match &preview {
+        Some(p) => {
+            let modified = p
+                .checkpoint_modified
+                .map(|t| {
+                    chrono::DateTime::<chrono::Local>::from(t)
+                        .format("%Y-%m-%d %H:%M:%S")
+                        .to_string()
+                })
+                .unwrap_or_else(|| "unknown time".to_string());
+            eprintln!(
+                "{} {} (modified {})",
+                "Checkpoint:".bold().cyan(),
+                p.checkpoint_path.display(),
+                modified.dimmed()
+            );
+            let will_run = p.plan.len() - p.will_skip;
+            eprintln!(
+                "  completed: {} | will run: {} | will skip: {} | protected (outside this run): {}",
+                p.completed_total,
+                will_run.to_string().green(),
+                p.will_skip.to_string().dimmed(),
+                p.protected_outside
+            );
+            for chain in &p.cascade_chains {
+                eprintln!("  {} {}", "rerun cascade:".yellow(), chain.join(" → "));
+            }
+        }
+        None => {
+            eprintln!(
+                "{} no checkpoint — every rule in this plan will execute",
+                "Checkpoint:".bold().cyan()
+            );
+        }
+    }
+
     // Sample readiness (issue #63). With `--samples ready` the report covers
     // the full cohort (computed pre-filter); otherwise it is computed on the
     // (possibly filtered) expanded config.
@@ -1815,20 +1848,38 @@ pub async fn dry_run_command(
         samples::print_readiness_section(report);
     }
 
-    let mut wildcard_values: HashMap<String, String> = HashMap::new();
-    for (key, value) in &config.config {
-        let string_val = match value {
-            toml::Value::String(s) => s.clone(),
-            other => other.to_string(),
-        };
-        wildcard_values.insert(format!("config.{key}"), string_val);
-    }
-
     for (i, rule_name) in order.iter().enumerate() {
         let rule = config
             .get_rule(rule_name)
             .ok_or_else(|| anyhow::anyhow!("rule '{}' not found", rule_name))?;
-        eprintln!("  {}. {}", i + 1, rule_name.bold().cyan());
+        let status_text = preview
+            .as_ref()
+            .and_then(|p| p.plan.iter().find(|r| r.name == *rule_name))
+            .map(|r| match &r.status {
+                crate::commands::run_preview::RuleStatus::NeverCompleted => {
+                    format!("{}", "[run: never completed]".bold())
+                }
+                crate::commands::run_preview::RuleStatus::ConfigInvalidated => {
+                    format!("{}", "[run: config changed]".bold())
+                }
+                crate::commands::run_preview::RuleStatus::InputInvalidated => {
+                    format!("{}", "[run: input changed]".bold().yellow())
+                }
+                crate::commands::run_preview::RuleStatus::OutputsMissing => {
+                    format!("{}", "[run: outputs missing]".bold().yellow())
+                }
+                crate::commands::run_preview::RuleStatus::Cascaded { from } => {
+                    format!(
+                        "{}",
+                        format!("[rerun: downstream of {from}]").bold().yellow()
+                    )
+                }
+                crate::commands::run_preview::RuleStatus::Skipped => {
+                    format!("{}", "[skip: up to date]".dimmed())
+                }
+            })
+            .unwrap_or_default();
+        eprintln!("  {}. {}  {}", i + 1, rule_name.bold().cyan(), status_text);
 
         let threads = rule.effective_threads();
         eprintln!("     threads={}", threads);
@@ -1989,6 +2040,56 @@ pub async fn dry_run_command(
             })
         });
 
+        // Machine-readable checkpoint preview (issue #66): the predicted
+        // execution plan with per-rule status + reason.
+        let checkpoint_block = preview.as_ref().map(|p| {
+            let plan: Vec<serde_json::Value> = p
+                .plan
+                .iter()
+                .map(|r| {
+                    let (status, cascaded_from) = match &r.status {
+                        crate::commands::run_preview::RuleStatus::NeverCompleted => {
+                            ("run-never-completed", None)
+                        }
+                        crate::commands::run_preview::RuleStatus::ConfigInvalidated => {
+                            ("run-config-changed", None)
+                        }
+                        crate::commands::run_preview::RuleStatus::InputInvalidated => {
+                            ("run-input-changed", None)
+                        }
+                        crate::commands::run_preview::RuleStatus::OutputsMissing => {
+                            ("run-outputs-missing", None)
+                        }
+                        crate::commands::run_preview::RuleStatus::Cascaded { from } => {
+                            ("run-cascaded", Some(from.clone()))
+                        }
+                        crate::commands::run_preview::RuleStatus::Skipped => ("skip", None),
+                    };
+                    serde_json::json!({
+                        "name": r.name,
+                        "status": status,
+                        "cascaded_from": cascaded_from,
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "path": p.checkpoint_path.display().to_string(),
+                "modified": p.checkpoint_modified.map(|t| {
+                    chrono::DateTime::<chrono::Local>::from(t)
+                        .format("%Y-%m-%d %H:%M:%S")
+                        .to_string()
+                }),
+                "completed_total": p.completed_total,
+                "summary": {
+                    "will_run": p.plan.len() - p.will_skip,
+                    "will_skip": p.will_skip,
+                    "protected_outside": p.protected_outside,
+                },
+                "plan": plan,
+                "cascade_chains": p.cascade_chains,
+            })
+        });
+
         let output = serde_json::json!({
             "command": "dry-run",
             "workflow": workflow.display().to_string(),
@@ -2002,6 +2103,7 @@ pub async fn dry_run_command(
             },
             "suggested_jobs": suggested_jobs,
             "samples": samples_block,
+            "checkpoint_preview": checkpoint_block,
         });
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
     }
