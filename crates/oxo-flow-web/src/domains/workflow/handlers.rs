@@ -277,7 +277,10 @@ pub async fn search_pipelines(Json(req): Json<SearchRequest>) -> ApiResult<Searc
 // ---------------------------------------------------------------------------
 
 /// POST /api/pipelines — create a new pipeline from TOML
-pub async fn save_pipeline(Json(req): Json<serde_json::Value>) -> ApiResult<Pipeline> {
+pub async fn save_pipeline(
+    authenticated: Option<axum::Extension<Option<String>>>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<Pipeline> {
     let pool = get_pool()?;
     let toml_content = req
         .get("toml_content")
@@ -301,13 +304,23 @@ pub async fn save_pipeline(Json(req): Json<serde_json::Value>) -> ApiResult<Pipe
         .get("visibility")
         .and_then(|v| v.as_str())
         .unwrap_or("private");
-    // Find admin user ID for FK constraint
-    let admin_row: Option<models::UserRow> =
-        sqlx::query_as("SELECT * FROM users WHERE role = 'admin' LIMIT 1")
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None);
-    let user_id = admin_row.map(|u| u.id).unwrap_or_else(|| "default".into());
+    // Attribute the pipeline to the acting user (team/hpc mode) or the
+    // 'default' pseudo-user (personal mode). The auth middleware inserts the
+    // session's user_id, which may be a username — resolve it against the
+    // users table for the FK, falling back to 'default'.
+    let user_id = match authenticated.and_then(|ext| ext.0) {
+        Some(uid) => {
+            let row: Option<(String,)> =
+                sqlx::query_as("SELECT id FROM users WHERE id = ? OR username = ?")
+                    .bind(&uid)
+                    .bind(&uid)
+                    .fetch_optional(pool)
+                    .await
+                    .unwrap_or(None);
+            row.map(|r| r.0).unwrap_or_else(|| "default".into())
+        }
+        None => "default".into(),
+    };
 
     let rules_count = oxo_flow_core::WorkflowConfig::parse(toml_content)
         .map(|wf| wf.rules.len() as i64)

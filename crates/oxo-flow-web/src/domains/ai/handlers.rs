@@ -321,6 +321,23 @@ pub async fn get_ai_config_effective() -> ApiResult<serde_json::Value> {
     let env_model = std::env::var("OXO_FLOW_AI_MODEL").ok();
     let env_url = std::env::var("OXO_FLOW_AI_API_URL").ok();
 
+    // The user tier is the 'default' user's saved row (personal mode) — the
+    // settings UI reads/writes it via PUT /api/ai/config/user.
+    let user_row: Option<(String, Option<String>, Option<String>)> =
+        match crate::infra::db::sqlite::try_pool() {
+            Ok(pool) => sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
+                "SELECT provider, model, api_url FROM ai_provider_config WHERE user_id = 'default' ORDER BY updated_at DESC LIMIT 1",
+            )
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None),
+            Err(_) => None,
+        };
+    let (user_provider, user_model, user_url) = match user_row {
+        Some((p, m, u)) => (Some(p), m, u),
+        None => (None, None, None),
+    };
+
     Ok(Json(serde_json::json!({
         "effective": {
             "provider": config.provider,
@@ -334,7 +351,9 @@ pub async fn get_ai_config_effective() -> ApiResult<serde_json::Value> {
             "env_url": env_url,
             "server_provider": config.provider,
             "server_model": config.model,
-            "user_provider": serde_json::Value::Null,
+            "user_provider": user_provider,
+            "user_model": user_model,
+            "user_api_url": user_url,
         },
         "resolution_order": ["user_settings", "server_config", "environment", "defaults"],
     })))

@@ -497,7 +497,7 @@ async fn security_headers(
 /// tokens.  Public endpoints (login, OAuth, health, etc.) bypass this check.
 async fn require_auth(
     headers: axum::http::HeaderMap,
-    request: axum::extract::Request,
+    mut request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     let path = request.uri().path();
@@ -547,26 +547,31 @@ async fn require_auth(
     };
 
     // Validate the token against the sessions table
-    let valid = match crate::infra::db::sqlite::try_pool() {
+    let session = match crate::infra::db::sqlite::try_pool() {
         Ok(pool) => {
             let now = chrono::Utc::now().to_rfc3339();
-            let session: Option<crate::infra::db::models::SessionRow> =
-                sqlx::query_as("SELECT * FROM sessions WHERE token = ? AND expires_at > ?")
-                    .bind(&token)
-                    .bind(&now)
-                    .fetch_optional(pool)
-                    .await
-                    .unwrap_or(None);
-            session.is_some()
+            sqlx::query_as::<_, crate::infra::db::models::SessionRow>(
+                "SELECT * FROM sessions WHERE token = ? AND expires_at > ?",
+            )
+            .bind(&token)
+            .bind(&now)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None)
         }
         Err(_) => {
             // DB not available — reject all tokens (fail-secure)
             tracing::error!("require_auth: DB pool not available, rejecting request");
-            false
+            None
         }
     };
 
-    if valid {
+    if let Some(session) = session {
+        // Handlers resolve the acting user from this extension
+        // (save_pipeline ownership, per-user AI config).
+        request
+            .extensions_mut()
+            .insert::<Option<String>>(Some(session.user_id));
         return next.run(request).await;
     }
 
