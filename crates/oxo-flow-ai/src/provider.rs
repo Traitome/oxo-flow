@@ -10,8 +10,7 @@
 
 use crate::error::AiError;
 use crate::types::{
-    AiResponse, Message, MessageRole, ToolCall, ToolDef, Usage, tool_calls_from_openai,
-    tool_calls_to_openai,
+    AiResponse, Message, MessageRole, ToolCall, ToolDef, Usage, tool_calls_to_openai,
 };
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
@@ -63,6 +62,8 @@ pub enum AiProvider {
     OpenAi(OpenAiBackend),
     DeepSeek(OpenAiBackend), // Reuses OpenAI-compatible backend
     Ollama(OllamaBackend),
+    /// Offline replay provider for tests and evaluation (issue #73).
+    Scripted(crate::scripted::ScriptedBackend),
     Noop,
 }
 
@@ -72,7 +73,7 @@ impl AiProvider {
             Self::Claude(p) => Some(p.api_url.clone()),
             Self::OpenAi(p) | Self::DeepSeek(p) => Some(p.api_url.clone()),
             Self::Ollama(p) => Some(p.api_url.clone()),
-            Self::Noop => None,
+            Self::Scripted(_) | Self::Noop => None,
         }
     }
 
@@ -81,6 +82,7 @@ impl AiProvider {
             Self::Claude(p) => Some(p.model.clone()),
             Self::OpenAi(p) | Self::DeepSeek(p) => Some(p.model.clone()),
             Self::Ollama(p) => Some(p.model.clone()),
+            Self::Scripted(p) => Some(p.model_name()),
             Self::Noop => None,
         }
     }
@@ -91,6 +93,7 @@ impl AiProvider {
             Self::OpenAi(_) => "openai",
             Self::DeepSeek(_) => "deepseek",
             Self::Ollama(_) => "ollama",
+            Self::Scripted(_) => "scripted",
             Self::Noop => "disabled",
         }
     }
@@ -116,8 +119,141 @@ impl AiProvider {
             Self::Claude(p) => p.chat_with_tools(messages, tools).await,
             Self::OpenAi(p) | Self::DeepSeek(p) => p.chat_with_tools(messages, tools).await,
             Self::Ollama(p) => p.chat_with_tools(messages, tools).await,
+            Self::Scripted(p) => p.chat_with_tools(messages, tools).await,
             Self::Noop => Err(AiError::NotConfigured),
         }
+    }
+
+    /// Chat with automatic context-overflow recovery (issue #73): on
+    /// [`AiError::ContextOverflow`] the transcript is compressed
+    /// ([`compress_transcript`]) and the request retried ONCE. A second
+    /// overflow surfaces a readable error instead of wasting quota.
+    pub async fn chat_with_tools_overflow_safe(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDef],
+    ) -> Result<AiResponse, AiError> {
+        match self.chat_with_tools(messages, tools).await {
+            Err(AiError::ContextOverflow { provider, message }) => {
+                tracing::warn!(
+                    provider,
+                    message,
+                    "context overflow — compressing transcript and retrying once"
+                );
+                const GUIDANCE: &str = "reduce the grounding data you send: fewer \
+                                        rules/skills, smaller tool results, or a \
+                                        shorter workflow";
+                match compress_transcript(messages) {
+                    Some(compressed) => match self.chat_with_tools(&compressed, tools).await {
+                        Err(AiError::ContextOverflow {
+                            provider,
+                            message: retry_message,
+                        }) => Err(AiError::ContextOverflow {
+                            provider,
+                            message: format!(
+                                "{retry_message} (still overflowing after transcript \
+                                 compression — {GUIDANCE})"
+                            ),
+                        }),
+                        other => other,
+                    },
+                    None => Err(AiError::ContextOverflow {
+                        provider,
+                        message: format!(
+                            "{message} (the transcript has no removable turns — {GUIDANCE})"
+                        ),
+                    }),
+                }
+            }
+            other => other,
+        }
+    }
+}
+
+/// How many non-system messages the tail keeps when compressing after a
+/// context overflow.
+pub const COMPRESS_KEEP_TAIL: usize = 6;
+
+/// Compress a transcript for a context-overflow retry: keep every system
+/// message and the last [`COMPRESS_KEEP_TAIL`] non-system messages, replace
+/// everything dropped in between with a single marker turn.
+///
+/// Returns `None` when there is nothing to drop (compression cannot help).
+pub fn compress_transcript(messages: &[Message]) -> Option<Vec<Message>> {
+    let non_system = messages
+        .iter()
+        .filter(|m| m.role != MessageRole::System)
+        .collect::<Vec<_>>();
+    if non_system.len() <= COMPRESS_KEEP_TAIL {
+        return None;
+    }
+    let dropped = non_system.len() - COMPRESS_KEEP_TAIL;
+    let mut out: Vec<Message> = messages
+        .iter()
+        .filter(|m| m.role == MessageRole::System)
+        .cloned()
+        .collect();
+    out.push(Message::user(&format!(
+        "[... {dropped} earlier turns omitted: the context window was exceeded ...]"
+    )));
+    out.extend(non_system[dropped..].iter().map(|m| (*m).clone()));
+    Some(out)
+}
+
+/// Classify a non-success HTTP status + error body into an [`AiError`].
+///
+/// Body matching is keyword-based: context-window markers map to
+/// [`AiError::ContextOverflow`] (retrying the same transcript is
+/// pointless), output-size markers to [`AiError::OutputLimit`].
+pub fn classify_http_error(provider: &str, status: u16, body: &str) -> AiError {
+    let body_lower = body.to_lowercase();
+    if status == 429 {
+        return AiError::RateLimited {
+            provider: provider.into(),
+            retry_after: None,
+        };
+    }
+    if status == 401 || status == 403 {
+        return AiError::Auth {
+            provider: provider.into(),
+            message: body.to_string(),
+        };
+    }
+    const OVERFLOW_MARKERS: &[&str] = &[
+        "context length",
+        "context window",
+        "maximum context",
+        "context_length_exceeded",
+        "input length",
+        "input too long",
+        "too many tokens",
+        "maximum prompt",
+        "prompt too long",
+    ];
+    const OUTPUT_MARKERS: &[&str] = &[
+        "max_tokens",
+        "maximum output",
+        "output too long",
+        "completion tokens",
+    ];
+    if status == 413
+        || (status == 400 || status == 422)
+            && OVERFLOW_MARKERS.iter().any(|m| body_lower.contains(m))
+    {
+        return AiError::ContextOverflow {
+            provider: provider.into(),
+            message: body.to_string(),
+        };
+    }
+    if (status == 400 || status == 422) && OUTPUT_MARKERS.iter().any(|m| body_lower.contains(m)) {
+        return AiError::OutputLimit {
+            provider: provider.into(),
+            message: body.to_string(),
+        };
+    }
+    AiError::Provider {
+        provider: provider.into(),
+        message: format!("HTTP {status}: {body}"),
     }
 }
 
@@ -233,16 +369,7 @@ impl ClaudeBackend {
 
         if !status.is_success() {
             let err_msg = json["error"]["message"].as_str().unwrap_or("unknown error");
-            if status.as_u16() == 429 {
-                return Err(AiError::RateLimited {
-                    provider: "claude".into(),
-                    retry_after: None,
-                });
-            }
-            return Err(AiError::Provider {
-                provider: "claude".into(),
-                message: format!("HTTP {status}: {err_msg}"),
-            });
+            return Err(classify_http_error("claude", status.as_u16(), err_msg));
         }
 
         parse_claude_response(&json)
@@ -404,22 +531,7 @@ impl OpenAiBackend {
 
         if !status.is_success() {
             let err_msg = json["error"]["message"].as_str().unwrap_or("unknown error");
-            if status.as_u16() == 429 {
-                return Err(AiError::RateLimited {
-                    provider: "openai".into(),
-                    retry_after: None,
-                });
-            }
-            if status.as_u16() == 401 || status.as_u16() == 403 {
-                return Err(AiError::Auth {
-                    provider: "openai".into(),
-                    message: err_msg.to_string(),
-                });
-            }
-            return Err(AiError::Provider {
-                provider: "openai".into(),
-                message: format!("HTTP {status}: {err_msg}"),
-            });
+            return Err(classify_http_error("openai", status.as_u16(), err_msg));
         }
 
         parse_openai_response(&json)
@@ -443,12 +555,7 @@ fn parse_openai_response(json: &serde_json::Value) -> Result<AiResponse, AiError
         .to_string();
 
     let tool_calls = if let Some(tc_json) = message["tool_calls"].as_array() {
-        let parsed = tool_calls_from_openai(&serde_json::Value::Array(tc_json.clone()));
-        if parsed.as_ref().is_some_and(|tcs| !tcs.is_empty()) {
-            parsed
-        } else {
-            None
-        }
+        Some(parse_tool_calls_strict(tc_json)?)
     } else {
         None
     };
@@ -464,6 +571,55 @@ fn parse_openai_response(json: &serde_json::Value) -> Result<AiResponse, AiError
         usage,
         finish_reason,
     })
+}
+
+/// Parse OpenAI tool calls strictly (issue #73).
+///
+/// Structurally broken calls (missing `function`, `name`, or `id`) are an
+/// error — silently dropping them hides a model failure from the caller.
+/// Broken *arguments* JSON is repaired to `{}`: models like DeepSeek have
+/// been observed to truncate long argument strings.
+fn parse_tool_calls_strict(arr: &[serde_json::Value]) -> Result<Vec<ToolCall>, AiError> {
+    arr.iter()
+        .map(|tc| {
+            let func = tc.get("function").ok_or_else(|| AiError::ToolError {
+                tool: "<unknown>".into(),
+                message: "tool call missing 'function' block".into(),
+            })?;
+            let name =
+                func.get("name")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| AiError::ToolError {
+                        tool: "<unknown>".into(),
+                        message: "tool call missing function name".into(),
+                    })?;
+            let id = tc
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AiError::ToolError {
+                    tool: name.into(),
+                    message: "tool call missing id".into(),
+                })?;
+            let raw_arguments = func
+                .get("arguments")
+                .and_then(|v| v.as_str())
+                .unwrap_or("{}");
+            let arguments = if serde_json::from_str::<serde_json::Value>(raw_arguments).is_ok() {
+                raw_arguments.to_string()
+            } else {
+                tracing::warn!(
+                    tool = name,
+                    "tool call arguments are not valid JSON — repairing to {{}}"
+                );
+                "{}".to_string()
+            };
+            Ok(ToolCall {
+                id: id.to_string(),
+                name: name.to_string(),
+                arguments,
+            })
+        })
+        .collect()
 }
 
 // ── Ollama backend ─────────────────────────────────────────────────────────
@@ -861,6 +1017,173 @@ mod tests {
         assert_eq!(tc.len(), 1);
         assert_eq!(tc[0].name, "lookup_tool");
         assert_eq!(tc[0].arguments, r#"{"tool": "STAR"}"#);
+    }
+
+    #[test]
+    fn parse_openai_response_repairs_truncated_tool_arguments() {
+        // DeepSeek has been observed to truncate long tool-call arguments;
+        // the broken JSON must be repaired to "{}" rather than silently
+        // dropped (issue #73).
+        let json = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "lookup_tool",
+                            "arguments": "{\"tool\": \"STA"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        });
+        let response = parse_openai_response(&json).unwrap();
+        let calls = response
+            .tool_calls
+            .expect("repaired call must not be dropped");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "lookup_tool");
+        assert_eq!(calls[0].arguments, "{}");
+    }
+
+    #[test]
+    fn parse_openai_response_keeps_valid_calls_beside_repaired_ones() {
+        let json = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "lookup_tool", "arguments": "{\"tool\": \"STAR\"}"}
+                        },
+                        {
+                            "id": "call_2",
+                            "type": "function",
+                            "function": {"name": "lookup_skill", "arguments": "{\"query\": \"truncated"}
+                        }
+                    ]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        });
+        let response = parse_openai_response(&json).unwrap();
+        let calls = response.tool_calls.unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].arguments, r#"{"tool": "STAR"}"#);
+        assert_eq!(calls[1].arguments, "{}");
+    }
+
+    #[test]
+    fn parse_openai_response_errors_on_unrepairable_tool_call() {
+        // A tool call without an id/name cannot be repaired — the caller
+        // must see the error instead of a silently empty response.
+        let json = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "type": "function",
+                        "function": {"name": "lookup_tool", "arguments": "{}"}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        });
+        let err = parse_openai_response(&json).unwrap_err();
+        assert!(
+            matches!(err, AiError::ToolError { .. }),
+            "expected ToolError, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn classify_http_errors_by_status_and_body() {
+        // Context overflows come back as 400/413 with context markers.
+        assert!(matches!(
+            classify_http_error(
+                "openai",
+                400,
+                "This model's maximum context length is 65536 tokens."
+            ),
+            AiError::ContextOverflow { .. }
+        ));
+        assert!(matches!(
+            classify_http_error("openai", 413, "payload too large"),
+            AiError::ContextOverflow { .. }
+        ));
+        assert!(matches!(
+            classify_http_error(
+                "openai",
+                400,
+                "context_length_exceeded: input exceeds limit"
+            ),
+            AiError::ContextOverflow { .. }
+        ));
+        // Output-limit errors mention max_tokens.
+        assert!(matches!(
+            classify_http_error("openai", 400, "max_tokens is too large: 100000 > 8192"),
+            AiError::OutputLimit { .. }
+        ));
+        // Existing classifications are preserved.
+        assert!(matches!(
+            classify_http_error("openai", 429, "rate limit"),
+            AiError::RateLimited { .. }
+        ));
+        assert!(matches!(
+            classify_http_error("openai", 401, "bad key"),
+            AiError::Auth { .. }
+        ));
+        assert!(matches!(
+            classify_http_error("openai", 500, "server exploded"),
+            AiError::Provider { .. }
+        ));
+    }
+
+    #[test]
+    fn compress_transcript_keeps_system_and_tail() {
+        let messages = vec![
+            Message::system("sys"),
+            Message::user("u1"),
+            Message::assistant("a1"),
+            Message::user("u2"),
+            Message::assistant("a2"),
+            Message::user("u3"),
+            Message::assistant("a3"),
+            Message::user("u4"),
+            Message::assistant("a4"),
+            Message::user("u5"),
+            Message::assistant("a5"),
+            Message::user("final"),
+        ];
+        let compressed = compress_transcript(&messages).expect("droppable turns exist");
+        // System + marker + last COMPRESS_KEEP_TAIL non-system messages.
+        assert!(compressed[0].role == MessageRole::System);
+        assert!(compressed[1].content.contains("omitted"));
+        assert_eq!(compressed.len(), 2 + COMPRESS_KEEP_TAIL);
+        assert_eq!(compressed.last().unwrap().content, "final");
+        assert!(
+            compressed.iter().any(|m| m.content == "a5"),
+            "recent turns must survive"
+        );
+    }
+
+    #[test]
+    fn compress_transcript_returns_none_when_nothing_to_drop() {
+        let messages = vec![
+            Message::system("sys"),
+            Message::user("u1"),
+            Message::assistant("a1"),
+            Message::user("final"),
+        ];
+        assert!(compress_transcript(&messages).is_none());
     }
 
     #[test]

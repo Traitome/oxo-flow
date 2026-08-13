@@ -61,15 +61,61 @@ impl Message {
         }
     }
 
+    /// Tool result message. Content is bounded to
+    /// [`MAX_TOOL_RESULT_BYTES`] with a truncation marker (issue #73) —
+    /// every transcript built through this constructor stays within
+    /// predictable context limits.
     pub fn tool(tool_call_id: &str, name: &str, content: &str) -> Self {
         Self {
             role: MessageRole::Tool,
-            content: content.to_string(),
+            content: bound_tool_result(content),
             tool_calls: None,
             tool_call_id: Some(tool_call_id.to_string()),
             name: Some(name.to_string()),
         }
     }
+}
+
+/// Maximum bytes a single tool result may occupy in a transcript.
+pub const MAX_TOOL_RESULT_BYTES: usize = 16 * 1024;
+
+/// Bound a tool result to [`MAX_TOOL_RESULT_BYTES`], keeping the head and
+/// tail (UTF-8 safe) and inserting a marker reporting the original size.
+pub fn bound_tool_result(content: &str) -> String {
+    if content.len() <= MAX_TOOL_RESULT_BYTES {
+        return content.to_string();
+    }
+    let half = MAX_TOOL_RESULT_BYTES / 2;
+    let head = truncate_utf8_from_start(content, half);
+    let tail = truncate_utf8_from_end(content, half);
+    format!(
+        "{head}\n[... tool result truncated: {} bytes total; middle omitted ...]\n{tail}",
+        content.len()
+    )
+}
+
+/// Largest prefix of `s` with at most `max_bytes` bytes (char-boundary safe).
+fn truncate_utf8_from_start(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// Largest suffix of `s` with at most `max_bytes` bytes (char-boundary safe).
+fn truncate_utf8_from_end(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut start = s.len() - max_bytes;
+    while !s.is_char_boundary(start) {
+        start += 1;
+    }
+    &s[start..]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -230,6 +276,59 @@ mod tests {
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].name, "lookup_tool");
         assert_eq!(parsed[0].arguments, r#"{"tool": "STAR"}"#);
+    }
+
+    #[test]
+    fn bound_tool_result_keeps_short_content_unchanged() {
+        let content = "short tool output";
+        assert_eq!(bound_tool_result(content), content);
+    }
+
+    #[test]
+    fn bound_tool_result_truncates_long_content_with_marker() {
+        let content = "abcdef".repeat(10_000); // 60_000 bytes
+        let bounded = bound_tool_result(&content);
+        assert!(bounded.len() < content.len() + 128);
+        assert!(
+            bounded.contains("tool result truncated"),
+            "marker required: {bounded}"
+        );
+        assert!(
+            bounded.contains("60000 bytes total"),
+            "marker must report the total size: {bounded}"
+        );
+        // Head and tail survive so the model keeps both the leading and
+        // trailing context of the result.
+        assert!(bounded.starts_with("abcdefabcdef"));
+        assert!(bounded.ends_with("abcdefabcdef"));
+        assert_eq!(bounded.matches("truncated").count(), 1);
+    }
+
+    #[test]
+    fn bound_tool_result_is_utf8_safe_at_boundaries() {
+        // Multi-byte characters straddling the byte budget must not panic
+        // or produce replacement characters.
+        let content = "测".repeat(60_000); // 3 bytes per char
+        let bounded = bound_tool_result(&content);
+        assert!(!bounded.contains('\u{FFFD}'), "no replacement chars");
+        assert!(bounded.chars().all(|c| c == '测'
+            || c.is_ascii()
+            || c == '['
+            || c == ']'
+            || c == '.'
+            || c == ' '
+            || c == '\n'
+            || c == ':'
+            || c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn tool_message_bounds_content() {
+        let content = "x".repeat(100_000);
+        let msg = Message::tool("call_1", "lookup_tool", &content);
+        assert!(msg.content.len() < content.len());
+        assert!(msg.content.contains("tool result truncated"));
+        assert_eq!(msg.tool_call_id.as_deref(), Some("call_1"));
     }
 
     #[test]

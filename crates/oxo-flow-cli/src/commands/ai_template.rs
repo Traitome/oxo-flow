@@ -333,7 +333,7 @@ Your TOML MUST include:
     let mut response_text: Option<String> = None;
     for _round in 0..max_rounds {
         let response = provider
-            .chat_with_tools(&messages, &tool_defs)
+            .chat_with_tools_overflow_safe(&messages, &tool_defs)
             .await
             .context("AI provider call failed")?;
         cmd_session.record_usage(&response.usage);
@@ -388,7 +388,7 @@ Your TOML MUST include:
             // The model kept calling tools without finalizing — force one
             // plain answer without any tools.
             let final_response = provider
-                .chat_with_tools(&messages, &[])
+                .chat_with_tools_overflow_safe(&messages, &[])
                 .await
                 .context("AI provider call failed during final (tool-free) round")?;
             cmd_session.record_usage(&final_response.usage);

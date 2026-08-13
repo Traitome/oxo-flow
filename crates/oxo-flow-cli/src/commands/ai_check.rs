@@ -70,7 +70,9 @@ pub async fn analyze_workflow(
 
     use oxo_flow_ai::types::Message;
     let messages = vec![Message::system(&system), Message::user(&user)];
-    let response = provider.chat_with_tools(&messages, &[]).await?;
+    let response = provider
+        .chat_with_tools_overflow_safe(&messages, &[])
+        .await?;
     let response_text = response.content.unwrap_or_default();
 
     // Record token usage for observability

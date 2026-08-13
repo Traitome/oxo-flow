@@ -66,7 +66,10 @@ impl Orchestrator {
 
             // 2. GATHER/ACT — call AI with current messages + tools
             let tool_defs = ctx.tool_registry.to_defs();
-            let response = self.provider.chat_with_tools(&messages, &tool_defs).await?;
+            let response = self
+                .provider
+                .chat_with_tools_overflow_safe(&messages, &tool_defs)
+                .await?;
 
             session.add_usage(&response.usage);
 

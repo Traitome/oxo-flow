@@ -52,6 +52,15 @@ pub enum AiError {
 
     #[error("Authentication failed for {provider}: {message}")]
     Auth { provider: String, message: String },
+
+    /// The request exceeded the provider's context window. Retrying the
+    /// same transcript is pointless — compress it first.
+    #[error("Context window exceeded for {provider}: {message}")]
+    ContextOverflow { provider: String, message: String },
+
+    /// The provider rejected the requested output size.
+    #[error("Output limit exceeded for {provider}: {message}")]
+    OutputLimit { provider: String, message: String },
 }
 
 impl From<reqwest::Error> for AiError {

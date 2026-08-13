@@ -37,6 +37,7 @@ pub mod knowledge;
 pub mod mcp;
 pub mod plugin;
 pub mod provider;
+pub mod scripted;
 pub mod session;
 pub mod skill;
 pub mod tools;
