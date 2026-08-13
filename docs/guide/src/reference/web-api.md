@@ -241,6 +241,14 @@ without `pipeline_id` get a fresh per-run sandbox and execute everything.
 Malformed or unknown pipeline ids are rejected (`400 INVALID_PIPELINE_ID` /
 `404 PIPELINE_NOT_FOUND`).
 
+Execution flags are forwarded to the CLI executor:
+
+- `dry_run: true` spawns the preview subcommand (`oxo-flow dry-run`) —
+  nothing executes; the log shows the would-be plan.
+- `max_jobs` maps to the executor's `-j` only when explicitly set; without
+  it the CLI default (1) applies (the resource estimate assumes 4).
+- `keep_going: true` maps to `-k`.
+
 ### Run Status
 ```
 GET /api/runs/{id}/status

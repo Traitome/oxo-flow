@@ -345,3 +345,98 @@ async fn web_create_run_rejects_malformed_pipeline_id() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["code"], "INVALID_PIPELINE_ID");
 }
+
+/// Regression (issue #69 follow-up): `dry_run: true` must spawn the preview
+/// subcommand — nothing may execute. Previously the flag only affected the
+/// estimate while the CLI executed the workflow for real.
+#[tokio::test]
+async fn web_dry_run_flag_previews_without_executing() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.base.clone();
+
+    let toml = "[workflow]\nname = \"dry69\"\n\n\
+                [[rules]]\nname = \"produce\"\noutput = [\"produced.txt\"]\n\
+                shell = \"echo ran > produced.txt\"\n";
+    let run: serde_json::Value = client
+        .post(format!("{base}/api/runs"))
+        .json(&serde_json::json!({ "toml_content": toml, "dry_run": true }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let run_id = run["run_id"].as_str().unwrap().to_string();
+    assert_eq!(wait_for_terminal(&client, &base, &run_id).await, "success");
+
+    let logs: String = client
+        .get(format!("{base}/api/runs/{run_id}/logs"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        logs.contains("(dry-run)"),
+        "preview plan expected in logs: {logs}"
+    );
+    assert!(
+        !logs.contains("Running: produce"),
+        "dry-run must not execute rules: {logs}"
+    );
+    // Nothing was executed anywhere in the sandbox.
+    assert!(
+        !dir.path()
+            .join("workspace/users/local_user/runs")
+            .join(&run_id)
+            .join("produced.txt")
+            .exists(),
+        "dry-run must not create outputs"
+    );
+}
+
+/// Regression (issue #69 follow-up): an explicit `max_jobs` must reach the
+/// CLI executor (-j). Previously it only influenced the resource estimate.
+#[tokio::test]
+async fn web_max_jobs_flag_reaches_executor() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.base.clone();
+
+    let toml = "[workflow]\nname = \"jobs69\"\n\n\
+                [[rules]]\nname = \"a\"\noutput = [\"a.txt\"]\nshell = \"echo a > a.txt\"\n\n\
+                [[rules]]\nname = \"b\"\noutput = [\"b.txt\"]\nshell = \"echo b > b.txt\"\n\n\
+                [[rules]]\nname = \"c\"\noutput = [\"c.txt\"]\nshell = \"echo c > c.txt\"\n";
+    let run: serde_json::Value = client
+        .post(format!("{base}/api/runs"))
+        .json(&serde_json::json!({ "toml_content": toml, "max_jobs": 3 }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let run_id = run["run_id"].as_str().unwrap().to_string();
+    assert_eq!(wait_for_terminal(&client, &base, &run_id).await, "success");
+
+    let logs: String = client
+        .get(format!("{base}/api/runs/{run_id}/logs"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    // -j 1 would execute sequentially (Running → ✓ per rule); with -j 3 all
+    // three rules are submitted before the first completion.
+    let third_submission = logs.find("Running: c").expect("rule c must be submitted");
+    let first_completion = logs.find("✓").expect("a rule must complete");
+    assert!(
+        first_completion > third_submission,
+        "all three rules must be submitted before any completes (parallel): {logs}"
+    );
+}

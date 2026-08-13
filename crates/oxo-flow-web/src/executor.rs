@@ -84,6 +84,17 @@ fn extract_invalidation_summary(log: &str) -> Option<String> {
     }
 }
 
+/// Execution options carried from the run request to the CLI subprocess.
+#[derive(Debug, Clone, Default)]
+pub struct RunFlags {
+    /// Preview mode: spawns `oxo-flow dry-run` instead of executing anything.
+    pub dry_run: bool,
+    /// Continue executing independent rules when one fails (`-k`).
+    pub keep_going: bool,
+    /// Explicitly requested parallelism (`-j`); `None` keeps the CLI default.
+    pub max_jobs: Option<usize>,
+}
+
 /// Spawns a background task to execute the workflow in a sandboxed workspace.
 ///
 /// `workdir` is the directory the CLI executes in: a persistent per-pipeline
@@ -96,6 +107,7 @@ pub fn spawn_background_run(
     auth_type: String,
     os_user: String,
     workdir: Option<PathBuf>,
+    flags: RunFlags,
 ) {
     tokio::spawn(async move {
         info!("Starting background run {} for user {}", run_id, username);
@@ -138,23 +150,37 @@ pub fn spawn_background_run(
 
         let oxo_bin = find_oxo_flow_binary();
 
+        // Issue #69 follow-up: honor the run request's execution flags.
+        // `dry_run` spawns the preview subcommand (nothing executes);
+        // max_jobs and keep_going map to -j / -k. Only explicitly requested
+        // jobs are passed — the CLI default stays in charge otherwise.
+        let mut oxo_args: Vec<std::ffi::OsString> = Vec::new();
+        if flags.dry_run {
+            oxo_args.push("dry-run".into());
+        } else {
+            oxo_args.push("run".into());
+        }
+        oxo_args.push(workflow_file.as_os_str().to_owned());
+        oxo_args.push("--workdir".into());
+        oxo_args.push(run_dir.as_os_str().to_owned());
+        if !flags.dry_run {
+            if flags.keep_going {
+                oxo_args.push("--keep-going".into());
+            }
+            if let Some(jobs) = flags.max_jobs {
+                oxo_args.push("-j".into());
+                oxo_args.push(jobs.to_string().into());
+            }
+        }
+
         let mut cmd = if auth_type == "sudo" && os_user != "oxo-flow" {
             let mut c = Command::new("sudo");
-            c.arg("-n")
-                .arg("-u")
-                .arg(&os_user)
-                .arg(&oxo_bin)
-                .arg("run")
-                .arg(&workflow_file)
-                .arg("--workdir")
-                .arg(&run_dir);
+            c.arg("-n").arg("-u").arg(&os_user).arg(&oxo_bin);
+            c.args(&oxo_args);
             c
         } else {
             let mut c = Command::new(&oxo_bin);
-            c.arg("run")
-                .arg(&workflow_file)
-                .arg("--workdir")
-                .arg(&run_dir);
+            c.args(&oxo_args);
             c
         };
 

@@ -213,12 +213,22 @@ pub async fn run_workflow(
     let _ = db::log_action(&user.id, "run", &config.workflow.name).await;
 
     // 4. Spawn background executor (ad-hoc sandbox: no persistent workdir)
+    let run_flags = req
+        .config
+        .as_ref()
+        .map(|c| executor::RunFlags {
+            dry_run: c.dry_run.unwrap_or(false),
+            keep_going: c.keep_going.unwrap_or(false),
+            max_jobs: c.max_jobs,
+        })
+        .unwrap_or_default();
     executor::spawn_background_run(
         run_id.clone(),
         user.username.clone(),
         user.auth_type.clone(),
         user.os_user.clone(),
         None,
+        run_flags,
     );
 
     ACTIVE_WORKFLOWS.fetch_add(1, Ordering::Relaxed);

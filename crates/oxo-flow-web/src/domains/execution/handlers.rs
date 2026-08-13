@@ -162,6 +162,20 @@ pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateR
             "none".to_string(),
             "local".to_string(),
             Some(run_dir),
+            crate::executor::RunFlags {
+                dry_run: req
+                    .get("dry_run")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                keep_going: req
+                    .get("keep_going")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                max_jobs: req
+                    .get("max_jobs")
+                    .and_then(|v| v.as_u64())
+                    .map(|j| j as usize),
+            },
         );
     }
 
