@@ -18,15 +18,11 @@ export default function ToolPalette({ onAddTool }: ToolPaletteProps) {
   const [error, setError] = useState<string | null>(null);
 
   // Grounded search over the embedded Bioconda database (6103 tools).
-  // An empty query shows the hint instead of an arbitrary DB slice.
+  // An empty query shows the hint instead of an arbitrary DB slice — the
+  // results are gated at render time, so no state resets are needed here.
+  const effectiveQuery = query.trim();
   useEffect(() => {
-    if (query.trim() === '') {
-      setTools([]);
-      setTotal(null);
-      setLoading(false);
-      setError(null);
-      return;
-    }
+    if (effectiveQuery === '') return;
     const timer = setTimeout(async () => {
       setLoading(true);
       setError(null);
@@ -43,6 +39,8 @@ export default function ToolPalette({ onAddTool }: ToolPaletteProps) {
       }
     }, DEBOUNCE_MS);
     return () => clearTimeout(timer);
+    // `query` drives the effect; effectiveQuery is its trimmed form.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query]);
 
   const handleAdd = useCallback(
@@ -70,13 +68,14 @@ export default function ToolPalette({ onAddTool }: ToolPaletteProps) {
       <div className="tool-palette-results">
         {loading && <div className="tool-palette-hint">Searching…</div>}
         {!loading && error && <div className="tool-palette-hint error">{error}</div>}
-        {!loading && !error && query === '' && (
+        {effectiveQuery === '' && (
           <div className="tool-palette-hint">
             Search to add a real tool as a rule. Each result carries its Bioconda name and version — no
             stub commands.
           </div>
         )}
-        {!loading &&
+        {effectiveQuery !== '' &&
+          !loading &&
           !error &&
           tools.map((tool) => (
             <div className="tool-palette-item" key={tool.name}>

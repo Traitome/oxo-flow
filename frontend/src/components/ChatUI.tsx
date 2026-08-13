@@ -18,7 +18,7 @@ const PLACEHOLDERS: Record<ChatContextType, string> = {
 
 interface ChatUIProps {
   context?: ChatContextType;
-  onPipelineReady?: (data: any) => void;
+  onPipelineReady?: (data: { toml_content?: string; validation?: unknown; pipeline_id?: string }) => void;
   onDataReport?: (report: any) => void;
 }
 
@@ -29,7 +29,7 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
   const [loading, setLoading] = useState(false);
   const [agents, setAgents] = useState<Record<string, string>>({});
   const chatRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // Sync messages to session context whenever they change
   useEffect(() => {
@@ -67,7 +67,7 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
       const decoder = new TextDecoder();
       let buffer = '';
       let doneReading = false;
-      let finalPipelineData: any = null;
+      let finalPipelineData: { toml_content?: string; validation?: unknown; pipeline_id?: string } | null = null;
 
       while (!doneReading) {
         const { value, done } = await reader.read();
@@ -248,7 +248,7 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
       {/* Input */}
       <div style={{ padding: '12px 16px', borderTop: '1px solid var(--color-border)', display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
         <textarea
-          ref={inputRef as any}
+          ref={inputRef}
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }}}
