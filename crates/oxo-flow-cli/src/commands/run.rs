@@ -311,8 +311,41 @@ pub async fn run_command(
     rerun: bool,
 ) -> Result<()> {
     print_banner();
-    let workflow = resolve_workflow(workflow)?;
+
+    // ── Repository-URL workflows (nextflow-style `run <repo>`) ──────────
+    // `oxo-flow run gh:owner/repo[@ref]` (or a *.git URL / local repo dir)
+    // checks out into <cwd>/.oxo-flow/repos/<name> (reused on later runs).
+    // For run, @ref is a git branch/tag — never a Release asset (that is
+    // pull's bundle namespace). Outputs/checkpoint default to the CURRENT
+    // directory: data belongs outside the clone.
+    let (workflow, from_repo) = match workflow {
+        Some(w) => {
+            let text = w.to_string_lossy();
+            match crate::commands::pull::classify_run_source(&text) {
+                Some(crate::commands::pull::RunSource::Repo { url, git_ref }) => {
+                    let cache = crate::commands::pull::repo_cache_dir(&url, git_ref.as_deref())?;
+                    let wf = crate::commands::pull::checkout_repo_workflow(
+                        &url,
+                        git_ref.as_deref(),
+                        &cache,
+                    )
+                    .await?;
+                    (wf, true)
+                }
+                None => (w, false),
+            }
+        }
+        None => (resolve_workflow(None)?, false),
+    };
     let workflow_dir = oxo_flow_core::parent_dir(&workflow).to_path_buf();
+    // Workdir default: the workflow's own directory, EXCEPT for repository
+    // runs, where the current directory holds the user's data (the clone is
+    // a read-only cache).
+    let workdir_default: PathBuf = if from_repo {
+        std::env::current_dir().context("cannot determine current directory")?
+    } else {
+        workflow_dir.clone()
+    };
 
     // ── Workdir lock (issue #70) ────────────────────────────────────────
     // Concurrent runs on the same workdir would race on
@@ -320,7 +353,7 @@ pub async fn run_command(
     // acquired as early as possible and held for the whole run; the OS
     // releases it automatically if this process exits or crashes, so there
     // are no stale locks.
-    let workdir_effective = workdir.as_ref().unwrap_or(&workflow_dir);
+    let workdir_effective = workdir.as_ref().unwrap_or(&workdir_default);
     let _workdir_lock = WorkdirLock::acquire(workdir_effective)?;
 
     let mut config = WorkflowConfig::from_file(&workflow)
@@ -492,7 +525,7 @@ pub async fn run_command(
             &mut config,
             &samples_filter,
             true,
-            workdir.as_deref().unwrap_or(&workflow_dir),
+            workdir.as_deref().unwrap_or(&workdir_default),
         )?
     {
         samples::print_readiness_section(&readiness);
@@ -569,7 +602,7 @@ pub async fn run_command(
     // rules with stale outputs).
     let checkpoint_path = workdir
         .as_ref()
-        .unwrap_or(&workflow_dir)
+        .unwrap_or(&workdir_default)
         .join(".oxo-flow/checkpoint.json");
     let checkpoint: Arc<Mutex<CheckpointState>> = if checkpoint_path.exists() {
         Arc::new(Mutex::new(
@@ -586,7 +619,7 @@ pub async fn run_command(
     {
         let mut ck = checkpoint.lock().await;
         ck.set_workflow_path(&absolutize(&workflow)?);
-        ck.set_workdir(&absolutize(workdir.as_deref().unwrap_or(&workflow_dir))?);
+        ck.set_workdir(&absolutize(workdir.as_deref().unwrap_or(&workdir_default))?);
     }
 
     // Changed config keys → only rules referencing them (plus DAG downstream)
@@ -648,7 +681,7 @@ pub async fn run_command(
         wildcard_values.insert(format!("config.{key}"), string_val);
     }
     let wildcard_values: Arc<HashMap<String, String>> = Arc::new(wildcard_values);
-    let workdir_actual = Arc::new(workdir.as_ref().unwrap_or(&workflow_dir).clone());
+    let workdir_actual = Arc::new(workdir.as_ref().unwrap_or(&workdir_default).clone());
 
     // ── Input manifest comparison (issue #72) ──────────────────────────────
     // A completed rule is reused only when the file set its inputs resolved
@@ -730,7 +763,7 @@ pub async fn run_command(
     let exec_config = ExecutorConfig {
         max_jobs: jobs,
         dry_run: false,
-        workdir: workdir.clone().unwrap_or_else(|| workflow_dir.clone()),
+        workdir: workdir.clone().unwrap_or_else(|| workdir_default.clone()),
         keep_going,
         retry_count: retry,
         timeout: if timeout_secs > 0 {
@@ -830,7 +863,7 @@ pub async fn run_command(
     // ── Auto-build references (indexes, data files) ──────────────────────
 
     if !skip_ref_build && !config.references.is_empty() {
-        let ref_workdir = workdir.as_ref().unwrap_or(&workflow_dir);
+        let ref_workdir = workdir.as_ref().unwrap_or(&workdir_default);
         let ref_checkpoint = checkpoint_path
             .parent()
             .unwrap_or(Path::new("."))
@@ -1539,7 +1572,7 @@ pub async fn run_command(
 
     // Verify output files exist for completed rules
     if success_count > 0 {
-        let workdir_actual = workdir.as_ref().unwrap_or(&workflow_dir);
+        let workdir_actual = workdir.as_ref().unwrap_or(&workdir_default);
         let mut missing_outputs = Vec::new();
         let mut verified = 0usize;
         let mut total_size: u64 = 0;
@@ -1602,7 +1635,7 @@ pub async fn run_command(
     // regenerates chunks while the combine stays pre-skipped (which would
     // orphan the freshly created chunk files).
     if fail_count == 0 {
-        let workdir_actual = workdir.as_ref().unwrap_or(&workflow_dir);
+        let workdir_actual = workdir.as_ref().unwrap_or(&workdir_default);
         for rule in &config.rules {
             if rule.cleanup_chunks && checkpoint.is_completed(&rule.name) {
                 oxo_flow_core::executor::checkpoint::cleanup_transform_chunks(rule, workdir_actual)

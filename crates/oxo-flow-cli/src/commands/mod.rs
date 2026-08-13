@@ -8,17 +8,23 @@ use std::path::{Path, PathBuf};
 /// Priority: main.oxoflow > *.oxoflow (alphabetically first)
 pub fn discover_workflow_file() -> Result<PathBuf> {
     let cwd = std::env::current_dir().context("cannot determine current directory")?;
+    discover_workflow_file_in(&cwd)
+}
 
+/// Auto-discover a workflow file in a specific directory (used by `pull`
+/// after cloning a repository).
+/// Priority: main.oxoflow > *.oxoflow (alphabetically first)
+pub fn discover_workflow_file_in(dir: &Path) -> Result<PathBuf> {
     // Priority 1: main.oxoflow
-    let main_workflow = cwd.join("main.oxoflow");
+    let main_workflow = dir.join("main.oxoflow");
     if main_workflow.exists() {
         return Ok(main_workflow);
     }
 
     // Priority 2: any *.oxoflow file (alphabetically first)
     let mut oxoflow_files: Vec<PathBuf> = Vec::new();
-    for entry in std::fs::read_dir(&cwd)
-        .with_context(|| format!("cannot read directory {}", cwd.display()))?
+    for entry in std::fs::read_dir(dir)
+        .with_context(|| format!("cannot read directory {}", dir.display()))?
     {
         let entry = entry.context("cannot read directory entry")?;
         let path = entry.path();
@@ -31,8 +37,9 @@ pub fn discover_workflow_file() -> Result<PathBuf> {
 
     if oxoflow_files.is_empty() {
         return Err(anyhow::anyhow!(
-            "no .oxoflow file found in current directory.\n\
-            Specify a workflow file or run 'oxo-flow init' to create one."
+            "no .oxoflow file found in {}.\n\
+            The repository must contain a workflow file (main.oxoflow or any *.oxoflow).",
+            dir.display()
         ));
     }
 

@@ -3161,6 +3161,126 @@ fn cli_pull_rejects_invalid_url() {
     assert!(!output.status.success(), "should reject invalid URL");
 }
 
+/// Non-bundle repository mode: `pull file://<dir>` clones a git repository,
+/// discovers its workflow, and sanity-parses it — no bundle packaging
+/// required (issue #76 follow-up).
+#[test]
+fn cli_pull_clones_repository_without_bundle() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("pipeline-repo");
+    fs::create_dir_all(&repo).unwrap();
+    fs::write(
+        repo.join("rnaseq.oxoflow"),
+        "[workflow]\nname = \"rnaseq\"\nversion = \"1.0\"\n",
+    )
+    .unwrap();
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?} failed");
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "test"]);
+    git(&["add", "rnaseq.oxoflow"]);
+    git(&["commit", "-qm", "initial"]);
+
+    let work = dir.path().join("work");
+    fs::create_dir_all(&work).unwrap();
+    let out = oxo_flow_cmd()
+        .args(["pull", &format!("file://{}", repo.display())])
+        .current_dir(&work)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("Cloning"), "{stderr}");
+    assert!(stderr.contains("rnaseq.oxoflow"), "{stderr}");
+    assert!(
+        stderr.contains("oxo-flow run"),
+        "next steps must point at run: {stderr}"
+    );
+    // Clone landed next to the CWD (repo dir name) with the workflow inside.
+    assert!(work.join("pipeline-repo").join("rnaseq.oxoflow").exists());
+}
+
+/// nextflow-style repository execution: `run file://<repo>` checks the
+/// workflow out into a cache, executes it, and defaults the workdir to the
+/// current directory (outputs/checkpoint land next to the user's data, not
+/// inside the clone). Second run reuses the cache and skips completed work.
+#[test]
+fn cli_run_executes_workflow_from_repository() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("wf-repo");
+    fs::create_dir_all(&repo).unwrap();
+    fs::write(
+        repo.join("main.oxoflow"),
+        r#"[workflow]
+name = "remote-wf"
+version = "1.0"
+
+[[rules]]
+name = "hello"
+output = ["result.txt"]
+shell = "echo hello > result.txt"
+"#,
+    )
+    .unwrap();
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?} failed");
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "test"]);
+    git(&["add", "main.oxoflow"]);
+    git(&["commit", "-qm", "initial"]);
+
+    let work = dir.path().join("analysis");
+    fs::create_dir_all(&work).unwrap();
+    let repo_url = format!("file://{}", repo.display());
+
+    // First run: clone + execute. Outputs and checkpoint land in CWD.
+    let out = oxo_flow_cmd()
+        .args(["run", &repo_url, "-j", "2"])
+        .current_dir(&work)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("running workflow from"), "{stderr}");
+    assert!(
+        work.join("result.txt").exists(),
+        "outputs land in the workdir"
+    );
+    assert!(
+        work.join(".oxo-flow").join("checkpoint.json").exists(),
+        "checkpoint lands in the workdir"
+    );
+    assert!(
+        work.join(".oxo-flow/repos/wf-repo/main.oxoflow").exists(),
+        "clone cached under .oxo-flow/repos"
+    );
+
+    // Second run: cache reused, rule skipped via checkpoint.
+    let out = oxo_flow_cmd()
+        .args(["run", &repo_url, "-j", "2"])
+        .current_dir(&work)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("reusing cached checkout"), "{stderr}");
+    assert!(stderr.contains("already completed"), "{stderr}");
+}
+
 // ---------------------------------------------------------------------------
 // provenance verify tests
 // ---------------------------------------------------------------------------

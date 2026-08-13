@@ -73,6 +73,35 @@ oxo-flow run
 oxo-flow run pipeline.oxoflow
 ```
 
+### Run a workflow from a repository (nextflow-style)
+
+A public git repository can be executed directly — no clone, no bundle:
+
+```bash
+# Default branch
+oxo-flow run gh:owner/pipeline
+
+# Pinned to a git tag or branch (@ref selects a git ref — unlike `pull`,
+# where @tag means a GitHub Release bundle)
+oxo-flow run gh:owner/pipeline@v1.0.0
+
+# Any git URL or local repository directory
+oxo-flow run https://example.com/team/pipeline.git
+```
+
+The repository is checked out into `.oxo-flow/repos/<name>` under the
+current directory (reused on later runs — delete the directory to force a
+fresh clone), and the workflow file is auto-discovered (`main.oxoflow`
+first). Because the clone is a read-only cache, the working directory
+defaults to the **current directory** for repository runs — outputs, the
+checkpoint, and the workdir lock all land next to your data, not inside the
+clone. All other run semantics apply unchanged: `--samples`, `--rerun`,
+config overrides, `--workdir`, checkpoint-aware dry-run previews, etc.
+
+For `github.com` clones the official URL is tried first, then the
+`ghfast.top` / `gh-proxy.com` mirrors automatically (see
+[China Mirrors](../how-to/china-mirrors.md)).
+
 ### Custom working directory
 
 Relative paths in the workflow resolve against the workflow file's

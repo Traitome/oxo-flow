@@ -141,9 +141,14 @@ See the [Git (GitHub)](#git-github) section below for more proxy options and SSH
 
 ## Git (GitHub)
 
-When HTTPS-based GitHub proxies (like `ghfast.top`) are slow or unreliable,
-try using SSH to clone as a first alternative — SSH often bypasses the same
-network issues that affect HTTPS:
+**Built-in fallback**: when oxo-flow clones a `github.com` repository itself
+(`oxo-flow pull gh:owner/repo`, `oxo-flow run gh:owner/repo[@ref]`), it tries
+the official URL first and then falls back to the `ghfast.top` and
+`gh-proxy.com` mirrors automatically — no configuration needed.
+
+For your own manual `git clone` commands, when HTTPS-based GitHub proxies
+(like `ghfast.top`) are slow or unreliable, try using SSH as a first
+alternative — SSH often bypasses the same network issues that affect HTTPS:
 
 ```bash
 git clone git@github.com:Traitome/oxo-flow.git
