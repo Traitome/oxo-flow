@@ -60,6 +60,143 @@ fn oxo_flow_web_cmd() -> Command {
     Command::new(workspace_bin("oxo-flow-web"))
 }
 
+// ─── Pilot subset (--samples) & forced re-run (--rerun) ─────────────────────
+
+/// --samples first:N runs a pilot subset; scaling up afterwards skips the
+/// completed samples via the checkpoint and runs only the remaining ones.
+#[test]
+fn cli_samples_pilot_then_scale_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("scale.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"scale\"\nversion = \"1.0.0\"\n\n[[sample_groups]]\nname = \"cohort\"\nsamples = [\"S1\", \"S2\", \"S3\"]\n\n[[rules]]\nname = \"analyze\"\noutput = [\"out/{sample}.txt\"]\nshell = \"echo {sample} > {output}\"\n",
+    )
+    .unwrap();
+
+    // Pilot: only the first sample.
+    let pilot = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--samples", "first:1"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        pilot.status.success(),
+        "pilot run failed: {}",
+        String::from_utf8_lossy(&pilot.stderr)
+    );
+    assert!(dir.path().join("out/S1.txt").exists());
+    assert!(!dir.path().join("out/S2.txt").exists());
+
+    // Scale up: S1 is completed, only S2/S3 execute.
+    let full = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        full.status.success(),
+        "scale-up run failed: {}",
+        String::from_utf8_lossy(&full.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&full.stderr);
+    assert!(
+        stderr.contains("1 skipped"),
+        "scale-up should skip S1: {stderr}"
+    );
+    assert!(dir.path().join("out/S2.txt").exists());
+    assert!(dir.path().join("out/S3.txt").exists());
+}
+
+/// --rerun forces re-execution even when outputs are up to date, while a
+/// plain second run skips everything via the checkpoint.
+#[test]
+fn cli_rerun_forces_execution() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("again.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"again\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"step\"\noutput = [\"out.txt\"]\nshell = \"echo run > {output}\"\n",
+    )
+    .unwrap();
+
+    let run1 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run1.status.success());
+
+    // Second run without --rerun: everything is up to date.
+    let run2 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run2.status.success());
+    assert!(
+        String::from_utf8_lossy(&run2.stderr).contains("1 skipped"),
+        "second run should skip: {}",
+        String::from_utf8_lossy(&run2.stderr)
+    );
+
+    // Third run with --rerun: forced re-execution.
+    let run3 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--rerun"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run3.status.success());
+    let stderr3 = String::from_utf8_lossy(&run3.stderr);
+    assert!(
+        stderr3.contains("1 succeeded"),
+        "--rerun should re-execute: {stderr3}"
+    );
+    assert!(
+        !stderr3.contains("1 skipped"),
+        "--rerun must not skip: {stderr3}"
+    );
+}
+
+/// --samples and -t combine as an intersection: both constraints apply.
+#[test]
+fn cli_samples_and_target_intersect() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("pilot.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"pilot\"\nversion = \"1.0.0\"\n\n[[sample_groups]]\nname = \"cohort\"\nsamples = [\"S1\", \"S2\"]\n\n[[rules]]\nname = \"fastp_trim\"\noutput = [\"trim/{sample}.fq\"]\nshell = \"echo t > {output}\"\n\n[[rules]]\nname = \"align\"\ninput = [\"trim/{sample}.fq\"]\noutput = [\"aln/{sample}.bam\"]\nshell = \"echo a > {output}\"\n",
+    )
+    .unwrap();
+
+    let out = oxo_flow_cmd()
+        .args([
+            "dry-run",
+            wf.to_str().unwrap(),
+            "--samples",
+            "first:1",
+            "-t",
+            "fastp",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "dry-run failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("1 rules would execute"),
+        "intersection should yield exactly the 1 fastp rule: {stderr}"
+    );
+    assert!(
+        !stderr.contains("align_"),
+        "align must be filtered by -t: {stderr}"
+    );
+}
+
 // ─── oxo-flow CLI: basic flags ──────────────────────────────────────────────
 
 #[test]

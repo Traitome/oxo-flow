@@ -142,6 +142,8 @@ pub async fn run_command(
     extra_samples: Vec<String>,
     ai_recover: bool,
     _ai_max_retries: Option<u32>,
+    samples_filter: Vec<String>,
+    rerun: bool,
 ) -> Result<()> {
     print_banner();
     let workflow = resolve_workflow(workflow)?;
@@ -149,6 +151,21 @@ pub async fn run_command(
 
     let mut config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
+
+    // ── Filter to a pilot subset (--samples first:N / explicit names) ──
+    if !samples_filter.is_empty() {
+        let (kept, unknown) = config.filter_samples(&samples_filter)?;
+        if kept.is_empty() {
+            anyhow::bail!("--samples matched no samples in this workflow");
+        }
+        for name in &unknown {
+            eprintln!(
+                "  {} sample '{}' not found in workflow samples",
+                "⚠".yellow(),
+                name
+            );
+        }
+    }
 
     // ── Parse and merge CLI config overrides ────────────────────────────
     // Accepted forms (all map to `config.<key>` values):
@@ -395,6 +412,7 @@ pub async fn run_command(
         } else {
             None
         },
+        force_rerun: rerun,
         resource_groups: config
             .resource_groups
             .iter()
@@ -618,6 +636,7 @@ pub async fn run_command(
         let ck = checkpoint.lock().await;
         for rule_name in &order {
             if ck.is_completed(rule_name)
+                && !rerun
                 && order_set.contains(rule_name.as_str())
                 && !submitted.contains(rule_name.as_str())
             {
@@ -1187,6 +1206,7 @@ pub async fn dry_run_command(
     json: bool,
     ai: bool,
     _ai_max_retries: Option<u32>,
+    samples_filter: Vec<String>,
 ) -> Result<()> {
     print_banner();
     let workflow = resolve_workflow(workflow)?;
@@ -1198,6 +1218,21 @@ pub async fn dry_run_command(
     }
     let mut config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
+
+    // ── Filter to a pilot subset (--samples first:N / explicit names) ──
+    if !samples_filter.is_empty() {
+        let (kept, unknown) = config.filter_samples(&samples_filter)?;
+        if kept.is_empty() {
+            anyhow::bail!("--samples matched no samples in this workflow");
+        }
+        for name in &unknown {
+            eprintln!(
+                "  {} sample '{}' not found in workflow samples",
+                "⚠".yellow(),
+                name
+            );
+        }
+    }
 
     config.apply_defaults();
     config
@@ -1708,6 +1743,8 @@ pub async fn resume_command(
         Vec::new(),      // extra_samples (resume uses existing groups)
         ai_recover,
         ai_max_retries,
+        Vec::new(), // samples_filter (resume restores checkpoint state as-is)
+        false,      // rerun (resume skips completed rules by design)
     )
     .await
 }

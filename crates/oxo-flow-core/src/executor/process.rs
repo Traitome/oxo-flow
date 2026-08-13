@@ -258,6 +258,10 @@ pub struct ExecutorConfig {
     pub max_threads: Option<u32>,
     pub max_memory_mb: Option<u64>,
     pub resource_groups: HashMap<String, u32>,
+    /// Force re-execution of every rule selected for this run, even when
+    /// outputs are up to date (CLI `--rerun`). Checkpoint records for
+    /// rules outside this run are untouched.
+    pub force_rerun: bool,
     pub skip_env_setup: bool,
     pub cache_dir: Option<PathBuf>,
     pub interpreter_map: HashMap<String, String>,
@@ -275,6 +279,7 @@ impl Default for ExecutorConfig {
             max_threads: None,
             max_memory_mb: None,
             resource_groups: HashMap::new(),
+            force_rerun: false,
             skip_env_setup: false,
             cache_dir: None,
             interpreter_map: HashMap::new(),
@@ -692,7 +697,9 @@ impl LocalExecutor {
             }
         }
 
-        if super::checkpoint::should_skip_rule(rule, &self.config.workdir, wildcard_values) {
+        if !self.config.force_rerun
+            && super::checkpoint::should_skip_rule(rule, &self.config.workdir, wildcard_values)
+        {
             record.status = JobStatus::Skipped;
             record.skip_reason = Some("outputs up-to-date".to_string());
             record.finished_at = Some(Utc::now());

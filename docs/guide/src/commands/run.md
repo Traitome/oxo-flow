@@ -45,6 +45,8 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--yes` | — | — | Skip the confirmation prompt when running a bundle (required in non-interactive sessions: CI, scripts, redirected input, or `--json`) |
 | `--ai-recover` | — | — | Enable AI error recovery on rule failure |
 | `--ai-max-retries` | — | — | Maximum AI retries (overrides `[ai]` config) |
+| `--samples` | — | `LIST` | Run only a subset of samples: `first:N` (pilot) or explicit names. Repeatable, comma-separated. Filters `[[sample_groups]]`, `sample_pattern` discovery, and `[[pairs]]`. Mutually exclusive with `--sample` |
+| `--rerun` | — | — | Force re-execution of this run's rules (ignore up-to-date checks). Checkpoint records for rules outside this run are kept |
 | `--verbose` | `-v` | — | Enable debug-level logging |
 
 ---
@@ -159,6 +161,34 @@ oxo-flow run --bundle pipeline-bundle.tar.gz -j 16 --yes
 # Pull from remote and execute in one step
 oxo-flow pull gh:user/repo@v1 && oxo-flow run --bundle repo-bundle.tar.zst -j 16 --yes
 ```
+
+### Pilot runs and scale-up
+
+For a large cohort, run a fast pilot on a subset first; the checkpoint
+then skips the pilot samples when you scale up:
+
+```bash
+# Pilot: run the full pipeline on the first 2 samples only
+oxo-flow run pipeline.oxoflow --samples first:2
+
+# Or name the pilot samples explicitly (combines with first:N)
+oxo-flow run pipeline.oxoflow --samples first:2,NA12899
+
+# Scale up: no flag needed — completed samples are skipped automatically
+oxo-flow run pipeline.oxoflow
+
+# Preview the pilot plan without executing
+oxo-flow dry-run pipeline.oxoflow --samples first:2
+
+# Fix a config bug found by the pilot, then force a re-run of everything
+oxo-flow run pipeline.oxoflow --rerun
+```
+
+`--samples` filters every sample source (sample groups, `sample_pattern`
+discovery, and experiment/control pairs). `--rerun` re-executes the rules
+selected for *this* run even when outputs are up to date — combine it with
+`--samples` to re-run just the pilot subset while keeping the other
+samples' completed records.
 
 ---
 

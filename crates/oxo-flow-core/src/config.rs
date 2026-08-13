@@ -1431,6 +1431,97 @@ impl WorkflowConfig {
         Ok(config)
     }
 
+    /// Filter the workflow's samples to a pilot subset.
+    ///
+    /// Specs are `first:N` (the first N samples in workflow order) and/or
+    /// explicit comma-separated sample names — both forms may be combined
+    /// and repeated. Filtering is applied to every sample source
+    /// (`[[sample_groups]]`, `sample_pattern` auto-discovery, sample-group
+    /// files), the merged `config.samples_list`, and experiment/control
+    /// `[[pairs]]` whose samples were filtered out.
+    ///
+    /// Returns `(kept, unknown)` — the kept samples in workflow order and
+    /// any explicitly named samples that were not found.
+    pub fn filter_samples(&mut self, specs: &[String]) -> Result<(Vec<String>, Vec<String>)> {
+        let mut take_first: Option<usize> = None;
+        let mut explicit: Vec<String> = Vec::new();
+        for spec in specs {
+            for part in spec.split(',') {
+                let part = part.trim();
+                if part.is_empty() {
+                    continue;
+                }
+                if let Some(n) = part.strip_prefix("first:") {
+                    let n: usize = n.trim().parse().map_err(|_| OxoFlowError::Config {
+                        message: format!(
+                            "invalid --samples spec '{part}': expected first:<N> or a sample name"
+                        ),
+                    })?;
+                    take_first = Some(take_first.map_or(n, |cur| cur.max(n)));
+                } else {
+                    explicit.push(part.to_string());
+                }
+            }
+        }
+
+        // Workflow order: group order, then within-group order, deduplicated.
+        let ordered: Vec<String> = {
+            let mut out = Vec::new();
+            for group in &self.sample_groups {
+                for s in &group.samples {
+                    if !out.contains(s) {
+                        out.push(s.clone());
+                    }
+                }
+            }
+            out
+        };
+
+        let allowed: std::collections::HashSet<String> = if let Some(n) = take_first {
+            ordered
+                .iter()
+                .take(n)
+                .cloned()
+                .chain(explicit.iter().cloned())
+                .collect()
+        } else {
+            explicit.iter().cloned().collect()
+        };
+        let kept: Vec<String> = ordered
+            .iter()
+            .filter(|s| allowed.contains(*s))
+            .cloned()
+            .collect();
+        let unknown: Vec<String> = explicit
+            .iter()
+            .filter(|name| !ordered.iter().any(|s| s == name.as_str()))
+            .cloned()
+            .collect();
+
+        // Filter every sample source and the merged samples_list.
+        for group in &mut self.sample_groups {
+            group.samples.retain(|s| allowed.contains(s));
+        }
+        self.pairs.retain(|p| {
+            allowed.contains(&p.experiment)
+                && p.control.as_ref().is_none_or(|c| allowed.contains(c))
+        });
+        if !kept.is_empty() {
+            self.config.insert(
+                "samples_list".to_string(),
+                toml::Value::String(kept.join(",")),
+            );
+        }
+        for group in &self.sample_groups {
+            self.config.insert(
+                format!("samples_{}", group.name),
+                toml::Value::String(group.samples.join(",")),
+            );
+        }
+
+        Ok((kept, unknown))
+    }
+
     /// Validate the workflow configuration for internal consistency.
     #[must_use = "validation returns a Result that must be checked"]
     pub fn validate(&self) -> Result<()> {
@@ -4081,6 +4172,79 @@ mod tests {
             .find(|g| g.name == "auto-discovered")
             .expect("auto-discovered group");
         assert_eq!(group.samples, vec!["S1".to_string()]);
+    }
+
+    #[test]
+    fn filter_samples_first_n_and_explicit() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1", "S2", "S3", "S4"]
+
+            [[pairs]]
+            pair_id = "P1"
+            experiment = "S1"
+            control = "S2"
+
+            [[pairs]]
+            pair_id = "P2"
+            experiment = "S3"
+            control = "S4"
+        "#;
+
+        // first:N takes the first N samples in workflow order and prunes
+        // pairs whose samples were filtered out.
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        let (kept, unknown) = config.filter_samples(&["first:2".to_string()]).unwrap();
+        assert_eq!(kept, vec!["S1", "S2"]);
+        assert!(unknown.is_empty());
+        assert_eq!(config.pairs.len(), 1);
+        assert_eq!(config.pairs[0].pair_id, "P1");
+        assert_eq!(
+            config.config.get("samples_list").and_then(|v| v.as_str()),
+            Some("S1,S2")
+        );
+        assert_eq!(
+            config.config.get("samples_cohort").and_then(|v| v.as_str()),
+            Some("S1,S2")
+        );
+
+        // Explicit names combine with first:N and preserve workflow order.
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        let (kept, unknown) = config
+            .filter_samples(&["first:2".to_string(), "S4".to_string()])
+            .unwrap();
+        assert_eq!(kept, vec!["S1", "S2", "S4"]);
+        assert!(unknown.is_empty());
+
+        // Unknown names are reported, known ones still applied.
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        let (kept, unknown) = config.filter_samples(&["S2,S9".to_string()]).unwrap();
+        assert_eq!(kept, vec!["S2"]);
+        assert_eq!(unknown, vec!["S9"]);
+    }
+
+    #[test]
+    fn filter_samples_invalid_spec() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1"]
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hi"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        assert!(config.filter_samples(&["first:abc".to_string()]).is_err());
     }
 
     #[test]

@@ -523,6 +523,8 @@ pub async fn watch_command(workflow: PathBuf, auto_run: bool, jobs: usize) -> Re
                             vec![],          // extra_samples
                             false,           // ai_recover
                             None,            // ai_max_retries
+                            vec![],          // samples_filter (watch: run everything)
+                            false,           // rerun
                         )
                         .await;
                     } else {
@@ -531,10 +533,11 @@ pub async fn watch_command(workflow: PathBuf, auto_run: bool, jobs: usize) -> Re
                         let _ = crate::commands::run::dry_run_command(
                             Some(workflow_path.clone()),
                             vec![],
-                            false,
-                            false, // json (watch mode = human-readable)
-                            false, // ai
-                            None,  // ai_max_retries
+                            false,  // verbose
+                            false,  // json (watch mode = human-readable)
+                            false,  // ai
+                            None,   // ai_max_retries
+                            vec![], // samples_filter (watch: run everything)
                         )
                         .await;
                     }

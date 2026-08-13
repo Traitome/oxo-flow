@@ -28,6 +28,7 @@ catch issues early.
 | `--output` | — | — | Output file path to verify after the run (fails with exit code 1 if the file is not found) |
 | `--run` | — | — | Execute the workflow after validation and lint (runs for real) |
 | `--jobs` | `-j` | `1` | Number of parallel jobs (only with `--run`) |
+| `--samples` | — | — | Test only a subset of samples: `first:N` (pilot) or explicit names (repeatable, comma-separated) |
 
 ---
 

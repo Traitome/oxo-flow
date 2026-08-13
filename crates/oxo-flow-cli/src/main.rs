@@ -154,6 +154,22 @@ pub enum Commands {
         /// Maximum AI retries (overrides [ai] config).
         #[arg(long = "ai-max-retries", value_name = "N")]
         ai_max_retries: Option<u32>,
+        /// Filter to a subset of samples: `first:N` or explicit names
+        /// (repeatable, comma-separated). Mutually exclusive with --sample.
+        #[arg(
+            long = "samples",
+            value_name = "LIST",
+            conflicts_with = "extra_samples",
+            help = "Run only these samples: first:N (pilot) or explicit names (repeatable, comma-separated)"
+        )]
+        samples_filter: Vec<String>,
+        /// Re-execute every rule selected for this run even if outputs are
+        /// up to date. Checkpoint records for rules outside this run are kept.
+        #[arg(
+            long,
+            help = "Force re-execution of this run's rules (ignore up-to-date checks)"
+        )]
+        rerun: bool,
     },
     /// Resume an interrupted workflow from a checkpoint.
     Resume {
@@ -192,6 +208,14 @@ pub enum Commands {
         /// Maximum AI analysis rounds (overrides [ai] config).
         #[arg(long = "ai-max-retries", value_name = "N")]
         ai_max_retries: Option<u32>,
+        /// Filter to a subset of samples: `first:N` or explicit names
+        /// (repeatable, comma-separated).
+        #[arg(
+            long = "samples",
+            value_name = "LIST",
+            help = "Preview only these samples: first:N (pilot) or explicit names (repeatable, comma-separated)"
+        )]
+        samples_filter: Vec<String>,
     },
     /// Validate a .oxoflow workflow file.
     Validate {
@@ -514,6 +538,14 @@ pub enum Commands {
             help = "Maximum number of concurrent jobs"
         )]
         jobs: usize,
+        /// Filter to a subset of samples: `first:N` or explicit names
+        /// (repeatable, comma-separated).
+        #[arg(
+            long = "samples",
+            value_name = "LIST",
+            help = "Test only these samples: first:N (pilot) or explicit names (repeatable, comma-separated)"
+        )]
+        samples_filter: Vec<String>,
     },
     /// Publish a workflow with its environment files into a bundle.
     Publish {
@@ -711,6 +743,8 @@ async fn main() -> Result<()> {
             extra_samples,
             ai_recover,
             ai_max_retries,
+            samples_filter,
+            rerun,
         } => {
             use anyhow::Context as _;
             use colored::Colorize as _;
@@ -825,6 +859,8 @@ async fn main() -> Result<()> {
                 extra_samples,
                 ai_recover,
                 ai_max_retries,
+                samples_filter,
+                rerun,
             )
             .await?
         }
@@ -839,7 +875,19 @@ async fn main() -> Result<()> {
             target,
             ai,
             ai_max_retries,
-        } => dry_run_command(workflow, target, cli.verbose, cli.json, ai, ai_max_retries).await?,
+            samples_filter,
+        } => {
+            dry_run_command(
+                workflow,
+                target,
+                cli.verbose,
+                cli.json,
+                ai,
+                ai_max_retries,
+                samples_filter,
+            )
+            .await?
+        }
         Commands::Validate {
             workflow,
             as_include,
@@ -1010,6 +1058,7 @@ async fn main() -> Result<()> {
             output,
             run,
             jobs,
+            samples_filter,
         } => {
             use colored::Colorize;
             eprintln!(
@@ -1032,6 +1081,7 @@ async fn main() -> Result<()> {
                 cli.json,
                 false,
                 None,
+                samples_filter.clone(),
             )
             .await?;
             // 4. Optional: run with --run flag
@@ -1058,6 +1108,8 @@ async fn main() -> Result<()> {
                     vec![], // extra_samples
                     false,  // ai_recover
                     None,   // ai_max_retries
+                    samples_filter.clone(),
+                    false, // rerun (test mode: normal up-to-date checks)
                 )
                 .await?;
             }
