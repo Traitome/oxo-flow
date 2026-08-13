@@ -1360,6 +1360,42 @@ impl RuleBuilder {
     }
 }
 
+/// Deserialize the `environment.modules` field: accepts a TOML array of
+/// module names or a comma-separated string.
+fn deserialize_modules<'de, D>(de: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct ModuleVisitor;
+    impl<'de> serde::de::Visitor<'de> for ModuleVisitor {
+        type Value = Vec<String>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a list of module names or a comma-separated string")
+        }
+
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            Ok(v.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect())
+        }
+
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut out = Vec::new();
+            while let Some(v) = seq.next_element::<String>()? {
+                out.push(v);
+            }
+            Ok(out)
+        }
+    }
+    de.deserialize_any(ModuleVisitor)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2048,40 +2084,4 @@ mod tests {
         let spec: EnvironmentSpec = toml::from_str(r#"modules = "gcc/11.2,""#).unwrap();
         assert_eq!(spec.modules, vec!["gcc/11.2"]);
     }
-}
-
-/// Deserialize the `environment.modules` field: accepts a TOML array of
-/// module names or a comma-separated string.
-fn deserialize_modules<'de, D>(de: D) -> Result<Vec<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    struct ModuleVisitor;
-    impl<'de> serde::de::Visitor<'de> for ModuleVisitor {
-        type Value = Vec<String>;
-
-        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-            f.write_str("a list of module names or a comma-separated string")
-        }
-
-        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
-            Ok(v.split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .collect())
-        }
-
-        fn visit_seq<A: serde::de::SeqAccess<'de>>(
-            self,
-            mut seq: A,
-        ) -> Result<Self::Value, A::Error> {
-            let mut out = Vec::new();
-            while let Some(v) = seq.next_element::<String>()? {
-                out.push(v);
-            }
-            Ok(out)
-        }
-    }
-    de.deserialize_any(ModuleVisitor)
 }
