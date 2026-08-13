@@ -51,6 +51,15 @@ This is a classic parallel computing pattern:
 2. **Process**: Each scattered job runs GATK HaplotypeCaller restricted to a single chromosome (`-L {chr}`), producing one per-chromosome GVCF.
 3. **Gather**: The `gather_gvcf` rule receives the outputs of all scattered jobs as its `{input}` and merges them with GATK GatherVcfs.
 
+!!! info "Gather inference is reliable in complex workflows"
+    The gather rule's inputs are injected automatically by the expansion engine — you never declare them by hand. This stays reliable in complex scenarios:
+
+    - **Multiple scatter rules feeding one gather** — all outputs accumulate (verified: two scatters with 3 + 2 values injected 5 inputs into one gather)
+    - **Explicit inputs preserved** — any inputs you DO declare on the gather rule are kept alongside the injected ones
+    - **Independent rules unaffected** — non-scatter rules run concurrently without interference
+
+    Note that `oxo-flow graph` shows the *unexpanded* template DAG (scatter rules before per-value expansion), while `oxo-flow dry-run` shows the fully expanded DAG with all per-chromosome jobs and gather edges.
+
 ### Config-Driven Parallelism
 
 The chromosomes to scatter over are controlled by a config variable:
