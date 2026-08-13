@@ -42,6 +42,21 @@ pub struct CheckpointState {
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub checksums: HashMap<String, String>,
+    /// Config value snapshot at the time rules completed.
+    /// Maps config key → canonical value string (sensitive keys store a
+    /// SHA-256 digest instead of the plaintext value). Compared against the
+    /// current config on every run to drive precise invalidation (issue #62).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub config_snapshot: HashMap<String, String>,
+    /// Per-rule structural fingerprints at completion time.
+    /// Maps rule name → "sha256:<hex>" of the fields that determine rule
+    /// output content (shell, script, inputs, outputs, envvars, params,
+    /// conditions, environment). A mismatch invalidates the rule and its
+    /// downstream (issue #62).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub rule_fingerprints: HashMap<String, String>,
 }
 
 impl CheckpointState {
@@ -53,6 +68,8 @@ impl CheckpointState {
             benchmarks: HashMap::new(),
             workflow_path: None,
             checksums: HashMap::new(),
+            config_snapshot: HashMap::new(),
+            rule_fingerprints: HashMap::new(),
         }
     }
 

@@ -104,6 +104,12 @@ fn cli_samples_pilot_then_scale_up() {
         stderr.contains("1 skipped"),
         "scale-up should skip S1: {stderr}"
     );
+    // samples_list churns between the pilot and scale-up runs (engine
+    // injected): it must NOT be reported as a config change (issue #62).
+    assert!(
+        !stderr.contains("Config change:"),
+        "--samples toggle must not trigger config-change invalidation: {stderr}"
+    );
     assert!(dir.path().join("out/S2.txt").exists());
     assert!(dir.path().join("out/S3.txt").exists());
 }
@@ -3297,5 +3303,473 @@ fn cli_dry_run_suggestion_parallel_width() {
     assert!(
         stderr.contains("-j 2"),
         "two independent rules should suggest -j 2, got: {stderr}"
+    );
+}
+
+// ─── Config-change impact analysis (issue #62) ──────────────────────────────
+
+fn write_impact_workflow(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let wf = dir.join(format!("{name}.oxoflow"));
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "impact"
+version = "1.0.0"
+
+[config]
+min_quality = "20"
+
+[[rules]]
+name = "upstream"
+output = ["up.txt"]
+shell = "echo up > {output}"
+
+[[rules]]
+name = "param"
+input = ["up.txt"]
+output = ["param.txt"]
+shell = "echo q={config.min_quality} > {output}"
+
+[[rules]]
+name = "downstream"
+input = ["param.txt"]
+output = ["down.txt"]
+shell = "cat {input} > {output}"
+"#,
+    )
+    .unwrap();
+    wf
+}
+
+/// Changing a config key via CLI override re-runs only the rules that
+/// reference it plus their downstream; upstream rules keep the checkpoint.
+#[test]
+fn cli_config_change_invalidates_only_referencing_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_impact_workflow(dir.path(), "impact");
+
+    // First run: everything executes with min_quality = 20.
+    let run1 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        run1.status.success(),
+        "run1 failed: {}",
+        String::from_utf8_lossy(&run1.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("param.txt")).unwrap(),
+        "q=20\n"
+    );
+
+    // Second run, identical: everything hits the checkpoint, no summary.
+    let run2 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run2.status.success());
+    let stderr2 = String::from_utf8_lossy(&run2.stderr);
+    assert!(
+        !stderr2.contains("Config change:"),
+        "no change expected: {stderr2}"
+    );
+    assert!(
+        stderr2.contains("3 skipped"),
+        "all rules should skip: {stderr2}"
+    );
+
+    // Third run with min_quality=30: upstream keeps the checkpoint, param and
+    // its downstream re-execute with the new value.
+    let run3 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "min_quality=30"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        run3.status.success(),
+        "run3 failed: {}",
+        String::from_utf8_lossy(&run3.stderr)
+    );
+    let stderr3 = String::from_utf8_lossy(&run3.stderr);
+    assert!(
+        stderr3.contains("Config change:"),
+        "expected summary: {stderr3}"
+    );
+    assert!(
+        stderr3.contains("min_quality: 20 → 30"),
+        "expected old→new: {stderr3}"
+    );
+    assert!(
+        stderr3.contains("re-running 2/3"),
+        "expected 2 re-runs: {stderr3}"
+    );
+    assert!(
+        stderr3.contains("already completed"),
+        "upstream must skip: {stderr3}"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("param.txt")).unwrap(),
+        "q=30\n"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("down.txt")).unwrap(),
+        "q=30\n"
+    );
+
+    // Fourth run WITHOUT the override: effective config flips back to 20, so
+    // the referencing rules re-run again (comparison is on effective config,
+    // which includes CLI overrides — outputs must match what was run).
+    let run4 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run4.status.success());
+    let stderr4 = String::from_utf8_lossy(&run4.stderr);
+    assert!(
+        stderr4.contains("min_quality: 30 → 20"),
+        "expected 30 → 20: {stderr4}"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("param.txt")).unwrap(),
+        "q=20\n"
+    );
+
+    // --rerun forces everything and suppresses the change summary.
+    let run5 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--rerun"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run5.status.success());
+    let stderr5 = String::from_utf8_lossy(&run5.stderr);
+    assert!(
+        !stderr5.contains("Config change:"),
+        "summary suppressed under --rerun: {stderr5}"
+    );
+    assert!(
+        !stderr5.contains("already completed"),
+        "nothing skipped under --rerun: {stderr5}"
+    );
+}
+
+/// Editing a rule's shell invalidates exactly that rule plus downstream.
+#[test]
+fn cli_rule_edit_invalidates_rule_and_downstream() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_impact_workflow(dir.path(), "edit");
+
+    let run1 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run1.status.success());
+
+    // Edit the param rule's shell (add a marker to the output).
+    let toml = fs::read_to_string(&wf).unwrap();
+    let edited = toml.replace(
+        "shell = \"echo q={config.min_quality} > {output}\"",
+        "shell = \"echo q={config.min_quality}-edited > {output}\"",
+    );
+    assert_ne!(toml, edited, "workflow edit must take effect");
+    fs::write(&wf, edited).unwrap();
+
+    let run2 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        run2.status.success(),
+        "run2 failed: {}",
+        String::from_utf8_lossy(&run2.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&run2.stderr);
+    assert!(
+        stderr.contains("rule definition changed: param"),
+        "expected fingerprint mismatch for param: {stderr}"
+    );
+    assert!(
+        stderr.contains("already completed"),
+        "upstream must skip: {stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("param.txt")).unwrap(),
+        "q=20-edited\n"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("down.txt")).unwrap(),
+        "q=20-edited\n"
+    );
+}
+
+/// A checkpoint without config tracking (pre-#62) is adopted as a baseline:
+/// nothing re-runs on the first post-upgrade run, and detection works from
+/// the next run onward.
+#[test]
+fn cli_legacy_checkpoint_adopts_baseline() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_impact_workflow(dir.path(), "legacy");
+
+    let run1 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run1.status.success());
+
+    // Strip the tracking fields to simulate a checkpoint written by an
+    // oxo-flow version that predates config tracking.
+    let checkpoint_path = dir.path().join(".oxo-flow/checkpoint.json");
+    let mut json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&checkpoint_path).unwrap()).unwrap();
+    let obj = json.as_object_mut().unwrap();
+    obj.remove("config_snapshot");
+    obj.remove("rule_fingerprints");
+    fs::write(
+        &checkpoint_path,
+        serde_json::to_string_pretty(&json).unwrap(),
+    )
+    .unwrap();
+
+    // Post-upgrade run: legacy notice, everything reused, baseline recorded.
+    let run2 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run2.status.success());
+    let stderr2 = String::from_utf8_lossy(&run2.stderr);
+    assert!(
+        stderr2.contains("predates config tracking"),
+        "expected legacy notice: {stderr2}"
+    );
+    assert!(
+        stderr2.contains("3 skipped"),
+        "legacy run must reuse: {stderr2}"
+    );
+
+    // From now on, config changes are detected.
+    let run3 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "min_quality=30"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run3.status.success());
+    let stderr3 = String::from_utf8_lossy(&run3.stderr);
+    assert!(
+        stderr3.contains("Config change:"),
+        "expected summary: {stderr3}"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("param.txt")).unwrap(),
+        "q=30\n"
+    );
+}
+
+/// When a config change flips a rule's `when` condition to false, the change
+/// is detected once and then stays quiet: the summary must not re-print on
+/// every subsequent run.
+#[test]
+fn cli_when_flip_detected_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("whenflip.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "whenflip"
+version = "1.0.0"
+
+[config]
+enable = "true"
+
+[[rules]]
+name = "upstream"
+output = ["up.txt"]
+shell = "echo up > {output}"
+
+[[rules]]
+name = "gated"
+input = ["up.txt"]
+output = ["gated.txt"]
+when = "config.enable"
+shell = "echo gated > {output}"
+"#,
+    )
+    .unwrap();
+
+    let run1 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run1.status.success());
+    assert!(dir.path().join("gated.txt").exists());
+
+    // enable=false: gated is invalidated, re-submitted, and skipped by its
+    // condition. The change is reported once.
+    let run2 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "enable=false"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run2.status.success());
+    let stderr2 = String::from_utf8_lossy(&run2.stderr);
+    assert!(
+        stderr2.contains("Config change:"),
+        "expected summary: {stderr2}"
+    );
+    // gated is re-submitted (invalidated) but its `when` condition now
+    // evaluates to false: no rule succeeds, both end up skipped.
+    assert!(
+        stderr2.contains("0 succeeded, 2 skipped"),
+        "gated must be condition-skipped: {stderr2}"
+    );
+
+    // Third run with the same config: no summary (detection is idempotent).
+    let run3 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "enable=false"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run3.status.success());
+    let stderr3 = String::from_utf8_lossy(&run3.stderr);
+    assert!(
+        !stderr3.contains("Config change:"),
+        "summary must not repeat after the flip: {stderr3}"
+    );
+}
+
+/// A completed rule with `{config.x}` outputs whose files were deleted is
+/// detected and re-executed (the pre-process existence check expands config
+/// placeholders before testing the path).
+#[test]
+fn cli_config_var_output_existence_check() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("cfgout.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "cfgout"
+version = "1.0.0"
+
+[config]
+outdir = "results"
+
+[[rules]]
+name = "step"
+output = ["{config.outdir}/x.txt"]
+shell = "echo hi > {output}"
+"#,
+    )
+    .unwrap();
+
+    let run1 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run1.status.success());
+    assert!(dir.path().join("results/x.txt").exists());
+
+    // Delete the output but keep the checkpoint: the rule must re-run.
+    fs::remove_file(dir.path().join("results/x.txt")).unwrap();
+    let run2 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run2.status.success());
+    assert!(
+        dir.path().join("results/x.txt").exists(),
+        "output must be recreated: {}",
+        String::from_utf8_lossy(&run2.stderr)
+    );
+}
+
+/// Editing a reference build command rebuilds the artifact and invalidates
+/// the rules that consume it through declared inputs.
+#[test]
+fn cli_reference_rebuild_invalidates_consumers() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("refcons.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "refcons"
+version = "1.0.0"
+
+[config]
+ref_dir = "refs"
+
+[[references]]
+name = "genome_idx"
+source = "genome.fa"
+output = "{config.ref_dir}/genome.idx"
+build = "mkdir -p {config.ref_dir} && echo built-v1 > {output}"
+
+[[rules]]
+name = "use_ref"
+input = ["{config.ref_dir}/genome.idx"]
+output = ["result.txt"]
+shell = "cat {input} > {output}"
+"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("genome.fa"), b"AAAA").unwrap();
+
+    let run1 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run1.status.success());
+    assert_eq!(
+        fs::read_to_string(dir.path().join("result.txt")).unwrap(),
+        "built-v1\n"
+    );
+
+    // Second run: fingerprint matches, nothing rebuilt or re-run.
+    let run2 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run2.status.success());
+    let stderr2 = String::from_utf8_lossy(&run2.stderr);
+    assert!(
+        !stderr2.contains("Building"),
+        "no rebuild expected: {stderr2}"
+    );
+
+    // Edit the build command: artifact rebuilds AND the consumer re-runs.
+    let toml = fs::read_to_string(&wf).unwrap();
+    fs::write(&wf, toml.replace("built-v1", "built-v2")).unwrap();
+    let run3 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        run3.status.success(),
+        "run3 failed: {}",
+        String::from_utf8_lossy(&run3.stderr)
+    );
+    let stderr3 = String::from_utf8_lossy(&run3.stderr);
+    assert!(
+        stderr3.contains("definition or referenced config changed"),
+        "expected rebuild: {stderr3}"
+    );
+    assert!(
+        stderr3.contains("invalidated 1 rule(s): use_ref"),
+        "consumer must be invalidated: {stderr3}"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("result.txt")).unwrap(),
+        "built-v2\n"
     );
 }

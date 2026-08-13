@@ -2,13 +2,93 @@ use crate::commands::{print_banner, resolve_workflow};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use oxo_flow_core::config::WorkflowConfig;
+use oxo_flow_core::config_impact::{ConfigChangeReport, config_value_string};
 use oxo_flow_core::dag::WorkflowDag;
 use oxo_flow_core::executor::{CheckpointState, ExecutorConfig, LocalExecutor};
 use oxo_flow_core::rule::parse_duration_secs;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+
+/// Print the config-change impact summary (issue #62).
+///
+/// Distinguishes the full invalidation set (checkpoint mutation; includes
+/// rules outside this run's targets/samples) from the rules that will
+/// actually re-execute in THIS run (intersection with `order`). Under
+/// `--rerun` everything is forced anyway, so the summary is suppressed —
+/// the snapshot/fingerprint refresh still happened silently.
+#[allow(clippy::too_many_arguments)]
+fn print_config_change_summary(
+    report: &ConfigChangeReport,
+    old_snapshot: &HashMap<String, String>,
+    config: &WorkflowConfig,
+    sensitive_keys: &HashSet<String>,
+    order: &[String],
+    completed_in_run: usize,
+    rerun: bool,
+) {
+    if rerun {
+        return;
+    }
+    if report.is_legacy {
+        eprintln!(
+            "  {} checkpoint predates config tracking: recorded a baseline snapshot; \
+             future config changes will invalidate affected rules automatically",
+            "Note:".yellow()
+        );
+        return;
+    }
+    if report.changed_keys.is_empty()
+        && report.added_keys.is_empty()
+        && report.removed_keys.is_empty()
+        && report.fingerprint_mismatches.is_empty()
+    {
+        return;
+    }
+
+    eprintln!("{}", "Config change:".bold().cyan());
+    for key in &report.changed_keys {
+        if sensitive_keys.contains(key) {
+            eprintln!("  {key}: **** → ****");
+        } else {
+            let old = old_snapshot.get(key).map(String::as_str).unwrap_or("?");
+            let new = config
+                .config
+                .get(key)
+                .map(config_value_string)
+                .unwrap_or_else(|| "?".to_string());
+            eprintln!("  {key}: {old} → {new}");
+        }
+    }
+    for key in &report.added_keys {
+        eprintln!("  {key}: (new key)");
+    }
+    for key in &report.removed_keys {
+        eprintln!("  {key}: (removed)");
+    }
+    if !report.fingerprint_mismatches.is_empty() {
+        eprintln!(
+            "  rule definition changed: {}",
+            report.fingerprint_mismatches.join(", ")
+        );
+    }
+
+    let order_set: HashSet<&str> = order.iter().map(String::as_str).collect();
+    let rerun_this_run = report
+        .invalidated
+        .iter()
+        .filter(|name| order_set.contains(name.as_str()))
+        .count();
+    eprintln!(
+        "  → invalidated {} ({} directly affected), re-running {}/{} this run, skipping {}",
+        report.invalidated.len(),
+        report.directly_affected.len(),
+        rerun_this_run,
+        order.len(),
+        completed_in_run,
+    );
+}
 
 /// Validate a config value against its ConfigDef declaration.
 fn validate_config_value(
@@ -242,12 +322,15 @@ pub async fn run_command(
         }
     }
 
-    // Also inject any undeclared --arg values as {config.xxx}
+    // Also inject any undeclared KEY=VALUE values as {config.xxx}.
+    // insert() (not entry().or_insert()) — a CLI override must win over a
+    // value already set in the workflow's [config] table, even when the key
+    // has no config_meta declaration (issue #62: `oxo-flow run wf min_quality=30`
+    // depends on this).
     for (k, v) in &cli_arg_values {
         config
             .config
-            .entry(k.clone())
-            .or_insert_with(|| toml::Value::String(v.clone()));
+            .insert(k.clone(), toml::Value::String(v.clone()));
     }
 
     // ── Merge --sample CLI flags into sample groups and samples_list ───
@@ -361,6 +444,79 @@ pub async fn run_command(
         eprintln!("  {}. {}", i + 1, rule_name);
     }
 
+    // ── Load checkpoint + config-change impact analysis (issue #62) ─────
+    // Detection must happen AFTER overrides/profile merges and wildcard
+    // expansion (config.config is final) and BEFORE ExecutorConfig
+    // construction (the invalidation set must reach the executor's
+    // freshness gate, which would otherwise silently skip re-submitted
+    // rules with stale outputs).
+    let checkpoint_path = workdir
+        .as_ref()
+        .unwrap_or(&workflow_dir)
+        .join(".oxo-flow/checkpoint.json");
+    let checkpoint: Arc<Mutex<CheckpointState>> = if checkpoint_path.exists() {
+        Arc::new(Mutex::new(
+            CheckpointState::load_from_file(&checkpoint_path).unwrap_or_default(),
+        ))
+    } else {
+        Arc::new(Mutex::new(CheckpointState::default()))
+    };
+
+    // Store workflow path in checkpoint for resume support
+    {
+        let mut ck = checkpoint.lock().await;
+        ck.set_workflow_path(&workflow);
+    }
+
+    // Changed config keys → only rules referencing them (plus DAG downstream)
+    // are invalidated; edited rule definitions are caught by fingerprints.
+    // Engine-injected keys (samples_list, samples_<group>) are excluded:
+    // their --samples churn must not invalidate everything.
+    let sensitive_keys: std::collections::HashSet<String> = config
+        .config_meta
+        .iter()
+        .filter(|(_, def)| def.sensitive)
+        .map(|(key, _)| key.clone())
+        .collect();
+    let old_snapshot = {
+        let ck = checkpoint.lock().await;
+        ck.config_snapshot.clone()
+    };
+    let (change_report, force_rules, completed_in_run) = {
+        let mut ck = checkpoint.lock().await;
+        let report = oxo_flow_core::config_impact::detect_config_changes(
+            &mut ck,
+            &config.rules,
+            &dag,
+            &config.config,
+            &sensitive_keys,
+            &config.workflow.interpreter_map,
+        );
+        let force_rules: std::collections::HashSet<String> =
+            report.invalidated.iter().cloned().collect();
+        let completed_in_run = order
+            .iter()
+            .filter(|name| ck.completed_rules.contains(*name))
+            .count();
+        // Eager save: the invalidation is correct regardless of whether this
+        // run proceeds (budget bail, crash, a `when` condition flipping to
+        // false). Persisting now makes change detection idempotent across
+        // aborted runs and stabilizes the `when`-false state on disk.
+        if let Err(e) = ck.save_to_file(&checkpoint_path) {
+            tracing::warn!(error = %e, "failed to save checkpoint after config-change detection");
+        }
+        (report, force_rules, completed_in_run)
+    };
+    print_config_change_summary(
+        &change_report,
+        &old_snapshot,
+        &config,
+        &sensitive_keys,
+        &order,
+        completed_in_run,
+        rerun,
+    );
+
     // indicatif's stderr draw target auto-hides when stderr is not a terminal,
     // which makes every per-rule progress message silently disappear under pipes,
     // redirects, nohup, CI, or schedulers. When that happens, fall back to plain
@@ -413,6 +569,9 @@ pub async fn run_command(
             None
         },
         force_rerun: rerun,
+        // Rules invalidated by config-change analysis bypass the executor's
+        // mtime freshness gate so their stale outputs are actually rebuilt.
+        force_rules: force_rules.clone(),
         resource_groups: config
             .resource_groups
             .iter()
@@ -463,24 +622,6 @@ pub async fn run_command(
     // the root cause stays distinguishable from the fallout.
     let blocked: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
 
-    let checkpoint_path = workdir
-        .as_ref()
-        .unwrap_or(&workflow_dir)
-        .join(".oxo-flow/checkpoint.json");
-    let checkpoint: Arc<Mutex<CheckpointState>> = if checkpoint_path.exists() {
-        Arc::new(Mutex::new(
-            CheckpointState::load_from_file(&checkpoint_path).unwrap_or_default(),
-        ))
-    } else {
-        Arc::new(Mutex::new(CheckpointState::default()))
-    };
-
-    // Store workflow path in checkpoint for resume support
-    {
-        let mut ck = checkpoint.lock().await;
-        ck.set_workflow_path(&workflow);
-    }
-
     // When --resume-failed is set, clear failed rules from checkpoint so they re-execute.
     if resume_failed && checkpoint_path.exists() {
         let mut ck = checkpoint.lock().await;
@@ -515,14 +656,31 @@ pub async fn run_command(
             .parent()
             .unwrap_or(Path::new("."))
             .join(".oxo-flow/reference-checkpoint.json");
-        let mut ref_state: std::collections::HashSet<String> = if ref_checkpoint.exists() {
-            std::fs::read_to_string(&ref_checkpoint)
+        // name → fingerprint. Legacy checkpoints store a plain JSON array of
+        // names; those entries are adopted with the current fingerprint
+        // (no rebuild) — the same one-time window as rule config snapshots.
+        let mut ref_state: HashMap<String, String> = if ref_checkpoint.exists() {
+            let raw = std::fs::read_to_string(&ref_checkpoint).unwrap_or_default();
+            serde_json::from_str::<HashMap<String, String>>(&raw)
                 .ok()
-                .and_then(|s| serde_json::from_str(&s).ok())
+                .or_else(|| {
+                    serde_json::from_str::<Vec<String>>(&raw)
+                        .map(|names| {
+                            names
+                                .into_iter()
+                                .map(|n| (n, String::new()))
+                                .collect::<HashMap<String, String>>()
+                        })
+                        .ok()
+                })
                 .unwrap_or_default()
         } else {
-            std::collections::HashSet::new()
+            HashMap::new()
         };
+
+        // Artifacts actually rebuilt in THIS run — consumers (rules whose
+        // declared inputs match) are invalidated afterwards.
+        let mut rebuilt_outputs: Vec<String> = Vec::new();
 
         for ref_def in &config.references {
             let output_path = oxo_flow_core::executor::checkpoint::expand_config_in_path(
@@ -530,34 +688,45 @@ pub async fn run_command(
                 &wildcard_values,
             );
             let output_full = ref_workdir.join(&output_path);
+            let current_fp =
+                oxo_flow_core::config_impact::reference_fingerprint(ref_def, &config.config);
+            let stored = ref_state.get(&ref_def.name).cloned();
 
-            if output_full.exists() && ref_state.contains(&ref_def.name) {
-                continue; // Already built and tracked
-            }
-
-            // Check freshness: source newer than output → warn
-            if let Some(ref source) = ref_def.source {
+            // Decide whether the artifact must be (re)built. A fingerprint
+            // mismatch means the build/source/output definition — or a config
+            // value its build command references — changed since the last
+            // build, so the old artifact is silently stale.
+            let rebuild_reason = if !output_full.exists() {
+                Some("output missing")
+            } else if stored.as_deref() == Some("") {
+                // Legacy entry: adopt the current fingerprint without rebuilding.
+                ref_state.insert(ref_def.name.clone(), current_fp.clone());
+                None
+            } else if let Some(stored_fp) = stored.as_deref()
+                && stored_fp != current_fp
+            {
+                Some("definition or referenced config changed")
+            } else if let Some(source) = ref_def.source.as_ref() {
                 let source_path =
                     ref_workdir.join(oxo_flow_core::executor::checkpoint::expand_config_in_path(
                         source,
                         &wildcard_values,
                     ));
                 if source_path.exists()
-                    && output_full.exists()
                     && oxo_flow_core::executor::checkpoint::file_is_newer(
                         &source_path,
                         &output_full,
                     )
                 {
-                    eprintln!(
-                        "  {} {}: source is newer than output, rebuilding...",
-                        "↻".yellow(),
-                        ref_def.name
-                    );
+                    Some("source is newer than output")
+                } else {
+                    None
                 }
-            }
+            } else {
+                None
+            };
 
-            if !output_full.exists() {
+            if let Some(reason) = rebuild_reason {
                 let build_cmd = oxo_flow_core::executor::process::render_shell_command(
                     &ref_def.build,
                     &oxo_flow_core::rule::Rule {
@@ -568,10 +737,11 @@ pub async fn run_command(
                     &wildcard_values,
                 );
                 eprintln!(
-                    "  {} Building {}: {}",
+                    "  {} Building {}: {} ({})",
                     "⚙".cyan().bold(),
                     ref_def.name,
-                    ref_def.description.as_deref().unwrap_or(&ref_def.output)
+                    ref_def.description.as_deref().unwrap_or(&ref_def.output),
+                    reason
                 );
                 let status = std::process::Command::new("sh")
                     .arg("-c")
@@ -580,7 +750,8 @@ pub async fn run_command(
                     .status();
                 match status {
                     Ok(s) if s.success() => {
-                        ref_state.insert(ref_def.name.clone());
+                        ref_state.insert(ref_def.name.clone(), current_fp.clone());
+                        rebuilt_outputs.push(output_path.clone());
                         if let Some(parent) = ref_checkpoint.parent() {
                             let _ = std::fs::create_dir_all(parent);
                         }
@@ -602,12 +773,76 @@ pub async fn run_command(
                         anyhow::bail!("failed to run build command for '{}': {}", ref_def.name, e);
                     }
                 }
-            } else if !ref_state.contains(&ref_def.name) {
-                // Output exists but not tracked — mark as built
-                ref_state.insert(ref_def.name.clone());
+            } else if stored.is_none() {
+                // Output exists but not tracked — adopt as built.
+                ref_state.insert(ref_def.name.clone(), current_fp);
+                if let Some(parent) = ref_checkpoint.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
                 let _ = std::fs::write(
                     &ref_checkpoint,
                     serde_json::to_string(&ref_state).unwrap_or_default(),
+                );
+            }
+        }
+
+        // A rebuilt reference invalidates the rules that consume it through
+        // declared inputs (plus their DAG downstream). The checkpoint
+        // pre-process would otherwise skip them as "already completed"
+        // without consulting input freshness; after invalidation the
+        // executor's mtime gate sees the rebuilt artifact and re-runs them.
+        // Shell-only reads of a reference cannot be tracked — declare
+        // reference artifacts in a rule's `input` list.
+        if !rebuilt_outputs.is_empty() {
+            let mut consumers: HashSet<String> = HashSet::new();
+            for rule in &config.rules {
+                let inputs: Vec<String> = rule
+                    .input
+                    .to_vec()
+                    .into_iter()
+                    .map(|i| {
+                        oxo_flow_core::executor::checkpoint::expand_config_in_path(
+                            &i,
+                            &wildcard_values,
+                        )
+                    })
+                    .collect();
+                if inputs.iter().any(|input| {
+                    !input.contains('{') && rebuilt_outputs.iter().any(|rebuilt| rebuilt == input)
+                }) {
+                    consumers.insert(rule.name.clone());
+                }
+            }
+            if !consumers.is_empty() {
+                let mut invalidated: HashSet<String> = consumers.clone();
+                let mut frontier: Vec<String> = consumers.iter().cloned().collect();
+                while let Some(name) = frontier.pop() {
+                    if let Ok(dependents) = dag.dependents(&name) {
+                        for dependent in dependents {
+                            if invalidated.insert(dependent.clone()) {
+                                frontier.push(dependent);
+                            }
+                        }
+                    }
+                }
+                let mut ck = checkpoint.lock().await;
+                for name in &invalidated {
+                    ck.completed_rules.remove(name);
+                }
+                if let Err(e) = ck.save_to_file(&checkpoint_path) {
+                    tracing::warn!(error = %e, "failed to save checkpoint after reference rebuild");
+                }
+                let mut names: Vec<&String> = invalidated.iter().collect();
+                names.sort();
+                eprintln!(
+                    "  {} reference rebuild invalidated {} rule(s): {}",
+                    "↻".yellow(),
+                    names.len(),
+                    names
+                        .iter()
+                        .map(|n| n.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 );
             }
         }
@@ -644,16 +879,18 @@ pub async fn run_command(
                 let mut outputs_ok = true;
                 if let Some(rule) = config.get_rule(rule_name) {
                     for output in &rule.output {
-                        if !output.contains('{') {
-                            let expanded =
-                                oxo_flow_core::executor::checkpoint::expand_config_in_path(
-                                    output,
-                                    &wildcard_values,
-                                );
-                            if !workdir_actual.join(&expanded).exists() {
-                                outputs_ok = false;
-                                break;
-                            }
+                        // Expand {config.x} placeholders BEFORE the wildcard
+                        // check — previously rules with {config.x} outputs were
+                        // never existence-checked, so deleting their files
+                        // still left them silently "already completed"
+                        // (issue #62 review).
+                        let expanded = oxo_flow_core::executor::checkpoint::expand_config_in_path(
+                            output,
+                            &wildcard_values,
+                        );
+                        if !expanded.contains('{') && !workdir_actual.join(&expanded).exists() {
+                            outputs_ok = false;
+                            break;
                         }
                     }
                 }

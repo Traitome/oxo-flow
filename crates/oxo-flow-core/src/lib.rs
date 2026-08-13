@@ -43,6 +43,7 @@ pub mod clinical;
 #[cfg(feature = "cluster")]
 pub mod cluster;
 pub mod config;
+pub mod config_impact;
 #[cfg(feature = "container")]
 pub mod container;
 pub mod dag;

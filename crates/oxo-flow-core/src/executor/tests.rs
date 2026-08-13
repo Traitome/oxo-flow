@@ -1004,3 +1004,49 @@ async fn check_resources_fails_fast_when_group_is_undeclared() {
         other => panic!("expected ResourceGroupExhausted, got {other}"),
     }
 }
+
+#[tokio::test]
+async fn force_rules_bypasses_freshness_skip() {
+    let workdir = std::env::temp_dir().join(format!("oxo-force-test-{}", std::process::id()));
+    let _ = tokio::fs::remove_dir_all(&workdir).await;
+    tokio::fs::create_dir_all(&workdir).await.unwrap();
+
+    // Output exists and is newer than the input → the mtime freshness gate
+    // would normally skip the rule. force_rules must bypass it (issue #62:
+    // checkpoint-invalidated rules must actually re-execute).
+    tokio::fs::write(workdir.join("in.txt"), b"input")
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    tokio::fs::write(workdir.join("out.txt"), b"stale")
+        .await
+        .unwrap();
+
+    let mut rule = make_rule("fresh_skip", "echo fresh > {output}");
+    rule.input = FilePatterns::List(vec!["in.txt".to_string()]);
+    rule.output = FilePatterns::List(vec!["out.txt".to_string()]);
+
+    // Without force: freshness gate skips.
+    let executor = LocalExecutor::new(ExecutorConfig {
+        workdir: workdir.clone(),
+        ..Default::default()
+    });
+    let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+    assert_eq!(record.status, JobStatus::Skipped);
+    assert_eq!(record.skip_reason.as_deref(), Some("outputs up-to-date"));
+
+    // With force_rules: the rule re-executes and rewrites the output.
+    let executor = LocalExecutor::new(ExecutorConfig {
+        workdir: workdir.clone(),
+        force_rules: std::collections::HashSet::from(["fresh_skip".to_string()]),
+        ..Default::default()
+    });
+    let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+    assert_eq!(record.status, JobStatus::Success);
+    let content = tokio::fs::read_to_string(workdir.join("out.txt"))
+        .await
+        .unwrap();
+    assert_eq!(content.trim(), "fresh");
+
+    let _ = tokio::fs::remove_dir_all(&workdir).await;
+}

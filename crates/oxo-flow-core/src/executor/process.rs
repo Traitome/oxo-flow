@@ -262,6 +262,12 @@ pub struct ExecutorConfig {
     /// outputs are up to date (CLI `--rerun`). Checkpoint records for
     /// rules outside this run are untouched.
     pub force_rerun: bool,
+    /// Rules forced to re-execute even when their outputs are fresh.
+    ///
+    /// Populated by config-change impact analysis (issue #62): rules
+    /// invalidated in the checkpoint must bypass the mtime freshness gate,
+    /// otherwise their stale outputs would be silently reused.
+    pub force_rules: std::collections::HashSet<String>,
     pub skip_env_setup: bool,
     pub cache_dir: Option<PathBuf>,
     pub interpreter_map: HashMap<String, String>,
@@ -280,6 +286,7 @@ impl Default for ExecutorConfig {
             max_memory_mb: None,
             resource_groups: HashMap::new(),
             force_rerun: false,
+            force_rules: std::collections::HashSet::new(),
             skip_env_setup: false,
             cache_dir: None,
             interpreter_map: HashMap::new(),
@@ -698,6 +705,7 @@ impl LocalExecutor {
         }
 
         if !self.config.force_rerun
+            && !self.config.force_rules.contains(&rule.name)
             && super::checkpoint::should_skip_rule(rule, &self.config.workdir, wildcard_values)
         {
             record.status = JobStatus::Skipped;
