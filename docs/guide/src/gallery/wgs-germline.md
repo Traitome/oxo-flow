@@ -6,6 +6,7 @@ A complete whole-genome sequencing (WGS) germline variant calling pipeline follo
     - GATK best-practices workflow
     - Twelve-rule cohort DAG with a branching VQSR path
     - Cohort joint genotyping with CombineGVCFs
+    - Per-sample rule expansion and `expand_inputs` fan-in
     - Mixed environments (conda, docker, singularity)
     - Clinical-grade variant annotation with VEP
     - Report configuration with provenance tracking
@@ -32,7 +33,9 @@ Edges are shown as realized after per-sample expansion (for example,
 `haplotype_caller` → `combine_gvcfs` exists because `expand_inputs`
 resolves the three per-sample GVCFs). In the unexpanded template DAG
 (`oxo-flow graph`), `combine_gvcfs` is a root rule — its inputs arrive
-via `expand_inputs`, not file-path inference.
+via `expand_inputs`, not file-path inference. See
+[Fan-out vs Fan-in](../reference/wildcards.md#fan-out-vs-fan-in) for
+how the two expansion mechanisms differ.
 
 **Steps:**
 
@@ -214,6 +217,21 @@ memory = "16G"
 [rules.environment]
 singularity = "docker://broadinstitute/gatk:4.5.0.0"
 
+!!! note "Why `input = []` + `expand_inputs` — not `{sample}` in `input`"
+    `combine_gvcfs` must run **once**, with all per-sample GVCFs in its
+    input list. `expand_inputs` does exactly that: the engine splits the
+    injected `config.samples_list` (`"NA12878,NA12879,NA12880"`) into its
+    three values, substitutes each into the pattern, and appends the three
+    paths to the rule's input list — while the rule itself stays **one task**.
+
+    Writing `input = ["variants/{sample}.g.vcf.gz"]` instead would have the
+    opposite effect: `{sample}` clones the rule once per sample, producing
+    three one-sample combines that all write the same output file.
+
+    Full mechanics: [Fan-out vs Fan-in](../reference/wildcards.md#fan-out-vs-fan-in),
+    [Gathering Inputs with `expand_inputs`](../reference/wildcards.md#gathering-inputs-with-expand_inputs),
+    and the [field reference](../reference/workflow-format.md#expand-inputs).
+
 [[rules]]
 name = "genotype_gvcfs"
 input = ["variants/cohort.g.vcf.gz"]
@@ -384,6 +402,9 @@ The `[[sample_groups]]` table is the single source of truth for the cohort:
   (`"NA12878,NA12879,NA12880"`), and `combine_gvcfs` references it in
   `expand_inputs` to collect the three per-sample GVCFs — no duplicate
   sample list is needed anywhere else.
+
+See the [wildcards reference](../reference/wildcards.md) for the complete
+mechanics of per-sample expansion and `expand_inputs`.
 
 ## Clinical Considerations
 
