@@ -280,6 +280,7 @@ impl StorageBackend for SqliteBackend {
                 user_id TEXT NOT NULL,
                 action TEXT NOT NULL,
                 target TEXT NOT NULL,
+                result TEXT NOT NULL DEFAULT 'success',
                 metadata TEXT,
                 timestamp TEXT NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -926,7 +927,7 @@ impl StorageBackend for SqliteBackend {
         let id = Uuid::new_v4().to_string();
         let now = Self::now();
         sqlx::query(
-            "INSERT INTO audit_logs (id, user_id, action, target, metadata, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO audit_logs (id, user_id, action, target, result, metadata, timestamp) VALUES (?, ?, ?, ?, 'success', ?, ?)",
         )
         .bind(&id)
         .bind(user_id)
