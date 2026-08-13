@@ -105,7 +105,7 @@ async fn wait_for_terminal(client: &reqwest::Client, base: &str, run_id: &str) -
             .await
             .unwrap();
         let status = body["status"].as_str().unwrap_or("").to_string();
-        if status == "success" || status == "failed" {
+        if status == "completed" || status == "failed" || status == "cancelled" {
             return status;
         }
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -166,7 +166,10 @@ async fn web_pipeline_rerun_rebuilds_only_config_affected_rules() {
         .await
         .unwrap();
     let run1_id = run1["run_id"].as_str().unwrap().to_string();
-    assert_eq!(wait_for_terminal(&client, &base, &run1_id).await, "success");
+    assert_eq!(
+        wait_for_terminal(&client, &base, &run1_id).await,
+        "completed"
+    );
     let logs1: String = client
         .get(format!("{base}/api/runs/{run1_id}/logs"))
         .send()
@@ -220,7 +223,10 @@ async fn web_pipeline_rerun_rebuilds_only_config_affected_rules() {
         .await
         .unwrap();
     let run2_id = run2["run_id"].as_str().unwrap().to_string();
-    assert_eq!(wait_for_terminal(&client, &base, &run2_id).await, "success");
+    assert_eq!(
+        wait_for_terminal(&client, &base, &run2_id).await,
+        "completed"
+    );
     let logs2: String = client
         .get(format!("{base}/api/runs/{run2_id}/logs"))
         .send()
@@ -294,7 +300,10 @@ async fn web_ad_hoc_run_logs_and_results_resolve_via_workdir() {
         .await
         .unwrap();
     let run_id = run["run_id"].as_str().unwrap().to_string();
-    assert_eq!(wait_for_terminal(&client, &base, &run_id).await, "success");
+    assert_eq!(
+        wait_for_terminal(&client, &base, &run_id).await,
+        "completed"
+    );
 
     let logs: String = client
         .get(format!("{base}/api/runs/{run_id}/logs"))
@@ -369,7 +378,10 @@ async fn web_dry_run_flag_previews_without_executing() {
         .await
         .unwrap();
     let run_id = run["run_id"].as_str().unwrap().to_string();
-    assert_eq!(wait_for_terminal(&client, &base, &run_id).await, "success");
+    assert_eq!(
+        wait_for_terminal(&client, &base, &run_id).await,
+        "completed"
+    );
 
     let logs: String = client
         .get(format!("{base}/api/runs/{run_id}/logs"))
@@ -421,7 +433,10 @@ async fn web_max_jobs_flag_reaches_executor() {
         .await
         .unwrap();
     let run_id = run["run_id"].as_str().unwrap().to_string();
-    assert_eq!(wait_for_terminal(&client, &base, &run_id).await, "success");
+    assert_eq!(
+        wait_for_terminal(&client, &base, &run_id).await,
+        "completed"
+    );
 
     let logs: String = client
         .get(format!("{base}/api/runs/{run_id}/logs"))
