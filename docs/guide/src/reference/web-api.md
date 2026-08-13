@@ -76,7 +76,12 @@ Returns structured audit entries: `{ entries: [{ timestamp, user, action, resour
 GET /api/events
 Accept: text/event-stream
 ```
-SSE stream for real-time workflow execution events (`run_started`, `run_failed`, `run_cancelled`, `run_paused`, `run_resumed`). Includes a 5-second heartbeat (`heartbeat` events).
+SSE stream for real-time workflow execution events (`run_started`, `run_completed`, `run_failed`, `run_cancelled`, `run_paused`, `run_resumed`). Includes a 5-second heartbeat (`heartbeat` events).
+
+`run_completed` carries a `summary` field: the CLI's invalidation summary
+extracted from the execution log — config changes, edited rule definitions,
+and input-set changes that invalidated checkpoint records this run
+(`null` when the run had no invalidation activity).
 
 ---
 
@@ -223,9 +228,18 @@ POST   /api/pipelines/search       # Search by name, tags, content
 POST /api/runs
 Content-Type: application/json
 
-{"toml_content": "<workflow TOML>", "max_jobs": 4, "dry_run": false, "keep_going": false}
+{"toml_content": "<workflow TOML>", "max_jobs": 4, "dry_run": false, "keep_going": false, "pipeline_id": "<uuid>"}
 ```
-`max_jobs`, `dry_run`, and `keep_going` are top-level fields (not nested under a `config` object). Returns `{ run_id, status: "queued", estimated_resources, execution_plan }`.
+`max_jobs`, `dry_run`, `keep_going`, and `pipeline_id` are top-level fields (not nested under a `config` object). Returns `{ run_id, status: "queued", estimated_resources, execution_plan }`.
+
+`pipeline_id` (optional) targets a saved pipeline: the run executes in the
+pipeline's **persistent working directory** (`workspace/users/<user>/pipelines/<id>`),
+so the checkpoint survives across re-runs. Re-running with a changed config
+rebuilds exactly the rules referencing the changed keys (plus their DAG
+downstream) — the rest keep their checkpoint records and are skipped. Runs
+without `pipeline_id` get a fresh per-run sandbox and execute everything.
+Malformed or unknown pipeline ids are rejected (`400 INVALID_PIPELINE_ID` /
+`404 PIPELINE_NOT_FOUND`).
 
 ### Run Status
 ```

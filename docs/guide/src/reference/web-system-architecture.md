@@ -87,7 +87,7 @@ The web crate follows a **domain-driven modular monolith** pattern. Each domain 
 | Domain | Path | Responsibility |
 |--------|------|---------------|
 | **workflow** | `domains/workflow/` | Pipeline parse, validate, prepare, DAG, format, lint, stats, diff, export, search, data discovery, plugin validation |
-| **execution** | `domains/execution/` | Run create/status/cancel/retry, diagnostics engine (30+ error patterns), sandbox workspace, background runner |
+| **execution** | `domains/execution/` | Run create/status/cancel/retry, diagnostics engine (30+ error patterns), sandbox workspace; runs delegate to the `oxo-flow` CLI subprocess, which owns checkpointing and invalidation |
 | **ai** | `domains/ai/` | AI translate, explain, interpret, optimize; provider dispatch (DeepSeek/Claude/OpenAI/Ollama) |
 | **collaboration** | `domains/collaboration/` | Fork, diff, share, import pipelines |
 | **auth** | `domains/auth/` | Login, session management, ORCID/GitHub OAuth2, RBAC |

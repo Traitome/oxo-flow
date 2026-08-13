@@ -44,8 +44,59 @@ fn find_oxo_flow_binary() -> PathBuf {
     PathBuf::from("oxo-flow")
 }
 
+/// Extract the invalidation summary lines the CLI writes into execution.log
+/// (issue #69): the config-change block, input-manifest invalidation lines,
+/// and baseline adoption notes. Returns `None` when the log shows no
+/// invalidation activity.
+///
+/// Substring matching is ANSI-escape tolerant: the colored prefixes wrap
+/// whole words, so the literal text stays contiguous.
+fn extract_invalidation_summary(log: &str) -> Option<String> {
+    let mut summary: Vec<&str> = Vec::new();
+    let mut in_config_block = false;
+    for line in log.lines() {
+        if line.contains("Config change:") {
+            in_config_block = true;
+            summary.push(line);
+        } else if in_config_block {
+            if line.contains("re-running") {
+                // Final line of the block ("→ invalidated N …, re-running …").
+                summary.push(line);
+                in_config_block = false;
+            } else if line.trim().is_empty() {
+                // The block ended without a summary line.
+                in_config_block = false;
+            } else {
+                // Key-level lines ("  key: old → new", "(new key)",
+                // "rule definition changed: …", "→ invalidated N …").
+                summary.push(line);
+            }
+        } else if line.contains("input changes invalidated")
+            || line.contains("recorded baseline input manifests")
+        {
+            summary.push(line);
+        }
+    }
+    if summary.is_empty() {
+        None
+    } else {
+        Some(summary.join("\n"))
+    }
+}
+
 /// Spawns a background task to execute the workflow in a sandboxed workspace.
-pub fn spawn_background_run(run_id: String, username: String, auth_type: String, os_user: String) {
+///
+/// `workdir` is the directory the CLI executes in: a persistent per-pipeline
+/// directory for saved-pipeline runs (so checkpoint-driven invalidation
+/// applies across re-runs, issue #69) or the per-run sandbox for ad-hoc runs.
+/// The caller must have already written `workflow.oxoflow` there.
+pub fn spawn_background_run(
+    run_id: String,
+    username: String,
+    auth_type: String,
+    os_user: String,
+    workdir: Option<PathBuf>,
+) {
     tokio::spawn(async move {
         info!("Starting background run {} for user {}", run_id, username);
 
@@ -73,7 +124,7 @@ pub fn spawn_background_run(run_id: String, username: String, auth_type: String,
             }),
         );
 
-        let run_dir = get_run_directory(&username, &run_id);
+        let run_dir = workdir.unwrap_or_else(|| get_run_directory(&username, &run_id));
         let workflow_file = run_dir.join("workflow.oxoflow");
 
         // Validate OS username to prevent injection in sudo mode
@@ -170,12 +221,19 @@ pub fn spawn_background_run(run_id: String, username: String, auth_type: String,
                         } else {
                             "run_failed"
                         };
+                        // Surfacing the CLI's invalidation summary (issue #69):
+                        // config changes, rule-definition edits, and input-set
+                        // changes that invalidated checkpoint records this run.
+                        let summary = std::fs::read_to_string(&log_file_path)
+                            .ok()
+                            .and_then(|log| extract_invalidation_summary(&log));
                         broadcast_event(
                             event,
                             &serde_json::json!({
                                 "run_id": run_id,
                                 "status": final_state,
                                 "finished_at": end.to_rfc3339(),
+                                "summary": summary,
                             }),
                         );
                     }
@@ -219,6 +277,51 @@ async fn mark_run_failed(run_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summary_extracts_config_change_block() {
+        let log = "DAG: 2 rules in execution order\n\
+                   Config change:\n\
+                   \x20 min_quality: 20 → 30\n\
+                   \x20 → invalidated 1 (1 directly affected), re-running 1/2 this run, skipping 1\n\
+                   \x20 Running: affected\n\
+                   \x20 ✓ affected (0.1s)\n";
+        let summary = extract_invalidation_summary(log).expect("config change must be found");
+        assert!(summary.contains("Config change:"));
+        assert!(summary.contains("min_quality: 20 → 30"));
+        assert!(summary.contains("re-running 1/2 this run, skipping 1"));
+        assert!(!summary.contains("Running: affected"));
+        assert!(!summary.contains("✓ affected"));
+    }
+
+    #[test]
+    fn summary_extracts_input_manifest_invalidations() {
+        let log = "  ↻ input changes invalidated 2 rule(s): gather, report\n\
+                   Note: checkpoint predates input tracking: recorded baseline input manifests for 1 completed rule(s); future input changes will invalidate them automatically\n";
+        let summary = extract_invalidation_summary(log).expect("invalidation lines must be found");
+        assert!(summary.contains("input changes invalidated 2 rule(s): gather, report"));
+        assert!(summary.contains("recorded baseline input manifests"));
+    }
+
+    #[test]
+    fn summary_handles_ansi_colored_output() {
+        // The CLI colors "Config change:" and the "↻" marker when stderr is a
+        // tty; substring matching must survive the escape wrappers.
+        let log = "\u{1b}[1;36mConfig change:\u{1b}[0m\n\
+                   \x20 n_threads: 4 → 8\n\
+                   \x20 → invalidated 2 (1 directly affected), re-running 2/3 this run, skipping 1\n\
+                   \u{1b}[33m↻\u{1b}[0m input changes invalidated 1 rule(s): align\n";
+        let summary = extract_invalidation_summary(log).expect("must parse ANSI-wrapped lines");
+        assert!(summary.contains("Config change:"));
+        assert!(summary.contains("n_threads: 4 → 8"));
+        assert!(summary.contains("input changes invalidated 1 rule(s): align"));
+    }
+
+    #[test]
+    fn summary_returns_none_without_invalidation_activity() {
+        let log = "DAG: 2 rules in execution order\nRunning: a\n✓ a (0.1s)\nDone: 2 succeeded\n";
+        assert_eq!(extract_invalidation_summary(log), None);
+    }
 
     #[test]
     fn sudo_username_regex_accepts_valid() {

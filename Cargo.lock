@@ -2667,11 +2667,13 @@ dependencies = [
  "assert_cmd",
  "oxo-flow-core",
  "predicates",
+ "reqwest",
  "serde_json",
  "tar",
  "tempfile",
  "tokio",
  "toml",
+ "uuid",
  "zstd",
 ]
 

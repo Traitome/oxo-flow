@@ -212,12 +212,13 @@ pub async fn run_workflow(
     // 3. Log the action
     let _ = db::log_action(&user.id, "run", &config.workflow.name).await;
 
-    // 4. Spawn background executor
+    // 4. Spawn background executor (ad-hoc sandbox: no persistent workdir)
     executor::spawn_background_run(
         run_id.clone(),
         user.username.clone(),
         user.auth_type.clone(),
         user.os_user.clone(),
+        None,
     );
 
     ACTIVE_WORKFLOWS.fetch_add(1, Ordering::Relaxed);

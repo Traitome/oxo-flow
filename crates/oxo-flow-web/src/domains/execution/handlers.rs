@@ -51,24 +51,76 @@ pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateR
         resource_budget: None,
     };
 
+    // Optional saved-pipeline linkage (issue #69): runs targeting a saved
+    // pipeline execute in the pipeline's persistent workdir, so the CLI's
+    // checkpoint (config snapshot, rule fingerprints, input manifests)
+    // survives across re-runs and delivers precise invalidation.
+    let pipeline_id: Option<String> = req
+        .get("pipeline_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    // Boundary validation: pipeline_id becomes a path component and must be a
+    // well-formed UUID (the save_pipeline id format).
+    if let Some(pid) = pipeline_id.as_ref()
+        && uuid::Uuid::parse_str(pid).is_err()
+    {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "INVALID_PIPELINE_ID",
+            format!("pipeline_id must be a UUID, got: {pid}"),
+        ));
+    }
+
     let resp = service::create_run(toml, &config, None)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e))?;
 
-    // Persist run to database. Ad-hoc runs have no saved pipeline row, so
-    // pipeline_id stays NULL (it is an FK only when a pipeline exists).
+    // Persist run to database. Ad-hoc runs (no pipeline_id) keep a NULL
+    // pipeline_id (the column is an FK only when a pipeline exists).
     if let Ok(pool) = crate::infra::db::sqlite::try_pool() {
         let workflow_name = oxo_flow_core::config::WorkflowConfig::parse(toml)
             .map(|c| c.workflow.name)
             .unwrap_or_else(|_| "unnamed".to_string());
+
+        // Resolve the working directory the executor will run in.
+        let run_dir = match &pipeline_id {
+            Some(pid) => {
+                let exists: Option<String> =
+                    sqlx::query_scalar("SELECT id FROM pipelines WHERE id = ?")
+                        .bind(pid)
+                        .fetch_optional(pool)
+                        .await
+                        .map_err(|e| {
+                            tracing::error!("DB error checking pipeline {pid}: {e}");
+                            err(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "DB_ERROR",
+                                "Internal database error".into(),
+                            )
+                        })?;
+                if exists.is_none() {
+                    return Err(err(
+                        StatusCode::NOT_FOUND,
+                        "PIPELINE_NOT_FOUND",
+                        format!("Pipeline {pid} not found"),
+                    ));
+                }
+                crate::workspace::setup_pipeline_directory("local_user", pid)
+                    .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e.to_string()))?
+            }
+            None => crate::workspace::setup_run_directory("local_user", &resp.run_id)
+                .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e.to_string()))?,
+        };
+
         let run = models::RunRow {
             id: resp.run_id.clone(),
             user_id: "default".to_string(),
-            pipeline_id: None,
+            pipeline_id: pipeline_id.clone(),
             pipeline_snapshot: toml.to_string(),
             status: "queued".to_string(),
             phase: "parsing".to_string(),
             pid: None,
-            workdir: None,
+            workdir: Some(run_dir.to_string_lossy().to_string()),
             started_at: None,
             finished_at: None,
             created_at: now_iso(),
@@ -95,11 +147,8 @@ pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateR
             tracing::error!("Failed to persist run {} to database: {e}", run.id);
         }
 
-        // Save pipeline TOML to run directory so executor can read it
-        let run_dir = crate::workspace::get_run_directory("local_user", &resp.run_id);
-        if let Err(e) = std::fs::create_dir_all(&run_dir) {
-            tracing::error!("Failed to create run dir {:?}: {e}", run_dir);
-        }
+        // Save pipeline TOML to the working directory so the executor (CLI
+        // subprocess) can read it.
         let workflow_path = run_dir.join("workflow.oxoflow");
         if let Err(e) = std::fs::write(&workflow_path, toml) {
             tracing::error!("Failed to write workflow to {:?}: {e}", workflow_path);
@@ -112,6 +161,7 @@ pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateR
             "local_user".to_string(),
             "none".to_string(),
             "local".to_string(),
+            Some(run_dir),
         );
     }
 
