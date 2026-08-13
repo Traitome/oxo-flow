@@ -36,15 +36,6 @@ pub struct EvidenceSource {
     pub confidence: f64,
 }
 
-/// Agent status update for SSE streaming.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentStatus {
-    pub agent: String,
-    pub status: String,
-    pub progress: f64,
-    pub message: String,
-}
-
 /// Data perception finding — 4-level degradation model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataFinding {
@@ -219,15 +210,6 @@ pub struct SearchItem {
     pub snippet: String,
     pub relevance_score: f64,
     pub source: String,
-}
-
-/// Environment detection result.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EnvironmentInfo {
-    pub name: String,
-    pub available: bool,
-    pub version: Option<String>,
-    pub path: Option<String>,
 }
 
 #[cfg(test)]

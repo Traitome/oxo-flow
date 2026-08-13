@@ -130,14 +130,6 @@ pub enum IssueSeverity {
 
 // ── Plugin discovery (reserved interface) ──────────────────────────────────
 
-/// Discover AI plugins from the standard plugin directory.
-///
-/// This is a reserved interface for Phase 5 MCP/Skill integration.
-/// Currently returns an empty registry.
-pub fn discover_ai_plugins(_project_dir: Option<&std::path::Path>) -> AiPluginRegistry {
-    AiPluginRegistry::default()
-}
-
 /// Registry of loaded AI plugins.
 #[derive(Default)]
 pub struct AiPluginRegistry {
@@ -149,10 +141,6 @@ pub struct AiPluginRegistry {
 impl AiPluginRegistry {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn register_tool(&mut self, plugin: Box<dyn AiToolPlugin>) {
-        self.tools.push(plugin);
     }
 
     pub fn register_knowledge(&mut self, plugin: Box<dyn AiKnowledgePlugin>) {

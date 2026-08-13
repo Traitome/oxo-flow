@@ -235,16 +235,6 @@ impl SchedulerState {
         })
     }
 
-    /// Returns `true` if any rule has failed.
-    pub fn has_failures(&self) -> bool {
-        self.statuses.values().any(|s| {
-            matches!(
-                s,
-                JobStatus::Failed | JobStatus::Cancelled | JobStatus::TimedOut
-            )
-        })
-    }
-
     /// Returns the number of currently running rules.
     pub fn running_count(&self) -> usize {
         self.running.len()
@@ -438,29 +428,6 @@ pub fn check_available_disk_mb(path: &std::path::Path) -> Option<u64> {
 #[cfg(not(unix))]
 pub fn check_available_disk_mb(_path: &std::path::Path) -> Option<u64> {
     None
-}
-
-/// Validate disk requirements for all rules against workdir capacity.
-pub fn validate_disk_requirements(rules: &[Rule], workdir: &std::path::Path) -> Vec<String> {
-    let mut warnings = Vec::new();
-    let available_mb = check_available_disk_mb(workdir).unwrap_or(u64::MAX);
-
-    for rule in rules {
-        if let Some(ref disk) = rule.resources.disk
-            && let Some(req_mb) = parse_memory_mb(disk)
-            && req_mb > available_mb
-        {
-            warnings.push(format!(
-                "rule '{}' may need {}MB disk but only {}MB available in {}",
-                rule.name,
-                req_mb,
-                available_mb,
-                workdir.display()
-            ));
-        }
-    }
-
-    warnings
 }
 
 /// Estimate memory requirement from ResourceHint when explicit memory not set.

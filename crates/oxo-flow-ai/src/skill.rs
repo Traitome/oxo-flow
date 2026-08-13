@@ -89,19 +89,6 @@ impl SkillRegistry {
         Self::default()
     }
 
-    /// Activate a skill by loading its manifest from a file.
-    pub fn activate_from_file(&mut self, path: &std::path::Path) -> Result<(), AiError> {
-        let content = std::fs::read_to_string(path).map_err(|e| AiError::Config {
-            message: format!("cannot read skill at {}: {e}", path.display()),
-        })?;
-        let manifest: SkillManifest = toml::from_str(&content).map_err(|e| AiError::Config {
-            message: format!("invalid skill manifest at {}: {e}", path.display()),
-        })?;
-        manifest.validate()?;
-        self.activate(manifest);
-        Ok(())
-    }
-
     /// Activate a skill from a manifest.
     pub fn activate(&mut self, skill: SkillManifest) {
         // Collect prompt additions

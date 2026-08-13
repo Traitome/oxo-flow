@@ -28,12 +28,6 @@ impl Default for AutoScale {
 }
 
 impl AutoScale {
-    /// Check if this is auto-scale mode.
-    #[must_use]
-    pub fn is_auto(&self) -> bool {
-        matches!(self, Self::Auto(s) if s == "auto")
-    }
-
     /// Get explicit value, or None if auto.
     #[must_use]
     pub fn explicit(&self) -> Option<u32> {
@@ -528,15 +522,6 @@ impl FilePatterns {
             }
         }
     }
-
-    /// Get a pattern by name.
-    pub fn get_named(&self, name: &str) -> Option<&String> {
-        match self {
-            Self::List(_) => None,
-            Self::Map(m) => m.get(name),
-            Self::Dir { .. } => None,
-        }
-    }
 }
 
 impl<'a> IntoIterator for &'a FilePatterns {
@@ -917,14 +902,6 @@ impl Rule {
     /// field over `resources.threads`.
     pub fn effective_threads(&self) -> u32 {
         self.threads.unwrap_or(self.resources.threads)
-    }
-
-    /// Get effective thread count with auto-scaling support.
-    #[allow(deprecated)]
-    #[must_use]
-    pub fn effective_threads_with_scaling(&self, available: u32) -> u32 {
-        let base = self.effective_threads();
-        base.min(available)
     }
 
     /// Returns the effective memory requirement.

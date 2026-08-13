@@ -92,50 +92,6 @@ impl fmt::Display for ClusterJobStatus {
     }
 }
 
-/// Detect resource exhaustion or limit errors from scheduler output.
-pub fn parse_resource_error(output: &str, backend: &ClusterBackend) -> Option<String> {
-    match backend {
-        ClusterBackend::Slurm => {
-            if output.contains("exceeded memory limit") || output.contains("OUT_OF_MEMORY") {
-                Some("SLURM: Memory limit exceeded".to_string())
-            } else if output.contains("Time limit exceeded") {
-                Some("SLURM: Walltime limit exceeded".to_string())
-            } else if output.contains("Requested node configuration is not available") {
-                Some(
-                    "SLURM: Requested resources (CPU/Memory) not available on any node".to_string(),
-                )
-            } else {
-                None
-            }
-        }
-        ClusterBackend::Pbs => {
-            if output.contains("exceeds system limit") || output.contains("job killed: mem limit") {
-                Some("PBS: Memory limit exceeded".to_string())
-            } else if output.contains("job killed: walltime limit") {
-                Some("PBS: Walltime limit exceeded".to_string())
-            } else {
-                None
-            }
-        }
-        ClusterBackend::Lsf => {
-            if output.contains("TERM_MEMLIMIT") {
-                Some("LSF: Memory limit exceeded".to_string())
-            } else if output.contains("TERM_RUNLIMIT") {
-                Some("LSF: Walltime limit exceeded".to_string())
-            } else {
-                None
-            }
-        }
-        ClusterBackend::Sge => {
-            if output.contains("exceeded its memory quota") {
-                Some("SGE: Memory limit exceeded".to_string())
-            } else {
-                None
-            }
-        }
-    }
-}
-
 /// A job that has been submitted to a cluster scheduler.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClusterJob {

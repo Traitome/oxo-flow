@@ -102,15 +102,6 @@ pub struct ValidationError {
     pub suggestion: Option<String>,
 }
 
-/// Request to prepare a pipeline: expand wildcards and resolve environments.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PrepareRequest {
-    pub toml_content: String,
-    pub resolve_wildcards: Option<bool>,
-    pub apply_defaults: Option<bool>,
-    pub pipeline_id: Option<String>,
-}
-
 /// Result of pipeline preparation: expanded rules, wildcard combinations, env commands.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrepareResponse {
@@ -209,14 +200,6 @@ pub struct Pipeline {
     pub visibility: String,
     pub created_at: String,
     pub updated_at: String,
-}
-
-/// Filter criteria for listing templates (category, tags, search text).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TemplateFilter {
-    pub category: Option<String>,
-    pub tags: Option<Vec<String>>,
-    pub search: Option<String>,
 }
 
 /// A pipeline template with metadata, tags, usage count, and optional TOML content.

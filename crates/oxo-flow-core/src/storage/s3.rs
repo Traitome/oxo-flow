@@ -67,12 +67,6 @@ impl S3Storage {
             client: default_client().clone(),
         }
     }
-
-    /// Create an S3 backend with a pre-configured client (useful for tests
-    /// or custom endpoints such as MinIO / LocalStack).
-    pub fn with_client(client: S3Client) -> Self {
-        Self { client }
-    }
 }
 
 impl Default for S3Storage {

@@ -28,32 +28,6 @@ pub enum EditOperation {
     Reorder,
 }
 
-/// A single edit command sent to the pipeline state manager.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DagEditCommandV2 {
-    pub source: EditSource,
-    pub operation: EditOperation,
-    pub payload: serde_json::Value,
-}
-
-/// Response from applying an edit command.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DagEditResponseV2 {
-    pub success: bool,
-    pub pipeline_state: serde_json::Value,
-    pub dag_json: serde_json::Value,
-    pub validation: Vec<DagEditValidation>,
-}
-
-/// Validation result for a single DAG edit.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DagEditValidation {
-    pub code: String,
-    pub message: String,
-    pub severity: String, // "error" | "warning" | "info"
-    pub rule: Option<String>,
-}
-
 impl EditOperation {
     pub const ALL: &'static [&'static str] = &[
         "add_rule",

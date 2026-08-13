@@ -707,27 +707,6 @@ pub fn expression_summary_section(records: &[ExpressionRecord], top_n: usize) ->
 // Multi-sample comparison section
 // ---------------------------------------------------------------------------
 
-/// Create a multi-sample comparison table from any metric keyed by sample.
-pub fn multi_sample_comparison(
-    title: &str,
-    id: &str,
-    metric_name: &str,
-    data: &[(String, String)],
-) -> ReportSection {
-    let headers = vec!["Sample".into(), metric_name.into()];
-    let rows: Vec<Vec<String>> = data
-        .iter()
-        .map(|(sample, value)| vec![sample.clone(), value.clone()])
-        .collect();
-
-    ReportSection {
-        title: title.to_string(),
-        id: id.to_string(),
-        content: ReportContent::Table { headers, rows },
-        subsections: Vec::new(),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Resource usage summary
 // ---------------------------------------------------------------------------
@@ -741,76 +720,6 @@ pub struct ResourceUsage {
     pub cpu_seconds: Option<f64>,
     pub threads: u32,
     pub status: String,
-}
-
-/// Create a resource usage summary section.
-pub fn resource_usage_section(usage: &[ResourceUsage]) -> ReportSection {
-    let headers = vec![
-        "Rule",
-        "Status",
-        "Wall Time",
-        "Max Memory",
-        "CPU Time",
-        "Threads",
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect();
-
-    let rows: Vec<Vec<String>> = usage
-        .iter()
-        .map(|u| {
-            vec![
-                u.rule.clone(),
-                u.status.clone(),
-                format!("{:.1}s", u.wall_time_secs),
-                u.max_memory_mb.map_or("N/A".into(), |m| format!("{}MB", m)),
-                u.cpu_seconds.map_or("N/A".into(), |c| format!("{:.1}s", c)),
-                u.threads.to_string(),
-            ]
-        })
-        .collect();
-
-    let total_time: f64 = usage.iter().map(|u| u.wall_time_secs).sum();
-    let total_cpu: f64 = usage.iter().filter_map(|u| u.cpu_seconds).sum();
-    let summary_pairs = vec![
-        ("Total Wall Time".into(), format!("{:.1}s", total_time)),
-        ("Total CPU Time".into(), format!("{:.1}s", total_cpu)),
-        ("Rules Executed".into(), usage.len().to_string()),
-        (
-            "Peak Memory".into(),
-            usage
-                .iter()
-                .filter_map(|u| u.max_memory_mb)
-                .max()
-                .map_or("N/A".into(), |m| format!("{}MB", m)),
-        ),
-    ];
-
-    let summary = ReportSection {
-        title: "Resource Summary".to_string(),
-        id: "resource-summary".to_string(),
-        content: ReportContent::KeyValue {
-            pairs: summary_pairs,
-        },
-        subsections: Vec::new(),
-    };
-
-    let table = ReportSection {
-        title: "Per-Rule Resources".to_string(),
-        id: "resource-table".to_string(),
-        content: ReportContent::Table { headers, rows },
-        subsections: Vec::new(),
-    };
-
-    ReportSection {
-        title: "Resource Usage".to_string(),
-        id: "resource-usage".to_string(),
-        content: ReportContent::Text {
-            text: String::new(),
-        },
-        subsections: vec![summary, table],
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -993,21 +902,6 @@ impl ReportBuilder {
         self
     }
 
-    pub fn resource_usage(mut self, usage: &[ResourceUsage]) -> Self {
-        self.report.add_section(resource_usage_section(usage));
-        self
-    }
-
-    pub fn execution_chart(mut self, records: &HashMap<String, JobRecord>) -> Self {
-        self.report.add_section(execution_time_chart(records));
-        self
-    }
-
-    pub fn execution_summary_table(mut self, records: &HashMap<String, JobRecord>) -> Self {
-        self.report.add_section(Report::execution_summary(records));
-        self
-    }
-
     pub fn provenance(
         mut self,
         wf_name: &str,
@@ -1018,59 +912,6 @@ impl ReportBuilder {
     ) -> Self {
         self.report
             .add_section(provenance_section(wf_name, wf_version, start, end, sw));
-        self
-    }
-
-    /// Add a generic dashboard from minimal execution stats (works for any task type).
-    pub fn generic_dashboard(
-        mut self,
-        total_rules: usize,
-        succeeded: usize,
-        failed: usize,
-        total_runtime_secs: Option<f64>,
-    ) -> Self {
-        let mut items = vec![
-            QcIndicator {
-                label: "Pipeline Status".into(),
-                value: format!("{}/{} succeeded", succeeded, total_rules),
-                status: if failed == 0 {
-                    QcStatusLevel::Pass
-                } else {
-                    QcStatusLevel::Warn
-                },
-                description: if failed == 0 {
-                    "All tasks completed".into()
-                } else {
-                    format!("{} task(s) failed", failed)
-                },
-            },
-            QcIndicator {
-                label: "Total Tasks".into(),
-                value: total_rules.to_string(),
-                status: QcStatusLevel::Info,
-                description: "Rules in workflow".into(),
-            },
-        ];
-        if let Some(runtime) = total_runtime_secs {
-            items.push(QcIndicator {
-                label: "Total Runtime".into(),
-                value: if runtime > 3600.0 {
-                    format!("{:.1}h", runtime / 3600.0)
-                } else if runtime > 60.0 {
-                    format!("{:.1}min", runtime / 60.0)
-                } else {
-                    format!("{:.0}s", runtime)
-                },
-                status: QcStatusLevel::Info,
-                description: "Wall clock time".into(),
-            });
-        }
-        self.report.add_section(ReportSection {
-            title: "Dashboard".into(),
-            id: "dashboard".into(),
-            content: ReportContent::QcIndicatorGroup { items },
-            subsections: vec![],
-        });
         self
     }
 
@@ -1124,140 +965,6 @@ impl ReportBuilder {
             content: ReportContent::Table { headers, rows },
             subsections: vec![],
         });
-        self
-    }
-
-    /// Add a shell command manifest showing the expanded command for each rule.
-    pub fn command_manifest(mut self, rules: &[crate::rule::Rule]) -> Self {
-        let headers: Vec<String> = vec!["Task", "Command"]
-            .into_iter()
-            .map(String::from)
-            .collect();
-        let rows: Vec<Vec<String>> = rules
-            .iter()
-            .map(|r| {
-                let cmd = r
-                    .shell
-                    .as_deref()
-                    .or(r.script.as_deref())
-                    .unwrap_or("(no command)");
-                vec![r.name.clone(), cmd.to_string()]
-            })
-            .collect();
-
-        self.report.add_section(ReportSection {
-            title: "Commands".into(),
-            id: "commands".into(),
-            content: ReportContent::Table { headers, rows },
-            subsections: vec![],
-        });
-        self
-    }
-
-    /// Add an execution status table from checkpoint data.
-    pub fn execution_status(
-        mut self,
-        completed: &std::collections::HashSet<String>,
-        failed: &std::collections::HashSet<String>,
-        benchmarks: &std::collections::HashMap<
-            String,
-            crate::executor::checkpoint::BenchmarkRecord,
-        >,
-    ) -> Self {
-        let headers: Vec<String> = vec!["Task", "Status", "Duration", "Exit Code"]
-            .into_iter()
-            .map(String::from)
-            .collect();
-        let mut rows = Vec::new();
-        for name in completed {
-            let bench = benchmarks.get(name);
-            rows.push(vec![
-                name.clone(),
-                "✓ Completed".into(),
-                bench.map_or("-".into(), |b| format!("{:.1}s", b.wall_time_secs)),
-                "0".into(),
-            ]);
-        }
-        for name in failed {
-            rows.push(vec![
-                name.clone(),
-                "✗ Failed".into(),
-                "-".into(),
-                "≠0".into(),
-            ]);
-        }
-        if !rows.is_empty() {
-            self.report.add_section(ReportSection {
-                title: "Execution Status".into(),
-                id: "execution-status".into(),
-                content: ReportContent::Table { headers, rows },
-                subsections: vec![],
-            });
-        }
-        self
-    }
-
-    /// Add an I/O manifest listing all input and output file patterns.
-    pub fn io_manifest(mut self, rules: &[crate::rule::Rule]) -> Self {
-        let mut all_inputs: Vec<String> = Vec::new();
-        let mut all_outputs: Vec<String> = Vec::new();
-        for r in rules {
-            for i in &r.input {
-                let s = i.to_string();
-                if !all_inputs.contains(&s) {
-                    all_inputs.push(s);
-                }
-            }
-            for o in &r.output {
-                let s = o.to_string();
-                if !all_outputs.contains(&s) {
-                    all_outputs.push(s);
-                }
-            }
-        }
-        let input_section = ReportSection {
-            title: "Input Files".into(),
-            id: "input-files".into(),
-            content: ReportContent::Table {
-                headers: vec!["Pattern".into()],
-                rows: all_inputs.into_iter().map(|i| vec![i]).collect(),
-            },
-            subsections: vec![],
-        };
-        let output_section = ReportSection {
-            title: "Output Files".into(),
-            id: "output-files".into(),
-            content: ReportContent::Table {
-                headers: vec!["Pattern".into()],
-                rows: all_outputs.into_iter().map(|o| vec![o]).collect(),
-            },
-            subsections: vec![],
-        };
-        self.report.add_section(ReportSection {
-            title: "File Manifest".into(),
-            id: "file-manifest".into(),
-            content: ReportContent::Text {
-                text: String::new(),
-            },
-            subsections: vec![input_section, output_section],
-        });
-        self
-    }
-
-    pub fn clinical_disclaimer(mut self) -> Self {
-        self.report.add_section(clinical_disclaimer_section());
-        self
-    }
-
-    /// Add a language-appropriate clinical disclaimer.
-    pub fn clinical_disclaimer_lang(mut self, lang: ReportLanguage) -> Self {
-        self.report
-            .add_section(clinical_disclaimer_for_language(lang));
-        self
-    }
-
-    pub fn sample_info(mut self, info: &SampleInfo) -> Self {
-        self.report.add_section(sample_info_section(info));
         self
     }
 
@@ -1450,34 +1157,6 @@ impl ReportLanguage {
             "zh" | "cn" | "chinese" | "zh-cn" | "zh_cn" => Self::Chinese,
             _ => Self::English,
         }
-    }
-}
-
-/// Generate a Chinese clinical disclaimer section.
-pub fn clinical_disclaimer_section_zh() -> ReportSection {
-    ReportSection {
-        title: "临床声明".to_string(),
-        id: "clinical-disclaimer".to_string(),
-        content: ReportContent::Html {
-            html: "<div class=\"disclaimer\">\
-                <p><strong>重要提示：</strong> 本报告由自动化生物信息学流程生成，\
-                仅供研究和临床决策支持使用。所有发现结果应由具备资质的医疗专业人员\
-                进行审查和解读。变异分类基于当前知识和数据库，可能随着新证据的出现\
-                而更新。</p>\
-                <p>本报告不构成医学诊断。在做出治疗决策前，可能需要临床相关性和\
-                确认性检测（如 Sanger 测序）。</p>\
-                </div>"
-                .to_string(),
-        },
-        subsections: Vec::new(),
-    }
-}
-
-/// Generate a language-appropriate clinical disclaimer.
-pub fn clinical_disclaimer_for_language(lang: ReportLanguage) -> ReportSection {
-    match lang {
-        ReportLanguage::Chinese => clinical_disclaimer_section_zh(),
-        ReportLanguage::English => clinical_disclaimer_section(),
     }
 }
 

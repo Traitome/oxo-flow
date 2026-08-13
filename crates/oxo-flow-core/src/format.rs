@@ -83,13 +83,6 @@ impl ValidationResult {
             .any(|d| d.severity == Severity::Error)
     }
 
-    /// Returns true if there are any warnings.
-    pub fn has_warnings(&self) -> bool {
-        self.diagnostics
-            .iter()
-            .any(|d| d.severity == Severity::Warning)
-    }
-
     /// Returns only error diagnostics.
     pub fn errors(&self) -> Vec<&Diagnostic> {
         self.diagnostics

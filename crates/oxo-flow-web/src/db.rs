@@ -324,19 +324,6 @@ pub struct Template {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct HpcJob {
-    pub id: String,
-    pub run_id: String,
-    pub user_id: String,
-    pub scheduler: String,
-    pub job_id: Option<String>,
-    pub partition_name: Option<String>,
-    pub status: String,
-    pub submitted_at: Option<DateTime<Utc>>,
-    pub completed_at: Option<DateTime<Utc>>,
-}
-
 // ---------------------------------------------------------------------------
 // Seed Data
 // ---------------------------------------------------------------------------
@@ -520,21 +507,6 @@ pub struct OutputRecordRow {
 }
 
 impl OutputRecordRow {
-    /// Convert from a core OutputRecord to a database row.
-    pub fn from_core(record: &oxo_flow_core::result::OutputRecord, id: &str) -> Self {
-        Self {
-            id: id.to_string(),
-            run_id: record.run_id.clone(),
-            rule: record.rule.clone(),
-            sample: record.sample.clone(),
-            file_path: record.file_path.clone(),
-            file_size: record.file_size as i64,
-            checksum: record.checksum.clone(),
-            metrics: serde_json::to_string(&record.metrics).unwrap_or_else(|_| "{}".to_string()),
-            created_at: record.created_at.clone(),
-        }
-    }
-
     /// Convert to a core OutputRecord.
     pub fn to_core(&self) -> oxo_flow_core::result::OutputRecord {
         let metrics: std::collections::HashMap<String, serde_json::Value> =
@@ -550,27 +522,6 @@ impl OutputRecordRow {
             created_at: self.created_at.clone(),
         }
     }
-}
-
-/// Insert a batch of output records into the database.
-pub async fn insert_output_records(records: &[OutputRecordRow]) -> anyhow::Result<()> {
-    for record in records {
-        sqlx::query(
-            "INSERT OR IGNORE INTO output_records (id, run_id, rule, sample, file_path, file_size, checksum, metrics, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        )
-        .bind(&record.id)
-        .bind(&record.run_id)
-        .bind(&record.rule)
-        .bind(&record.sample)
-        .bind(&record.file_path)
-        .bind(record.file_size)
-        .bind(&record.checksum)
-        .bind(&record.metrics)
-        .bind(&record.created_at)
-        .execute(pool())
-        .await?;
-    }
-    Ok(())
 }
 
 /// Get all output records for a given run.

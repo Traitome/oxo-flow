@@ -105,11 +105,6 @@ impl AiSession {
         self.total_usage.prompt_tokens += usage.prompt_tokens;
         self.total_usage.completion_tokens += usage.completion_tokens;
     }
-
-    /// Estimated cost in USD (DeepSeek v4 pro pricing by default).
-    pub fn estimated_cost(&self) -> f64 {
-        self.total_usage.cost_deepseek_v4_pro()
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -270,37 +265,6 @@ pub fn archive_before_modify(
     })?;
 
     tracing::info!("Workflow archived before modification: {}", path.display());
-    Ok(path)
-}
-
-/// Save the modified workflow to the archive.
-pub fn archive_after_modify(
-    workflow_path: &Path,
-    content: &str,
-    session_id: &str,
-) -> Result<PathBuf, AiError> {
-    let dir = archive_dir().join(
-        workflow_path
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .as_ref(),
-    );
-    std::fs::create_dir_all(&dir).map_err(|e| AiError::SessionError {
-        path: dir.clone(),
-        message: e.to_string(),
-    })?;
-
-    let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
-    let filename = format!("{timestamp}-{session_id}-after.oxoflow");
-    let path = dir.join(&filename);
-
-    std::fs::write(&path, content).map_err(|e| AiError::SessionError {
-        path: path.clone(),
-        message: e.to_string(),
-    })?;
-
-    tracing::info!("Modified workflow archived: {}", path.display());
     Ok(path)
 }
 

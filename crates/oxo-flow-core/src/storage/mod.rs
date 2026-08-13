@@ -25,7 +25,7 @@ pub mod gcs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::error::{OxoFlowError, Result};
+use crate::error::Result;
 
 /// URI scheme for storage backends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -173,28 +173,6 @@ impl StorageResolver {
             .iter()
             .find(|(s, _)| s == scheme)
             .map(|(_, b)| b)
-    }
-
-    /// Stage a remote file locally if needed, returning the local path to use.
-    ///
-    /// For local paths this is a no-op; for remote paths the corresponding
-    /// backend's `stage` method is called.
-    pub async fn stage_if_remote(&self, path_str: &str, workdir: &Path) -> Result<PathBuf> {
-        let sp = StoragePath::parse(path_str);
-        if !sp.is_remote() {
-            return Ok(PathBuf::from(path_str));
-        }
-        if let Some(backend) = self.get_backend(&sp.scheme) {
-            backend.stage(&sp, workdir).await
-        } else {
-            Err(OxoFlowError::Config {
-                message: format!(
-                    "No storage backend available for scheme: {:?}. \
-                     Enable the corresponding feature flag (e.g. 's3-storage')",
-                    sp.scheme
-                ),
-            })
-        }
     }
 }
 

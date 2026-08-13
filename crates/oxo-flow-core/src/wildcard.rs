@@ -364,12 +364,6 @@ pub fn expand_pattern(pattern: &str, values: &WildcardValues) -> Result<String> 
     Ok(result)
 }
 
-/// Expands all patterns in a list using the given wildcard values.
-#[must_use = "expanding patterns returns a Result that must be used"]
-pub fn expand_patterns(patterns: &[String], values: &WildcardValues) -> Result<Vec<String>> {
-    patterns.iter().map(|p| expand_pattern(p, values)).collect()
-}
-
 /// Returns `true` if the pattern contains any wildcard placeholders.
 pub fn has_wildcards(pattern: &str) -> bool {
     WILDCARD_RE.is_match(pattern)
@@ -465,35 +459,6 @@ pub fn paired_end_pattern(dir: &str, sample_pattern: &str, extension: &str) -> (
     let r1 = format!("{}/{}_R1.{}", dir, sample_pattern, extension);
     let r2 = format!("{}/{}_R2.{}", dir, sample_pattern, extension);
     (r1, r2)
-}
-
-/// Discover paired-end FASTQ files in a directory for a given sample name.
-///
-/// Looks for files matching common paired-end naming conventions:
-/// `{sample}_R1.fastq.gz` / `{sample}_R2.fastq.gz`,
-/// `{sample}_1.fastq.gz` / `{sample}_2.fastq.gz`, etc.
-#[must_use]
-pub fn discover_paired_files(dir: &std::path::Path, sample: &str) -> Vec<(String, String)> {
-    let mut pairs = Vec::new();
-    let suffixes = [
-        ("_R1.fastq.gz", "_R2.fastq.gz"),
-        ("_R1.fq.gz", "_R2.fq.gz"),
-        ("_1.fastq.gz", "_2.fastq.gz"),
-        ("_1.fq.gz", "_2.fq.gz"),
-        ("_R1.fastq", "_R2.fastq"),
-        ("_R1.fq", "_R2.fq"),
-    ];
-    for (s1, s2) in &suffixes {
-        let r1 = dir.join(format!("{}{}", sample, s1));
-        let r2 = dir.join(format!("{}{}", sample, s2));
-        if r1.exists() && r2.exists() {
-            pairs.push((
-                r1.to_string_lossy().to_string(),
-                r2.to_string_lossy().to_string(),
-            ));
-        }
-    }
-    pairs
 }
 
 // ---------------------------------------------------------------------------

@@ -9,9 +9,6 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 
-/// Maximum age in days for audit logs before cleanup.
-const MAX_LOG_AGE_DAYS: u64 = 30;
-
 /// Audit log entry format.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEntry {
@@ -80,43 +77,6 @@ pub fn write_audit_log(
     writeln!(file, "{}", json)?;
 
     Ok(())
-}
-
-/// Rotate audit logs by removing files older than the retention period.
-///
-/// Files older than `MAX_LOG_AGE_DAYS` days are deleted.
-/// This should be called periodically (e.g., daily via a scheduler).
-pub fn rotate_audit_logs() -> std::io::Result<u64> {
-    let dir = audit_log_dir();
-    if !dir.exists() {
-        return Ok(0);
-    }
-
-    let cutoff = Utc::now() - chrono::Duration::days(MAX_LOG_AGE_DAYS as i64);
-    let cutoff_date = cutoff.format("%Y-%m-%d").to_string();
-
-    let mut removed_count = 0;
-
-    for entry in fs::read_dir(&dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        // Check if it's a log file and older than cutoff
-        if let Some(filename) = path.file_name().and_then(|n| n.to_str())
-            && filename.ends_with(".log")
-        {
-            // Extract date from filename (YYYY-MM-DD.log)
-            let date_str = filename.trim_end_matches(".log");
-            // Compare &str with &str: cutoff_date is String, we take &cutoff_date which derefs to &str
-            let cutoff_str: &str = &cutoff_date;
-            if cutoff_str > date_str {
-                fs::remove_file(&path)?;
-                removed_count += 1;
-            }
-        }
-    }
-
-    Ok(removed_count)
 }
 
 /// Get recent audit log entries.

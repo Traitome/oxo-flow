@@ -449,21 +449,6 @@ pub fn submit_slurm_job(script_path: &str, job_name: &str, cpus: u32) -> Result<
     }
 }
 
-/// Cancel a SLURM job.
-pub fn cancel_slurm_job(job_id: &str) -> Result<(), String> {
-    let output = Command::new("scancel")
-        .arg(job_id)
-        .output()
-        .map_err(|e| format!("Failed to run scancel: {}", e))?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        let error = String::from_utf8_lossy(&output.stderr).to_string();
-        Err(format!("scancel failed: {}", error))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

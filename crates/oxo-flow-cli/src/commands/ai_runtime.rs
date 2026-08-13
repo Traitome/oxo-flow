@@ -9,10 +9,8 @@ use std::path::Path;
 use anyhow::Result;
 use colored::Colorize as _;
 use oxo_flow_ai::agent::orchestrator::Orchestrator;
-use oxo_flow_ai::agent::{AgentContext, ExternalSource};
 use oxo_flow_ai::config::AiConfig;
 use oxo_flow_ai::provider::AiProvider;
-use oxo_flow_ai::session::AiSession;
 use oxo_flow_ai::tools::{ToolRegistry, builtin};
 
 /// Fully-configured AI runtime for a command execution.
@@ -135,32 +133,6 @@ impl AiRuntime {
             orchestrator,
             skill_context,
         })
-    }
-
-    pub fn create_context(
-        &self,
-        command: &str,
-        intent: &str,
-        workflow_path: Option<&Path>,
-        workflow_content: Option<&str>,
-        external_sources: Vec<ExternalSource>,
-    ) -> AgentContext {
-        AgentContext {
-            intent: intent.to_string(),
-            command: command.to_string(),
-            workflow_path: workflow_path.map(|p| p.to_path_buf()),
-            workflow_content: workflow_content.map(|s| s.to_string()),
-            external_sources,
-            max_rounds: self.config.max_retries,
-            tool_registry: self.tool_registry.clone(),
-            tool_approver: None,
-            session: AiSession::new(
-                command,
-                intent,
-                self.provider.name(),
-                &self.provider.model().unwrap_or_else(|| "default".into()),
-            ),
-        }
     }
 }
 

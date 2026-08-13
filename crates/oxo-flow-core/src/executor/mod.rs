@@ -6,7 +6,6 @@
 use sysinfo::System;
 
 pub mod checkpoint;
-pub mod hooks;
 pub mod process;
 pub mod security;
 pub mod timeout;
@@ -29,21 +28,6 @@ pub fn available_memory_gb() -> u64 {
     let mut sys = System::new();
     sys.refresh_memory();
     sys.available_memory() / (1024 * 1024 * 1024) // Convert bytes to GB
-}
-
-/// Check if optional rule inputs exist.
-///
-/// Returns true if all non-wildcard input paths exist.
-#[must_use]
-pub fn optional_inputs_exist(rule: &crate::rule::Rule) -> bool {
-    use std::path::Path;
-    for input in rule.input.to_vec() {
-        // Skip wildcard patterns - they'll be expanded at runtime
-        if !input.contains('{') && !Path::new(&input).exists() {
-            return false;
-        }
-    }
-    true
 }
 
 // Re-export common items for backward compatibility and convenience

@@ -1320,43 +1320,7 @@ pub struct ExecutionStats {
     pub bottleneck_rule: Option<String>,
 }
 
-impl ExecutionStats {
-    pub fn from_records(records: &HashMap<String, JobRecord>) -> Self {
-        let mut succeeded = 0;
-        let mut failed = 0;
-        let mut skipped = 0;
-        let mut rule_durations = HashMap::new();
-        let mut max_duration = 0.0;
-        let mut bottleneck = None;
-
-        for (name, record) in records {
-            match record.status {
-                JobStatus::Success => succeeded += 1,
-                JobStatus::Failed | JobStatus::TimedOut => failed += 1,
-                JobStatus::Skipped => skipped += 1,
-                _ => {}
-            }
-            if let (Some(start), Some(end)) = (record.started_at, record.finished_at) {
-                let duration = end.signed_duration_since(start).num_milliseconds() as f64 / 1000.0;
-                rule_durations.insert(name.clone(), duration);
-                if duration > max_duration {
-                    max_duration = duration;
-                    bottleneck = Some(name.clone());
-                }
-            }
-        }
-        Self {
-            total_rules: records.len(),
-            succeeded,
-            failed,
-            skipped,
-            total_duration_secs: rule_durations.values().sum(),
-            rule_durations,
-            max_rule_duration_secs: max_duration,
-            bottleneck_rule: bottleneck,
-        }
-    }
-}
+impl ExecutionStats {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionProvenance {
@@ -1429,31 +1393,6 @@ pub fn hostname() -> String {
     std::env::var("HOSTNAME")
         .or_else(|_| std::env::var("COMPUTERNAME"))
         .unwrap_or_else(|_| "unknown".to_string())
-}
-
-pub fn cleanup_cache(workdir: &Path, max_age_days: u64) -> usize {
-    let cache_dir = workdir.join(".oxo-flow");
-    if !cache_dir.exists() {
-        return 0;
-    }
-    let max_age = std::time::Duration::from_secs(max_age_days * 24 * 3600);
-    let now = std::time::SystemTime::now();
-    let mut removed = 0;
-    if let Ok(entries) = std::fs::read_dir(&cache_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file()
-                && let Ok(metadata) = std::fs::metadata(&path)
-                && let Ok(modified) = metadata.modified()
-                && let Ok(age) = now.duration_since(modified)
-                && age > max_age
-                && std::fs::remove_file(&path).is_ok()
-            {
-                removed += 1;
-            }
-        }
-    }
-    removed
 }
 
 /// Check rule input/output paths for remote storage URIs and log a warning

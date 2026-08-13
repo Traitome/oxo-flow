@@ -239,12 +239,6 @@ pub struct ResourceBottleneck {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RetryRequest {
-    pub from_rule: Option<String>,
-    pub skip_succeeded: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetryResponse {
     pub new_run_id: String,
     pub will_rerun: Vec<String>,
