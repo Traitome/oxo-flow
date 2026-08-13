@@ -69,6 +69,24 @@ pub enum ReportContent {
         values: Vec<f64>,
         unit: String,
     },
+    QcStatus {
+        metric: String,
+        value: String,
+        status: String,
+        threshold: String,
+    },
+    QcIndicatorGroup { items: Vec<QcIndicator> },
+    Hierarchy {
+        name: String,
+        value: f64,
+        children: Vec<HierarchyNode>,
+    },
+    ScatterPlot {
+        title: String,
+        x_label: String,
+        y_label: String,
+        points: Vec<ScatterPoint>,
+    },
 }
 ```
 
@@ -179,14 +197,7 @@ sections = ["summary", "variants", "quality"]
 
 ### Templates
 
-The `template` field selects a report template. Built-in templates:
-
-| Template | Use case |
-|---|---|
-| `default` | General-purpose research report |
-| `clinical` | Clinical-grade report with structured sections |
-
-Templates are rendered with [Tera](https://tera.netlify.app/), a Jinja2-like template engine for Rust.
+The core library provides a [Tera](https://tera.netlify.app/)-based template engine pre-loaded with one built-in template, `report.html`; custom templates can be registered via `add_template`. The `[report].template` and `[report].format` fields are parsed from the `.oxoflow` file, and `[report].sections` filters which sections are included. The CLI `report` command currently renders via `Report::to_html()` / `to_json()` / `to_pdf()` and does not apply `[report].template`.
 
 ## See Also
 

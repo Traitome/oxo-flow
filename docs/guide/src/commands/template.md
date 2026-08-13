@@ -5,7 +5,7 @@ Generate a workflow from a predefined gallery template.
 ## Usage
 
 ```
-oxo-flow template [TEMPLATE] [-o <OUTPUT>]
+oxo-flow template [OPTIONS] [TEMPLATE]
 ```
 
 ## Description

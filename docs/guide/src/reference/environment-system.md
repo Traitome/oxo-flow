@@ -44,7 +44,7 @@ The central coordinator that:
 
 ```rust
 let resolver = EnvironmentResolver::new();
-let available = resolver.available_backends(); // ["conda", "mamba", "pixi", "docker", "singularity", "venv", "modules", "system"]
+let available = resolver.available_backends(); // e.g. ["system", "mamba", "conda", "pixi", "docker", "singularity", "venv", "modules"] — installed backends only
 resolver.validate_spec(&rule.environment)?;
 ```
 
@@ -81,7 +81,7 @@ Before executing a rule with an environment specification:
 | Pixi | `pixi install` (if pixi.toml exists) |
 | Docker | `docker pull <image>` |
 | Singularity | `singularity pull <image>` |
-| Venv | `python -m venv <path> && pip install -r <requirements>` |
+| Venv | `python3 -m venv <path> && source <path>/bin/activate && pip install -r <requirements>` |
 | Modules | None (no setup — modules are loaded at execution time) |
 | System | None (no setup needed — commands run directly in the current shell) |
 
@@ -102,7 +102,7 @@ oxo-flow run pipeline.oxoflow --skip-env-setup
 
 - **Detection**: Checks for `conda` on `$PATH`
 - **Resolution**: Parses YAML environment file
-- **Activation**: Runs `conda activate <env_name>` before the command
+- **Activation**: Runs `conda run -n <env_name> bash -c '<command>'`
 - **Caching**: Environments are created once and reused across rules that share the same YAML file
 
 ### Mamba
@@ -136,7 +136,7 @@ oxo-flow run pipeline.oxoflow --skip-env-setup
 
 ### Python venv
 
-- **Detection**: Checks for `python3` and `pip` on `$PATH`
+- **Detection**: Checks for `python3` on `$PATH`
 - **Resolution**: Parses `requirements.txt` file
 - **Activation**: Creates a venv (if needed) and activates it before the command
 - **Caching**: Venvs are stored in a cache directory keyed by the requirements hash
@@ -146,7 +146,7 @@ oxo-flow run pipeline.oxoflow --skip-env-setup
 - **Detection**: Checks for `modulecmd` or `module` on `$PATH`
 - **Resolution**: Parses the module list (comma-separated) from `environment.modules`
 - **Activation**: Initializes the module system (sources `/etc/profile.d/modules.sh` or common Lmod/Modules init scripts), then runs `module load <modules>` before the command. Fails with a clear error if the `module` command is unavailable.
-- **Usage**: Set `environment.modules = ["gcc/11.2", "cuda/11.7"]` in the rule. Modules are loaded regardless of the primary backend if the executor supports them.
+- **Usage**: Set `environment.modules = ["gcc/11.2", "cuda/11.7"]` in the rule. Modules are used when `environment.modules` is set and no other backend is declared (priority: mamba, conda, pixi, docker, singularity, venv, modules).
 
 ### System
 
@@ -170,6 +170,9 @@ pub struct EnvironmentSpec {
     pub singularity: Option<String>,
     pub venv: Option<String>,
     pub modules: Vec<String>,
+    pub conda_prefix: Option<String>,
+    pub mamba_prefix: Option<String>,
+    pub venv_requirements: Option<String>,
 }
 ```
 
@@ -183,7 +186,7 @@ environment = { conda = "envs/tools.yaml" }
 # environment = { modules = ["gcc/11.2", "cuda/11.7"] }
 ```
 
-If multiple backends are specified, the first one found is used in this priority order: mamba, conda, pixi, docker, singularity, venv. HPC `modules` are loaded regardless of the primary backend if the executor supports them, and the `system` backend is used when a rule declares no environment spec.
+If multiple backends are specified, the first one found is used in this priority order: mamba, conda, pixi, docker, singularity, venv, modules. The `system` backend is used when a rule declares no environment spec.
 
 ---
 

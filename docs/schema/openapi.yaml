@@ -4,7 +4,7 @@ info:
   description: |
     Domain-driven REST API for bioinformatics pipeline orchestration —
     85+ endpoints across 11 domains.
-  version: 0.9.2
+  version: 0.10.2
   contact:
     name: Shixiang Wang
     email: w_shixiang@163.com

@@ -7,7 +7,7 @@ Show execution status from a checkpoint file. Displays which rules completed suc
 ## Usage
 
 ```
-oxo-flow status <CHECKPOINT>
+oxo-flow status [OPTIONS] <CHECKPOINT>
 ```
 
 ---
@@ -40,13 +40,17 @@ oxo-flow status .oxo-flow/checkpoint.json
 
 ```
 oxo-flow 0.10.2 — Bioinformatics Pipeline Engine
-Checkpoint Status:
-  ✓ trim_reads
+Status: Status for checkpoint: .oxo-flow/checkpoint.json
+  Completed: 3
+  Failed:    1
+
+Completed rules:
   ✓ align
   ✓ sort_bam
-  ✗ mark_duplicates
+  ✓ trim_reads
 
-Summary: 3 completed, 1 failed
+Failed rules:
+  ✗ mark_duplicates
 ```
 
 ---
@@ -64,9 +68,11 @@ The checkpoint file is JSON with the following structure:
       "rule": "trim_reads",
       "wall_time_secs": 42.5,
       "max_memory_mb": 1024,
-      "cpu_seconds": 38.2
+      "cpu_seconds": 38.2,
+      "retries": 0
     }
-  }
+  },
+  "workflow_path": "pipeline.oxoflow"
 }
 ```
 

@@ -5,7 +5,7 @@ Run a workflow in test mode: validate + lint + dry-run.
 ## Usage
 
 ```
-oxo-flow test <WORKFLOW>
+oxo-flow test [OPTIONS] <WORKFLOW>
 ```
 
 ## Description
@@ -25,7 +25,7 @@ catch issues early.
 
 | Option | Short | Default | Description |
 |---|---|---|---|
-| `--output` | — | — | Output directory for test run results |
+| `--output` | — | — | Output file path to verify after the run (fails with exit code 1 if the file is not found) |
 | `--run` | — | — | Execute the workflow after validation and lint (runs for real) |
 | `--jobs` | `-j` | `1` | Number of parallel jobs (only with `--run`) |
 
@@ -42,7 +42,7 @@ oxo-flow test pipeline.oxoflow
 ### Run the full test suite including execution
 
 ```bash
-oxo-flow test pipeline.oxoflow --run -j 4 --output test_results/
+oxo-flow test pipeline.oxoflow --run -j 4 --output results.txt
 ```
 
 ## Examples

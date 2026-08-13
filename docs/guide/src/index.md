@@ -18,7 +18,11 @@ DAG: 5 rules in execution order
   3. bwa_align
   4. sort_bam
   5. call_variants
-Done: 5 succeeded, 0 failed
+  Running: fastqc
+  ✓ fastqc (3.2s)
+  ⋮
+Done: 5 succeeded, 0 skipped, 0 failed
+✓ 9 output files verified (3.4GB total)
 ```
 
 ---
@@ -110,6 +114,7 @@ Here is a complete workflow that aligns paired-end reads and sorts the output:
 [workflow]
 name = "align-and-sort"
 version = "1.0.0"
+sample_pattern = "{sample}_R1.fastq.gz"
 
 [config]
 reference = "/data/ref/hg38.fa"
@@ -137,6 +142,8 @@ environment = { conda = "envs/samtools.yaml" }
 shell = "samtools index {input}"
 ```
 
+`{sample}` is a wildcard: `sample_pattern` tells oxo-flow to discover one sample per matching read file (`S1_R1.fastq.gz`, `S2_R1.fastq.gz`, … become one `bwa_align` task per sample). See [Wildcards](./reference/wildcards.md) for the other expansion sources.
+
 Run it:
 
 ```bash
@@ -146,12 +153,13 @@ oxo-flow validate align.oxoflow
 # Preview the execution plan
 oxo-flow dry-run align.oxoflow
 
-# Execute (the engine suggests -j from machine threads ÷ per-rule threads —
-# see the dry-run hint; the resource pool prevents oversubscription either way)
-oxo-flow run align.oxoflow -j 2
+# Execute (dry-run prints a suggested -j; the resource pool also
+# schedules by thread capacity, so jobs queue instead of oversubscribing)
+oxo-flow run align.oxoflow -j 1
 
-# Visualize the DAG
-oxo-flow graph align.oxoflow | dot -Tpng -o dag.png
+# Visualize the DAG (write the dot description, then render it)
+oxo-flow graph -f dot -o dag.dot align.oxoflow
+dot -Tpng -o dag.png dag.dot
 ```
 
 ---

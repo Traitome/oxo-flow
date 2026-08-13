@@ -2,7 +2,9 @@
 
 oxo-flow supports a compile-time + config-based plugin architecture. Plugins
 are Rust crates implementing standard traits, registered via TOML configuration
-files. Plugin authenticity is verified using HMAC-SHA256 signatures.
+files. Plugin manifests are integrity-checked using keyed SHA-256 signatures
+(`SHA256(key ‖ message)`). Note: this is not a true HMAC (RFC 2104) and does
+not provide cryptographic authentication.
 
 ## Quick Start
 
@@ -75,12 +77,15 @@ value = "a1b2c3d4..."
 
 ## Signature Verification
 
-Each plugin manifest can include a `[signature]` section with an HMAC-SHA256
-digest. The registry verifies signatures against trusted keys before loading:
+Each plugin manifest can include a `[signature]` section with a keyed
+SHA-256 digest. During discovery, the registry verifies signatures against
+trusted keys when any are configured; plugins with invalid signatures are
+skipped, while unsigned plugins and plugins with signatures but no
+configured trusted keys are loaded with a warning:
 
 ```rust
 registry.add_trusted_key("key-001", "shared-secret-key");
-registry.discover(Some(project_dir))?; // verified plugins only
+registry.discover(Some(project_dir))?; // invalid signatures are skipped
 ```
 
 ## API Reference

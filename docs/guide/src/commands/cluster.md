@@ -7,7 +7,7 @@ Manage cluster job submission and monitoring.
 ## Usage
 
 ```
-oxo-flow cluster <ACTION> [OPTIONS] [WORKFLOW/JOB_IDS]
+oxo-flow cluster <ACTION> [OPTIONS]
 ```
 
 ---
@@ -19,7 +19,7 @@ oxo-flow cluster <ACTION> [OPTIONS] [WORKFLOW/JOB_IDS]
 | `submit` | Submit a workflow to a cluster scheduler |
 | `status` | Show the status of submitted cluster jobs |
 | `cancel` | Cancel submitted cluster jobs |
-| `logs` | Fetch logs for a submitted cluster job |
+| `logs` | Fetch logs for a submitted cluster job (not yet implemented) |
 
 ---
 
@@ -28,7 +28,7 @@ oxo-flow cluster <ACTION> [OPTIONS] [WORKFLOW/JOB_IDS]
 | Argument | Description |
 |---|---|
 | `<WORKFLOW>` | Path to the `.oxoflow` workflow file (for `submit`) |
-| `<JOB_ID>...` | One or more cluster job IDs (for `cancel`) |
+| `[JOB_IDS]...` | Optional cluster job IDs (for `status` and `cancel`) |
 
 ---
 
@@ -42,7 +42,7 @@ oxo-flow cluster <ACTION> [OPTIONS] [WORKFLOW/JOB_IDS]
 | `--output` | `-o` | `cluster_scripts` | Directory for generated scripts |
 | `--target` | `-t` | — | Target rule(s) to execute |
 | `--with-dependencies` | — | — | Generate dependency-aware submit script with job chains |
-| `--dry-run` | `-n` | — | Preview scripts without generating files |
+| `--dry-run` | — | — | Preview scripts without generating files |
 
 ---
 
@@ -72,11 +72,9 @@ oxo-flow cluster submit pipeline.oxoflow -b sge -q all.q
 oxo-flow cluster submit pipeline.oxoflow -b lsf -q normal
 ```
 
-### Submit with pending timeout
+### Submit with queue and account
 
 ```bash
-# Abort submission if jobs stay in PENDING state for more than 1 hour
-# Submit with queue and account
 oxo-flow cluster submit pipeline.oxoflow -b slurm -q work -a lab-account
 ```
 
@@ -164,7 +162,9 @@ Done: 6 scripts written to cluster_scripts
 
 ## Generated Script Example
 
-For a workflow rule with conda environment, different backends produce different scripts:
+For a workflow rule with conda environment, different backends produce different scripts
+(threads/memory come from the rule's resources; the `-q`/`-a` flags add queue/account
+directives; there is no walltime option):
 
 ### SLURM Script
 
@@ -173,15 +173,14 @@ For a workflow rule with conda environment, different backends produce different
 #SBATCH --job-name=bwa_align
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
-#SBATCH --time=24:00:00
 #SBATCH --partition=compute
 #SBATCH --output=logs/bwa_align.out
 #SBATCH --error=logs/bwa_align.err
 
-# Environment wrapping (automatically added)
-conda activate bwa_env
+set -e
 
-bwa mem -t 16 ref.fa reads.fq > aligned.sam
+mkdir -p logs
+conda run -n bwa_env bash -c 'bwa mem -t 16 ref.fa reads.fq > aligned.sam'
 ```
 
 ### PBS/Torque Script
@@ -189,17 +188,14 @@ bwa mem -t 16 ref.fa reads.fq > aligned.sam
 ```bash
 #!/bin/bash
 #PBS -N bwa_align
-#PBS -l nodes=1:ppn=16
-#PBS -l mem=32gb
-#PBS -l walltime=24:00:00
-#PBS -q compute
+#PBS -l nodes=1:ppn=16,mem=32G
 #PBS -o logs/bwa_align.out
 #PBS -e logs/bwa_align.err
 
-# Environment wrapping (automatically added)
-conda activate bwa_env
+set -e
 
-bwa mem -t 16 ref.fa reads.fq > aligned.sam
+mkdir -p logs
+conda run -n bwa_env bash -c 'bwa mem -t 16 ref.fa reads.fq > aligned.sam'
 ```
 
 ### SGE Script
@@ -207,17 +203,15 @@ bwa mem -t 16 ref.fa reads.fq > aligned.sam
 ```bash
 #!/bin/bash
 #$ -N bwa_align
-#$ -pe threaded 16
-#$ -l mem_free=32G
-#$ -l h_rt=24:00:00
-#$ -q all.q
+#$ -pe smp 16
+#$ -l h_vmem=32G
 #$ -o logs/bwa_align.out
 #$ -e logs/bwa_align.err
 
-# Environment wrapping (automatically added)
-conda activate bwa_env
+set -e
 
-bwa mem -t 16 ref.fa reads.fq > aligned.sam
+mkdir -p logs
+conda run -n bwa_env bash -c 'bwa mem -t 16 ref.fa reads.fq > aligned.sam'
 ```
 
 ### LSF Script
@@ -226,17 +220,20 @@ bwa mem -t 16 ref.fa reads.fq > aligned.sam
 #!/bin/bash
 #BSUB -J bwa_align
 #BSUB -n 16
-#BSUB -R "rusage[mem=32768]"
-#BSUB -W 24:00
-#BSUB -q normal
+#BSUB -M 32G
 #BSUB -o logs/bwa_align.out
 #BSUB -e logs/bwa_align.err
 
-# Environment wrapping (automatically added)
-conda activate bwa_env
+set -e
 
-bwa mem -t 16 ref.fa reads.fq > aligned.sam
+mkdir -p logs
+conda run -n bwa_env bash -c 'bwa mem -t 16 ref.fa reads.fq > aligned.sam'
 ```
+
+Environment wrapping is applied automatically: conda rules are wrapped in
+`conda run -n <env> bash -c '...'`, docker rules in
+`docker run --rm --user $(id -u):$(id -g) ... <image> sh -c '...'`, and rules
+without an environment run the command directly.
 
 ### Dependency-Aware Submit Script
 

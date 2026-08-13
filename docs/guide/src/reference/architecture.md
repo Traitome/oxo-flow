@@ -13,7 +13,8 @@ oxo-flow/
 │   ├── oxo-flow-ai/      # AI companion — provider abstraction, skill system, agent framework
 │   ├── oxo-flow-cli/     # CLI binary
 │   └── oxo-flow-web/     # Web API server
-├── pipelines/            # Pipeline definitions
+├── frontend/             # Web UI (React SPA)
+├── docs/                 # User guide
 ├── examples/             # Example workflows
 └── tests/                # Integration tests
 ```
@@ -86,7 +87,7 @@ sequenceDiagram
         Environment-->>Executor: environment ready
         Executor->>ResourcePool: check_resources()
         ResourcePool-->>Executor: resources available
-        Executor->>ResourcePool: reserve_resources()
+        Executor->>ResourcePool: reserve()
         Executor->>Environment: wrap_command()
         Environment-->>Executor: wrapped command
         Executor->>Executor: run shell command
@@ -146,11 +147,11 @@ The core library uses `thiserror` for typed errors:
 
 ```rust
 pub enum OxoFlowError {
-    Config(String),
-    Dag(String),
-    Execution(String),
+    Config { message: String },
+    CycleDetected { details: String },
+    Execution { rule: String, message: String },
     Environment { kind: String, message: String },
-    ResourceExhausted { rule: String, ... },
+    ResourceExhausted { rule: String, required_threads: u32, ... },
     // ...
 }
 ```
@@ -190,7 +191,7 @@ The `oxo-flow-web` crate follows a **domain-driven modular monolith** pattern:
 
 ```
 crates/oxo-flow-web/src/
-├── server.rs              # Router assembly (~200 lines)
+├── server.rs              # Router assembly (~580 lines)
 ├── domains/
 │   ├── workflow/          # Pipeline parse, validate, prepare, DAG, format
 │   │   ├── types.rs       # Request/response structs
@@ -199,8 +200,10 @@ crates/oxo-flow-web/src/
 │   ├── execution/         # Run management, diagnostics, smart retry
 │   │   ├── diagnostics.rs # Deterministic error pattern matching (30+ patterns)
 │   │   └── runner.rs      # Background process spawn + monitor
+│   ├── dag/               # DAG editing: edit commands with undo/redo
 │   ├── ai/                # AI translation layer (calls core APIs only)
 │   │   └── service.rs     # DeepSeek/Claude/OpenAI/Ollama enum dispatch
+│   ├── chat/              # Chat interface: intent inference
 │   ├── collaboration/     # Fork, diff, share, import
 │   ├── auth/              # Authentication + OAuth2 (ORCID, GitHub)
 │   └── observability/     # Health, metrics, structured logging, SSE
@@ -208,7 +211,7 @@ crates/oxo-flow-web/src/
 │   ├── db/                # StorageBackend trait + SQLite + PostgreSQL
 │   ├── license.rs         # License notice management
 │   └── sse.rs             # Real-time Server-Sent Events
-└── templates/             # Embedded .oxoflow templates
+└── pipelines/             # Embedded .oxoflow pipeline templates
 ```
 
 **Key principles:**

@@ -52,10 +52,10 @@ oxo-flow pull https://example.com/pipelines/align-bundle.tar.gz
 oxo-flow pull gh:user/repo@v2 -o my-pipeline.tar.zst
 
 # Pull and execute in one step
-oxo-flow pull gh:user/repo@v1 && oxo-flow run --bundle repo-bundle.tar.zst -j 16 --yes
+oxo-flow pull gh:user/repo@v1 -o repo-bundle.tar.zst && oxo-flow run --bundle repo-bundle.tar.zst -j 16 --yes
 
 # Pull and review resources before running
-oxo-flow pull gh:user/repo@v1
+oxo-flow pull gh:user/repo@v1 -o repo-bundle.tar.zst
 oxo-flow run --bundle repo-bundle.tar.zst --yes
 ```
 

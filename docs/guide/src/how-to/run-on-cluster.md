@@ -156,7 +156,7 @@ When generating cluster scripts, oxo-flow automatically wraps commands through t
 | Backend | Wrapping |
 |---|---|---|
 | Conda / Mamba | `conda run -n <env> bash -c '<command>'` |
-| Docker | `docker run --rm -v <workdir>:<workdir> -w <workdir> <image> <command>` |
+| Docker | `docker run --rm --user $(id -u):$(id -g) -v .:. -w . <image> sh -c '<command>'` |
 | Singularity | `singularity exec --bind .:. <image> sh -c '<command>'` |
 | Pixi | `pixi run -e <env> <command>` |
 | Venv | `source <venv>/bin/activate && <command>` |

@@ -7,7 +7,7 @@ Inspect and manage workflow configuration.
 ## Usage
 
 ```
-oxo-flow config <ACTION> [WORKFLOW] [KEY] [VALUE]
+oxo-flow config <ACTION> [OPTIONS]
 ```
 
 ---
@@ -50,7 +50,7 @@ oxo-flow config stats pipeline.oxoflow
 
 ```bash
 oxo-flow config get pipeline.oxoflow reference
-# Output: /data/references/GRCh38/genome.fa
+# Output: "/data/references/GRCh38/genome.fa"
 ```
 
 ---
@@ -100,13 +100,13 @@ Rule A ──► Rule B ──► Rule C
 
 **Why can dependencies exceed rules?**
 
-Some rules depend on multiple upstream outputs (e.g., a merge rule that combines results from parallel branches). Each input file creates an edge in the DAG.
+Some rules depend on multiple upstream outputs (e.g., a merge rule that combines results from parallel branches). Each input file that exactly matches another rule's output string creates an edge in the DAG (wildcard patterns like `{sample}` are matched literally and do not match other rules' patterns).
 
 ---
 
 ## Notes
 
-- `config show` displays metadata, configuration variables, includes, and execution groups
+- `config show` displays workflow metadata (name, version, description, author) and configuration variables
 - `config stats` provides a high-level overview of the workflow's complexity
 - `config get` exits with code 1 if the key is not found
 - `config get` returns values in their native TOML type representation

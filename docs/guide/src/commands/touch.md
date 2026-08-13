@@ -53,7 +53,7 @@ oxo-flow 0.10.2 — Bioinformatics Pipeline Engine
   ✓ sample2.bam
   ✓ sample2.bam.bai
 
-Done: 4 file(s) touched, 0 wildcard patterns skipped
+Done: 4 file(s) touched, 0 wildcard pattern(s) skipped
 ```
 
 ---

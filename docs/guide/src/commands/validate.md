@@ -7,7 +7,7 @@ Validate a `.oxoflow` workflow file. Checks TOML syntax, rule definitions, and D
 ## Usage
 
 ```
-oxo-flow validate <WORKFLOW>
+oxo-flow validate [OPTIONS] <WORKFLOW>
 ```
 
 ---
@@ -51,13 +51,13 @@ oxo-flow validate pipeline.oxoflow
 ### Invalid TOML syntax
 
 ```
-✗ pipeline.oxoflow — expected `=`, found newline at line 15 column 1
+✗ pipeline.oxoflow — parse error in pipeline.oxoflow: TOML parse error at line 15, column 1
 ```
 
 ### Circular dependency
 
 ```
-✗ pipeline.oxoflow — DAG error: cycle detected involving rule "align"
+✗ pipeline.oxoflow — DAG error: cycle detected in workflow DAG: cycle detected: align → sort_bam → align
 ```
 
 ---
@@ -66,5 +66,6 @@ oxo-flow validate pipeline.oxoflow
 
 - Exits with code `0` on success, `1` on failure
 - Validates both TOML parsing and DAG construction
-- Does not check that referenced files, environments, or tools actually exist — use `oxo-flow env check` for environment validation
+- Missing input files are reported as warnings (not errors); `--as-include` skips DAG validation and input-existence checks
+- Environments and tools are not verified — use `oxo-flow env check` for environment validation
 - Run `validate` before `run` to catch errors early without consuming compute resources

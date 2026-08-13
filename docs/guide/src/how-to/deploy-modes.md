@@ -25,7 +25,7 @@ oxo-flow serve --mode hpc
 | Network | `127.0.0.1:8080` (localhost only) |
 | Database | SQLite file (`oxo-flow.db`) |
 | Auth | None (single user) |
-| Workspace | `workspace/personal/` |
+| Workspace | `workspace/users/local_user/runs/<run_id>` |
 
 ```bash
 # Start
@@ -47,7 +47,7 @@ open http://localhost:8080
 | Network | `127.0.0.1:8080` by default — pass `--host 0.0.0.0` to bind all interfaces |
 | Database | SQLite (default) or PostgreSQL |
 | Auth | Password env vars (`OXO_FLOW_ADMIN_PASSWORD` / `OXO_FLOW_USER_PASSWORD` / `OXO_FLOW_VIEWER_PASSWORD`) + optional ORCID/GitHub OAuth |
-| Workspace | `workspace/users/<username>/` |
+| Workspace | `workspace/users/<username>/runs/<run_id>` |
 
 ```bash
 # Start with SQLite (default) and bind to all interfaces

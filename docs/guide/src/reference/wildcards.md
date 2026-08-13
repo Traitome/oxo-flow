@@ -9,6 +9,10 @@ Wildcards are the mechanism by which oxo-flow enables dynamic, pattern-based pip
 Wildcards are denoted by curly braces `{}` containing a name (e.g., `{sample}`).
 
 ```toml
+[workflow]
+name = "align-pipeline"
+sample_pattern = "raw/{sample}.fastq.gz"
+
 [[rules]]
 name = "align"
 input = ["raw/{sample}.fastq.gz"]
@@ -16,7 +20,7 @@ output = ["aligned/{sample}.bam"]
 shell = "bwa mem ref.fa {input} > {output}"
 ```
 
-In this example, `{sample}` is a wildcard. When oxo-flow runs this workflow, it scans for files matching `raw/*.fastq.gz`, extracts the matching portion as the `sample` value, and generates one `align` task for each sample found.
+In this example, `{sample}` is a wildcard. When oxo-flow loads this workflow, `sample_pattern` scans the filesystem for matching files, extracts the matching portion as the `sample` value, and generates one `align` task for each sample found.
 
 ---
 
@@ -26,10 +30,10 @@ oxo-flow determines the values for wildcards from three primary sources:
 
 ### 1. File Discovery (Automatic)
 
-When a rule's `input` contains wildcards, oxo-flow scans the filesystem to find all files that match the pattern.
+Set [`[workflow] sample_pattern`](./workflow-format.md#auto-discovery-with-sample_pattern) to scan the filesystem at load time. oxo-flow collects the discovered samples into an `auto-discovered` sample group, and rules referencing `{sample}` expand once per discovered sample.
 
 - **Example**: If `raw/` contains `S1.fastq.gz` and `S2.fastq.gz`.
-- **Pattern**: `raw/{sample}.fastq.gz`
+- **Pattern**: `sample_pattern = "raw/{sample}.fastq.gz"`
 - **Values**: `sample` becomes `["S1", "S2"]`.
 
 ### 2. Experiment-Control Pairs (`[[pairs]]`)
@@ -79,7 +83,7 @@ While they use the same `{}` syntax, built-in placeholders are NOT wildcards; th
 
 ## Multiple Wildcards & Cartesian Product
 
-If a pattern contains multiple wildcards, oxo-flow generates the **Cartesian product** of all possible values.
+If a pattern contains multiple wildcards with explicit value lists, oxo-flow generates the **Cartesian product** of all values — the semantics used by the [`expand_inputs`](./workflow-format.md#expand-inputs) field.
 
 - **Pattern**: `results/{sample}_R{read}.txt`
 - **Values**: `sample=["A", "B"]`, `read=["1", "2"]`
@@ -112,9 +116,8 @@ If a value discovered from the filesystem does not match its constraint, it is i
 
 When a rule is expanded from wildcards, its unique name in the DAG is modified to include the wildcard values to avoid collisions:
 
-- **Basic Wildcard**: `align` → `align_S1`, `align_S2`
+- **Sample/group wildcards**: `align` → `align_control_S1` — one expanded rule per (group, sample) combination
 - **Pairs**: `mutect2` → `mutect2_CASE_001`
-- **Groups**: `fastqc` → `fastqc_control_C1`
 
 ---
 

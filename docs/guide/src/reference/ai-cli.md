@@ -39,11 +39,11 @@ export ANTHROPIC_AUTH_TOKEN="..."
 
 # Local Ollama (no API key needed)
 export OXO_FLOW_AI_PROVIDER=ollama
-export OLLAMA_HOST="http://localhost:11434"
-export OLLAMA_MODEL="llama3"
+export OXO_FLOW_AI_API_URL="http://localhost:11434"
+export OXO_FLOW_AI_MODEL="llama3"
 ```
 
-Configuration persists to `~/.oxo-flow/ai_config.json` after first use.
+Configuration persists to `~/.config/oxo-flow/ai_config.json` after first use.
 
 ### 2. Enable AI in Your Workflow
 
@@ -146,7 +146,7 @@ oxo-flow template "RNA-seq" --ai --ai-max-retries 5
 
 ## Configuration
 
-### Global Config (`~/.oxo-flow/ai_config.json`)
+### Global Config (`~/.config/oxo-flow/ai_config.json`)
 
 ```json
 {
@@ -176,10 +176,10 @@ model = "deepseek-v4-flash"
 | `OXO_FLOW_AI_MODEL` | Model name override | (provider default) |
 | `DEEPSEEK_API_KEY` | DeepSeek (OpenAI-compatible) | — |
 | `ANTHROPIC_AUTH_TOKEN` | Anthropic-compatible API key | — |
-| `ANTHROPIC_BASE_URL` | Custom Anthropic endpoint | `https://api.anthropic.com` |
+| `ANTHROPIC_BASE_URL` | Custom Anthropic endpoint | `https://api.anthropic.com/v1/messages` |
 | `OPENAI_API_KEY` | OpenAI-compatible API key | — |
-| `OPENAI_BASE_URL` | Custom OpenAI-compatible endpoint | `https://api.openai.com/v1` |
-| `OLLAMA_HOST` | Ollama server address | `http://localhost:11434` |
+| `OPENAI_BASE_URL` | Custom OpenAI-compatible endpoint | `https://api.openai.com/v1/chat/completions` |
+| `OLLAMA_HOST` | Ollama server address (web service only; the CLI reads `OXO_FLOW_AI_API_URL`) | `http://localhost:11434` |
 
 ---
 
@@ -190,7 +190,7 @@ The AI agent combines four embedded knowledge sources (all compiled into the bin
 1. **Tool Reference Table**: 40 curated bioinformatics tools with resource allocations (threads, memory)
 2. **Bioconda Tool Database**: 6,103 CLI tools with current versions and descriptions — queried on demand via `lookup_tool`
 3. **bioSkills Library**: 562 curated Agent Skills (the emerging SKILL.md standard) with domain procedures, commands, and caveats — matched by assay type and injected into generation prompts, or queried via `lookup_skill`
-4. **Pipeline Knowledge Graph**: 78 workflow skills and 470 literature-backed data-flow transitions (BAM → VCF → annotated VCF chains) — queried via `lookup_pipeline` to design correct multi-step topologies
+4. **Pipeline Knowledge Graph**: 79 workflow skills and 469 literature-backed data-flow transitions (BAM → VCF → annotated VCF chains) — queried via `lookup_pipeline` to design correct multi-step topologies
 
 Token efficiency: embedded data is **never added to the LLM context wholesale**. Only on-demand tool queries (~1 KB per result) and domain-matched skill summaries (≤3 per domain) are injected — the rest stays in the binary until needed.
 
@@ -214,7 +214,7 @@ Every AI interaction is logged to `.oxo-flow/ai_sessions/` for audit and debuggi
   "user_intent": "RNA-seq with STAR and DESeq2",
   "provider": "deepseek",
   "model": "deepseek-v4-pro",
-  "rounds": 1,
+  "total_usage": { "prompt_tokens": 1234, "completion_tokens": 432 },
   "outcome": "success",
   "confidence": 0.91
 }
@@ -245,7 +245,7 @@ Every AI interaction is logged to `.oxo-flow/ai_sessions/` for audit and debuggi
 | `oxo-flow template "X" --ai --from-file PATH` | required | ❌ | Generate with local file as reference |
 | `oxo-flow template "X" --ai -o PATH` | required | ❌ | Write output to specific path |
 | `oxo-flow template "X" --ai --ai-max-retries N` | required | ❌ | Override max correction rounds |
-| `oxo-flow env create "X" --ai` | required | ❌ | Natural language → pinned conda environment YAML |
+| `oxo-flow env create "X" --ai` | required | ❌ | Natural language → pinned conda environment YAML (or pixi TOML with `--backend pixi`) |
 | `oxo-flow dry-run WORKFLOW` | optional | ✅ | AI analysis if [ai] enabled=true |
 | `oxo-flow dry-run WORKFLOW --ai` | force | — | Explicit AI override |
 | `oxo-flow validate WORKFLOW` | optional | ✅ | AI semantic validation |

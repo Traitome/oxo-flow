@@ -26,6 +26,10 @@ oxo-flow lint [OPTIONS] <WORKFLOW>
 |---|---|---|---|
 | `--strict` | — | — | Treat warnings as errors (non-zero exit) |
 | `--ai` | — | — | Enable AI-powered semantic linting |
+| `--verbose` | `-v` | — | Enable verbose (debug-level) logging |
+| `--quiet` | — | — | Suppress non-essential output (errors only) |
+| `--no-color` | — | — | Disable colored output |
+| `--json` | — | — | Output machine-readable JSON to stdout |
 
 ---
 

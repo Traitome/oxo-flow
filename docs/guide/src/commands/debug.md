@@ -1,8 +1,8 @@
 # `oxo-flow debug`
 
 Debug a workflow by showing each rule with its fully resolved shell command,
-resource requirements, environment, dependencies, and metadata. Useful for
-verifying that template variables are substituted correctly.
+outputs, and dependencies. Useful for verifying that template variables are
+substituted correctly.
 
 ---
 
@@ -52,29 +52,20 @@ oxo-flow debug pipeline.oxoflow -r bwa_align
 
 For each rule, the debug command shows:
 
-- **Rule name** and description
-- **Inputs and outputs** (with wildcard patterns)
-- **Shell command** — both the raw template and the expanded version
-- **Resources** — threads, memory, GPU specifications
-- **Environment** — conda, docker, singularity, modules, etc.
-- **Dependencies** — both file-based and explicit `depends_on`
-- **Tags** — categorization labels
-- **Format hints** — declared file formats
-- **Metadata** — arbitrary domain-specific key-value pairs
-- **Wildcards** — wildcard names extracted from patterns
+- **Rule name** and description (when the rule declares one)
+- **Outputs** (with wildcard patterns expanded)
+- **Shell (expanded)** — the fully resolved shell command
+- **Dependencies** — other rules that must run first
 
 ```
-── Rule: bwa_align ──
-  Description: Align reads to reference genome
-  Inputs: ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz"]
-  Outputs: ["aligned/{sample}.sorted.bam"]
-  Shell (template): bwa mem -t {threads} {config.reference} {input} | samtools sort -o {output}
-  Shell (expanded): bwa mem -t 16 {config.reference} trimmed/{sample}_R1.fastq.gz trimmed/{sample}_R2.fastq.gz | samtools sort -o aligned/{sample}.sorted.bam
-  Resources: threads=16, memory=32G
-  Environment: docker
-  Dependencies: ["trim_reads"]
-  Tags: ["alignment"]
-  Wildcards: ["sample"]
+oxo-flow 0.10.2 — Bioinformatics Pipeline Engine
+Debug: Debugging 3 rules
+── Rule: transform ──
+  Outputs: ["data/filtered.csv"]
+  Shell (expanded): head -1 data/raw.csv > data/filtered.csv
+awk -F',' 'NR>1 && $3 > 500' data/raw.csv >> data/filtered.csv
+
+  Dependencies: ["generate_data"]
 ```
 
 ---
@@ -84,6 +75,9 @@ For each rule, the debug command shows:
 - The debug command does not execute any shell commands
 - Template variables like `{input}`, `{output}`, and `{threads}` are
   substituted in the expanded view
-- Wildcard placeholders like `{sample}` remain unresolved since actual
-  values depend on input file discovery at runtime
+- Wildcard rules are expanded per sample before display: rule names get a
+  `_<sample>` suffix (e.g. `bwa_mem2_align_cohort_NA12878`) and wildcard
+  placeholders are replaced with concrete values
+- With `--rule`, use the full expanded rule name as shown in the output
+  (for wildcard workflows, the template name like `bwa_mem2_align` will not match)
 - Use this command to verify variable substitution before running a workflow

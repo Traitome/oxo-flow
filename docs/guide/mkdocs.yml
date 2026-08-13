@@ -186,6 +186,7 @@ nav:
       - Cloud Storage: reference/cloud-storage.md
       - Plugin System: reference/plugin-system.md
       - Glossary: reference/glossary.md
+      - Security Model: reference/security.md
       - Licensing: reference/license.md
   - Deployment:
       - Deployment Modes: how-to/deploy-modes.md

@@ -7,7 +7,7 @@ Execute a workflow.
 ## Usage
 
 ```
-oxo-flow run [OPTIONS] [WORKFLOW]
+oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 ```
 
 ---
@@ -17,6 +17,7 @@ oxo-flow run [OPTIONS] [WORKFLOW]
 | Argument | Description |
 |---|---|
 | `[WORKFLOW]` | Path to the `.oxoflow` workflow file. **Optional** — if not specified, auto-discovery searches for: (1) `main.oxoflow` in current directory, (2) alphabetically first `*.oxoflow` file in current directory. |
+| `[KEY=VALUE]...` | Direct config overrides: `KEY=VALUE`, `--KEY=VALUE`, or `--KEY VALUE` |
 
 ---
 
@@ -26,7 +27,7 @@ oxo-flow run [OPTIONS] [WORKFLOW]
 |---|---|---|---|
 | `--jobs` | `-j` | `1` | Maximum number of concurrent jobs |
 | `--keep-going` | `-k` | — | Continue execution when a job fails |
-| `--workdir` | `-d` | Current directory | Working directory for execution |
+| `--workdir` | `-d` | Workflow file's directory | Working directory for execution |
 | `--target` | `-t` | All rules | Run only specific target rules |
 | `--retry` | `-r` | `0` | Number of times to retry failed jobs |
 | `--timeout` | — | `0` (disabled) | Timeout per job in seconds |
@@ -188,21 +189,23 @@ DAG: 5 rules in execution order
   3. bwa_align
   4. sort_bam
   5. call_variants
-⠋ [00:15] [████████████░░░░░░░░] 3/5 (Done: 3, Fail: 0, Skip: 0)
-  ✓ fastqc
-  ✓ trim_reads
-  ✓ bwa_align
-  ✓ sort_bam
-  ✓ call_variants
+⠋ [00:15] [████████████░░░░░░░░] 3/5 ETA:0:00:42 (executing sort_bam)
+  ✓ fastqc (2.1s)
+  ✓ trim_reads (15.0s)
+  ✓ bwa_align (42.3s)
+  ✓ sort_bam (10.2s)
+  ✓ call_variants (8.4s)
 
-Done: 5 succeeded, 0 failed
+Done: 5 succeeded, 0 skipped, 0 failed
+✓ 5 output files verified (118.3MB total)
 ```
 
 A progress bar shows execution progress with:
 
 - Elapsed time
 - Current position / total rules
-- Success/Fail/Skip counts
+- Estimated time remaining (ETA), plus the rule currently executing
+- The final summary line reports succeeded / skipped / failed counts
 
 ---
 

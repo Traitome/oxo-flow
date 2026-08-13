@@ -16,7 +16,7 @@ graph TD
     D --> E[GATK BaseRecalibrator]
     E --> F[GATK ApplyBQSR]
     F --> G[GATK Mutect2: paired tumor-normal]
-    G --> H[bcftools: filter]
+    G --> H[GATK FilterMutectCalls]
 ```
 
 Every rule applies to **both** the tumor and the normal sample — `[[pairs]]` drives the expansion automatically.
@@ -43,9 +43,9 @@ channels:
   - bioconda
   - conda-forge
 dependencies:
-  - bwa=0.7.17
-  - samtools=1.19
-  - fastp=0.23.4
+  - bwa=0.7.19
+  - samtools=1.24
+  - fastp=1.3.6
 ```
 
 ```yaml
@@ -55,17 +55,7 @@ channels:
   - bioconda
   - conda-forge
 dependencies:
-  - gatk4=4.5.0.0
-```
-
-```yaml
-# envs/bcftools.yaml
-name: bcftools
-channels:
-  - bioconda
-  - conda-forge
-dependencies:
-  - bcftools=1.19
+  - gatk4=4.6.2.0
 ```
 
 ---
@@ -81,7 +71,9 @@ description = "Paired somatic variant calling pipeline (tumor-normal)"
 [config]
 reference = "/data/references/hg38/hg38.fa"
 known_sites = "/data/references/hg38/dbsnp_146.hg38.vcf.gz"
+known_indels = "/data/references/hg38/Mills_and_1000G_gold_standard.indels.hg38.vcf.gz"
 germline_resource = "/data/references/hg38/af-only-gnomad.hg38.vcf.gz"
+panel_of_normals = "/data/references/hg38/1000g_pon.hg38.vcf.gz"
 results = "results"
 
 [defaults]
@@ -116,6 +108,7 @@ fastp --in1 raw/{control}_R1.fastq.gz --in2 raw/{control}_R2.fastq.gz --out1 {co
 
 [[rules]]
 name = "align"
+# -R adds read-group tags (required by GATK downstream); \\t stays a literal backslash-t so bwa can split it into header fields
 input = [
     "{config.results}/trimmed/{experiment}_R1.fastq.gz", "{config.results}/trimmed/{experiment}_R2.fastq.gz",
     "{config.results}/trimmed/{control}_R1.fastq.gz", "{config.results}/trimmed/{control}_R2.fastq.gz"
@@ -126,9 +119,9 @@ output = [
 ]
 environment = { conda = "envs/alignment.yaml" }
 shell = """
-bwa mem -t {threads} {config.reference} {config.results}/trimmed/{experiment}_R1.fastq.gz {config.results}/trimmed/{experiment}_R2.fastq.gz | samtools sort -@ {threads} -o {config.results}/aligned/{experiment}.bam
+bwa mem -t {threads} -R "@RG\\tID:{experiment}\\tSM:{experiment}\\tLB:lib_{experiment}\\tPL:ILLUMINA" {config.reference} {config.results}/trimmed/{experiment}_R1.fastq.gz {config.results}/trimmed/{experiment}_R2.fastq.gz | samtools sort -@ {threads} -o {config.results}/aligned/{experiment}.bam
 samtools index {config.results}/aligned/{experiment}.bam
-bwa mem -t {threads} {config.reference} {config.results}/trimmed/{control}_R1.fastq.gz {config.results}/trimmed/{control}_R2.fastq.gz | samtools sort -@ {threads} -o {config.results}/aligned/{control}.bam
+bwa mem -t {threads} -R "@RG\\tID:{control}\\tSM:{control}\\tLB:lib_{control}\\tPL:ILLUMINA" {config.reference} {config.results}/trimmed/{control}_R1.fastq.gz {config.results}/trimmed/{control}_R2.fastq.gz | samtools sort -@ {threads} -o {config.results}/aligned/{control}.bam
 samtools index {config.results}/aligned/{control}.bam
 """
 [rules.resources]
@@ -154,8 +147,8 @@ input = ["{config.results}/dedup/{experiment}.dedup.bam", "{config.results}/dedu
 output = ["{config.results}/recal/{experiment}.recal.table", "{config.results}/recal/{control}.recal.table"]
 environment = { conda = "envs/gatk.yaml" }
 shell = """
-gatk BaseRecalibrator -I {config.results}/dedup/{experiment}.dedup.bam -R {config.reference} --known-sites {config.known_sites} -O {config.results}/recal/{experiment}.recal.table
-gatk BaseRecalibrator -I {config.results}/dedup/{control}.dedup.bam -R {config.reference} --known-sites {config.known_sites} -O {config.results}/recal/{control}.recal.table
+gatk BaseRecalibrator -I {config.results}/dedup/{experiment}.dedup.bam -R {config.reference} --known-sites {config.known_sites} --known-sites {config.known_indels} -O {config.results}/recal/{experiment}.recal.table
+gatk BaseRecalibrator -I {config.results}/dedup/{control}.dedup.bam -R {config.reference} --known-sites {config.known_sites} --known-sites {config.known_indels} -O {config.results}/recal/{control}.recal.table
 """
 
 [[rules]]
@@ -183,6 +176,7 @@ gatk Mutect2 \
   -I {config.results}/recal/{control}.recal.bam \
   -normal {control} \
   --germline-resource {config.germline_resource} \
+  --panel-of-normals {config.panel_of_normals} \
   --native-pair-hmm-threads {threads} \
   -O {config.results}/variants/{pair_id}.vcf.gz
 """
@@ -191,11 +185,9 @@ gatk Mutect2 \
 name = "filter_variants"
 input = ["{config.results}/variants/{pair_id}.vcf.gz"]
 output = ["{config.results}/filtered/{pair_id}.filtered.vcf.gz"]
-environment = { conda = "envs/bcftools.yaml" }
+environment = { conda = "envs/gatk.yaml" }
 shell = """
-bcftools filter -i 'QUAL>=30 && DP>=10' {config.results}/variants/{pair_id}.vcf.gz | \
-  bcftools view -f PASS -Oz -o {config.results}/filtered/{pair_id}.filtered.vcf.gz
-bcftools index -t {config.results}/filtered/{pair_id}.filtered.vcf.gz
+gatk FilterMutectCalls -R {config.reference} -V {config.results}/variants/{pair_id}.vcf.gz -O {config.results}/filtered/{pair_id}.filtered.vcf.gz
 """
 ```
 
@@ -245,8 +237,8 @@ oxo-flow report variant-calling.oxoflow -f html -o report.html
 | Pattern | Example |
 |---|---|
 | **Tumor-normal pairing** | `[[pairs]]` expands each rule per pair; Mutect2 runs in paired mode |
-| **Multiple environments** | Different conda envs for alignment, GATK, and bcftools |
-| **Resource scaling** | `align` gets 16 threads / 32G; `filter_variants` gets 2 threads / 8G |
+| **Multiple environments** | Different conda envs for alignment and GATK |
+| **Resource scaling** | `align` overrides `[defaults]` with 16 threads / 32G; all other rules inherit 4 threads / 8G |
 | **Piped commands** | `bwa mem \| samtools sort` in the `align` rule |
 | **Config variables** | `{config.reference}`, `{config.results}` used across all rules |
 | **Linear dependency chain** | Each rule's output is the next rule's input |

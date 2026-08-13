@@ -28,7 +28,7 @@ oxo-flow batch [OPTIONS] <TEMPLATE> [ITEMS...]
 | `--jobs` | `-j` | 1 | Number of parallel workers |
 | `--stop-on-error` | `-x` | — | Stop after first failure |
 | `--file` | `-f` | — | Read items from file |
-| `--json-output` | — | — | Output results as formatted JSON (`--json` also accepted) |
+| `--json-output` | — | — | Output results as formatted JSON |
 | `--dry-run` | `-n` | — | Preview without executing |
 | `--workdir` | `-d` | . | Working directory |
 | `--environment` | `-e` | — | Environment spec |
@@ -110,4 +110,4 @@ oxo-flow batch -n "fastqc {item}" *.fastq.gz
 - When no items provided and stdin has data, reads from pipe
 - `{}` is rush-compatible shorthand for `{item}`
 - Environment spec format: `conda: env.yaml` or `docker: image:tag`
-- Generated workflows use wildcard patterns when items follow a naming pattern
+- Generated workflows create one rule per item (`batch_item_1`, `batch_item_2`, ...)

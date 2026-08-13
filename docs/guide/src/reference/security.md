@@ -34,6 +34,7 @@ These emit **warnings** but allow execution (common in bioinformatics scripts):
 | `eval` | eval usage detected |
 | `rm -rf /` (in shell) | Dangerous recursive deletion |
 | `chmod 777` | Overly permissive chmod |
+| `curl/wget` piped to shell or `&& bash` | Remote pipe to shell detected |
 
 ---
 
@@ -44,14 +45,14 @@ Output paths are validated to prevent file system escape:
 | Check | Behavior | Error Code |
 |-------|----------|------------|
 | `..` in path | Blocked — prevents directory traversal | E009 |
-| Absolute paths outside workdir | Blocked — prevents system file access | E009 |
-| Interpreter paths | Only standard directories allowed | Validation |
+| Absolute paths outside workdir | Lint warning (W017); blocked at runtime when they escape the workdir | W017 |
+| Interpreter paths | Only simple names or paths under `/usr/bin`, `/usr/local/bin`, `/opt`, `/home`, `/Users` | Validation |
 
 ---
 
 ## Layer 3 — Secret & Credential Scanning
 
-`scan_for_secrets()` detects hardcoded credentials in workflow TOML content and shell commands. Runs during validation and emits warnings (does not block execution).
+Hardcoded credentials in workflow TOML content are detected by the `oxo-flow lint` command (`format::scan_for_secrets`), which emits S008 warnings; it does not block execution.
 
 ### Detected Secret Types
 
@@ -61,12 +62,14 @@ Output paths are validated to prevent file system escape:
 | Passwords | `password = "hunter2"`, `pwd = "..."` |
 | Anthropic keys | `sk-ant-api03-...`, `sk-proj-...` |
 | OpenAI / DeepSeek keys | `sk-<32+ chars>` |
-| GitHub tokens | `ghp_...`, `gho_...`, `ghs_...` |
+| GitHub tokens | `ghp_...`, `gho_...`, `ghu_...`, `ghs_...`, `ghr_...` |
 | AWS keys | `AKIA...`, `ASIA...` |
 | Private keys (PEM) | `-----BEGIN RSA PRIVATE KEY-----` |
 | DB connection strings | `postgresql://user:pass@host/db` |
 
 Secret values are **redacted** in findings — only the first and last 4 characters are shown.
+
+Additionally, workflow config values declared with `sensitive = true` in a `[config]` definition are masked as `****` in logs, `--help`, and error output.
 
 ---
 

@@ -25,7 +25,10 @@ oxo-flow init [OPTIONS] <NAME>
 | Option | Short | Default | Description |
 |---|---|---|---|
 | `--dir` | `-d` | `./<NAME>` | Output directory (defaults to the project name) |
-| `--verbose` | `-v` | — | Enable debug-level logging |
+| `--verbose` | `-v` | — | Enable verbose (debug-level) logging |
+| `--quiet` | — | — | Suppress non-essential output (errors only) |
+| `--no-color` | — | — | Disable colored output |
+| `--json` | — | — | Output machine-readable JSON to stdout |
 
 ---
 
@@ -51,11 +54,13 @@ oxo-flow init my-pipeline -d /projects/genomics/my-pipeline
 oxo-flow 0.10.2 — Bioinformatics Pipeline Engine
 ✓ Created new project at my-pipeline
   my-pipeline/my-pipeline.oxoflow
-  my-pipeline/envs/
-  my-pipeline/scripts/
+  my-pipeline/envs/example.yaml
+  my-pipeline/scripts/example.sh
   my-pipeline/.gitignore
 
-  Edit my-pipeline/my-pipeline.oxoflow to define your pipeline.
+  Next steps: To run your first workflow:
+    cd my-pipeline
+    oxo-flow run my-pipeline.oxoflow
 ```
 
 ### Generated files
@@ -67,8 +72,11 @@ oxo-flow 0.10.2 — Bioinformatics Pipeline Engine
 name = "my-pipeline"
 version = "0.1.0"
 description = "A new oxo-flow pipeline"
+author = ""
 
 [config]
+# Variables defined here are used in shell commands as {config.key}
+sample_name = "example"
 greeting = "Hello from oxo-flow!"
 
 [defaults]
@@ -77,14 +85,14 @@ memory = "1G"
 
 [[rules]]
 name = "hello_world"
-input = ["data/input.txt"]
-output = ["results/output.txt"]
-shell = "echo '{config.greeting}' > {output[0]} && cat {input[0]} >> {output[0]}"
+description = "A minimal rule that writes a greeting"
+output = ["results/{config.sample_name}_output.txt"]
+shell = "echo '{config.greeting}' > {output[0]}"
 ```
 
-**`envs/`** — Directory for conda YAML / Docker / Pixi environment specs.
+**`envs/example.yaml`** — Starter conda environment specification.
 
-**`scripts/`** — Directory for helper scripts.
+**`scripts/example.sh`** — Starter helper script.
 
 **`data/`** — Pre-populated with an `input.txt` sample to allow immediate execution.
 
@@ -97,5 +105,5 @@ shell = "echo '{config.greeting}' > {output[0]} && cat {input[0]} >> {output[0]}
 ## Notes
 
 - The output directory is created if it does not exist
-- If the directory already exists, files are written into it without overwriting existing files
+- If the directory already exists, oxo-flow prints a warning and files may be overwritten
 - The generated `.gitignore` includes common bioinformatics file types and oxo-flow internal directories

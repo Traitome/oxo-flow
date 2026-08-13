@@ -7,7 +7,7 @@ Verify or display license status.
 ## Usage
 
 ```
-oxo-flow license [LICENSE_PATH]
+oxo-flow license [OPTIONS] [LICENSE_PATH]
 ```
 
 ---
@@ -30,7 +30,7 @@ oxo-flow license
 # License status:
 #   Status:  Valid (academic)
 #   Issued:  Public Academic Test License (any academic user)
-#   Message: Academic license active - free for non-commercial use.
+#   Message: Academic license active - free for non-commercial use. Commercial use requires a paid license file.
 ```
 
 ### Verify a commercial license file
@@ -41,8 +41,17 @@ oxo-flow license /path/to/license.key
 
 ---
 
+## Options
+
+| Option | Description |
+|--------|-------------|
+| `-v, --verbose` | Enable verbose (debug-level) logging |
+| `--quiet` | Suppress non-essential output (errors only) |
+| `--no-color` | Disable colored output |
+| `--json` | Output machine-readable JSON to stdout |
+
 ## Notes
 
 - oxo-flow ships with a default academic license for non-commercial use.
 - Commercial use requires a paid license file. Contact Traitome for details.
-- The license check runs automatically on `oxo-flow serve` startup.
+- License status is also exposed by the web server via `GET /api/license` (see [oxo-flow serve](serve.md)).

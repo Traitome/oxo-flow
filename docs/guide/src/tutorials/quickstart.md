@@ -16,7 +16,9 @@ This creates:
 ```
 my-pipeline/
 ├── my-pipeline.oxoflow    # Workflow definition
+├── data/input.txt         # Starting input data
 ├── envs/                  # Environment specs
+├── results/               # Output directory (created by init)
 ├── scripts/               # Helper scripts
 └── .gitignore             # Bioinformatics-aware ignore file
 ```
@@ -96,7 +98,7 @@ DAG: (dry-run) 2 rules would execute
 
 Summary: 2 rules, total 4 threads declared, max 2 threads/rule
 
-To execute:  oxo-flow run my-pipeline.oxoflow -j 5
+To execute:  oxo-flow run my-pipeline.oxoflow -j 1
 ```
 
 ---
@@ -182,7 +184,6 @@ oxo-flow graph my-pipeline.oxoflow --format dot
 ```
 
 ```dot
-oxo-flow 0.10.2 — Bioinformatics Pipeline Engine
 digraph {
     0 [ label = "create_data"]
     1 [ label = "transform"]
@@ -193,7 +194,8 @@ digraph {
 If you have Graphviz installed, render it (macOS: `brew install graphviz`):
 
 ```bash
-oxo-flow graph my-pipeline.oxoflow -f dot | dot -Tpng -o dag.png
+oxo-flow graph my-pipeline.oxoflow -f dot -o dag.dot
+dot -Tpng -o dag.png dag.dot
 ```
 
 ---

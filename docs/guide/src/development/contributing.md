@@ -44,8 +44,8 @@ oxo-flow/
 │   ├── oxo-flow-ai/     # AI companion — provider abstraction, skill system, agent framework
 │   ├── oxo-flow-cli/    # CLI binary (oxo-flow command)
 │   ├── oxo-flow-web/    # Web REST API (axum-based)
-├── pipelines/           # Pipeline definitions (.oxoflow files)
-├── examples/            # Example workflows
+├── frontend/            # Web UI (embedded SPA)
+├── examples/            # Example workflows (.oxoflow files)
 ├── tests/               # Integration tests
 └── docs/                # Documentation (MkDocs)
 ```
@@ -163,6 +163,7 @@ cargo test --workspace --verbose
 | Crate | License |
 |---|---|
 | oxo-flow-core | Apache 2.0 |
+| oxo-flow-ai | Apache 2.0 |
 | oxo-flow-cli | Apache 2.0 |
 | oxo-flow-web | Dual (Academic free / Commercial paid) |
 

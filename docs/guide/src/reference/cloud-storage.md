@@ -17,9 +17,12 @@ shell = "cp {input[0]} {output[0]}"
 ```
 
 When the pipeline engine encounters an `s3://` or `gs://` URI, it
-resolves the appropriate backend, downloads the file to a local staging
-directory, substitutes the expanded local path into the shell command,
-and (optionally) uploads outputs back to the remote location.
+detects the remote scheme and logs a warning — the executor does not
+yet stage remote files into the workdir or upload outputs back (see
+[Current Limitations](#current-limitations)). The storage module is
+usable today as a library API: callers can resolve URIs and read,
+write, stage, or upload objects programmatically through the
+[`StorageBackend`](#storage-backend-api) trait.
 
 ### Prerequisites
 
@@ -29,6 +32,10 @@ Enable them at build time:
 ```bash
 cargo build --release --features "s3-storage,gcs-storage"
 ```
+
+> The example workflows below illustrate the URI syntax only — remote
+> URIs are not yet staged or uploaded by the executor (see
+> [Current Limitations](#current-limitations)).
 
 ## AWS S3
 
@@ -43,8 +50,8 @@ The SDK discovers credentials in this order:
 1. Environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
    `AWS_SESSION_TOKEN`)
 2. `~/.aws/credentials` (standard AWS config file)
-3. Instance metadata (EC2, ECS, EKS)
-4. Web identity tokens
+3. Web identity tokens
+4. Instance metadata (EC2, ECS)
 
 When using MinIO or LocalStack for testing, set `AWS_ENDPOINT_URL` to
 point to your local S3-compatible service:
@@ -134,8 +141,12 @@ resolver.add_backend(StorageScheme::S3, Arc::new(s3_backend));
 
 ## Current Limitations
 
-- **No streaming** — Files are fully downloaded before execution.
-  Streaming read/write is planned for a future release.
+- **Not wired into the executor** — The engine only detects remote
+  URIs and logs a warning (`warn_if_remote_paths` in the executor is a
+  stub); it does not stage inputs or upload outputs during a run.
+  Workflows referencing `s3://`/`gs://` paths currently fail at
+  execution unless the tool handles the URI itself. Full staging and
+  upload integration is planned.
 - **Feature-gated** — Both backends are opt-in at compile time.  The
   default build includes only the local filesystem backend.
 - **UTF-8 only** — `read_to_string` requires the content to be valid

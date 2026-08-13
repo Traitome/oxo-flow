@@ -37,12 +37,14 @@ Contact: **Shixiang Wang <w_shixiang@163.com>**
 
 ## License Verification
 
-The web server verifies its license at startup:
+License status is resolved by `check_license()` in the following order:
 
 1. Checks `OXO_FLOW_LICENSE` environment variable
 2. Checks platform config directory (`io.traitome.oxo-flow/license.oxo.json`)
 3. Checks legacy path (`~/.config/oxo-flow/license.oxo.json`)
 4. Falls back to embedded academic license (default)
+
+The same verification is available from the CLI: `oxo-flow license` reports the current status, and `oxo-flow license <path>` verifies a specific license file (Ed25519 signature via `oxo_license`).
 
 ```bash
 # Set commercial license
@@ -66,8 +68,8 @@ The license is prominently displayed in three locations:
 3. **API response header** — `X-OxoFlow-License` on all HTTP responses
 
 ```
-X-OxoFlow-License: oxo-flow-core,oxo-flow-cli:Apache-2.0; oxo-flow-web:Dual(Academic|Commercial)
-X-OxoFlow-Version: 0.10.1
+X-OxoFlow-License: oxo-flow v0.10.2 — oxo-flow-core, oxo-flow-cli: Apache 2.0. oxo-flow-web: Dual license (LICENSE-ACADEMIC / LICENSE-COMMERCIAL). Free for academic use. Commercial use requires authorization. Contact: Shixiang Wang <w_shixiang@163.com>.
+X-OxoFlow-Version: 0.10.2
 ```
 
 ## Key Principles
@@ -83,5 +85,5 @@ X-OxoFlow-Version: 0.10.1
 By contributing to oxo-flow, you agree that your contributions will be licensed
 under the same terms as the crate you contribute to:
 
-- `oxo-flow-core` and `oxo-flow-cli`: Apache 2.0
+- `oxo-flow-core`, `oxo-flow-cli`, and `oxo-flow-ai`: Apache 2.0
 - `oxo-flow-web`: Dual license (Academic + Commercial)

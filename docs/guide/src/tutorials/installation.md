@@ -7,7 +7,7 @@ This guide covers all the ways to install the `oxo-flow` binary on your system.
 ## Requirements
 
 - **Operating system**: Linux (x86_64, aarch64) or macOS (Apple Silicon, Intel)
-- **Disk space**: ~50 MB for the binary
+- **Disk space**: ~13 MB for the binary
 - **Optional**: Rust toolchain (1.85+) if building from source
 
 !!! note "Runtime dependencies"
@@ -43,7 +43,7 @@ Verify the installation:
 
 ```bash
 oxo-flow --version
-# oxo-flow 0.10.1
+# oxo-flow 0.10.2
 ```
 
 !!! tip "Updating"
@@ -85,8 +85,8 @@ Pre-built binaries are available from the [GitHub Releases](https://github.com/T
 === "Linux (x86_64)"
 
     ```bash
-    curl -LO https://github.com/Traitome/oxo-flow/releases/latest/download/oxo-flow-linux-x86_64.tar.gz
-    tar xzf oxo-flow-linux-x86_64.tar.gz
+    curl -LO https://github.com/Traitome/oxo-flow/releases/download/v0.10.2/oxo-flow-v0.10.2-x86_64-unknown-linux-gnu.tar.gz
+    tar xzf oxo-flow-v0.10.2-x86_64-unknown-linux-gnu.tar.gz
     chmod +x oxo-flow
     mv oxo-flow ~/.local/bin/
     ```
@@ -94,8 +94,8 @@ Pre-built binaries are available from the [GitHub Releases](https://github.com/T
 === "macOS (Apple Silicon)"
 
     ```bash
-    curl -LO https://github.com/Traitome/oxo-flow/releases/latest/download/oxo-flow-macos-aarch64.tar.gz
-    tar xzf oxo-flow-macos-aarch64.tar.gz
+    curl -LO https://github.com/Traitome/oxo-flow/releases/download/v0.10.2/oxo-flow-v0.10.2-aarch64-apple-darwin.tar.gz
+    tar xzf oxo-flow-v0.10.2-aarch64-apple-darwin.tar.gz
     chmod +x oxo-flow
     mv oxo-flow /usr/local/bin/  # Or another folder in your PATH
     ```
@@ -173,7 +173,7 @@ oxo-flow validate my-test-pipeline.oxoflow
 Expected output:
 
 ```
-✓ my-test-pipeline.oxoflow — 1 rule, 0 dependencies
+✓ my-test-pipeline.oxoflow — 1 rules, 0 dependencies
 ```
 
 ---

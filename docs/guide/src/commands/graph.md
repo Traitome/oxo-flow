@@ -26,9 +26,11 @@ oxo-flow graph [OPTIONS] <WORKFLOW>
 |---|---|---|
 | `--format <FORMAT>` | `-f` | Output format: `ascii` (terminal), `dot` (Graphviz), `dot-clustered` (level-grouped), `tree` (indented tree). Default: `ascii` |
 | `--output <FILE>` | `-o` | Save output to a file (useful for dot/svg generation) |
+| `--expanded` | | Show the DAG after wildcard/sample/scatter expansion (the actual runtime DAG) |
 | `--verbose` | `-v` | Enable debug-level logging |
 | `--quiet` | | Suppress non-essential output (errors only) |
 | `--no-color` | | Disable colored output |
+| `--json` | | Output machine-readable JSON to stdout |
 
 ---
 
@@ -48,8 +50,11 @@ oxo-flow graph pipeline.oxoflow -f dot
 
 ### Render to PNG with Graphviz
 
+The graph command prints log output (e.g. resource warnings) to stdout before the DOT body, so piping stdout into `dot` does not work reliably. Write the DOT to a file first, then render it:
+
 ```bash
-oxo-flow graph pipeline.oxoflow -f dot | dot -Tpng -o dag.png
+oxo-flow graph -f dot -o graph.dot pipeline.oxoflow
+dot -Tpng -o dag.png graph.dot
 ```
 
 ### Save DOT to file
@@ -64,6 +69,34 @@ oxo-flow graph pipeline.oxoflow -f dot -o graph.dot
 oxo-flow graph pipeline.oxoflow -f dot-clustered -o clustered.dot
 ```
 
+### View the expanded runtime DAG
+
+By default, `graph` shows the template DAG — one node per `[[rules]]` block. Use `--expanded` to show the actual runtime DAG after wildcard, sample, and scatter expansion: each generated task becomes its own node (rule names get a `_<group>_<sample>` or `_<pair_id>` suffix).
+
+```bash
+oxo-flow graph pipeline.oxoflow --expanded
+```
+
+For example, a workflow with a `cohort` sample group of three samples shows the template DAG as 12 rules, while the expanded view shows 22 rules — one per (rule, sample) task:
+
+```
+┌────────────────────────────────────────────────┐
+│  Workflow DAG: 22 rules, 28 dependencies       │
+│  Depth: 12, Width: 3, Critical path: 12 steps  │
+└────────────────────────────────────────────────┘
+
+Level 0 (parallel: 3 rules)
+┌─── fastp_qc_cohort_NA12878
+│─── fastp_qc_cohort_NA12879
+└─── fastp_qc_cohort_NA12880
+     │
+     ▼
+Level 1 (parallel: 3 rules)
+┌─── bwa_mem2_align_cohort_NA12878 [depends: fastp_qc_cohort_NA12878]
+│─── bwa_mem2_align_cohort_NA12879 [depends: fastp_qc_cohort_NA12879]
+└─── bwa_mem2_align_cohort_NA12880 [depends: fastp_qc_cohort_NA12880]
+```
+
 ---
 
 ## Output Formats
@@ -71,29 +104,68 @@ oxo-flow graph pipeline.oxoflow -f dot-clustered -o clustered.dot
 ### ASCII (default)
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│ Workflow: wgs-germline-calling                                       │
-│ Rules: 10, Dependencies: 11                                          │
-└─────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│  Workflow DAG: 3 rules, 2 dependencies       │
+│  Depth: 3, Width: 1, Critical path: 3 steps  │
+└──────────────────────────────────────────────┘
 
-  fastp_qc ──► bwa_mem2_align ──► mark_duplicates ──► bqsr_apply
-       │                              │                    │
-       ▼                              ▼                    ▼
-  (parallel)                    (parallel)            (parallel)
+Level 0 (sequential)
+     generate_data
+     │
+     ▼
+Level 1 (sequential)
+     transform [depends: generate_data]
+     │
+     ▼
+Level 2 (sequential)
+     summarize [depends: transform]
 
-  bqsr_apply ──► gatk_haplotypecaller ──► gatk_vqsr ──► annotate_variants
+Critical path: generate_data → transform → summarize
 ```
 
 ### DOT
 
 ```dot
+digraph {
+    0 [ label = "generate_data"]
+    1 [ label = "transform"]
+    2 [ label = "summarize"]
+    0 -> 1 [ ]
+    1 -> 2 [ ]
+}
+```
+
+The `dot-clustered` format adds level-based clusters, `rankdir = TB` (top-to-bottom), and node/edge styling:
+
+```dot
 digraph workflow {
-    rankdir = TB;
-    node [shape=box, style="rounded,filled", fillcolor="#e8f4f8"];
-    "trim_reads" -> "align";
-    "align" -> "sort_bam";
-    "sort_bam" -> "mark_duplicates";
-    "mark_duplicates" -> "call_variants";
+  rankdir=TB;
+  node [shape=box, style="rounded,filled", fillcolor="#e8f0fe", fontname="Helvetica"];
+  edge [color="#666666"];
+
+  subgraph cluster_0 {
+    label = "Level 0";
+    style = dashed;
+    color = "#cccccc";
+    "generate_data";
+  }
+
+  subgraph cluster_1 {
+    label = "Level 1";
+    style = dashed;
+    color = "#cccccc";
+    "transform";
+  }
+
+  subgraph cluster_2 {
+    label = "Level 2";
+    style = dashed;
+    color = "#cccccc";
+    "summarize";
+  }
+
+  "generate_data" -> "transform";
+  "transform" -> "summarize";
 }
 ```
 
@@ -107,7 +179,7 @@ digraph workflow {
     - **Linux**: `apt install graphviz` or `yum install graphviz`
     - **Conda**: `conda install graphviz`
 - Nodes represent rules, edges represent dependencies
-- The graph direction is top-to-bottom (`rankdir = TB`)
+- The `dot-clustered` format is laid out top-to-bottom (`rankdir = TB`); the plain `dot` format does not set a direction
 
 ### Understanding Metrics
 

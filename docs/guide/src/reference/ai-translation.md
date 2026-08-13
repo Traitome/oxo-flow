@@ -25,12 +25,11 @@ Convert natural language intent to a validated `.oxoflow` pipeline.
 ```
 Input:  { intent: "RNA-seq, PE, hg38, STAR + featureCounts, strand-specific" }
 Process:
-  1. AI parses intent → structured intent
-  2. Calls /api/data/analyze for data characteristics
-  3. Matches template library → selects best template
-  4. Generates concrete parameters → full .oxoflow config
-  5. Auto-calls /api/pipelines/validate for verification
-  6. If invalid → correct and re-validate, max 3 rounds
+  1. AI generates a concrete .oxoflow config from the intent (fallback chain across providers)
+  2. Template names are passed into the prompt; keyword matching is used only
+     as a deterministic fallback when all providers fail
+  3. Auto-calls /api/pipelines/validate for verification
+  4. If invalid → correct and re-validate, max 3 rounds
 Output: { pipeline_id, toml_content, explanation, alternatives, confidence }
 ```
 
@@ -43,8 +42,9 @@ Input:  { run_id, language?: "zh"|"en" }
 Output: { summary, root_cause, fix_suggestion }
 ```
 
-Calls `/api/runs/{run_id}/diagnostics` for deterministic diagnosis,
-then augments with human-readable explanation.
+Runs the same deterministic diagnosis engine behind
+`/api/runs/{run_id}/diagnostics`, then augments it with a human-readable
+explanation.
 
 ### POST /api/ai/interpret
 
@@ -74,11 +74,11 @@ The AI layer uses an enum-based dispatch system:
 DeepSeek (default) → Claude (Anthropic) → OpenAI → Ollama (local) → Template keyword match
 ```
 
-**Fallback chain**: DeepSeek is the default provider. If DeepSeek is
-unavailable, falls back to Claude. If Claude is unavailable, falls back to
+**Fallback chain**: DeepSeek is the default provider. If the primary provider
+is unavailable, falls back to Claude. If Claude is unavailable, falls back to
 OpenAI. If OpenAI is unavailable, falls back to local Ollama. If all AI
-providers are unavailable, falls back to template keyword matching
-(deterministic).
+providers are unavailable, the request fails with an error suggesting the
+best-matching template name — no pipeline is produced without AI.
 
 **Request dedup**: Same intent + same data characteristics → cached result,
 avoiding redundant API calls.
@@ -110,8 +110,8 @@ export OXO_FLOW_AI_API_KEY=sk-...
 
 # Or via API
 POST /api/ai/config { "provider": "claude", "api_key": "..." }
-GET  /api/ai/config  → { provider, model, available }
-POST /api/ai/test    → { ok: true, latency_ms: 234 }
+GET  /api/ai/config  → { provider, model, api_url, is_configured }
+POST /api/ai/test    → { success, message, provider, model }
 ```
 
 ## Non-AI Intelligence (Deterministic)

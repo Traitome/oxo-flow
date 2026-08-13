@@ -11,8 +11,8 @@ The Diagnostics Engine analyzes failed pipeline runs and returns:
 - **Fix suggestions** (auto-fixable or manual)
 - **Relevant log lines** for context
 
-It does NOT use AI. It matches error signatures (regex patterns, exit codes,
-log keywords) against a curated library of 30+ error patterns.
+It does NOT use AI. It matches error signatures (log keywords, exit codes)
+against a curated library of 30+ error patterns.
 
 ## Error Pattern Library
 
@@ -29,19 +29,19 @@ log keywords) against a curated library of 30+ error patterns.
 
 | Pattern | Signature | Auto-Fix |
 |---------|-----------|----------|
-| Out of memory | exit 137/9, "OOM", "out of memory" | ✅ Increase memory limit |
+| Out of memory | exit 137/9, "out of memory", "cannot allocate memory" | ✅ Increase memory limit |
 | Timeout | "timed out", exit 124 | ✅ Increase time_limit |
 | Disk full | ENOSPC, "No space left" | ❌ Suggest cleanup |
-| Too many open files | EMFILE, "Too many open files" | ❌ Increase ulimit |
+| Too many open files | EMFILE, "Too many open files" | ✅ Run `ulimit -n 65536` before starting |
 
 ### Data Errors
 
 | Pattern | Signature | Auto-Fix |
 |---------|-----------|----------|
 | Input file missing | "No such file", exit 1 | ❌ Point to missing path |
-| File truncated | "truncated", "unexpected EOF" | ❌ Suggest re-download |
-| Checksum mismatch | "checksum", "hash mismatch" | ❌ Verify file integrity |
-| FASTQ quality low | "quality score" warnings | ✅ Suggest fastp insertion |
+| File truncated | "truncated", "unexpected end" | ❌ Suggest re-download |
+| Corrupt gzip file | "not in gzip format", "corrupt input" | ❌ Verify file is valid gzip |
+| FASTQ quality low | "low quality", "poor quality" | ✅ Suggest fastp insertion |
 | Empty file | "empty file", "zero length" | ❌ Check upstream rule |
 
 ### System Errors
@@ -50,16 +50,16 @@ log keywords) against a curated library of 30+ error patterns.
 |---------|-----------|----------|
 | Permission denied | exit 126, "Permission denied" | ❌ Fix file permissions |
 | Network error | "Connection refused", timeout | ❌ Check network |
-| Lock file conflict | "already locked", "lock" | ✅ Remove stale lock |
+| Shared library missing | "error while loading shared libraries", "cannot open shared object" | ✅ Suggest conda install |
 
 ### Config Errors
 
 | Pattern | Signature | Auto-Fix |
 |---------|-----------|----------|
-| Incompatible params | "incompatible", "conflict" | ❌ Point to conflict |
-| Wildcard expanded empty | "no files matching" | ❌ Check naming |
-| Invalid reference | "reference not found" | ❌ Check genome install |
-| Missing dependency rule | "rule not found", "depends on" | ❌ Add missing rule |
+| Invalid parameter | "invalid option", "unknown option" | ❌ Check tool documentation |
+| Missing required parameter | "required", "must specify" | ❌ Add the missing parameter |
+| Wildcard expanded empty | "no matches", "no files", "empty" | ❌ Check naming |
+| Conda environment failed | "conda", "environment", "create failed" | ❌ Verify conda env name |
 
 ## API
 
@@ -78,34 +78,29 @@ Response:
   warnings: [{
     rule: "qualimap",
     pattern: "skipped",
-    suggestion: "Skipped due to upstream failure"
+    suggestion: "This rule was skipped due to upstream failure."
   }],
-  resource_bottlenecks: [{
-    rule: "star_align",
-    metric: "memory",
-    actual: 16384,
-    limit: 32768
-  }]
+  resource_bottlenecks: []
 }
 ```
 
+The `resource_bottlenecks` field is reserved for future use — the engine
+does not currently populate it.
+
 ## Extending the Pattern Library
 
-Add new patterns in `domains/execution/diagnostics.rs`:
+Add new patterns in `crates/oxo-flow-web/src/domains/execution/diagnostics.rs`
+(inside `DiagnosticsEngine::new()`):
 
 ```rust
-ErrorPattern {
+Pattern {
     id: "new_pattern_id",
     category: ErrorCategory::Tool,
-    signatures: vec![
-        ErrorSignature::ExitCode(134),
-        ErrorSignature::StderrContains("specific error text"),
-    ],
+    exit_codes: vec![134],
+    stderr_patterns: vec!["specific error text"],
     likely_cause: "Description of the likely cause",
     auto_fixable: false,
-    fix_action: Some(FixAction {
-        description: "Suggested fix",
-        config_change: None,
-    }),
+    fix_desc: Some("Suggested fix"),
+    fix_config_path: None,
 }
 ```

@@ -5,7 +5,7 @@ Watch a workflow file for changes and re-validate automatically.
 ## Usage
 
 ```
-oxo-flow watch <WORKFLOW>
+oxo-flow watch [OPTIONS] <WORKFLOW>
 ```
 
 ## Description

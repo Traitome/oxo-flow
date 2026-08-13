@@ -99,7 +99,7 @@ The web crate follows a **domain-driven modular monolith** pattern. Each domain 
 
 ### Legacy Modules (deprecated since 0.8.0)
 
-The `handlers/` directory contains pre-v0.8 handler modules marked `#[deprecated(since = "0.8.0")]`. These are preserved for backward compatibility: they remain functional in v0.10.2 (kept building via the crate-level `#![allow(deprecated)]`) and are scheduled for removal in a future release. New code should use `domains/*/` modules.
+The `handlers/` directory contains pre-v0.8 handler modules marked `#[deprecated(since = "0.8.0")]`. These are preserved so the crate still builds (via the crate-level `#![allow(deprecated)]`), but they are **not mounted in the served router**: both `oxo-flow serve` and the `oxo-flow-web` binary assemble their routes exclusively from the `domains/*` modules via `server.rs::build_router`. The legacy routes (including the old `/api/workflows/*` endpoints) are not reachable on a running server and are scheduled for removal in a future release. New code should use `domains/*/` modules.
 
 ---
 
@@ -113,17 +113,18 @@ The `handlers/` directory contains pre-v0.8 handler modules marked `#[deprecated
 ├── /openapi.json           # OpenAPI 3.1 spec
 ├── /events                 # SSE event stream (real-time execution updates)
 ├── /audit                  # Audit logs (structured, with result field)
-├── /hpc                    # HPC scheduler status (SLURM, PBS, etc.)
+├── /hpc                    # HPC scheduler status (SLURM, PBS, etc.) — hpc mode only
 │
 ├── /auth
 │   ├── /login              # Login (username/password)
-│   └── /me                 # Current session info
+│   ├── /me                 # Current session info
+│   └── /oauth/...          # OAuth2 authorize / callback
 │
 ├── /license
 │   ├── /                   # License status (type, validity, contact)
 │   └── /upload             # Upload commercial license file
 │
-├── /users                  # User CRUD (admin)
+├── /users                  # User list/create/delete (admin)
 │
 ├── /pipelines (new v0.8 API — replaces /workflows)
 │   ├── /parse              # Parse TOML → structured pipeline
@@ -131,7 +132,7 @@ The `handlers/` directory contains pre-v0.8 handler modules marked `#[deprecated
 │   ├── /prepare            # Prepare (expand wildcards, resolve envs)
 │   ├── /dag                # Build DAG as JSON
 │   ├── /format             # Canonical TOML formatting
-│   ├── /lint               # Lint pipeline with pagination
+│   ├── /lint               # Lint pipeline (valid + errors/lint findings)
 │   ├── /stats              # Aggregate pipeline statistics
 │   ├── /diff               # Diff two pipelines (by TOML content)
 │   ├── /export             # Export Docker/Singularity packaging
@@ -150,13 +151,18 @@ The `handlers/` directory contains pre-v0.8 handler modules marked `#[deprecated
 │   ├── /{id}/dag-status    # DAG JSON + per-node live status
 │   ├── /{id}/diagnostics   # Diagnostic engine results (30+ error patterns)
 │   ├── /{id}/logs          # Execution logs
-│   ├── /{id}/results       # Output files and QC metrics
+│   ├── /{id}/results       # Output files with sizes
 │   ├── /{id}/retry         # Smart retry (failed + downstream only)
-│   └── /{id}/cancel        # Cancel running workflow
+│   ├── /{id}/cancel        # Cancel running workflow
+│   ├── /{id}/pause         # Pause running workflow
+│   └── /{id}/resume        # Resume paused workflow
 │
 ├── /data
 │   ├── /analyze            # Scan files → detect format, suggest pipeline
-│   └── /reference          # Reference genome discovery
+│   ├── /reference          # Reference genome discovery
+│   ├── /perceive           # Data perception (AI Companion)
+│   ├── /reference/status   # Reference genome status
+│   └── /samplesheet/parse  # Parse a samplesheet
 │
 ├── /templates
 │   ├── /                   # GET: list templates; POST: create
@@ -166,15 +172,19 @@ The `handlers/` directory contains pre-v0.8 handler modules marked `#[deprecated
 │   └── /validate           # Validate plugin manifest + signature
 │
 ├── /ai
-│   ├── /translate          # Natural language → validated .oxoflow (SSE)
+│   ├── /translate          # Natural language → validated .oxoflow (JSON)
+│   ├── /translate/stream   # Same, streamed over SSE
 │   ├── /explain            # Explain run failure + suggest fix
 │   ├── /interpret          # Interpret results with caveats
-│   └── /optimize           # Optimize pipeline parameters
+│   ├── /optimize           # Optimize pipeline parameters
+│   └── /config, /test      # AI provider configuration
 │
-├── /scheduled              # Scheduled runs list/create
+├── /chat                   # AI Companion: /send, /send/json, /sessions
+│
+└── /pipeline/{id}          # DAG edit API: /command, /undo, /redo
 ```
-(See [Web API](./web-api.md) and [openapi.json](../../../schema/openapi.yaml) for the complete API reference.)
-(Old `/workflows/*` endpoints marked `#[deprecated]` remain functional in v0.10.2 and are scheduled for removal in a future release.)
+(See [Web API](./web-api.md) and [openapi.json](https://github.com/Traitome/oxo-flow/blob/main/docs/schema/openapi.yaml) for the complete API reference.)
+(Old `/workflows/*` endpoints marked `#[deprecated]` exist only as unserved legacy modules — see [Legacy Modules](#legacy-modules-deprecated-since-080).)
 
 ---
 
@@ -184,12 +194,10 @@ All errors follow this format:
 
 ```json
 {
-  "error": {
-    "code": "AUTH_REQUIRED",
-    "message": "Authentication is required for this endpoint",
-    "detail": "The request did not include a valid session token or Bearer token",
-    "suggestion": "Please login at POST /api/auth/login to obtain a session token"
-  }
+  "code": "AUTH_REQUIRED",
+  "message": "Authentication is required for this endpoint",
+  "detail": "The request did not include a valid session token or Bearer token",
+  "suggestion": "Please login at POST /api/auth/login to obtain a session token"
 }
 ```
 
@@ -198,33 +206,27 @@ All errors follow this format:
 | Code | HTTP Status | Description |
 |------|-------------|-------------|
 | `BAD_REQUEST` | 400 | Input validation failed |
-| `INVALID_WORKFLOW` | 400 | Workflow TOML parsing failed |
+| `MISSING_FIELD` | 400 | Required request field missing (e.g. `toml_content`) |
+| `DAG_EDIT_ERROR` | 400 | DAG edit command rejected (unknown operation, missing fields) |
 | `AUTH_REQUIRED` | 401 | Authentication required |
-| `INVALID_CREDENTIALS` | 401 | Invalid login credentials |
+| `AUTH_FAILED` | 401 | Invalid login credentials |
+| `TOKEN_EXPIRED` | 401 | Session token missing or expired |
 | `ACCESS_DENIED` | 403 | Permission denied |
 | `NOT_FOUND` | 404 | Resource not found |
-| `ALREADY_EXISTS` | 409 | Resource conflict |
-| `UNPROCESSABLE_ENTITY` | 422 | Entity unprocessable |
+| `NO_UNDO` / `NO_REDO` | 404 | DAG edit undo/redo stack empty |
 | `RATE_LIMITED` | 429 | Request rate exceeded |
-| `LICENSE_ERROR` | 403 | License invalid |
-| `INTERNAL_ERROR` | 500 | Internal server error |
+| `DB_ERROR` | 500 | Internal database error |
+
+Domain-specific codes (all 400) include `PARSE_ERROR`, `VALIDATE_ERROR`, `PREPARE_ERROR`, `DAG_ERROR`, `LINT_ERROR`, `STATS_ERROR`, `DIFF_ERROR`, `EXPORT_ERROR`, `SEARCH_ERROR`, `RUN_ERROR`, `RETRY_ERROR`, `DATA_ERROR`, `REF_ERROR`, `PLUGIN_ERROR`, `AI_TRANSLATE_ERROR`, `CHAT_ERROR`, `INVALID_URL`.
 
 ---
 
-## Pagination Envelope
+## List Responses
 
-List endpoints use a consistent pagination format:
+List endpoints return bare JSON arrays. There is currently no pagination envelope: `GET /api/pipelines` returns at most 100 items (ordered by last update), and `GET /api/templates` returns all templates.
 
 ```json
-{
-  "data": [...],
-  "meta": {
-    "total": 142,
-    "page": 1,
-    "per_page": 20,
-    "total_pages": 8
-  }
-}
+[{ "id": "...", "name": "...", ... }]
 ```
 
 ---
@@ -242,27 +244,30 @@ GET /api/openapi.json
 
 ```
 1. GET /api/health              # Check server availability
-2. POST /api/auth/login         # Authenticate
-3. POST /api/workflows/generate # [AI] "Run standard RNA-seq differential expression"
-4. POST /api/workflows/run      # Execute the pipeline
+2. POST /api/auth/login         # Authenticate (team/hpc mode)
+3. POST /api/ai/translate       # [AI] "Run standard RNA-seq differential expression"
+4. POST /api/runs               # Execute the pipeline (POST the TOML content)
 5. GET  /api/events             # SSE real-time progress (optional)
 6. GET  /api/runs/{id}/results  # Get structured results
 ```
 
 ### API Streaming
 
-All long-running operations (generate, run) support SSE streaming:
+AI pipeline generation supports SSE streaming via the dedicated streaming endpoint:
 
 ```
-POST /api/workflows/generate?stream=true
+POST /api/ai/translate/stream
 Accept: text/event-stream
 
-event: step
-data: {"step": "parsing_intent", "status": "in_progress"}
+event: progress
+data: {"step": "intent", "message": "Intent received", "intent": "..."}
 
-event: step
-data: {"step": "generating_rules", "status": "in_progress", "rules_found": 5}
+event: progress
+data: {"step": "match", "message": "Matching templates...", "templates_count": 5}
 
-event: result
-data: {"status": "complete", "pipeline": {...}}
+event: progress
+data: {"step": "generate", "message": "Generating pipeline via AI..."}
+
+event: done
+data: {"pipeline_id": "...", ...}
 ```

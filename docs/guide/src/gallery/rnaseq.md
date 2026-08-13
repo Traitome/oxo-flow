@@ -105,7 +105,7 @@ conda = "envs/samtools.yaml"
 [[rules]]
 name = "featurecounts"
 input = ["aligned/{sample}/Aligned.sortedByCoord.out.bam"]
-output = ["counts/{sample}.counts.txt"]
+output = ["counts/{sample}.counts.txt", "counts/{sample}.counts.txt.summary"]
 description = "Gene-level read counting with featureCounts"
 shell = """
 mkdir -p counts
@@ -171,7 +171,7 @@ The `samples = "samples.csv"` key in `[config]` is inert: no rule references it,
 
 ```bash
 $ oxo-flow validate examples/gallery/06_rnaseq_quantification.oxoflow
-✓ examples/gallery/06_rnaseq_quantification.oxoflow — 5 rules, 7 dependencies
+✓ examples/gallery/06_rnaseq_quantification.oxoflow — 5 rules, 6 dependencies
 ```
 
 ### Resource Summary

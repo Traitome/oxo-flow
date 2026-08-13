@@ -23,6 +23,7 @@ oxo-flow serve [OPTIONS]
 | `--verbose` | `-v` | — | Enable debug-level logging |
 | `--quiet` | — | — | Suppress non-essential output (errors only) |
 | `--no-color` | — | — | Disable colored output |
+| `--json` | — | — | Output machine-readable JSON to stdout (suppresses human-readable stderr output) |
 
 ---
 
@@ -58,7 +59,7 @@ POST /oxo-flow/api/pipelines/validate
 
 ```
 oxo-flow 0.10.2 — Bioinformatics Pipeline Engine
-Starting web server at 127.0.0.1:8080 ...
+Serve: Starting oxo-flow web server in personal mode on 127.0.0.1:8080
 ```
 
 ---

@@ -105,8 +105,10 @@ output:
 - The combine rule receives all chunk paths via `{chunks}` (space-separated).
   Wrap them as your tool requires — GATK's `GatherVcfs`, for example, needs
   `-I` before each input (the example uses a `for` loop to add them).
-- With `cleanup = true`, the chunk directory is removed after the combine
-  succeeds.
+- With `cleanup = true`, the chunk files are removed once the whole run
+  finishes successfully (emptied chunk directories are cleaned up too —
+  directories still holding chunks from other rules are left alone).
+  Failed runs keep their chunks for debugging.
 
 ## Running the Workflow
 
@@ -121,21 +123,17 @@ $ oxo-flow validate examples/gallery/10_transform_operator.oxoflow
 
 ```mermaid
 graph TD
-    A["variant_calling<br/>(split by chr)"] --> B1["variant_calling_chr1"]
-    A --> B2["variant_calling_chr2"]
-    A --> B3["variant_calling_chr3"]
-    A --> B4["variant_calling_chr4"]
-    A --> B5["variant_calling_chr5"]
-    B1 --> C["variant_calling_combine"]
-    B2 --> C
-    B3 --> C
-    B4 --> C
-    B5 --> C
+    B1["variant_calling_chr1"] --> C["variant_calling_combine"]
+    B2["variant_calling_chr2"] --> C
+    B3["variant_calling_chr3"] --> C
+    B4["variant_calling_chr4"] --> C
+    B5["variant_calling_chr5"] --> C
 ```
 
 `parallel_qc` (Mode B) expands the same way — five chunk rules
-(`parallel_qc_chr1` … `parallel_qc_chr5`) — but has no combine step; the
-diagram shows only the Mode A expansion for readability.
+(`parallel_qc_chr1` … `parallel_qc_chr5`) run in parallel with the map
+rules above but have no combine step; the diagram shows only the Mode A
+expansion for readability.
 
 ## Use Cases
 

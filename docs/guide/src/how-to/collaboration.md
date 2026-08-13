@@ -45,10 +45,10 @@ curl -X POST http://localhost:8080/api/pipelines/diff \
 {
   "diffs": [
     {
-      "path": "rules[0].shell",
-      "category": "modified",
-      "description": "STAR --runThreadN 8 → STAR --runThreadN 16",
-      "severity": "medium"
+      "path": "rules",
+      "category": "rules",
+      "description": "rule \"align\": shell command changed",
+      "severity": "info"
     }
   ]
 }

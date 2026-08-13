@@ -26,6 +26,10 @@ oxo-flow format [OPTIONS] <WORKFLOW>
 |---|---|---|---|
 | `--output` | `-o` | stdout | Write formatted output to a file |
 | `--check` | — | — | Check if the file is already formatted (exit non-zero if not) |
+| `--verbose` | `-v` | — | Enable verbose (debug-level) logging |
+| `--quiet` | — | — | Suppress non-essential output (errors only) |
+| `--no-color` | — | — | Disable colored output |
+| `--json` | — | — | Output machine-readable JSON to stdout |
 
 ---
 
@@ -54,7 +58,6 @@ oxo-flow format pipeline.oxoflow --check
 ## Output
 
 ```
-oxo-flow 0.10.2 — Bioinformatics Pipeline Engine
 [workflow]
 name = "my-pipeline"
 version = "0.1.0"
@@ -72,4 +75,4 @@ shell = "cat input.txt > output.txt"
 
 - The formatter ensures consistent indentation and key ordering
 - Using `--check` is recommended for CI/CD pipelines to enforce style consistency
-- Comments are preserved during reformatting
+- The file is re-serialized from the parsed configuration, so comments are not preserved

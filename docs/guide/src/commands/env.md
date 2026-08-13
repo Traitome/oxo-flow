@@ -54,23 +54,25 @@ oxo-flow env check <WORKFLOW>
   ✓ align (conda)
   ✓ call_variants (docker)
   ✓ annotate (singularity)
+```
 
 ### `env create`
 
 Create a new environment from a specification file.
 
 ```bash
-oxo-flow env create <SPEC> [-n <NAME>]
+oxo-flow env create [OPTIONS] <SPEC>
 ```
 
 | Argument | Description |
 |---|---|
-| `<SPEC>` | Path to the environment specification file (`.yaml`, `.toml`, `.lock`) |
+| `<SPEC>` | Path to the environment specification file (`.yaml`/`.yml`, `.toml`, `.lock`) |
 
 | Option | Short | Description |
 |---|---|---|
 | `--name` | `-n` | Custom name for the created environment (default: derived from the spec filename) |
-```
+| `--ai` | — | Generate the environment spec from a natural-language description (SPEC is the description) |
+| `--backend` | — | Environment backend to generate: conda (YAML) or pixi (TOML) (default: conda) |
 
 **Output (missing backend):**
 

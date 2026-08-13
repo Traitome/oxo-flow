@@ -6,10 +6,10 @@ oxo-flow includes a built-in REST API server for building, validating, running, 
 
 ## API Design Conventions
 
-- **Envelope**: `{ data, error, meta: { page, per_page, total } }`
-- **Errors**: `{ code: "E001", message, detail, suggestion? }`
-- **Pagination**: cursor-based for lists > 100 items
-- **Versioning**: `/api/` prefix; legacy `/api/workflows/*` endpoints preserved for backward compat
+- **Envelope**: success responses are bare JSON objects/arrays; errors are `{ code, message, detail?, suggestion? }`
+- **Errors**: `{ code: "E001", message, detail?, suggestion? }`
+- **Lists**: list endpoints return bare JSON arrays (e.g. `GET /api/pipelines` returns at most 100 items); no pagination envelope is currently implemented
+- **Versioning**: `/api/` prefix for all endpoints
 - **Self-discoverable**: OpenAPI 3.1 spec at `GET /api/openapi.json`
 
 ### Structured Error Format
@@ -65,12 +65,18 @@ GET /api/metrics
 ```
 Returns real-time resource metrics: CPU%, memory (used/total/swap), active workflows, total requests, CPU count.
 
+### Audit Logs
+```
+GET /api/audit?days=7
+```
+Returns structured audit entries: `{ entries: [{ timestamp, user, action, resource, result }], days }`.
+
 ### Server-Sent Events
 ```
 GET /api/events
 Accept: text/event-stream
 ```
-SSE stream for real-time workflow execution events (`run_started`, `run_failed`, `run_completed`, `run_cancelled`). Includes a 5-second heartbeat.
+SSE stream for real-time workflow execution events (`run_started`, `run_failed`, `run_cancelled`, `run_paused`, `run_resumed`). Includes a 5-second heartbeat (`heartbeat` events).
 
 ---
 
@@ -104,11 +110,18 @@ POST /api/license/upload
 ```
 Upload a commercial license file for validation and activation.
 
+### Users (admin)
+```
+GET    /api/users          # List users (requires a valid session)
+POST   /api/users          # Create user
+DELETE /api/users/{id}     # Delete user
+```
+
 ---
 
 ## Pipeline Lifecycle (v0.8 `/api/pipelines/*`)
 
-> Legacy `/api/workflows/*` endpoints remain functional but are deprecated. Use `/api/pipelines/*` for new integrations.
+> The pre-v0.8 `/api/workflows/*` endpoints exist only as unserved legacy modules (see [Web System Architecture](web-system-architecture.md)); the running server exposes only the `/api/pipelines/*` API below.
 
 ### Parse
 ```
@@ -133,7 +146,7 @@ Returns `{ valid, errors: [{ code, message, rule, suggestion }] }`.
 POST /api/pipelines/prepare
 Content-Type: application/json
 
-{"pipeline_id": "...", "resolve_wildcards": true, "apply_defaults": true}
+{"toml_content": "<TOML>", "resolve_wildcards": true, "apply_defaults": true}
 ```
 Expands wildcards, resolves environments. Returns `expanded_rules_count`, `wildcard_combinations`, `environment_setup_cmds`.
 
@@ -162,7 +175,7 @@ Content-Type: application/json
 
 {"toml_content": "<TOML>"}
 ```
-Returns diagnostic findings with pagination support.
+Returns `{ valid, errors: [{ code, message, rule, suggestion }] }` — validation errors plus lint-level findings (e.g. missing description).
 
 ### Stats
 ```
@@ -193,7 +206,7 @@ Generates Dockerfile or Singularity definition.
 
 ### List / Save / Get / Update / Delete
 ```
-GET    /api/pipelines              # List pipelines (paginated)
+GET    /api/pipelines              # List pipelines (most recent first, up to 100)
 POST   /api/pipelines              # Save new pipeline
 GET    /api/pipelines/{id}         # Get pipeline with TOML content
 PUT    /api/pipelines/{id}         # Update pipeline
@@ -210,9 +223,9 @@ POST   /api/pipelines/search       # Search by name, tags, content
 POST /api/runs
 Content-Type: application/json
 
-{"pipeline_id": "...", "config": {"max_jobs": 4, "dry_run": false, "keep_going": false}}
+{"toml_content": "<workflow TOML>", "max_jobs": 4, "dry_run": false, "keep_going": false}
 ```
-Returns `{ run_id, status: "queued", estimated_resources, execution_plan }`.
+`max_jobs`, `dry_run`, and `keep_going` are top-level fields (not nested under a `config` object). Returns `{ run_id, status: "queued", estimated_resources, execution_plan }`.
 
 ### Run Status
 ```
@@ -224,7 +237,7 @@ Real-time status: `{ status, phase, nodes: [{ rule, status, started_at, duration
 ```
 GET /api/runs/{id}/dag-status
 ```
-DAG JSON with per-node live status. Color-coded: green=completed, blue=running, gray=pending, red=failed.
+DAG JSON with per-node live status. Color-coded: green=completed, blue=running, red=failed, gray=skipped.
 
 ### Diagnostics
 ```
@@ -246,6 +259,13 @@ Only re-runs failed nodes and their downstream dependents. Returns `{ new_run_id
 POST /api/runs/{id}/cancel
 ```
 Cancels a running/pending run.
+
+### Pause / Resume
+```
+POST /api/runs/{id}/pause
+POST /api/runs/{id}/resume
+```
+Pauses a running run (`{"reason": "..."}` optional) and resumes it (`{"from_rule": "..."}` optional).
 
 ### Logs
 ```
@@ -270,7 +290,7 @@ Content-Type: application/json
 
 {"paths": ["/data/*.fastq.gz", "/data/*.bam"], "max_depth": 2}
 ```
-Deterministic file scanning + format inference + pipeline recommendation. Returns `{ files: [{ path, size, format, format_confidence, paired_with? }], summary, suggested_workflow }`. Format detection uses magic bytes + extension — **not AI**.
+Deterministic file scanning + format inference + pipeline recommendation. Returns `{ files: [{ path, size, format, format_confidence, paired_with?, sample_name? }], summary, suggested_workflow }`. Format detection uses filename extension matching — **not AI**.
 
 ### Reference Discovery
 ```
@@ -286,12 +306,12 @@ Finds installed reference genome components and reports missing ones with downlo
 ## Templates
 
 ```
-GET    /api/templates?category=rnaseq&tags=star,featurecounts
+GET    /api/templates
 POST   /api/templates
 GET    /api/templates/{id}
 DELETE /api/templates/{id}
 ```
-Built-in and user-created pipeline templates. System templates are read-only.
+Built-in and user-created pipeline templates. System templates are read-only. The list endpoint does not accept filter query parameters.
 
 ---
 
@@ -311,10 +331,14 @@ Validates a plugin manifest and optionally verifies its HMAC signature against t
 ## AI (Phase 2 — calls deterministic APIs above)
 
 ```
-POST /api/ai/translate   # NL intent → validated .oxoflow (SSE streaming)
-POST /api/ai/explain     # Explain run failure + suggest fix
-POST /api/ai/interpret   # Interpret results with caveats
-POST /api/ai/optimize    # Optimize pipeline parameters
+POST /api/ai/translate          # NL intent → validated .oxoflow (JSON response)
+POST /api/ai/translate/stream   # Same, streamed over SSE (progress → done events)
+POST /api/ai/explain            # Explain run failure + suggest fix
+POST /api/ai/interpret          # Interpret results with caveats
+POST /api/ai/optimize           # Optimize pipeline parameters
+GET  /api/ai/config             # Get AI provider configuration
+POST /api/ai/config             # Update AI provider configuration
+POST /api/ai/test               # Test the configured AI provider
 ```
 
 See [AI Translation Layer](ai-translation.md) for details.
@@ -339,7 +363,19 @@ See [Collaboration](../how-to/collaboration.md) for details.
 ```
 GET /api/hpc
 ```
-Returns scheduler status (SLURM, PBS/Torque, LSF, SGE), available queues, and node count.
+Returns scheduler status (SLURM, PBS/Torque, LSF, SGE), available queues, and node count. This route is only mounted when the server runs in `hpc` mode.
+
+---
+
+## DAG Editing
+
+```
+POST /api/pipeline/{id}/command   # Apply an edit command (add/remove rule, connect, ...)
+POST /api/pipeline/{id}/undo      # Revert the last edit
+POST /api/pipeline/{id}/redo      # Re-apply the last undone edit
+```
+
+See [DAG Edit API](dag-edit-api.md) for the full command reference.
 
 ---
 

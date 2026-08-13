@@ -53,8 +53,8 @@ channels:
   - bioconda
   - conda-forge
 dependencies:
-  - bwa=0.7.17
-  - samtools=1.19
+  - bwa=0.7.19
+  - samtools=1.24
 ```
 
 !!! note "Why Bioconda?"
@@ -92,8 +92,8 @@ channels = ["bioconda", "conda-forge"]
 platforms = ["linux-64"]
 
 [dependencies]
-bwa = "0.7.17"
-samtools = "1.19"
+bwa = "0.7.19"
+samtools = "1.24"
 ```
 
 ---
@@ -103,13 +103,13 @@ samtools = "1.19"
 Use pre-built container images from registries like BioContainers:
 
 ```toml
-environment = { docker = "biocontainers/bwa:0.7.17--h7132678_3" }
+environment = { docker = "biocontainers/bwa:0.7.19--h577a1d6_1" }
 ```
 
 oxo-flow runs the rule's shell command inside the container, mounting the working directory automatically:
 
 ```bash
-docker run --rm -v $(pwd):$(pwd) -w $(pwd) biocontainers/bwa:0.7.17 \
+docker run --rm -v $(pwd):$(pwd) -w $(pwd) biocontainers/bwa:0.7.19--h577a1d6_1 \
   bwa mem ref.fa reads.fastq.gz
 ```
 
@@ -123,7 +123,7 @@ docker run --rm -v $(pwd):$(pwd) -w $(pwd) biocontainers/bwa:0.7.17 \
 For HPC clusters where Docker is not available:
 
 ```toml
-environment = { singularity = "docker://biocontainers/bwa:0.7.17--h7132678_3" }
+environment = { singularity = "docker://biocontainers/bwa:0.7.19--h577a1d6_1" }
 ```
 
 Singularity can pull images directly from Docker registries. The working directory is bound automatically.
@@ -135,7 +135,7 @@ Singularity can pull images directly from Docker registries. The working directo
 On clusters using Lmod / Environment Modules, load toolchain modules for the rule:
 
 ```toml
-environment = { modules = ["gcc/11.2.0", "openmpi/4.1.1", "samtools/1.19"] }
+environment = { modules = ["gcc/11.2.0", "openmpi/4.1.1", "samtools/1.24"] }
 ```
 
 The rule's shell command runs after all listed modules are loaded, and the module environment is cleaned up afterward. This is the standard way to use cluster-administered software stacks.
@@ -167,7 +167,7 @@ A single workflow can use different environments for different rules:
 ```toml
 [[rules]]
 name = "align"
-environment = { docker = "biocontainers/bwa:0.7.17" }
+environment = { docker = "biocontainers/bwa:0.7.19--h577a1d6_1" }
 # ...
 
 [[rules]]

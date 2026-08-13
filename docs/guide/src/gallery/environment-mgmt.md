@@ -96,8 +96,8 @@ Each rule can declare its own isolated software environment. oxo-flow supports e
 
 Bioinformatics tools often have conflicting dependencies:
 
-- **FastQC** requires Java 11
-- **BWA-MEM2** requires a specific libdeflate version
+- **FastQC** requires Java 11+
+- **BWA-MEM2** requires an x86 CPU with AVX2 (SIMD-accelerated build)
 - **GATK** requires Java 17 with specific Spark libraries
 - **VEP** requires Perl with custom modules
 

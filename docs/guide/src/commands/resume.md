@@ -5,7 +5,7 @@ Resume an interrupted workflow from a checkpoint file.
 ## Usage
 
 ```
-oxo-flow resume <CHECKPOINT> [-j <JOBS>]
+oxo-flow resume [OPTIONS] <CHECKPOINT>
 ```
 
 ## Description

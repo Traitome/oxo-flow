@@ -51,13 +51,13 @@ Given a list of rules, the DAG is built by:
 1. **Adding nodes** — one per rule, keyed by `rule.name`
 2. **Inferring edges** — for each rule B, if any of B's inputs appear in another rule A's outputs, add an edge A → B
 3. **Cycle detection** — verify the graph is acyclic
-4. **Validation** — check for duplicate rule names and missing dependencies
+4. **Validation** — reject duplicate rule names; inputs with no producer are treated as source files
 
 ```rust
 let dag = WorkflowDag::from_rules(&config.rules)?;
 ```
 
-If the DAG contains a cycle, an `OxoFlowError::Dag` error is returned with details about which rules are involved.
+If the DAG contains a cycle, an `OxoFlowError::CycleDetected` error is returned with the cycle path (e.g., `A → B → A`).
 
 ---
 
@@ -131,7 +131,7 @@ let groups: Vec<Vec<String>> = dag.parallel_groups()?;
 // [["fastqc", "trim_reads"], ["align"], ["multiqc"]]
 ```
 
-This is used by the executor to determine which rules can be launched simultaneously within the `-j` concurrency limit.
+This is used by `oxo-flow dry-run` to display the execution plan grouped by level, and by `oxo-flow run` to suggest a `-j` value from the maximum group width.
 
 ---
 
@@ -202,12 +202,14 @@ let dot: String = dag.to_dot();
 Output:
 
 ```dot
-digraph workflow {
-    rankdir = TB;
-    node [shape=box, style="rounded,filled", fillcolor="#e8f4f8"];
-    "fastqc" -> "multiqc";
-    "trim_reads" -> "align";
-    "align" -> "multiqc";
+digraph {
+    0 [ label = "fastqc"]
+    1 [ label = "trim_reads"]
+    2 [ label = "align"]
+    3 [ label = "multiqc"]
+    1 -> 2 [ ]
+    0 -> 3 [ ]
+    2 -> 3 [ ]
 }
 ```
 
@@ -274,7 +276,7 @@ state.check_deadlock(&dag, available_threads, available_memory_mb, &rules)?;
 |---|---|---|
 | Rule requires 64 threads, `--max-threads=32` | `ResourceExhausted` — lists required vs available | Increase `--max-threads`, reduce rule's thread declaration, or run on larger hardware |
 | Rule requires 256GB, system has 128GB | `ResourceExhausted` — lists required vs available memory | Increase `--max-memory`, reduce memory declaration, or split the rule |
-| Circular dependency | `CycleDetected` — shows the cycle path | Use `oxo-flow graph` to find and break the cycle |
+| Circular dependency | `CycleDetected` — shows the cycle path (caught at DAG build, before scheduling) | Use `oxo-flow graph` to find and break the cycle |
 | Rules stuck with no clear cause | `Config` error — "N rules stuck" with stuck rule names | Check all resource constraints and dependency declarations |
 
 ### Stuck Rule Detection
@@ -331,7 +333,7 @@ Resolve by giving each rule distinct output paths (e.g., `caller_a/{sample}.vcf`
 |---|---|---|
 | `Cycle detected: A → B → A` | Two or more rules form a circular dependency | Use `oxo-flow graph` to visualize; break the cycle by removing an input/output connection or using `depends_on` to express the intended ordering |
 | `Duplicate rule name` | Two rules share the same `name` field | Rename one rule; use `namespace` with `[[include]]` to avoid conflicts |
-| `Rule not found: 'name'` | `-t` target or `depends_on` references a non-existent rule | Check spelling; try prefix matching (`-t al` may match `align`); use `oxo-flow graph` to list all rule names |
+| `Rule not found: 'name'` | `-t` target references a non-existent rule | Check spelling; try prefix matching (`-t al` may match `align`); use `oxo-flow graph` to list all rule names (unknown `depends_on` references are caught by `oxo-flow validate`) |
 | `ResourceExhausted` | Rule's resource requirements exceed available pool | Increase `--max-threads`/`--max-memory`, reduce rule's declared resources, or lower `-j` |
 | `Deadlock detected: N rules stuck` | Pending rules can never fit in available resources | Reduce job parallelism or increase resource limits |
 
@@ -374,7 +376,7 @@ The cycle path `A → B → C → A` shows you the circular chain. To break it:
 - The DAG is immutable once built — modifications require rebuilding from rules
 - Wildcard patterns are matched literally during DAG construction; expansion happens at execution time
 - The petgraph `DiGraph` provides efficient graph traversal with O(V + E) topological sort
-- Cycle detection is performed twice: once during edge insertion (via DFS) and once during topological sort (via Kahn's algorithm) for robustness
+- Cycle detection uses petgraph's topological sort (Kahn's algorithm); DFS is used only to reconstruct the cycle path for error messages
 
 ---
 

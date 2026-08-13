@@ -13,23 +13,38 @@ The DAG Edit domain (`crates/oxo-flow-web/src/domains/dag/service.rs`) provides 
 3. **Formatted** — the config is serialized back to canonical TOML
 4. **Validated** — the result is validated through the workflow validation pipeline
 
-Edits that produce invalid workflows are still applied and persisted — the
+Edits that produce invalid workflows are still applied and returned — the
 response reports `success: false` with the `validation_errors` populated, so the
 problematic state can be inspected and fixed with a follow-up edit.
 
----
+## Endpoint
+
+All edit commands are sent to a single endpoint, with the pipeline ID in the URL path:
+
+```
+POST /api/pipeline/{id}/command
+```
+
+The pipeline ID is a logical key for the undo/redo stacks — it does not need to
+reference a saved pipeline.
 
 ## Commands
 
-All commands share a common request envelope:
+All commands share a common request envelope. The request body must include the
+current TOML content (`toml_content`) plus the command:
 
 ```json
 {
-  "source": "dag",
+  "toml_content": "<current workflow TOML>",
+  "source": "dag_editor",
   "operation": "<command>",
   "payload": { ... }
 }
 ```
+
+`source` is one of `dag_editor` (the interactive editor), `chat`, or `proposal`.
+`operation` is one of `add_rule`, `remove_rule`, `connect`, `disconnect`,
+`update_params`, `replace_tool`, or `reorder`.
 
 ### `add_rule`
 
@@ -46,7 +61,8 @@ Add a new rule to the workflow.
 
 ```json
 {
-  "source": "dag",
+  "toml_content": "<current workflow TOML>",
+  "source": "dag_editor",
   "operation": "add_rule",
   "payload": {
     "name": "fastp_trim",
@@ -55,7 +71,7 @@ Add a new rule to the workflow.
 }
 ```
 
-**Result:** The new rule is appended to the rule list. You must also declare `input`, `output`, and other fields — add them with `update_params`.
+**Result:** The new rule is appended to the rule list. Note that `update_params` can only change `threads` and `shell`; `input`, `output`, and other rule fields cannot currently be set via the edit API.
 
 ---
 
@@ -73,7 +89,8 @@ Remove a rule and all references to it.
 
 ```json
 {
-  "source": "dag",
+  "toml_content": "<current workflow TOML>",
+  "source": "dag_editor",
   "operation": "remove_rule",
   "payload": { "name": "obsolete_step" }
 }
@@ -98,7 +115,8 @@ Add an explicit dependency edge between two rules.
 
 ```json
 {
-  "source": "dag",
+  "toml_content": "<current workflow TOML>",
+  "source": "dag_editor",
   "operation": "connect",
   "payload": { "from": "fastqc", "to": "trim_reads" }
 }
@@ -123,7 +141,8 @@ Remove an explicit dependency edge between two rules.
 
 ```json
 {
-  "source": "dag",
+  "toml_content": "<current workflow TOML>",
+  "source": "dag_editor",
   "operation": "disconnect",
   "payload": { "from": "fastqc", "to": "trim_reads" }
 }
@@ -149,7 +168,8 @@ Update one or more fields on an existing rule.
 
 ```json
 {
-  "source": "dag",
+  "toml_content": "<current workflow TOML>",
+  "source": "dag_editor",
   "operation": "update_params",
   "payload": {
     "name": "bwa_align",
@@ -172,22 +192,20 @@ The DAG Edit API maintains an undo/redo stack per pipeline ID with a maximum dep
 Reverts the last edit, restoring the previous TOML state.
 
 ```
-POST /api/dag/undo
-{ "pipeline_id": "..." }
+POST /api/pipeline/{id}/undo
 ```
 
-Returns the previous TOML content, or `null` if the undo stack is empty.
+Returns the previous TOML content, or `404` with code `NO_UNDO` if the undo stack is empty.
 
 ### `redo`
 
 Re-applies the last undone edit.
 
 ```
-POST /api/dag/redo
-{ "pipeline_id": "..." }
+POST /api/pipeline/{id}/redo
 ```
 
-Returns the redone TOML content, or `null` if the redo stack is empty.
+Returns the redone TOML content, or `404` with code `NO_REDO` if the redo stack is empty.
 
 **Note:** Performing a new edit after an undo clears the redo stack (standard undo/redo semantics).
 
@@ -207,17 +225,19 @@ All edit commands return a `DagEditResponse`:
 
 | Field | Type | Description |
 |---|---|---|
-| `success` | Boolean | `true` if validation passed (no errors) |
+| `success` | Boolean | `true` if validation passed (no hard errors) |
 | `toml_content` | String | The complete workflow TOML after the edit |
-| `validation_errors` | Array of String | Validation error messages (empty on success) |
+| `validation_errors` | Array of String | Validation error messages (lint-level findings such as a missing description may appear even when `success` is `true`) |
 
-If validation fails, `success` is `false` and the edit is **still applied** to the TOML (so the user can see the problematic state), with `validation_errors` populated.
+If validation fails, `success` is `false` and the edit is **still applied** to the returned TOML (so the user can see the problematic state), with `validation_errors` populated.
+
+Malformed commands (unknown operation, missing required payload fields such as the rule `name`, or a `connect`/`disconnect`/`update_params` target rule that does not exist) are rejected with HTTP `400` and code `DAG_EDIT_ERROR`; the edit is not applied.
 
 ---
 
 ## Important Notes
 
-- **File-based edges are immutable via the edit API.** The `connect`/`disconnect` commands only manage `depends_on` entries. File-based dependencies (inferred from input/output matching) are controlled by the `input` and `output` fields of rules — change those with `update_params`.
+- **File-based edges are immutable via the edit API.** The `connect`/`disconnect` commands only manage `depends_on` entries. File-based dependencies (inferred from input/output matching) are controlled by the `input` and `output` fields of rules, which the edit API cannot currently modify.
 - **All edits are validated.** The edit API runs the full workflow validation pipeline after every command. Edits that introduce cycles, duplicate names, or invalid syntax are flagged in `validation_errors`.
 - **TOML round-tripping preserves formatting.** The core `format::format_workflow` function produces canonical TOML, so edited workflows will have consistent formatting regardless of the original style.
 - **Undo/redo is in-memory.** Stacks are per-pipeline and live only for the duration of the server process. They do not persist across server restarts.

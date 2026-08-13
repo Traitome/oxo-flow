@@ -28,6 +28,12 @@ graph TD
     K --> L[annotate_variants]
 ```
 
+Edges are shown as realized after per-sample expansion (for example,
+`haplotype_caller` → `combine_gvcfs` exists because `expand_inputs`
+resolves the three per-sample GVCFs). In the unexpanded template DAG
+(`oxo-flow graph`), `combine_gvcfs` is a root rule — its inputs arrive
+via `expand_inputs`, not file-path inference.
+
 **Steps:**
 
 1. **fastp_qc** — Read quality control and adapter trimming
@@ -98,7 +104,7 @@ output = ["aligned/{sample}.sorted.bam"]
 description = "Paired-end alignment with BWA-MEM2 and coordinate sorting"
 shell = """
 mkdir -p aligned
-bwa-mem2 mem -t {threads} -R '@RG\\tID:{sample}\\tSM:{sample}\\tLB:WGS\\tPL:ILLUMINA\\tPU:{sample}' \
+bwa-mem2 mem -M -t {threads} -R '@RG\\tID:{sample}\\tSM:{sample}\\tLB:WGS\\tPL:ILLUMINA\\tPU:{sample}' \
     {config.reference} {input[0]} {input[1]} \
     | samtools sort -@ {threads} -m 2G -o {output[0]}
 samtools index {output[0]}
@@ -113,7 +119,7 @@ docker = "biocontainers/bwa-mem2:2.2.1"
 ```
 
 !!! note "Read Group Escape Sequences"
-    The `\\t` in the read group string (`-R '@RG\\tID:...'`) is a double-escaped tab character. TOML requires `\\` to represent a literal backslash, which the shell then interprets as `\t` (tab) — the delimiter BWA expects between read group fields.
+    The `\\t` in the read group string (`-R '@RG\\tID:...'`) is a double-escaped tab character. TOML requires `\\` to represent a literal backslash, so the shell receives `\t`; inside single quotes it passes the two characters through literally, and bwa-mem2 itself converts the `\t` escape to a real tab when it writes the read group header into the SAM — the delimiter it expects between read group fields.
 
 ```toml
 [[rules]]
@@ -147,6 +153,7 @@ mkdir -p bqsr
 gatk BaseRecalibrator \
     -I {input[0]} -R {config.reference} \
     --known-sites {config.known_sites} \
+    --known-sites {config.thousand_g} \
     --known-sites {config.known_indels} \
     -O bqsr/{sample}.recal_data.table
 
@@ -400,6 +407,14 @@ Instead of fixed hard filters, the pipeline applies VQSR for clinical-grade vari
 4. **apply_vqsr_indels** — GATK ApplyVQSR applies the INDEL model at `--truth-sensitivity-filter-level 99.7` to produce the final filtered variant set.
 
 VQSR adaptively models the variant quality profile rather than applying fixed thresholds, which generally preserves more true variants than hard filtering.
+
+!!! note "VQSR assumes a large callset"
+    GATK recommends VQSR for cohorts of roughly 30+ samples, where enough
+    sites are available to train the model reliably. For a small cohort
+    like the three samples here, GATK instead recommends hard filtering
+    with VariantFiltration (e.g. `QD < 2.0`, `FS > 60.0`, `MQ < 40.0` for
+    SNPs). The example keeps VQSR to demonstrate the tool; match the
+    filtering strategy to your cohort size.
 
 ## Running the Workflow
 

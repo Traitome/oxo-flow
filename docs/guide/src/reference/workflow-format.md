@@ -41,6 +41,7 @@ Workflow files must use the `.oxoflow` extension (e.g., `qc_pipeline.oxoflow`).
 [defaults]          # Optional: rule defaults
 [report]            # Optional: report configuration
 [[include]]         # Optional: include external workflow files
+[[references]]      # Optional: auto-built indexes and reference data
 [[rules]]           # Required: one or more rules
 [[pairs]]           # Optional: experiment-control pairs (WC-01)
 [[sample_groups]]   # Optional: multi-sample groups (WC-02)
@@ -147,9 +148,10 @@ author = "Your Name"
 
 By default, oxo-flow auto-detects interpreters based on file extensions:
 
-- `.py` → `python3`
+- `.py` → `python`
+- `.py3` → `python3`
 - `.R`, `.r` → `Rscript`
-- `.sh` → `sh`
+- `.sh`, `.bash` → `bash`
 - `.jl` → `julia`
 
 You can override or extend this mapping in the `[workflow]` section:
@@ -164,7 +166,7 @@ name = "custom-interpreters"
 ".py" = "/opt/conda/bin/python"  # Override default
 ```
 
-This mapping applies only to the [`script`](#rules-script-field) field.
+This mapping applies only to the [`script`](#script-execution-script) field.
 
 ---
 
@@ -291,16 +293,23 @@ description = "BWA index for alignment"
 ### Auto-Derivation from `reference_dir`
 
 When `[config]` contains `reference_dir` and no explicit `[[references]]` blocks
-are declared, the engine automatically derives four standard indexes:
+are declared, the engine automatically derives eight standard references:
 
-| Auto-Generated | Build Time | Size |
-|---|---|---|
-| `bwa_index` | ~1-2 hours | ~4 GB |
-| `bowtie2_index` | ~30-60 min | ~4 GB |
-| `star_index` | ~2-6 hours | ~30 GB |
-| `hisat2_index` | ~1-2 hours | ~7 GB |
+| Name | Output |
+|---|---|
+| `samtools_faidx` | `{reference_dir}/genome.fa.fai` |
+| `bwa_index` | `{reference_dir}/bwa/genome.fa.bwt` |
+| `bwamem2_index` | `{reference_dir}/bwamem2/genome.fa.0123` |
+| `bowtie2_index` | `{reference_dir}/bowtie2/genome.fa.1.bt2` |
+| `minimap2_index` | `{reference_dir}/genome.fa.mmi` |
+| `star_index` | `{reference_dir}/star/SAindex` |
+| `hisat2_index` | `{reference_dir}/hisat2/genome.fa.1.ht2` |
+| `gatk_dict` | `{reference_dir}/genome.dict` |
 
-Users can override any auto-derived reference by declaring it explicitly.
+`reference_dir` also auto-derives config defaults such as
+`reference_fasta` (`{reference_dir}/genome.fa`) and `gene_annotation`
+(`{reference_dir}/genes.gtf`). Users can override any auto-derived reference
+by declaring it explicitly.
 
 ### CLI
 
@@ -364,7 +373,7 @@ Each section ID maps to a registered `ReportSectionGenerator`:
 | `clinical-compliance` | ACMG/AMP classification, audit trail, biomarkers | Always |
 | `execution-status` | Per-rule execution status and benchmark metrics | Only with checkpoint |
 
-The domain (DNA-seq, RNA-seq, epigenomics, clinical, generic) is auto-detected from tool names in the workflow. Custom generators can be registered programmatically.
+The domain (DNA-seq, RNA-seq, epigenomics, or generic) is auto-detected from tool names in the workflow. Custom generators can be registered programmatically.
 
 ---
 
@@ -438,7 +447,7 @@ memory = "32G"
 | `checksum` | String | No | Output integrity verification (`"md5"` or `"sha256"`) |
 | `resource_hint` | Table | No | Resource estimation hints for dynamic scheduling |
 
-**Note:** At least one of `shell` or `script` must be provided. If both are defined, they execute sequentially: shell first, then script.
+**Note:** When a rule declares outputs, at least one of `shell`, `script`, or `transform` must be provided. If both `shell` and `script` are defined, they execute sequentially: shell first, then script.
 
 ### Environment specification
 
@@ -490,7 +499,6 @@ conda = "envs/qc.yaml"
 
 [env_groups.align_env]
 conda = "envs/alignment.yaml"
-docker = "biocontainers/bwa:0.7.17"  # fallback
 
 [[rules]]
 name = "fastqc"
@@ -501,8 +509,9 @@ shell = "fastqc {input} -o qc/"
 ```
 
 Rules using `env_group` inherit the full environment specification from the
-named group. If a rule also defines an inline `[rules.environment]`, the
-inline spec takes precedence.
+named group. The `env_group` spec takes precedence over an inline
+`[rules.environment]`; the inline spec is only used when no `env_group` is set
+(or the named group does not exist), followed by `[defaults] environment`.
 
 ### Environment Variables (`envvars`)
 
@@ -548,7 +557,6 @@ interpreter = "python3" # Optional: overrides auto-detection
 1.  **Explicit `interpreter` field** on the rule.
 2.  **Custom `[workflow.interpreter_map]`** in the metadata.
 3.  **Built-in defaults** based on file extension.
-4.  **Shebang line** (if file is executable).
 
 ### Lifecycle Hooks
 
@@ -649,7 +657,7 @@ oxo-flow automatically cleans up temporary outputs:
 |---|---|---|
 | Success + `temp_output` | Cleaned after successful completion |
 | Failure + `temp_output` | Cleaned to prevent stale partial files |
-| Transform with `cleanup=true` | Chunk files cleaned after combine succeeds |
+| Transform with `cleanup=true` | Chunk files cleaned after the whole run finishes successfully (kept on failed runs for debugging; re-runs recompute the map rules) |
 
 ### Timeout Enforcement
 
@@ -992,6 +1000,10 @@ expand_inputs = [
 | `"a"` (string, no comma) | `a` |
 | `"a,b,c"` (comma-joined string) | `a`, `b`, `c` (split on commas, trimmed) |
 | `["a,b"]` (single-element array) | `a,b` as one value — escape hatch for comma-containing strings |
+
+Inline literals (a plain string written directly in `variables`, e.g.
+`sample = "S1,S2"`) are always treated as one value and are never split —
+the comma-splitting applies only to `config.*` references.
 
 Comma-joined strings are how the engine injects merged sample lists
 (`config.samples_list`, `config.samples_<group_name>` — see
@@ -1476,7 +1488,7 @@ Priority: `values` → `values_from` → `n` → `glob`
 |---|---|
 | `{split_var}` | Current split value (e.g., `{chr}` → `"chr1"`) |
 | `{chunks}` | Space-separated list of all chunk outputs |
-| `{input}` | Original rule input (in combine) |
+| `{input}` | Chunk outputs — same as `{chunks}` (in combine) |
 | `{output}` | Original rule output (in combine) |
 
 ### Modes
@@ -1497,7 +1509,21 @@ map = "gatk HaplotypeCaller -R {config.reference} -I {input} -L {chr} -O {output
 shell = "gatk GatherVcfs $(for f in {chunks}; do echo \"-I $f \"; done) -O {output}"
 ```
 
-**Mode B: Split → Map → Aggregate**
+**Mode B: Split → Map (No Combine)**
+
+Parallel processing without merging — each split produces independent output:
+
+```toml
+[rules.transform.split]
+by = "chr"
+values_from = "config.chromosomes"
+
+[rules.transform]
+map = "samtools flagstat {input} > {output}"
+# No combine section
+```
+
+**Mode C: Split → Map → Aggregate**
 
 Automatic aggregation (concat or json_merge):
 
@@ -1514,28 +1540,16 @@ aggregate = true
 method = "concat"
 ```
 
-**Mode C: Split → Map (No Combine)**
-
-Parallel processing without merging — each split produces independent output:
-
-```toml
-[rules.transform.split]
-by = "chr"
-values_from = "config.chromosomes"
-
-[rules.transform]
-map = "samtools flagstat {input} > {output}"
-# No combine section
-```
-
 ### Cleanup
 
-When `cleanup = true`, chunk files are automatically cleaned up after combine succeeds:
+When `cleanup = true`, chunk files are automatically deleted after the whole run finishes successfully (empty chunk directories are removed too):
 
 ```toml
 [rules.transform]
 cleanup = true
 ```
+
+Failed runs keep their chunks for debugging. Because chunk deletion makes the map outputs "missing", a re-run always recomputes the map rules — that is the disk-space trade-off of `cleanup = true`.
 
 ### Failure and Retry Logic
 

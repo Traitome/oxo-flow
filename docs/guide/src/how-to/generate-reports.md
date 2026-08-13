@@ -42,8 +42,9 @@ A generated report includes:
 | **Environment** | Environment backends and specifications used |
 | **Task Summary** | Always included — a per-rule table of tasks, types, inputs, outputs, environments, and resources |
 
-Sections adapt to the detected workflow domain and to available execution
-data; the **Task Summary** table is always appended.
+Sections adapt to available execution data — for example, **Execution
+Status** only appears when a checkpoint from a previous run is present —
+and the **Task Summary** table is always appended.
 
 ---
 
@@ -55,15 +56,18 @@ Add a `[report]` section to your workflow file to customize report output:
 [report]
 template = "clinical"
 format = ["html", "json", "pdf"]
-sections = ["summary", "variants", "quality"]
+sections = ["universal", "commands", "environment"]
 ```
 
 > **Note — partial support**: of the three fields, only `sections` is
 > currently consumed — it filters which registered sections the report
-> includes (names match the table above). `template` and `format` are
-> parsed but not yet consumed: there are no built-in templates such as
-> `"clinical"` yet (the field is a free-form string reserved for future
-> use), and output formats are selected via the CLI `-f` flag.
+> includes. The filter keys are the generator **names** (`universal`,
+> `execution-status`, `clinical-compliance`, `workflow-info`, `commands`,
+> `file-manifest`, `environment`), not the display titles in the table
+> above. `template` and `format` are parsed but not yet consumed: there
+> are no built-in templates such as `"clinical"` yet (the field is a
+> free-form string reserved for future use), and output formats are
+> selected via the CLI `-f` flag.
 
 ### Fields
 
@@ -71,7 +75,7 @@ sections = ["summary", "variants", "quality"]
 |---|---|---|
 | `template` | String | Report template name (free-form; no built-in templates such as `"clinical"`/`"research"` exist yet) |
 | `format` | Array | Output formats to generate (`"html"`, `"json"`, `"pdf"`) |
-| `sections` | Array | Sections to include in the report |
+| `sections` | Array | Sections to include, by generator name (`universal`, `execution-status`, `clinical-compliance`, `workflow-info`, `commands`, `file-manifest`, `environment`) |
 
 ---
 
@@ -125,7 +129,7 @@ Example output structure:
         "type": "Table",
         "headers": ["Task", "Type", "Inputs", "Outputs", "Environment", "Resources"],
         "rows": [
-          ["align", "shell", "1", "1", "conda:envs/bwa.yaml", "t=8 m=16G"]
+          ["align", "shell", "1", "1", "conda", "t=8 m=16G"]
         ]
       },
       "subsections": []

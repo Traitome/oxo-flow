@@ -26,7 +26,7 @@ sample = "SAMPLE_01"
 
 [[rules]]
 name = "count"
-input = ["raw/{config.sample}.fastq.gz"]
+input = ["raw/{config.sample}.fastq"]
 output = ["counts/{config.sample}.count.txt"]
 script = "scripts/count_reads.py {input[0]} --min-quality {params.min_q} -o {output[0]}"
 
@@ -48,7 +48,20 @@ conda = "envs/py.yaml"
 
 `summarize` depends on `count` automatically — its `input` matches `count`'s `output`, so the DAG engine infers the edge. No explicit declaration needed.
 
-### 2. The scripts
+### 2. The environment file
+
+Both rules declare `environment = { conda = "envs/py.yaml" }`, so create that file first — the run will fail with `EnvironmentFileNotFound` otherwise:
+
+```yaml
+# envs/py.yaml
+name: py
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+```
+
+### 3. The scripts
 
 `scripts/count_reads.py`:
 
@@ -94,9 +107,14 @@ with open(args.out, "w") as f:
 print(f"wrote summary: {n} reads")
 ```
 
-### 3. Run it
+### 4. Run it
+
+Create a tiny FASTQ file to process, then run the pipeline:
 
 ```bash
+mkdir -p raw
+printf '@read1\nACGTACGT\n+\nIIIIIIII\n@read2\nTGCATGCA\n+\nIIIIIIII\n' > raw/SAMPLE_01.fastq
+
 oxo-flow run count.oxoflow
 # ✓ count (0.1s)
 # ✓ summarize (0.1s)
@@ -117,7 +135,7 @@ genome = "hg38"       # string
 
 ```bash
 script = "analyze.py --min-quality {params.min_q} --genome {params.genome} {input[0]}"
-# Expands to: analyze.py --min-quality 20 --genome hg38 raw/SAMPLE_01.fastq.gz
+# Expands to: analyze.py --min-quality 20 --genome hg38 raw/SAMPLE_01.fastq
 ```
 
 | Placeholder | Scope | Defined in |

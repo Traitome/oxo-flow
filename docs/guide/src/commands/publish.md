@@ -34,6 +34,10 @@ each environment YAML, ensuring exact reproducibility across time.
 | `--output` | `-o` | Output path for the bundle archive (default: `<name>-bundle.<ext>`) |
 | `--with-lockfiles` | | Generate `conda-lock` lockfiles for reproducible environments |
 | `--format` | | Archive format: `tar.zst` (default, better compression) or `tar.gz` (universal compatibility) |
+| `--verbose` | `-v` | Enable verbose (debug-level) logging |
+| `--quiet` | | Suppress non-essential output (errors only) |
+| `--no-color` | | Disable colored output |
+| `--json` | | Output machine-readable JSON to stdout |
 
 ## Examples
 
@@ -71,7 +75,7 @@ The `manifest.json` inside each bundle:
 {
   "format": "oxoflow-bundle-v1",
   "workflow": "my_pipeline.oxoflow",
-  "oxo_flow_version": "0.10.1",
+  "oxo_flow_version": "0.10.2",
   "created_at_epoch": 1234567890,
   "entrypoint": "my_pipeline.oxoflow",
   "files": [
@@ -92,6 +96,17 @@ The `manifest.json` inside each bundle:
       "image": "biocontainers/bwa:0.7.17"
     }
   ],
+  "resources": {
+    "rules": [
+      {
+        "rule": "bwa_align",
+        "threads": 16
+      }
+    ],
+    "recommendations": {
+      "min_threads": 16
+    }
+  },
   "signatures": []
 }
 ```

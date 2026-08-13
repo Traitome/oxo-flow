@@ -5,7 +5,7 @@ Show execution history from checkpoints.
 ## Usage
 
 ```
-oxo-flow history [DIR] [-n <LIMIT>]
+oxo-flow history [OPTIONS] [DIR]
 ```
 
 ## Description
@@ -20,6 +20,10 @@ execution time, and recent rules with per-rule durations.
 | Option | Description |
 |--------|-------------|
 | `-n, --limit <LIMIT>` | Maximum number of recent rules to show (default: 10) |
+| `-v, --verbose` | Enable verbose (debug-level) logging |
+| `--quiet` | Suppress non-essential output (errors only) |
+| `--no-color` | Disable colored output |
+| `--json` | Output machine-readable JSON to stdout |
 
 ## Examples
 

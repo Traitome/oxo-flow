@@ -1,86 +1,97 @@
 # Webhook Notifications
 
-oxo-flow includes a built-in webhook system that can send notifications about workflow and rule execution events to external services like Slack, Microsoft Teams, Discord, or any custom HTTP endpoint.
+oxo-flow includes a webhook client (`oxo_flow_core::webhook`, behind the `webhook` cargo feature — enabled by default) that can send JSON notifications about workflow and rule execution events to external services like Slack, Microsoft Teams, Discord, or any custom HTTP endpoint.
+
+> **Status note:** the webhook module provides the configuration model, the HTTP client (with retries and HMAC signing), and the payload types. It is not yet wired into the executor — the engine does not currently dispatch webhook notifications during workflow execution.
 
 ## Configuration
 
-Webhooks are configured in your `.oxoflow` workflow file under the `[webhooks]` table. You can define multiple webhooks, each with its own target URL, events to subscribe to, and payload format.
+A webhook is described by the `WebhookConfig` struct:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `url` | String | — (required) | Webhook endpoint URL. |
+| `method` | String | `"post"` | HTTP method: `post`, `put`, or `get`. |
+| `headers` | Map | `{}` | Custom HTTP headers to include in the request. |
+| `events` | Array of String | `["workflow_completed"]` | Events to subscribe to (see below). If omitted, **only** `workflow_completed` is used. |
+| `secret` | String | none | Secret key for HMAC-SHA256 signature. |
+| `timeout_secs` | Integer | `30` | Request timeout in seconds. |
+| `max_retries` | Integer | `3` | Maximum retries on failure (with exponential backoff: 1s, 2s, 4s...). |
 
 ### Example Configuration
 
 ```toml
-[workflow]
-name = "variant-calling"
-version = "1.0.0"
-
-[[webhooks]]
-# Send all workflow-level events to a Slack channel
 url = "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
-events = ["WorkflowStarted", "WorkflowCompleted", "WorkflowFailed", "WorkflowCancelled"]
-format = "slack"
-
-[[webhooks]]
-# Send only failed rule events to a custom monitoring endpoint
-url = "https://api.my-monitoring.com/v1/alerts"
-events = ["RuleFailed"]
-format = "json"
+events = ["workflow_started", "workflow_completed", "workflow_failed"]
+method = "post"
+headers = { "X-Custom" = "value" }
 secret = "my-shared-secret"  # Used for HMAC-SHA256 signature
+timeout_secs = 30
+max_retries = 3
 ```
 
 ## Supported Events
 
-You can subscribe to the following events by listing them in the `events` array:
+Events are serialized in snake_case. You can subscribe by listing them in the `events` array:
 
 | Event Name | Description |
 | --- | --- |
-| `WorkflowStarted` | Fired when the workflow execution begins. |
-| `WorkflowCompleted` | Fired when all rules in the workflow have completed successfully. |
-| `WorkflowFailed` | Fired when the workflow fails (e.g., due to a failed rule with keep_going=false). |
-| `WorkflowCancelled` | Fired when the workflow execution is manually cancelled. |
-| `RuleStarted` | Fired when an individual rule begins execution. |
-| `RuleCompleted` | Fired when a rule completes successfully. |
-| `RuleFailed` | Fired when a rule fails after all retries are exhausted. |
-| `RuleSkipped` | Fired when a rule is skipped (e.g., outputs are already up-to-date). |
+| `workflow_started` | Fired when the workflow execution begins. |
+| `workflow_completed` | Fired when the workflow finishes (success or failure). |
+| `workflow_failed` | Fired when the workflow fails. |
+| `rule_completed` | Fired when an individual rule completes. |
+| `rule_failed` | Fired when an individual rule fails. |
 
-If the `events` array is omitted, the webhook will receive **all** events by default.
+There is no `WorkflowCancelled`, `RuleStarted`, or `RuleSkipped` event in the webhook module.
 
-## Payload Formats
+If the `events` array is omitted, the default subscription is `["workflow_completed"]` only.
 
-The `format` field determines how the event data is serialized and sent to the endpoint.
+## Payload
 
-### `json` (Default)
-
-The `json` format sends a standard HTTP POST request with `Content-Type: application/json`. The payload includes detailed information about the event, the workflow, and (if applicable) the specific rule.
+The `json` payload is a standard HTTP POST request with `Content-Type: application/json`. The body is a `WebhookPayload`:
 
 ```json
 {
-  "event": "RuleFailed",
-  "workflow": "variant-calling",
+  "event": "rule_failed",
+  "workflow_name": "variant-calling",
   "timestamp": "2026-05-18T12:00:00Z",
-  "rule": "align_reads",
-  "message": "rule 'align_reads' failed with exit code 1",
-  "details": {
+  "data": {
+    "total_rules": 12,
+    "succeeded": 10,
+    "failed": 1,
+    "skipped": 1,
+    "duration_ms": 45210,
+    "rule": "align_reads",
     "exit_code": 1,
-    "stderr": "bwa: command not found"
-  }
+    "error": "bwa: command not found"
+  },
+  "version": "0.10.2"
 }
 ```
 
-### `slack`
+Field details:
 
-The `slack` format transforms the event into a Slack-compatible message payload (`{"text": "...", "blocks": [...]}`). This is directly compatible with Slack Incoming Webhooks. It uses color-coding (green for success, red for failure) and formatted blocks to display rule and workflow status clearly.
+- `event` — the event name in snake_case.
+- `workflow_name` — the workflow name.
+- `timestamp` — ISO 8601 timestamp.
+- `data` — event-specific fields; only the fields relevant to the event are present (`total_rules`, `succeeded`, `failed`, `skipped`, `duration_ms`, `rule`, `exit_code`, `error`).
+- `version` — the oxo-flow version that sent the notification.
+
+### Slack format
+
+For Slack-compatible endpoints, `WebhookPayload::to_slack_payload()` converts the payload to a `{"text": "...", "blocks": [...]}` message with per-event status emoji (green success, red failure), directly compatible with Slack Incoming Webhooks.
 
 ## Security (HMAC Signatures)
 
-If you provide a `secret` field in your webhook configuration, oxo-flow will compute an HMAC-SHA256 signature of the payload and include it in the `X-Hub-Signature-256` HTTP header. 
-
-Your receiving endpoint can use this signature to verify that the webhook request genuinely originated from your oxo-flow execution and that the payload was not tampered with in transit.
+If you set the `secret` field, oxo-flow computes an HMAC-SHA256 signature over the payload body and includes it in the `X-OxoFlow-Signature` HTTP header:
 
 ```http
 POST /alerts HTTP/1.1
 Host: api.my-monitoring.com
 Content-Type: application/json
-X-Hub-Signature-256: sha256=abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
+X-OxoFlow-Signature: sha256=abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
 
-{"event": "RuleFailed", ...}
+{"event": "rule_failed", ...}
 ```
+
+Your receiving endpoint can use this signature to verify that the webhook request genuinely originated from your oxo-flow execution and that the payload was not tampered with in transit.

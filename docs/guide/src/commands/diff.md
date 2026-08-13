@@ -36,8 +36,8 @@ oxo-flow diff v1.oxoflow v2.oxoflow
 ```
 oxo-flow 0.10.2 — Bioinformatics Pipeline Engine
 Diff: 2 difference(s) between v1.oxoflow and v2.oxoflow:
-  • [rule] rule 'bwa_align' shell command changed
-  • [config] variable 'threads' changed from 8 to 16
+  • [rules] rule "bwa_align": shell command changed
+  • [config] config variable changed: "threads"
 ```
 
 ---

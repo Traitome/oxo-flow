@@ -5,7 +5,7 @@ Output the JSON Schema for the `.oxoflow` format.
 ## Usage
 
 ```
-oxo-flow schema
+oxo-flow schema [OPTIONS]
 ```
 
 ## Description
