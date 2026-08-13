@@ -68,32 +68,31 @@ Pixi uses both conda and PyPI channels. Configure via `~/.config/pixi/config.tom
 index-url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
 
 [mirrors]
-"https://conda.anaconda.org/conda-forge" =
+"https://conda.anaconda.org/conda-forge" = [
     "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge"
-"https://conda.anaconda.org/bioconda" =
+]
+"https://conda.anaconda.org/bioconda" = [
     "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/bioconda"
-"https://repo.anaconda.com/pkgs/main" =
+]
+"https://repo.anaconda.com/pkgs/main" = [
     "https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main"
+]
 ```
+
+> **Note:** pixi `[mirrors]` values must be **arrays** of strings — a plain
+> string fails to parse.
 
 ---
 
 ## Docker
 
-Add to `/etc/docker/daemon.json`:
+> **Warning:** the long-standing university registry mirrors
+> (`docker.mirrors.tuna.tsinghua.edu.cn`, `docker.mirrors.ustc.edu.cn`) were
+> discontinued in 2024. Community mirrors change frequently — check a
+> current, community-maintained mirror list before relying on any URL.
 
-```json
-{
-  "registry-mirrors": [
-    "https://docker.mirrors.tuna.tsinghua.edu.cn",
-    "https://docker.mirrors.ustc.edu.cn"
-  ]
-}
-```
-
-Then restart Docker: `sudo systemctl restart docker`
-
-Alternatively, configure per-container in `~/.docker/config.json`:
+The most stable approach is a per-container HTTP proxy in
+`~/.docker/config.json`:
 
 ```json
 {
@@ -174,8 +173,6 @@ Common GitHub proxies:
 |-----------|-------|
 | `https://ghfast.top/https://github.com` | Fast, reliable |
 | `https://gh-proxy.com/https://github.com` | General purpose |
-| `https://moeyy.cn/gh-proxy/https://github.com` | Alternative |
-| `https://gh-proxy.org/https://github.com` | Community maintained |
 
 ---
 
@@ -191,7 +188,7 @@ conda create -n test-mirror fastqc --dry-run
 pixi init test-mirror && cd test-mirror && pixi add fastqc --dry-run
 
 # Test pip
-pip install --dry-run fastqc
+pip install --dry-run numpy
 
 # Test docker
 docker pull hello-world

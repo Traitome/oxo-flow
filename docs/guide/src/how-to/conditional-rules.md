@@ -24,7 +24,7 @@ shell = "fastqc {input[0]} -o qc/"
 ### Simple truthiness
 
 ```toml
-when = "config.run_qc"        # true if run_qc is truthy (boolean true, non-zero, non-empty)
+when = "config.run_qc"        # true if truthy: boolean true, non-zero number, or non-empty string other than "false"/"0"
 when = "!config.skip_step"    # true if skip_step is falsy
 ```
 
@@ -125,4 +125,4 @@ are skipped and reported as `Skipped` in the run output.
 
 ## Full Example
 
-See [`examples/conditional_workflow.oxoflow`](https://github.com/Traitome/oxo-flow/blob/main/examples/conditional_workflow.oxoflow) for a complete WGS/WES adaptive pipeline that demonstrates all `when` expression types.
+See [`examples/conditional_workflow.oxoflow`](https://github.com/Traitome/oxo-flow/blob/main/examples/conditional_workflow.oxoflow) for a complete WGS/WES adaptive pipeline that demonstrates most `when` expression types (truthiness, string comparisons, `&&`, `>=`).

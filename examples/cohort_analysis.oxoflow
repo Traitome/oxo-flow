@@ -1,7 +1,7 @@
 [workflow]
 name = "cohort-analysis"
 version = "1.0.0"
-description = "Population-scale cohort study with per-sample and per-group aggregation"
+description = "Population-scale cohort study with per-sample analysis and cohort-level QC aggregation"
 author = "oxo-flow examples"
 
 [config]
@@ -86,7 +86,7 @@ shell = "multiqc qc/ -o reports/"
 description = "Aggregate QC metrics for the entire cohort"
 
 [rules.resources]
-threads = 1
+threads = 2
 memory = "4G"
 
 [rules.environment]

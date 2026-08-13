@@ -119,12 +119,13 @@ Supported formats:
 
 ### TSV Format
 
+One row per group; the `samples` column is comma-separated. The same
+layout works for CSV (with `,` as delimiter):
+
 ```tsv
-group	sample
-healthy	H001
-healthy	H002
-disease	D001
-disease	D002
+name	samples
+healthy	H001,H002
+disease	D001,D002
 ```
 
 For groups with metadata, use JSON format.

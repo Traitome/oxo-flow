@@ -102,7 +102,7 @@ shell = "python scripts/report.py --vcf {input[0]} --qc qc/ --out {output[0]}"
 when = "config.run_annotation && config.run_qc"
 
 [rules.resources]
-threads = 1
+threads = 2
 
 [rules.environment]
 conda = "envs/report.yaml"

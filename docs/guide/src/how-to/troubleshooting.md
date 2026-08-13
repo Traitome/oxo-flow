@@ -109,7 +109,7 @@ namespace = "shared"
 
 ### Timeout exceeded
 
-**Symptom**: `command timed out after 3600s for rule 'variant_calling'`
+**Symptom**: `command timed out` (exit code 124)
 
 **Solution**: Increase the timeout via `--timeout` flag or allocate more
 resources (threads/memory) to the rule.
@@ -118,7 +118,7 @@ resources (threads/memory) to the rule.
 
 ### Unresolved wildcards
 
-**Symptom**: `wildcard error in rule '...': unresolved wildcards: sample`
+**Symptom**: `wildcard error in rule '...'` (e.g. a `{sample}` placeholder that could not be resolved)
 
 **Solution**: Ensure wildcard values are provided. Wildcards like `{sample}`
 must be resolved from:
@@ -212,13 +212,13 @@ Use `oxo-flow graph workflow.oxoflow` to see all rule names.
 
 1. **DAG is naturally sequential**: Run `oxo-flow graph workflow.oxoflow` and check **Width** in the header. If width=1, every rule depends on the previous one — no parallelism is possible. Consider splitting large rules into independent sub-tasks.
 2. **Resource constraints**: If rules declare high thread/memory requirements (e.g., 32 threads each on a 64-thread machine), the resource pool may only allow 1-2 concurrent jobs. Either reduce declarations or increase `--max-threads`/`--max-memory`.
-3. **Implicit file dependencies**: Check that intermediate output files use unique names — if two independent rules produce files with the same wildcard expansion, the engine may serialize them.
+3. **Implicit file dependencies**: Check that intermediate output files use unique names — if two rules produce the same output file, the engine reports an `Output pattern collision` error and refuses to run.
 
 ### Orphan rules (rules that never connect)
 
 **Symptom**: A rule exists in the workflow but has no connections to other rules — neither consuming their outputs nor producing inputs for them.
 
-**Detection**: Use `oxo-flow graph workflow.oxoflow -f tree` and look for rules with no upstream or downstream indicators. Or run `oxo-flow validate` — orphan rules are reported as warnings.
+**Detection**: Use `oxo-flow graph workflow.oxoflow -f tree` and look for rules with no upstream or downstream indicators, or run `oxo-flow clean --orphans` to find them.
 
 **Solution**: Check input/output paths for typos. An orphan is usually a misspelled file path that prevents the engine from matching it to other rules.
 
@@ -310,11 +310,9 @@ oxo-flow run workflow.oxoflow
 2. **Check resource constraints**: Use `oxo-flow debug` to verify that
    resource requirements are reasonable.
 
-3. **Use streaming**: For I/O-bound rules, set `pipe = true` to enable
-   FIFO-based streaming where supported.
-
-4. **Enable caching**: Set `cache_key` on rules to enable content-based
-   output reuse.
+3. **Use streaming / caching**: the `pipe` and `cache_key` rule fields are
+   parsed but their execution features are not wired up yet — do not rely
+   on them for performance.
 
 ### Memory issues with large workflows
 

@@ -6,9 +6,9 @@ This guide explains how to execute oxo-flow workflows on HPC clusters using SLUR
 
 ## Overview
 
-oxo-flow's cluster module translates each rule into a cluster job submission. Resource requirements declared in the `.oxoflow` file (`threads`, `memory`, `gpu`, `disk`, `time_limit`) are mapped to the appropriate scheduler directives.
+oxo-flow's cluster module translates each rule into a cluster job submission. Resource requirements declared in the `.oxoflow` file (`threads`, `memory`, `gpu`, `time_limit`) are mapped to the appropriate scheduler directives. The `disk` field is **not** mapped to any scheduler directive — it only produces a local warning during `oxo-flow run`.
 
-**Environment wrapping is applied automatically** — conda, docker, singularity, pixi, and venv environments are properly wrapped in the generated scripts.
+**Environment wrapping is applied automatically** — conda, mamba, docker, singularity, pixi, venv, and modules environments are wrapped in the generated scripts. Each rule applies **one** backend (the first declared in the resolver order), so declaring e.g. both `singularity` and `modules` silently drops `modules`.
 
 ---
 
@@ -38,10 +38,12 @@ shell = "bwa mem -t {threads} ref.fa {input} | samtools sort -o {output}"
 [rules.resources]
 threads = 16
 memory = "32G"
-gpu = 0
-disk = "100G"
 time_limit = "24h"
 ```
+
+> **Note on `gpu`:** declare `gpu = 1` or higher. `gpu = 0` is treated as a
+> present-but-zero value and generates directives like `#SBATCH --gres=gpu:0`
+> — omit the field instead.
 
 ### Resource fields
 
@@ -51,7 +53,7 @@ time_limit = "24h"
 | `memory` | String | `"32G"` | RAM allocation |
 | `gpu` | Integer | `1` | Number of GPUs (simple count) |
 | `gpu_spec` | Table | See below | Detailed GPU specification |
-| `disk` | String | `"100G"` | Local disk space |
+| `disk` | String | `"100G"` | Local disk space — **local warning only**, never emitted as a scheduler directive |
 | `time_limit` | String | `"24h"` | Wall-time limit |
 
 ### GPU Specification
@@ -63,14 +65,17 @@ For basic GPU requests, use the `gpu` field:
 gpu = 2  # Request 2 GPUs
 ```
 
-For advanced GPU configuration (SLURM only), use `gpu_spec`:
+For advanced GPU configuration, use `gpu_spec`:
 
 ```toml
 [rules.resources.gpu_spec]
 count = 2
-model = "a100"       # GPU model (optional, SLURM only)
-memory_gb = 40       # Per-GPU memory in GB (optional, SLURM only)
+model = "a100"       # GPU model (optional — SLURM only)
+memory_gb = 40       # Per-GPU memory in GB (optional — SLURM only)
 ```
+
+`count` works on SLURM, PBS, and SGE; `model` and `memory_gb` only affect
+SLURM directives (LSF ignores `gpu_spec` entirely).
 
 Different schedulers handle GPU requests differently:
 
@@ -85,21 +90,26 @@ Different schedulers handle GPU requests differently:
 
 ## SLURM Example
 
-oxo-flow generates SLURM job scripts automatically. For the `align` rule above, the generated script looks like:
+oxo-flow generates SLURM job scripts automatically. For the `align` rule above, the generated script is:
 
 ```bash
 #!/bin/bash
 #SBATCH --job-name=align
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
-#SBATCH --time=24:00:00
-#SBATCH --output=logs/align_%j.out
-#SBATCH --error=logs/align_%j.err
+#SBATCH --time=1-00:00:00
+#SBATCH --output=logs/align.out
+#SBATCH --error=logs/align.err
 
-# Environment wrapping (automatically applied)
-singularity exec docker://biocontainers/bwa:0.7.17 \
-  bwa mem -t 16 ref.fa sample1_R1.fastq.gz | samtools sort -o aligned/sample1.bam
+set -e
+
+mkdir -p logs
+singularity exec --bind .:. docker://biocontainers/bwa:0.7.17 sh -c 'bwa mem -t 16 ref.fa {sample}_R1.fastq.gz | samtools sort -o aligned/{sample}.bam'
 ```
+
+Note: one script is generated per **rule** — `{sample}` and other
+placeholders stay literal in the script (the scheduler submits the rule as
+written; per-sample expansion happens in the execution layer).
 
 ---
 
@@ -108,17 +118,14 @@ singularity exec docker://biocontainers/bwa:0.7.17 \
 ```bash
 #!/bin/bash
 #PBS -N align
-#PBS -l ncpus=16
-#PBS -l mem=32gb
-#PBS -l walltime=24:00:00
+#PBS -l nodes=1:ppn=16,mem=32G,walltime=1-00:00:00
 #PBS -o logs/align.out
 #PBS -e logs/align.err
 
-cd $PBS_O_WORKDIR
+set -e
 
-# Environment wrapping (automatically applied)
-singularity exec docker://biocontainers/bwa:0.7.17 \
-  bwa mem -t 16 ref.fa sample1_R1.fastq.gz | samtools sort -o aligned/sample1.bam
+mkdir -p logs
+singularity exec --bind .:. docker://biocontainers/bwa:0.7.17 sh -c 'bwa mem -t 16 ref.fa {sample}_R1.fastq.gz | samtools sort -o aligned/{sample}.bam'
 ```
 
 ---
@@ -129,15 +136,15 @@ singularity exec docker://biocontainers/bwa:0.7.17 \
 #!/bin/bash
 #$ -N align
 #$ -pe smp 16
-#$ -l h_vmem=2G
-#$ -l h_rt=24:00:00
+#$ -l h_vmem=32G
+#$ -l h_rt=1-00:00:00
 #$ -o logs/align.out
 #$ -e logs/align.err
-#$ -cwd
 
-# Environment wrapping (automatically applied)
-singularity exec docker://biocontainers/bwa:0.7.17 \
-  bwa mem -t 16 ref.fa sample1_R1.fastq.gz | samtools sort -o aligned/sample1.bam
+set -e
+
+mkdir -p logs
+singularity exec --bind .:. docker://biocontainers/bwa:0.7.17 sh -c 'bwa mem -t 16 ref.fa {sample}_R1.fastq.gz | samtools sort -o aligned/{sample}.bam'
 ```
 
 ---
@@ -148,12 +155,12 @@ When generating cluster scripts, oxo-flow automatically wraps commands through t
 
 | Backend | Wrapping |
 |---|---|---|
-| Conda | `conda activate <env>; <command>` |
-| Docker | `docker run --rm -v ... <image> <command>` |
-| Singularity | `singularity exec <image> <command>` |
-| Pixi | `pixi run <command>` |
-| Venv | `source <venv>/bin/activate; <command>` |
-| Modules | `module load <mod1> <mod2>; <command>` |
+| Conda / Mamba | `conda run -n <env> bash -c '<command>'` |
+| Docker | `docker run --rm -v <workdir>:<workdir> -w <workdir> <image> <command>` |
+| Singularity | `singularity exec --bind .:. <image> sh -c '<command>'` |
+| Pixi | `pixi run -e <env> <command>` |
+| Venv | `source <venv>/bin/activate && <command>` |
+| Modules | `module load <mod1> <mod2> && <command>` |
 
 ### Environment Examples
 
@@ -165,7 +172,7 @@ name = "train_model"
 input = ["data/train.h5"]
 output = ["models/trained.pt"]
 environment = { conda = "envs/pytorch.yaml" }
-shell = "python train.py --input {input} --output {output} --gpus {resources.gpu}"
+shell = "python train.py --input {input} --output {output}"
 
 [rules.resources]
 threads = 8
@@ -174,23 +181,27 @@ gpu = 2
 time_limit = "24h"
 ```
 
-**Singularity with Modules (common on HPC):**
+The `gpu` field controls the **scheduler allocation only** (e.g.
+`#SBATCH --gres=gpu:2`) — there is no `{resources.gpu}` shell placeholder.
+
+**Singularity (common on HPC):**
 
 ```toml
 [[rules]]
 name = "variant_call"
 input = ["aligned/{sample}.bam"]
 output = ["variants/{sample}.vcf"]
-environment = { 
-    singularity = "docker://broadinstitute/gatk:4.4.0.0",
-    modules = ["cuda/11.8"]  # Load CUDA module first
-}
+environment = { singularity = "docker://broadinstitute/gatk:4.4.0.0" }
 shell = "gatk HaplotypeCaller -I {input} -O {output}"
 
 [rules.resources]
 threads = 16
 memory = "32G"
 ```
+
+Only **one** backend applies per rule, so combining e.g. `singularity` with
+`modules` in the same rule would silently drop `modules` — use the
+module-based example below for module-only setups.
 
 **Pixi for reproducible environments:**
 
@@ -199,7 +210,7 @@ memory = "32G"
 name = "qc_check"
 input = ["{sample}.fastq.gz"]
 output = ["qc/{sample}_fastqc.html"]
-environment = { pixi = "pixi.toml" }
+environment = { pixi = "default" }  # environment name, not the pixi.toml path
 shell = "fastqc -t {threads} -o qc/ {input}"
 
 [rules.resources]

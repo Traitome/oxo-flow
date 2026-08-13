@@ -17,10 +17,12 @@ This generates a project directory with a starter `.oxoflow` file, `envs/` and `
 
 ## Workflow file structure
 
-Every `.oxoflow` file is TOML with four top-level sections:
+Every `.oxoflow` file is TOML with four core top-level sections
+(additional sections like `[report]`, `[[sample_groups]]`, `[[pairs]]`,
+and `[[include]]` are available for advanced use):
 
 ```toml
-[workflow]      # Required: name, version, metadata
+[workflow]      # Required: name
 [config]        # Optional: user-defined variables
 [defaults]      # Optional: default settings for all rules
 [[rules]]       # Required: one or more pipeline steps
@@ -102,9 +104,9 @@ memory = "16G"
 | Field | Required | Type | Description |
 |---|---|---|---|
 | `name` | Yes | String | Unique rule identifier |
-| `input` | Yes | Array | Input file paths (may contain wildcards) |
-| `output` | Yes | Array | Output file paths (may contain wildcards) |
-| `shell` | Yes | String | Shell command to execute |
+| `shell` | Yes | String | Shell command to execute (`script` or `transform` can replace it) |
+| `input` | No | Array | Input file paths (may contain wildcards; recommended for file-based dependency inference) |
+| `output` | No | Array | Output file paths (may contain wildcards; recommended for checkpoint/resume) |
 | `environment` | No | Table | Environment specification |
 | `resources` | No | Table | Resource specification (threads, memory, GPU, disk, time_limit) |
 
@@ -150,10 +152,12 @@ When the DAG is built, oxo-flow examines every rule's `input` and `output` field
 [[rules]]
 name = "step1"
 output = ["intermediate.txt"]
+shell = "echo hello > intermediate.txt"
 
 [[rules]]
 name = "step2"
 input = ["intermediate.txt"]   # ← matches step1's output → step2 depends on step1
+shell = "cat intermediate.txt"
 ```
 
 Step-by-step, the engine:

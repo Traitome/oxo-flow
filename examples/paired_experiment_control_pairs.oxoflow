@@ -153,6 +153,7 @@ input = [
 ]
 output = ["variants/{pair_id}.mutect2.vcf.gz"]
 shell = """
+  # Production runs should also pass --germline-resource and --panel-of-normals
   gatk Mutect2 -I {input[0]} -I {input[1]} -normal {control} -R {config.reference_fasta} -O {output[0]}
 """
 
@@ -197,7 +198,7 @@ shell = "python scripts/generate_report.py --input {input[0]} --output {output[0
 description = "Generate clinical-grade variant report for a experiment-control pair"
 
 [rules.resources]
-threads = 1
+threads = 2
 memory = "4G"
 
 [rules.environment]

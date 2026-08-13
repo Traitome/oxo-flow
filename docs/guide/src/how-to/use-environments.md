@@ -1,6 +1,11 @@
 # Use Environments
 
-This guide provides practical recipes for each environment backend supported by oxo-flow.
+This guide provides practical recipes for the environment backends supported
+by oxo-flow. The engine ships eight backends: `conda`, `mamba`, `pixi`,
+`docker`, `singularity`, `venv`, and `modules` (plus the implicit `system`
+fallback when a rule declares no environment). Recipes below cover the most
+commonly used ones; `mamba` uses the same YAML syntax as `conda`, and
+`modules` takes a list of HPC module names.
 
 ---
 
@@ -31,10 +36,10 @@ shell = "bwa mem ref.fa reads.fastq.gz | samtools sort -o aligned.bam"
 
 ### How it works
 
-1. oxo-flow checks if the environment already exists
-2. If not, it creates it from the YAML specification
-3. The environment is activated before the shell command runs
-4. After the command completes, the environment is deactivated
+1. oxo-flow checks if the environment already exists (keyed by the YAML specification)
+2. If not, it creates it from the YAML file
+3. The shell command runs inside the environment via `conda run -n <env-name> bash -c '<command>'`, where `<env-name>` is the `name:` from your YAML
+4. The environment is created once and reused by every rule that references the same YAML
 
 !!! tip "Reuse environments"
     Multiple rules can share the same conda YAML file. oxo-flow creates the environment once and reuses it.
@@ -104,7 +109,7 @@ Singularity is the preferred container runtime for HPC clusters because it:
 ### Create a pixi.toml
 
 ```toml
-# envs/pixi.toml
+# pixi.toml — at the workflow root (the directory you run oxo-flow from)
 [project]
 name = "qc-tools"
 channels = ["bioconda", "conda-forge"]
@@ -117,12 +122,18 @@ fastp = "0.23.4"
 
 ### Reference in a rule
 
+The `pixi` value is the pixi **environment name** (the default environment
+in `pixi.toml` is named `default`), not a file path:
+
 ```toml
 [[rules]]
 name = "fastqc"
-environment = { pixi = "envs/pixi.toml" }
+environment = { pixi = "default" }
 shell = "fastqc input.fastq.gz -o qc/"
 ```
+
+oxo-flow runs `pixi install -e default` once, then wraps the command as
+`pixi run -e default <command>`.
 
 ---
 
@@ -139,18 +150,22 @@ seaborn>=0.13
 
 ### Reference in a rule
 
+The `venv` value is the **directory** where the virtual environment is
+created; the requirements file goes in the separate `venv_requirements`
+field (defaults to `requirements.txt` in the working directory):
+
 ```toml
 [[rules]]
 name = "plot_results"
-environment = { venv = "envs/requirements.txt" }
+environment = { venv = "venv/", venv_requirements = "envs/requirements.txt" }
 shell = "python scripts/plot.py --input results.csv --output plot.png"
 ```
 
 ### How it works
 
-1. oxo-flow creates a venv in a cache directory (or reuses an existing one)
+1. oxo-flow creates the venv at the given directory with `python3 -m venv` (or reuses it if it already exists)
 2. Packages from the requirements file are installed with pip
-3. The venv is activated for the shell command
+3. The shell command runs with the venv activated (`source <dir>/bin/activate && <command>`)
 
 ---
 
@@ -174,7 +189,7 @@ environment = { singularity = "docker://ensemblorg/ensembl-vep:112.0" }
 
 [[rules]]
 name = "report"
-environment = { venv = "envs/requirements.txt" }
+environment = { venv = "venv/", venv_requirements = "envs/requirements.txt" }
 # ...
 ```
 

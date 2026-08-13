@@ -93,7 +93,7 @@ Running this with `oxo-flow run somatic-minimal.oxoflow` internally expands to t
 Use `oxo-flow dry-run` to see the expanded rule set before execution:
 
 ```bash
-oxo-flow dry-run somatic.oxoflow
+oxo-flow dry-run somatic-minimal.oxoflow
 ```
 
 ## Full Example

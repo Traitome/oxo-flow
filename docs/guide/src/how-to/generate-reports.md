@@ -33,10 +33,17 @@ A generated report includes:
 
 | Section | Contents |
 |---|---|
-| **Workflow Information** | Name, version, author, number of rules |
-| **Execution Summary** | Rules executed, success/failure counts, duration |
-| **Rule Details** | Per-rule inputs, outputs, resource usage, environment |
-| **Configuration** | All `[config]` variables used |
+| **Dashboard** | Workflow-level overview metrics |
+| **Execution Status** | Per-rule status and metrics (requires execution data from the checkpoint) |
+| **Clinical Compliance** | Compliance-oriented checks (clinical-domain workflows) |
+| **Workflow Information** | Name, version, total rules, and all `[config]` variables |
+| **Commands** | The shell commands the workflow will run |
+| **File Manifest** | Input and output files per rule |
+| **Environment** | Environment backends and specifications used |
+| **Task Summary** | Always included — a per-rule table of tasks, types, inputs, outputs, environments, and resources |
+
+Sections adapt to the detected workflow domain and to available execution
+data; the **Task Summary** table is always appended.
 
 ---
 
@@ -51,12 +58,12 @@ format = ["html", "json", "pdf"]
 sections = ["summary", "variants", "quality"]
 ```
 
-> **Note — planned, not yet active**: the `[report]` section is parsed by the
-> core library but **not yet consumed by any code path**. It is planned
-> functionality; report output is currently controlled entirely via the
-> `oxo-flow report` CLI flags (`-f`, `-o`). Likewise, there are no built-in
-> report templates such as `"clinical"` or `"research"` yet — the `template`
-> field is a free-form string reserved for future use.
+> **Note — partial support**: of the three fields, only `sections` is
+> currently consumed — it filters which registered sections the report
+> includes (names match the table above). `template` and `format` are
+> parsed but not yet consumed: there are no built-in templates such as
+> `"clinical"` yet (the field is a free-form string reserved for future
+> use), and output formats are selected via the CLI `-f` flag.
 
 ### Fields
 
@@ -93,23 +100,38 @@ Example output structure:
 ```json
 {
   "title": "my-pipeline Report",
-  "workflow": "my-pipeline",
-  "version": "0.10.2",
-  "generated_at": "2026-04-05T12:00:00Z",
+  "generated_at": "2026-08-13T03:47:43Z",
+  "workflow_name": "my-pipeline",
+  "workflow_version": "1.0.0",
   "sections": [
     {
       "title": "Workflow Information",
       "id": "workflow-info",
       "content": {
-        "type": "key_value",
+        "type": "KeyValue",
         "pairs": [
           ["Name", "my-pipeline"],
           ["Version", "1.0.0"],
-          ["Rules", "7"]
+          ["Total Rules", "7"],
+          ["Config Variables", "reference, samples_dir"]
         ]
-      }
+      },
+      "subsections": []
+    },
+    {
+      "title": "Task Summary",
+      "id": "task-summary",
+      "content": {
+        "type": "Table",
+        "headers": ["Task", "Type", "Inputs", "Outputs", "Environment", "Resources"],
+        "rows": [
+          ["align", "shell", "1", "1", "conda:envs/bwa.yaml", "t=8 m=16G"]
+        ]
+      },
+      "subsections": []
     }
-  ]
+  ],
+  "metadata": {}
 }
 ```
 

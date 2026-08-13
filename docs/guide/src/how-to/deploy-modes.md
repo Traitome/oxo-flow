@@ -44,37 +44,39 @@ open http://localhost:8080
 
 | Setting | Value |
 |---------|-------|
-| Network | `0.0.0.0:8080` (all interfaces) |
+| Network | `127.0.0.1:8080` by default — pass `--host 0.0.0.0` to bind all interfaces |
 | Database | SQLite (default) or PostgreSQL |
-| Auth | ORCID OAuth2 → GitHub OAuth2 → Invite Code → Basic |
+| Auth | Password env vars (`OXO_FLOW_ADMIN_PASSWORD` / `OXO_FLOW_USER_PASSWORD` / `OXO_FLOW_VIEWER_PASSWORD`) + optional ORCID/GitHub OAuth |
 | Workspace | `workspace/users/<username>/` |
 
 ```bash
-# Start with SQLite (default)
-oxo-flow serve --mode team
+# Start with SQLite (default) and bind to all interfaces
+oxo-flow serve --mode team --host 0.0.0.0
 
 # Set auth credentials
-export OXO_ORCID_CLIENT_ID=...
-export OXO_ORCID_CLIENT_SECRET=...
-export OXO_ADMIN_PASSWORD=...
+export OXO_FLOW_ADMIN_PASSWORD=...
+export OXO_FLOW_USER_PASSWORD=...
+export OXO_FLOW_VIEWER_PASSWORD=...
+export ORCID_CLIENT_ID=...
+export ORCID_CLIENT_SECRET=...
+export GITHUB_CLIENT_ID=...
+export GITHUB_CLIENT_SECRET=...
 
 oxo-flow serve --mode team
 ```
 
-**Authentication chain**: ORCID OAuth2 is attempted first (preferred — every
-scientist has one). Falls back to GitHub OAuth2, then invite codes (for
-air-gapped labs), and finally basic auth (for dev mode).
+**Authentication**: role-based password authentication comes from the
+`OXO_FLOW_*_PASSWORD` environment variables (with a dev-mode fallback when
+`OXO_FLOW_DEV_MODE=1`). ORCID and GitHub OAuth are available as separate
+login endpoints when their client credentials are configured — there is no
+automatic fallback chain between mechanisms.
 
 **Workspace isolation**:
 ```
 workspace/
-├── users/
-│   ├── alice/
-│   │   ├── pipelines/
-│   │   └── runs/<run_id>/
-│   ├── bob/
-│   └── shared/          # workspace-shared pipelines
-└── templates/           # system templates (read-only)
+└── users/
+    └── <username>/
+        └── runs/<run_id>/
 ```
 
 ## Mode 3: HPC
@@ -83,24 +85,20 @@ workspace/
 
 | Setting | Value |
 |---------|-------|
-| Network | `0.0.0.0:8080` |
+| Network | `127.0.0.1:8080` by default — pass `--host 0.0.0.0` to bind all interfaces |
 | Database | SQLite or PostgreSQL |
 | Auth | Same as Team mode |
 | Executor | SLURM / PBS / LSF / SGE |
 | Resources | Scheduler-managed |
 
 ```bash
-# The scheduler (SLURM / PBS / LSF / SGE) is auto-detected
 oxo-flow serve --mode hpc
 ```
 
-**HPC workflow**:
+**HPC workflow** (current implementation status):
 1. User creates/imports pipeline in Web UI
-2. User clicks "Submit to Cluster"
-3. oxo-flow generates cluster job script
-4. Job is submitted to SLURM/PBS
-5. Web UI polls scheduler for status
-6. Results available when job completes
+2. oxo-flow can generate cluster job scripts (`oxo-flow cluster submit` on the CLI)
+3. The Web UI does not yet submit jobs or poll scheduler status — use the CLI for cluster submission and your scheduler's native tools to monitor
 
 ## Switching Modes
 
@@ -132,3 +130,6 @@ Log lines carry timestamps in a terminal, and the mode, host, and port follow `-
 | Personal | <0.1s | ~30MB | ~150MB |
 | Team | <0.3s | ~40MB | ~200MB |
 | HPC | <0.3s | ~40MB | ~200MB |
+
+> These are indicative figures, not benchmark results — measure on your own
+> hardware before capacity planning.

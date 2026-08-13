@@ -27,6 +27,15 @@ threads = 16
 memory = "32G"  # 2× expected input size
 ```
 
+!!! warning "Engine conventions"
+    - Always declare resources in the `[rules.resources]` sub-table. The
+      deprecated rule-level `threads`/`memory` shorthand still works, and
+      **takes precedence** over the sub-table when both are present.
+    - In the sub-table, `threads <= 1` means "unset" — the engine falls
+      back to `[defaults].threads`. To give a rule fewer threads than the
+      default, declare `threads = 2` or higher (a single thread is not
+      expressible; there is no way to force 1).
+
 ## Memory Declaration
 
 ### Rule of Thumb
@@ -78,7 +87,7 @@ model = "A100"
 memory_gb = 40
 ```
 
-Generated SLURM directive: `--gres=gpu:a100:2:40g --mem-per-gpu=40G`
+Generated SLURM directive: `--gres=gpu:A100:2:40g --mem-per-gpu=40G` (the model string is passed through verbatim)
 
 ### Common GPU Tools
 
@@ -141,16 +150,21 @@ Useful for shared servers or when running multiple workflows.
 
 ### Example: Same Workflow, Different Targets
 
+Because rule names must be unique within one workflow, keep the per-target
+variants in **separate files** (or give them distinct names):
+
 ```toml
-# Local development (undersubscribe)
+# workflows/local.oxoflow — local development (undersubscribe)
 [[rules]]
 name = "align"
 
 [rules.resources]
 threads = 4
 memory = "8G"
+```
 
-# HPC production (full allocation)
+```toml
+# workflows/hpc.oxoflow — HPC production (full allocation)
 [[rules]]
 name = "align"
 
@@ -159,8 +173,6 @@ threads = 32
 memory = "128G"
 partition = "highmem"
 ```
-
-Consider using separate workflow files or conditional logic.
 
 ## Disk Space
 

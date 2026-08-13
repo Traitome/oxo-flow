@@ -39,7 +39,7 @@ Compare two pipelines and see what changed:
 ```bash
 curl -X POST http://localhost:8080/api/pipelines/diff \
   -H "Content-Type: application/json" \
-  -d '{"pipeline_a_id": "pipeline-abc", "pipeline_b_id": "pipeline-def"}'
+  -d '{"toml_a": "<workflow-a TOML>", "toml_b": "<workflow-b TOML>"}'
 
 # Response
 {
@@ -56,10 +56,9 @@ curl -X POST http://localhost:8080/api/pipelines/diff \
 
 ## Share
 
-Share a pipeline via a link or within your workspace:
+Create a shareable link for a pipeline:
 
 ```bash
-# Share via link (anyone with the link can view)
 curl -X POST http://localhost:8080/api/pipelines/pipeline-abc/share \
   -H "Content-Type: application/json" \
   -d '{"visibility": "link", "expires_in_days": 30}'
@@ -70,16 +69,12 @@ curl -X POST http://localhost:8080/api/pipelines/pipeline-abc/share \
   "access_token": "abc123",
   "expires_at": "2024-02-12T00:00:00Z"
 }
-
-# Share within workspace (visible to all workspace members)
-curl -X POST http://localhost:8080/api/pipelines/pipeline-abc/share \
-  -H "Content-Type: application/json" \
-  -d '{"visibility": "workspace"}'
 ```
 
-**Visibility levels**:
-- `link` — Anyone with the share URL can view (read-only)
-- `workspace` — All workspace members can view (read-only)
+**Visibility levels** (`link` / `workspace`) are stored on the share record.
+Currently the share link is consumed only through the
+[import API](#import) below — there is no browser page at the share URL, and
+visibility/membership checks are not yet enforced on import.
 
 ## Import
 
@@ -107,24 +102,23 @@ you can paste them into any tool and the intent is clear.
 
 ## Permissions Model
 
-Two levels only:
+A simple three-state visibility model:
 
 | Level | Access |
 |-------|--------|
-| Private | Only owner can view/edit |
-| Shared | Read-only for link/workspace recipients |
+| Private | Only the owner can view/edit (the default for imported pipelines) |
+| Shared (`link` / `workspace`) | Read-only access via share/import |
 | Admin | Can view all, manage users |
 
 No nested RBAC. No group hierarchies. Simple and transparent.
 
 ## Audit Trail
 
-All collaboration actions are logged:
+Forking a pipeline is recorded in the audit log:
 
 ```
-fork_pipeline   → audit_logs
-share_pipeline  → audit_logs
-import_pipeline → audit_logs
+fork_pipeline → audit_logs
 ```
 
-View audit logs via `GET /api/audit?days=7`.
+Share and import actions are not yet logged. View audit logs via
+`GET /api/audit?days=7`.
