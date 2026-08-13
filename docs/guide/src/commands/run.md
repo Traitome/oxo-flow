@@ -45,7 +45,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--yes` | — | — | Skip the confirmation prompt when running a bundle (required in non-interactive sessions: CI, scripts, redirected input, or `--json`) |
 | `--ai-recover` | — | — | Enable AI error recovery on rule failure |
 | `--ai-max-retries` | — | — | Maximum AI retries (overrides `[ai]` config) |
-| `--samples` | — | `LIST` | Run only a subset of samples: `first:N` (pilot) or explicit names. Repeatable, comma-separated. Filters `[[sample_groups]]`, `sample_pattern` discovery, and `[[pairs]]`. Mutually exclusive with `--sample` |
+| `--samples` | — | `LIST` | Run only a subset of samples: `first:N` (pilot), explicit names, or `ready` (samples whose entry inputs are complete). Repeatable, comma-separated. Filters `[[sample_groups]]`, `sample_pattern` discovery, and `[[pairs]]`. Mutually exclusive with `--sample` |
 | `--rerun` | — | — | Force re-execution of this run's rules (ignore up-to-date checks). Checkpoint records for rules outside this run are kept |
 | `--verbose` | `-v` | — | Enable debug-level logging |
 
@@ -208,6 +208,47 @@ After a `--samples` run, a **pilot summary** is printed: samples run,
 wall time, per-sample time, and a linear projection for the full cohort.
 When the workflow enables `[ai]`, a plain-language pilot report (health
 assessment and scale-up advice) is appended automatically.
+
+### Incremental data arrival: `--samples ready`
+
+Sequencing centers deliver data in batches, so a cohort's fastq files
+trickle in over days. Instead of waiting for every sample, run the analysis
+as data arrives:
+
+```bash
+# Which samples can be processed right now, and what is still missing?
+oxo-flow dry-run pipeline.oxoflow
+#   Sample readiness: 87/100 complete, 13 waiting
+#     ⏳ NA12891 (missing: data/NA12891_R2.fastq.gz), …
+
+# Run only the samples whose entry inputs are complete
+oxo-flow run pipeline.oxoflow --samples ready
+
+# … more data arrives …
+oxo-flow run pipeline.oxoflow --samples ready
+#   Done: 5 succeeded, 87 skipped — the checkpoint skips completed samples
+```
+
+A sample is **ready** when every external input belonging to it exists —
+that is, every rule input (after wildcard and `{config.x}` expansion) that
+the workflow itself does not produce. Intermediate products are never
+checked (producing them is the DAG's job), and `optional = true` rules do
+not block readiness (the executor skips them when their inputs are absent).
+
+Semantics:
+
+- `ready` is a special `--samples` value, not a new syntax: it resolves to
+  the names of ready samples and combines with `first:N` and explicit names
+  as a union. Because it is reserved, a sample literally named `ready`
+  cannot be selected by name.
+- With zero ready samples `run` aborts and lists the waiting samples;
+  `dry-run --samples ready` instead reports the full cohort state.
+- For `[[pairs]]` workflows, a pair is kept only when **both** experiment
+  and control inputs are complete; otherwise it is skipped with a note.
+  Missing files that belong to no specific sample (shared references) are
+  reported as workflow-level inputs.
+- The report is also available as JSON via `dry-run --json` (the `samples`
+  block), and `--samples ready` works in `test --run` as well.
 
 ---
 

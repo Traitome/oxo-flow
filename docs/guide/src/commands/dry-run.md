@@ -25,7 +25,7 @@ oxo-flow dry-run [OPTIONS] [WORKFLOW]
 | Option | Short | Description |
 |---|---|---|
 | `--target` | `-t` | Run only specific target rules and their dependencies (repeatable, prefix matching) |
-| `--samples <LIST>` | — | Preview only a subset of samples: `first:N` (pilot) or explicit names (repeatable, comma-separated) |
+| `--samples <LIST>` | — | Preview only a subset of samples: `first:N` (pilot), explicit names, or `ready` (samples whose entry inputs are complete; repeatable, comma-separated) |
 | `--ai` | — | Enable AI-powered analysis of the workflow |
 | `--ai-max-retries <N>` | — | Maximum AI analysis rounds (overrides `[ai]` config) |
 | `--verbose` | `-v` | Enable debug-level logging |
@@ -44,6 +44,49 @@ model for a plain-language explanation.
 # the preflight says so before any compute is spent
 oxo-flow dry-run pipeline.oxoflow --samples first:2
 ```
+
+## Sample Readiness
+
+Every dry-run on a sample-scoped workflow reports **which samples have
+complete entry inputs** and which are still waiting for data — designed for
+incremental data arrival, when a sequencing center delivers fastq files in
+batches:
+
+```console
+$ oxo-flow dry-run pipeline.oxoflow
+DAG: (dry-run) 100 rules would execute
+Sample readiness: 87/100 complete, 13 waiting
+    ⏳ NA12891 (missing: data/NA12891_R2.fastq.gz)
+    ⏳ NA12892 (missing: data/NA12892_R2.fastq.gz)
+    … and 11 more waiting
+```
+
+Rules are judged per sample:
+
+- A sample is **ready** when every external input belonging to it exists.
+  External inputs are rule inputs (after wildcard and `{config.x}`
+  expansion) that the workflow itself does not produce; intermediate
+  products are the DAG's job, so they are never checked.
+- `optional = true` rules do not block readiness — the executor skips them
+  when their inputs are absent.
+- Missing files that belong to no specific sample (shared references) are
+  reported as workflow-level inputs that block every sample.
+- `--samples ready` previews only the ready samples, but the readiness
+  section still covers the whole cohort so you can see what was left out.
+
+With `--json` the same report is machine-readable:
+
+```json
+"samples": {
+  "total": 100, "ready": 87, "waiting_count": 13,
+  "ready_names": ["NA12878", "…"],
+  "waiting": [{"name": "NA12891", "missing": ["data/NA12891_R2.fastq.gz"]}],
+  "missing_global": []
+}
+```
+
+See [`run`](run.md#incremental-data-arrival-samples-ready) for the matching
+`--samples ready` execution mode.
 
 ## Examples
 

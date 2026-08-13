@@ -178,3 +178,9 @@ oxo-flow run cohort.oxoflow
 `sample_groups_file`, `sample_pattern`) and prunes `[[pairs]]` whose
 samples were filtered out. See
 [Pilot runs](../commands/run.md#pilot-runs-and-scale-up) for details.
+
+When the cohort's data arrives in batches (a sequencing center delivering
+fastq files over days), check readiness with
+[`dry-run`](../commands/dry-run.md#sample-readiness) and run what is
+complete with
+[`--samples ready`](../commands/run.md#incremental-data-arrival-samples-ready).
