@@ -7,8 +7,6 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use oxo_flow_web::infra::db::StorageBackend;
-use oxo_flow_web::infra::db::sqlite::SqliteBackend;
 use oxo_flow_web::server;
 use serde_json::{Value, json};
 use std::sync::OnceLock;
@@ -69,8 +67,9 @@ async fn callback_rejects_unissued_state() {
 #[tokio::test]
 async fn issued_state_is_single_use() {
     // Storage/verification helper round-trip: issued states verify once.
-    let backend = SqliteBackend::new(db_url()).await.expect("backend");
-    backend.init().await.expect("schema");
+    // ensure_db initializes the infra global pool (the oauth_states table
+    // ships with its schema) — the helpers go through that pool.
+    ensure_db().await;
 
     oxo_flow_web::domains::auth::service::store_pending_state("state-1")
         .await
