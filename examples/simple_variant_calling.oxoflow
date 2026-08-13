@@ -83,8 +83,10 @@ description = "Read alignment to reference genome"
 threads = 16
 memory = "32G"
 
+# The pipe needs BOTH bwa-mem2 and samtools; the single-tool docker image
+# cannot run it — use a conda environment that ships the pair.
 [rules.environment]
-docker = "biocontainers/bwa-mem2:2.2.1"
+conda = "envs/alignment.yaml"
 
 [[rules]]
 name = "mark_duplicates"

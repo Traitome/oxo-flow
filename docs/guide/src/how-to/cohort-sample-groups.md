@@ -73,7 +73,7 @@ samples = ["D001", "D002", "D003"]
 name   = "align"
 input  = ["raw/{sample}_R1.fq.gz", "raw/{sample}_R2.fq.gz"]
 output = ["aligned/{sample}.bam"]
-shell  = "bwa mem -t {threads} {config.reference} {input[0]} {input[1]} | samtools sort -o {output[0]}"
+shell  = "bwa mem -t {threads} -R '@RG\tID:{sample}\tSM:{sample}\tPL:ILLUMINA' {config.reference} {input[0]} {input[1]} | samtools sort -o {output[0]}"
 
 [rules.resources]
 threads = 8
@@ -87,12 +87,16 @@ shell  = "gatk HaplotypeCaller -I {input[0]} -R {config.reference} -O {output[0]
 [rules.resources]
 threads = 4
 
-# Aggregation step — runs ONCE for all samples
+# Aggregation step — runs ONCE for all samples.
+# Directory inputs form no file-based DAG edges, so depends_on keeps the
+# aggregation behind every rule that writes into qc/ (declared names
+# expand to all sample instances).
 [[rules]]
 name   = "multiqc"
 input  = ["qc/"]
 output = ["reports/multiqc_report.html"]
 shell  = "multiqc qc/ -o reports/"
+depends_on = ["align"]
 ```
 
 ## Combining Groups and Pairs

@@ -62,7 +62,7 @@ control    = "PT001_CTRL"
 name   = "align_experiment"
 input  = ["raw/{experiment}_R1.fq.gz", "raw/{experiment}_R2.fq.gz"]
 output = ["aligned/{experiment}.bam"]
-shell  = "bwa mem -t 8 {config.reference} {input[0]} {input[1]} | samtools sort -o {output[0]}"
+shell  = "bwa mem -t 8 -R '@RG\tID:{experiment}\tSM:{experiment}\tPL:ILLUMINA' {config.reference} {input[0]} {input[1]} | samtools sort -o {output[0]}"
 
 [rules.resources]
 threads = 8
@@ -71,7 +71,7 @@ threads = 8
 name   = "align_control"
 input  = ["raw/{control}_R1.fq.gz", "raw/{control}_R2.fq.gz"]
 output = ["aligned/{control}.bam"]
-shell  = "bwa mem -t 8 {config.reference} {input[0]} {input[1]} | samtools sort -o {output[0]}"
+shell  = "bwa mem -t 8 -R '@RG\tID:{control}\tSM:{control}\tPL:ILLUMINA' {config.reference} {input[0]} {input[1]} | samtools sort -o {output[0]}"
 
 [rules.resources]
 threads = 8

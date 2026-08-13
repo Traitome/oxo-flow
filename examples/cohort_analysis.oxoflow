@@ -39,7 +39,7 @@ input = [
     "trimmed/{sample}_R2.fq.gz",
 ]
 output = ["aligned/{sample}.sorted.bam"]
-shell = "bwa-mem2 mem -t {threads} {config.reference_fasta} {input[0]} {input[1]} | samtools sort -@ {threads} -o {output[0]}"
+shell = "bwa-mem2 mem -t {threads} {config.reference_fasta} {input[0]} {input[1]} | samtools sort -@ 4 -o {output[0]}"
 
 [rules.resources]
 threads = 8
@@ -84,6 +84,12 @@ input = ["qc/"]
 output = ["reports/multiqc_report.html"]
 shell = "multiqc qc/ -o reports/"
 description = "Aggregate QC metrics for the entire cohort"
+# Directory inputs form no file-based DAG edges; depends_on keeps multiqc
+# behind every rule that writes into qc/ (expands to all sample instances).
+depends_on = [
+    "fastp",
+    "markdup",
+]
 
 [rules.resources]
 threads = 2

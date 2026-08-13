@@ -58,7 +58,7 @@ input = [
     "trimmed/{experiment}_R2.fq.gz",
 ]
 output = ["aligned/{experiment}.sorted.bam"]
-shell = "bwa-mem2 mem -t {threads} {config.reference_fasta} {input[0]} {input[1]} | samtools sort -@ {threads} -o {output[0]}"
+shell = "bwa-mem2 mem -t {threads} -R '@RG\tID:{experiment}\tSM:{experiment}\tPL:ILLUMINA' {config.reference_fasta} {input[0]} {input[1]} | samtools sort -@ 4 -o {output[0]}"
 
 [rules.resources]
 threads = 16
@@ -74,7 +74,7 @@ input = [
     "trimmed/{control}_R2.fq.gz",
 ]
 output = ["aligned/{control}.sorted.bam"]
-shell = "bwa-mem2 mem -t {threads} {config.reference_fasta} {input[0]} {input[1]} | samtools sort -@ {threads} -o {output[0]}"
+shell = "bwa-mem2 mem -t {threads} -R '@RG\tID:{experiment}\tSM:{experiment}\tPL:ILLUMINA' {config.reference_fasta} {input[0]} {input[1]} | samtools sort -@ 4 -o {output[0]}"
 
 [rules.resources]
 threads = 16
