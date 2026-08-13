@@ -238,6 +238,7 @@ See [Deployment Modes](../how-to/deploy-modes.md) for detailed configuration.
 
 ## Next Steps
 
+- **Run a pilot first**: on real cohorts, try `oxo-flow run my-pipeline.oxoflow --samples first:2` — the engine runs the full pipeline on two samples, reports a projected full-run time, and skips them automatically when you scale up. See [Pilot runs](../commands/run.md#pilot-runs-and-scale-up).
 - [Your First Workflow](./first-workflow.md) — build a real bioinformatics pipeline with environments
 - [Variant Calling Pipeline](./variant-calling.md) — complete NGS analysis tutorial
 - [Create a Workflow](../how-to/create-workflow.md) — reference guide for `.oxoflow` authoring

@@ -414,7 +414,10 @@ VQSR adaptively models the variant quality profile rather than applying fixed th
     like the three samples here, GATK instead recommends hard filtering
     with VariantFiltration (e.g. `QD < 2.0`, `FS > 60.0`, `MQ < 40.0` for
     SNPs). The example keeps VQSR to demonstrate the tool; match the
-    filtering strategy to your cohort size.
+    filtering strategy to your cohort size. The engine's scientific
+    preflight flags this automatically: `oxo-flow dry-run` emits
+    `SCI-VQSR-COHORT` for small-cohort VQSR runs, so a pilot never wastes
+    compute failing at this step for scientific reasons.
 
 ## Running the Workflow
 

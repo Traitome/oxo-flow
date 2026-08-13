@@ -160,3 +160,21 @@ You can combine inline `[[sample_groups]]` with `sample_groups_file` — entries
     - Share group definitions across multiple workflows
     - Update sample lists without modifying workflow files
     - Supports metadata for downstream reporting
+
+## Pilot Subsets
+
+For a large cohort, test the full pipeline on a subset before scaling up —
+no workflow edits needed:
+
+```bash
+# Pilot: first 2 samples of the cohort, full pipeline
+oxo-flow run cohort.oxoflow --samples first:2
+
+# Scale up: completed pilot samples are skipped automatically
+oxo-flow run cohort.oxoflow
+```
+
+`--samples` filters every source declared here (`[[sample_groups]]`,
+`sample_groups_file`, `sample_pattern`) and prunes `[[pairs]]` whose
+samples were filtered out. See
+[Pilot runs](../commands/run.md#pilot-runs-and-scale-up) for details.
