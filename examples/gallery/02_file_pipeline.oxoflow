@@ -17,7 +17,7 @@ output = ["data/raw.csv"]
 shell = """
 mkdir -p data
 echo 'id,name,value' > {output[0]}
-for i in $(seq 1 100); do echo "$i,item_$i,$((RANDOM % 1000))"; done >> {output[0]}
+for i in $(seq 1 100); do echo "$i,item_$i,$((i * 37 % 1000))"; done >> {output[0]}
 """
 
 [[rules]]

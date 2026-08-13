@@ -11,7 +11,9 @@ A linear three-step pipeline that generates data, transforms it, and produces a 
 ## Workflow Definition
 
 ```toml
-# examples/gallery/02_file_pipeline.oxoflow
+# 02 — File Processing Pipeline
+# A linear three-step pipeline: generate → transform → summarize.
+# Demonstrates: multi-rule dependencies, input/output chaining, config variables.
 
 [workflow]
 name = "file-pipeline"
@@ -28,7 +30,7 @@ output = ["data/raw.csv"]
 shell = """
 mkdir -p data
 echo 'id,name,value' > {output[0]}
-for i in $(seq 1 100); do echo "$i,item_$i,$((RANDOM % 1000))"; done >> {output[0]}
+for i in $(seq 1 100); do echo "$i,item_$i,$((i * 37 % 1000))"; done >> {output[0]}
 """
 
 [[rules]]

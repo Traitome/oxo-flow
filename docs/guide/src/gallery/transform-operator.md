@@ -11,7 +11,9 @@ Unify split → map → combine scatter-gather patterns into a single rule decla
 ## Workflow Definition
 
 ```toml
-# examples/gallery/10_transform_operator.oxoflow
+# 10 — Transform Operator Demo
+# Demonstrates the unified split → map → combine pattern in a single rule.
+# Similar to dplyr's group_by() %>% summarize() or pandas' groupby().apply()
 
 [workflow]
 name = "transform-demo"
@@ -39,6 +41,9 @@ output = ["variants/sample.g.vcf.gz"]
 [rules.resources]
 threads = 8
 
+[rules.environment]
+conda = "envs/gatk.yaml"
+
 [rules.transform.split]
 by = "chr"
 values_from = "config.chromosomes"
@@ -60,6 +65,9 @@ input = ["aligned/sample.bam"]
 
 [rules.resources]
 threads = 4
+
+[rules.environment]
+conda = "envs/samtools.yaml"
 
 [rules.transform.split]
 by = "chr"

@@ -43,7 +43,10 @@ graph TD
 ## Workflow Definition
 
 ```toml
-# examples/gallery/08_multiomics_integration.oxoflow
+# 08 — Multi-Omics Integration Pipeline
+# Integrates WGS variant data, RNA-seq expression data, and methylation data.
+# Demonstrates: complex DAG with multiple input branches, conditional execution,
+# advanced reporting, and cross-omics data integration.
 
 [workflow]
 name = "multiomics-integration"
@@ -54,6 +57,8 @@ author = "oxo-flow examples"
 [config]
 reference = "/data/references/GRCh38/genome.fa"
 gene_annotation = "/data/references/GRCh38/genes.gtf"
+star_index = "/data/references/GRCh38/star_index"
+bismark_index = "/data/references/GRCh38/bismark_index"
 genome_build = "GRCh38"
 
 [defaults]
@@ -76,9 +81,9 @@ output = ["wgs_aligned/{sample}.sorted.bam"]
 description = "WGS read alignment with BWA-MEM2"
 shell = """
 mkdir -p wgs_aligned
-bwa-mem2 mem -M -t {threads} -R '@RG\\tID:{sample}\\tSM:{sample}\\tLB:WGS\\tPL:ILLUMINA' \
+bwa-mem2 mem -M -t {threads} -R '@RG\tID:{sample}\tSM:{sample}\tLB:WGS\tPL:ILLUMINA' \
     {config.reference} {input[0]} {input[1]} \
-    | samtools sort -@ {threads} -o {output[0]}
+    | samtools sort -@ 4 -o {output[0]}
 samtools index {output[0]}
 """
 
@@ -86,8 +91,10 @@ samtools index {output[0]}
 threads = 16
 memory = "32G"
 
+# The pipe needs BOTH bwa-mem2 and samtools; single-tool docker images
+# cannot run it — use a conda environment that ships the pair.
 [rules.environment]
-docker = "biocontainers/bwa-mem2:2.2.1"
+conda = "envs/alignment.yaml"
 
 [[rules]]
 name = "wgs_call_variants"
@@ -118,7 +125,7 @@ description = "RNA-seq splice-aware alignment with STAR"
 shell = """
 mkdir -p rnaseq_aligned/{sample}
 STAR --runThreadN {threads} \
-     --genomeDir /data/references/GRCh38/star_index \
+     --genomeDir {config.star_index} \
      --readFilesIn {input[0]} {input[1]} \
      --readFilesCommand zcat \
      --outSAMtype BAM SortedByCoordinate \
@@ -160,7 +167,7 @@ output = ["methyl_aligned/{sample}.deduplicated.bam"]
 description = "Bisulfite-seq alignment with Bismark"
 shell = """
 mkdir -p methyl_aligned
-bismark --genome /data/references/GRCh38/bismark_index \
+bismark --genome {config.bismark_index} \
         -1 {input[0]} -2 {input[1]} \
         --multicore {threads} \
         --basename {sample} \
@@ -185,7 +192,7 @@ description = "Extract CpG methylation calls"
 shell = """
 mkdir -p methylation
 bismark_methylation_extractor --paired-end --no_overlap --comprehensive \
-    --genome_folder /data/references/GRCh38/bismark_index \
+    --genome_folder {config.bismark_index} \
     --parallel {threads} \
     --CX --cytosine_report \
     -o methylation/ {input[0]}

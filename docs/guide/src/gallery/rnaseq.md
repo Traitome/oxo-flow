@@ -30,7 +30,9 @@ graph TD
 ## Workflow Definition
 
 ```toml
-# examples/gallery/06_rnaseq_quantification.oxoflow
+# 06 — RNA-seq Quantification Pipeline
+# A complete RNA-seq analysis: QC → trimming → alignment → quantification → differential expression.
+# Demonstrates: bioinformatics workflow patterns, multi-environment, wildcards, reporting.
 
 [workflow]
 name = "rnaseq-quantification"
@@ -42,7 +44,12 @@ author = "oxo-flow examples"
 reference_genome = "/data/references/GRCh38/genome.fa"
 gene_annotation = "/data/references/GRCh38/genes.gtf"
 star_index = "/data/references/GRCh38/star_index"
-samples = "samples.csv"
+
+# Sample cohort for {sample} expansion. For CSV-driven cohorts use
+# `sample_groups_file` in [workflow] instead of the inline list.
+[[sample_groups]]
+name = "cohort"
+samples = ["sample1", "sample2"]
 
 [defaults]
 threads = 4
@@ -125,10 +132,9 @@ conda = "envs/subread.yaml"
 
 [[rules]]
 name = "multiqc"
-# Explicitly depends on all per-sample rules so multiqc runs once after
-# all samples have been processed, regardless of wildcard expansion.
-# Using directory paths as inputs avoids creating one multiqc instance
-# per sample when [[sample_groups]] is defined.
+# The rule has no {sample} in its inputs, so it expands to ONE instance.
+# depends_on keeps it behind every per-sample rule that feeds its qc/ and
+# counts/ directories (directory inputs form no file-based DAG edges).
 depends_on = ["fastp_trim", "featurecounts"]
 output = ["results/multiqc_report.html"]
 description = "Aggregate QC metrics into a single report"

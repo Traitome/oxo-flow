@@ -28,6 +28,9 @@ output = ["variants/sample.g.vcf.gz"]
 [rules.resources]
 threads = 8
 
+[rules.environment]
+conda = "envs/gatk.yaml"
+
 [rules.transform.split]
 by = "chr"
 values_from = "config.chromosomes"
@@ -49,6 +52,9 @@ input = ["aligned/sample.bam"]
 
 [rules.resources]
 threads = 4
+
+[rules.environment]
+conda = "envs/samtools.yaml"
 
 [rules.transform.split]
 by = "chr"
