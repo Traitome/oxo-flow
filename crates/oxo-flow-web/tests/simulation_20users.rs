@@ -1280,7 +1280,7 @@ async fn scenario_u13_api_developer_rest_lifecycle() {
         let (s, b) = post_auth(uri, json!({"toml_content": MINIMAL_TOML}), &token).await;
         assert_eq!(s, 200, "endpoint {uri} should return 200");
         assert!(
-            b.get(key).map_or(false, |v| !v.is_null()),
+            b.get(key).is_some_and(|v| !v.is_null()),
             "endpoint {uri} should have key {key}"
         );
     }

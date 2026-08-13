@@ -362,9 +362,11 @@ name = "test"
 
     #[test]
     fn resolve_chain_workflow_overrides_global() {
-        let mut global = AiConfig::default();
-        global.enabled = true;
-        global.max_retries = 3;
+        let global = AiConfig {
+            enabled: true,
+            max_retries: 3,
+            ..AiConfig::default()
+        };
 
         let workflow = AiConfig {
             enabled: true,
@@ -379,8 +381,10 @@ name = "test"
 
     #[test]
     fn resolve_chain_rule_disables() {
-        let mut global = AiConfig::default();
-        global.enabled = true;
+        let global = AiConfig {
+            enabled: true,
+            ..AiConfig::default()
+        };
 
         let rule = AiConfig {
             enabled: false,
