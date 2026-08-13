@@ -1199,7 +1199,7 @@ fn expand_config_vars_in_path(path: &str, config: &HashMap<String, toml::Value>)
             toml::Value::String(s) => s.clone(),
             other => other.to_string(),
         };
-        result = result.replace(&format!("{{{{config.{key}}}}}"), &string_val);
+        result = result.replace(&format!("{{config.{key}}}"), &string_val);
     }
     result
 }
@@ -2353,208 +2353,6 @@ impl WorkflowConfig {
                 let mut current_input = rule.input.to_vec();
                 current_input.extend(expanded);
                 rule.input = FilePatterns::List(current_input);
-            }
-        }
-
-        self.rules = final_rules;
-        Ok(())
-    }
-
-    /// Expand rules with `transform` field into map and combine rules.
-    ///
-    /// The transform operator creates:
-    /// - N map rules (one per split value) that run in parallel
-    /// - One combine rule (if combine is specified) that merges results
-    ///
-    /// This is called automatically during workflow expansion.
-    pub fn expand_transform(&mut self) -> Result<()> {
-        use crate::wildcard::expand_pattern;
-
-        let mut final_rules: Vec<Rule> = Vec::new();
-        let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-        for rule in &self.rules {
-            if let Some(ref transform) = rule.transform {
-                // Resolve split values
-                let split_values = self.resolve_split_values(&transform.split)?;
-
-                if split_values.is_empty() {
-                    return Err(OxoFlowError::Validation {
-                        message: format!("transform rule '{}' has no split values", rule.name),
-                        rule: Some(rule.name.clone()),
-                        suggestion: Some(
-                            "provide values, values_from, n, or glob in split config".to_string(),
-                        ),
-                    });
-                }
-
-                let split_var = &transform.split.by;
-                let mut all_chunk_outputs: Vec<String> = Vec::new();
-
-                // Generate map rules for each split value
-                for value in &split_values {
-                    let mut combo = HashMap::new();
-                    combo.insert(split_var.clone(), value.clone());
-
-                    // Chunk output path: .oxo-flow/chunks/{split_var}/{value}.ext
-                    // or use the pattern in the rule's output if it contains {split_var}
-                    let chunk_output = if rule.output.is_empty() {
-                        // Generate a temp chunk file
-                        format!(".oxo-flow/chunks/{split_var}/{value}.out")
-                    } else if rule
-                        .output
-                        .get_index(0)
-                        .map(|o| o.contains(&format!("{{{split_var}}}")))
-                        .unwrap_or(false)
-                    {
-                        expand_pattern(rule.output.get_index(0).expect("output non-empty"), &combo)
-                            .unwrap_or_else(|_| {
-                                rule.output
-                                    .get_index(0)
-                                    .expect("output non-empty")
-                                    .to_string()
-                            })
-                    } else {
-                        // Append split value to output
-                        let base = rule
-                            .output
-                            .get_index(0)
-                            .expect("output non-empty: guarded by is_empty() check");
-                        // Keep the full multi-part extension (e.g. "vcf.gz", not
-                        // just "gz") so tools can infer the format from the name.
-                        let file_part = base.rsplit('/').next().unwrap_or(base);
-                        let ext = file_part.split_once('.').map(|(_, e)| e).unwrap_or("out");
-                        format!(".oxo-flow/chunks/{split_var}/{value}.{ext}")
-                    };
-
-                    all_chunk_outputs.push(chunk_output.clone());
-
-                    // Create the map rule
-                    let map_rule_name = format!("{}_{}", rule.name, value);
-                    if !seen_names.insert(map_rule_name.clone()) {
-                        return Err(OxoFlowError::DuplicateRule {
-                            name: map_rule_name,
-                        });
-                    }
-
-                    let map_shell = expand_pattern(&transform.map, &combo)
-                        .unwrap_or_else(|_| transform.map.clone());
-
-                    let mut map_rule = Rule {
-                        name: map_rule_name,
-                        input: rule.input.clone(),
-                        output: vec![chunk_output].into(),
-                        shell: Some(map_shell),
-                        threads: rule.threads,
-                        memory: rule.memory.clone(),
-                        resources: rule.resources.clone(),
-                        environment: rule.environment.clone(),
-                        retries: rule.retries,
-                        ..Default::default()
-                    };
-
-                    // Handle deprecated fields
-                    #[allow(deprecated)]
-                    {
-                        map_rule.threads = rule.threads;
-                        map_rule.memory = rule.memory.clone();
-                    }
-
-                    final_rules.push(map_rule);
-                }
-
-                // Generate combine rule if specified
-                if let Some(ref combine) = transform.combine {
-                    let combine_rule_name = format!("{}_combine", rule.name);
-                    if !seen_names.insert(combine_rule_name.clone()) {
-                        return Err(OxoFlowError::DuplicateRule {
-                            name: combine_rule_name,
-                        });
-                    }
-
-                    // Build combine shell command
-                    let combine_shell = if let Some(ref shell) = combine.shell {
-                        // Replace {chunks} with all chunk outputs
-                        let chunks_str = all_chunk_outputs.join(" ");
-                        shell
-                            .replace("{chunks}", &chunks_str)
-                            .replace("{input}", &chunks_str)
-                            .replace("{output}", &rule.output.join(" "))
-                    } else if combine.aggregate {
-                        // Use aggregation method
-                        let method = combine.method.as_deref().unwrap_or("concat");
-                        let chunks_str = all_chunk_outputs.join(" ");
-                        let output_str = rule.output.join(" ");
-
-                        match method {
-                            "concat" => {
-                                let header = combine
-                                    .header
-                                    .as_deref()
-                                    .map(|h| format!("echo '{}' && ", h))
-                                    .unwrap_or_default();
-                                format!("{}cat {} > {}", header, chunks_str, output_str)
-                            }
-                            "json_merge" => {
-                                format!("jq -s 'add' {} > {}", chunks_str, output_str)
-                            }
-                            _ => {
-                                return Err(OxoFlowError::Validation {
-                                    message: format!("unknown aggregation method: {}", method),
-                                    rule: Some(rule.name.clone()),
-                                    suggestion: Some("use 'concat' or 'json_merge'".to_string()),
-                                });
-                            }
-                        }
-                    } else {
-                        // No combine shell specified
-                        return Err(OxoFlowError::Validation {
-                            message: format!(
-                                "transform rule '{}' has combine but no shell or aggregate method",
-                                rule.name
-                            ),
-                            rule: Some(rule.name.clone()),
-                            suggestion: Some(
-                                "specify combine.shell or combine.aggregate".to_string(),
-                            ),
-                        });
-                    };
-
-                    let mut combine_rule = Rule {
-                        name: combine_rule_name,
-                        input: FilePatterns::List(all_chunk_outputs.clone()),
-                        output: rule.output.clone(),
-                        shell: Some(combine_shell),
-                        cleanup_chunks: transform.cleanup,
-                        threads: rule.threads,
-                        memory: rule.memory.clone(),
-                        resources: rule.resources.clone(),
-                        environment: rule.environment.clone(),
-                        ..Default::default()
-                    };
-
-                    #[allow(deprecated)]
-                    {
-                        combine_rule.threads = rule.threads;
-                        combine_rule.memory = rule.memory.clone();
-                    }
-
-                    final_rules.push(combine_rule);
-                } else if rule.output.is_empty() {
-                    // No combine, no output - each map rule produces its own output
-                    // Already handled above - chunk outputs are individual
-                } else {
-                    // No combine but rule has output - this means each map produces part of output
-                    // Use the rule's output pattern for each map (already set above)
-                }
-            } else {
-                // No transform - keep rule as-is
-                if !seen_names.insert(rule.name.clone()) {
-                    return Err(OxoFlowError::DuplicateRule {
-                        name: rule.name.clone(),
-                    });
-                }
-                final_rules.push(rule.clone());
             }
         }
 
@@ -4227,6 +4025,60 @@ mod tests {
 
         let combine = &config.rules[1];
         assert!(!combine.cleanup_chunks);
+    }
+
+    #[test]
+    fn sample_pattern_expands_config_vars() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw = dir.path().join("raw");
+        std::fs::create_dir_all(&raw).unwrap();
+        std::fs::write(raw.join("S1_R1.fastq.gz"), b"x").unwrap();
+
+        let wf_path = dir.path().join("sp.oxoflow");
+        std::fs::write(
+            &wf_path,
+            r#"
+            [workflow]
+            name = "sp"
+            version = "1.0.0"
+            sample_pattern = "{config.samples_dir}/{sample}_R1.fastq.gz"
+
+            [config]
+            samples_dir = "raw"
+            "#,
+        )
+        .unwrap();
+        let config = WorkflowConfig::from_file(&wf_path).unwrap();
+        let group = config
+            .sample_groups
+            .iter()
+            .find(|g| g.name == "auto-discovered")
+            .expect("auto-discovered group");
+        assert_eq!(group.samples, vec!["S1".to_string()]);
+    }
+
+    #[test]
+    fn cleanup_chunks_is_not_settable_from_user_toml() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "step1"
+            input = ["in.bam"]
+            output = ["out.bam"]
+            shell = "cp {input} {output}"
+            cleanup_chunks = true
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let rule = config.rules.iter().find(|r| r.name == "step1").unwrap();
+        // The flag is engine-internal: a user setting it on a plain rule
+        // would silently delete their real input files after success.
+        assert!(
+            !rule.cleanup_chunks,
+            "user TOML must not be able to set cleanup_chunks"
+        );
     }
 
     #[test]

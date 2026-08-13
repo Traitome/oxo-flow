@@ -114,9 +114,7 @@ impl WorkflowDag {
             Err(cycle) => {
                 let cycle_path = self.find_cycle_path(cycle.node_id());
                 let path_str = cycle_path.join(" → ");
-                Err(OxoFlowError::CycleDetected {
-                    details: format!("cycle detected: {}", path_str),
-                })
+                Err(OxoFlowError::CycleDetected { details: path_str })
             }
         }
     }
@@ -179,9 +177,7 @@ impl WorkflowDag {
             Err(cycle) => {
                 let cycle_path = self.find_cycle_path(cycle.node_id());
                 let path_str = cycle_path.join(" → ");
-                Err(OxoFlowError::CycleDetected {
-                    details: format!("cycle detected: {}", path_str),
-                })
+                Err(OxoFlowError::CycleDetected { details: path_str })
             }
         }
     }

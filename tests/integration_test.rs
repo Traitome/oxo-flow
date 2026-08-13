@@ -1971,8 +1971,8 @@ fn transform_split_is_parsed() {
     let config =
         oxo_flow_core::config::WorkflowConfig::from_file(&d.path().join("tf.oxoflow")).unwrap();
     let rule = &config.rules[0];
-    // Transform is parsed during from_file but may be consumed after expand_transform
-    // Verify the rule parsed correctly
+    // Transform is parsed during from_file and consumed by expand_wildcards;
+    // before expansion the rule must parse with its name intact.
     assert_eq!(rule.name, "chunked");
 }
 

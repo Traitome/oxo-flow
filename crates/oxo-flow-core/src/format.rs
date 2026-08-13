@@ -1464,23 +1464,50 @@ pub fn diff_workflows(a: &WorkflowConfig, b: &WorkflowConfig) -> Vec<WorkflowDif
         });
     }
 
-    // Compare pairs and sample groups (count + membership)
-    if a.pairs.len() != b.pairs.len() {
+    // Compare pairs by keyed membership — a swapped experiment/control or a
+    // replaced pair with the same count is still a meaningful change, which
+    // a count-only comparison would hide.
+    fn keyed_pairs(wf: &WorkflowConfig) -> Vec<(String, String, Option<String>, Option<String>)> {
+        let mut out: Vec<_> = wf
+            .pairs
+            .iter()
+            .map(|p| {
+                (
+                    p.pair_id.clone(),
+                    p.experiment.clone(),
+                    p.control.clone(),
+                    p.experiment_type.clone(),
+                )
+            })
+            .collect();
+        out.sort();
+        out
+    }
+    let a_pairs = keyed_pairs(a);
+    let b_pairs = keyed_pairs(b);
+    if a_pairs != b_pairs {
         diffs.push(WorkflowDiff {
             category: "pairs".to_string(),
-            description: format!("pairs count changed: {} → {}", a.pairs.len(), b.pairs.len()),
+            description: format!("pairs changed: {:?} → {:?}", a_pairs, b_pairs),
         });
     }
-    let a_groups: Vec<(String, usize)> = a
-        .sample_groups
-        .iter()
-        .map(|g| (g.name.clone(), g.samples.len()))
-        .collect();
-    let b_groups: Vec<(String, usize)> = b
-        .sample_groups
-        .iter()
-        .map(|g| (g.name.clone(), g.samples.len()))
-        .collect();
+
+    // Sample groups compared by full (sorted) membership, not just counts.
+    fn keyed_groups(wf: &WorkflowConfig) -> Vec<(String, Vec<String>)> {
+        let mut out: Vec<_> = wf
+            .sample_groups
+            .iter()
+            .map(|g| {
+                let mut samples = g.samples.clone();
+                samples.sort();
+                (g.name.clone(), samples)
+            })
+            .collect();
+        out.sort();
+        out
+    }
+    let a_groups = keyed_groups(a);
+    let b_groups = keyed_groups(b);
     if a_groups != b_groups {
         diffs.push(WorkflowDiff {
             category: "sample_groups".to_string(),
@@ -2523,6 +2550,78 @@ mod tests {
         assert!(
             diffs.iter().any(|d| d.category == "pairs"),
             "pairs count change must be detected: {diffs:?}"
+        );
+    }
+
+    #[test]
+    fn diff_pair_membership_swap_detected() {
+        let toml_a = r#"
+            [workflow]
+            name = "test"
+
+            [[pairs]]
+            pair_id = "P1"
+            experiment = "E1"
+            control = "C1"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hello"
+        "#;
+        let toml_b = r#"
+            [workflow]
+            name = "test"
+
+            [[pairs]]
+            pair_id = "P1"
+            experiment = "C1"
+            control = "E1"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hello"
+        "#;
+        let a = WorkflowConfig::parse(toml_a).unwrap();
+        let b = WorkflowConfig::parse(toml_b).unwrap();
+        let diffs = diff_workflows(&a, &b);
+        assert!(
+            diffs.iter().any(|d| d.category == "pairs"),
+            "swapping experiment/control within a pair must be detected: {diffs:?}"
+        );
+    }
+
+    #[test]
+    fn diff_sample_group_membership_change_detected() {
+        let toml_a = r#"
+            [workflow]
+            name = "test"
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1", "S2", "S3"]
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hello"
+        "#;
+        let toml_b = r#"
+            [workflow]
+            name = "test"
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1", "S2", "S4"]
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hello"
+        "#;
+        let a = WorkflowConfig::parse(toml_a).unwrap();
+        let b = WorkflowConfig::parse(toml_b).unwrap();
+        let diffs = diff_workflows(&a, &b);
+        assert!(
+            diffs.iter().any(|d| d.category == "sample_groups"),
+            "replacing one sample with another (same count) must be detected: {diffs:?}"
         );
     }
 

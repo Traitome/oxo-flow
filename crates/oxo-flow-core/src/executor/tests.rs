@@ -1,7 +1,7 @@
 use super::checkpoint::*;
 use super::process::*;
 use super::security::*;
-use crate::rule::{EnvironmentSpec, Resources, Rule, RuleBuilder};
+use crate::rule::{EnvironmentSpec, FilePatterns, Resources, Rule, RuleBuilder};
 use std::collections::HashMap;
 
 fn make_rule(name: &str, shell: &str) -> Rule {
@@ -68,6 +68,32 @@ async fn execute_echo() {
     let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
     assert_eq!(record.status, JobStatus::Success);
     assert!(record.stdout.unwrap().contains("hello_oxoflow"));
+}
+
+#[tokio::test]
+async fn execute_creates_config_var_output_dirs() {
+    let workdir = std::env::temp_dir().join(format!("oxo-outdir-test-{}", std::process::id()));
+    let _ = tokio::fs::remove_dir_all(&workdir).await;
+    let config = ExecutorConfig {
+        max_jobs: 1,
+        dry_run: false,
+        workdir: workdir.clone(),
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    let mut rule = make_rule("outdir_test", "echo hi > {output}");
+    rule.output = FilePatterns::List(vec!["{config.results_dir}/nested/hello.txt".to_string()]);
+    let mut values = HashMap::new();
+    values.insert("config.results_dir".to_string(), "out".to_string());
+
+    let record = executor.execute_rule(&rule, &values).await.unwrap();
+    assert_eq!(record.status, JobStatus::Success);
+    // The literal {config.results_dir} directory must NOT be created;
+    // the expanded path must.
+    assert!(workdir.join("out/nested/hello.txt").exists());
+    assert!(!workdir.join("{config.results_dir}").exists());
+
+    let _ = tokio::fs::remove_dir_all(&workdir).await;
 }
 
 #[tokio::test]
@@ -928,4 +954,53 @@ fn validate_wildcard_injection_blocks_subshell_in_value() {
     values.insert("sample".to_string(), "$(echo hacked)".to_string());
     let result = validate_wildcard_injection(&values);
     assert!(result.is_err(), "should block $() in wildcard values");
+}
+
+#[tokio::test]
+async fn check_resources_fails_fast_when_group_exceeds_declared_capacity() {
+    let config = ExecutorConfig {
+        workdir: std::env::temp_dir(),
+        resource_groups: HashMap::from([("gpu".to_string(), 1)]),
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    let mut rule = make_rule("gpu_job", "echo hi");
+    rule.resources.groups = HashMap::from([("gpu".to_string(), 2)]);
+    // Requirement (2) exceeds declared capacity (1): must fail immediately
+    // instead of waiting forever in the resource-notify loop.
+    let err = executor.check_resources(&rule).await.unwrap_err();
+    match err {
+        crate::OxoFlowError::ResourceGroupExhausted {
+            group,
+            required,
+            available,
+            ..
+        } => {
+            assert_eq!(group, "gpu");
+            assert_eq!(required, 2);
+            assert_eq!(available, 1);
+        }
+        other => panic!("expected ResourceGroupExhausted, got {other}"),
+    }
+}
+
+#[tokio::test]
+async fn check_resources_fails_fast_when_group_is_undeclared() {
+    let config = ExecutorConfig {
+        workdir: std::env::temp_dir(),
+        resource_groups: HashMap::new(),
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    let mut rule = make_rule("gpu_job", "echo hi");
+    rule.resources.groups = HashMap::from([("gpu".to_string(), 1)]);
+    // The workflow declares no [resource_groups]: the request can never be
+    // satisfied, so it must fail fast with an actionable error.
+    let err = executor.check_resources(&rule).await.unwrap_err();
+    match err {
+        crate::OxoFlowError::ResourceGroupExhausted { available, .. } => {
+            assert_eq!(available, 0);
+        }
+        other => panic!("expected ResourceGroupExhausted, got {other}"),
+    }
 }

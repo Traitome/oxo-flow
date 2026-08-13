@@ -2187,7 +2187,7 @@ impl ReportSectionGenerator for EnvironmentInfoGenerator {
                 pairs: vec![
                     (
                         "Available Backends".into(),
-                        "conda, pixi, docker, singularity, venv, system, modules".into(),
+                        "conda, mamba, pixi, docker, singularity, venv, system, modules".into(),
                     ),
                     ("oxo-flow Version".into(), env!("CARGO_PKG_VERSION").into()),
                 ],

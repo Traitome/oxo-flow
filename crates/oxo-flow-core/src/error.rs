@@ -122,6 +122,19 @@ pub enum OxoFlowError {
         required_memory_mb: u64,
         available_memory_mb: u64,
     },
+
+    /// Resource group exhaustion - rule requires more of a named group
+    /// (e.g. GPUs) than the workflow declares in `[resource_groups]`, or
+    /// the group is not declared at all. Waiting can never satisfy this.
+    #[error(
+        "resource exhausted: rule '{rule}' requires {required} of resource group '{group}' (declared capacity: {available})"
+    )]
+    ResourceGroupExhausted {
+        rule: String,
+        group: String,
+        required: u32,
+        available: u32,
+    },
 }
 
 impl OxoFlowError {
@@ -233,7 +246,7 @@ impl OxoFlowError {
                         p.display()
                     ))
                 } else {
-                    Some("try running with --force to ignore checkpoint state".to_string())
+                    Some("delete the checkpoint file (or its directory) and re-run".to_string())
                 }
             }
             OxoFlowError::Integrity { failed_files, .. } => {
@@ -266,9 +279,17 @@ impl OxoFlowError {
                         required_memory_mb, available_memory_mb
                     ));
                 }
-                hints.push("use a cluster backend (--profile slurm) for larger resource allocations".into());
+                hints.push("use a cluster backend (oxo-flow cluster submit) for larger resource allocations".into());
                 Some(hints.join(". "))
             }
+            OxoFlowError::ResourceGroupExhausted {
+                group,
+                required,
+                available,
+                ..
+            } => Some(format!(
+                "reduce the '{group}' requirement from {required} to {available} or lower, or declare a larger capacity in [resource_groups]"
+            )),
             _ => None,
         }
     }

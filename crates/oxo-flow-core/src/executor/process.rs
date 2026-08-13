@@ -12,7 +12,7 @@ use std::sync::{Arc, LazyLock};
 use tokio::process::Command;
 use tokio::sync::{Mutex, Semaphore};
 
-use super::checkpoint::{cleanup_temp_outputs, cleanup_transform_chunks, validate_outputs};
+use super::checkpoint::{cleanup_temp_outputs, validate_outputs};
 use super::security::{
     sanitize_shell_command, validate_path_safety, validate_shell_safety,
     validate_wildcard_injection,
@@ -548,7 +548,7 @@ impl LocalExecutor {
     /// Wait until the resource pool can accommodate the rule, then reserve
     /// atomically.  Rules that can never fit in the total pool capacity fail
     /// fast instead of waiting forever.
-    async fn check_resources(&self, rule: &Rule) -> Result<()> {
+    pub(crate) async fn check_resources(&self, rule: &Rule) -> Result<()> {
         let required_threads = rule.effective_threads();
         let required_memory = rule
             .effective_memory()
@@ -564,6 +564,26 @@ impl LocalExecutor {
                 required_memory_mb: required_memory,
                 available_memory_mb: self.system_memory_mb,
             });
+        }
+
+        // Fast-fail: a group requirement above the declared capacity (or an
+        // undeclared group) can never be satisfied — the wait loop below
+        // would otherwise hang forever.
+        for (group_name, &required) in &rule.resources.groups {
+            let available = self
+                .config
+                .resource_groups
+                .get(group_name)
+                .copied()
+                .unwrap_or(0);
+            if required > available {
+                return Err(OxoFlowError::ResourceGroupExhausted {
+                    rule: rule.name.clone(),
+                    group: group_name.clone(),
+                    required,
+                    available,
+                });
+            }
         }
 
         loop {
@@ -715,7 +735,13 @@ impl LocalExecutor {
 
         // Create parent directories for all output files
         for output_pattern in &rule.output {
-            let path = self.config.workdir.join(output_pattern);
+            // Expand config variables (e.g. {config.results_dir}) before
+            // creating parent directories — otherwise a literal
+            // `{config.…}` directory is created and the shell command
+            // later fails to find it.
+            let expanded =
+                super::checkpoint::expand_config_in_path(output_pattern, wildcard_values);
+            let path = self.config.workdir.join(expanded);
             if let Some(parent) = path.parent()
                 && !parent.as_os_str().is_empty()
                 && !parent.exists()
@@ -890,9 +916,6 @@ impl LocalExecutor {
             let missing = validate_outputs(rule, &self.config.workdir, wildcard_values);
             if missing.is_empty() {
                 record.status = JobStatus::Success;
-                if rule.cleanup_chunks {
-                    cleanup_transform_chunks(rule, &self.config.workdir).await;
-                }
                 if let Some(ref hook_cmd) = rule.on_success {
                     let _ = Command::new("sh")
                         .arg("-c")

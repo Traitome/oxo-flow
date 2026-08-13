@@ -235,7 +235,8 @@ pub struct EnvironmentSpec {
     pub venv: Option<String>,
 
     /// HPC software modules to load (e.g., ["gcc/11.2", "cuda/11.7"]).
-    #[serde(default)]
+    /// Also accepts a comma-separated string ("gcc/11.2,cuda/11.7").
+    #[serde(default, deserialize_with = "deserialize_modules")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub modules: Vec<String>,
 
@@ -629,8 +630,11 @@ pub struct Rule {
     pub output: FilePatterns,
 
     /// Delete the input (chunk) files after this rule succeeds.
-    /// Set on transform combine rules when `transform.cleanup = true`.
-    #[serde(default)]
+    /// Engine-internal: set on transform combine rules when
+    /// `transform.cleanup = true`. Not deserializable from TOML —
+    /// deleting a rule's inputs must only come from the transform
+    /// expansion, never from a user-set flag.
+    #[serde(default, skip_deserializing)]
     #[serde(skip_serializing_if = "is_false")]
     pub cleanup_chunks: bool,
 
@@ -2028,4 +2032,56 @@ mod tests {
         let rule = RuleBuilder::new("test").rule_metadata(metadata).build();
         assert!(rule.rule_metadata.contains_key("organism"));
     }
+
+    #[test]
+    fn environment_modules_accepts_array_and_comma_string() {
+        // Array form (documented)
+        let spec: EnvironmentSpec =
+            toml::from_str(r#"modules = ["gcc/11.2", "cuda/11.7"]"#).unwrap();
+        assert_eq!(spec.modules, vec!["gcc/11.2", "cuda/11.7"]);
+
+        // Comma-separated string form (accepted for convenience)
+        let spec: EnvironmentSpec = toml::from_str(r#"modules = "gcc/11.2, openmpi/4.1""#).unwrap();
+        assert_eq!(spec.modules, vec!["gcc/11.2", "openmpi/4.1"]);
+
+        // Empty segments dropped
+        let spec: EnvironmentSpec = toml::from_str(r#"modules = "gcc/11.2,""#).unwrap();
+        assert_eq!(spec.modules, vec!["gcc/11.2"]);
+    }
+}
+
+/// Deserialize the `environment.modules` field: accepts a TOML array of
+/// module names or a comma-separated string.
+fn deserialize_modules<'de, D>(de: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct ModuleVisitor;
+    impl<'de> serde::de::Visitor<'de> for ModuleVisitor {
+        type Value = Vec<String>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a list of module names or a comma-separated string")
+        }
+
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            Ok(v.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect())
+        }
+
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut out = Vec::new();
+            while let Some(v) = seq.next_element::<String>()? {
+                out.push(v);
+            }
+            Ok(out)
+        }
+    }
+    de.deserialize_any(ModuleVisitor)
 }
