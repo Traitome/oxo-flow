@@ -130,8 +130,11 @@ oxo-flow expands `{sample}` from the available input files or from explicit conf
 |---|---|
 | `{input}` | Space-separated list of all input files |
 | `{output}` | Space-separated list of all output files |
+| `{input[N]}` / `{output[N]}` | The Nth file (0-indexed) — see note below |
 | `{threads}` | Thread count for this rule |
 | `{config.*}` | Value from the `[config]` section |
+
+**`{input}` vs `{input[0]}`** — for a single-input rule both expand identically (`{input}` joins all inputs; `{input[0]}` takes the first). Use the simple form for single files, the indexed form when selecting specific files from a list.
 
 ---
 

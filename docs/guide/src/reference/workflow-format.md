@@ -994,6 +994,12 @@ Built-in placeholders use the same syntax but have reserved meanings:
 | `{memory}` | Memory allocation assigned to this rule |
 | `{config.*}` | Value from the `[config]` section (plain value, declared default, or CLI override) |
 
+**`{input}` vs `{input[N]}`** — both forms are equivalent when the array has a single entry (`{input}` joins all inputs with spaces; `{input[0]}` takes the first). Practical guidance:
+
+- **Single input/output**: either form works — `{input}` and `{output}` are the simplest
+- **Multiple inputs/outputs**: use `{input[0]}`, `{input[1]}` … to select specific files, or `{input}` to pass all of them at once
+- The indexed form communicates *intent* ("this rule expects exactly this file"), so it remains useful even for single-element arrays in multi-step pipelines
+
 ### Named Input & Output
 
 For complex rules with many files, use `named_input` and `named_output` to improve readability:
