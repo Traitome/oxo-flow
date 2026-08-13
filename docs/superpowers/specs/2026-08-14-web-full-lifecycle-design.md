@@ -38,20 +38,27 @@ the web must never lie about what ran, what will run, or what a result means.
 - 110+ backend integration tests (phase1–4, ai_security) + 5 Playwright specs
   (871 lines) that are **not run in CI**.
 
-### 2.2 What is broken (verified defects)
+### 2.2 What was broken (verified defects — **all fixed in P0**)
 
-| # | Defect | Evidence | Impact |
-|---|--------|----------|--------|
-| B1 | **Cancel/pause/resume never signal the process** — handlers only UPDATE the DB row | `execution/handlers.rs:787,854,917`; no signal call anywhere in executor | User clicks Cancel; pipeline keeps running. Unacceptable for a control plane |
-| B2 | **Status vocabulary drift** — executor writes `"success"`, terminal checks only recognize `"completed"|"failed"|"cancelled"` | `executor.rs:226` vs `sqlite.rs:645`, `models.rs:36` | `finished_at` never set; UI state inconsistent |
-| B3 | **`audit_logs` schema divergence** — `db.rs` creates the table first (production) with `result` but no `metadata`; sqlite's `log_action` INSERTs `metadata` | `db.rs:58-174` vs `sqlite.rs:290-298,1015-1031` | Runtime INSERT failure when audit logging fires |
-| B4 | `insert_run` omits `pipeline_snapshot/phase/workdir/created_at` | `db.rs:455-469` | Silent empty columns; works only via sqlite ALTER defaults |
-| B5 | `run_nodes` table never written (write APIs have zero callers); per-node status comes from checkpoint files via `dag-status` | `infra/db/mod.rs:83-92` | Dead table — schema debt |
-| B6 | `chat_sessions` never written; `process_chat` ignores `session_id` | `chat/handlers.rs:215`, `chat/service.rs:13` | No conversation memory across messages |
-| B7 | `/report/ask` + `/report/visualize` return canned template JSON | `execution/handlers.rs:1115-1173` | Fake AI features shipped as real |
-| B8 | OAuth callback does not verify `state` (only non-empty) | `auth/handlers.rs:369-380` | CSRF on login in team/hpc mode |
-| B9 | `save_pipeline` owner hardcoded to first admin row | `workflow/handlers.rs:304-310` | Wrong ownership semantics |
-| B10 | `get_ai_config_effective` returns hardcoded `"user_provider": null` | `ai/handlers.rs:360` | Config UI lies |
+| # | Defect | Evidence | Fix (commit) |
+|---|--------|----------|--------------|
+| B1 | **Cancel/pause/resume never signal the process** — handlers only UPDATE the DB row | `execution/handlers.rs:787,854,917`; no signal call anywhere in executor | `process_control.rs` pgid registry; SIGTERM→SIGKILL grace, SIGSTOP/SIGCONT; cancel persists `cancelled` BEFORE signaling so the executor's exit path can't flip it back (df32ce1, 3f43e2a, 3eb13eb) |
+| B2 | **Status vocabulary drift** — executor wrote `"success"` | `executor.rs:226` | executor writes `completed`; idempotent startup migration (087f92d) |
+| B3 | **`audit_logs` schema divergence** | `db.rs` vs `sqlite.rs:290-298` | one schema `(…, result, metadata, …)` in both init paths (5929d9c) |
+| B4 | `insert_run` omitted 5 of 12 columns | `db.rs:455-469` | full 12-column INSERT (5929d9c) |
+| B5 | `run_nodes` table never written — **and it was the ONLY source for node status, so `dag-status`/`run-status` showed everything pending forever** | 5 read sites, 0 write sites | table + trait + models dropped; `checkpoint_status.rs` derives status from the engine's checkpoint + "Running:" log lines; full rule list merged so unrun rules show as pending (04c2f45) |
+| B6 | `chat_sessions` never written; `process_chat` ignores `session_id` | `chat/handlers.rs:215`, `chat/service.rs:13` | → P3 (chat rewrite) |
+| B7 | `/report/ask` + `/report/visualize` return canned template JSON | `execution/handlers.rs:1115-1173` | → P1 |
+| B8 | OAuth callback does not verify `state` (only non-empty) | `auth/handlers.rs:369-380` | `oauth_states` table; issued states verified + consumed before token exchange (1eef785) |
+| B9 | `save_pipeline` owner hardcoded to first admin row | `workflow/handlers.rs:304-310` | auth middleware injects session user; owner resolves via users lookup, `default` in personal mode (c4a716a) |
+| B10 | `get_ai_config_effective` returns hardcoded `"user_provider": null` | `ai/handlers.rs:360` | real user-tier row read (c4a716a) |
+
+Implementation deviations from the P0 plan (documented): signals go through
+`nix`'s safe `killpg` (the web crate also `forbid(unsafe_code)`, so raw libc
+was not an option); the cancel grace window polls the registry instead of a
+flat 5 s sleep (fast path when the executor reaps promptly); pause/resume on
+an unregistered group still records the DB state (documented race only during
+the spawn window).
 
 ### 2.3 What is missing (goal-critical gaps)
 
