@@ -1,4 +1,4 @@
-use crate::commands::{print_banner, resolve_workflow};
+use crate::commands::{print_banner, resolve_workflow, samples};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use oxo_flow_core::config::WorkflowConfig;
@@ -283,21 +283,6 @@ pub async fn run_command(
     let mut config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
-    // ── Filter to a pilot subset (--samples first:N / explicit names) ──
-    if !samples_filter.is_empty() {
-        let (kept, unknown) = config.filter_samples(&samples_filter)?;
-        if kept.is_empty() {
-            anyhow::bail!("--samples matched no samples in this workflow");
-        }
-        for name in &unknown {
-            eprintln!(
-                "  {} sample '{}' not found in workflow samples",
-                "⚠".yellow(),
-                name
-            );
-        }
-    }
-
     // ── Parse and merge CLI config overrides ────────────────────────────
     // Accepted forms (all map to `config.<key>` values):
     //   KEY=VALUE            direct positional form
@@ -454,6 +439,15 @@ pub async fn run_command(
             "Samples:".cyan(),
             extra_samples.len()
         );
+    }
+
+    // ── Filter to a sample subset (--samples first:N / names / ready) ────
+    // Runs after CLI overrides so `ready` resolution sees the final config
+    // values in `{config.x}` paths (issue #63).
+    if !samples_filter.is_empty()
+        && let Some(readiness) = samples::apply_samples_filter(&mut config, &samples_filter, true)?
+    {
+        samples::print_readiness_section(&readiness);
     }
 
     config.apply_defaults();
@@ -1602,20 +1596,15 @@ pub async fn dry_run_command(
     let mut config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
-    // ── Filter to a pilot subset (--samples first:N / explicit names) ──
-    if !samples_filter.is_empty() {
-        let (kept, unknown) = config.filter_samples(&samples_filter)?;
-        if kept.is_empty() {
-            anyhow::bail!("--samples matched no samples in this workflow");
-        }
-        for name in &unknown {
-            eprintln!(
-                "  {} sample '{}' not found in workflow samples",
-                "⚠".yellow(),
-                name
-            );
-        }
-    }
+    // ── Filter to a sample subset (--samples first:N / names / ready) ──
+    // `ready` resolves against a scratch expanded clone; the report covers
+    // the full cohort so the readiness section stays informative even when
+    // the listing is filtered (issue #63).
+    let ready_report = if !samples_filter.is_empty() {
+        samples::apply_samples_filter(&mut config, &samples_filter, false)?
+    } else {
+        None
+    };
 
     // ── Scientific preflight (deterministic, evidence-backed) ────────────
     // Printed for every dry-run; with --ai the findings are also passed to
@@ -1689,6 +1678,17 @@ pub async fn dry_run_command(
         "DAG:".bold().yellow(),
         order.len()
     );
+
+    // Sample readiness (issue #63). With `--samples ready` the report covers
+    // the full cohort (computed pre-filter); otherwise it is computed on the
+    // (possibly filtered) expanded config.
+    let readiness_report = match ready_report {
+        Some(report) => Some(report),
+        None => Some(oxo_flow_core::readiness::compute_readiness(&config)),
+    };
+    if let Some(report) = &readiness_report {
+        samples::print_readiness_section(report);
+    }
 
     let mut wildcard_values: HashMap<String, String> = HashMap::new();
     for (key, value) in &config.config {
@@ -1837,6 +1837,29 @@ pub async fn dry_run_command(
             })
             .collect();
 
+        // Machine-readable sample readiness (issue #63).
+        let samples_block = readiness_report.as_ref().map(|report| {
+            let ready_names: Vec<&str> = report.ready.iter().map(|s| s.name.as_str()).collect();
+            let waiting: Vec<serde_json::Value> = report
+                .waiting
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "name": s.name,
+                        "missing": s.missing,
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "total": report.total,
+                "ready": report.ready.len(),
+                "waiting_count": report.waiting.len(),
+                "ready_names": ready_names,
+                "waiting": waiting,
+                "missing_global": report.missing_global,
+            })
+        });
+
         let output = serde_json::json!({
             "command": "dry-run",
             "workflow": workflow.display().to_string(),
@@ -1849,6 +1872,7 @@ pub async fn dry_run_command(
                 "memory_rules": memory_values.len(),
             },
             "suggested_jobs": suggested_jobs,
+            "samples": samples_block,
         });
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
     }

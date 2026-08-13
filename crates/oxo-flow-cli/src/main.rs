@@ -161,7 +161,7 @@ pub enum Commands {
             long = "samples",
             value_name = "LIST",
             conflicts_with = "extra_samples",
-            help = "Run only these samples: first:N (pilot) or explicit names (repeatable, comma-separated)"
+            help = "Run only these samples: first:N (pilot), explicit names, or ready (complete inputs; repeatable, comma-separated)"
         )]
         samples_filter: Vec<String>,
         /// Re-execute every rule selected for this run even if outputs are
@@ -214,7 +214,7 @@ pub enum Commands {
         #[arg(
             long = "samples",
             value_name = "LIST",
-            help = "Preview only these samples: first:N (pilot) or explicit names (repeatable, comma-separated)"
+            help = "Preview only these samples: first:N (pilot), explicit names, or ready (complete inputs; repeatable, comma-separated)"
         )]
         samples_filter: Vec<String>,
     },
@@ -544,7 +544,7 @@ pub enum Commands {
         #[arg(
             long = "samples",
             value_name = "LIST",
-            help = "Test only these samples: first:N (pilot) or explicit names (repeatable, comma-separated)"
+            help = "Test only these samples: first:N (pilot), explicit names, or ready (complete inputs; repeatable, comma-separated)"
         )]
         samples_filter: Vec<String>,
     },

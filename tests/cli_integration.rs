@@ -3887,3 +3887,154 @@ shell = "echo q={config.min_quality} > {output}"
         "q=60\n"
     );
 }
+
+// ─── Incremental data arrival (--samples ready, issue #63) ──────────────────
+
+/// dry-run reports per-sample readiness: which samples have complete entry
+/// inputs, which are waiting, and exactly which files are missing. --json
+/// exposes the same report machine-readably.
+#[test]
+fn cli_dry_run_reports_sample_readiness() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("ready.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"ready\"\nversion = \"1.0.0\"\n\n[[sample_groups]]\nname = \"cohort\"\nsamples = [\"S1\", \"S2\", \"S3\"]\n\n[[rules]]\nname = \"qc\"\ninput = [\"data/{sample}_R1.fastq.gz\", \"data/{sample}_R2.fastq.gz\"]\noutput = [\"results/{sample}.qc.txt\"]\nshell = \"cat {input} > {output}\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("data")).unwrap();
+    for sample in ["S1", "S2"] {
+        fs::write(dir.path().join(format!("data/{sample}_R1.fastq.gz")), b"x").unwrap();
+        fs::write(dir.path().join(format!("data/{sample}_R2.fastq.gz")), b"x").unwrap();
+    }
+    // S3_R1 exists but S3_R2 has not arrived yet — S3 is waiting.
+    fs::write(dir.path().join("data/S3_R1.fastq.gz"), b"x").unwrap();
+
+    // Human output: aggregate counts + grouped waiting list with missing files.
+    let out = oxo_flow_cmd()
+        .args(["dry-run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("Sample readiness: 2/3 complete, 1 waiting"),
+        "expected readiness summary, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("S3 (missing: data/S3_R2.fastq.gz)"),
+        "waiting sample must list its missing files, got:\n{stderr}"
+    );
+
+    // Machine output: samples block with ready names and per-sample missing.
+    let out = oxo_flow_cmd()
+        .args(["dry-run", wf.to_str().unwrap(), "--json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("stdout must be pure JSON");
+    let samples = &parsed["samples"];
+    assert_eq!(samples["total"], 3);
+    assert_eq!(samples["ready"], 2);
+    assert_eq!(samples["waiting_count"], 1);
+    assert_eq!(samples["ready_names"], serde_json::json!(["S1", "S2"]));
+    assert_eq!(
+        samples["waiting"][0]["missing"],
+        serde_json::json!(["data/S3_R2.fastq.gz"])
+    );
+}
+
+/// `--samples ready` runs only samples with complete entry inputs; when the
+/// missing data arrives later, a second run skips the completed samples via
+/// the checkpoint and processes the newcomer — the incremental-arrival loop.
+#[test]
+fn cli_run_samples_ready_incremental_arrival() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("inc.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"inc\"\nversion = \"1.0.0\"\n\n[[sample_groups]]\nname = \"cohort\"\nsamples = [\"S1\", \"S2\", \"S3\"]\n\n[[rules]]\nname = \"qc\"\ninput = [\"data/{sample}_R1.fastq.gz\", \"data/{sample}_R2.fastq.gz\"]\noutput = [\"results/{sample}.qc.txt\"]\nshell = \"cat {input} > {output}\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("data")).unwrap();
+    for sample in ["S1", "S2"] {
+        fs::write(dir.path().join(format!("data/{sample}_R1.fastq.gz")), b"x").unwrap();
+        fs::write(dir.path().join(format!("data/{sample}_R2.fastq.gz")), b"x").unwrap();
+    }
+    fs::write(dir.path().join("data/S3_R1.fastq.gz"), b"x").unwrap();
+
+    // First batch: only S1 and S2 are runnable.
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--samples", "ready"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(dir.path().join("results/S1.qc.txt").exists());
+    assert!(dir.path().join("results/S2.qc.txt").exists());
+    assert!(!dir.path().join("results/S3.qc.txt").exists());
+
+    // S3's second read arrives — a new batch is ready.
+    fs::write(dir.path().join("data/S3_R2.fastq.gz"), b"x").unwrap();
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--samples", "ready"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        dir.path().join("results/S3.qc.txt").exists(),
+        "newly-arrived sample must be processed"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("3/3 complete"),
+        "readiness must reflect the full cohort, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("2 skipped"),
+        "checkpoint must skip the already-completed samples, got:\n{stderr}"
+    );
+}
+
+/// With zero ready samples `run --samples ready` aborts with an actionable
+/// error naming the waiting samples instead of executing nothing.
+#[test]
+fn cli_run_samples_ready_zero_ready_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("empty.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"empty\"\nversion = \"1.0.0\"\n\n[[sample_groups]]\nname = \"cohort\"\nsamples = [\"S1\", \"S2\", \"S3\"]\n\n[[rules]]\nname = \"qc\"\ninput = [\"data/{sample}_R1.fastq.gz\", \"data/{sample}_R2.fastq.gz\"]\noutput = [\"results/{sample}.qc.txt\"]\nshell = \"cat {input} > {output}\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("data")).unwrap();
+    fs::write(dir.path().join("data/S1_R1.fastq.gz"), b"x").unwrap();
+
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--samples", "ready"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "zero ready samples must abort");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("0 of 3 samples have complete inputs"),
+        "expected actionable error, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("waiting: S1, S2, S3"),
+        "error must name the waiting samples, got:\n{stderr}"
+    );
+}

@@ -52,6 +52,7 @@ pub mod error;
 pub mod executor;
 pub mod format;
 pub mod plugin;
+pub mod readiness;
 pub mod result;
 
 #[cfg(feature = "report")]

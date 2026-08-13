@@ -206,4 +206,5 @@ pub mod publish;
 pub mod pull;
 pub mod quality;
 pub mod run;
+pub mod samples;
 pub mod web;

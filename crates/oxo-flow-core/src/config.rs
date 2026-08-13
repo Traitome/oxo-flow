@@ -1123,6 +1123,15 @@ pub struct WorkflowConfig {
     #[serde(default, rename = "sample_groups")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sample_groups: Vec<SampleGroup>,
+
+    /// Engine-internal: the sample names each expanded rule came from.
+    ///
+    /// Populated by [`WorkflowConfig::expand_wildcards`]: pair expansion
+    /// records the experiment/control names, group expansion records the
+    /// sample name. Used for per-sample input-readiness attribution
+    /// (issue #63). Never serialized — user TOML cannot set it.
+    #[serde(skip)]
+    pub expansion_samples: HashMap<String, Vec<String>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1492,9 +1501,18 @@ impl WorkflowConfig {
             .filter(|s| allowed.contains(*s))
             .cloned()
             .collect();
+        // Pair experiment/control names are valid sample identifiers too —
+        // they must not be reported as unknown (issue #63 feeds resolved
+        // `ready` names through this path).
         let unknown: Vec<String> = explicit
             .iter()
-            .filter(|name| !ordered.iter().any(|s| s == name.as_str()))
+            .filter(|name| {
+                !ordered.iter().any(|s| s == name.as_str())
+                    && !self.pairs.iter().any(|p| {
+                        p.experiment == name.as_str()
+                            || p.control.as_deref().is_some_and(|c| c == name.as_str())
+                    })
+            })
             .cloned()
             .collect();
 
@@ -1916,6 +1934,10 @@ impl WorkflowConfig {
         let pair_combos = wildcard_combinations_from_pairs(&self.pairs);
         let group_combos = wildcard_combinations_from_groups(&self.sample_groups);
 
+        // Rebuild expansion provenance from scratch — this method may run on a
+        // config that was expanded before.
+        self.expansion_samples.clear();
+
         // Pre-compile constraints for performance
         let mut compiled_constraints = HashMap::new();
         for (name, pattern) in &self.wildcard_constraints {
@@ -2088,6 +2110,20 @@ impl WorkflowConfig {
                             Some(expand_pattern(shell, combo).unwrap_or_else(|_| shell.clone()));
                     }
 
+                    // Record which sample names this expansion belongs to
+                    // (issue #63 readiness attribution).
+                    let mut involved: Vec<String> = Vec::new();
+                    for key in ["experiment", "control"] {
+                        if let Some(value) = combo.get(key)
+                            && !value.is_empty()
+                            && !involved.contains(value)
+                        {
+                            involved.push(value.clone());
+                        }
+                    }
+                    self.expansion_samples
+                        .insert(expanded.name.clone(), involved);
+
                     expanded_rules.push(expanded);
                 }
                 name_map.insert(orig_name, expanded_names);
@@ -2142,6 +2178,17 @@ impl WorkflowConfig {
                         expanded.shell =
                             Some(expand_pattern(shell, combo).unwrap_or_else(|_| shell.clone()));
                     }
+
+                    // Record which sample this expansion belongs to
+                    // (issue #63 readiness attribution).
+                    let involved: Vec<String> = combo
+                        .get("sample")
+                        .cloned()
+                        .into_iter()
+                        .filter(|name| !name.is_empty())
+                        .collect();
+                    self.expansion_samples
+                        .insert(expanded.name.clone(), involved);
 
                     expanded_rules.push(expanded);
                 }
@@ -4230,6 +4277,42 @@ mod tests {
         let (kept, unknown) = config.filter_samples(&["S2,S9".to_string()]).unwrap();
         assert_eq!(kept, vec!["S2"]);
         assert_eq!(unknown, vec!["S9"]);
+    }
+
+    #[test]
+    fn filter_samples_knows_pair_names() {
+        // Pair experiment/control names are valid sample identifiers — an
+        // explicit selection must not be reported as unknown (issue #63:
+        // `--samples ready` feeds pair names into this path).
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[pairs]]
+            pair_id = "P1"
+            experiment = "T1"
+            control = "N1"
+
+            [[rules]]
+            name = "align"
+            input = ["data/{experiment}.fq", "data/{control}.fq"]
+            output = ["results/{experiment}_{control}.bam"]
+            shell = "touch {output}"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        let (kept, unknown) = config
+            .filter_samples(&["T1".to_string(), "N1".to_string()])
+            .unwrap();
+        assert!(kept.is_empty()); // pairs-only workflow: kept tracks group samples
+        assert!(unknown.is_empty(), "pair names are known: {unknown:?}");
+        // Both sides selected → the pair survives filtering.
+        assert_eq!(config.pairs.len(), 1);
+
+        // A truly unknown name is still reported.
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        let (_, unknown) = config.filter_samples(&["BOGUS".to_string()]).unwrap();
+        assert_eq!(unknown, vec!["BOGUS".to_string()]);
     }
 
     #[test]
