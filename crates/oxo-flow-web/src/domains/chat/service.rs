@@ -217,9 +217,19 @@ use oxo_flow_ai::agent::orchestrator::Orchestrator;
 
 /// A live chat-agent run: the SSE handler drains `events` while the loop
 /// executes, and receives the final outcome on `outcome`.
+/// One item on the live chat-agent channel: an observable agent event, or
+/// the terminal outcome (sent last, before the channel closes).
+pub enum ChatStreamEvent {
+    Agent(AgentEvent),
+    /// Boxed: `AgentOutcome` carries the session record, which is much larger
+    /// than the event variants — boxing keeps the channel items small.
+    Outcome(Box<Result<AgentOutcome, String>>),
+}
+
+/// A live chat-agent run: the SSE handler drains `events` until the channel
+/// closes — a single ordered source, no separate oneshot.
 pub struct ChatAgentRun {
-    pub events: tokio::sync::mpsc::Receiver<AgentEvent>,
-    pub outcome: tokio::sync::oneshot::Receiver<Result<AgentOutcome, String>>,
+    pub events: tokio::sync::mpsc::Receiver<ChatStreamEvent>,
 }
 
 /// Spawn the agent loop on the tokio runtime. Events are buffered (64) —
@@ -230,15 +240,15 @@ pub fn spawn_chat_agent(
     context: Option<ChatContext>,
     run_id: Option<String>,
 ) -> ChatAgentRun {
-    let (event_tx, event_rx) = tokio::sync::mpsc::channel::<AgentEvent>(64);
-    let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
+    let (event_tx, event_rx) = tokio::sync::mpsc::channel::<ChatStreamEvent>(64);
+    let outcome_tx = event_tx.clone();
     tokio::spawn(async move {
         // Non-blocking: the sink is sync and runs inside the tokio runtime.
-        // Buffer is 64 — a full or closed channel drops the event (the
-        // outcome still arrives via the oneshot; on client disconnect the
-        // channel closing ends the SSE stream, which is the cancellation path).
+        // A full or closed channel drops the event (observability loss only;
+        // on client disconnect the closing channel ends the SSE stream,
+        // which is the cancellation path).
         let mut sink = move |e: AgentEvent| {
-            let _ = event_tx.try_send(e);
+            let _ = event_tx.try_send(ChatStreamEvent::Agent(e));
         };
         let result = run_chat_agent(
             &message,
@@ -247,15 +257,11 @@ pub fn spawn_chat_agent(
             Some(&mut sink),
         )
         .await;
-        let _ = outcome_tx.send(result);
+        let _ = outcome_tx.try_send(ChatStreamEvent::Outcome(Box::new(result)));
     });
-    ChatAgentRun {
-        events: event_rx,
-        outcome: outcome_rx,
-    }
+    ChatAgentRun { events: event_rx }
 }
 
-/// Run the real tool-calling agent loop with the web tool registry.
 pub async fn run_chat_agent(
     message: &str,
     context: Option<&ChatContext>,

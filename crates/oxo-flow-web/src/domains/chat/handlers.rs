@@ -43,89 +43,71 @@ pub async fn chat_send(
 
     let stream = async_stream::stream! {
         let mut events = run.events;
-        let mut outcome_rx = Some(run.outcome);
-        loop {
-            tokio::select! {
-                event = events.recv() => {
-                    match event {
-                        Some(oxo_flow_ai::agent::events::AgentEvent::Status(msg)) => {
-                            yield Ok::<_, Infallible>(Event::default()
-                                .event("status")
-                                .data(serde_json::json!({"message": msg}).to_string()));
-                        }
-                        Some(oxo_flow_ai::agent::events::AgentEvent::ToolCall { name, args }) => {
-                            yield Ok::<_, Infallible>(Event::default()
-                                .event("tool_call")
-                                .data(serde_json::json!({"name": name, "args": args}).to_string()));
-                        }
-                        Some(oxo_flow_ai::agent::events::AgentEvent::ToolResult { name, summary }) => {
-                            yield Ok::<_, Infallible>(Event::default()
-                                .event("tool_result")
-                                .data(serde_json::json!({"name": name, "summary": summary}).to_string()));
-                        }
-                        Some(oxo_flow_ai::agent::events::AgentEvent::Text(text)) => {
-                            yield Ok::<_, Infallible>(Event::default()
-                                .event("text")
-                                .data(serde_json::json!({"chunk": text}).to_string()));
-                        }
-                        Some(other) => {
-                            yield Ok::<_, Infallible>(Event::default()
-                                .event("status")
-                                .data(serde_json::json!({"message": format!("{other:?}")}).to_string()));
-                        }
-                        None => break,
-                    }
+        while let Some(event) = events.recv().await {
+            match event {
+                service::ChatStreamEvent::Agent(oxo_flow_ai::agent::events::AgentEvent::Status(msg)) => {
+                    yield Ok::<_, Infallible>(Event::default()
+                        .event("status")
+                        .data(serde_json::json!({"message": msg}).to_string()));
                 }
-                result = async {
-                    match outcome_rx.as_mut() {
-                        Some(rx) => rx.await.ok(),
-                        // Already consumed: never resolve again — the stream
-                        // terminates when the event channel drains (None).
-                        None => std::future::pending::<
-                            Option<Result<oxo_flow_ai::agent::AgentOutcome, String>>,
-                        >()
-                        .await,
-                    }
-                }, if outcome_rx.is_some() => {
-                    outcome_rx = None;
-                    match result {
-                        Some(Ok(outcome)) => {
-                            if let Some(toml) = outcome.content.as_deref() {
-                                let validation = crate::domains::workflow::service::validate_pipeline(toml)
-                                    .map(|v| serde_json::json!({
-                                        "valid": v.valid,
-                                        "errors": v.errors.iter().map(|e| serde_json::json!({
-                                            "code": e.code, "message": e.message, "suggestion": e.suggestion
-                                        })).collect::<Vec<_>>()
-                                    }))
-                                    .unwrap_or(serde_json::json!({"valid": false, "errors": []}));
-                                yield Ok::<_, Infallible>(Event::default()
-                                    .event("action")
-                                    .data(serde_json::json!({
-                                        "action_type": "pipeline_ready",
-                                        "data": {
-                                            "toml_content": toml,
-                                            "validation": validation,
-                                        }
-                                    }).to_string()));
-                            }
-                            yield Ok::<_, Infallible>(Event::default()
-                                .event("done")
-                                .data(serde_json::json!({
-                                    "session_id": session_id,
-                                    "rounds": outcome.rounds,
-                                }).to_string()));
-                        }
-                        Some(Err(e)) => {
+                service::ChatStreamEvent::Agent(oxo_flow_ai::agent::events::AgentEvent::ToolCall { name, args }) => {
+                    yield Ok::<_, Infallible>(Event::default()
+                        .event("tool_call")
+                        .data(serde_json::json!({"name": name, "args": args}).to_string()));
+                }
+                service::ChatStreamEvent::Agent(oxo_flow_ai::agent::events::AgentEvent::ToolResult { name, summary }) => {
+                    yield Ok::<_, Infallible>(Event::default()
+                        .event("tool_result")
+                        .data(serde_json::json!({"name": name, "summary": summary}).to_string()));
+                }
+                service::ChatStreamEvent::Agent(oxo_flow_ai::agent::events::AgentEvent::Text(text)) => {
+                    yield Ok::<_, Infallible>(Event::default()
+                        .event("text")
+                        .data(serde_json::json!({"chunk": text}).to_string()));
+                }
+                service::ChatStreamEvent::Agent(other) => {
+                    yield Ok::<_, Infallible>(Event::default()
+                        .event("status")
+                        .data(serde_json::json!({"message": format!("{other:?}")}).to_string()));
+                }
+                service::ChatStreamEvent::Outcome(boxed) => {
+                    let outcome = match *boxed {
+                        Ok(o) => o,
+                        Err(e) => {
                             yield Ok::<_, Infallible>(Event::default()
                                 .event("error")
                                 .data(serde_json::json!({
                                     "code": "CHAT_ERROR",
                                     "message": e
                                 }).to_string()));
+                            continue;
                         }
-                        None => unreachable!("pending future never resolves"),
+                    };
+                    if let Some(toml) = outcome.content.as_deref() {
+                        let validation = crate::domains::workflow::service::validate_pipeline(toml)
+                            .map(|v| serde_json::json!({
+                                "valid": v.valid,
+                                "errors": v.errors.iter().map(|e| serde_json::json!({
+                                    "code": e.code, "message": e.message, "suggestion": e.suggestion
+                                })).collect::<Vec<_>>()
+                            }))
+                            .unwrap_or(serde_json::json!({"valid": false, "errors": []}));
+                        yield Ok::<_, Infallible>(Event::default()
+                            .event("action")
+                            .data(serde_json::json!({
+                                "action_type": "pipeline_ready",
+                                "data": {
+                                    "toml_content": toml,
+                                    "validation": validation,
+                                }
+                            }).to_string()));
                     }
+                    yield Ok::<_, Infallible>(Event::default()
+                        .event("done")
+                        .data(serde_json::json!({
+                            "session_id": session_id,
+                            "rounds": outcome.rounds,
+                        }).to_string()));
                 }
             }
         }
