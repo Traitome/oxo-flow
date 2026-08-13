@@ -75,7 +75,7 @@ conda = "envs/samtools.yaml"
 [[rules]]
 name = "featurecounts"
 input = ["aligned/{sample}/Aligned.sortedByCoord.out.bam"]
-output = ["counts/{sample}.counts.txt"]
+output = ["counts/{sample}.counts.txt", "counts/{sample}.counts.txt.summary"]
 description = "Gene-level read counting with featureCounts"
 shell = """
 mkdir -p counts
@@ -99,7 +99,7 @@ name = "multiqc"
 # all samples have been processed, regardless of wildcard expansion.
 # Using directory paths as inputs avoids creating one multiqc instance
 # per sample when [[sample_groups]] is defined.
-depends_on = ["fastp_trim", "featurecounts", "index_bam"]
+depends_on = ["fastp_trim", "featurecounts"]
 output = ["results/multiqc_report.html"]
 description = "Aggregate QC metrics into a single report"
 shell = """

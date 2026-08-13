@@ -16,7 +16,6 @@ graph TD
     B --> C[index_bam]
     B --> D[featurecounts]
     A --> E[multiqc]
-    C --> E
     D --> E
 ```
 
@@ -26,7 +25,7 @@ graph TD
 2. **star_align** — Splice-aware alignment to reference genome with STAR
 3. **index_bam** — Index aligned BAM for downstream tools
 4. **featurecounts** — Gene-level read counting
-5. **multiqc** — Aggregate QC metrics into a single interactive report (runs once after all per-sample rules complete via `depends_on`)
+5. **multiqc** — Aggregate QC metrics (fastp JSON + featureCounts summaries) into a single interactive report. Depends on the rules whose outputs it parses — not on every upstream rule.
 
 ## Workflow Definition
 
@@ -130,7 +129,7 @@ name = "multiqc"
 # all samples have been processed, regardless of wildcard expansion.
 # Using directory paths as inputs avoids creating one multiqc instance
 # per sample when [[sample_groups]] is defined.
-depends_on = ["fastp_trim", "featurecounts", "index_bam"]
+depends_on = ["fastp_trim", "featurecounts"]
 output = ["results/multiqc_report.html"]
 description = "Aggregate QC metrics into a single report"
 shell = """
