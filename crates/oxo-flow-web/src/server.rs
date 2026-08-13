@@ -362,7 +362,7 @@ pub fn build_router(mode: &str) -> Router {
         .route("/api/quota", get(observability::handlers::quota_status));
 
     // ---- HPC routes ----
-    let hpc_routes = Router::new().route("/api/hpc", get(crate::handlers::system::hpc_status));
+    let hpc_routes = Router::new().route("/api/hpc", get(observability::handlers::hpc_status));
 
     // ---- API 404: unknown /api/* paths return JSON, never HTML ----
     let api_fallback = Router::new().nest("/api", Router::new().fallback(api_not_found));

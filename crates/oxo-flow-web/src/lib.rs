@@ -12,7 +12,6 @@ pub mod audit;
 pub mod db;
 pub mod domains;
 pub mod executor;
-pub mod handlers;
 pub mod hpc;
 pub mod infra;
 pub mod process_control;
