@@ -10,6 +10,7 @@ pub mod hooks;
 pub mod process;
 pub mod security;
 pub mod timeout;
+pub mod workdir_lock;
 
 #[cfg(test)]
 mod tests;
@@ -52,3 +53,4 @@ pub use process::{
     LocalExecutor,
 };
 pub use security::{sanitize_shell_command, validate_shell_safety, validate_wildcard_injection};
+pub use workdir_lock::WorkdirLock;

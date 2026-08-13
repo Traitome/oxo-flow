@@ -4,7 +4,7 @@ use colored::Colorize;
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::config_impact::{ConfigChangeReport, config_value_string};
 use oxo_flow_core::dag::WorkflowDag;
-use oxo_flow_core::executor::{CheckpointState, ExecutorConfig, LocalExecutor};
+use oxo_flow_core::executor::{CheckpointState, ExecutorConfig, LocalExecutor, WorkdirLock};
 use oxo_flow_core::rule::parse_duration_secs;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -290,6 +290,15 @@ pub async fn run_command(
     print_banner();
     let workflow = resolve_workflow(workflow)?;
     let workflow_dir = oxo_flow_core::parent_dir(&workflow).to_path_buf();
+
+    // ── Workdir lock (issue #70) ────────────────────────────────────────
+    // Concurrent runs on the same workdir would race on
+    // .oxo-flow/checkpoint.json (last-writer-wins). The exclusive lock is
+    // acquired as early as possible and held for the whole run; the OS
+    // releases it automatically if this process exits or crashes, so there
+    // are no stale locks.
+    let workdir_effective = workdir.as_ref().unwrap_or(&workflow_dir);
+    let _workdir_lock = WorkdirLock::acquire(workdir_effective)?;
 
     let mut config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;

@@ -311,9 +311,12 @@ correctly when the split values change.
   detected.
 - Config values declared `sensitive` are stored in the snapshot as SHA-256
   digests, never as plaintext.
-- Concurrent `oxo-flow run` invocations on the same workdir race on
-  `checkpoint.json` (last writer wins) — run one workflow instance per
-  workdir.
+- Concurrent `oxo-flow run` invocations on the same workdir are prevented
+  by an exclusive lock on `.oxo-flow/lock` (held for the whole run). The
+  second invocation fails with a clear error instead of silently racing on
+  `checkpoint.json`; the lock releases automatically when the first process
+  exits (even on a crash). `clean` refuses to delete while a run is active
+  unless `--force` is given.
 
 ### Forcing Execution
 

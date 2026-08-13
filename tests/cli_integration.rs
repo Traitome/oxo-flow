@@ -4594,3 +4594,69 @@ fn cli_concurrent_runs_get_clear_lock_error() {
         "completed rule must be skipped after the first run"
     );
 }
+
+// ─── Concurrent-run protection (.oxo-flow/lock, issue #70) ──────────────────
+
+/// Two `run` invocations on the same workdir must not silently race on the
+/// checkpoint: the second gets a clear lock error, and succeeds after the
+/// first exits (the OS releases the lock automatically).
+#[test]
+fn cli_concurrent_runs_get_clear_lock_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("locktest.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"lock\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"slow\"\noutput = [\"results/done.txt\"]\nshell = \"sleep 2 && echo done > results/done.txt\"\n",
+    )
+    .unwrap();
+
+    // Run #1 in the background, holding the lock for ~2s.
+    let mut first = std::process::Command::new(workspace_bin("oxo-flow"))
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+
+    // Wait until the lock is actually held (poll with the core probe).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !oxo_flow_core::executor::WorkdirLock::is_locked(dir.path()) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "first run never acquired the workdir lock"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    // Run #2 while the lock is held: clear error, no silent racing.
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "second run must fail while locked");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("workdir is locked"),
+        "second run must report the lock, got:\n{stderr}"
+    );
+
+    // After run #1 exits the lock releases: run #2 succeeds and skips the
+    // completed rule.
+    assert!(first.wait().unwrap().success());
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "run after lock release must succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("1 skipped"),
+        "completed rule must be skipped after the first run"
+    );
+}

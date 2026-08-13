@@ -25,6 +25,10 @@ pub enum OxoFlowError {
     #[error("cycle detected in workflow DAG: {details}")]
     CycleDetected { details: String },
 
+    /// Another live process holds the workdir lock (concurrent runs, issue #70).
+    #[error("workdir is locked by another oxo-flow process: {path}")]
+    WorkdirLocked { path: PathBuf },
+
     /// A rule references an input that no other rule produces and no source file exists.
     #[error("missing input for rule '{rule}': {path}")]
     MissingInput { rule: String, path: String },
@@ -169,6 +173,11 @@ impl OxoFlowError {
             OxoFlowError::CycleDetected { .. } => Some(
                 "review rule input/output patterns and depends_on fields to break the circular dependency".to_string(),
             ),
+            OxoFlowError::WorkdirLocked { path } => Some(format!(
+                "another oxo-flow run is active in this workdir ('{}') — wait for it to finish; \
+                 the lock releases automatically when that process exits",
+                path.display()
+            )),
             OxoFlowError::MissingInput { rule, path } => Some(format!(
                 "ensure '{}' is produced by another rule or exists as a source file. \
                  Check rule '{}' inputs for typos",

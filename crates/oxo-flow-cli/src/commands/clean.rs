@@ -41,8 +41,24 @@ pub fn clean_command(
 
     // Working directory for .oxo-flow artifacts: explicit --workdir wins,
     // default is the workflow file's directory (issue #68).
-    let workdir =
-        workdir.unwrap_or_else(|| oxo_flow_core::parent_dir(&workflow).to_path_buf());
+    let workdir = workdir.unwrap_or_else(|| oxo_flow_core::parent_dir(&workflow).to_path_buf());
+
+    // Refuse to delete while a run is active in this workdir (issue #70):
+    // the run's checkpoint and outputs must not vanish mid-flight.
+    // --force overrides with a warning.
+    if !is_dry_run && oxo_flow_core::executor::WorkdirLock::is_locked(&workdir) {
+        if force {
+            eprintln!(
+                "{} workdir is locked by a running oxo-flow process — cleaning anyway (--force)",
+                "Warning:".yellow()
+            );
+        } else {
+            anyhow::bail!(
+                "another oxo-flow run is active in this workdir — wait for it to finish \
+                 before cleaning, or pass --force to override"
+            );
+        }
+    }
 
     // Handle orphan cleanup mode
     if orphans {
