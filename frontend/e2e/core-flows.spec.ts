@@ -129,7 +129,7 @@ test.describe('oxo-flow v0.9 Core User Flows', () => {
 
   test('Pipelines page loads', async ({ page }) => {
     await page.goto('/pipelines');
-    await expect(page.locator('h1')).toContainText('Pipeline Library');
+    await expect(page.locator('h1')).toContainText('Pipelines');
   });
 
   // ── Runs ──

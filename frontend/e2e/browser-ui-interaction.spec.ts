@@ -84,7 +84,7 @@ test.describe('Browser UI Interaction Tests', () => {
     await page.goto('/pipelines');
     await page.waitForTimeout(1000);
 
-    await expect(page.locator('h1')).toContainText('Pipeline Library', { timeout: 5000 });
+    await expect(page.locator('h1')).toContainText('Pipelines', { timeout: 5000 });
   });
 
   // ── Responsive Design ──
