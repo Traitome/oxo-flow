@@ -532,6 +532,41 @@ fn record_manifest_file(
     );
 }
 
+/// Returns `true` when a rule declares `optional = true` and at least one of
+/// its inputs does not exist (issue #75).
+///
+/// Existence rules: `{config.x}` placeholders are expanded first; engine
+/// wildcards (`{sample}` etc.) are assumed present (they resolve
+/// per-instance); literal globs count as present when they match at least
+/// one file; plain paths must exist (file or directory).
+pub fn optional_inputs_missing(
+    rule: &Rule,
+    workdir: &Path,
+    wildcard_values: &HashMap<String, String>,
+) -> bool {
+    if !rule.optional || rule.input.is_empty() {
+        return false;
+    }
+    for input in rule.input.to_vec() {
+        let expanded = expand_config_in_path(&input, wildcard_values);
+        if expanded.contains('{') {
+            continue; // engine wildcard — assume present
+        }
+        if is_glob_pattern(&expanded) {
+            let pattern = workdir.join(&expanded);
+            let matched = glob::glob(&pattern.to_string_lossy())
+                .map(|paths| paths.filter_map(|p| p.ok()).next().is_some())
+                .unwrap_or(false);
+            if !matched {
+                return true;
+            }
+        } else if !workdir.join(&expanded).exists() {
+            return true;
+        }
+    }
+    false
+}
+
 /// Check if a rule should be skipped based on output freshness.
 ///
 /// Returns true if all outputs exist and are newer than all inputs.
@@ -957,5 +992,90 @@ mod tests {
         let legacy = r#"{"completed_rules":["r"],"failed_rules":[],"benchmarks":{}}"#;
         let loaded: CheckpointState = serde_json::from_str(legacy).unwrap();
         assert!(loaded.input_manifests.is_empty());
+    }
+}
+
+// ─── Optional-input skipping (issue #75) ──────────────────────────────────
+
+#[cfg(test)]
+mod optional_tests {
+    use super::*;
+
+    fn rule_optional(name: &str, inputs: &[&str]) -> Rule {
+        Rule {
+            name: name.to_string(),
+            input: FilePatterns::List(inputs.iter().map(|s| s.to_string()).collect()),
+            optional: true,
+            ..Default::default()
+        }
+    }
+
+    fn wd(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("oxo-optional-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn missing_plain_input_is_missing() {
+        let dir = wd("plain");
+        let rule = rule_optional("r", &["data/nope.txt"]);
+        assert!(optional_inputs_missing(&rule, &dir, &HashMap::new()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn present_plain_input_is_not_missing() {
+        let dir = wd("present");
+        std::fs::create_dir_all(dir.join("data")).unwrap();
+        std::fs::write(dir.join("data/a.txt"), "x").unwrap();
+        let rule = rule_optional("r", &["data/a.txt"]);
+        assert!(!optional_inputs_missing(&rule, &dir, &HashMap::new()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn non_optional_rule_is_never_missing() {
+        let dir = wd("nonopt");
+        let rule = Rule {
+            name: "r".to_string(),
+            input: FilePatterns::List(vec!["missing.txt".to_string()]),
+            optional: false,
+            ..Default::default()
+        };
+        assert!(!optional_inputs_missing(&rule, &dir, &HashMap::new()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn glob_input_missing_only_when_nothing_matches() {
+        let dir = wd("glob");
+        let rule = rule_optional("r", &["data/*.txt"]);
+        assert!(optional_inputs_missing(&rule, &dir, &HashMap::new()));
+        std::fs::create_dir_all(dir.join("data")).unwrap();
+        std::fs::write(dir.join("data/a.txt"), "x").unwrap();
+        assert!(!optional_inputs_missing(&rule, &dir, &HashMap::new()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn engine_wildcard_input_is_assumed_present() {
+        let dir = wd("engine");
+        let rule = rule_optional("r", &["out/{sample}.txt"]);
+        assert!(!optional_inputs_missing(&rule, &dir, &HashMap::new()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn config_placeholder_is_expanded_before_checking() {
+        let dir = wd("config");
+        std::fs::create_dir_all(dir.join("real")).unwrap();
+        std::fs::write(dir.join("real/x.txt"), "x").unwrap();
+        let rule = rule_optional("r", &["{config.datadir}/x.txt"]);
+        let mut values = HashMap::new();
+        values.insert("config.datadir".to_string(), "real".to_string());
+        assert!(!optional_inputs_missing(&rule, &dir, &values));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

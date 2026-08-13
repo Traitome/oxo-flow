@@ -262,6 +262,29 @@ fn validate_config_value(
     Ok(())
 }
 
+/// Remove files in the environment cache that have not been touched for
+/// `max_age_days` (issue #75). Returns the number of files removed.
+fn cleanup_cache_dir(cache_dir: &std::path::Path, max_age_days: u64) -> usize {
+    let max_age = std::time::Duration::from_secs(max_age_days * 24 * 3600);
+    let now = std::time::SystemTime::now();
+    let mut removed = 0;
+    if let Ok(entries) = std::fs::read_dir(cache_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file()
+                && let Ok(metadata) = std::fs::metadata(&path)
+                && let Ok(modified) = metadata.modified()
+                && let Ok(age) = now.duration_since(modified)
+                && age > max_age
+                && std::fs::remove_file(&path).is_ok()
+            {
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_command(
     workflow: Option<PathBuf>,
@@ -735,7 +758,7 @@ pub async fn run_command(
             .map(|(k, v)| (k.clone(), v.max))
             .collect(),
         skip_env_setup,
-        cache_dir,
+        cache_dir: cache_dir.clone(),
         interpreter_map: config.workflow.interpreter_map.clone(),
     };
 
@@ -763,6 +786,17 @@ pub async fn run_command(
             breaches.len(),
             detail
         ));
+    }
+
+    // Disk pre-flight (issue #75): warn when a rule's declared
+    // `resources.disk` exceeds the free space in the workdir — a long run
+    // should not discover this mid-pipeline.
+    let disk_warnings = oxo_flow_core::scheduler::validate_disk_requirements(
+        &scheduled.iter().map(|r| (*r).clone()).collect::<Vec<_>>(),
+        workdir_actual.as_ref(),
+    );
+    for warning in &disk_warnings {
+        eprintln!("  {} {}", "Warning:".bold().yellow(), warning);
     }
 
     let exec_max_threads = exec_config.max_threads;
@@ -1205,6 +1239,18 @@ pub async fn run_command(
                             (rule_name, oxo_flow_core::executor::JobStatus::Success, record)
                         } else if record.status == oxo_flow_core::executor::JobStatus::Skipped {
                             skipped_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            // Surface the executor's skip reason (condition
+                            // false, optional inputs missing, outputs
+                            // up-to-date) — otherwise a submitted rule that
+                            // never executes looks indistinguishable from one
+                            // that ran.
+                            if !is_tty {
+                                let reason = record
+                                    .skip_reason
+                                    .as_deref()
+                                    .unwrap_or("skipped");
+                                eprintln!("  {} {} ({reason})", "⊝".dimmed(), rule_name);
+                            }
                             (rule_name, oxo_flow_core::executor::JobStatus::Skipped, record)
                         } else {
                             fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1449,6 +1495,22 @@ pub async fn run_command(
     let blocked = blocked.lock().await;
 
     progress.finish_and_clear();
+
+    // Environment-cache aging (issue #75): --cache-dir would grow without
+    // bound; files untouched for CACHE_MAX_AGE_DAYS are removed after the
+    // run so the next one starts clean.
+    const CACHE_MAX_AGE_DAYS: u64 = 30;
+    if let Some(ref cache_dir) = cache_dir {
+        let removed = cleanup_cache_dir(cache_dir, CACHE_MAX_AGE_DAYS);
+        if removed > 0 {
+            tracing::info!(
+                removed,
+                cache = %cache_dir.display(),
+                "aged environment-cache files removed"
+            );
+        }
+    }
+
     eprintln!(
         "\n{} {} succeeded, {} skipped, {} failed",
         "Done:".bold(),

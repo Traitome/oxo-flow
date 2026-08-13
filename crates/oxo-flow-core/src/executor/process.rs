@@ -704,6 +704,17 @@ impl LocalExecutor {
             }
         }
 
+        // Optional rules skip (no error) when their declared inputs are
+        // absent — e.g. analysis steps that only apply to some samples
+        // (issue #75). Evaluated before the freshness gate so a missing
+        // input never falls through to a failing shell command.
+        if super::checkpoint::optional_inputs_missing(rule, &self.config.workdir, wildcard_values) {
+            record.status = JobStatus::Skipped;
+            record.skip_reason = Some("optional inputs missing".to_string());
+            record.finished_at = Some(Utc::now());
+            return Ok(record);
+        }
+
         if !self.config.force_rerun
             && !self.config.force_rules.contains(&rule.name)
             && super::checkpoint::should_skip_rule(rule, &self.config.workdir, wildcard_values)
@@ -786,12 +797,15 @@ impl LocalExecutor {
                 message: format!("semaphore error: {e}"),
             })?;
 
-        // Hooks logic (simplified here for brevity, keeping it inline in execute_rule as in original)
+        // Hooks run the same placeholder rendering as the main command
+        // ({config.x}, {input}, {output}) so hook commands see expanded
+        // values instead of literal braces (issue #75).
         if let Some(ref pre_cmd) = rule.pre_exec {
-            validate_shell_safety(pre_cmd)?;
+            let rendered = render_shell_command(pre_cmd, rule, wildcard_values);
+            validate_shell_safety(&rendered)?;
             let pre_result = Command::new("sh")
                 .arg("-c")
-                .arg(pre_cmd)
+                .arg(&rendered)
                 .current_dir(&self.config.workdir)
                 .envs(&rule.envvars)
                 .output()
@@ -932,13 +946,12 @@ impl LocalExecutor {
             if missing.is_empty() {
                 record.status = JobStatus::Success;
                 if let Some(ref hook_cmd) = rule.on_success {
-                    let _ = Command::new("sh")
-                        .arg("-c")
-                        .arg(hook_cmd)
-                        .current_dir(&self.config.workdir)
-                        .envs(&rule.envvars)
-                        .output()
-                        .await;
+                    run_hook(
+                        &render_shell_command(hook_cmd, rule, wildcard_values),
+                        rule,
+                        &self.config.workdir,
+                    )
+                    .await;
                 }
             } else {
                 record.status = JobStatus::Failed;
@@ -961,26 +974,24 @@ impl LocalExecutor {
                 }
                 cleanup_temp_outputs(rule, &self.config.workdir).await;
                 if let Some(ref hook_cmd) = rule.on_failure {
-                    let _ = Command::new("sh")
-                        .arg("-c")
-                        .arg(hook_cmd)
-                        .current_dir(&self.config.workdir)
-                        .envs(&rule.envvars)
-                        .output()
-                        .await;
+                    run_hook(
+                        &render_shell_command(hook_cmd, rule, wildcard_values),
+                        rule,
+                        &self.config.workdir,
+                    )
+                    .await;
                 }
             }
         } else {
             // Keep the status set in the loop (Failed or TimedOut)
             cleanup_temp_outputs(rule, &self.config.workdir).await;
             if let Some(ref hook_cmd) = rule.on_failure {
-                let _ = Command::new("sh")
-                    .arg("-c")
-                    .arg(hook_cmd)
-                    .current_dir(&self.config.workdir)
-                    .envs(&rule.envvars)
-                    .output()
-                    .await;
+                run_hook(
+                    &render_shell_command(hook_cmd, rule, wildcard_values),
+                    rule,
+                    &self.config.workdir,
+                )
+                .await;
             }
         }
 
@@ -1098,6 +1109,33 @@ pub fn build_execution_command(
     }
 
     Some(base_cmd)
+}
+
+/// Execute a rendered rule hook (on_success / on_failure) in the rule's
+/// environment. Hooks are best-effort: their failure never changes the
+/// rule's own status (pre_exec is the exception and aborts the rule).
+async fn run_hook(cmd: &str, rule: &Rule, workdir: &std::path::Path) {
+    let result = Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .current_dir(workdir)
+        .envs(&rule.envvars)
+        .output()
+        .await;
+    match result {
+        Ok(output) if !output.status.success() => {
+            tracing::warn!(
+                rule = %rule.name,
+                code = %output.status.code().unwrap_or(-1),
+                stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                "rule hook failed (best-effort)"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(rule = %rule.name, error = %e, "failed to spawn rule hook");
+        }
+        _ => {}
+    }
 }
 
 pub fn render_shell_command(

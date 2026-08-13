@@ -430,7 +430,7 @@ memory = "32G"
 | `priority` | Integer | No | Execution priority (higher = runs first; default: 0) |
 | `target` | Boolean | No | Mark as default target (built when no explicit `-t` given) |
 | `required` | Boolean | No | Pipeline fails if this rule fails, even without downstream deps |
-| `optional` | Boolean | No | Rule is skipped if its inputs don't exist (no error) — parsed but not yet enforced, see [#75](https://github.com/Traitome/oxo-flow/issues/75) |
+| `optional` | Boolean | No | Rule is skipped (no error) when its inputs don't exist — literal globs count as missing only when they match nothing |
 | `benchmark` | String | No | Benchmark output path for performance data |
 | `log` | String | No | Log file path for rule execution output |
 | `group` | String | No | Job group label for cluster submission grouping |
@@ -581,11 +581,7 @@ retries = 3
 - **`on_success`**: Runs only after the main command completes with exit code 0.
 - **`on_failure`**: Runs if the main command fails, *after* all `retries` have been exhausted.
 
-!!! warning "Not yet enforced"
-
-    Hook fields are parsed and validated but not yet executed by the engine
-    (tracked in [#75](https://github.com/Traitome/oxo-flow/issues/75)).
-    Declaring them currently has no effect.
+Hook commands support the same `{config.x}` / `{input}` / `{output}` placeholder expansion as `shell`.
 
 **Output validation:** After a rule's shell command exits successfully (exit code 0),
 oxo-flow verifies that all declared `output` files exist on disk. If any declared output
@@ -614,6 +610,10 @@ gpu = 1
 disk = "200G"
 time_limit = "48h"
 ```
+
+Declared `disk` requirements are checked against the working directory's
+free space before a run starts — a shortfall prints a warning (the run
+proceeds; the warning exists so long jobs don't fail mid-pipeline).
 
 | Field | Type | Example | Description |
 |---|---|---|---|

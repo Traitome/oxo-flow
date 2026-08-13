@@ -4995,3 +4995,181 @@ fn cli_plain_input_change_rebuilds_rule() {
         "mutated\n"
     );
 }
+
+// ─── Issue #75 value recovery: optional / hooks / disk / cache ─────────────
+
+/// `optional = true` rules skip without error when their inputs are absent
+/// (previously the field was parsed but never enforced).
+#[test]
+fn cli_optional_rule_skips_when_inputs_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("opt75.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"opt75\"\n\n\
+         [[rules]]\nname = \"baseline\"\noutput = [\"base.txt\"]\n\
+         shell = \"echo base > base.txt\"\n\n\
+         [[rules]]\nname = \"optional_step\"\ninput = [\"data/absent.txt\"]\n\
+         output = [\"opt.txt\"]\noptional = true\n\
+         shell = \"cp data/absent.txt opt.txt\"\n",
+    )
+    .unwrap();
+
+    // Input missing: optional rule skips, the run succeeds.
+    let run1 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        run1.status.success(),
+        "run1 must succeed: {}",
+        String::from_utf8_lossy(&run1.stderr)
+    );
+    let stderr1 = String::from_utf8_lossy(&run1.stderr);
+    assert!(
+        stderr1.contains("1 skipped"),
+        "optional rule must skip, not fail: {stderr1}"
+    );
+    assert!(
+        stderr1.contains("optional inputs missing"),
+        "skip reason must be surfaced: {stderr1}"
+    );
+    assert!(
+        !stderr1.contains("✓ optional_step"),
+        "optional rule with missing inputs must not execute: {stderr1}"
+    );
+    assert!(!dir.path().join("opt.txt").exists());
+
+    // Input present: the rule executes.
+    fs::create_dir(dir.path().join("data")).unwrap();
+    fs::write(dir.path().join("data/absent.txt"), "here").unwrap();
+    let run2 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run2.status.success());
+    let stderr2 = String::from_utf8_lossy(&run2.stderr);
+    assert!(
+        stderr2.contains("Running: optional_step"),
+        "optional rule must run once its input exists: {stderr2}"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("opt.txt")).unwrap(),
+        "here"
+    );
+}
+
+/// Hook commands expand {config.x} / {input} / {output} placeholders like
+/// the main shell command (issue #75).
+#[test]
+fn cli_hooks_expand_config_placeholders() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("hooks75.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"hooks75\"\n\n\
+         [config]\ntag = \"EXPANDED\"\n\n\
+         [[rules]]\nname = \"hooky\"\noutput = [\"out.txt\"]\n\
+         shell = \"echo main > out.txt\"\n\
+         pre_exec = \"echo {config.tag} > pre.txt\"\n\
+         on_success = \"cp {output} success.txt\"\n",
+    )
+    .unwrap();
+
+    let run = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "run failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("pre.txt")).unwrap(),
+        "EXPANDED\n"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("success.txt")).unwrap(),
+        "main\n"
+    );
+}
+
+/// A rule declaring more `resources.disk` than the workdir has free space
+/// triggers a pre-flight warning before any rule executes (issue #75).
+#[test]
+fn cli_disk_requirement_preflight_warns() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("disk75.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"disk75\"\n\n\
+         [[rules]]\nname = \"greedy\"\noutput = [\"g.txt\"]\n\
+         shell = \"echo x > g.txt\"\n\n\
+         [rules.resources]\ndisk = \"999999999G\"\n",
+    )
+    .unwrap();
+
+    let run = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run.status.success());
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("declares 999999999G disk but only"),
+        "pre-flight disk warning expected: {stderr}"
+    );
+}
+
+/// --cache-dir entries older than 30 days are removed after the run
+/// (issue #75); fresh entries survive.
+#[test]
+fn cli_cache_dir_aging_cleans_stale_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("cache75.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"cache75\"\n\n\
+         [[rules]]\nname = \"one\"\noutput = [\"one.txt\"]\n\
+         shell = \"echo x > one.txt\"\n",
+    )
+    .unwrap();
+    let cache = dir.path().join("env-cache");
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(cache.join("stale.txt"), "old").unwrap();
+    fs::write(cache.join("fresh.txt"), "new").unwrap();
+    // Backdate the stale entry beyond the 30-day window.
+    let touch = std::process::Command::new("touch")
+        .arg("-t")
+        .arg("200001010000")
+        .arg(cache.join("stale.txt"))
+        .status()
+        .unwrap();
+    assert!(touch.success(), "touch must backdate the stale file");
+
+    let run = oxo_flow_cmd()
+        .args([
+            "run",
+            wf.to_str().unwrap(),
+            "--cache-dir",
+            cache.to_str().unwrap(),
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run.status.success());
+
+    assert!(
+        !cache.join("stale.txt").exists(),
+        "stale cache entry must be removed"
+    );
+    assert!(
+        cache.join("fresh.txt").exists(),
+        "fresh cache entry must survive"
+    );
+}

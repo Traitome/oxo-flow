@@ -35,7 +35,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--max-memory` | — | `0` (auto-detect) | Maximum memory in MB available for execution |
 | `--skip-env-setup` | — | — | Skip environment setup (assume environments are ready) |
 | `--skip-ref-build` | — | — | Skip automatic reference/index building (assume pre-built) |
-| `--cache-dir` | — | — | Directory for caching environment setup state |
+| `--cache-dir` | — | — | Directory for caching environment setup state (entries untouched for 30 days are cleaned up after each run) |
 | `--resume-failed` | — | — | Resume only failed rules from a previous run |
 | `--profile` | — | — | Execution profile name, loaded from `profiles/<NAME>.toml` (use `oxo-flow profile` to manage) |
 | `--provenance` | — | — | Track output file checksums for later verification |
