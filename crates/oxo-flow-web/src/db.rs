@@ -88,6 +88,7 @@ pub async fn init_db(database_url: &str) -> Result<()> {
             action TEXT NOT NULL,
             target TEXT NOT NULL,
             result TEXT NOT NULL DEFAULT 'success',
+            metadata TEXT,
             timestamp DATETIME NOT NULL,
             FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
         );
@@ -454,15 +455,17 @@ pub async fn delete_session(token: &str) -> Result<()> {
 
 pub async fn insert_run(run: &Run) -> Result<()> {
     sqlx::query(
-        "INSERT INTO runs (id, user_id, workflow_name, status, pid, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, pid, workdir, started_at, finished_at, created_at) VALUES (?, ?, ?, '', ?, ?, 'parsing', ?, NULL, ?, ?, ?)"
     )
     .bind(&run.id)
     .bind(&run.user_id)
+    .bind(None::<String>)
     .bind(&run.workflow_name)
     .bind(&run.status)
     .bind(run.pid)
     .bind(run.started_at)
     .bind(run.finished_at)
+    .bind(Utc::now())
     .execute(pool())
     .await?;
     Ok(())
@@ -472,7 +475,7 @@ pub async fn log_action(user_id: &str, action: &str, target: &str) -> Result<()>
     let id = Uuid::new_v4().to_string();
     let now = Utc::now();
     sqlx::query(
-        "INSERT INTO audit_logs (id, user_id, action, target, result, timestamp) VALUES (?, ?, ?, ?, 'success', ?)",
+        "INSERT INTO audit_logs (id, user_id, action, target, result, metadata, timestamp) VALUES (?, ?, ?, ?, 'success', ?, ?)",
     )
     .bind(id)
     .bind(user_id)

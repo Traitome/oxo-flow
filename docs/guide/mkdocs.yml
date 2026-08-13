@@ -132,6 +132,7 @@ nav:
       - "15 — Paired Experiment-Control (Pairs)": gallery/paired-experiment-control-pairs.md
   - How-to Guides:
       - Create a Workflow: how-to/create-workflow.md
+      - Build on the Web Canvas: how-to/web-editor.md
       - Use Environments: how-to/use-environments.md
       - Run on a Cluster: how-to/run-on-cluster.md
       - Resource Tuning: how-to/resource-tuning.md

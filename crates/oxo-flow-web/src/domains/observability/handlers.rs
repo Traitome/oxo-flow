@@ -191,3 +191,8 @@ pub async fn get_audit_logs(
 
     Ok(Json(AuditLogResponse { entries, days }))
 }
+
+/// GET /api/hpc — scheduler status (hpc mode only).
+pub async fn hpc_status() -> axum::Json<crate::hpc::HpcStatus> {
+    axum::Json(crate::hpc::get_hpc_status())
+}

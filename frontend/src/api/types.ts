@@ -44,10 +44,50 @@ export interface ParseResponse {
   rules: Array<{ name: string; inputs: string[]; outputs: string[]; environment: string; threads: number }>;
   dag: DagJson; stats: Record<string, unknown>;
 }
+export interface DagJsonNode {
+  id: string;
+  label: string;
+  color: string;
+  environment: string;
+  /** Complete serialized rule — canvas cards and the inspector read from here. */
+  rule: Record<string, unknown>;
+}
+
+export interface DagJsonEdge {
+  from: string;
+  to: string;
+  /** "declared" = explicit depends_on; "file" = inferred from input/output match. */
+  kind: 'declared' | 'file';
+}
+
 export interface DagJson {
-  nodes: Array<{ id: string; label: string; color: string }>;
-  edges: Array<{ source: string; target: string }>;
+  nodes: DagJsonNode[];
+  edges: DagJsonEdge[];
   parallel_groups?: Array<Array<string>>; critical_path?: Array<string>;
+}
+
+export interface KnowledgeTool {
+  name: string;
+  version: string;
+  summary: string;
+  platforms: string[];
+}
+
+export interface KnowledgeToolsResponse {
+  total: number;
+  tools: KnowledgeTool[];
+}
+
+export interface KnowledgeSkill {
+  name: string;
+  description: string;
+  domain: string;
+  primary_tool: string;
+}
+
+export interface KnowledgeSkillsResponse {
+  total: number;
+  skills: KnowledgeSkill[];
 }
 
 // ── Runs ──
@@ -101,7 +141,7 @@ export interface SearchResponse { query: string; total: number; results: Array<{
 
 // ── Legacy compat ──
 export interface GenerateResponse { toml_content: string; workflow_name: string; rules_count: number; execution_order: string[]; description: string; valid: boolean; }
-export interface WorkflowDetail extends ParseResponse {}
+export type WorkflowDetail = ParseResponse;
 export interface RunResponse {
   run_id: string;
   status: string;
@@ -130,7 +170,7 @@ export interface ChatEventV2 {
   status?: string;
   progress?: number;
   action_type?: string;
-  data?: any;
+  data?: unknown;
   code?: string;
   message?: string;
   session_id?: string;
@@ -150,7 +190,7 @@ export interface ChatRequestV2 {
 // Data Perception
 export interface DataFindings {
   field: string;
-  value: any;
+  value: unknown;
   confidence: number;
   source: string;
   evidence: string;
@@ -167,7 +207,7 @@ export interface DataPerceptionReport {
 export interface DagEditCommand {
   source: 'dag_editor' | 'chat' | 'proposal';
   operation: 'add_rule' | 'remove_rule' | 'connect' | 'disconnect' | 'update_params' | 'replace_tool' | 'reorder';
-  payload: any;
+  payload: Record<string, unknown>;
 }
 
 export interface DagEditResponse {
@@ -229,11 +269,11 @@ export interface ReportFinding {
 export interface ChartConfig {
   chart_type: string;
   title: string;
-  spec: any;
+  spec: Record<string, unknown>;
 }
 
 export interface ReportData {
-  qc_summary: any;
+  qc_summary: Record<string, unknown>;
   key_findings: ReportFinding[];
   narrative_md: string;
   caveats: string[];

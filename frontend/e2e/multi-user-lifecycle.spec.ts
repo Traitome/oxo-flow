@@ -10,7 +10,7 @@ test.describe('Multi-User Lifecycle Simulation', () => {
       data: { username: 'admin', password: 'admin' },
     });
     expect(loginResp.ok() || loginResp.status() === 401).toBeTruthy();
-    const loginBody = await loginResp.json();
+    await loginResp.json();
 
     // If auth failed, try creating the user anyway (personal mode, no auth needed)
     const createResp = await request.post('/api/users', {
@@ -196,9 +196,10 @@ test.describe('Multi-User Lifecycle Simulation', () => {
     const results = await request.get(`/api/runs/${runId}/results`);
     expect(results.ok() || results.status() === 404).toBeTruthy();
 
-    // Cancel run
+    // Cancel run — the run may already have finished (409 RUN_NOT_ACTIVE for
+    // terminal states is the contract since P0's real process control).
     const cancel = await request.post(`/api/runs/${runId}/cancel`, { data: {} });
-    expect(cancel.ok() || cancel.status() === 404).toBeTruthy();
+    expect(cancel.ok() || cancel.status() === 404 || cancel.status() === 409).toBeTruthy();
   });
 
   // ── AI Companion ──
@@ -234,6 +235,7 @@ test.describe('Multi-User Lifecycle Simulation', () => {
     expect(health.ok()).toBeTruthy();
     const h = await health.json();
     expect(['ok', 'healthy', 'degraded']).toContain(h.status);
-    expect(h.version).toBe('0.9.2');
+    // The version drifts with releases — assert the shape, not a frozen value.
+    expect(h.version).toMatch(/^\d+\.\d+\.\d+$/);
   });
 });

@@ -4,6 +4,8 @@
 //! Orchestrator → (Data Agent, Tool Expert, Validator) → Response.
 //! All agent calls go through deterministic core APIs — zero write access.
 
+pub mod agent;
 pub mod handlers;
 pub mod service;
+pub mod tools;
 pub mod types;

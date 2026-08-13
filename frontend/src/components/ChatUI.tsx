@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Loader2, Check } from 'lucide-react';
+import { Send, Bot, User, Loader2, Check, Wrench } from 'lucide-react';
 import { usePipelineSession, type ChatContextType, type ChatMessage, type ChatAction } from '../context/PipelineSession';
 
 const CONTEXT_LABELS: Record<ChatContextType, string> = {
@@ -18,8 +18,8 @@ const PLACEHOLDERS: Record<ChatContextType, string> = {
 
 interface ChatUIProps {
   context?: ChatContextType;
-  onPipelineReady?: (data: any) => void;
-  onDataReport?: (report: any) => void;
+  onPipelineReady?: (data: { toml_content?: string; validation?: unknown; pipeline_id?: string }) => void;
+  onDataReport?: (report: Record<string, unknown>) => void;
 }
 
 export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatUIProps) {
@@ -29,7 +29,7 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
   const [loading, setLoading] = useState(false);
   const [agents, setAgents] = useState<Record<string, string>>({});
   const chatRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // Sync messages to session context whenever they change
   useEffect(() => {
@@ -67,7 +67,7 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
       const decoder = new TextDecoder();
       let buffer = '';
       let doneReading = false;
-      let finalPipelineData: any = null;
+      let finalPipelineData: { toml_content?: string; validation?: unknown; pipeline_id?: string } | null = null;
 
       while (!doneReading) {
         const { value, done } = await reader.read();
@@ -88,16 +88,25 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
           
           if (currentEvent && currentData) {
             const payload = JSON.parse(currentData);
-            if (currentEvent === 'agent') {
-              setAgents(prev => ({...prev, [payload.agent]: payload.status}));
-              setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, agentStatus: `${payload.agent}: ${payload.status}` } : m));
+            if (currentEvent === 'status') {
+              setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, agentStatus: payload.message } : m));
+            } else if (currentEvent === 'tool_call') {
+              setMessages(prev => prev.map(m => m.id === assistantId ? {
+                ...m,
+                toolCalls: [...(m.toolCalls ?? []), { id: `${payload.name}-${Date.now()}`, name: payload.name, args: typeof payload.args === 'string' ? payload.args : JSON.stringify(payload.args) }],
+              } : m));
+            } else if (currentEvent === 'tool_result') {
+              setMessages(prev => prev.map(m => m.id === assistantId ? {
+                ...m,
+                toolCalls: (m.toolCalls ?? []).map((tc, i, arr) =>
+                  i === arr.length - 1 && tc.name === payload.name ? { ...tc, summary: payload.summary } : tc
+                ),
+              } : m));
             } else if (currentEvent === 'text') {
               setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: m.content + payload.chunk } : m));
             } else if (currentEvent === 'action') {
               if (payload.action_type === 'pipeline_ready') {
                 finalPipelineData = payload.data;
-              } else if (payload.action_type === 'data_report') {
-                // handle data report
               }
             } else if (currentEvent === 'done') {
               doneReading = true;
@@ -127,9 +136,10 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
         setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, agentStatus: undefined } : m));
       }
       setAgents({});
-    } catch (e: any) {
+    } catch (e: unknown) {
+      const errMsg = e instanceof Error ? e.message : 'Connection error.';
       setMessages(prev => prev.map(m =>
-        m.id === assistantId ? { ...m, content: m.content + `\n❌ ${e.message || 'Connection error.'}`, agentStatus: undefined } : m
+        m.id === assistantId ? { ...m, content: m.content + `\n❌ ${errMsg}`, agentStatus: undefined } : m
       ));
     }
     setLoading(false);
@@ -179,6 +189,27 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
                   <Loader2 size={12} className="spin" /> {msg.agentStatus}
                 </div>
               )}
+              {msg.toolCalls && msg.toolCalls.length > 0 && (
+                <div className="chat-tool-cards">
+                  {msg.toolCalls.map((tc) => (
+                    <details className="chat-tool-card" key={tc.id}>
+                      <summary>
+                        <Wrench size={12} />
+                        <span className="chat-tool-name">{tc.name}</span>
+                        {tc.summary ? (
+                          <span className="chat-tool-done">✓</span>
+                        ) : (
+                          <span className="chat-tool-pending"><Loader2 size={11} className="spin" /></span>
+                        )}
+                      </summary>
+                      <div className="chat-tool-body">
+                        <div className="chat-tool-args">{tc.args}</div>
+                        {tc.summary && <div className="chat-tool-summary">{tc.summary}</div>}
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              )}
               {msg.content && (
                 <div style={{ fontSize: '0.85rem', lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.content}</div>
               )}
@@ -218,7 +249,7 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
       {/* Input */}
       <div style={{ padding: '12px 16px', borderTop: '1px solid var(--color-border)', display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
         <textarea
-          ref={inputRef as any}
+          ref={inputRef}
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }}}

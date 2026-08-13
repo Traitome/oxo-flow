@@ -133,34 +133,11 @@ pub async fn explain(Json(req): Json<ExplainRequest>) -> ApiResult<ExplainRespon
             .unwrap_or(None);
 
         if let Some(run) = run {
-            let nodes: Vec<models::RunNodeRow> =
-                sqlx::query_as("SELECT * FROM run_nodes WHERE run_id = ? ORDER BY attempt ASC")
-                    .bind(&req.run_id)
-                    .fetch_all(pool)
-                    .await
-                    .unwrap_or_default();
-
-            let node_items: Vec<crate::domains::execution::types::NodeStatusItem> = nodes
-                .iter()
-                .map(|n| {
-                    use crate::domains::execution::types::NodeStatus;
-                    let status = match n.status.as_str() {
-                        "success" => NodeStatus::Success,
-                        "failed" => NodeStatus::Failed,
-                        "running" => NodeStatus::Running,
-                        "skipped" => NodeStatus::Skipped,
-                        _ => NodeStatus::Pending,
-                    };
-                    crate::domains::execution::types::NodeStatusItem {
-                        rule: n.rule_name.clone(),
-                        status,
-                        started_at: n.started_at.clone(),
-                        duration_ms: None,
-                        exit_code: n.exit_code,
-                        progress_pct: None,
-                    }
-                })
-                .collect();
+            // Node status comes from the engine's checkpoint state.
+            let node_items = crate::domains::execution::checkpoint_status::load_node_statuses(
+                std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
+                run.status == "running",
+            );
 
             let log = run
                 .workdir
@@ -334,6 +311,54 @@ pub async fn test_ai_config(Json(_req): Json<AiConfigRequest>) -> ApiResult<AiTe
 // AI Config - Three-tier priority
 // ---------------------------------------------------------------------------
 
+/// Restore the AI registry from the DB-persisted config at startup.
+///
+/// Env vars (via `init_from_env`) take precedence; the DB tier (user row,
+/// then server row) fills in when env did not configure a provider. Without
+/// this, a key saved through the settings UI would be lost on restart.
+pub async fn restore_ai_config_from_db() {
+    let Ok(pool) = crate::infra::db::sqlite::try_pool() else {
+        return;
+    };
+    // Skip when env explicitly configured a provider — env is the top tier.
+    if std::env::var("OXO_FLOW_AI_PROVIDER").is_ok() {
+        return;
+    }
+    let user_row = sqlx::query_as::<_, (String, String, String, String)>(
+        "SELECT provider, api_key, COALESCE(api_url, ''), COALESCE(model, '') \
+         FROM ai_provider_config WHERE user_id = 'default' \
+         ORDER BY updated_at DESC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    // Server tier fallback: rows with user_id IS NULL.
+    let row = match user_row {
+        Some(r) => Some(r),
+        None => sqlx::query_as::<_, (String, String, String, String)>(
+            "SELECT provider, api_key, COALESCE(api_url, ''), COALESCE(model, '') \
+             FROM ai_provider_config WHERE user_id IS NULL \
+             ORDER BY updated_at DESC LIMIT 1",
+        )
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten(),
+    };
+    if let Some((provider, api_key, api_url, model)) = row
+        && !api_key.is_empty()
+    {
+        let _ = crate::ai_provider::AiProviderRegistry::global().reconfigure(
+            &provider,
+            Some(api_key),
+            Some(api_url),
+            Some(model),
+        );
+        tracing::info!("AI registry restored from DB tier: provider={provider}");
+    }
+}
+
 /// GET /api/ai/config/effective
 pub async fn get_ai_config_effective() -> ApiResult<serde_json::Value> {
     use crate::ai_provider::AiProviderRegistry;
@@ -343,6 +368,23 @@ pub async fn get_ai_config_effective() -> ApiResult<serde_json::Value> {
     let env_provider = std::env::var("OXO_FLOW_AI_PROVIDER").ok();
     let env_model = std::env::var("OXO_FLOW_AI_MODEL").ok();
     let env_url = std::env::var("OXO_FLOW_AI_API_URL").ok();
+
+    // The user tier is the 'default' user's saved row (personal mode) — the
+    // settings UI reads/writes it via PUT /api/ai/config/user.
+    let user_row: Option<(String, Option<String>, Option<String>)> =
+        match crate::infra::db::sqlite::try_pool() {
+            Ok(pool) => sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
+                "SELECT provider, model, api_url FROM ai_provider_config WHERE user_id = 'default' ORDER BY updated_at DESC LIMIT 1",
+            )
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None),
+            Err(_) => None,
+        };
+    let (user_provider, user_model, user_url) = match user_row {
+        Some((p, m, u)) => (Some(p), m, u),
+        None => (None, None, None),
+    };
 
     Ok(Json(serde_json::json!({
         "effective": {
@@ -357,7 +399,9 @@ pub async fn get_ai_config_effective() -> ApiResult<serde_json::Value> {
             "env_url": env_url,
             "server_provider": config.provider,
             "server_model": config.model,
-            "user_provider": serde_json::Value::Null,
+            "user_provider": user_provider,
+            "user_model": user_model,
+            "user_api_url": user_url,
         },
         "resolution_order": ["user_settings", "server_config", "environment", "defaults"],
     })))
@@ -519,4 +563,50 @@ pub async fn update_user_ai_config(
     Ok(Json(
         serde_json::json!({"status": "updated", "provider": provider}),
     ))
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge search — the editor palette's grounded tool source
+// ---------------------------------------------------------------------------
+
+/// Query parameters for the knowledge search endpoints.
+#[derive(Debug, serde::Deserialize)]
+pub struct KnowledgeQuery {
+    #[serde(default)]
+    pub q: String,
+    pub limit: Option<usize>,
+}
+
+/// GET /api/knowledge/tools — search the embedded Bioconda tool database.
+pub async fn knowledge_tools(
+    axum::extract::Query(params): axum::extract::Query<KnowledgeQuery>,
+) -> ApiResult<serde_json::Value> {
+    let limit = params.limit.unwrap_or(20).clamp(1, 50);
+    let tools = oxo_flow_ai::knowledge::bioconda::search_tools(&params.q, limit);
+    Ok(Json(serde_json::json!({
+        "total": oxo_flow_ai::knowledge::bioconda::tool_count(),
+        "tools": tools.iter().map(|t| serde_json::json!({
+            "name": t.name,
+            "version": t.version,
+            "summary": t.summary,
+            "platforms": t.platforms,
+        })).collect::<Vec<_>>(),
+    })))
+}
+
+/// GET /api/knowledge/skills — search the embedded bioSkills database.
+pub async fn knowledge_skills(
+    axum::extract::Query(params): axum::extract::Query<KnowledgeQuery>,
+) -> ApiResult<serde_json::Value> {
+    let limit = params.limit.unwrap_or(20).clamp(1, 50);
+    let skills = oxo_flow_ai::knowledge::skills::search_skills(&params.q, limit);
+    Ok(Json(serde_json::json!({
+        "total": oxo_flow_ai::knowledge::skills::skill_count(),
+        "skills": skills.iter().map(|s| serde_json::json!({
+            "name": s.name,
+            "description": s.description,
+            "domain": s.domain,
+            "primary_tool": s.primary_tool,
+        })).collect::<Vec<_>>(),
+    })))
 }

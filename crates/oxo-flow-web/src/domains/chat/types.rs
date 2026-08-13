@@ -9,6 +9,9 @@ pub struct ChatRequest {
     pub message: String,
     /// Optional context for the AI (data paths, intent hints, etc.).
     pub context: Option<ChatContext>,
+    /// Optional run id — scopes the read-only run-diagnosis tools.
+    #[serde(default)]
+    pub run_id: Option<String>,
 }
 
 /// Context provided with a chat message to help AI understand the user's setup.

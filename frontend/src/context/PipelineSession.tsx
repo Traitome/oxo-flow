@@ -1,9 +1,16 @@
-import { createContext, useContext, useReducer, useEffect, type Dispatch, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, type Dispatch, type ReactNode } from 'react';
 import type { DagJson } from '../api/types';
 
 // ── Types ──
 
 export type ChatContextType = 'dashboard' | 'editor' | 'monitor' | 'report';
+
+export interface ChatMessageToolCall {
+  id: string;
+  name: string;
+  args: string;
+  summary?: string;
+}
 
 export interface ChatMessage {
   id: string;
@@ -11,6 +18,8 @@ export interface ChatMessage {
   content: string;
   actions?: ChatAction[];
   agentStatus?: string;
+  /** Grounded tool calls the agent made (rendered as collapsible cards). */
+  toolCalls?: ChatMessageToolCall[];
 }
 
 export interface ChatAction {
@@ -157,21 +166,54 @@ export function PipelineSessionProvider({ children }: { children: ReactNode }) {
     saveState(state);
   }, [state.pipelineToml, state.dagData, state.activeRunId, state.chatMessages]);
 
-  const ctx: SessionContextValue = {
-    state,
-    dispatch,
-    setPipelineToml: (toml) => dispatch({ type: 'SET_PIPELINE_TOML', payload: toml }),
-    setDagData: (dag) => dispatch({ type: 'SET_DAG_DATA', payload: dag }),
-    setActiveRunId: (id) => dispatch({ type: 'SET_ACTIVE_RUN_ID', payload: id }),
-    setRunResult: (result) => dispatch({ type: 'SET_RUN_RESULT', payload: result }),
-    setChatContext: (c) => dispatch({ type: 'SET_CHAT_CONTEXT', payload: c }),
-    setChatMessages: (ctx, msgs) => dispatch({ type: 'SET_CHAT_MESSAGES', payload: { context: ctx, messages: msgs } }),
-    clearSession: () => dispatch({ type: 'CLEAR_SESSION' }),
-  };
+  // Stable setter identities: consumers can list them in effect deps
+  // without retriggering on unrelated context changes.
+  const setPipelineToml = useCallback(
+    (toml: string) => dispatch({ type: 'SET_PIPELINE_TOML', payload: toml }),
+    [],
+  );
+  const setDagData = useCallback(
+    (dag: DagJson | null) => dispatch({ type: 'SET_DAG_DATA', payload: dag }),
+    [],
+  );
+  const setActiveRunId = useCallback(
+    (id: string | null) => dispatch({ type: 'SET_ACTIVE_RUN_ID', payload: id }),
+    [],
+  );
+  const setRunResult = useCallback(
+    (result: RunResult | null) => dispatch({ type: 'SET_RUN_RESULT', payload: result }),
+    [],
+  );
+  const setChatContext = useCallback(
+    (c: ChatContextType) => dispatch({ type: 'SET_CHAT_CONTEXT', payload: c }),
+    [],
+  );
+  const setChatMessages = useCallback(
+    (ctx: ChatContextType, msgs: ChatMessage[]) =>
+      dispatch({ type: 'SET_CHAT_MESSAGES', payload: { context: ctx, messages: msgs } }),
+    [],
+  );
+  const clearSession = useCallback(() => dispatch({ type: 'CLEAR_SESSION' }), []);
+
+  const ctx: SessionContextValue = useMemo(
+    () => ({
+      state,
+      dispatch,
+      setPipelineToml,
+      setDagData,
+      setActiveRunId,
+      setRunResult,
+      setChatContext,
+      setChatMessages,
+      clearSession,
+    }),
+    [state, dispatch, setPipelineToml, setDagData, setActiveRunId, setRunResult, setChatContext, setChatMessages, clearSession],
+  );
 
   return <SessionCtx.Provider value={ctx}>{children}</SessionCtx.Provider>;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function usePipelineSession(): SessionContextValue {
   const ctx = useContext(SessionCtx);
   if (!ctx) throw new Error('usePipelineSession must be used within PipelineSessionProvider');

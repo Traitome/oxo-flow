@@ -209,6 +209,94 @@ fn extract_toml_from_response(response: &str) -> Option<String> {
     None
 }
 
+// ── Grounded agent loop (real Orchestrator + knowledge tools) ──────────────
+
+use oxo_flow_ai::agent::AgentOutcome;
+use oxo_flow_ai::agent::events::{AgentEvent, AgentEventSink};
+use oxo_flow_ai::agent::orchestrator::Orchestrator;
+
+/// A live chat-agent run: the SSE handler drains `events` while the loop
+/// executes, and receives the final outcome on `outcome`.
+/// One item on the live chat-agent channel: an observable agent event, or
+/// the terminal outcome (sent last, before the channel closes).
+pub enum ChatStreamEvent {
+    Agent(AgentEvent),
+    /// Boxed: `AgentOutcome` carries the session record, which is much larger
+    /// than the event variants — boxing keeps the channel items small.
+    Outcome(Box<Result<AgentOutcome, String>>),
+}
+
+/// A live chat-agent run: the SSE handler drains `events` until the channel
+/// closes — a single ordered source, no separate oneshot.
+pub struct ChatAgentRun {
+    pub events: tokio::sync::mpsc::Receiver<ChatStreamEvent>,
+}
+
+/// Spawn the agent loop on the tokio runtime. Events are buffered (64) —
+/// the handler must keep draining to avoid backpressure.
+pub fn spawn_chat_agent(
+    message: String,
+    _session_id: String,
+    context: Option<ChatContext>,
+    run_id: Option<String>,
+) -> ChatAgentRun {
+    let (event_tx, event_rx) = tokio::sync::mpsc::channel::<ChatStreamEvent>(64);
+    let outcome_tx = event_tx.clone();
+    tokio::spawn(async move {
+        // Non-blocking: the sink is sync and runs inside the tokio runtime.
+        // A full or closed channel drops the event (observability loss only;
+        // on client disconnect the closing channel ends the SSE stream,
+        // which is the cancellation path).
+        let mut sink = move |e: AgentEvent| {
+            let _ = event_tx.try_send(ChatStreamEvent::Agent(e));
+        };
+        let result = run_chat_agent(
+            &message,
+            context.as_ref(),
+            run_id.as_deref(),
+            Some(&mut sink),
+        )
+        .await;
+        let _ = outcome_tx.try_send(ChatStreamEvent::Outcome(Box::new(result)));
+    });
+    ChatAgentRun { events: event_rx }
+}
+
+pub async fn run_chat_agent(
+    message: &str,
+    context: Option<&ChatContext>,
+    run_id: Option<&str>,
+    sink: Option<&mut AgentEventSink>,
+) -> Result<AgentOutcome, String> {
+    let provider = AiProviderRegistry::global().get_provider();
+    let agent = super::agent::ChatAgent::new(infer_intent(message), message.to_string());
+    let ctx = oxo_flow_ai::agent::AgentContext {
+        intent: infer_intent(message),
+        command: message.to_string(),
+        workflow_path: None,
+        workflow_content: None,
+        external_sources: vec![],
+        max_rounds: 6,
+        tool_registry: super::tools::build_chat_tool_registry(run_id),
+        tool_approver: None,
+        session: oxo_flow_ai::session::AiSession::new("web-chat", "chat", "web", "web-provider"),
+    };
+    // Context-supplied data paths feed the user prompt (deterministic
+    // data perception stays out of the model loop).
+    if let Some(ctx) = context
+        && let Some(paths) = &ctx.data_paths
+        && !paths.is_empty()
+    {
+        let _ = crate::domains::workflow::data::analyze_files(paths, Some(2));
+    }
+
+    let orchestrator = Orchestrator::new(provider, 6);
+    orchestrator
+        .execute_with_sink(&agent, &ctx, sink, None)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

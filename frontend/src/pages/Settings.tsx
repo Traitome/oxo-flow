@@ -34,7 +34,7 @@ export default function Settings() {
   const [model, setModel] = useState('');
   const [testResult, setTestResult] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [refs, setRefs] = useState<{ installed: any[]; missing: string[] } | null>(null);
+  const [refs, setRefs] = useState<{ installed: Array<Record<string, unknown>>; missing: string[] } | null>(null);
 
 
   useEffect(() => {
@@ -131,11 +131,11 @@ export default function Settings() {
             Base path: <code>/data/references</code>
           </div>
           <div style={{ display: 'grid', gap: '6px' }}>
-            {refs?.installed?.map((ref: any, idx: number) => (
+            {refs?.installed?.map((ref: Record<string, unknown>, idx: number) => (
               <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border-light)' }}>
                 <div>
-                  <strong>{ref.genome || 'unknown'}</strong>
-                  <span style={{ color: 'var(--color-text-secondary)', marginLeft: '8px', fontSize: '0.8rem' }}>{ref.components?.join(', ')}</span>
+                  <strong>{String(ref.genome || 'unknown')}</strong>
+                  <span style={{ color: 'var(--color-text-secondary)', marginLeft: '8px', fontSize: '0.8rem' }}>{Array.isArray(ref.components) ? ref.components.join(', ') : ''}</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <span className="status-badge success">Complete</span>

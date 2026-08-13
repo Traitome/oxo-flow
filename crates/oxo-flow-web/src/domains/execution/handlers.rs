@@ -8,6 +8,7 @@ use crate::domains::ai::agents::report_agent;
 use crate::domains::ai::agents::types::ReportFile;
 use axum::{Json, extract::Path, http::StatusCode};
 
+use super::checkpoint_status;
 use super::service;
 use super::types::*;
 use crate::domains::workflow::handlers::ApiError;
@@ -175,6 +176,26 @@ pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateR
                     .get("max_jobs")
                     .and_then(|v| v.as_u64())
                     .map(|j| j as usize),
+                samples: req
+                    .get("samples")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str())
+                            .map(String::from)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                targets: req
+                    .get("targets")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str())
+                            .map(String::from)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             },
         );
     }
@@ -302,50 +323,21 @@ pub async fn get_run_status(Path(id): Path<String>) -> ApiResult<RunStatusRespon
         )
     })?;
 
-    let nodes: Vec<models::RunNodeRow> =
-        sqlx::query_as("SELECT * FROM run_nodes WHERE run_id = ? ORDER BY attempt ASC")
-            .bind(&id)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error fetching run nodes for status: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
-
-    let node_items: Vec<NodeStatusItem> = nodes
-        .into_iter()
-        .map(|n| {
-            let status = match n.status.as_str() {
-                "pending" => NodeStatus::Pending,
-                "running" => NodeStatus::Running,
-                "success" => NodeStatus::Success,
-                "failed" => NodeStatus::Failed,
-                "skipped" => NodeStatus::Skipped,
-                _ => NodeStatus::Pending,
-            };
-            let started_at = n.started_at.clone();
-            let finished_at = n.finished_at.clone();
-            let duration_ms = finished_at.as_ref().and_then(|f| {
-                started_at.as_ref().and_then(|s| {
-                    let sf = chrono::NaiveDateTime::parse_from_str(s, "%+").ok()?;
-                    let ff = chrono::NaiveDateTime::parse_from_str(f, "%+").ok()?;
-                    Some((ff - sf).num_milliseconds().max(0) as u64)
-                })
-            });
-            NodeStatusItem {
-                rule: n.rule_name,
-                status,
-                started_at: n.started_at,
-                duration_ms,
-                exit_code: n.exit_code,
-                progress_pct: None,
-            }
-        })
-        .collect();
+    // Node status comes from the engine's checkpoint state (single source of
+    // truth), merged with the full rule list so unrun rules show as pending.
+    let dag = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
+        .ok()
+        .and_then(|wf| oxo_flow_core::dag::WorkflowDag::from_rules(&wf.rules).ok());
+    let node_items = checkpoint_status::load_node_statuses(
+        std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
+        run.status == "running",
+    );
+    let node_items = match &dag {
+        Some(d) => {
+            checkpoint_status::with_all_rules(node_items, &d.execution_order().unwrap_or_default())
+        }
+        None => node_items,
+    };
 
     let overall = service::compute_overall_status(&node_items);
 
@@ -394,45 +386,34 @@ pub async fn get_dag_status(Path(id): Path<String>) -> ApiResult<DagStatusRespon
         .ok()
         .and_then(|wf| oxo_flow_core::dag::WorkflowDag::from_rules(&wf.rules).ok());
 
-    let nodes: Vec<models::RunNodeRow> =
-        sqlx::query_as("SELECT * FROM run_nodes WHERE run_id = ? ORDER BY attempt ASC")
-            .bind(&id)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error fetching run nodes for DAG status: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
-
-    let dag_nodes: Vec<DagNode> = nodes
+    // Node status comes from the engine's checkpoint state, merged with the
+    // full rule list so unrun rules show as pending.
+    let node_items = checkpoint_status::load_node_statuses(
+        std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
+        run.status == "running",
+    );
+    let node_items = match &dag {
+        Some(d) => {
+            checkpoint_status::with_all_rules(node_items, &d.execution_order().unwrap_or_default())
+        }
+        None => node_items,
+    };
+    let dag_nodes: Vec<DagNode> = node_items
         .iter()
         .map(|n| {
-            let color = match n.status.as_str() {
-                "success" => "green",
-                "running" => "blue",
-                "failed" => "red",
-                "skipped" => "gray",
-                _ => "lightgray",
+            let color = match n.status {
+                NodeStatus::Success => "green",
+                NodeStatus::Running => "blue",
+                NodeStatus::Failed => "red",
+                NodeStatus::Skipped => "gray",
+                NodeStatus::Pending => "lightgray",
             };
-            let started_at = n.started_at.clone();
-            let finished_at = n.finished_at.clone();
-            let duration_ms = finished_at.as_ref().and_then(|f| {
-                started_at.as_ref().and_then(|s| {
-                    let sf = chrono::NaiveDateTime::parse_from_str(s, "%+").ok()?;
-                    let ff = chrono::NaiveDateTime::parse_from_str(f, "%+").ok()?;
-                    Some((ff - sf).num_milliseconds().max(0) as u64)
-                })
-            });
             DagNode {
-                id: n.rule_name.clone(),
-                label: n.rule_name.clone(),
-                status: n.status.clone(),
+                id: n.rule.clone(),
+                label: n.rule.clone(),
+                status: n.status.to_string(),
                 color: color.to_string(),
-                duration_ms,
+                duration_ms: n.duration_ms,
                 exit_code: n.exit_code,
             }
         })
@@ -524,40 +505,10 @@ pub async fn get_diagnostics(Path(id): Path<String>) -> ApiResult<DiagnosticsRes
         )
     })?;
 
-    let nodes: Vec<models::RunNodeRow> =
-        sqlx::query_as("SELECT * FROM run_nodes WHERE run_id = ? ORDER BY attempt ASC")
-            .bind(&id)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error fetching run nodes for diagnostics: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
-
-    let node_items: Vec<NodeStatusItem> = nodes
-        .iter()
-        .map(|n| {
-            let status = match n.status.as_str() {
-                "success" => NodeStatus::Success,
-                "failed" => NodeStatus::Failed,
-                "running" => NodeStatus::Running,
-                "skipped" => NodeStatus::Skipped,
-                _ => NodeStatus::Pending,
-            };
-            NodeStatusItem {
-                rule: n.rule_name.clone(),
-                status,
-                started_at: n.started_at.clone(),
-                duration_ms: None,
-                exit_code: n.exit_code,
-                progress_pct: None,
-            }
-        })
-        .collect();
+    let node_items = checkpoint_status::load_node_statuses(
+        std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
+        run.status == "running",
+    );
 
     // Try to read log output from workdir
     let log_output = run
@@ -707,40 +658,10 @@ pub async fn retry_run(
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
 
-    let nodes: Vec<models::RunNodeRow> =
-        sqlx::query_as("SELECT * FROM run_nodes WHERE run_id = ? ORDER BY attempt ASC")
-            .bind(&id)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error fetching run nodes for retry: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
-
-    let node_items: Vec<NodeStatusItem> = nodes
-        .iter()
-        .map(|n| {
-            let status = match n.status.as_str() {
-                "success" => NodeStatus::Success,
-                "failed" => NodeStatus::Failed,
-                "running" => NodeStatus::Running,
-                "skipped" => NodeStatus::Skipped,
-                _ => NodeStatus::Pending,
-            };
-            NodeStatusItem {
-                rule: n.rule_name.clone(),
-                status,
-                started_at: n.started_at.clone(),
-                duration_ms: None,
-                exit_code: n.exit_code,
-                progress_pct: None,
-            }
-        })
-        .collect();
+    let node_items = checkpoint_status::load_node_statuses(
+        std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
+        run.status == "running",
+    );
 
     let dag = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
         .ok()
@@ -781,35 +702,82 @@ pub async fn cancel_run(Path(id): Path<String>) -> ApiResult<serde_json::Value> 
             )
         })?;
 
-    match run {
-        Some(_r) => {
-            let now = now_iso();
-            sqlx::query("UPDATE runs SET status = 'cancelled', finished_at = ? WHERE id = ?")
-                .bind(&now)
-                .bind(&id)
-                .execute(pool)
-                .await
-                .map_err(|e| {
-                    tracing::error!("DB error cancelling run {id}: {e}");
-                    err(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "DB_ERROR",
-                        "Internal database error".into(),
-                    )
-                })?;
-
-            Ok(Json(serde_json::json!({
-                "run_id": id,
-                "status": "cancelled",
-                "cancelled_at": now,
-            })))
-        }
-        None => Err(err(
+    let run = run.ok_or_else(|| {
+        err(
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
             format!("Run {id} not found"),
-        )),
+        )
+    })?;
+
+    // Terminal states are final — cancelling a finished run would silently
+    // rewrite its result.
+    let is_terminal = matches!(run.status.as_str(), "completed" | "failed" | "cancelled");
+    if is_terminal {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "RUN_NOT_ACTIVE",
+            format!("Run {id} is already {0} — cannot cancel", run.status),
+        ));
     }
+
+    // Persist the cancellation BEFORE signaling: the executor's exit path
+    // checks for a 'cancelled' row and skips its own terminal write, so the
+    // kill fallout can never flip the status back to completed/failed.
+    let now = now_iso();
+    sqlx::query("UPDATE runs SET status = 'cancelled', finished_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(&id)
+        .execute(pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error cancelling run {id}: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
+
+    // Signal the live process group: paused groups need SIGCONT first so the
+    // SIGTERM can be delivered, then a bounded grace window before SIGKILL.
+    if let Some(pgid) = crate::process_control::pgid(&id) {
+        use crate::process_control::{SIGCONT, SIGKILL, SIGTERM, signal_group};
+        if run.status == "paused"
+            && let Err(e) = signal_group(pgid, SIGCONT)
+        {
+            tracing::warn!("SIGCONT before cancel failed for run {id} pgid {pgid}: {e}");
+        }
+        if let Err(e) = signal_group(pgid, SIGTERM) {
+            tracing::warn!("SIGTERM failed for run {id} pgid {pgid}: {e}");
+        }
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while crate::process_control::pgid(&id).is_some() && tokio::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        if crate::process_control::pgid(&id).is_some()
+            && let Err(e) = signal_group(pgid, SIGKILL)
+        {
+            tracing::warn!("SIGKILL failed for run {id} pgid {pgid}: {e}");
+        }
+        crate::process_control::unregister(&id);
+    } else {
+        tracing::warn!(
+            "cancel for run {id}: no live process group registered (already finished or server restarted)"
+        );
+    }
+
+    crate::broadcast_event(
+        "run_cancelled",
+        &serde_json::json!({"run_id": id, "cancelled_at": now}),
+    );
+
+    Ok(Json(serde_json::json!({
+        "run_id": id,
+        "status": "cancelled",
+        "cancelled_at": now,
+    })))
 }
 
 /// POST /api/runs/{id}/pause
@@ -849,6 +817,17 @@ pub async fn pause_run(
         .get("reason")
         .and_then(|v| v.as_str())
         .unwrap_or("user_request");
+
+    // Freeze the live process group (the CLI and every rule subprocess).
+    if let Some(pgid) = crate::process_control::pgid(&id)
+        && let Err(e) = crate::process_control::signal_group(pgid, crate::process_control::SIGSTOP)
+    {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "PAUSE_ERROR",
+            format!("Failed to pause run {id}: {e}"),
+        ));
+    }
 
     let now = now_iso();
     sqlx::query("UPDATE runs SET status = 'paused', phase = ? WHERE id = ?")
@@ -913,6 +892,17 @@ pub async fn resume_run(
     })?;
     let from_rule = req.get("from_rule").and_then(|v| v.as_str());
 
+    // Unfreeze the live process group.
+    if let Some(pgid) = crate::process_control::pgid(&id)
+        && let Err(e) = crate::process_control::signal_group(pgid, crate::process_control::SIGCONT)
+    {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "RESUME_ERROR",
+            format!("Failed to resume run {id}: {e}"),
+        ));
+    }
+
     let _now = now_iso();
     sqlx::query("UPDATE runs SET status = 'running', phase = 'executing' WHERE id = ?")
         .bind(&id)
@@ -970,36 +960,19 @@ pub async fn get_ai_status(Path(id): Path<String>) -> ApiResult<serde_json::Valu
         )
     })?;
 
-    let nodes: Vec<models::RunNodeRow> =
-        sqlx::query_as("SELECT * FROM run_nodes WHERE run_id = ? ORDER BY attempt ASC")
-            .bind(&id)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error fetching run nodes for AI status: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
-
-    let exec_nodes: Vec<NodeExecutionStatus> = nodes
-        .iter()
-        .map(|n| NodeExecutionStatus {
-            rule: n.rule_name.clone(),
-            status: n.status.clone(),
-            duration_ms: n.finished_at.as_ref().and_then(|f| {
-                n.started_at.as_ref().and_then(|s| {
-                    let sf = chrono::NaiveDateTime::parse_from_str(s, "%+").ok()?;
-                    let ff = chrono::NaiveDateTime::parse_from_str(f, "%+").ok()?;
-                    Some((ff - sf).num_milliseconds())
-                })
-            }),
-            exit_code: n.exit_code,
-            started_at: n.started_at.clone(),
-        })
-        .collect();
+    let exec_nodes: Vec<NodeExecutionStatus> = checkpoint_status::load_node_statuses(
+        std::path::Path::new(_run.workdir.as_deref().unwrap_or("")),
+        _run.status == "running",
+    )
+    .iter()
+    .map(|n| NodeExecutionStatus {
+        rule: n.rule.clone(),
+        status: n.status.to_string(),
+        duration_ms: n.duration_ms.map(|d| d as i64),
+        exit_code: n.exit_code,
+        started_at: n.started_at.clone(),
+    })
+    .collect();
 
     let resources = ResourceUsage::default();
     let status = monitor_agent::analyze_run_status(&exec_nodes, &resources);
@@ -1008,36 +981,10 @@ pub async fn get_ai_status(Path(id): Path<String>) -> ApiResult<serde_json::Valu
 }
 
 /// GET /api/runs/{id}/report
-pub async fn get_run_report(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
-    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })?;
-
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for report: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
-
+/// Build the deterministic report data from a run row — shared by the report
+/// page, the Q&A, and the visualization endpoints so they all answer from
+/// the SAME real data.
+fn build_report_for_run(run: &models::RunRow) -> crate::domains::ai::agents::types::ReportData {
     let pipeline_name = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
         .ok()
         .map(|c| c.workflow.name.clone())
@@ -1070,7 +1017,40 @@ pub async fn get_run_report(Path(id): Path<String>) -> ApiResult<serde_json::Val
         .and_then(|wd| std::fs::read_to_string(format!("{wd}/execution.log")).ok())
         .unwrap_or_default();
 
-    let report = report_agent::generate_report(&pipeline_name, &files, &log_summary, &[]);
+    report_agent::generate_report(&pipeline_name, &files, &log_summary, &[])
+}
+
+pub async fn get_run_report(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
+    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+
+    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error fetching run {id} for report: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
+
+    let run = run.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Run {id} not found"),
+        )
+    })?;
+
+    let report = build_report_for_run(&run);
 
     Ok(Json(serde_json::json!(report)))
 }
@@ -1104,7 +1084,7 @@ pub async fn ask_report_question(
                 "Internal database error".into(),
             )
         })?;
-    let _run = run.ok_or_else(|| {
+    let run = run.ok_or_else(|| {
         err(
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
@@ -1112,9 +1092,8 @@ pub async fn ask_report_question(
         )
     })?;
 
-    let pipeline_name = "pipeline";
-    let files = vec![];
-    let report = report_agent::generate_report(pipeline_name, &files, "", &[]);
+    // Answer from the same deterministic report the report page shows.
+    let report = build_report_for_run(&run);
     let answer = report_agent::answer_question(&report, question);
     Ok(Json(answer))
 }
@@ -1148,7 +1127,7 @@ pub async fn visualize_report(
                 "Internal database error".into(),
             )
         })?;
-    let _run = run.ok_or_else(|| {
+    let run = run.ok_or_else(|| {
         err(
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
@@ -1156,17 +1135,51 @@ pub async fn visualize_report(
         )
     })?;
 
+    // Real data sources: the run's file tree, or per-rule timings from the
+    // engine's checkpoint. No canned rows.
+    let report = build_report_for_run(&run);
+    let data: Vec<serde_json::Value> = if chart_type == "files" {
+        report
+            .file_tree
+            .iter()
+            .map(|f| serde_json::json!({"name": f.name, "size_bytes": f.size_bytes}))
+            .collect()
+    } else {
+        checkpoint_status::load_node_statuses(
+            std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
+            false,
+        )
+        .into_iter()
+        .map(|n| {
+            serde_json::json!({
+                "rule": n.rule,
+                "duration_secs": n.duration_ms.map(|d| d as f64 / 1000.0).unwrap_or(0.0),
+            })
+        })
+        .collect()
+    };
+
     let plot_json = serde_json::json!({
         "chart_type": chart_type,
-        "title": format!("{chart_type} plot"),
-        "spec": {
-            "mark": if chart_type == "bar" { "bar" } else { "point" },
-            "encoding": {
-                "x": {"field": "x", "type": "quantitative", "title": "X Axis"},
-                "y": {"field": "y", "type": "quantitative", "title": "Y Axis"},
-            }
+        "title": format!("{chart_type} chart"),
+        "spec": if chart_type == "files" {
+            serde_json::json!({
+                "mark": "bar",
+                "encoding": {
+                    "x": {"field": "name", "type": "nominal", "title": "File"},
+                    "y": {"field": "size_bytes", "type": "quantitative", "title": "Bytes"},
+                }
+            })
+        } else {
+            serde_json::json!({
+                "mark": "bar",
+                "encoding": {
+                    "x": {"field": "rule", "type": "nominal", "title": "Rule"},
+                    "y": {"field": "duration_secs", "type": "quantitative", "title": "Seconds"},
+                }
+            })
         },
-        "data": []
+        "data": data,
     });
 
     Ok(Json(plot_json))

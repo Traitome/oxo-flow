@@ -7,6 +7,7 @@ import type {
   DataAnalysis, ReferenceResult, AuditLogResponse, SearchResponse,
   DagEditResponse, DataPerceptionReport, MonitorStatus,
   ReportData, AiConfigFull, ServerAiConfig, UserAiConfig, AiConfigUpdate,
+  KnowledgeToolsResponse, KnowledgeSkillsResponse,
 } from './types';
 
 
@@ -76,14 +77,23 @@ export const api = {
   dagUndo: (id: string) => post<{ toml_content: string }>(`/api/pipeline/${id}/undo`, {}),
   dagRedo: (id: string) => post<{ toml_content: string }>(`/api/pipeline/${id}/redo`, {}),
 
+  // ── Knowledge (editor palette) ──
+  knowledgeTools: (q: string, limit = 20) =>
+    get<KnowledgeToolsResponse>(`/api/knowledge/tools?q=${encodeURIComponent(q)}&limit=${limit}`),
+  knowledgeSkills: (q: string, limit = 20) =>
+    get<KnowledgeSkillsResponse>(`/api/knowledge/skills?q=${encodeURIComponent(q)}&limit=${limit}`),
+
   // ── Data Perception ──
   analyzeData: (paths: string[], maxDepth = 2) => post<DataAnalysis>('/api/data/analyze', { paths, max_depth: maxDepth }),
   perceiveData: (paths?: string[], description?: string) => post<DataPerceptionReport>('/api/data/perceive', { paths, description }),
   discoverReference: (genome: string, components: string[]) => post<ReferenceResult>('/api/data/reference', { genome, components }),
-  referenceStatus: () => get<{ installed: any[]; missing: string[] }>('/api/data/reference/status'),
+  referenceStatus: () => get<{ installed: Array<Record<string, unknown>>; missing: string[] }>('/api/data/reference/status'),
 
   // ── Execution ──
-  createRun: (toml_content: string, maxJobs = 4, dryRun = false) => post<RunResponse>('/api/runs', { toml_content, max_jobs: maxJobs, dry_run: dryRun }),
+  createRun: (
+    toml_content: string,
+    options: { max_jobs?: number; dry_run?: boolean; keep_going?: boolean; samples?: string[]; targets?: string[] } = {},
+  ) => post<RunResponse>('/api/runs', { toml_content, max_jobs: options.max_jobs ?? 4, dry_run: options.dry_run ?? false, keep_going: options.keep_going ?? false, samples: options.samples ?? [], targets: options.targets ?? [] }),
   listRuns: () => get<RunItem[]>('/api/runs'),
   getRun: (id: string) => get<RunItem>(`/api/runs/${id}`),
   getRunStatus: (id: string) => get<RunStatus>(`/api/runs/${id}/status`),
@@ -100,7 +110,7 @@ export const api = {
   // ── Report ──
   runReport: (id: string) => get<ReportData>(`/api/runs/${id}/report`),
   askReport: (id: string, question: string) => post<string>(`/api/runs/${id}/report/ask`, { question }),
-  visualizeReport: (id: string, type: string) => post<any>(`/api/runs/${id}/report/visualize`, { type }),
+  visualizeReport: (id: string, type: string) => post<{ chart_type: string; data: unknown[]; spec: Record<string, unknown> }>(`/api/runs/${id}/report/visualize`, { type }),
 
   // ── AI Companion ──
   aiConfig: () => get<AiConfig>('/api/ai/config'),
@@ -118,7 +128,7 @@ export const api = {
 
   // ── Chat ──
   chatSessions: () => get<Array<{ id: string; title: string; updated_at: string }>>('/api/chat/sessions'),
-  chatSendJson: (message: string, context?: any) => post<any>('/api/chat/send/json', { message, context }),
+  chatSendJson: (message: string, context?: Record<string, unknown>) => post<{ reply: string }>('/api/chat/send/json', { message, context }),
 
   // ── Templates ──
   listTemplates: () => get<Template[]>('/api/templates'),

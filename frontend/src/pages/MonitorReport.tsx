@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { RunItem, MonitorStatus, ReportData, DagStatus, Diagnostics } from '../api/types';
 import { Play, Pause, RotateCcw, BarChart3, Loader2, Bot } from 'lucide-react';
-import DagView from '../components/DagView';
+import WorkflowCanvas from '../components/WorkflowCanvas';
 import { usePipelineSession } from '../context/PipelineSession';
 
 type TabType = 'monitor' | 'report' | 'diagnostics' | 'dag';
@@ -49,7 +49,10 @@ export default function MonitorReport() {
 
   useEffect(() => {
     if (routeId && routeId !== selId) {
-      selectRun(routeId);
+      // Defer to a macrotask: selectRun triggers several state updates and
+      // must not run synchronously inside the effect body.
+      const timer = setTimeout(() => selectRun(routeId), 0);
+      return () => clearTimeout(timer);
     }
   }, [routeId, selectRun, selId]);
 
@@ -237,7 +240,7 @@ export default function MonitorReport() {
         {/* QC Stats */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.5rem', marginBottom: '1rem' }}>
           <StatCard value={`${reportData.qc_summary?.total_files || 0}`} label="Output Files" color="#059669" />
-          <StatCard value={reportData.qc_summary?.total_size_mb || '0'} label="Total Size (MB)" />
+          <StatCard value={String(reportData.qc_summary?.total_size_mb || '0')} label="Total Size (MB)" />
           <StatCard value={`${reportData.qc_summary?.directories || 0}`} label="Directories" />
           <StatCard value={reportData.key_findings.length > 0 ? `${reportData.key_findings.length}` : '0'} label="Findings" color={reportData.key_findings.length > 0 ? '#D97706' : '#059669'} />
         </div>
@@ -393,10 +396,22 @@ export default function MonitorReport() {
             <span style={{ color: 'var(--color-text-secondary)' }}>ETA: {(dagStatus.metrics.eta_ms / 60000).toFixed(0)}min</span>
           )}
         </div>
-        <div style={{ height: '400px', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
-          <DagView
-            nodes={dagStatus.nodes.map(n => ({ id: n.id, label: n.label, color: n.color, duration_ms: n.duration_ms ?? undefined }))}
-            edges={dagStatus.edges}
+        <div style={{ height: '480px', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
+          <WorkflowCanvas
+            dag={{
+              nodes: dagStatus.nodes.map(n => ({
+                id: n.id,
+                label: n.label,
+                color: n.color,
+                environment: 'system',
+                rule: {},
+              })),
+              edges: dagStatus.edges.map(e => ({ from: e.source, to: e.target, kind: 'declared' as const })),
+            }}
+            editable={false}
+            scopeKey={`monitor-${routeId}`}
+            statusById={Object.fromEntries(dagStatus.nodes.map(n => [n.id, n.status]))}
+            context="monitor"
           />
         </div>
       </div>

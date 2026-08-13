@@ -226,18 +226,6 @@ impl StorageBackend for SqliteBackend {
                 FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE
             );
 
-            CREATE TABLE IF NOT EXISTS run_nodes (
-                run_id TEXT NOT NULL,
-                rule_name TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
-                started_at TEXT,
-                finished_at TEXT,
-                exit_code INTEGER,
-                attempt INTEGER NOT NULL DEFAULT 1,
-                error_pattern TEXT,
-                PRIMARY KEY (run_id, rule_name),
-                FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
-            );
 
             CREATE TABLE IF NOT EXISTS sessions (
                 token TEXT PRIMARY KEY,
@@ -292,9 +280,24 @@ impl StorageBackend for SqliteBackend {
                 user_id TEXT NOT NULL,
                 action TEXT NOT NULL,
                 target TEXT NOT NULL,
+                result TEXT NOT NULL DEFAULT 'success',
                 metadata TEXT,
                 timestamp TEXT NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS oauth_states (
+                state TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                meta TEXT,
+                created_at TEXT NOT NULL
             );
             "#,
         )
@@ -308,7 +311,6 @@ impl StorageBackend for SqliteBackend {
             CREATE INDEX IF NOT EXISTS idx_pipelines_user_id ON pipelines(user_id);
             CREATE INDEX IF NOT EXISTS idx_runs_user_id ON runs(user_id);
             CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
-            CREATE INDEX IF NOT EXISTS idx_run_nodes_run_id ON run_nodes(run_id);
             CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
             CREATE INDEX IF NOT EXISTS idx_templates_category ON templates(category);
             CREATE INDEX IF NOT EXISTS idx_shares_pipeline_id ON shares(pipeline_id);
@@ -367,6 +369,14 @@ impl StorageBackend for SqliteBackend {
         }
         // Migration: add usage_count to templates if missing
         sqlx::query("ALTER TABLE templates ADD COLUMN usage_count INTEGER NOT NULL DEFAULT 0")
+            .execute(&self.pool)
+            .await
+            .ok();
+
+        // Vocabulary migration: legacy executors wrote `success` for completed
+        // runs; the canonical terminal set is completed|failed|cancelled.
+        // Idempotent — safe to run on every init.
+        sqlx::query("UPDATE runs SET status = 'completed' WHERE status = 'success'")
             .execute(&self.pool)
             .await
             .ok();
@@ -733,91 +743,6 @@ impl StorageBackend for SqliteBackend {
     }
 
     // -----------------------------------------------------------------------
-    // Run Nodes
-    // -----------------------------------------------------------------------
-
-    async fn create_run_node(&self, node: &models::RunNodeRow) -> Result<(), String> {
-        sqlx::query(
-            "INSERT INTO run_nodes (run_id, rule_name, status, started_at, finished_at, exit_code, attempt, error_pattern) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&node.run_id)
-        .bind(&node.rule_name)
-        .bind(&node.status)
-        .bind(&node.started_at)
-        .bind(&node.finished_at)
-        .bind(node.exit_code)
-        .bind(node.attempt)
-        .bind(&node.error_pattern)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    async fn update_run_node(
-        &self,
-        run_id: &str,
-        rule_name: &str,
-        status: &str,
-        exit_code: Option<i32>,
-        error_pattern: Option<&str>,
-    ) -> Result<(), String> {
-        let now = Self::now();
-        let is_terminal = status == "success" || status == "failed" || status == "skipped";
-
-        if is_terminal {
-            sqlx::query(
-                "UPDATE run_nodes SET status = ?, finished_at = ?, exit_code = ?, error_pattern = ? WHERE run_id = ? AND rule_name = ?",
-            )
-            .bind(status)
-            .bind(&now)
-            .bind(exit_code)
-            .bind(error_pattern)
-            .bind(run_id)
-            .bind(rule_name)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
-        } else if status == "running" {
-            sqlx::query(
-                "UPDATE run_nodes SET status = ?, started_at = ?, exit_code = ?, error_pattern = ? WHERE run_id = ? AND rule_name = ?",
-            )
-            .bind(status)
-            .bind(&now)
-            .bind(exit_code)
-            .bind(error_pattern)
-            .bind(run_id)
-            .bind(rule_name)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
-        } else {
-            sqlx::query(
-                "UPDATE run_nodes SET status = ?, exit_code = ?, error_pattern = ? WHERE run_id = ? AND rule_name = ?",
-            )
-            .bind(status)
-            .bind(exit_code)
-            .bind(error_pattern)
-            .bind(run_id)
-            .bind(rule_name)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
-        }
-        Ok(())
-    }
-
-    async fn get_run_nodes(&self, run_id: &str) -> Result<Vec<models::RunNodeRow>, String> {
-        sqlx::query_as::<_, models::RunNodeRow>(
-            "SELECT * FROM run_nodes WHERE run_id = ? ORDER BY attempt ASC",
-        )
-        .bind(run_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| e.to_string())
-    }
-
-    // -----------------------------------------------------------------------
     // Sessions
     // -----------------------------------------------------------------------
 
@@ -1016,7 +941,7 @@ impl StorageBackend for SqliteBackend {
         let id = Uuid::new_v4().to_string();
         let now = Self::now();
         sqlx::query(
-            "INSERT INTO audit_logs (id, user_id, action, target, metadata, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO audit_logs (id, user_id, action, target, result, metadata, timestamp) VALUES (?, ?, ?, ?, 'success', ?, ?)",
         )
         .bind(&id)
         .bind(user_id)
@@ -1144,12 +1069,11 @@ mod tests {
             .expect("Failed to create backend");
         backend.init().await.expect("Failed to init");
 
-        // Verify all 8 tables exist by querying sqlite_master
+        // Verify all 7 tables exist by querying sqlite_master
         let expected_tables = [
             "users",
             "pipelines",
             "runs",
-            "run_nodes",
             "sessions",
             "templates",
             "shares",
@@ -1295,11 +1219,11 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Test: create_run + update_run_status + get_run_nodes
+    // Test: create_run + update_run_status
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn test_create_run_and_nodes() {
+    async fn test_create_run_and_status() {
         let backend = create_backend().await;
         let user = create_test_user(&backend, "runner").await;
         let pipeline = create_test_pipeline(&backend, &user.id, "run-test").await;
@@ -1333,44 +1257,6 @@ mod tests {
         let running = backend.get_run(&created_run.id).await.unwrap().unwrap();
         assert_eq!(running.status, "running");
         assert!(running.started_at.is_some());
-
-        // Create run nodes
-        let node1 = models::RunNodeRow {
-            run_id: created_run.id.clone(),
-            rule_name: "step_a".to_string(),
-            status: "pending".to_string(),
-            started_at: None,
-            finished_at: None,
-            exit_code: None,
-            attempt: 1,
-            error_pattern: None,
-        };
-        backend.create_run_node(&node1).await.unwrap();
-
-        let node2 = models::RunNodeRow {
-            run_id: created_run.id.clone(),
-            rule_name: "step_b".to_string(),
-            status: "pending".to_string(),
-            started_at: None,
-            finished_at: None,
-            exit_code: None,
-            attempt: 1,
-            error_pattern: None,
-        };
-        backend.create_run_node(&node2).await.unwrap();
-
-        // Update node1 to success
-        backend
-            .update_run_node(&created_run.id, "step_a", "success", Some(0), None)
-            .await
-            .unwrap();
-
-        // Get run nodes
-        let nodes = backend.get_run_nodes(&created_run.id).await.unwrap();
-        assert_eq!(nodes.len(), 2);
-        let n1 = nodes.iter().find(|n| n.rule_name == "step_a").unwrap();
-        assert_eq!(n1.status, "success");
-        assert!(n1.finished_at.is_some());
 
         // List runs for user
         let pag = Pagination::default();
@@ -1674,6 +1560,46 @@ mod tests {
         };
         let result = backend.list_runs(&user.id, pag).await.unwrap();
         assert_eq!(result.items.len(), 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: legacy 'success' status migrates to 'completed'
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_legacy_success_status_migrates_to_completed() {
+        let backend = SqliteBackend::new("sqlite::memory:")
+            .await
+            .expect("Failed to create in-memory backend");
+        backend.init().await.expect("schema init");
+
+        sqlx::query(
+            "INSERT INTO runs (id, user_id, pipeline_snapshot, workflow_name, status, phase, pid, workdir, started_at, finished_at, created_at)
+             VALUES ('legacy-1', 'default', '', 'wf', 'success', 'executing', NULL, '', '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .execute(backend.inner_pool())
+        .await
+        .unwrap();
+
+        // Re-init is idempotent and re-runs the migration.
+        backend.init().await.expect("re-init");
+        let status: String = sqlx::query_scalar("SELECT status FROM runs WHERE id = 'legacy-1'")
+            .fetch_one(backend.inner_pool())
+            .await
+            .unwrap();
+        assert_eq!(status, "completed");
+
+        // Non-success rows are untouched.
+        sqlx::query("UPDATE runs SET status = 'failed' WHERE id = 'legacy-1'")
+            .execute(backend.inner_pool())
+            .await
+            .unwrap();
+        backend.init().await.expect("re-init again");
+        let status: String = sqlx::query_scalar("SELECT status FROM runs WHERE id = 'legacy-1'")
+            .fetch_one(backend.inner_pool())
+            .await
+            .unwrap();
+        assert_eq!(status, "failed");
     }
 
     // -----------------------------------------------------------------------

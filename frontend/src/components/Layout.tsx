@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { Link, NavLink, Outlet } from 'react-router-dom';
 import { LayoutDashboard, GitBranch, PlayCircle, BarChart3, Library, Settings, BookOpen, FlaskConical, Menu, X, MessageCircle } from 'lucide-react';
 import Toast from './Toast';
 import ResultNotification from './ResultNotification';
@@ -30,6 +30,13 @@ const STATUS_POLL_MS = 30000;
 
 export default function Layout() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [userName, setUserName] = useState<string | null>(null);
+  useEffect(() => {
+    api.authMe()
+      .then((me) => setUserName(me.authenticated ? (me.username ?? null) : null))
+      .catch(() => setUserName(null));
+  }, []);
+
   const [serverStatus, setServerStatus] = useState<ServerStatus>('checking');
   const session = usePipelineSession();
 
@@ -71,7 +78,11 @@ export default function Layout() {
         </nav>
         <div className="header-right">
           <span id="header-status" role="status" aria-label={STATUS_TITLES[serverStatus]} className={`status-dot ${serverStatus}`} title={STATUS_TITLES[serverStatus]} />
-          <span className="header-user">Guest</span>
+          {userName ? (
+            <span className="header-user" title="Signed in">{userName}</span>
+          ) : (
+            <Link to="/login" className="header-user">Guest — sign in</Link>
+          )}
         </div>
       </header>
 

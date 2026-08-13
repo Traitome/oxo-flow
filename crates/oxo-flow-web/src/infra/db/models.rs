@@ -33,25 +33,13 @@ pub struct RunRow {
     pub pipeline_id: Option<String>,
     pub pipeline_snapshot: String,
     pub workflow_name: Option<String>,
-    pub status: String, // "queued"|"running"|"completed"|"failed"|"cancelled"
+    pub status: String, // "queued"|"running"|"paused"|"completed"|"failed"|"cancelled"
     pub phase: String,  // "parsing"|"validating"|"preparing"|"executing"|"reporting"
     pub pid: Option<i64>,
     pub workdir: Option<String>,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
     pub created_at: String,
-}
-
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
-pub struct RunNodeRow {
-    pub run_id: String,
-    pub rule_name: String,
-    pub status: String, // "pending"|"running"|"success"|"failed"|"skipped"
-    pub started_at: Option<String>,
-    pub finished_at: Option<String>,
-    pub exit_code: Option<i32>,
-    pub attempt: i64,
-    pub error_pattern: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]

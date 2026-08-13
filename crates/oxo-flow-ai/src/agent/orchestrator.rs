@@ -10,6 +10,7 @@
 
 use chrono::Utc;
 
+use super::events::{AgentEvent, AgentEventSink};
 use super::{Agent, AgentContext, AgentOutcome};
 use crate::error::AiError;
 use crate::provider::AiProvider;
@@ -41,12 +42,28 @@ impl Orchestrator {
         agent: &dyn Agent,
         ctx: &AgentContext,
     ) -> Result<AgentOutcome, AiError> {
+        self.execute_with_sink(agent, ctx, None, None).await
+    }
+
+    /// Run an agent to completion, emitting observable events through `sink`
+    /// and honoring `cancel` (checked between provider calls and before every
+    /// tool execution).
+    pub async fn execute_with_sink(
+        &self,
+        agent: &dyn Agent,
+        ctx: &AgentContext,
+        mut sink: Option<&mut AgentEventSink>,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+    ) -> Result<AgentOutcome, AiError> {
         let mut session = ctx.session.clone();
         let mut messages: Vec<Message> = Vec::new();
         let mut modifications: Vec<Modification> = Vec::new();
         let mut tool_call_records: Vec<ToolCallRecord> = Vec::new();
 
         // 1. PLAN — build system + user messages
+        if let Some(sink) = &mut sink {
+            sink(AgentEvent::Status("planning".into()));
+        }
         let system_msg = agent.plan(ctx);
         let user_msg = agent.user_message(ctx);
         messages.push(system_msg);
@@ -61,6 +78,12 @@ impl Orchestrator {
             if rounds > self.max_rounds {
                 return Err(AiError::MaxRoundsExceeded {
                     max: self.max_rounds,
+                });
+            }
+            if cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                return Err(AiError::ToolError {
+                    tool: "cancelled".into(),
+                    message: "cancelled by caller".to_string(),
                 });
             }
 
@@ -80,6 +103,9 @@ impl Orchestrator {
                 // Record assistant's tool call request
                 messages.push(Message::assistant_with_tools(tool_calls.clone()));
 
+                if let Some(sink) = &mut sink {
+                    sink(AgentEvent::Status("executing tools".into()));
+                }
                 for tc in tool_calls {
                     let start = std::time::Instant::now();
 
@@ -102,9 +128,25 @@ impl Orchestrator {
                         ctx.tool_registry.execute(&tc.name, &tc.arguments).await
                     };
                     let duration_ms = start.elapsed().as_millis() as u64;
+                    if let Some(sink) = &mut sink {
+                        sink(AgentEvent::ToolCall {
+                            name: tc.name.clone(),
+                            args: tc.arguments.clone(),
+                        });
+                    }
 
                     match &result {
                         Ok(content) => {
+                            if let Some(sink) = &mut sink {
+                                sink(AgentEvent::ToolResult {
+                                    name: tc.name.clone(),
+                                    summary: if content.len() > 200 {
+                                        format!("{}...", &content[..200])
+                                    } else {
+                                        content.clone()
+                                    },
+                                });
+                            }
                             messages.push(Message::tool(&tc.id, &tc.name, content));
                             tool_call_records.push(ToolCallRecord {
                                 timestamp: Utc::now(),
@@ -120,6 +162,12 @@ impl Orchestrator {
                             });
                         }
                         Err(e) => {
+                            if let Some(sink) = &mut sink {
+                                sink(AgentEvent::ToolResult {
+                                    name: tc.name.clone(),
+                                    summary: format!("Error: {e}"),
+                                });
+                            }
                             messages.push(Message::tool(&tc.id, &tc.name, &format!("Error: {e}")));
                             tool_call_records.push(ToolCallRecord {
                                 timestamp: Utc::now(),
@@ -138,6 +186,9 @@ impl Orchestrator {
 
             // Model returned text content (no tool calls)
             if let Some(content) = &response.content {
+                if let Some(sink) = &mut sink {
+                    sink(AgentEvent::Text(content.clone()));
+                }
                 // Extract content (agent-specific, e.g., strip code fences)
                 let extracted = agent.extract_content(content);
 
@@ -218,6 +269,10 @@ impl Orchestrator {
             .collect();
         session.tool_calls = tool_call_records;
         session.modifications = modifications;
+
+        if let Some(sink) = &mut sink {
+            sink(AgentEvent::Done);
+        }
 
         let completed = if success {
             session.complete(confidence)
@@ -379,5 +434,87 @@ mod tests {
         let ctx = test_context();
         let result = orch.execute(&agent, &ctx).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn execute_with_sink_emits_tool_and_text_events() {
+        use crate::scripted::{ScriptedTurn, scripted_provider};
+        use crate::types::ToolCall;
+
+        // Turn 1: the model calls a registered tool; turn 2: final text.
+        let provider = scripted_provider(vec![
+            ScriptedTurn {
+                content: None,
+                tool_calls: Some(vec![ToolCall {
+                    id: "tc-1".into(),
+                    name: "read_only_tool".into(),
+                    arguments: "{}".into(),
+                }]),
+                error: None,
+                delay_ms: 0,
+            },
+            ScriptedTurn {
+                content: Some("final output".into()),
+                tool_calls: None,
+                error: None,
+                delay_ms: 0,
+            },
+        ]);
+        let orch = Orchestrator::new(provider, 3);
+        let mut ctx = test_context();
+        ctx.tool_registry.register(Box::new(ScriptedTool {
+            name: "read_only_tool",
+            read_only: true,
+        }));
+
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::<AgentEvent>::new()));
+        let events_for_sink = events.clone();
+        let outcome = orch
+            .execute_with_sink(
+                &TestAgent,
+                &ctx,
+                Some(&mut move |e| events_for_sink.lock().unwrap().push(e)),
+                None,
+            )
+            .await
+            .expect("scripted run succeeds");
+        assert!(outcome.success);
+
+        let events = events.lock().unwrap();
+        assert!(
+            events.iter().any(
+                |e| matches!(e, AgentEvent::ToolCall { name, .. } if name == "read_only_tool")
+            )
+        );
+        assert!(
+            events.iter().any(
+                |e| matches!(e, AgentEvent::ToolResult { name, .. } if name == "read_only_tool")
+            )
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::Text(t) if t == "final output"))
+        );
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+    }
+
+    #[tokio::test]
+    async fn execute_with_sink_honors_cancellation() {
+        use crate::scripted::{ScriptedTurn, scripted_provider};
+
+        let provider = scripted_provider(vec![ScriptedTurn {
+            content: Some("whatever".into()),
+            tool_calls: None,
+            error: None,
+            delay_ms: 0,
+        }]);
+        let orch = Orchestrator::new(provider, 3);
+        let ctx = test_context();
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        let result = orch
+            .execute_with_sink(&TestAgent, &ctx, None, Some(&cancel))
+            .await;
+        assert!(result.is_err(), "pre-set cancel must abort the loop");
     }
 }

@@ -9,6 +9,8 @@ homepage.workspace = true
 description = "AI provider abstraction, agent framework, and knowledge system for oxo-flow"
 
 [dependencies]
+async-stream = "0.3.6"
+futures = "0.3.32"
 # Workspace
 serde = { workspace = true }
 serde_json = { workspace = true }

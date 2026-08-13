@@ -1,0 +1,9 @@
+
+/* ── My Pipelines table ── */
+
+.pipeline-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; }
+.pipeline-table th, .pipeline-table td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--color-border); }
+.pipeline-table th { background: var(--color-bg-secondary); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-tertiary); }
+.pipeline-table tr:last-child td { border-bottom: none; }
+.pipeline-actions { display: inline-flex; gap: 6px; align-items: center; }
+.pipeline-actions .btn-sm { display: inline-flex; align-items: center; gap: 4px; text-decoration: none; }

@@ -31,7 +31,13 @@ reference a saved pipeline.
 ## Commands
 
 All commands share a common request envelope. The request body must include the
-current TOML content (`toml_content`) plus the command:
+current TOML content (`toml_content`) plus the command.
+
+> The commands below reflect the v0.11+ extended API: `add_rule` accepts a
+> complete rule table, `update_rule` patches any rule fields through a TOML
+> table (with `null` meaning "remove this key"), and `update_workflow`
+> replaces top-level sections. `update_params` remains as a legacy alias of
+> `update_rule`.
 
 ```json
 {
@@ -52,12 +58,12 @@ Add a new rule to the workflow.
 
 **Payload:**
 
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `name` | String | No | `"new_rule"` | Unique rule identifier |
-| `shell` | String | No | `"echo 'new step'"` | Shell command to execute |
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `rule` | Table | Yes (full form) | Complete rule table — any rule field from the workflow format (input, output, shell, environment, resources, envvars, when, retries, tags, …) |
+| `name` / `shell` | String | No (legacy form) | Legacy minimal shape, kept for compatibility |
 
-**Example:**
+**Example (full form):**
 
 ```json
 {
@@ -65,13 +71,21 @@ Add a new rule to the workflow.
   "source": "dag_editor",
   "operation": "add_rule",
   "payload": {
-    "name": "fastp_trim",
-    "shell": "fastp -i {input} -o {output} --thread {threads}"
+    "rule": {
+      "name": "fastp_trim",
+      "description": "Trim adapters",
+      "input": ["raw/{sample}_R1.fastq.gz", "raw/{sample}_R2.fastq.gz"],
+      "output": ["trimmed/{sample}_R1.fastq.gz"],
+      "shell": "fastp --in1 {input[0]} --out1 {output[0]}",
+      "environment": {"conda": "envs/fastp.yaml"},
+      "resources": {"threads": 8, "memory": "16G"}
+    }
   }
 }
 ```
 
-**Result:** The new rule is appended to the rule list. Note that `update_params` can only change `threads` and `shell`; `input`, `output`, and other rule fields cannot currently be set via the edit API.
+**Result:** The new rule is appended to the rule list and core parsing
+validates the field set (unknown fields are rejected with a parse error).
 
 ---
 
@@ -152,17 +166,16 @@ Remove an explicit dependency edge between two rules.
 
 ---
 
-### `update_params`
+### `update_rule`
 
-Update one or more fields on an existing rule.
+Update any fields on an existing rule.
 
 **Payload:**
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `name` | String | **Yes** | Name of the rule to update |
-| `threads` | Integer | No | New thread count |
-| `shell` | String | No | New shell command |
+| `patch` | Table | **Yes** | Rule fields to replace. Nested tables (`resources`, `environment`, `envvars`) replace wholesale — send complete sub-objects. A `null` value removes the key (e.g. dropping an environment) |
 
 **Example:**
 
@@ -170,16 +183,38 @@ Update one or more fields on an existing rule.
 {
   "toml_content": "<current workflow TOML>",
   "source": "dag_editor",
-  "operation": "update_params",
+  "operation": "update_rule",
   "payload": {
     "name": "bwa_align",
-    "threads": 32,
-    "shell": "bwa-mem2 mem -t {threads} {config.reference} {input} | samtools sort -o {output}"
+    "patch": {
+      "shell": "bwa-mem2 mem -t {threads} {config.reference} {input} | samtools sort -o {output}",
+      "input": ["raw/{sample}_R1.fastq.gz", "raw/{sample}_R2.fastq.gz"],
+      "resources": {"threads": 32, "memory": "64G"},
+      "retries": null
+    }
   }
 }
 ```
 
-**Result:** Only the specified fields are updated; all other rule fields are preserved.
+**Result:** Patch keys replace the rule's fields; all unpatched fields are
+preserved. `update_params` (`{name, threads, shell}`) remains as a legacy
+alias.
+
+### `update_workflow`
+
+Replace top-level TOML sections (`workflow`, `config`, `defaults`, …). Patch
+keys replace the corresponding section wholesale — send complete sections.
+
+```json
+{
+  "toml_content": "<current workflow TOML>",
+  "source": "dag_editor",
+  "operation": "update_workflow",
+  "payload": {
+    "patch": {"workflow": {"name": "renamed", "version": "2.0.0", "description": "d"}}
+  }
+}
+```
 
 ---
 

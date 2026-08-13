@@ -10,6 +10,7 @@
 //!                                if pass → archive, return
 //! ```
 
+pub mod events;
 pub mod orchestrator;
 
 use async_trait::async_trait;
