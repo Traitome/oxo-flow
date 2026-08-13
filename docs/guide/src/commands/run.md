@@ -143,6 +143,19 @@ oxo-flow run pipeline.oxoflow database=refs/nt threshold=1e-3
 oxo-flow run pipeline.oxoflow --arg database=refs/nt --arg threshold=1e-3
 ```
 
+!!! note "Ordering: run flags before overrides"
+
+    `run` flags (`--json`, `--rerun`, `--samples`, `-j`, …) must come
+    **before** positional `KEY=VALUE` overrides — the override list is
+    trailing, so a flag typed after it is reported with actionable guidance:
+
+    ```console
+    oxo-flow run pipeline.oxoflow min_quality=30 --json
+    '--json' is a run flag, not a config override.
+      Run flags must come before KEY=VALUE overrides, e.g.:
+      oxo-flow run <workflow.oxoflow> --json min_quality=30
+    ```
+
 ### Execute a published bundle
 
 ```bash

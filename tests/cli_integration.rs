@@ -3773,3 +3773,117 @@ shell = "cat {input} > {output}"
         "built-v2\n"
     );
 }
+
+// ─── #71: run flags after positional overrides get actionable errors ───────
+
+/// clap's trailing config_overrides positional (allow_hyphen_values) cannot
+/// distinguish `--json` the flag from `--json` a hyphen-value, so flags typed
+/// after `KEY=VALUE` land in the override list. They must fail with targeted
+/// guidance instead of a confusing "invalid config flag" — while the three
+/// override forms and the flags-first ordering keep working.
+#[test]
+fn cli_run_flags_after_overrides_get_actionable_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("trail.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "trail"
+version = "1.0.0"
+
+[config]
+min_quality = "20"
+
+[[rules]]
+name = "param"
+output = ["param.txt"]
+shell = "echo q={config.min_quality} > {output}"
+"#,
+    )
+    .unwrap();
+
+    // 1. Long flag after a positional override: targeted error, not a run.
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "min_quality=30", "--json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "--json after KEY=VALUE must error");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("run flag, not a config override"),
+        "expected actionable guidance, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("--json"),
+        "error must name the offending flag: {stderr}"
+    );
+    assert!(
+        !stderr.contains("invalid config flag: '--json'"),
+        "old confusing error must be gone: {stderr}"
+    );
+
+    // 2. Short flag after a positional override: same targeted error.
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "min_quality=30", "-j", "4"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("run flag, not a config override") && stderr.contains("-j"),
+        "short flags need the same guidance: {stderr}"
+    );
+
+    // 3. --KEY VALUE form still works (allow_hyphen_values contract).
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--min_quality", "40"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "--KEY VALUE form must keep working: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("param.txt")).unwrap(),
+        "q=40\n"
+    );
+
+    // 4. --KEY=VALUE form still works.
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--min_quality=50"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "--KEY=VALUE form must keep working: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("param.txt")).unwrap(),
+        "q=50\n"
+    );
+
+    // 5. Flags before positionals: the documented ordering, everything works.
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--json", "min_quality=60"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "flags-first ordering must work: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("stdout must be pure JSON");
+    assert_eq!(parsed["command"], "run");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("param.txt")).unwrap(),
+        "q=60\n"
+    );
+}

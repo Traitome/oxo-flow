@@ -101,6 +101,46 @@ fn print_config_change_summary(
     );
 }
 
+/// Long-form names of `oxo-flow run` flags (plus clap's global --help/
+/// --version). Keep in sync with the `Run` variant in main.rs.
+///
+/// clap's trailing `config_overrides` positional (`allow_hyphen_values`)
+/// cannot distinguish `--json` the run flag from `--json` a hyphen-value
+/// once positional overrides start, so flags typed after `KEY=VALUE` land
+/// in the override list (issue #71). Matching them here turns a confusing
+/// "invalid config flag" error — or a silently wrong override — into
+/// actionable guidance.
+const RUN_FLAG_NAMES: &[&str] = &[
+    "jobs",
+    "keep-going",
+    "workdir",
+    "target",
+    "retry",
+    "timeout",
+    "resume-failed",
+    "profile",
+    "max-threads",
+    "max-memory",
+    "skip-env-setup",
+    "skip-ref-build",
+    "cache-dir",
+    "provenance",
+    "bundle",
+    "yes",
+    "arg",
+    "sample",
+    "ai-recover",
+    "ai-max-retries",
+    "samples",
+    "rerun",
+    "json",
+    "help",
+    "version",
+];
+
+/// Short-form run flag names (same contract as [`RUN_FLAG_NAMES`]).
+const RUN_SHORT_FLAGS: &[&str] = &["j", "k", "d", "t", "r", "h", "V"];
+
 /// Validate a config value against its ConfigDef declaration.
 fn validate_config_value(
     name: &str,
@@ -269,6 +309,30 @@ pub async fn run_command(
         std::collections::HashMap::new();
     let mut cli_args_iter = cli_args.into_iter().peekable();
     while let Some(arg_str) = cli_args_iter.next() {
+        // issue #71: run flags swallowed by the trailing overrides positional
+        // get a targeted error instead of a confusing parse failure.
+        let swallowed_flag = arg_str
+            .strip_prefix("--")
+            .map(|flag| flag.split('=').next().unwrap_or(flag))
+            .filter(|name| RUN_FLAG_NAMES.contains(name))
+            .map(|name| format!("--{name}"))
+            .or_else(|| {
+                arg_str
+                    .strip_prefix('-')
+                    .filter(|rest| !rest.starts_with('-'))
+                    .map(|flag| flag.split('=').next().unwrap_or(flag))
+                    .filter(|name| RUN_SHORT_FLAGS.contains(name))
+                    .map(|name| format!("-{name}"))
+            });
+        if let Some(flag) = swallowed_flag {
+            anyhow::bail!(
+                "'{flag}' is a run flag, not a config override.\n  \
+                 Run flags must come before KEY=VALUE overrides, e.g.:\n  \
+                 oxo-flow run <workflow.oxoflow> --json min_quality=30\n  \
+                 For a config key that itself starts with dashes, use --arg KEY=VALUE\n  \
+                 (also placed before positional overrides)."
+            );
+        }
         let (k, v) = if let Some(eq) = arg_str.find('=') {
             let k = arg_str[..eq].trim_start_matches('-').to_string();
             (k, arg_str[eq + 1..].to_string())
