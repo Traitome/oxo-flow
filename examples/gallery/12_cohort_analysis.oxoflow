@@ -1,3 +1,7 @@
+# 12 — Cohort Analysis with Sample Groups
+# Population-scale study with per-sample analysis and cohort-level QC
+# aggregation (fastp → BWA-MEM2 → MarkDuplicates → HaplotypeCaller → MultiQC).
+
 [workflow]
 name = "cohort-analysis"
 version = "1.0.0"

@@ -1,0 +1,207 @@
+# Germline Variant Calling (Simple Chain)
+
+The per-sample GATK germline chain: FastQC + fastp QC, BWA-MEM2 alignment with read groups, MarkDuplicates, BQSR, and HaplotypeCaller GVCF — the simpler sibling of gallery 07, which adds joint calling, VQSR, and annotation.
+
+## What It Demonstrates
+
+- Read-group string `-R '@RG\tID:{sample}\tSM:{sample}\tPL:ILLUMINA'` renders real TAB separators
+- Each stage declares its own environment (conda for QC tools, singularity for GATK)
+- Mix of environment backends per rule is first-class
+
+## Workflow Definition
+
+```toml
+# examples/gallery/13_simple_variant_calling.oxoflow
+# 13 — Germline Variant Calling (Simple Chain)
+# Per-sample germline best practices: FastQC/fastp QC → BWA-MEM2 →
+# MarkDuplicates → BQSR → HaplotypeCaller GVCF. The simpler sibling of
+# gallery 07 (which adds joint calling, VQSR, and annotation).
+
+[workflow]
+name = "simple-variant-calling"
+version = "1.0.0"
+description = "A simple variant calling pipeline demonstrating oxo-flow features"
+author = "Traitome"
+
+[config]
+reference = "/data/reference/GRCh38.fa"
+known_sites = "/data/reference/dbsnp_146.hg38.vcf.gz"
+
+[defaults]
+threads = 4
+memory = "8G"
+
+[report]
+template = "variant_report"
+format = [
+    "html",
+    "json",
+]
+sections = [
+    "summary",
+    "variants",
+    "coverage",
+    "qc_metrics",
+]
+
+[[rules]]
+name = "fastqc"
+input = [
+    "raw/{sample}_R1.fastq.gz",
+    "raw/{sample}_R2.fastq.gz",
+]
+output = [
+    "qc/{sample}_R1_fastqc.html",
+    "qc/{sample}_R2_fastqc.html",
+]
+shell = "fastqc {input} -o qc/"
+description = "Quality control check on raw sequencing reads"
+
+[rules.resources]
+threads = 2
+
+[rules.environment]
+conda = "envs/qc.yaml"
+
+[[rules]]
+name = "fastp"
+input = [
+    "raw/{sample}_R1.fastq.gz",
+    "raw/{sample}_R2.fastq.gz",
+]
+output = [
+    "trimmed/{sample}_R1.fastq.gz",
+    "trimmed/{sample}_R2.fastq.gz",
+    "qc/{sample}_fastp.json",
+]
+shell = """
+fastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]} --json {output[2]} --thread {threads}
+"""
+description = "Adapter trimming and quality filtering"
+
+[rules.resources]
+threads = 8
+
+[rules.environment]
+conda = "envs/fastp.yaml"
+
+[[rules]]
+name = "bwa_align"
+input = [
+    "trimmed/{sample}_R1.fastq.gz",
+    "trimmed/{sample}_R2.fastq.gz",
+]
+output = ["aligned/{sample}.sorted.bam"]
+shell = '''
+bwa-mem2 mem -t {threads} -R '@RG\tID:{sample}\tSM:{sample}\tPL:ILLUMINA' {config.reference} {input[0]} {input[1]} | samtools sort -@ 4 -o {output[0]}
+samtools index {output[0]}
+'''
+description = "Read alignment to reference genome"
+
+[rules.resources]
+threads = 16
+memory = "32G"
+
+# The pipe needs BOTH bwa-mem2 and samtools; the single-tool docker image
+# cannot run it — use a conda environment that ships the pair.
+[rules.environment]
+conda = "envs/alignment.yaml"
+
+[[rules]]
+name = "mark_duplicates"
+input = ["aligned/{sample}.sorted.bam"]
+output = [
+    "dedup/{sample}.dedup.bam",
+    "dedup/{sample}.metrics.txt",
+]
+shell = """
+gatk MarkDuplicates -I {input[0]} -O {output[0]} -M {output[1]} --CREATE_INDEX true
+"""
+description = "Mark PCR duplicate reads"
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "base_recalibrator"
+input = ["dedup/{sample}.dedup.bam"]
+output = ["recal/{sample}.recal_data.table"]
+shell = """
+gatk BaseRecalibrator -I {input[0]} -R {config.reference} --known-sites {config.known_sites} -O {output[0]}
+"""
+description = "Base quality score recalibration table"
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "apply_bqsr"
+input = [
+    "dedup/{sample}.dedup.bam",
+    "recal/{sample}.recal_data.table",
+]
+output = ["recal/{sample}.recal.bam"]
+shell = """
+gatk ApplyBQSR -I {input[0]} -R {config.reference} --bqsr-recal-file {input[1]} -O {output[0]}
+"""
+description = "Apply base quality score recalibration"
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[rules]]
+name = "haplotype_caller"
+input = ["recal/{sample}.recal.bam"]
+output = ["variants/{sample}.g.vcf.gz"]
+shell = """
+gatk HaplotypeCaller -R {config.reference} -I {input[0]} -O {output[0]} -ERC GVCF --native-pair-hmm-threads {threads}
+"""
+description = "Germline variant calling"
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[sample_groups]]
+name = "samples"
+samples = [
+    "NA12878",
+    "NA12891",
+    "NA12892",
+]
+
+[sample_groups.metadata]
+```
+
+## Try It
+
+```bash
+# Inspect the expanded plan first — no data needed:
+oxo-flow dry-run examples/gallery/13_simple_variant_calling.oxoflow
+
+# Copy the environment specs next to the workflow, adapt [config]
+# paths to your data, then run:
+oxo-flow run examples/gallery/13_simple_variant_calling.oxoflow
+```
+
+!!! note "Input data and environments"
+
+    Input paths under `/data/references/...` and `raw/` are placeholders —
+    replace them with your own data. The referenced `envs/*.yaml` specs ship
+    in [`examples/envs/`](https://github.com/Traitome/oxo-flow/tree/main/examples/envs).
+

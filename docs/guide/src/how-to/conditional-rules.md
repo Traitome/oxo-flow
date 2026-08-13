@@ -125,4 +125,4 @@ are skipped and reported as `Skipped` in the run output.
 
 ## Full Example
 
-See [`examples/conditional_workflow.oxoflow`](https://github.com/Traitome/oxo-flow/blob/main/examples/conditional_workflow.oxoflow) for a complete WGS/WES adaptive pipeline that demonstrates most `when` expression types (truthiness, string comparisons, `&&`, `>=`).
+See [`examples/gallery/11_conditional_workflow.oxoflow`](https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/11_conditional_workflow.oxoflow) for a complete WGS/WES adaptive pipeline that demonstrates most `when` expression types (truthiness, string comparisons, `&&`, `>=`).

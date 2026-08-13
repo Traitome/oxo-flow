@@ -1,3 +1,8 @@
+# 14 — Paired Experiment-Control (Single Pair)
+# Somatic variant calling for one tumor/control pair, with hardcoded
+# sample names for readability: fastp → BWA-MEM2 → MarkDuplicates →
+# BQSR → Mutect2 → FilterMutectCalls → VEP → clinical report.
+
 [workflow]
 name = "paired-experiment-control"
 version = "1.0.0"

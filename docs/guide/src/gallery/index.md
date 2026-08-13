@@ -20,6 +20,11 @@ Use this gallery to learn oxo-flow incrementally — each example builds on conc
 | 08 | [Multi-Omics Integration](multiomics.md) | ⭐⭐⭐⭐⭐ | WGS + RNA-seq + Methylation, branching DAG, cross-omics integration |
 | 09 | [Single-Cell RNA-seq](single-cell-rnaseq.md) | ⭐⭐⭐⭐ | Droplet-based scRNA-seq, 10x Genomics, CellRanger, Seurat |
 | 10 | [Transform Operator](transform-operator.md) | ⭐⭐⭐ | Unified split → map → combine, scatter-gather in a single rule |
+| 11 | [Conditional Execution](conditional-workflow.md) | ⭐⭐⭐ | `when` conditions, WGS/WES mode switching, config-gated branches |
+| 12 | [Cohort Analysis](cohort-analysis.md) | ⭐⭐⭐⭐ | Multi-group samples, cohort-level QC aggregation, per-rule environments |
+| 13 | [Germline Variant Calling](simple-variant-calling.md) | ⭐⭐⭐⭐ | Per-sample GATK chain: FastQC/fastp → BWA-MEM2 → BQSR → HaplotypeCaller |
+| 14 | [Paired Experiment-Control](paired-experiment-control.md) | ⭐⭐⭐⭐⭐ | Single-pair somatic calling: Mutect2, FilterMutectCalls, VEP, report |
+| 15 | [Paired Experiment-Control (Pairs)](paired-experiment-control-pairs.md) | ⭐⭐⭐⭐⭐ | The `[[pairs]]`-driven scalable version of 14 |
 
 ---
 
@@ -60,6 +65,9 @@ Master wildcards for multi-sample processing, scatter-gather parallelism pattern
 
 ### Advanced (Workflows 06–10)
 Build production-grade bioinformatics pipelines covering RNA-seq, whole-genome sequencing, multi-omics integration, and single-cell analysis with clinical-grade reporting and complex DAG topologies — plus the unified `transform` operator for scatter-gather parallelism.
+
+### Applied Patterns (Workflows 11–15)
+Reference pipelines for real study designs: condition-gated branches, population cohorts, per-sample germline calling, and paired tumor/control somatic calling (single pair and `[[pairs]]`-scaled).
 
 ---
 

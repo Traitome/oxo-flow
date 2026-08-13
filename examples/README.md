@@ -1,12 +1,12 @@
 # oxo-flow Examples
 
-Two tiers of example workflows:
+All example workflows live in one numbered progression:
 
-- **`examples/*.oxoflow`** — top-level pattern references
-  (variant calling, paired experiment/control, cohorts, conditionals).
-- **`examples/gallery/*.oxoflow`** — numbered progressive gallery
-  (01 hello world → 10 transform operator), documented in
-  `docs/guide/src/gallery/`.
+- **`examples/gallery/*.oxoflow`** — 15 progressive workflows
+  (01 hello world → 15 paired experiment-control), each with a dedicated
+  documentation page in `docs/guide/src/gallery/`. Start at 01; the
+  numbering follows the learning curve from minimal rules to full
+  production pipelines.
 
 ## What ships, what doesn't
 

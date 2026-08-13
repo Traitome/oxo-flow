@@ -125,6 +125,11 @@ nav:
       - "08 — Multi-Omics Integration": gallery/multiomics.md
       - "09 — Single-Cell RNA-seq": gallery/single-cell-rnaseq.md
       - "10 — Transform Operator": gallery/transform-operator.md
+      - "11 — Conditional Execution": gallery/conditional-workflow.md
+      - "12 — Cohort Analysis": gallery/cohort-analysis.md
+      - "13 — Germline Variant Calling": gallery/simple-variant-calling.md
+      - "14 — Paired Experiment-Control": gallery/paired-experiment-control.md
+      - "15 — Paired Experiment-Control (Pairs)": gallery/paired-experiment-control-pairs.md
   - How-to Guides:
       - Create a Workflow: how-to/create-workflow.md
       - Use Environments: how-to/use-environments.md

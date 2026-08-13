@@ -1196,7 +1196,7 @@ shell  = "gatk Mutect2 -I {input[0]} -I {input[1]} -normal {control} -O {output[
 
 Produces rule `mutect2_CASE_001` with concrete file paths.
 
-See [`examples/paired_experiment_control_pairs.oxoflow`](https://github.com/Traitome/oxo-flow/blob/main/examples/paired_experiment_control_pairs.oxoflow) for a full clinical somatic calling pipeline.
+See [`examples/gallery/15_paired_experiment_control_pairs.oxoflow`](https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/15_paired_experiment_control_pairs.oxoflow) for a full clinical somatic calling pipeline.
 
 ---
 
@@ -1268,7 +1268,7 @@ shell  = "bwa mem ref.fa {input[0]} > {output[0]}"
 
 Produces `align_treatment_S001` and `align_treatment_S002`.
 
-See [`examples/cohort_analysis.oxoflow`](https://github.com/Traitome/oxo-flow/blob/main/examples/cohort_analysis.oxoflow) for a complete cohort study pipeline.
+See [`examples/gallery/12_cohort_analysis.oxoflow`](https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/12_cohort_analysis.oxoflow) for a complete cohort study pipeline.
 
 ### Auto-Discovery with `sample_pattern`
 
@@ -1424,7 +1424,7 @@ when = 'config.mode == "WGS"'
 # ...
 ```
 
-See [`examples/conditional_workflow.oxoflow`](https://github.com/Traitome/oxo-flow/blob/main/examples/conditional_workflow.oxoflow) for a full example.
+See [`examples/gallery/11_conditional_workflow.oxoflow`](https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/11_conditional_workflow.oxoflow) for a full example.
 
 ---
 

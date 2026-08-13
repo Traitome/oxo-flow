@@ -46,7 +46,8 @@ fn full_lifecycle_simple_workflow() {
 /// Test full lifecycle with the paired tumor-normal example.
 #[test]
 fn full_lifecycle_paired_experiment_control() {
-    let toml = std::fs::read_to_string("examples/paired_experiment_control.oxoflow").unwrap();
+    let toml =
+        std::fs::read_to_string("examples/gallery/14_paired_experiment_control.oxoflow").unwrap();
     let config = WorkflowConfig::parse(&toml).unwrap();
 
     assert_eq!(config.workflow.name, "paired-experiment-control");
@@ -69,7 +70,8 @@ fn full_lifecycle_paired_experiment_control() {
 /// Test full lifecycle with the simple variant calling example.
 #[test]
 fn full_lifecycle_simple_variant_calling() {
-    let toml = std::fs::read_to_string("examples/simple_variant_calling.oxoflow").unwrap();
+    let toml =
+        std::fs::read_to_string("examples/gallery/13_simple_variant_calling.oxoflow").unwrap();
     let config = WorkflowConfig::parse(&toml).unwrap();
 
     assert!(!config.rules.is_empty());
@@ -478,7 +480,9 @@ fn wc01_pairs_expand_to_concrete_rules() {
 /// Test that the multi-case experiment-control example file parses and expands correctly.
 #[test]
 fn wc01_example_paired_experiment_control_pairs() {
-    let toml = std::fs::read_to_string("examples/paired_experiment_control_pairs.oxoflow").unwrap();
+    let toml =
+        std::fs::read_to_string("examples/gallery/15_paired_experiment_control_pairs.oxoflow")
+            .unwrap();
     let mut config = WorkflowConfig::parse(&toml).unwrap();
 
     assert_eq!(config.workflow.name, "multi-case-experiment-control");
@@ -611,7 +615,7 @@ fn wc02_sample_groups_expand_correctly() {
 /// Test the cohort analysis example file.
 #[test]
 fn wc02_example_cohort_analysis() {
-    let toml = std::fs::read_to_string("examples/cohort_analysis.oxoflow").unwrap();
+    let toml = std::fs::read_to_string("examples/gallery/12_cohort_analysis.oxoflow").unwrap();
     let mut config = WorkflowConfig::parse(&toml).unwrap();
 
     assert_eq!(config.workflow.name, "cohort-analysis");
@@ -650,7 +654,7 @@ fn wc02_example_cohort_analysis() {
 /// Test that the conditional workflow example parses correctly.
 #[test]
 fn wf01_example_conditional_workflow() {
-    let toml = std::fs::read_to_string("examples/conditional_workflow.oxoflow").unwrap();
+    let toml = std::fs::read_to_string("examples/gallery/11_conditional_workflow.oxoflow").unwrap();
     let config = WorkflowConfig::parse(&toml).unwrap();
 
     assert_eq!(config.workflow.name, "conditional-workflow");

@@ -1,0 +1,157 @@
+# Cohort Analysis with Sample Groups
+
+A population-scale study: multiple `[[sample_groups]]` expand per-sample instances, and a single multiqc aggregation step consumes the whole cohort's QC directory.
+
+## What It Demonstrates
+
+- `{sample}` rules expand once per sample across all groups (case/control here)
+- The aggregation rule has no wildcard inputs → exactly one instance; `depends_on` keeps it behind every per-sample rule (directory inputs form no DAG edges)
+- Per-rule conda environments keep tool versions isolated (fastp / bwa-mem2+samtools / gatk / multiqc)
+
+## Workflow Definition
+
+```toml
+# examples/gallery/12_cohort_analysis.oxoflow
+# 12 — Cohort Analysis with Sample Groups
+# Population-scale study with per-sample analysis and cohort-level QC
+# aggregation (fastp → BWA-MEM2 → MarkDuplicates → HaplotypeCaller → MultiQC).
+
+[workflow]
+name = "cohort-analysis"
+version = "1.0.0"
+description = "Population-scale cohort study with per-sample analysis and cohort-level QC aggregation"
+author = "oxo-flow examples"
+
+[config]
+known_sites = "/data/references/GRCh38/dbsnp_146.hg38.vcf.gz"
+reference_fasta = "/data/references/GRCh38/genome.fa"
+genome_build = "GRCh38"
+
+[defaults]
+threads = 4
+memory = "8G"
+
+[[rules]]
+name = "fastp"
+input = [
+    "raw/{sample}_R1.fq.gz",
+    "raw/{sample}_R2.fq.gz",
+]
+output = [
+    "trimmed/{sample}_R1.fq.gz",
+    "trimmed/{sample}_R2.fq.gz",
+    "qc/{sample}_fastp.json",
+]
+shell = "fastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]} --json {output[2]} --thread {threads}"
+
+[rules.resources]
+threads = 4
+
+[rules.environment]
+conda = "envs/fastp.yaml"
+
+[[rules]]
+name = "bwa_mem2"
+input = [
+    "trimmed/{sample}_R1.fq.gz",
+    "trimmed/{sample}_R2.fq.gz",
+]
+output = ["aligned/{sample}.sorted.bam"]
+shell = "bwa-mem2 mem -t {threads} {config.reference_fasta} {input[0]} {input[1]} | samtools sort -@ 4 -o {output[0]}"
+
+[rules.resources]
+threads = 8
+memory = "16G"
+
+[rules.environment]
+conda = "envs/bwa_mem2.yaml"
+
+[[rules]]
+name = "markdup"
+input = ["aligned/{sample}.sorted.bam"]
+output = [
+    "dedup/{sample}.dedup.bam",
+    "qc/{sample}.markdup_metrics.txt",
+]
+shell = "gatk MarkDuplicates -I {input[0]} -O {output[0]} -M {output[1]}"
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+[[rules]]
+name = "haplotype_caller"
+input = ["dedup/{sample}.dedup.bam"]
+output = ["gvcf/{sample}.g.vcf.gz"]
+shell = "gatk HaplotypeCaller -I {input[0]} -R {config.reference_fasta} -O {output[0]} -ERC GVCF"
+description = "Per-sample GVCF generation for joint genotyping"
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+[[rules]]
+name = "multiqc"
+input = ["qc/"]
+output = ["reports/multiqc_report.html"]
+shell = "multiqc qc/ -o reports/"
+description = "Aggregate QC metrics for the entire cohort"
+# Directory inputs form no file-based DAG edges; depends_on keeps multiqc
+# behind every rule that writes into qc/ (expands to all sample instances).
+depends_on = [
+    "fastp",
+    "markdup",
+]
+
+[rules.resources]
+threads = 2
+memory = "4G"
+
+[rules.environment]
+conda = "envs/multiqc.yaml"
+
+[[sample_groups]]
+name = "control"
+samples = [
+    "CTRL_001",
+    "CTRL_002",
+    "CTRL_003",
+]
+
+[sample_groups.metadata]
+tissue = "blood"
+
+[[sample_groups]]
+name = "case"
+samples = [
+    "CASE_001",
+    "CASE_002",
+]
+
+[sample_groups.metadata]
+tissue = "tumor"
+```
+
+## Try It
+
+```bash
+# Inspect the expanded plan first — no data needed:
+oxo-flow dry-run examples/gallery/12_cohort_analysis.oxoflow
+
+# Copy the environment specs next to the workflow, adapt [config]
+# paths to your data, then run:
+oxo-flow run examples/gallery/12_cohort_analysis.oxoflow
+```
+
+!!! note "Input data and environments"
+
+    Input paths under `/data/references/...` and `raw/` are placeholders —
+    replace them with your own data. The referenced `envs/*.yaml` specs ship
+    in [`examples/envs/`](https://github.com/Traitome/oxo-flow/tree/main/examples/envs).
+

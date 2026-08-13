@@ -1,3 +1,8 @@
+# 13 — Germline Variant Calling (Simple Chain)
+# Per-sample germline best practices: FastQC/fastp QC → BWA-MEM2 →
+# MarkDuplicates → BQSR → HaplotypeCaller GVCF. The simpler sibling of
+# gallery 07 (which adds joint calling, VQSR, and annotation).
+
 [workflow]
 name = "simple-variant-calling"
 version = "1.0.0"

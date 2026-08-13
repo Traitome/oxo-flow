@@ -1,0 +1,154 @@
+# Conditional Execution
+
+Rule-level `when` conditions switch pipeline branches on config values: WGS vs WES coverage modes, optional QC gating, and downstream annotation gated on flags and thresholds.
+
+## What It Demonstrates
+
+- `when` supports bare boolean config keys (`config.run_qc`), string comparisons (`config.sequencing_mode == "WGS"`), and compound expressions with `&&` / `||` / `!`
+- Condition-skipped rules count as satisfied for their dependents — safe to `depends_on` them
+- Directory inputs form no file-based DAG edges; the report rule uses `depends_on` to stay behind its QC producers
+- Read groups are set at alignment so every downstream tool (GATK included) sees proper SM tags
+
+## Workflow Definition
+
+```toml
+# examples/gallery/11_conditional_workflow.oxoflow
+# 11 — Conditional Execution
+# Demonstrates when-conditionals: WGS/WES mode switching, optional QC,
+# and downstream gating on config flags and thresholds.
+
+[workflow]
+name = "conditional-workflow"
+version = "1.0.0"
+description = "Illustrates when-conditional rule execution"
+author = "oxo-flow examples"
+
+[config]
+sequencing_mode = "WGS"
+reference = "/ref/hg38.fa"
+target_bed = ""
+min_coverage = 30
+run_annotation = true
+run_qc = true
+
+[defaults]
+threads = 4
+memory = "8G"
+
+[[rules]]
+name = "align"
+input = [
+    "raw/sample_R1.fq.gz",
+    "raw/sample_R2.fq.gz",
+]
+output = ["aligned/sample.sorted.bam"]
+shell = "bwa mem -t {threads} -R '@RG\tID:sample\tSM:sample\tPL:ILLUMINA' {config.reference} {input[0]} {input[1]} | samtools sort -o {output[0]}"
+
+[rules.resources]
+threads = 8
+
+[rules.environment]
+conda = "envs/bwa.yaml"
+
+[[rules]]
+name = "fastqc"
+input = [
+    "raw/sample_R1.fq.gz",
+    "raw/sample_R2.fq.gz",
+]
+output = [
+    "qc/sample_R1_fastqc.html",
+    "qc/sample_R2_fastqc.html",
+]
+shell = "fastqc {input[0]} {input[1]} -o qc/"
+when = "config.run_qc"
+
+[rules.environment]
+conda = "envs/fastqc.yaml"
+
+[[rules]]
+name = "wgs_coverage"
+input = ["aligned/sample.sorted.bam"]
+output = ["qc/sample_wgs_coverage.txt"]
+shell = "mosdepth --quantize 0:1:10:50: qc/sample aligned/sample.sorted.bam"
+when = 'config.sequencing_mode == "WGS"'
+
+[rules.environment]
+conda = "envs/mosdepth.yaml"
+
+[[rules]]
+name = "wes_coverage"
+input = ["aligned/sample.sorted.bam"]
+output = ["qc/sample_wes_coverage.txt"]
+shell = "mosdepth --by {config.target_bed} qc/sample aligned/sample.sorted.bam"
+when = 'config.sequencing_mode == "WES" && config.target_bed != ""'
+
+[rules.environment]
+conda = "envs/mosdepth.yaml"
+
+[[rules]]
+name = "haplotype_caller"
+input = ["aligned/sample.sorted.bam"]
+output = ["variants/sample.g.vcf.gz"]
+shell = "gatk HaplotypeCaller -I {input[0]} -R {config.reference} -O {output[0]} -ERC GVCF"
+
+[rules.resources]
+threads = 4
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+[[rules]]
+name = "vep_annotate"
+input = ["variants/sample.g.vcf.gz"]
+output = ["annotated/sample.annotated.vcf.gz"]
+shell = "vep --input_file {input[0]} --output_file {output[0]} --format vcf --vcf --offline --cache"
+when = "config.run_annotation && config.min_coverage >= 20"
+
+[rules.resources]
+threads = 4
+
+[rules.environment]
+conda = "envs/vep.yaml"
+
+[[rules]]
+name = "report"
+input = [
+    "annotated/sample.annotated.vcf.gz",
+    "qc/",
+]
+output = ["reports/sample_report.html"]
+shell = "python scripts/report.py --vcf {input[0]} --qc qc/ --out {output[0]}"
+when = "config.run_annotation && config.run_qc"
+# Directory inputs form no file-based DAG edges; keep the report behind the
+# qc producers (condition-skipped deps count as satisfied).
+depends_on = [
+    "fastqc",
+    "wgs_coverage",
+    "wes_coverage",
+]
+
+[rules.resources]
+threads = 2
+
+[rules.environment]
+conda = "envs/report.yaml"
+```
+
+## Try It
+
+```bash
+# Inspect the expanded plan first — no data needed:
+oxo-flow dry-run examples/gallery/11_conditional_workflow.oxoflow
+
+# Copy the environment specs next to the workflow, adapt [config]
+# paths to your data, then run:
+oxo-flow run examples/gallery/11_conditional_workflow.oxoflow
+```
+
+!!! note "Input data and environments"
+
+    Input paths under `/data/references/...` and `raw/` are placeholders —
+    replace them with your own data. The referenced `envs/*.yaml` specs ship
+    in [`examples/envs/`](https://github.com/Traitome/oxo-flow/tree/main/examples/envs).
+
