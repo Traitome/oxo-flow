@@ -1437,6 +1437,57 @@ pub fn diff_workflows(a: &WorkflowConfig, b: &WorkflowConfig) -> Vec<WorkflowDif
         }
     }
 
+    // Compare defaults (threads/memory/environment) — silently ignoring
+    // these changes hides meaningful workflow modifications.
+    if a.defaults.threads != b.defaults.threads {
+        diffs.push(WorkflowDiff {
+            category: "defaults".to_string(),
+            description: format!(
+                "defaults threads changed: {:?} → {:?}",
+                a.defaults.threads, b.defaults.threads
+            ),
+        });
+    }
+    if a.defaults.memory != b.defaults.memory {
+        diffs.push(WorkflowDiff {
+            category: "defaults".to_string(),
+            description: format!(
+                "defaults memory changed: {:?} → {:?}",
+                a.defaults.memory, b.defaults.memory
+            ),
+        });
+    }
+    if a.defaults.environment != b.defaults.environment {
+        diffs.push(WorkflowDiff {
+            category: "defaults".to_string(),
+            description: "defaults environment changed".to_string(),
+        });
+    }
+
+    // Compare pairs and sample groups (count + membership)
+    if a.pairs.len() != b.pairs.len() {
+        diffs.push(WorkflowDiff {
+            category: "pairs".to_string(),
+            description: format!("pairs count changed: {} → {}", a.pairs.len(), b.pairs.len()),
+        });
+    }
+    let a_groups: Vec<(String, usize)> = a
+        .sample_groups
+        .iter()
+        .map(|g| (g.name.clone(), g.samples.len()))
+        .collect();
+    let b_groups: Vec<(String, usize)> = b
+        .sample_groups
+        .iter()
+        .map(|g| (g.name.clone(), g.samples.len()))
+        .collect();
+    if a_groups != b_groups {
+        diffs.push(WorkflowDiff {
+            category: "sample_groups".to_string(),
+            description: format!("sample groups changed: {:?} → {:?}", a_groups, b_groups),
+        });
+    }
+
     diffs
 }
 
@@ -2396,6 +2447,83 @@ mod tests {
         let b = WorkflowConfig::parse(toml_b).unwrap();
         let diffs = diff_workflows(&a, &b);
         assert!(diffs.iter().any(|d| d.description.contains("rule added")));
+    }
+
+    #[test]
+    fn diff_defaults_change_detected() {
+        let toml_a = r#"
+            [workflow]
+            name = "test"
+
+            [defaults]
+            threads = 2
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hello"
+        "#;
+        let toml_b = r#"
+            [workflow]
+            name = "test"
+
+            [defaults]
+            threads = 4
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hello"
+        "#;
+        let a = WorkflowConfig::parse(toml_a).unwrap();
+        let b = WorkflowConfig::parse(toml_b).unwrap();
+        let diffs = diff_workflows(&a, &b);
+        assert!(
+            diffs
+                .iter()
+                .any(|d| d.category == "defaults" && d.description.contains("threads")),
+            "defaults threads change must be detected: {diffs:?}"
+        );
+    }
+
+    #[test]
+    fn diff_pairs_count_change_detected() {
+        let toml_a = r#"
+            [workflow]
+            name = "test"
+
+            [[pairs]]
+            pair_id = "P1"
+            experiment = "E1"
+            control = "C1"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hello"
+        "#;
+        let toml_b = r#"
+            [workflow]
+            name = "test"
+
+            [[pairs]]
+            pair_id = "P1"
+            experiment = "E1"
+            control = "C1"
+
+            [[pairs]]
+            pair_id = "P2"
+            experiment = "E2"
+            control = "C2"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hello"
+        "#;
+        let a = WorkflowConfig::parse(toml_a).unwrap();
+        let b = WorkflowConfig::parse(toml_b).unwrap();
+        let diffs = diff_workflows(&a, &b);
+        assert!(
+            diffs.iter().any(|d| d.category == "pairs"),
+            "pairs count change must be detected: {diffs:?}"
+        );
     }
 
     #[test]
