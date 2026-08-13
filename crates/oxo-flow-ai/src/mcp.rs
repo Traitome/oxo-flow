@@ -22,10 +22,17 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::error::AiError;
 use crate::tools::Tool;
 use crate::types::ToolDef;
+
+/// Connect timeout for MCP HTTP endpoints.
+const MCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Total request timeout for MCP HTTP calls (a hung server fails the
+/// call instead of blocking the AI command).
+const MCP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 // ── MCP Client trait ───────────────────────────────────────────────────────
 
@@ -80,6 +87,10 @@ pub struct McpAnnotations {
 pub struct McpToolBridge {
     client: Arc<dyn McpClient>,
     tool_def: McpToolDef,
+    /// Registry key — must equal `def().name` (`mcp_<server>_<tool>`):
+    /// the agent invokes tools by their def name, and [`ToolRegistry`]
+    /// keys on `Tool::name()`. Stored once so the two stay in sync.
+    name: String,
 }
 
 impl McpToolBridge {
@@ -88,9 +99,13 @@ impl McpToolBridge {
         let tools = client.list_tools().await?;
         Ok(tools
             .into_iter()
-            .map(|tool_def| McpToolBridge {
-                client: Arc::clone(&client),
-                tool_def,
+            .map(|tool_def| {
+                let name = format!("mcp_{}_{}", client.server_name(), tool_def.name);
+                McpToolBridge {
+                    client: Arc::clone(&client),
+                    tool_def,
+                    name,
+                }
             })
             .collect())
     }
@@ -100,7 +115,7 @@ impl McpToolBridge {
 impl Tool for McpToolBridge {
     fn def(&self) -> ToolDef {
         ToolDef {
-            name: format!("mcp_{}_{}", self.client.server_name(), self.tool_def.name),
+            name: self.name.clone(),
             description: format!(
                 "[MCP: {}] {}",
                 self.client.server_name(),
@@ -111,10 +126,7 @@ impl Tool for McpToolBridge {
     }
 
     fn name(&self) -> &str {
-        // Return a stable reference — use a static string hack
-        // In practice, this returns the def's name, but we need &str
-        // We'll use the server_name as a stable prefix
-        self.client.server_name()
+        &self.name
     }
 
     async fn execute(&self, arguments: &str) -> Result<String, AiError> {
@@ -172,10 +184,19 @@ impl McpHttpClient {
             .chars()
             .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
             .collect::<String>();
+        // Bound every request: a hung MCP server must fail the tool call
+        // (fail-safe), never block the AI command indefinitely.
+        let http = reqwest::Client::builder()
+            .connect_timeout(MCP_CONNECT_TIMEOUT)
+            .timeout(MCP_REQUEST_TIMEOUT)
+            .build()
+            .map_err(|e| AiError::Config {
+                message: format!("failed to build MCP HTTP client: {e}"),
+            })?;
         Ok(Self {
             base_url,
             session_id: std::sync::Mutex::new(None),
-            http: reqwest::Client::new(),
+            http,
             server_name,
         })
     }
@@ -356,6 +377,42 @@ mod tests {
         }
     }
 
+    /// A test MCP client that serves two tools from one server (the
+    /// registry-collision regression case: `name()` must key on the def
+    /// name, never the bare server name).
+    #[derive(Clone)]
+    struct TwoToolClient;
+
+    #[async_trait]
+    impl McpClient for TwoToolClient {
+        async fn list_tools(&self) -> Result<Vec<McpToolDef>, AiError> {
+            Ok(vec![
+                McpToolDef {
+                    name: "read_tool".into(),
+                    description: "read-only lookup".into(),
+                    input_schema: serde_json::json!({}),
+                    annotations: Some(McpAnnotations {
+                        read_only_hint: Some(true),
+                    }),
+                },
+                McpToolDef {
+                    name: "write_tool".into(),
+                    description: "mutating tool".into(),
+                    input_schema: serde_json::json!({}),
+                    annotations: None,
+                },
+            ])
+        }
+
+        async fn call_tool(&self, name: &str, args: &str) -> Result<String, AiError> {
+            Ok(format!("{name}: {args}"))
+        }
+
+        fn server_name(&self) -> &str {
+            "two-server"
+        }
+    }
+
     #[tokio::test]
     async fn mcp_client_lists_tools() {
         let client = TestMcpClient;
@@ -382,6 +439,37 @@ mod tests {
         let def = bridges[0].def();
         assert!(def.name.contains("mcp_"));
         assert!(def.description.contains("test-server"));
+    }
+
+    /// Regression (issue #61): the agent invokes tools by the name exposed
+    /// in the tool defs (`mcp_<server>_<tool>`), and the registry keys on
+    /// `Tool::name()` — so bridges must register under their def name.
+    /// Keying on the bare server name made model-invoked MCP tools
+    /// unresolvable and collapsed all tools of one server into a single
+    /// registry entry.
+    #[tokio::test]
+    async fn mcp_bridges_register_under_def_names() {
+        let bridges = McpToolBridge::discover(Arc::new(TwoToolClient))
+            .await
+            .unwrap();
+        assert_eq!(bridges.len(), 2);
+
+        let mut registry = crate::tools::ToolRegistry::new();
+        for bridge in bridges {
+            registry.register(Box::new(bridge));
+        }
+
+        // No key collisions: every tool must survive registration.
+        assert_eq!(registry.len(), 2);
+        // Model-invoked names must resolve in the registry.
+        let read_name = "mcp_two-server_read_tool";
+        let write_name = "mcp_two-server_write_tool";
+        assert!(registry.get(read_name).is_some());
+        assert!(registry.get(write_name).is_some());
+        // readOnlyHint=true must mark the tool read-only (auto-execute);
+        // the unannotated one stays approval-gated.
+        assert!(registry.is_read_only(read_name));
+        assert!(!registry.is_read_only(write_name));
     }
 
     /// A minimal single-threaded HTTP fixture serving JSON-RPC responses —
