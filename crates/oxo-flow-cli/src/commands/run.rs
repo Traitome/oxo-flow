@@ -2308,29 +2308,50 @@ logical errors. Output format per rule:
     Ok(())
 }
 
-pub async fn handle_status(checkpoint_path: PathBuf, json: bool) -> Result<()> {
+/// Default checkpoint location used when `status` is invoked without an argument.
+const DEFAULT_CHECKPOINT: &str = ".oxo-flow/checkpoint.json";
+
+/// Checkpoint rules ordered by wall-clock time (slowest first), plus total time.
+fn rule_timings(state: &CheckpointState) -> (Vec<(&str, f64)>, f64) {
+    let mut timings: Vec<(&str, f64)> = state
+        .benchmarks
+        .iter()
+        .map(|(rule, bench)| (rule.as_str(), bench.wall_time_secs))
+        .collect();
+    // Deterministic order: slowest first (HashSet iteration order is arbitrary)
+    timings.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let total = timings.iter().map(|(_, secs)| secs).sum();
+    (timings, total)
+}
+
+pub async fn handle_status(
+    checkpoint: Option<PathBuf>,
+    json: bool,
+    timing: bool,
+    limit: usize,
+) -> Result<()> {
     print_banner();
 
     // Detect common mistake: user passes a .oxoflow file instead of checkpoint
-    if checkpoint_path
-        .extension()
-        .is_some_and(|ext| ext == "oxoflow")
+    if let Some(path) = &checkpoint
+        && path.extension().is_some_and(|ext| ext == "oxoflow")
     {
         eprintln!(
             "{} '{}' appears to be a workflow file, not a checkpoint.",
             "Warning:".bold().yellow(),
-            checkpoint_path.display()
+            path.display()
         );
         eprintln!(
             "  The 'status' command expects a checkpoint file (e.g., .oxo-flow/checkpoint.json)."
         );
         eprintln!(
             "  Run 'oxo-flow run {}' first to generate a checkpoint.",
-            checkpoint_path.display()
+            path.display()
         );
         anyhow::bail!("Cannot read workflow file as checkpoint");
     }
 
+    let checkpoint_path = checkpoint.unwrap_or_else(|| PathBuf::from(DEFAULT_CHECKPOINT));
     let state = CheckpointState::load_from_file(&checkpoint_path).with_context(|| {
         format!(
             "failed to load checkpoint from '{}'.\n  \
@@ -2347,13 +2368,23 @@ pub async fn handle_status(checkpoint_path: PathBuf, json: bool) -> Result<()> {
     failed.sort_unstable();
 
     if json {
-        let output = serde_json::json!({
+        let mut output = serde_json::json!({
             "command": "status",
             "checkpoint": checkpoint_path.display().to_string(),
             "workflow": state.workflow_path,
             "completed": completed,
             "failed": failed,
         });
+        if timing {
+            let (timings, total) = rule_timings(&state);
+            // serde_json::Map is a BTreeMap: keys stay deterministically sorted
+            let timings_map: serde_json::Map<String, serde_json::Value> = timings
+                .into_iter()
+                .map(|(rule, secs)| (rule.to_string(), serde_json::json!(secs)))
+                .collect();
+            output["timings"] = serde_json::Value::Object(timings_map);
+            output["total_time_secs"] = serde_json::json!(total);
+        }
         println!("{}", serde_json::to_string_pretty(&output)?);
         return Ok(());
     }
@@ -2366,17 +2397,32 @@ pub async fn handle_status(checkpoint_path: PathBuf, json: bool) -> Result<()> {
     eprintln!("  Completed: {}", completed.len());
     eprintln!("  Failed:    {}", failed.len());
 
-    if !completed.is_empty() {
-        eprintln!("\n{}", "Completed rules:".bold().green());
-        for rule in &completed {
-            eprintln!("  {} {}", "✓".green(), rule);
+    if timing {
+        let (timings, total) = rule_timings(&state);
+        if !timings.is_empty() {
+            eprintln!(
+                "\n{} (top {}, total {:.1}s)",
+                "Rule timings:".bold().green(),
+                limit.min(timings.len()),
+                total
+            );
+            for (rule, secs) in timings.iter().take(limit) {
+                eprintln!("  {} {} ({:.1}s)", "✓".green(), rule, secs);
+            }
         }
-    }
+    } else {
+        if !completed.is_empty() {
+            eprintln!("\n{}", "Completed rules:".bold().green());
+            for rule in &completed {
+                eprintln!("  {} {}", "✓".green(), rule);
+            }
+        }
 
-    if !failed.is_empty() {
-        eprintln!("\n{}", "Failed rules:".bold().red());
-        for rule in &failed {
-            eprintln!("  {} {}", "✗".red(), rule);
+        if !failed.is_empty() {
+            eprintln!("\n{}", "Failed rules:".bold().red());
+            for rule in &failed {
+                eprintln!("  {} {}", "✗".red(), rule);
+            }
         }
     }
 

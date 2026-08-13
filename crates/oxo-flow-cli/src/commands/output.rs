@@ -249,9 +249,17 @@ pub fn handle_export(workflow: PathBuf, format: String, output: Option<PathBuf>)
             oxo_flow_core::container::generate_singularity_def(&config, &pkg)
                 .map_err(|e| anyhow::anyhow!(e))?
         }
+        "compose" => {
+            let pkg = oxo_flow_core::container::PackageConfig {
+                format: oxo_flow_core::container::ContainerFormat::Compose,
+                ..Default::default()
+            };
+            oxo_flow_core::container::generate_compose_file(&config, &pkg)
+                .map_err(|e| anyhow::anyhow!(e))?
+        }
         "toml" => oxo_flow_core::format::format_workflow(&config),
         other => anyhow::bail!(
-            "unsupported export format '{}'. Supported formats: docker, singularity, toml",
+            "unsupported export format '{}'. Supported formats: docker, singularity, compose, toml",
             other
         ),
     };

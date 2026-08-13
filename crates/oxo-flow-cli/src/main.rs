@@ -11,14 +11,13 @@ use crate::commands::batch::batch_command;
 use crate::commands::clean::clean_command;
 use crate::commands::cluster::cluster_command;
 use crate::commands::completions::handle_completions;
-use crate::commands::infra::{env_command, package_command, profile_command};
+use crate::commands::infra::{env_command, handle_license};
 use crate::commands::output::{handle_diff, handle_export, handle_graph, handle_report};
 use crate::commands::project::{init_command, template_command};
 use crate::commands::provenance::provenance_verify_command;
 use crate::commands::publish::publish_command;
 use crate::commands::quality::{
     deep_check_command, format_command, lint_command, touch_command, validate_command,
-    watch_command,
 };
 use crate::commands::run::{
     debug_command, dry_run_command, handle_status, resume_command, run_command,
@@ -101,7 +100,7 @@ pub enum Commands {
         resume_failed: bool,
         #[arg(
             long,
-            help = "Execution profile name (loaded from profiles/<NAME>.toml; use 'oxo-flow profile' to manage)"
+            help = "Execution profile name (loaded from profiles/<NAME>.toml or profiles/<NAME>.oxoflow next to the workflow; fills in config keys the workflow does not set)"
         )]
         profile: Option<String>,
         #[arg(
@@ -320,13 +319,24 @@ pub enum Commands {
         )]
         expanded: bool,
     },
-    /// Show execution status from a checkpoint file.
+    /// Show execution status and per-rule timings from a checkpoint file.
     Status {
         #[arg(
             value_name = "CHECKPOINT",
-            help = "Path to the checkpoint file (.oxo-flow/checkpoint.json)"
+            help = "Path to the checkpoint file (default: .oxo-flow/checkpoint.json)"
         )]
-        checkpoint: PathBuf,
+        checkpoint: Option<PathBuf>,
+        /// Show per-rule wall-clock times and total runtime (slowest first).
+        #[arg(long)]
+        timing: bool,
+        #[arg(
+            short = 'n',
+            long,
+            default_value = "10",
+            requires = "timing",
+            help = "Maximum number of rules to show in the --timing view"
+        )]
+        limit: usize,
     },
     /// Pull a published bundle from a remote source.
     Pull {
@@ -410,20 +420,6 @@ pub enum Commands {
         #[arg(long)]
         ai: bool,
     },
-    /// Watch workflow file for changes and re-validate/re-run.
-    Watch {
-        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
-        workflow: PathBuf,
-        #[arg(long, help = "Re-run the workflow automatically when the file changes")]
-        run: bool,
-        #[arg(
-            short = 'j',
-            long,
-            default_value = "1",
-            help = "Maximum number of concurrent jobs"
-        )]
-        jobs: usize,
-    },
     /// Mark workflow outputs as up-to-date without re-executing rules.
     Touch {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
@@ -456,15 +452,6 @@ pub enum Commands {
         )]
         workdir: Option<PathBuf>,
     },
-    /// Package a workflow into a container image.
-    Package {
-        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
-        workflow: PathBuf,
-        #[arg(short = 'f', long, default_value = "docker", help = "Output format")]
-        format: String,
-        #[arg(short = 'o', long, help = "Output file path")]
-        output: Option<PathBuf>,
-    },
     /// Start the web interface server.
     Serve {
         /// Server operation mode: personal, team, or hpc.
@@ -485,11 +472,6 @@ pub enum Commands {
     Completions {
         #[arg(value_enum, help = "Shell to generate completions for")]
         shell: clap_complete::Shell,
-    },
-    /// Manage execution profiles.
-    Profile {
-        #[command(subcommand)]
-        action: ProfileAction,
     },
     /// Export a workflow to a container definition or standalone TOML.
     Export {
@@ -554,18 +536,6 @@ pub enum Commands {
     },
     /// Output the JSON Schema for the .oxoflow format.
     Schema,
-    /// Show execution history from checkpoints.
-    History {
-        #[arg(value_name = "DIR", help = "Directory path")]
-        dir: Option<PathBuf>,
-        #[arg(
-            short = 'n',
-            long,
-            default_value = "10",
-            help = "Maximum number of entries to show"
-        )]
-        limit: usize,
-    },
     /// Run a workflow in test mode, validating and verifying outputs.
     Test {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
@@ -660,19 +630,6 @@ pub enum EnvAction {
         )]
         backend: String,
     },
-}
-
-#[derive(Subcommand, Debug)]
-pub enum ProfileAction {
-    /// List all available execution profiles.
-    List,
-    /// Show the contents of a named profile.
-    Show {
-        #[arg(value_name = "NAME", help = "Profile name")]
-        name: String,
-    },
-    /// Show the profile that would be used by default.
-    Current,
 }
 
 #[derive(Subcommand, Debug)]
@@ -1061,7 +1018,11 @@ async fn main() -> Result<()> {
             output,
             expanded,
         } => handle_graph(workflow, format, output, expanded)?,
-        Commands::Status { checkpoint } => handle_status(checkpoint, cli.json).await?,
+        Commands::Status {
+            checkpoint,
+            timing,
+            limit,
+        } => handle_status(checkpoint, cli.json, timing, limit).await?,
         Commands::Pull { url, output } => crate::commands::pull::pull_command(&url, output).await?,
         Commands::Config { action } => crate::commands::infra::handle_config(action)?,
         Commands::Diff {
@@ -1091,11 +1052,6 @@ async fn main() -> Result<()> {
             strict,
             ai,
         } => lint_command(workflow, strict, cli.json, ai).await?,
-        Commands::Watch {
-            workflow,
-            run,
-            jobs,
-        } => watch_command(workflow, run, jobs).await?,
         Commands::Touch { workflow, rules } => touch_command(workflow, rules)?,
         Commands::Report {
             workflow,
@@ -1105,11 +1061,6 @@ async fn main() -> Result<()> {
             ai,
             workdir,
         } => handle_report(workflow, format, output, checkpoint_path, ai, workdir).await?,
-        Commands::Package {
-            workflow,
-            format,
-            output,
-        } => package_command(workflow, format, output)?,
         Commands::Serve {
             mode,
             host,
@@ -1117,7 +1068,6 @@ async fn main() -> Result<()> {
             base_path,
         } => crate::commands::web::handle_serve(mode, host, port, base_path).await?,
         Commands::Completions { shell } => handle_completions(shell)?,
-        Commands::Profile { action } => profile_command(action)?,
         Commands::Export {
             workflow,
             format,
@@ -1160,46 +1110,6 @@ async fn main() -> Result<()> {
         Commands::Schema => {
             let schema = include_str!("../schema/oxoflow-v1.schema.json");
             println!("{schema}");
-        }
-        Commands::History { dir, limit } => {
-            use colored::Colorize;
-            let base = dir.unwrap_or_else(|| PathBuf::from("."));
-            let checkpoint_path = base.join(".oxo-flow").join("checkpoint.json");
-
-            if checkpoint_path.exists() {
-                if let Ok(state) =
-                    oxo_flow_core::executor::CheckpointState::load_from_file(&checkpoint_path)
-                {
-                    eprintln!("{} {}", "History:".bold().cyan(), checkpoint_path.display());
-                    eprintln!(
-                        "  Workflow: {}",
-                        state.workflow_path.as_deref().unwrap_or("unknown")
-                    );
-                    eprintln!("  Completed: {}", state.completed_rules.len());
-                    eprintln!("  Failed:    {}", state.failed_rules.len());
-                    if !state.benchmarks.is_empty() {
-                        let total: f64 = state.benchmarks.values().map(|b| b.wall_time_secs).sum();
-                        eprintln!("  Total time: {:.1}s", total);
-                    }
-                    if !state.completed_rules.is_empty() {
-                        eprintln!("\n  {} (showing up to {})", "Recent rules:".bold(), limit);
-                        for rule in state.completed_rules.iter().take(limit) {
-                            let bench = state.benchmarks.get(rule);
-                            let time =
-                                bench.map_or("-".into(), |b| format!("{:.1}s", b.wall_time_secs));
-                            eprintln!("    ✓ {} ({})", rule, time);
-                        }
-                    }
-                } else {
-                    eprintln!("  {} failed to parse checkpoint", "✗".red());
-                }
-            } else {
-                eprintln!(
-                    "{} No checkpoint found at {}. Run a workflow first.",
-                    "Note:".yellow(),
-                    checkpoint_path.display()
-                );
-            }
         }
         Commands::Test {
             workflow,
@@ -1294,40 +1204,7 @@ async fn main() -> Result<()> {
             with_lockfiles,
             format,
         } => publish_command(workflow, output, with_lockfiles, format)?,
-        Commands::License { path } => {
-            use colored::Colorize;
-            let status = oxo_flow_web::check_license();
-            if let Some(p) = path {
-                match oxo_license::load_and_verify(Some(&p), &oxo_flow_web::OXO_FLOW_CONFIG) {
-                    Ok(license) => {
-                        println!("{} License verified successfully", "✓".green().bold());
-                        println!("  Type:    {}", license.payload.license_type);
-                        println!("  Issued:  {}", license.payload.issued_to_org);
-                        println!("  Schema:  {}", license.payload.schema);
-                        println!("  ID:      {}", license.payload.license_id);
-                    }
-                    Err(e) => {
-                        eprintln!("{} License verification failed: {e}", "✗".red().bold());
-                        std::process::exit(1);
-                    }
-                }
-            } else {
-                println!("License status:");
-                if status.valid {
-                    println!(
-                        "  Status:  {} ({})",
-                        "Valid".green().bold(),
-                        status.license_type.as_deref().unwrap_or("unknown")
-                    );
-                    if let Some(org) = &status.issued_to {
-                        println!("  Issued:  {org}");
-                    }
-                } else {
-                    println!("  Status:  {}", "Invalid".red().bold());
-                }
-                println!("  Message: {}", status.message);
-            }
-        }
+        Commands::License { path } => handle_license(path)?,
     }
 
     Ok(())

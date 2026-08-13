@@ -299,7 +299,7 @@ fn cli_ai_explain_unknown_step_fails_fast_without_provider() {
         .args([
             "ai",
             "explain",
-            "examples/simple_variant_calling.oxoflow",
+            "examples/gallery/13_simple_variant_calling.oxoflow",
             "--step",
             "no_such_rule",
         ])
@@ -313,7 +313,11 @@ fn cli_ai_explain_without_provider_fails_cleanly() {
     let dir = tempfile::tempdir().unwrap();
     oxo_flow_cmd()
         .env("HOME", dir.path())
-        .args(["ai", "explain", "examples/simple_variant_calling.oxoflow"])
+        .args([
+            "ai",
+            "explain",
+            "examples/gallery/13_simple_variant_calling.oxoflow",
+        ])
         .assert()
         .failure()
         .stderr(predicate::str::contains("AI provider not configured"))
@@ -332,7 +336,11 @@ fn cli_ai_unknown_action_errors() {
 #[test]
 fn cli_ai_test_rejects_workflow_arg() {
     oxo_flow_cmd()
-        .args(["ai", "test", "examples/simple_variant_calling.oxoflow"])
+        .args([
+            "ai",
+            "test",
+            "examples/gallery/13_simple_variant_calling.oxoflow",
+        ])
         .assert()
         .failure()
         .stderr(predicate::str::contains("takes no workflow"));
@@ -452,8 +460,8 @@ fn cli_no_args() {
 fn cli_validate_functional() {
     // Valid cases
     for file in &[
-        "examples/simple_variant_calling.oxoflow",
-        "examples/paired_experiment_control.oxoflow",
+        "examples/gallery/13_simple_variant_calling.oxoflow",
+        "examples/gallery/14_paired_experiment_control.oxoflow",
     ] {
         oxo_flow_cmd().args(["validate", file]).assert().success();
     }
@@ -479,7 +487,10 @@ fn cli_validate_functional() {
 #[test]
 fn cli_dry_run_simple() {
     oxo_flow_cmd()
-        .args(["dry-run", "examples/simple_variant_calling.oxoflow"])
+        .args([
+            "dry-run",
+            "examples/gallery/13_simple_variant_calling.oxoflow",
+        ])
         .assert()
         .success();
 }
@@ -487,7 +498,10 @@ fn cli_dry_run_simple() {
 #[test]
 fn cli_dry_run_paired() {
     oxo_flow_cmd()
-        .args(["dry-run", "examples/paired_experiment_control.oxoflow"])
+        .args([
+            "dry-run",
+            "examples/gallery/14_paired_experiment_control.oxoflow",
+        ])
         .assert()
         .success();
 }
@@ -595,7 +609,7 @@ fn cli_graph_outputs_dot() {
             "graph",
             "-f",
             "dot",
-            "examples/simple_variant_calling.oxoflow",
+            "examples/gallery/13_simple_variant_calling.oxoflow",
         ])
         .assert()
         .success()
@@ -620,7 +634,7 @@ fn cli_report_html() {
     oxo_flow_cmd()
         .args([
             "report",
-            "examples/simple_variant_calling.oxoflow",
+            "examples/gallery/13_simple_variant_calling.oxoflow",
             "-f",
             "html",
             "-o",
@@ -642,7 +656,7 @@ fn cli_report_json() {
     oxo_flow_cmd()
         .args([
             "report",
-            "examples/simple_variant_calling.oxoflow",
+            "examples/gallery/13_simple_variant_calling.oxoflow",
             "-f",
             "json",
             "-o",
@@ -662,36 +676,6 @@ fn cli_report_json() {
 #[test]
 fn cli_env_list() {
     oxo_flow_cmd().args(["env", "list"]).assert().success();
-}
-
-// ─── package subcommand ─────────────────────────────────────────────────────
-
-#[test]
-fn cli_package_docker() {
-    oxo_flow_cmd()
-        .args([
-            "package",
-            "examples/simple_variant_calling.oxoflow",
-            "-f",
-            "docker",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("FROM"));
-}
-
-#[test]
-fn cli_package_singularity() {
-    oxo_flow_cmd()
-        .args([
-            "package",
-            "examples/simple_variant_calling.oxoflow",
-            "-f",
-            "singularity",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Bootstrap"));
 }
 
 // ─── init subcommand ────────────────────────────────────────────────────────
@@ -780,7 +764,11 @@ fn cli_template_gallery_works_without_repo_checkout() {
 #[test]
 fn cli_clean_dry_run() {
     oxo_flow_cmd()
-        .args(["clean", "examples/simple_variant_calling.oxoflow", "-n"])
+        .args([
+            "clean",
+            "examples/gallery/13_simple_variant_calling.oxoflow",
+            "-n",
+        ])
         .assert()
         .success();
 }
@@ -913,6 +901,44 @@ fn cli_export_toml() {
         .assert()
         .success()
         .stdout(predicate::str::contains("[workflow]"));
+}
+
+#[test]
+fn cli_export_compose() {
+    oxo_flow_cmd()
+        .args([
+            "export",
+            "examples/gallery/01_hello_world.oxoflow",
+            "-f",
+            "compose",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("version: \"3.8\""))
+        .stdout(predicate::str::contains("services:"));
+}
+
+#[test]
+fn cli_export_compose_to_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("compose.yml");
+
+    oxo_flow_cmd()
+        .args([
+            "export",
+            "examples/gallery/01_hello_world.oxoflow",
+            "-f",
+            "compose",
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Exported compose"));
+
+    let content = fs::read_to_string(&out).unwrap();
+    assert!(content.contains("version: \"3.8\""));
+    assert!(content.contains("command: [\"run\", \"workflow.oxoflow\"]"));
 }
 
 // ─── Debug CLI tests ────────────────────────────────────────────────────────
@@ -1141,12 +1167,170 @@ fn cli_status_invalid_checkpoint() {
         .failure();
 }
 
+#[test]
+fn cli_status_defaults_to_workdir_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let flow_dir = dir.path().join(".oxo-flow");
+    fs::create_dir_all(&flow_dir).unwrap();
+    fs::write(
+        flow_dir.join("checkpoint.json"),
+        r#"{
+            "completed_rules": ["step_a"],
+            "failed_rules": [],
+            "benchmarks": {
+                "step_a": {"rule": "step_a", "wall_time_secs": 1.23, "max_memory_mb": null, "cpu_seconds": null}
+            }
+        }"#,
+    )
+    .unwrap();
+
+    oxo_flow_cmd()
+        .current_dir(dir.path())
+        .args(["status"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("step_a"));
+}
+
+#[test]
+fn cli_status_missing_default_checkpoint_fails() {
+    let dir = tempfile::tempdir().unwrap();
+
+    oxo_flow_cmd()
+        .current_dir(dir.path())
+        .args(["status"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(".oxo-flow/checkpoint.json"));
+}
+
+#[test]
+fn cli_status_timing_slowest_first_with_total() {
+    let dir = tempfile::tempdir().unwrap();
+    let checkpoint = dir.path().join("checkpoint.json");
+    fs::write(
+        &checkpoint,
+        r#"{
+            "completed_rules": ["step_fast", "step_slow"],
+            "failed_rules": [],
+            "benchmarks": {
+                "step_fast": {"rule": "step_fast", "wall_time_secs": 1.0, "max_memory_mb": null, "cpu_seconds": null},
+                "step_slow": {"rule": "step_slow", "wall_time_secs": 9.5, "max_memory_mb": null, "cpu_seconds": null}
+            }
+        }"#,
+    )
+    .unwrap();
+
+    oxo_flow_cmd()
+        .args(["status", checkpoint.to_str().unwrap(), "--timing"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Rule timings"))
+        .stderr(predicate::str::contains("total 10.5s"))
+        .stderr(predicate::function(|s: &str| {
+            s.find("step_slow (9.5s)")
+                .is_some_and(|slow| s.find("step_fast (1.0s)").is_some_and(|fast| slow < fast))
+        }));
+}
+
+#[test]
+fn cli_status_timing_limit_truncates() {
+    let dir = tempfile::tempdir().unwrap();
+    let checkpoint = dir.path().join("checkpoint.json");
+    fs::write(
+        &checkpoint,
+        r#"{
+            "completed_rules": ["step_fast", "step_mid", "step_slow"],
+            "failed_rules": [],
+            "benchmarks": {
+                "step_fast": {"rule": "step_fast", "wall_time_secs": 1.0, "max_memory_mb": null, "cpu_seconds": null},
+                "step_mid": {"rule": "step_mid", "wall_time_secs": 5.0, "max_memory_mb": null, "cpu_seconds": null},
+                "step_slow": {"rule": "step_slow", "wall_time_secs": 9.5, "max_memory_mb": null, "cpu_seconds": null}
+            }
+        }"#,
+    )
+    .unwrap();
+
+    oxo_flow_cmd()
+        .args([
+            "status",
+            checkpoint.to_str().unwrap(),
+            "--timing",
+            "-n",
+            "2",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("step_slow (9.5s)"))
+        .stderr(predicate::str::contains("step_mid (5.0s)"))
+        .stderr(predicate::str::contains("step_fast").not());
+}
+
+#[test]
+fn cli_status_json_includes_timings() {
+    let dir = tempfile::tempdir().unwrap();
+    let checkpoint = dir.path().join("checkpoint.json");
+    fs::write(
+        &checkpoint,
+        r#"{
+            "completed_rules": ["step_fast", "step_slow"],
+            "failed_rules": [],
+            "benchmarks": {
+                "step_fast": {"rule": "step_fast", "wall_time_secs": 1.0, "max_memory_mb": null, "cpu_seconds": null},
+                "step_slow": {"rule": "step_slow", "wall_time_secs": 9.5, "max_memory_mb": null, "cpu_seconds": null}
+            }
+        }"#,
+    )
+    .unwrap();
+
+    oxo_flow_cmd()
+        .args(["status", checkpoint.to_str().unwrap(), "--timing", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"timings\""))
+        .stdout(predicate::str::contains("\"step_slow\": 9.5"))
+        .stdout(predicate::str::contains("\"total_time_secs\": 10.5"));
+}
+
+#[test]
+fn cli_status_limit_requires_timing() {
+    oxo_flow_cmd()
+        .args(["status", "checkpoint.json", "-n", "5"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--timing"));
+}
+
+// ─── License subcommand ──────────────────────────────────────────────────────
+
+#[test]
+fn cli_license_status() {
+    oxo_flow_cmd()
+        .args(["license"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("License status:"));
+}
+
+#[test]
+fn cli_license_invalid_path_fails() {
+    oxo_flow_cmd()
+        .args(["license", "/nonexistent/license.lic"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("License verification failed"));
+}
+
 // ─── Config subcommand ───────────────────────────────────────────────────────
 
 #[test]
 fn cli_config_show() {
     oxo_flow_cmd()
-        .args(["config", "show", "examples/simple_variant_calling.oxoflow"])
+        .args([
+            "config",
+            "show",
+            "examples/gallery/13_simple_variant_calling.oxoflow",
+        ])
         .assert()
         .success()
         .stderr(predicate::str::contains("Name:"));
@@ -1155,7 +1339,11 @@ fn cli_config_show() {
 #[test]
 fn cli_config_stats() {
     oxo_flow_cmd()
-        .args(["config", "stats", "examples/simple_variant_calling.oxoflow"])
+        .args([
+            "config",
+            "stats",
+            "examples/gallery/13_simple_variant_calling.oxoflow",
+        ])
         .assert()
         .success()
         .stderr(predicate::str::contains("Rules:"))
@@ -1182,8 +1370,8 @@ fn cli_diff_identical_workflows() {
     oxo_flow_cmd()
         .args([
             "diff",
-            "examples/simple_variant_calling.oxoflow",
-            "examples/simple_variant_calling.oxoflow",
+            "examples/gallery/13_simple_variant_calling.oxoflow",
+            "examples/gallery/13_simple_variant_calling.oxoflow",
         ])
         .assert()
         .success()
@@ -1195,8 +1383,8 @@ fn cli_diff_different_workflows() {
     oxo_flow_cmd()
         .args([
             "diff",
-            "examples/simple_variant_calling.oxoflow",
-            "examples/paired_experiment_control.oxoflow",
+            "examples/gallery/13_simple_variant_calling.oxoflow",
+            "examples/gallery/14_paired_experiment_control.oxoflow",
         ])
         .assert()
         .success()
@@ -1208,7 +1396,7 @@ fn cli_diff_nonexistent_workflow() {
     oxo_flow_cmd()
         .args([
             "diff",
-            "examples/simple_variant_calling.oxoflow",
+            "examples/gallery/13_simple_variant_calling.oxoflow",
             "nonexistent.oxoflow",
         ])
         .assert()
@@ -1220,7 +1408,10 @@ fn cli_diff_nonexistent_workflow() {
 #[test]
 fn cli_format_outputs_canonical_toml() {
     oxo_flow_cmd()
-        .args(["format", "examples/simple_variant_calling.oxoflow"])
+        .args([
+            "format",
+            "examples/gallery/13_simple_variant_calling.oxoflow",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("[workflow]"));
@@ -1234,7 +1425,7 @@ fn cli_format_save_to_file() {
     oxo_flow_cmd()
         .args([
             "format",
-            "examples/simple_variant_calling.oxoflow",
+            "examples/gallery/13_simple_variant_calling.oxoflow",
             "-o",
             out.to_str().unwrap(),
         ])
@@ -1255,43 +1446,6 @@ fn cli_touch_command_success() {
         .args(["touch", "examples/gallery/01_hello_world.oxoflow"])
         .assert()
         .success();
-}
-
-// ─── Profile subcommand ──────────────────────────────────────────────────────
-
-#[test]
-fn cli_profile_list() {
-    oxo_flow_cmd()
-        .args(["profile", "list"])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("local"))
-        .stderr(predicate::str::contains("slurm"))
-        .stderr(predicate::str::contains("pbs"));
-}
-
-#[test]
-fn cli_profile_show_functional() {
-    for profile in &["local", "slurm", "pbs"] {
-        oxo_flow_cmd()
-            .args(["profile", "show", profile])
-            .assert()
-            .success();
-    }
-
-    oxo_flow_cmd()
-        .args(["profile", "show", "unknown-profile"])
-        .assert()
-        .failure();
-}
-
-#[test]
-fn cli_profile_current() {
-    oxo_flow_cmd()
-        .args(["profile", "current"])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("local"));
 }
 
 // ─── Env subcommand: extended ────────────────────────────────────────────────
@@ -1976,7 +2130,7 @@ fn cli_verbose_flag_produces_debug_output() {
         .args([
             "--verbose",
             "validate",
-            "examples/simple_variant_calling.oxoflow",
+            "examples/gallery/13_simple_variant_calling.oxoflow",
         ])
         .assert()
         .success();
@@ -1988,7 +2142,7 @@ fn cli_quiet_flag_suppresses_output() {
         .args([
             "--quiet",
             "validate",
-            "examples/simple_variant_calling.oxoflow",
+            "examples/gallery/13_simple_variant_calling.oxoflow",
         ])
         .output()
         .unwrap();
@@ -4772,6 +4926,32 @@ fn cli_resume_reuses_recorded_workdir() {
         stderr.contains("Workdir:"),
         "resume must show which workdir it is using, got:\n{stderr}"
     );
+}
+
+/// Resuming a checkpoint with no executed rules is not an error: it points
+/// the user at `run` and exits cleanly instead of launching an executor.
+#[test]
+fn cli_resume_empty_checkpoint_advises_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("empty.oxoflow");
+    fs::write(&wf, "[workflow]\nname = \"empty\"\nversion = \"1.0.0\"\n").unwrap();
+    let checkpoint = dir.path().join("checkpoint.json");
+    fs::write(
+        &checkpoint,
+        format!(
+            r#"{{"completed_rules": [], "failed_rules": [], "benchmarks": {{}}, "workflow_path": "{}"}}"#,
+            wf.display()
+        ),
+    )
+    .unwrap();
+
+    oxo_flow_cmd()
+        .args(["resume", checkpoint.to_str().unwrap()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "No rules have been executed yet. Use 'oxo-flow run' instead.",
+        ));
 }
 
 // ─── Concurrent-run protection (.oxo-flow/lock, issue #70) ──────────────────

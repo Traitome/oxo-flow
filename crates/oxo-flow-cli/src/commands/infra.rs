@@ -1,11 +1,10 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
 use oxo_flow_core::config::WorkflowConfig;
-use std::path::PathBuf;
 
 use crate::commands::print_banner;
 
-use crate::{ConfigAction, EnvAction, ProfileAction};
+use crate::{ConfigAction, EnvAction};
 
 pub async fn env_command(action: EnvAction) -> Result<()> {
     print_banner();
@@ -290,100 +289,35 @@ pub fn handle_config(action: ConfigAction) -> Result<()> {
     Ok(())
 }
 
-pub fn package_command(workflow: PathBuf, format: String, output: Option<PathBuf>) -> Result<()> {
-    print_banner();
-    let config = WorkflowConfig::from_file(&workflow)
-        .with_context(|| format!("failed to parse {}", workflow.display()))?;
-
-    let pkg_config = oxo_flow_core::container::PackageConfig {
-        format: match format.as_str() {
-            "docker" => oxo_flow_core::container::ContainerFormat::Docker,
-            "singularity" => oxo_flow_core::container::ContainerFormat::Singularity,
-            "compose" => oxo_flow_core::container::ContainerFormat::Compose,
-            other => anyhow::bail!(
-                "unsupported package format '{}'. Supported formats: docker, singularity, compose",
-                other
-            ),
-        },
-        ..Default::default()
-    };
-
-    let content = match pkg_config.format {
-        oxo_flow_core::container::ContainerFormat::Docker => {
-            oxo_flow_core::container::generate_dockerfile(&config, &pkg_config)?
-        }
-        oxo_flow_core::container::ContainerFormat::Singularity => {
-            oxo_flow_core::container::generate_singularity_def(&config, &pkg_config)?
-        }
-        oxo_flow_core::container::ContainerFormat::Compose => {
-            oxo_flow_core::container::generate_compose_file(&config, &pkg_config)?
-        }
-    };
-
-    match output {
-        Some(path) => {
-            std::fs::write(&path, &content)?;
-            eprintln!("Container definition written to {}", path.display());
-        }
-        None => {
-            println!("{content}");
-        }
-    }
-    Ok(())
-}
-
-pub fn profile_command(action: ProfileAction) -> Result<()> {
-    print_banner();
-    match action {
-        ProfileAction::List => {
-            eprintln!("{}", "Available execution profiles:".bold());
-            let profiles = ["local", "slurm", "pbs", "sge", "lsf"];
-            for p in &profiles {
-                let desc = match *p {
-                    "local" => "Local execution (default)",
-                    "slurm" => "SLURM cluster scheduler",
-                    "pbs" => "PBS/Torque cluster scheduler",
-                    "sge" => "Sun Grid Engine (SGE) scheduler",
-                    "lsf" => "IBM LSF scheduler",
-                    _ => "Unknown",
-                };
-                eprintln!("  {} {} — {}", "•".cyan(), p.bold(), desc);
+/// Verify a license file, or display the current license status without one.
+pub fn handle_license(path: Option<std::path::PathBuf>) -> Result<()> {
+    let status = oxo_flow_web::check_license();
+    if let Some(p) = path {
+        match oxo_license::load_and_verify(Some(&p), &oxo_flow_web::OXO_FLOW_CONFIG) {
+            Ok(license) => {
+                println!("{} License verified successfully", "✓".green().bold());
+                println!("  Type:    {}", license.payload.license_type);
+                println!("  Issued:  {}", license.payload.issued_to_org);
+                println!("  Schema:  {}", license.payload.schema);
+                println!("  ID:      {}", license.payload.license_id);
             }
+            Err(e) => anyhow::bail!("License verification failed: {e}"),
         }
-        ProfileAction::Show { name } => match name.as_str() {
-            "local" | "default" => {
-                eprintln!("{}", "Profile: local".bold());
-                eprintln!("  Executor:    local process");
-                eprintln!("  Max jobs:    auto (CPU count)");
-                eprintln!("  Retries:     0");
-                eprintln!("  Timeout:     none");
+    } else {
+        println!("License status:");
+        if status.valid {
+            println!(
+                "  Status:  {} ({})",
+                "Valid".green().bold(),
+                status.license_type.as_deref().unwrap_or("unknown")
+            );
+            if let Some(org) = &status.issued_to {
+                println!("  Issued:  {org}");
             }
-            "slurm" | "pbs" | "sge" | "lsf" => {
-                let backend = match name.as_str() {
-                    "slurm" => oxo_flow_core::cluster::ClusterBackend::Slurm,
-                    "pbs" => oxo_flow_core::cluster::ClusterBackend::Pbs,
-                    "sge" => oxo_flow_core::cluster::ClusterBackend::Sge,
-                    _ => oxo_flow_core::cluster::ClusterBackend::Lsf,
-                };
-                eprintln!("{}", format!("Profile: {}", name).bold());
-                eprintln!(
-                    "  Submit cmd:  {}",
-                    oxo_flow_core::cluster::submit_command(&backend)
-                );
-                eprintln!(
-                    "  Status cmd:  {}",
-                    oxo_flow_core::cluster::status_command(&backend)
-                );
-                eprintln!("  Executor:    cluster job submission");
-            }
-            other => {
-                eprintln!("{} Unknown profile: {}", "✗".red().bold(), other);
-                std::process::exit(1);
-            }
-        },
-        ProfileAction::Current => {
-            eprintln!("{} {}", "Active profile:".bold(), "local".green());
+        } else {
+            println!("  Status:  {}", "Invalid".red().bold());
         }
+        println!("  Message: {}", status.message);
     }
     Ok(())
 }
