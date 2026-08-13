@@ -17,7 +17,8 @@ use crate::commands::project::{init_command, template_command};
 use crate::commands::provenance::provenance_verify_command;
 use crate::commands::publish::publish_command;
 use crate::commands::quality::{
-    format_command, lint_command, touch_command, validate_command, watch_command,
+    deep_check_command, format_command, lint_command, touch_command, validate_command,
+    watch_command,
 };
 use crate::commands::run::{
     debug_command, dry_run_command, handle_status, resume_command, run_command,
@@ -551,6 +552,13 @@ pub enum Commands {
             help = "Test only these samples: first:N (pilot), explicit names, or ready (complete inputs; repeatable, comma-separated)"
         )]
         samples_filter: Vec<String>,
+        /// Run deep health checks (script files, environment definition files,
+        /// system-backend binaries, reference data) after the basic steps.
+        #[arg(
+            long,
+            help = "Run deep checks: script files, env YAML files, backend binaries, reference data"
+        )]
+        deep: bool,
     },
     /// Publish a workflow with its environment files into a bundle.
     Publish {
@@ -1103,6 +1111,7 @@ async fn main() -> Result<()> {
             run,
             jobs,
             samples_filter,
+            deep,
         } => {
             use colored::Colorize;
             eprintln!(
@@ -1128,9 +1137,14 @@ async fn main() -> Result<()> {
                 samples_filter.clone(),
             )
             .await?;
-            // 4. Optional: run with --run flag
+            // 4. Optional: deep health checks (issue #64)
+            if deep {
+                eprintln!("{} Deep checks...", "4.".bold());
+                deep_check_command(&workflow, cli.json)?;
+            }
+            // 5. Optional: run with --run flag
             if run {
-                eprintln!("{} Execution...", "4.".bold());
+                eprintln!("{} Execution...", if deep { "5." } else { "4." }.bold());
                 run_command(
                     Some(workflow),
                     jobs,
@@ -1157,7 +1171,7 @@ async fn main() -> Result<()> {
                 )
                 .await?;
             }
-            // 5. Optional: verify output file existence
+            // Optional: verify output file existence
             if let Some(output_path) = output {
                 if output_path.exists() {
                     eprintln!(

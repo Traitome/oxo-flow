@@ -47,6 +47,7 @@ pub mod config_impact;
 #[cfg(feature = "container")]
 pub mod container;
 pub mod dag;
+pub mod deep_check;
 pub mod environment;
 pub mod error;
 pub mod executor;

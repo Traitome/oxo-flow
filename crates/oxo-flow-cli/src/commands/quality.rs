@@ -296,6 +296,135 @@ pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool)
     Ok(())
 }
 
+/// Deep pipeline health checks for `test --deep` (issue #64).
+///
+/// Checks script files (D001, error), environment definition files (D002,
+/// warning), system-backend binaries in PATH (D003, warning), and reference
+/// data paths (D004, warning). Exits 1 when any error-severity finding is
+/// reported; warnings are informational — PATH and reference data are
+/// machine-specific and can arrive later (issue #63).
+pub fn deep_check_command(workflow: &Path, json: bool) -> Result<()> {
+    let config = WorkflowConfig::from_file(workflow)
+        .with_context(|| format!("failed to parse {}", workflow.display()))?;
+    let base_dir = oxo_flow_core::parent_dir(workflow).to_path_buf();
+    let report = oxo_flow_core::deep_check::compute_deep_check(&config, &base_dir);
+
+    print_deep_console(&report);
+
+    if json {
+        let diagnostics: Vec<serde_json::Value> = report
+            .findings
+            .iter()
+            .map(|f| {
+                serde_json::json!({
+                    "severity": format!("{:?}", f.severity).to_lowercase(),
+                    "code": f.code,
+                    "message": f.message,
+                    "rule": f.rule,
+                    "suggestion": f.suggestion,
+                    "path": f.path,
+                })
+            })
+            .collect();
+        let output = serde_json::json!({
+            "command": "deep-check",
+            "workflow": workflow.display().to_string(),
+            "diagnostics": diagnostics,
+            "error_count": report.error_count,
+            "warning_count": report.warning_count,
+            "passed": report.passed,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    }
+
+    if report.error_count > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// Print the human-readable deep-check report to stderr, grouped by category
+/// with a green summary line per clean category (lint precedent: human
+/// output goes to stderr even in `--json` mode).
+fn print_deep_console(report: &oxo_flow_core::deep_check::DeepCheckReport) {
+    let finding_lines = |code: &str| {
+        for f in report.findings.iter().filter(|f| f.code == code) {
+            let icon = if f.severity == oxo_flow_core::format::Severity::Error {
+                "✗".red().bold()
+            } else {
+                "⚠".yellow().bold()
+            };
+            let rule_suffix = f
+                .rule
+                .as_deref()
+                .map(|rule| format!(" (rule: {rule})"))
+                .unwrap_or_default();
+            eprintln!("    {} {}{} [{}]", icon, f.message, rule_suffix, f.code);
+            if let Some(hint) = &f.suggestion {
+                eprintln!("      hint: {}", hint.dimmed());
+            }
+        }
+    };
+
+    // Categories with nothing checked and no findings are omitted entirely.
+    let has = |code: &str| report.findings.iter().any(|f| f.code == code);
+
+    if report.scripts_checked > 0 || has("D001") {
+        eprintln!("{}", "  Scripts:".bold());
+        if report.scripts_checked > 0 && !has("D001") {
+            eprintln!(
+                "    {} {} script reference(s) found",
+                "✓".green().bold(),
+                report.scripts_checked
+            );
+        }
+        finding_lines("D001");
+    }
+
+    if report.envs_checked > 0 || has("D002") {
+        eprintln!("{}", "  Environments:".bold());
+        if report.envs_checked > 0 && !has("D002") {
+            eprintln!(
+                "    {} {} environment definition(s) found",
+                "✓".green().bold(),
+                report.envs_checked
+            );
+        }
+        finding_lines("D002");
+    }
+
+    if report.commands_probed > 0 || has("D003") {
+        eprintln!("{}", "  Binaries:".bold());
+        if report.commands_probed > 0 && !has("D003") {
+            eprintln!(
+                "    {} {} command(s) found in PATH",
+                "✓".green().bold(),
+                report.commands_probed
+            );
+        }
+        finding_lines("D003");
+    }
+
+    if report.references_checked > 0 || has("D004") {
+        eprintln!("{}", "  References:".bold());
+        if report.references_checked > 0 && !has("D004") {
+            eprintln!(
+                "    {} {} reference path(s) found",
+                "✓".green().bold(),
+                report.references_checked
+            );
+        }
+        finding_lines("D004");
+    }
+
+    eprintln!(
+        "\n{} {} error(s), {} warning(s)",
+        "Deep check summary:".bold(),
+        report.error_count,
+        report.warning_count
+    );
+}
+
 pub fn format_command(workflow: PathBuf, output: Option<PathBuf>, check: bool) -> Result<()> {
     let config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;

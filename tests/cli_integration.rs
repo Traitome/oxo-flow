@@ -4039,6 +4039,423 @@ fn cli_run_samples_ready_zero_ready_errors() {
     );
 }
 
+// ─── Deep checks (test --deep, issue #64) ────────────────────────────────
+
+/// E-clean workflow skeleton: valid name/version, described rules, concrete
+/// outputs, no inputs — validate/lint/dry-run all pass, and `test` is
+/// non-strict so W-codes don't fail it.
+fn deep_workflow(rules_body: &str) -> String {
+    format!(
+        "[workflow]\nname = \"deep\"\nversion = \"1.0.0\"\n\
+         description = \"deep check fixture\"\nauthor = \"tests\"\n\n{rules_body}"
+    )
+}
+
+/// Run `oxo-flow test` (with `--deep` or not) against a workflow file in a
+/// tempdir.
+fn run_test_command(
+    dir: &std::path::Path,
+    wf: &std::path::Path,
+    extra: &[&str],
+) -> std::process::Output {
+    let mut args: Vec<&str> = vec!["test", wf.to_str().unwrap()];
+    args.extend_from_slice(extra);
+    oxo_flow_cmd()
+        .args(&args)
+        .current_dir(dir)
+        .output()
+        .unwrap()
+}
+
+/// Split concatenated pretty-printed JSON documents (one per `test` step)
+/// on lines that are a bare `{`, returning each parsed document.
+fn parse_json_docs(stdout: &[u8]) -> Vec<serde_json::Value> {
+    let text = String::from_utf8_lossy(stdout);
+    let mut docs: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for line in text.lines() {
+        // Pretty-printed JSON indents nested braces, so only a column-0 `{`
+        // starts a new document.
+        if line == "{" && !current.trim().is_empty() {
+            docs.push(std::mem::take(&mut current));
+        }
+        current.push_str(line);
+        current.push('\n');
+    }
+    if !current.trim().is_empty() {
+        docs.push(current);
+    }
+    docs.iter()
+        .map(|d| serde_json::from_str(d).expect("parse JSON document"))
+        .collect()
+}
+
+/// `test --deep` fails with a D001 error when a `script =` file is missing —
+/// a deterministic run-time failure.
+#[test]
+fn cli_test_deep_script_field_missing_exits_1() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("deep.oxoflow");
+    fs::write(
+        &wf,
+        deep_workflow(
+            "[[rules]]\nname = \"analyze\"\noutput = [\"results/a.txt\"]\n\
+             description = \"run script\"\nscript = \"scripts/analyze.py --out results/a.txt\"\n",
+        ),
+    )
+    .unwrap();
+
+    let out = run_test_command(dir.path(), &wf, &["--deep"]);
+    assert!(
+        !out.status.success(),
+        "missing script must fail test --deep"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("[D001]"), "expected D001, got:\n{stderr}");
+    assert!(
+        stderr.contains("scripts/analyze.py"),
+        "finding must name the path, got:\n{stderr}"
+    );
+}
+
+/// `test --deep` catches script paths inside plain interpreter invocations
+/// in `shell` strings.
+#[test]
+fn cli_test_deep_shell_interpreter_script_missing_exits_1() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("deep.oxoflow");
+    fs::write(
+        &wf,
+        deep_workflow(
+            "[[rules]]\nname = \"report\"\noutput = [\"results/r.txt\"]\n\
+             description = \"run python script\"\n\
+             shell = \"python scripts/report.py --out results/r.txt\"\n",
+        ),
+    )
+    .unwrap();
+
+    let out = run_test_command(dir.path(), &wf, &["--deep"]);
+    assert!(
+        !out.status.success(),
+        "missing script must fail test --deep"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("[D001]"), "expected D001, got:\n{stderr}");
+    assert!(
+        stderr.contains("scripts/report.py"),
+        "finding must name the path, got:\n{stderr}"
+    );
+}
+
+/// A missing conda YAML is a warning: `test --deep` still exits 0.
+#[test]
+fn cli_test_deep_env_yaml_missing_warns_exit_0() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("deep.oxoflow");
+    fs::write(
+        &wf,
+        deep_workflow(
+            "[[rules]]\nname = \"qc\"\noutput = [\"results/q.txt\"]\n\
+             description = \"qc step\"\nshell = \"cat data.fq > results/q.txt\"\n\
+             [rules.environment]\nconda = \"envs/qc.yaml\"\n",
+        ),
+    )
+    .unwrap();
+
+    let out = run_test_command(dir.path(), &wf, &["--deep"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("[D002]"), "expected D002, got:\n{stderr}");
+    assert!(
+        stderr.contains("envs/qc.yaml"),
+        "finding must name the path, got:\n{stderr}"
+    );
+}
+
+/// A missing system-backend binary is a warning (PATH is machine-specific).
+#[test]
+fn cli_test_deep_missing_binary_warns_exit_0() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("deep.oxoflow");
+    fs::write(
+        &wf,
+        deep_workflow(
+            "[[rules]]\nname = \"qc\"\noutput = [\"results/q.txt\"]\n\
+             description = \"run fake tool\"\n\
+             shell = \"fake_tool_for_deep_check_9f3k --in data.fq\"\n",
+        ),
+    )
+    .unwrap();
+
+    let out = run_test_command(dir.path(), &wf, &["--deep"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("[D003]"), "expected D003, got:\n{stderr}");
+    assert!(
+        stderr.contains("fake_tool_for_deep_check_9f3k"),
+        "finding must name the binary, got:\n{stderr}"
+    );
+}
+
+/// Binaries that are in PATH get the green summary line.
+#[test]
+fn cli_test_deep_present_binary_reports_found() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("deep.oxoflow");
+    fs::write(
+        &wf,
+        deep_workflow(
+            "[[rules]]\nname = \"sh\"\noutput = [\"results/s.txt\"]\n\
+             description = \"run shell builtin\"\n\
+             shell = \"sh -c 'echo hi > results/s.txt'\"\n",
+        ),
+    )
+    .unwrap();
+
+    let out = run_test_command(dir.path(), &wf, &["--deep"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("found in PATH"),
+        "expected the found-in-PATH summary, got:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("[D003]"),
+        "sh must not produce D003, got:\n{stderr}"
+    );
+}
+
+/// A non-system backend gates the binary probe (the tool comes from the
+/// environment, not PATH) — the env YAML is still checked.
+#[test]
+fn cli_test_deep_conda_env_gates_binary_probe() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("deep.oxoflow");
+    fs::write(
+        &wf,
+        deep_workflow(
+            "[[rules]]\nname = \"qc\"\noutput = [\"results/q.txt\"]\n\
+             description = \"run tool in conda env\"\n\
+             shell = \"fake_tool_for_deep_check_9f3k --in data.fq\"\n\
+             [rules.environment]\nconda = \"envs/qc.yaml\"\n",
+        ),
+    )
+    .unwrap();
+
+    let out = run_test_command(dir.path(), &wf, &["--deep"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("[D003]"), "got:\n{stderr}");
+    assert!(stderr.contains("[D002]"), "expected D002, got:\n{stderr}");
+}
+
+/// Path-like config values referenced in shells are checked for existence.
+#[test]
+fn cli_test_deep_config_reference_missing_warns() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("deep.oxoflow");
+    fs::write(
+        &wf,
+        deep_workflow(
+            "[config]\nreference = \"/data/refs/GRCh38/genome.fa\"\n\n\
+             [[rules]]\nname = \"align\"\noutput = [\"results/a.sam\"]\n\
+             description = \"align reads\"\n\
+             shell = \"bwa mem {config.reference} data.fq > results/a.sam\"\n",
+        ),
+    )
+    .unwrap();
+
+    let out = run_test_command(dir.path(), &wf, &["--deep"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("[D004]"), "expected D004, got:\n{stderr}");
+    assert!(
+        stderr.contains("/data/refs/GRCh38/genome.fa"),
+        "finding must name the path, got:\n{stderr}"
+    );
+}
+
+/// With `reference_dir` set, tool-derived index paths (bwa → bwa/genome.fa)
+/// are checked.
+#[test]
+fn cli_test_deep_derived_bwa_index_missing_warns() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("deep.oxoflow");
+    fs::write(
+        &wf,
+        format!(
+            "reference_dir = \"/data/refs/GRCh38\"\n\n{}",
+            deep_workflow(
+                "[[rules]]\nname = \"align\"\noutput = [\"results/a.sam\"]\n\
+                 description = \"align reads\"\n\
+                 shell = \"bwa mem genome.fa data.fq > results/a.sam\"\n",
+            )
+        ),
+    )
+    .unwrap();
+
+    let out = run_test_command(dir.path(), &wf, &["--deep"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("[D004]"), "expected D004, got:\n{stderr}");
+    assert!(
+        stderr.contains("/data/refs/GRCh38/bwa/genome.fa"),
+        "finding must name the derived index, got:\n{stderr}"
+    );
+}
+
+/// `[[references]]` build outputs are checked for existence.
+#[test]
+fn cli_test_deep_reference_block_output_missing_warns() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("deep.oxoflow");
+    fs::write(
+        &wf,
+        deep_workflow(
+            "[[references]]\nname = \"faidx\"\nsource = \"/data/refs/genome.fa\"\n\
+             output = \"/data/refs/genome.fa.fai\"\n\
+             build = \"samtools faidx /data/refs/genome.fa\"\n\n\
+             [[rules]]\nname = \"x\"\noutput = [\"results/x.txt\"]\n\
+             description = \"step\"\nshell = \"cat data.fq > results/x.txt\"\n",
+        ),
+    )
+    .unwrap();
+
+    let out = run_test_command(dir.path(), &wf, &["--deep"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("[D004]"), "expected D004, got:\n{stderr}");
+    assert!(
+        stderr.contains("/data/refs/genome.fa.fai"),
+        "finding must name the path, got:\n{stderr}"
+    );
+}
+
+/// A workflow whose scripts, env files, binaries and references all exist
+/// passes `test --deep` with the all-checks summary.
+#[test]
+fn cli_test_deep_happy_path_all_checks_pass() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+    std::fs::write(dir.path().join("scripts/analyze.py"), b"x").unwrap();
+    let wf = dir.path().join("deep.oxoflow");
+    fs::write(
+        &wf,
+        deep_workflow(
+            "[[rules]]\nname = \"analyze\"\noutput = [\"results/a.txt\"]\n\
+             description = \"run script\"\nscript = \"scripts/analyze.py --out results/a.txt\"\n\n\
+             [[rules]]\nname = \"sh\"\noutput = [\"results/s.txt\"]\n\
+             description = \"run shell builtin\"\n\
+             shell = \"sh -c 'echo hi > results/s.txt'\"\n",
+        ),
+    )
+    .unwrap();
+
+    let out = run_test_command(dir.path(), &wf, &["--deep"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("All checks passed."),
+        "expected all-checks summary, got:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("[D0"),
+        "expected no findings, got:\n{stderr}"
+    );
+}
+
+/// `test --deep --json` emits a fourth standalone `deep-check` document with
+/// the D001 finding, even though the command exits 1.
+#[test]
+fn cli_test_deep_json_emits_deep_check_doc() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("deep.oxoflow");
+    fs::write(
+        &wf,
+        deep_workflow(
+            "[[rules]]\nname = \"analyze\"\noutput = [\"results/a.txt\"]\n\
+             description = \"run script\"\nscript = \"scripts/analyze.py --out results/a.txt\"\n",
+        ),
+    )
+    .unwrap();
+
+    let out = run_test_command(dir.path(), &wf, &["--deep", "--json"]);
+    assert!(!out.status.success(), "D001 error must fail test --deep");
+    let docs = parse_json_docs(&out.stdout);
+    assert_eq!(docs.len(), 4, "expected 4 JSON docs, got {}", docs.len());
+    let deep = &docs[3];
+    assert_eq!(deep["command"], "deep-check");
+    assert_eq!(deep["error_count"], 1);
+    assert_eq!(deep["passed"], false);
+    assert_eq!(deep["diagnostics"][0]["code"], "D001");
+    assert_eq!(deep["diagnostics"][0]["severity"], "error");
+    assert!(
+        deep["diagnostics"][0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("scripts/analyze.py")
+    );
+}
+
+/// Without `--deep`, `test --json` keeps its existing three documents — the
+/// fast path is unchanged.
+#[test]
+fn cli_test_no_deep_keeps_three_docs() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+    std::fs::write(dir.path().join("scripts/analyze.py"), b"x").unwrap();
+    let wf = dir.path().join("deep.oxoflow");
+    fs::write(
+        &wf,
+        deep_workflow(
+            "[[rules]]\nname = \"analyze\"\noutput = [\"results/a.txt\"]\n\
+             description = \"run script\"\nscript = \"scripts/analyze.py --out results/a.txt\"\n",
+        ),
+    )
+    .unwrap();
+
+    let out = run_test_command(dir.path(), &wf, &["--json"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let docs = parse_json_docs(&out.stdout);
+    assert_eq!(docs.len(), 3, "expected 3 JSON docs, got {}", docs.len());
+}
+
 // ─── Working-directory semantics (issue #68) ────────────────────────────────
 
 /// A run with a custom --workdir records it in the checkpoint; resuming
@@ -4109,5 +4526,71 @@ fn cli_resume_reuses_recorded_workdir() {
     assert!(
         stderr.contains("Workdir:"),
         "resume must show which workdir it is using, got:\n{stderr}"
+    );
+}
+
+// ─── Concurrent-run protection (.oxo-flow/lock, issue #70) ──────────────────
+
+/// Two `run` invocations on the same workdir must not silently race on the
+/// checkpoint: the second gets a clear lock error, and succeeds after the
+/// first exits (the OS releases the lock automatically).
+#[test]
+fn cli_concurrent_runs_get_clear_lock_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("locktest.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"lock\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"slow\"\noutput = [\"results/done.txt\"]\nshell = \"sleep 2 && echo done > results/done.txt\"\n",
+    )
+    .unwrap();
+
+    // Run #1 in the background, holding the lock for ~2s.
+    let mut first = std::process::Command::new(workspace_bin("oxo-flow"))
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+
+    // Wait until the lock is actually held (poll with the core probe).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !oxo_flow_core::executor::WorkdirLock::is_locked(dir.path()) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "first run never acquired the workdir lock"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    // Run #2 while the lock is held: clear error, no silent racing.
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "second run must fail while locked");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("workdir is locked"),
+        "second run must report the lock, got:\n{stderr}"
+    );
+
+    // After run #1 exits the lock releases: run #2 succeeds and skips the
+    // completed rule.
+    assert!(first.wait().unwrap().success());
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "run after lock release must succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("1 skipped"),
+        "completed rule must be skipped after the first run"
     );
 }
