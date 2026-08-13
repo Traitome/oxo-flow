@@ -255,11 +255,13 @@ Integrating all three layers enables:
 
 ### DAG Parallelism
 
-The three branches (WGS, RNA-seq, Methylation) are entirely independent and execute in parallel. With sufficient resources (`-j 6`), all six alignment and analysis steps can run simultaneously:
+The three branches (WGS, RNA-seq, Methylation) are entirely independent and execute in parallel. `-j` controls how many rules may be *submitted* concurrently, but the engine's resource pool schedules the actual execution by thread capacity — the 16-thread align rules cannot oversubscribe the CPU:
 
 ```bash
-# Execute with 6 parallel jobs to maximize branch parallelism
-oxo-flow run examples/gallery/08_multiomics_integration.oxoflow -j 6
+# The dry-run hint suggests -j from machine threads ÷ per-rule threads
+# (e.g. 32-thread machine ÷ 16-thread align = -j 2).
+# The resource pool queues any excess safely either way.
+oxo-flow run examples/gallery/08_multiomics_integration.oxoflow -j 2
 ```
 
 ## Running the Workflow
