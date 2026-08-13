@@ -290,6 +290,15 @@ impl StorageBackend for SqliteBackend {
                 state TEXT PRIMARY KEY,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                meta TEXT,
+                created_at TEXT NOT NULL
+            );
             "#,
         )
         .execute(&self.pool)

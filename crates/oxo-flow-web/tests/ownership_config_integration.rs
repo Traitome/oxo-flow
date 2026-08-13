@@ -120,3 +120,24 @@ async fn effective_ai_config_reports_user_tier() {
     // The bug: tiers.user_provider was hardcoded to null.
     assert_eq!(body["tiers"]["user_provider"], "deepseek", "{body}");
 }
+
+#[tokio::test]
+async fn restore_ai_config_from_db_reconfigures_registry() {
+    ensure_db().await;
+    let pool = oxo_flow_web::infra::db::sqlite::pool();
+    sqlx::query(
+        "INSERT INTO ai_provider_config (id, user_id, provider, api_key, api_url, model, search_enabled, monitor_enabled, auto_retry_enabled, max_correction_rounds, created_at, updated_at)
+         VALUES (?, 'default', 'deepseek', 'sk-live-test-key', 'https://api.deepseek.com/v1', 'deepseek-v4-pro', 0, 0, 0, 3, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .execute(pool)
+    .await
+    .unwrap();
+
+    oxo_flow_web::domains::ai::handlers::restore_ai_config_from_db().await;
+    // The registry must now reflect the DB tier (env did not set a provider).
+    let provider = oxo_flow_web::ai_provider::AiProviderRegistry::global()
+        .get_config()
+        .provider;
+    assert_eq!(provider, "deepseek");
+}

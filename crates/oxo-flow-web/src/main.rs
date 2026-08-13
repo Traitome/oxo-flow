@@ -144,6 +144,9 @@ async fn main() -> Result<()> {
 
     // Initialize AI provider from environment variables
     oxo_flow_web::ai_provider::AiProviderRegistry::global().init_from_env();
+    // Restore the DB-persisted tier (settings UI) when env did not configure
+    // a provider — otherwise a saved key would be lost on restart.
+    oxo_flow_web::domains::ai::handlers::restore_ai_config_from_db().await;
     tracing::info!(
         "AI provider: {}",
         oxo_flow_web::ai_provider::AiProviderRegistry::global()

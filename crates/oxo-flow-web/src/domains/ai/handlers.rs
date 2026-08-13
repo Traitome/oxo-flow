@@ -311,6 +311,54 @@ pub async fn test_ai_config(Json(_req): Json<AiConfigRequest>) -> ApiResult<AiTe
 // AI Config - Three-tier priority
 // ---------------------------------------------------------------------------
 
+/// Restore the AI registry from the DB-persisted config at startup.
+///
+/// Env vars (via `init_from_env`) take precedence; the DB tier (user row,
+/// then server row) fills in when env did not configure a provider. Without
+/// this, a key saved through the settings UI would be lost on restart.
+pub async fn restore_ai_config_from_db() {
+    let Ok(pool) = crate::infra::db::sqlite::try_pool() else {
+        return;
+    };
+    // Skip when env explicitly configured a provider — env is the top tier.
+    if std::env::var("OXO_FLOW_AI_PROVIDER").is_ok() {
+        return;
+    }
+    let user_row = sqlx::query_as::<_, (String, String, String, String)>(
+        "SELECT provider, api_key, COALESCE(api_url, ''), COALESCE(model, '') \
+         FROM ai_provider_config WHERE user_id = 'default' \
+         ORDER BY updated_at DESC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    // Server tier fallback: rows with user_id IS NULL.
+    let row = match user_row {
+        Some(r) => Some(r),
+        None => sqlx::query_as::<_, (String, String, String, String)>(
+            "SELECT provider, api_key, COALESCE(api_url, ''), COALESCE(model, '') \
+             FROM ai_provider_config WHERE user_id IS NULL \
+             ORDER BY updated_at DESC LIMIT 1",
+        )
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten(),
+    };
+    if let Some((provider, api_key, api_url, model)) = row
+        && !api_key.is_empty()
+    {
+        let _ = crate::ai_provider::AiProviderRegistry::global().reconfigure(
+            &provider,
+            Some(api_key.into()),
+            Some(api_url.into()),
+            Some(model.into()),
+        );
+        tracing::info!("AI registry restored from DB tier: provider={provider}");
+    }
+}
+
 /// GET /api/ai/config/effective
 pub async fn get_ai_config_effective() -> ApiResult<serde_json::Value> {
     use crate::ai_provider::AiProviderRegistry;
