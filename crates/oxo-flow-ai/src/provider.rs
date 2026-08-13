@@ -1108,7 +1108,6 @@ pub struct ProviderConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::*;
 
     #[test]
     fn provider_kind_parse() {
