@@ -8,5 +8,7 @@ pub mod diagnostics;
 pub mod handlers;
 pub mod runner;
 pub mod sandbox;
+// Re-export for the security integration tests.
+pub use sandbox::sanitize_path_component;
 pub mod service;
 pub mod types;

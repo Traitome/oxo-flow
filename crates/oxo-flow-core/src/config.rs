@@ -3344,6 +3344,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn resolve_includes_depth_limit() {
         let dir = tempfile::tempdir().unwrap();
 
@@ -3355,10 +3356,6 @@ mod tests {
 
             [[include]]
             path = "circular.oxoflow"
-
-            [[rules]]
-            name = "step"
-            shell = "echo hi"
         "#;
         std::fs::write(dir.path().join("circular.oxoflow"), circular).unwrap();
 
@@ -3368,6 +3365,13 @@ mod tests {
             .expect_err("self-including workflow should hit the depth limit");
 
         let message = err.to_string();
+        // The limit must stay high enough for legitimate nested includes —
+        // the behavioral check above only proves the guard fires at *some*
+        // depth, not that the depth is reasonable.
+        assert!(
+            MAX_INCLUDE_DEPTH >= 8,
+            "include depth limit should be at least 8"
+        );
         assert!(
             message.contains(&MAX_INCLUDE_DEPTH.to_string()),
             "error should name the depth limit, got: {message}"

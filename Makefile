@@ -7,7 +7,7 @@ fmt:
 	cargo fmt -- --check
 
 clippy:
-	cargo clippy --workspace -- -D warnings
+	cargo clippy --workspace --all-targets -- -D warnings
 
 build:
 	cargo build --workspace

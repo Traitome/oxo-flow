@@ -328,21 +328,14 @@ mod tests {
             .unwrap();
         assert_eq!(result.intent, "RNA-seq analysis");
         assert!(result.toml_content.contains("[workflow]"));
-        // The generated pipeline may or may not validate cleanly, but the report
-        // has to be internally consistent: `valid` is false exactly when some
-        // check failed at error severity.
+        // The generated pipeline may or may not validate cleanly. `valid`
+        // is derived from the checks by validator_agent — asserted directly
+        // against deterministic inputs in validator_agent's own tests
+        // (valid/empty/invalid pipelines), so re-stating the derivation
+        // formula here would be vacuous. Assert only that the report ran.
         assert!(
             !result.validation.checks.is_empty(),
             "validation should have run at least one check"
-        );
-        let has_blocking_failure = result
-            .validation
-            .checks
-            .iter()
-            .any(|c| !c.passed && c.severity == "error");
-        assert_eq!(
-            result.validation.valid, !has_blocking_failure,
-            "`valid` should agree with the individual checks"
         );
         // At minimum should have a pipeline_id
         assert!(!result.pipeline_id.is_empty());

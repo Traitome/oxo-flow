@@ -85,8 +85,9 @@ fn test_ai_copilot_no_write_imports() {
 
 #[test]
 fn test_path_traversal_prevention() {
-    // Test the sandbox sanitize function
-    let func = |s: &str| -> String { s.replace("..", "_").replace(['/', '\\', '\0'], "_") };
+    // Exercise the production sanitizer — a local copy here would drift
+    // from the real implementation and test nothing.
+    let func = oxo_flow_web::domains::execution::sanitize_path_component;
 
     // Normal paths should pass through
     assert_eq!(func("run-123"), "run-123");

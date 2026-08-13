@@ -75,7 +75,9 @@ fn resolve_workspace_root(root: &Path) -> Result<PathBuf, String> {
 /// Sanitize a path component to prevent directory traversal.
 ///
 /// Replaces `/`, `\`, and `..` with safe alternatives.
-fn sanitize_path_component(component: &str) -> String {
+/// Sanitize a workspace path component against traversal sequences.
+/// Public so security tests exercise the production code directly.
+pub fn sanitize_path_component(component: &str) -> String {
     component.replace("..", "_").replace(['/', '\\', '\0'], "_")
 }
 

@@ -754,14 +754,16 @@ async fn main() -> Result<()> {
                 let (extracted_wf, extracted_dir) =
                     crate::commands::bundle::extract_and_verify_bundle(&bundle_path)?;
                 // Respect explicit -d flag; otherwise use extracted dir
-                let effective_wd = workdir.unwrap_or(extracted_dir);
+                let effective_wd = workdir.unwrap_or_else(|| extracted_dir.clone());
 
                 // Confirmation gate for bundle execution (remote code safety).
                 // After checksum verification, print what's about to run and
                 // require explicit confirmation unless --yes is set.
+                // The manifest describes the JUST-VERIFIED extracted bundle —
+                // a user-supplied -d directory may hold a stale manifest.
                 if !yes {
                     let manifest_path =
-                        crate::commands::bundle::find_manifest_in_dir(&effective_wd)?;
+                        crate::commands::bundle::find_manifest_in_dir(&extracted_dir)?;
                     let manifest_json = std::fs::read_to_string(&manifest_path)
                         .context("failed to read bundle manifest")?;
                     let manifest: serde_json::Value =
@@ -809,6 +811,9 @@ async fn main() -> Result<()> {
                         std::io::IsTerminal::is_terminal(&std::io::stdin()),
                     );
                     if !can_prompt {
+                        // The freshly extracted dir will never run — clean it
+                        // up instead of leaking /tmp/oxo-bundle-*.
+                        let _ = std::fs::remove_dir_all(&extracted_dir);
                         anyhow::bail!(
                             "Running a bundle requires confirmation, and this session cannot prompt for it. \
                              Use --yes to confirm in CI, scripts, or with --json.\n\
@@ -826,6 +831,7 @@ async fn main() -> Result<()> {
                     if !input.trim().eq_ignore_ascii_case("y")
                         && !input.trim().eq_ignore_ascii_case("yes")
                     {
+                        let _ = std::fs::remove_dir_all(&extracted_dir);
                         anyhow::bail!("execution cancelled by user");
                     }
                 }

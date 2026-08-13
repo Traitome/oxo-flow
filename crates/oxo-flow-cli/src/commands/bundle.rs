@@ -61,14 +61,13 @@ pub fn extract_and_verify_bundle(bundle_path: &Path) -> Result<(PathBuf, PathBuf
     // reused. `tempdir()` creates a uniquely named directory with 0700
     // permissions, failing if it cannot create it exclusively.
     //
-    // The directory is deliberately kept rather than dropped: it becomes the
-    // working directory for the run and holds the workflow's output files, so it
-    // has to outlive this function.
+    // The directory becomes the working directory for the run and holds the
+    // workflow's output files, so it is `.keep()`-ed on success only —
+    // every failure path below drops the TempDir and cleans up automatically.
     let extract_dir = tempfile::Builder::new()
         .prefix("oxo-bundle-")
         .tempdir()
-        .context("failed to create temporary directory for bundle extraction")?
-        .keep();
+        .context("failed to create temporary directory for bundle extraction")?;
 
     // Auto-detect format from extension and open archive
     let format = BundleFormat::from_path(&bundle_abs).unwrap_or(BundleFormat::TarZst); // default fallback
@@ -84,11 +83,11 @@ pub fn extract_and_verify_bundle(bundle_path: &Path) -> Result<(PathBuf, PathBuf
 
     // Extract all files
     archive
-        .unpack(&extract_dir)
+        .unpack(extract_dir.path())
         .context("failed to extract bundle")?;
 
     // Read and verify manifest
-    let manifest_path = extract_dir.join("manifest.json");
+    let manifest_path = extract_dir.path().join("manifest.json");
     let manifest_json = std::fs::read_to_string(&manifest_path)
         .context("bundle is missing manifest.json — not a valid oxo-flow bundle")?;
     let manifest: serde_json::Value =
@@ -105,7 +104,7 @@ pub fn extract_and_verify_bundle(bundle_path: &Path) -> Result<(PathBuf, PathBuf
     let entrypoint = manifest["entrypoint"]
         .as_str()
         .context("manifest missing 'entrypoint' field")?;
-    let workflow_path = extract_dir.join(entrypoint);
+    let workflow_path = extract_dir.path().join(entrypoint);
     if !workflow_path.exists() {
         anyhow::bail!(
             "bundle entrypoint '{}' not found in archive",
@@ -152,7 +151,7 @@ pub fn extract_and_verify_bundle(bundle_path: &Path) -> Result<(PathBuf, PathBuf
             .as_str()
             .context("file entry missing 'sha256'")?;
 
-        let file_path = extract_dir.join(path);
+        let file_path = extract_dir.path().join(path);
         if !file_path.exists() {
             anyhow::bail!(
                 "file '{}' declared in manifest but missing from archive",
@@ -162,8 +161,7 @@ pub fn extract_and_verify_bundle(bundle_path: &Path) -> Result<(PathBuf, PathBuf
 
         let actual_sha = compute_sha256(&file_path)?;
         if actual_sha != expected_sha {
-            // Clean up on mismatch
-            let _ = std::fs::remove_dir_all(&extract_dir);
+            // The TempDir drop cleans up the extraction on this bail.
             anyhow::bail!(
                 "checksum mismatch for '{}':\n  expected: {}\n  actual:   {}\nBundle verification failed.",
                 path,
@@ -181,7 +179,8 @@ pub fn extract_and_verify_bundle(bundle_path: &Path) -> Result<(PathBuf, PathBuf
         files.len()
     );
 
-    Ok((workflow_path, extract_dir))
+    // Verified successfully — hand ownership of the directory to the run.
+    Ok((workflow_path, extract_dir.keep()))
 }
 
 /// Compute SHA-256 checksum of a file (streaming, 64KB buffer).

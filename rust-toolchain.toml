@@ -1,0 +1,8 @@
+# Pin the toolchain so `clippy --all-targets -- -D warnings` in CI is
+# deterministic: new stable releases regularly add lints that fire on test
+# code (the class of breakage PR #59's CI gate is designed to catch, but
+# which should not arrive as random merge blockers from a toolchain bump).
+# Bump deliberately — run `make ci` locally on the new version first.
+[toolchain]
+channel = "1.92.0"
+components = ["rustfmt", "clippy"]
