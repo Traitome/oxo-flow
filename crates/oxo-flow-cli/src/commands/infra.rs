@@ -89,10 +89,15 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
                 }
             }
         }
-        EnvAction::Create { spec, name, ai } => {
+        EnvAction::Create {
+            spec,
+            name,
+            ai,
+            backend,
+        } => {
             // AI mode: SPEC is a natural-language description, not a file path.
             if ai {
-                return create_env_from_ai(&spec, name).await;
+                return create_env_from_ai(&spec, name, &backend).await;
             }
             let name_str = name.clone().unwrap_or_else(|| {
                 spec.file_stem()
@@ -389,17 +394,27 @@ pub fn profile_command(action: ProfileAction) -> Result<()> {
 
 // ── AI-powered environment spec generation ────────────────────────────────
 
-/// Generate a conda environment YAML from a natural-language description
-/// using the AI provider + built-in tool reference table.
-async fn create_env_from_ai(description: &std::path::Path, name: Option<String>) -> Result<()> {
+/// Generate an environment spec (conda YAML or pixi TOML) from a
+/// natural-language description using the AI provider + built-in tool table.
+async fn create_env_from_ai(
+    description: &std::path::Path,
+    name: Option<String>,
+    backend: &str,
+) -> Result<()> {
     let description = description.to_string_lossy().to_string();
     let provider = crate::commands::ai_template::resolve_ai_provider()?;
+
+    let is_pixi = backend.eq_ignore_ascii_case("pixi");
+    if !is_pixi && !backend.eq_ignore_ascii_case("conda") {
+        anyhow::bail!("unsupported backend '{}'. Use 'conda' or 'pixi'.", backend);
+    }
 
     println!("{}", "AI Environment Generator".bold().green());
     println!(
         "  Model: {}",
         provider.model().unwrap_or_else(|| "default".into())
     );
+    println!("  Backend: {}", if is_pixi { "pixi" } else { "conda" });
     println!("  Description: {description}\n");
 
     // Pre-resolve tools mentioned in the description against the embedded
@@ -433,8 +448,47 @@ async fn create_env_from_ai(description: &std::path::Path, name: Option<String>)
         }
     }
 
-    let system = format!(
-        r#"## Role
+    let system = if is_pixi {
+        format!(
+            r#"## Role
+You are a bioinformatics environment specialist. Generate a pixi environment
+TOML file from the user's natural-language description.
+
+## Tool Reference
+{}
+
+## Matched Bioconda Tools (real names + current versions)
+{}
+
+## Output Requirements
+Generate ONLY valid pixi.toml inside ```toml code fences:
+
+```toml
+[project]
+name = "env-name"
+channels = ["bioconda", "conda-forge"]
+platforms = ["linux-64"]
+
+[dependencies]
+tool = "version"
+```
+
+Rules:
+- Pin every tool version using the Matched Bioconda Tools above when present; otherwise use your knowledge of current stable versions
+- Include all tools the user mentions; add common companions if clearly needed
+- channels order: bioconda first, conda-forge second
+- Do NOT add comments beyond the file header
+"#,
+            oxo_flow_ai::knowledge::builtin::format_tool_table(),
+            if matched.is_empty() {
+                "(none matched)"
+            } else {
+                &matched
+            }
+        )
+    } else {
+        format!(
+            r#"## Role
 You are a bioinformatics environment specialist. Generate a conda environment
 YAML file from the user's natural-language description.
 
@@ -463,13 +517,14 @@ Rules:
 - channels order: bioconda first, conda-forge second
 - Do NOT add comments beyond the file header
 "#,
-        oxo_flow_ai::knowledge::builtin::format_tool_table(),
-        if matched.is_empty() {
-            "(none matched)"
-        } else {
-            &matched
-        }
-    );
+            oxo_flow_ai::knowledge::builtin::format_tool_table(),
+            if matched.is_empty() {
+                "(none matched)"
+            } else {
+                &matched
+            }
+        )
+    };
 
     println!("{}", "  Generating...".bold().cyan());
     use oxo_flow_ai::types::Message;
@@ -477,29 +532,39 @@ Rules:
     let response = provider.chat_with_tools(&messages, &[]).await?;
     let response_text = response.content.unwrap_or_default();
 
-    // Extract YAML from code fence
-    let yaml_content = extract_yaml(&response_text)
-        .ok_or_else(|| anyhow::anyhow!("AI response did not contain valid conda YAML"))?;
+    // Extract spec from code fence (YAML for conda, TOML for pixi)
+    let spec_content = if is_pixi {
+        extract_toml(&response_text)
+            .ok_or_else(|| anyhow::anyhow!("AI response did not contain valid pixi TOML"))?
+    } else {
+        extract_yaml(&response_text)
+            .ok_or_else(|| anyhow::anyhow!("AI response did not contain valid conda YAML"))?
+    };
 
     // Basic structural validation
-    if !yaml_content.contains("dependencies") {
-        anyhow::bail!("generated YAML missing 'dependencies' section");
+    let has_deps = spec_content.contains("dependencies");
+    if !has_deps {
+        anyhow::bail!("generated spec missing 'dependencies' section");
     }
 
-    // Determine output path: -n <name> → envs/<name>.yaml; else envs/generated.yaml
+    // Determine output path: -n <name> → envs/<name>.<ext>
+    let ext = if is_pixi { "toml" } else { "yaml" };
     let env_name = name.unwrap_or_else(|| {
-        yaml_content
-            .lines()
-            .find_map(|l| l.strip_prefix("name:"))
+        let name_key = if is_pixi {
+            spec_content.lines().find_map(|l| l.strip_prefix("name = "))
+        } else {
+            spec_content.lines().find_map(|l| l.strip_prefix("name:"))
+        };
+        name_key
             .map(|n| n.trim().trim_matches('"').trim_matches('\'').to_string())
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| "generated".to_string())
     });
-    let out_path = std::path::PathBuf::from("envs").join(format!("{env_name}.yaml"));
+    let out_path = std::path::PathBuf::from("envs").join(format!("{env_name}.{ext}"));
     if let Some(parent) = out_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&out_path, &yaml_content)?;
+    std::fs::write(&out_path, &spec_content)?;
 
     println!(
         "{} Environment spec written to {}",
@@ -530,6 +595,23 @@ fn extract_yaml(response: &str) -> Option<String> {
         }
     }
     if let Some(pos) = response.find("name:") {
+        return Some(response[pos..].trim().to_string());
+    }
+    None
+}
+
+/// Extract TOML content from an AI response (```toml fence or raw).
+fn extract_toml(response: &str) -> Option<String> {
+    if let Some(start) = response.find("```toml") {
+        let start = start + 7;
+        if let Some(end) = response[start..].find("```") {
+            let content = response[start..start + end].trim().to_string();
+            if !content.is_empty() {
+                return Some(content);
+            }
+        }
+    }
+    if let Some(pos) = response.find("[project]") {
         return Some(response[pos..].trim().to_string());
     }
     None

@@ -91,9 +91,7 @@ impl AiRuntime {
             workflow_content: workflow_content.map(|s| s.to_string()),
             external_sources,
             max_rounds: self.config.max_retries,
-            // TODO: ToolRegistry is not Clone; callers needing the embedded
-            // knowledge tools should use AiRuntime::new()'s registry directly.
-            tool_registry: ToolRegistry::new(),
+            tool_registry: self.tool_registry.clone(),
             session: AiSession::new(
                 command,
                 intent,

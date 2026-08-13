@@ -8,6 +8,7 @@ pub mod builtin;
 
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::error::AiError;
 pub use crate::types::ToolDef;
@@ -49,7 +50,15 @@ pub trait Tool: Send + Sync {
 /// let result = registry.execute("read_file", r#"{"path": "/tmp/test.txt"}"#).await?;
 /// ```
 pub struct ToolRegistry {
-    tools: HashMap<String, Box<dyn Tool>>,
+    tools: HashMap<String, Arc<dyn Tool>>,
+}
+
+impl Clone for ToolRegistry {
+    fn clone(&self) -> Self {
+        Self {
+            tools: self.tools.clone(),
+        }
+    }
 }
 
 impl ToolRegistry {
@@ -62,7 +71,7 @@ impl ToolRegistry {
     /// Register a tool in the registry.
     pub fn register(&mut self, tool: Box<dyn Tool>) {
         let name = tool.name().to_string();
-        self.tools.insert(name, tool);
+        self.tools.insert(name, Arc::from(tool));
     }
 
     /// Get all tool definitions for passing to the AI model.

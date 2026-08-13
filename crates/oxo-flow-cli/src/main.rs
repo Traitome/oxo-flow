@@ -522,6 +522,12 @@ pub enum EnvAction {
             help = "Generate the environment spec from a natural-language description (SPEC is the description)"
         )]
         ai: bool,
+        #[arg(
+            long = "backend",
+            default_value = "conda",
+            help = "Environment backend to generate: conda (YAML) or pixi (TOML)"
+        )]
+        backend: String,
     },
 }
 
