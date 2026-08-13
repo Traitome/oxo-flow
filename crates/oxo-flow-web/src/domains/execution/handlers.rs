@@ -781,35 +781,82 @@ pub async fn cancel_run(Path(id): Path<String>) -> ApiResult<serde_json::Value> 
             )
         })?;
 
-    match run {
-        Some(_r) => {
-            let now = now_iso();
-            sqlx::query("UPDATE runs SET status = 'cancelled', finished_at = ? WHERE id = ?")
-                .bind(&now)
-                .bind(&id)
-                .execute(pool)
-                .await
-                .map_err(|e| {
-                    tracing::error!("DB error cancelling run {id}: {e}");
-                    err(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "DB_ERROR",
-                        "Internal database error".into(),
-                    )
-                })?;
-
-            Ok(Json(serde_json::json!({
-                "run_id": id,
-                "status": "cancelled",
-                "cancelled_at": now,
-            })))
-        }
-        None => Err(err(
+    let run = run.ok_or_else(|| {
+        err(
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
             format!("Run {id} not found"),
-        )),
+        )
+    })?;
+
+    // Terminal states are final — cancelling a finished run would silently
+    // rewrite its result.
+    let is_terminal = matches!(run.status.as_str(), "completed" | "failed" | "cancelled");
+    if is_terminal {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "RUN_NOT_ACTIVE",
+            format!("Run {id} is already {0} — cannot cancel", run.status),
+        ));
     }
+
+    // Persist the cancellation BEFORE signaling: the executor's exit path
+    // checks for a 'cancelled' row and skips its own terminal write, so the
+    // kill fallout can never flip the status back to completed/failed.
+    let now = now_iso();
+    sqlx::query("UPDATE runs SET status = 'cancelled', finished_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(&id)
+        .execute(pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error cancelling run {id}: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
+
+    // Signal the live process group: paused groups need SIGCONT first so the
+    // SIGTERM can be delivered, then a bounded grace window before SIGKILL.
+    if let Some(pgid) = crate::process_control::pgid(&id) {
+        use crate::process_control::{SIGCONT, SIGKILL, SIGTERM, signal_group};
+        if run.status == "paused"
+            && let Err(e) = signal_group(pgid, SIGCONT)
+        {
+            tracing::warn!("SIGCONT before cancel failed for run {id} pgid {pgid}: {e}");
+        }
+        if let Err(e) = signal_group(pgid, SIGTERM) {
+            tracing::warn!("SIGTERM failed for run {id} pgid {pgid}: {e}");
+        }
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while crate::process_control::pgid(&id).is_some() && tokio::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        if crate::process_control::pgid(&id).is_some()
+            && let Err(e) = signal_group(pgid, SIGKILL)
+        {
+            tracing::warn!("SIGKILL failed for run {id} pgid {pgid}: {e}");
+        }
+        crate::process_control::unregister(&id);
+    } else {
+        tracing::warn!(
+            "cancel for run {id}: no live process group registered (already finished or server restarted)"
+        );
+    }
+
+    crate::broadcast_event(
+        "run_cancelled",
+        &serde_json::json!({"run_id": id, "cancelled_at": now}),
+    );
+
+    Ok(Json(serde_json::json!({
+        "run_id": id,
+        "status": "cancelled",
+        "cancelled_at": now,
+    })))
 }
 
 /// POST /api/runs/{id}/pause
@@ -849,6 +896,17 @@ pub async fn pause_run(
         .get("reason")
         .and_then(|v| v.as_str())
         .unwrap_or("user_request");
+
+    // Freeze the live process group (the CLI and every rule subprocess).
+    if let Some(pgid) = crate::process_control::pgid(&id)
+        && let Err(e) = crate::process_control::signal_group(pgid, crate::process_control::SIGSTOP)
+    {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "PAUSE_ERROR",
+            format!("Failed to pause run {id}: {e}"),
+        ));
+    }
 
     let now = now_iso();
     sqlx::query("UPDATE runs SET status = 'paused', phase = ? WHERE id = ?")
@@ -912,6 +970,17 @@ pub async fn resume_run(
         )
     })?;
     let from_rule = req.get("from_rule").and_then(|v| v.as_str());
+
+    // Unfreeze the live process group.
+    if let Some(pgid) = crate::process_control::pgid(&id)
+        && let Err(e) = crate::process_control::signal_group(pgid, crate::process_control::SIGCONT)
+    {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "RESUME_ERROR",
+            format!("Failed to resume run {id}: {e}"),
+        ));
+    }
 
     let _now = now_iso();
     sqlx::query("UPDATE runs SET status = 'running', phase = 'executing' WHERE id = ?")
