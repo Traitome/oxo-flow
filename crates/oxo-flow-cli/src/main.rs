@@ -251,6 +251,11 @@ pub enum Commands {
         format: String,
         #[arg(short = 'o', long, help = "Output file path")]
         output: Option<PathBuf>,
+        #[arg(
+            long = "expanded",
+            help = "Show the DAG after wildcard/sample/scatter expansion (the actual runtime DAG)"
+        )]
+        expanded: bool,
     },
     /// Show execution status from a checkpoint file.
     Status {
@@ -823,7 +828,8 @@ async fn main() -> Result<()> {
             workflow,
             format,
             output,
-        } => handle_graph(workflow, format, output)?,
+            expanded,
+        } => handle_graph(workflow, format, output, expanded)?,
         Commands::Status { checkpoint } => handle_status(checkpoint, cli.json).await?,
         Commands::Pull { url, output } => crate::commands::pull::pull_command(&url, output).await?,
         Commands::Config { action } => crate::commands::infra::handle_config(action)?,

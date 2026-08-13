@@ -13,7 +13,6 @@ reference = "/data/references/GRCh38/genome.fa"
 known_sites = "/data/references/GRCh38/dbsnp_146.hg38.vcf.gz"
 known_indels = "/data/references/GRCh38/Mills_and_1000G.indels.hg38.vcf.gz"
 intervals = "/data/references/GRCh38/wgs_calling_regions.hg38.interval_list"
-cohort = ["NA12878", "NA12879", "NA12880"]
 
 [[sample_groups]]
 name = "cohort"
@@ -136,7 +135,7 @@ singularity = "docker://broadinstitute/gatk:4.5.0.0"
 name = "combine_gvcfs"
 input = []
 expand_inputs = [
-    { pattern = "variants/{sample}.g.vcf.gz", variables = { sample = "config.cohort" } }
+    { pattern = "variants/{sample}.g.vcf.gz", variables = { sample = "config.samples_list" } }
 ]
 output = ["variants/cohort.g.vcf.gz"]
 description = "Combine per-sample GVCFs into a multi-sample GVCF"

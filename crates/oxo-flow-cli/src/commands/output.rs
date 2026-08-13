@@ -7,11 +7,25 @@ use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
 use std::path::PathBuf;
 
-pub fn handle_graph(workflow: PathBuf, format: String, output: Option<PathBuf>) -> Result<()> {
+pub fn handle_graph(
+    workflow: PathBuf,
+    format: String,
+    output: Option<PathBuf>,
+    expanded: bool,
+) -> Result<()> {
     print_banner();
     let workflow = resolve_workflow(Some(workflow))?;
-    let config = WorkflowConfig::from_file(&workflow)
+    let mut config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
+
+    // --expanded: show the runtime DAG after wildcard/sample/scatter
+    // expansion — the actual DAG that `run` executes.
+    if expanded {
+        config.apply_defaults();
+        config
+            .expand_wildcards()
+            .context("failed to expand wildcard rules")?;
+    }
 
     let dag = WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;
 
