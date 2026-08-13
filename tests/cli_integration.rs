@@ -317,6 +317,25 @@ fn cli_subcommand_help_has_no_banner() {
         .stdout(predicate::str::contains("███╗").not());
 }
 
+// ─── Non-UTF-8 arguments ────────────────────────────────────────────────────
+
+/// The banner pre-scan in main() walks argv with args_os, so arguments
+/// with invalid UTF-8 (common in bioinformatics paths) must not panic.
+#[cfg(unix)]
+#[test]
+fn cli_no_panic_on_non_utf8_args() {
+    use std::os::unix::ffi::OsStrExt;
+    let out = oxo_flow_cmd()
+        .arg(std::ffi::OsStr::from_bytes(b"bad-\xff-arg"))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("panicked"),
+        "non-UTF-8 args must not panic: {stderr}"
+    );
+}
+
 // ─── Run log header (print_banner) ─────────────────────────────────────────
 
 /// Long-running commands print the two-line banner (version + repository)

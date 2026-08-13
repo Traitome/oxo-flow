@@ -698,7 +698,9 @@ async fn main() -> Result<()> {
     // NO_COLOR is set or --no-color was passed.
     let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout())
         && std::env::var_os("NO_COLOR").is_none()
-        && !std::env::args().any(|arg| arg == "--no-color");
+        // args_os, not args: clap itself works on OsString and never
+        // panics on non-UTF-8 arguments (bioinformatics paths included).
+        && !std::env::args_os().any(|arg| arg == "--no-color");
     let matches = {
         let mut command = Cli::command();
         command = command.help_template(if use_color {
