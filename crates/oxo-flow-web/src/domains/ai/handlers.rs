@@ -351,9 +351,9 @@ pub async fn restore_ai_config_from_db() {
     {
         let _ = crate::ai_provider::AiProviderRegistry::global().reconfigure(
             &provider,
-            Some(api_key.into()),
-            Some(api_url.into()),
-            Some(model.into()),
+            Some(api_key),
+            Some(api_url),
+            Some(model),
         );
         tracing::info!("AI registry restored from DB tier: provider={provider}");
     }
