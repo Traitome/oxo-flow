@@ -1,7 +1,8 @@
 # oxo-flow Web: Full-Lifecycle Product Design
 
 **Date:** 2026-08-14
-**Status:** Approved for implementation (goal directive `/goal`, session 2026-08-14)
+**Status:** COMPLETE — all phases implemented, verified, and merged to `main`
+(6a91124, pushed 2026-08-14).
 **Scope:** crates/oxo-flow-web, crates/oxo-flow-ai (streaming extension), frontend/, CI, docs
 
 ---
