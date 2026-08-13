@@ -19,6 +19,13 @@ The checkpoint file (`.oxo-flow/checkpoint.json`) is automatically created by
 `oxo-flow run` and stores the completion status and benchmarks of each rule,
 plus a config snapshot and per-rule fingerprints for change detection.
 
+The checkpoint also records the **working directory** the original run
+executed in, so `resume` re-runs from the same place even when invoked from
+another directory — completed rules' outputs resolve identically and stay
+skipped. The recorded workflow path and workdir are stored as absolute
+paths; a legacy checkpoint without a recorded workdir falls back to the
+workflow file's directory.
+
 Resuming goes through the same config-change impact analysis as `run`: if the
 workflow config or a rule definition changed since the checkpoint was written,
 only the affected rules and their downstream re-execute. See
@@ -46,6 +53,8 @@ oxo-flow resume .oxo-flow/checkpoint.json -j 4
 
 - The checkpoint stores a reference to the original workflow file path.
   If the workflow was moved or renamed, resume will fail with a clear error.
+- The recorded working directory is shown as `Workdir:` before execution.
+  `--workdir` overrides it (e.g. when the project directory was moved).
 - `oxo-flow run` automatically resumes from the checkpoint if one exists.
   The standalone `resume` command is useful for explicitly re-running after
   inspecting the checkpoint state.

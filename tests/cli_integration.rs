@@ -4038,3 +4038,76 @@ fn cli_run_samples_ready_zero_ready_errors() {
         "error must name the waiting samples, got:\n{stderr}"
     );
 }
+
+// ─── Working-directory semantics (issue #68) ────────────────────────────────
+
+/// A run with a custom --workdir records it in the checkpoint; resuming
+/// from a different invocation directory re-uses the recorded workdir so
+/// completed rules stay skipped instead of being misjudged as stale.
+#[test]
+fn cli_resume_reuses_recorded_workdir() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("wf/w.oxoflow");
+    let wd = dir.path().join("wd");
+    fs::create_dir_all(wf.parent().unwrap()).unwrap();
+    fs::create_dir_all(wd.join("data")).unwrap();
+    fs::create_dir_all(wd.join("results")).unwrap();
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"wd\"\nversion = \"1.0.0\"\n\n[[sample_groups]]\nname = \"cohort\"\nsamples = [\"S1\", \"S2\"]\n\n[[rules]]\nname = \"qc\"\ninput = [\"data/{sample}.fq\"]\noutput = [\"results/{sample}.txt\"]\nshell = \"cat {input} > {output}\"\n",
+    )
+    .unwrap();
+    fs::write(wd.join("data/S1.fq"), b"a").unwrap();
+    fs::write(wd.join("data/S2.fq"), b"b").unwrap();
+
+    // Run with a custom workdir, invoked from inside it.
+    let out = oxo_flow_cmd()
+        .args([
+            "run",
+            wf.to_str().unwrap(),
+            "--workdir",
+            wd.to_str().unwrap(),
+        ])
+        .current_dir(&wd)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(wd.join("results/S1.txt").exists());
+    assert!(wd.join("results/S2.txt").exists());
+
+    // The checkpoint records the workdir.
+    let checkpoint = wd.join(".oxo-flow/checkpoint.json");
+    assert!(checkpoint.exists());
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(&checkpoint).unwrap()).unwrap();
+    assert_eq!(
+        state["workdir"].as_str().map(|s| s.ends_with("/wd")),
+        Some(true),
+        "checkpoint must record the workdir: {state}"
+    );
+
+    // Resume from an unrelated directory: the recorded workdir must be
+    // re-used, so both completed rules stay skipped.
+    let out = oxo_flow_cmd()
+        .args(["resume", checkpoint.to_str().unwrap()])
+        .current_dir(dir.path()) // NOT the workdir — proves recorded reuse
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("2 skipped"),
+        "completed rules must stay skipped after resume, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Workdir:"),
+        "resume must show which workdir it is using, got:\n{stderr}"
+    );
+}

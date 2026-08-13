@@ -897,7 +897,7 @@ async fn main() -> Result<()> {
             jobs,
             ai_recover,
             ai_max_retries,
-        } => resume_command(checkpoint, jobs, ai_recover, ai_max_retries).await?,
+        } => resume_command(checkpoint, jobs, ai_recover, ai_max_retries, None).await?,
         Commands::DryRun {
             workflow,
             target,
@@ -960,7 +960,7 @@ async fn main() -> Result<()> {
             dry_run,
             force,
             orphans,
-        } => clean_command(workflow, dry_run, force, orphans)?,
+        } => clean_command(workflow, dry_run, force, orphans, None)?,
         Commands::Env { action } => env_command(action).await?,
         Commands::Format {
             workflow,
@@ -984,7 +984,7 @@ async fn main() -> Result<()> {
             output,
             checkpoint_path,
             ai,
-        } => handle_report(workflow, format, output, checkpoint_path, ai).await?,
+        } => handle_report(workflow, format, output, checkpoint_path, ai, None).await?,
         Commands::Package {
             workflow,
             format,

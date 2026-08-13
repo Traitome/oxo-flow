@@ -101,6 +101,17 @@ fn print_config_change_summary(
     );
 }
 
+/// Resolve a possibly-relative path against the current directory without
+/// resolving symlinks. Checkpoint records use this so `resume` works from
+/// any invocation directory (issue #68).
+fn absolutize(path: &Path) -> Result<PathBuf> {
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        Ok(std::env::current_dir()?.join(path))
+    }
+}
+
 /// Long-form names of `oxo-flow run` flags (plus clap's global --help/
 /// --version). Keep in sync with the `Run` variant in main.rs.
 ///
@@ -536,10 +547,14 @@ pub async fn run_command(
         Arc::new(Mutex::new(CheckpointState::default()))
     };
 
-    // Store workflow path in checkpoint for resume support
+    // Store workflow path and working directory in the checkpoint so
+    // `resume` re-runs from the same place (issue #68). Both are made
+    // absolute — a raw relative path would only resolve from the original
+    // invocation directory.
     {
         let mut ck = checkpoint.lock().await;
-        ck.set_workflow_path(&workflow);
+        ck.set_workflow_path(&absolutize(&workflow)?);
+        ck.set_workdir(&absolutize(workdir.as_deref().unwrap_or(&workflow_dir))?);
     }
 
     // Changed config keys → only rules referencing them (plus DAG downstream)
@@ -2108,6 +2123,7 @@ pub async fn resume_command(
     jobs: usize,
     ai_recover: bool,
     ai_max_retries: Option<u32>,
+    workdir: Option<PathBuf>,
 ) -> Result<()> {
     // resume does not produce structured JSON output
     print_banner();
@@ -2179,25 +2195,36 @@ pub async fn resume_command(
         jobs
     );
 
+    // Workdir precedence (issue #68): explicit --workdir > the directory the
+    // original run recorded in the checkpoint > the workflow's directory.
+    let effective_workdir = workdir.or_else(|| state.workdir.clone().map(PathBuf::from));
+    eprintln!(
+        "  Workdir: {}",
+        effective_workdir
+            .as_deref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(workflow directory)".to_string())
+    );
+
     run_command(
         Some(workflow_path),
         jobs,
-        false,           // keep_going
-        None,            // workdir
-        Vec::new(),      // target
-        0,               // retry
-        "0".to_string(), // timeout
-        false,           // resume_failed (user can re-run with --resume-failed in 'run')
-        None,            // profile
-        0,               // max_threads
-        0,               // max_memory
-        false,           // skip_env_setup
-        true,            // skip_ref_build (resume: refs already built)
-        None,            // cache_dir
-        false,           // provenance (checkpoint already has checksums)
-        false,           // json (resume defaults to human-readable)
-        Vec::new(),      // cli_args (resume reuses checkpoint state)
-        Vec::new(),      // extra_samples (resume uses existing groups)
+        false,             // keep_going
+        effective_workdir, // workdir (recorded by the original run)
+        Vec::new(),        // target
+        0,                 // retry
+        "0".to_string(),   // timeout
+        false,             // resume_failed (user can re-run with --resume-failed in 'run')
+        None,              // profile
+        0,                 // max_threads
+        0,                 // max_memory
+        false,             // skip_env_setup
+        true,              // skip_ref_build (resume: refs already built)
+        None,              // cache_dir
+        false,             // provenance (checkpoint already has checksums)
+        false,             // json (resume defaults to human-readable)
+        Vec::new(),        // cli_args (resume reuses checkpoint state)
+        Vec::new(),        // extra_samples (resume uses existing groups)
         ai_recover,
         ai_max_retries,
         Vec::new(), // samples_filter (resume restores checkpoint state as-is)

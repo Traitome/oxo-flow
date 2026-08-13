@@ -26,16 +26,26 @@ fn replace_oxoflow_wildcards_with_glob(pattern: &str) -> String {
     result
 }
 
-pub fn clean_command(workflow: PathBuf, dry_run: bool, force: bool, orphans: bool) -> Result<()> {
+pub fn clean_command(
+    workflow: PathBuf,
+    dry_run: bool,
+    force: bool,
+    orphans: bool,
+    workdir: Option<PathBuf>,
+) -> Result<()> {
     print_banner();
 
     // If neither --force nor --dry-run is provided, default to dry-run
     // to prevent accidental data loss.
     let is_dry_run = dry_run || !force;
 
+    // Working directory for .oxo-flow artifacts: explicit --workdir wins,
+    // default is the workflow file's directory (issue #68).
+    let workdir =
+        workdir.unwrap_or_else(|| oxo_flow_core::parent_dir(&workflow).to_path_buf());
+
     // Handle orphan cleanup mode
     if orphans {
-        let workdir = oxo_flow_core::parent_dir(&workflow).to_path_buf();
         let chunks_dir = workdir.join(".oxo-flow/chunks");
 
         if !chunks_dir.exists() {

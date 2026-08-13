@@ -53,6 +53,7 @@ pub async fn handle_report(
     output: Option<PathBuf>,
     checkpoint_path: Option<PathBuf>,
     ai: bool,
+    workdir: Option<PathBuf>,
 ) -> Result<()> {
     use oxo_flow_core::{executor::CheckpointState, report::ReportBuilder};
 
@@ -61,10 +62,13 @@ pub async fn handle_report(
     let config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
-    // Determine checkpoint path: explicit > workflow-relative > warn
+    // Determine checkpoint path: explicit > workdir-relative (--workdir,
+    // else the workflow's directory) > warn (issue #68).
     let checkpoint_path = checkpoint_path.unwrap_or_else(|| {
-        let workflow_dir = oxo_flow_core::parent_dir(&workflow).to_path_buf();
-        workflow_dir.join(".oxo-flow").join("checkpoint.json")
+        let base = workdir
+            .clone()
+            .unwrap_or_else(|| oxo_flow_core::parent_dir(&workflow).to_path_buf());
+        base.join(".oxo-flow").join("checkpoint.json")
     });
 
     let checkpoint = match CheckpointState::load_from_file(&checkpoint_path) {

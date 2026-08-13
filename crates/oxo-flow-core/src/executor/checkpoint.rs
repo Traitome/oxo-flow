@@ -37,6 +37,13 @@ pub struct CheckpointState {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workflow_path: Option<String>,
+    /// Working directory the rules executed in (issue #68). `resume` re-runs
+    /// from this directory so completed rules' outputs resolve the same way;
+    /// absent in legacy checkpoints, which fall back to the workflow's
+    /// directory.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workdir: Option<String>,
     /// Output file checksums for provenance verification.
     /// Maps relative output file path → "sha256:<hex>".
     #[serde(default)]
@@ -67,6 +74,7 @@ impl CheckpointState {
             failed_rules: HashSet::new(),
             benchmarks: HashMap::new(),
             workflow_path: None,
+            workdir: None,
             checksums: HashMap::new(),
             config_snapshot: HashMap::new(),
             rule_fingerprints: HashMap::new(),
@@ -81,6 +89,11 @@ impl CheckpointState {
     /// Set the workflow path that generated this checkpoint.
     pub fn set_workflow_path(&mut self, path: &Path) {
         self.workflow_path = Some(path.to_string_lossy().to_string());
+    }
+
+    /// Set the working directory rules executed in (issue #68).
+    pub fn set_workdir(&mut self, path: &Path) {
+        self.workdir = Some(path.to_string_lossy().to_string());
     }
 
     /// Mark a rule as successfully completed and store its benchmark.
@@ -543,5 +556,27 @@ mod tests {
         assert!(workdir.join(".oxo-flow/chunks").exists());
 
         let _ = tokio::fs::remove_dir_all(&workdir).await;
+    }
+    #[test]
+    fn checkpoint_roundtrip_preserves_workdir() {
+        // issue #68: resume must re-run from the same working directory the
+        // original run used, or completed rules are misjudged as stale.
+        let mut state = CheckpointState::new();
+        state.set_workflow_path(std::path::Path::new("/wf/p.oxoflow"));
+        state.set_workdir(std::path::Path::new("/custom/wd"));
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(json.contains("workdir"));
+        let loaded: CheckpointState = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.workdir.as_deref(), Some("/custom/wd"));
+    }
+
+    #[test]
+    fn legacy_checkpoint_without_workdir_still_loads() {
+        // Older checkpoints have no workdir field — deserialization must
+        // not break, and resume falls back to the workflow's directory.
+        let json = r#"{"completed_rules":[],"failed_rules":[],"benchmarks":{},"workflow_path":"/wf/p.oxoflow"}"#;
+        let loaded: CheckpointState = serde_json::from_str(json).unwrap();
+        assert_eq!(loaded.workdir, None);
+        assert_eq!(loaded.workflow_path.as_deref(), Some("/wf/p.oxoflow"));
     }
 }
