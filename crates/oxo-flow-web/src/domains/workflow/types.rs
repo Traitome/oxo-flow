@@ -34,6 +34,11 @@ pub struct DagJsonNode {
     pub id: String,
     pub label: String,
     pub color: String,
+    /// Environment backend kind (system/conda/mamba/docker/singularity/venv/modules).
+    pub environment: String,
+    /// The complete serialized rule — the canvas and inspector read display
+    /// and prefill data from here, so no second source of truth exists.
+    pub rule: serde_json::Value,
 }
 
 /// A directed edge between two DAG nodes.
@@ -282,6 +287,8 @@ mod tests {
                     id: "n1".into(),
                     label: "Rule 1".into(),
                     color: "#ff0".into(),
+                    environment: "system".into(),
+                    rule: serde_json::json!({"name": "n1"}),
                 }],
                 edges: vec![DagJsonEdge {
                     from: "n1".into(),

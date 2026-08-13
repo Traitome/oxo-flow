@@ -68,6 +68,8 @@ pub fn parse_pipeline(
                 id: r.name.clone(),
                 label: r.name.clone(),
                 color: color.to_string(),
+                environment: env_str.to_string(),
+                rule: serde_json::to_value(r).unwrap_or(serde_json::Value::Null),
             }
         })
         .collect();
@@ -317,6 +319,8 @@ pub fn build_dag(toml_content: &str) -> Result<DagJsonResponse, String> {
                 id: r.name.clone(),
                 label: r.name.clone(),
                 color: color.to_string(),
+                environment: env_str.to_string(),
+                rule: serde_json::to_value(r).unwrap_or(serde_json::Value::Null),
             }
         })
         .collect();
@@ -520,5 +524,11 @@ mod tests {
             .find(|e| e.from == "c" && e.to == "b")
             .expect("c→b declared via depends_on");
         assert_eq!(declared_edge.kind, "declared");
+
+        // Nodes carry the complete serialized rule for canvas/inspector use.
+        let node_b = dag.nodes.iter().find(|n| n.id == "b").unwrap();
+        assert_eq!(node_b.environment, "system");
+        assert_eq!(node_b.rule["shell"], "cat a.txt > b.txt");
+        assert_eq!(node_b.rule["input"][0], "a.txt");
     }
 }
