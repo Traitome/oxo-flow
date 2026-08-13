@@ -130,6 +130,14 @@ jobs:
           [ -f CITATION.cff ] && git add CITATION.cff
           [ -f README.md ] && git add README.md
           [ -d docs/guide/src ] && git add docs/guide/src/*.md docs/guide/src/**/*.md
+          # Re-tagging a version whose files are already synced leaves nothing
+          # to commit (CITATION.cff/docs branches set CHANGED unconditionally).
+          # Tolerate it: keep the tag where it is and let the rest of the
+          # workflow proceed against the tag SHA.
+          if git diff --cached --quiet; then
+            echo "Version already synced — nothing to commit; keeping tag at $GITHUB_SHA"
+            exit 0
+          fi
           git commit -m "chore: bump version to ${{ steps.extract.outputs.version }} [skip ci]"
           git push origin "HEAD:${{ github.event.repository.default_branch }}"
           NEW_SHA=$(git rev-parse HEAD)
