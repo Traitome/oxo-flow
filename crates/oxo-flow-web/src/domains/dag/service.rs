@@ -176,7 +176,13 @@ pub fn execute_edit(
             let table = rule.as_table_mut().ok_or("rule entry is not a table")?;
             let patch_table = patch.as_object().ok_or("patch must be a table")?;
             for (k, v) in patch_table {
-                table.insert(k.clone(), json_to_toml(v));
+                // TOML cannot express null: `null` in a patch means "remove
+                // this key" (e.g. dropping an environment or retries).
+                if v.is_null() {
+                    table.remove(k);
+                } else {
+                    table.insert(k.clone(), json_to_toml(v));
+                }
             }
             config = reparse(&doc)?;
         }
@@ -190,7 +196,11 @@ pub fn execute_edit(
             let table = doc.as_table_mut().ok_or("workflow TOML is not a table")?;
             let patch_table = patch.as_object().ok_or("patch must be a table")?;
             for (k, v) in patch_table {
-                table.insert(k.clone(), json_to_toml(v));
+                if v.is_null() {
+                    table.remove(k);
+                } else {
+                    table.insert(k.clone(), json_to_toml(v));
+                }
             }
             config = reparse(&doc)?;
         }
@@ -361,6 +371,20 @@ mod tests {
         let s1 = config.rules.iter().find(|r| r.name == "s1").unwrap();
         assert_eq!(s1.shell.as_deref(), Some("process {input} > {output}"));
         assert_eq!(s1.input, vec!["data/in.fastq".to_string()].into());
+    }
+
+    #[test]
+    fn update_rule_null_patch_key_removes_field() {
+        let cmd = DagEditCommand {
+            source: "dag_editor".into(),
+            operation: "update_rule".into(),
+            payload: serde_json::json!({"name": "s1", "patch": {"threads": null, "shell": "x"}}),
+        };
+        let r = execute_edit(TEST_TOML, "patch-null", &cmd).unwrap();
+        let config = WorkflowConfig::parse(&r.toml_content).unwrap();
+        let s1 = config.rules.iter().find(|r| r.name == "s1").unwrap();
+        assert_eq!(s1.shell.as_deref(), Some("x"));
+        assert!(s1.threads.is_none(), "null patch key must remove the field");
     }
 
     #[test]
