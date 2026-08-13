@@ -5,7 +5,6 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use oxo_flow_ai::provider::AiProvider;
 use oxo_flow_ai::scripted::{ScriptedTurn, scripted_provider};
 use oxo_flow_ai::types::ToolCall;
 use oxo_flow_web::server;
@@ -14,9 +13,17 @@ use tower::ServiceExt;
 
 const VALID_TOML: &str = "[workflow]\nname = \"scripted-pipeline\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"fastqc\"\ninput = [\"{sample}.fastq.gz\"]\noutput = [\"qc/{sample}_fastqc.html\"]\nshell = \"fastqc {input} -o qc/\"\n";
 
+/// The global AI registry is process-wide; chat tests that install
+/// scripted providers must not interleave.
+static AI_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn install_scripted_provider_with(turns: Vec<ScriptedTurn>) {
+    oxo_flow_ai::AI.set_provider(scripted_provider(turns));
+}
+
 fn install_scripted_provider() {
     let toml = VALID_TOML;
-    let provider: AiProvider = scripted_provider(vec![
+    let provider_turns: Vec<ScriptedTurn> = vec![
         ScriptedTurn {
             content: None,
             tool_calls: Some(vec![ToolCall {
@@ -33,12 +40,13 @@ fn install_scripted_provider() {
             error: None,
             delay_ms: 0,
         },
-    ]);
-    oxo_flow_ai::AI.set_provider(provider);
+    ];
+    install_scripted_provider_with(provider_turns);
 }
 
 #[tokio::test]
 async fn chat_send_emits_typed_agent_events() {
+    let _guard = AI_LOCK.lock().unwrap();
     install_scripted_provider();
 
     let resp = server::build_router("personal")
@@ -158,5 +166,58 @@ async fn report_ask_and_visualize_use_real_run_data() {
         data.iter()
             .any(|d| d["name"].as_str() == Some("results.txt")),
         "visualization data must come from the run's files: {viz_json}"
+    );
+}
+
+/// With a run_id in the request, the agent loop gains the run-diagnosis
+/// tools and a scripted model can call them (read-only).
+#[tokio::test]
+async fn chat_with_run_id_registers_diagnosis_tools() {
+    let _guard = AI_LOCK.lock().unwrap();
+    install_scripted_provider_with(vec![
+        ScriptedTurn {
+            content: None,
+            tool_calls: Some(vec![ToolCall {
+                id: "tc-1".into(),
+                name: "get_run_status".into(),
+                arguments: "{}".into(),
+            }]),
+            error: None,
+            delay_ms: 0,
+        },
+        ScriptedTurn {
+            content: Some("The run failed; see the log.".into()),
+            tool_calls: None,
+            error: None,
+            delay_ms: 0,
+        },
+    ]);
+
+    let resp = server::build_router("personal")
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/chat/send")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"message": "why did my run fail", "run_id": "does-not-exist"})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 10 * 1024 * 1024)
+        .await
+        .unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("event: tool_call") && text.contains("get_run_status"),
+        "run-scoped tools must be registered when run_id is present: {text}"
+    );
+    assert!(
+        text.contains("run does-not-exist not found"),
+        "tool result must be honest: {text}"
     );
 }

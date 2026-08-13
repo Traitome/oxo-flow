@@ -162,6 +162,12 @@ impl Orchestrator {
                             });
                         }
                         Err(e) => {
+                            if let Some(sink) = &mut sink {
+                                sink(AgentEvent::ToolResult {
+                                    name: tc.name.clone(),
+                                    summary: format!("Error: {e}"),
+                                });
+                            }
                             messages.push(Message::tool(&tc.id, &tc.name, &format!("Error: {e}")));
                             tool_call_records.push(ToolCallRecord {
                                 timestamp: Utc::now(),

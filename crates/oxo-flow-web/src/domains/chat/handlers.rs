@@ -39,7 +39,7 @@ pub async fn chat_send(
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    let run = service::spawn_chat_agent(message, session_id.clone(), context);
+    let run = service::spawn_chat_agent(message, session_id.clone(), context, req.run_id);
 
     let stream = async_stream::stream! {
         let mut events = run.events;

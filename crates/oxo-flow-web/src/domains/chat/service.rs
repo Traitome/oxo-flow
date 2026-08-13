@@ -228,6 +228,7 @@ pub fn spawn_chat_agent(
     message: String,
     _session_id: String,
     context: Option<ChatContext>,
+    run_id: Option<String>,
 ) -> ChatAgentRun {
     let (event_tx, event_rx) = tokio::sync::mpsc::channel::<AgentEvent>(64);
     let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
@@ -239,7 +240,13 @@ pub fn spawn_chat_agent(
         let mut sink = move |e: AgentEvent| {
             let _ = event_tx.try_send(e);
         };
-        let result = run_chat_agent(&message, context.as_ref(), Some(&mut sink)).await;
+        let result = run_chat_agent(
+            &message,
+            context.as_ref(),
+            run_id.as_deref(),
+            Some(&mut sink),
+        )
+        .await;
         let _ = outcome_tx.send(result);
     });
     ChatAgentRun {
@@ -252,6 +259,7 @@ pub fn spawn_chat_agent(
 pub async fn run_chat_agent(
     message: &str,
     context: Option<&ChatContext>,
+    run_id: Option<&str>,
     sink: Option<&mut AgentEventSink>,
 ) -> Result<AgentOutcome, String> {
     let provider = AiProviderRegistry::global().get_provider();
@@ -263,7 +271,7 @@ pub async fn run_chat_agent(
         workflow_content: None,
         external_sources: vec![],
         max_rounds: 6,
-        tool_registry: super::tools::build_chat_tool_registry(),
+        tool_registry: super::tools::build_chat_tool_registry(run_id),
         tool_approver: None,
         session: oxo_flow_ai::session::AiSession::new("web-chat", "chat", "web", "web-provider"),
     };
