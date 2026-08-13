@@ -84,6 +84,11 @@ fn extract_invalidation_summary(log: &str) -> Option<String> {
     }
 }
 
+/// Map a subprocess exit status to the run status vocabulary.
+fn final_status_from_exit(success: bool) -> &'static str {
+    if success { "completed" } else { "failed" }
+}
+
 /// Execution options carried from the run request to the CLI subprocess.
 #[derive(Debug, Clone, Default)]
 pub struct RunFlags {
@@ -203,6 +208,11 @@ pub fn spawn_background_run(
             }
         };
 
+        // New process group: signals from cancel/pause/resume handlers reach
+        // the CLI and every rule subprocess it spawns (see process_control).
+        #[cfg(unix)]
+        cmd.process_group(0);
+
         cmd.stdout(Stdio::from(log_file));
         cmd.stderr(Stdio::from(err_file));
 
@@ -219,51 +229,69 @@ pub fn spawn_background_run(
                     warn!("Failed to record PID for run {run_id}: {e}");
                 }
 
+                // Register the process group so cancel/pause/resume can signal it.
+                if let Some(pid) = child.id() {
+                    crate::process_control::register(&run_id, pid as i32);
+                }
+
                 // Wait for process completion
                 match child.wait().await {
                     Ok(status) => {
-                        let final_state = if status.success() {
-                            "success"
-                        } else {
-                            "failed"
-                        };
+                        crate::process_control::unregister(&run_id);
+                        let final_state = final_status_from_exit(status.success());
                         let end = Utc::now();
-                        if let Err(e) =
-                            sqlx::query("UPDATE runs SET status = ?, finished_at = ? WHERE id = ?")
-                                .bind(final_state)
-                                .bind(end)
-                                .bind(&run_id)
-                                .execute(db::pool())
-                                .await
-                        {
-                            error!("Failed to update final status for run {run_id}: {e}");
-                        }
-                        info!("Run {run_id} finished: {final_state}");
+                        // A concurrent cancel sets status='cancelled' and emits
+                        // run_cancelled; the exit here is the SIGKILL fallout
+                        // and must not overwrite it back to completed/failed.
+                        let cancelled: bool = sqlx::query_scalar(
+                            "SELECT COUNT(*) FROM runs WHERE id = ? AND status = 'cancelled'",
+                        )
+                        .bind(&run_id)
+                        .fetch_one(db::pool())
+                        .await
+                        .map(|n: i64| n > 0)
+                        .unwrap_or(false);
+                        if !cancelled {
+                            if let Err(e) =
+                                sqlx::query("UPDATE runs SET status = ?, finished_at = ? WHERE id = ?")
+                                    .bind(final_state)
+                                    .bind(end)
+                                    .bind(&run_id)
+                                    .execute(db::pool())
+                                    .await
+                            {
+                                error!("Failed to update final status for run {run_id}: {e}");
+                            }
+                            info!("Run {run_id} finished: {final_state}");
 
-                        // Broadcast the terminal event (documented in the SSE
-                        // API): run_completed on success, run_failed otherwise.
-                        let event = if status.success() {
-                            "run_completed"
+                            // Broadcast the terminal event (documented in the SSE
+                            // API): run_completed on success, run_failed otherwise.
+                            let event = if status.success() {
+                                "run_completed"
+                            } else {
+                                "run_failed"
+                            };
+                            // Surfacing the CLI's invalidation summary (issue #69):
+                            // config changes, rule-definition edits, and input-set
+                            // changes that invalidated checkpoint records this run.
+                            let summary = std::fs::read_to_string(&log_file_path)
+                                .ok()
+                                .and_then(|log| extract_invalidation_summary(&log));
+                            broadcast_event(
+                                event,
+                                &serde_json::json!({
+                                    "run_id": run_id,
+                                    "status": final_state,
+                                    "finished_at": end.to_rfc3339(),
+                                    "summary": summary,
+                                }),
+                            );
                         } else {
-                            "run_failed"
-                        };
-                        // Surfacing the CLI's invalidation summary (issue #69):
-                        // config changes, rule-definition edits, and input-set
-                        // changes that invalidated checkpoint records this run.
-                        let summary = std::fs::read_to_string(&log_file_path)
-                            .ok()
-                            .and_then(|log| extract_invalidation_summary(&log));
-                        broadcast_event(
-                            event,
-                            &serde_json::json!({
-                                "run_id": run_id,
-                                "status": final_state,
-                                "finished_at": end.to_rfc3339(),
-                                "summary": summary,
-                            }),
-                        );
+                            info!("Run {run_id} exited after cancel; keeping 'cancelled'");
+                        }
                     }
                     Err(e) => {
+                        crate::process_control::unregister(&run_id);
                         error!("Failed to wait on child process for run {run_id}: {e}");
                         mark_run_failed(&run_id).await;
                     }
@@ -303,6 +331,12 @@ async fn mark_run_failed(run_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exit_success_maps_to_completed() {
+        assert_eq!(final_status_from_exit(true), "completed");
+        assert_eq!(final_status_from_exit(false), "failed");
+    }
 
     #[test]
     fn summary_extracts_config_change_block() {
