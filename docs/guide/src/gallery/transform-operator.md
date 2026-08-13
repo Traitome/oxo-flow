@@ -12,72 +12,7 @@ Unify split → map → combine scatter-gather patterns into a single rule decla
 
 ```toml
 # examples/gallery/10_transform_operator.oxoflow
-# 10 — Transform Operator Demo
-# Demonstrates the unified split → map → combine pattern in a single rule.
-# Similar to dplyr's group_by() %>% summarize() or pandas' groupby().apply()
-
-[workflow]
-name = "transform-demo"
-version = "1.0.0"
-description = "Demonstrates the transform operator for scatter-gather patterns"
-author = "oxo-flow examples"
-
-[config]
-chromosomes = ["chr1", "chr2", "chr3", "chr4", "chr5"]
-reference = "/data/references/GRCh38/genome.fa"
-
-[defaults]
-threads = 4
-memory = "8G"
-
-# ── Mode A: Split → Map → Combine ──────────────────────────────────────────────
-# Classic scatter-gather: split by chromosome, process each, merge results
-
-[[rules]]
-name = "variant_calling"
-input = ["aligned/sample.bam"]
-# GVCF mode (-ERC GVCF) — chunks inherit the full .g.vcf.gz extension
-output = ["variants/sample.g.vcf.gz"]
-
-[rules.resources]
-threads = 8
-
-[rules.environment]
-conda = "envs/gatk.yaml"
-
-[rules.transform.split]
-by = "chr"
-values_from = "config.chromosomes"
-
-[rules.transform]
-map = "gatk HaplotypeCaller -R {config.reference} -I {input} -L {chr} -O {output} -ERC GVCF"
-cleanup = true
-
-[rules.transform.combine]
-# GATK requires -I per input; {chunks} is space-separated
-shell = "gatk GatherVcfs $(for f in {chunks}; do echo \"-I $f \"; done) -O {output}"
-
-# ── Mode B: Split → Map (no combine) ────────────────────────────────────────────
-# Parallel processing without merging - each split produces independent output
-
-[[rules]]
-name = "parallel_qc"
-input = ["aligned/sample.bam"]
-
-[rules.resources]
-threads = 4
-
-[rules.environment]
-conda = "envs/samtools.yaml"
-
-[rules.transform.split]
-by = "chr"
-values_from = "config.chromosomes"
-
-[rules.transform]
-# Restrict each chunk to its chromosome so the stats actually differ
-map = "samtools view -b {input} {chr} | samtools flagstat - > {output}"
-# No combine — produces separate .oxo-flow/chunks/chr/chr1.out, etc.
+--8<-- "examples/gallery/10_transform_operator.oxoflow"
 ```
 
 ## Key Concepts

@@ -233,6 +233,26 @@ const EMBEDDED_GALLERY: &[(&str, &str)] = &[
         "10_transform_operator",
         include_str!("../../../../examples/gallery/10_transform_operator.oxoflow"),
     ),
+    (
+        "11_conditional_workflow",
+        include_str!("../../../../examples/gallery/11_conditional_workflow.oxoflow"),
+    ),
+    (
+        "12_cohort_analysis",
+        include_str!("../../../../examples/gallery/12_cohort_analysis.oxoflow"),
+    ),
+    (
+        "13_simple_variant_calling",
+        include_str!("../../../../examples/gallery/13_simple_variant_calling.oxoflow"),
+    ),
+    (
+        "14_paired_experiment_control",
+        include_str!("../../../../examples/gallery/14_paired_experiment_control.oxoflow"),
+    ),
+    (
+        "15_paired_experiment_control_pairs",
+        include_str!("../../../../examples/gallery/15_paired_experiment_control_pairs.oxoflow"),
+    ),
 ];
 
 /// Match an embedded template by exact stem or `_<name>` suffix (the same

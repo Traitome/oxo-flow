@@ -11,20 +11,7 @@ The simplest possible oxo-flow workflow: a single rule that writes a greeting to
 
 ```toml
 # examples/gallery/01_hello_world.oxoflow
-# 01 — Hello World
-# The simplest possible oxo-flow workflow: a single rule that writes a greeting.
-# Demonstrates: basic rule structure, shell commands, output files.
-
-[workflow]
-name = "hello-world"
-version = "1.0.0"
-description = "A minimal workflow that writes a greeting to a file"
-author = "oxo-flow examples"
-
-[[rules]]
-name = "greet"
-output = ["hello.txt"]
-shell = "echo 'Hello from oxo-flow!' > {output[0]}"
+--8<-- "examples/gallery/01_hello_world.oxoflow"
 ```
 
 ## Key Concepts

@@ -12,41 +12,7 @@ Call variants per chromosome in parallel, then merge the per-chromosome GVCFs in
 
 ```toml
 # examples/gallery/04_scatter_gather.oxoflow
-# 04 — Scatter-Gather Pattern
-# Demonstrates chromosome-based parallel processing, a common bioinformatics pattern.
-
-[workflow]
-name = "scatter-gather-chromosomes"
-version = "1.0.0"
-description = "Per-chromosome scatter-gather processing"
-author = "Traitome"
-
-[config]
-chromosomes = ["chr1", "chr2", "chr3", "chr4", "chr5"]
-reference = "/data/references/GRCh38/genome.fa"
-
-[defaults]
-threads = 4
-memory = "8G"
-
-[[rules]]
-name = "haplotype_caller"
-input = ["aligned/sample.bam"]
-output = ["variants/sample.{chr}.g.vcf.gz"]
-scatter = { variable = "chr", values_from = "config.chromosomes", gather = "gather_gvcf" }
-shell = "gatk HaplotypeCaller -R {config.reference} -I {input[0]} -L {chr} -O {output[0]} -ERC GVCF"
-
-[rules.environment]
-conda = "envs/gatk.yaml"
-
-[[rules]]
-name = "gather_gvcf"
-# The gather rule receives the output of all scattered rules as inputs
-output = ["variants/sample.g.vcf.gz"]
-shell = "gatk GatherVcfs $(for f in {input}; do echo \"-I $f \"; done) -O {output[0]}"
-
-[rules.environment]
-conda = "envs/gatk.yaml"
+--8<-- "examples/gallery/04_scatter_gather.oxoflow"
 ```
 
 ## Key Concepts
