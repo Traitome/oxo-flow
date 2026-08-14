@@ -441,3 +441,42 @@ output = ["finish.txt"]
     }
     assert!(compared > 0);
 }
+
+#[tokio::test]
+async fn cluster_logs_command_uses_mock_sacct() {
+    // `cluster logs` is the last CLI stub resolved (issue #67 §4): SLURM
+    // fetches the accounting record through the shared ExecutorBackend::logs
+    // implementation — the same path BackendDriver uses.
+    let dir = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let job_dir = state.path().join("jobs/12345");
+    std::fs::create_dir_all(&job_dir).unwrap();
+    std::fs::write(job_dir.join("state"), "COMPLETED").unwrap();
+    std::fs::write(job_dir.join("exit_code"), "0:0").unwrap();
+
+    let mut cmd = std::process::Command::new(workspace_bin("oxo-flow"));
+    let out = cmd
+        .args(["cluster", "logs", "--backend", "slurm", "12345"])
+        .env("MOCK_SCHEDULER_DIR", state.path())
+        .env("PATH", format!("{}:{}", fixtures_dir().display(), std::env::var("PATH").unwrap()))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "cluster logs failed: {stderr}"
+    );
+    assert!(stdout.contains("12345|COMPLETED|0:0|00:00:05|1234K"), "got: {stdout}");
+
+    // Unknown backend falls back to SLURM; missing scheduler binary fails
+    // loudly instead of silently succeeding.
+    let mut bad = std::process::Command::new(workspace_bin("oxo-flow"));
+    let out = bad
+        .args(["cluster", "logs", "--backend", "slurm", "99999"])
+        .env("MOCK_SCHEDULER_DIR", state.path())
+        .env("PATH", format!("{}:{}", fixtures_dir().display(), std::env::var("PATH").unwrap()))
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "unknown job id should fail");
+}

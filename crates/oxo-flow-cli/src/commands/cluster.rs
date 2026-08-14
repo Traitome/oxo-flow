@@ -374,12 +374,41 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
             }
         }
 
-        ClusterAction::Logs { backend: _, job_id } => {
-            eprintln!(
-                "{} Logs for job ID {} not yet implemented",
-                "⚠️".yellow(),
-                job_id
+        ClusterAction::Logs { backend, job_id } => {
+            // Issue #67 §4: the last CLI stub. SLURM fetches a precise
+            // accounting record (`sacct --format=JobID,State,ExitCode,
+            // Elapsed,MaxRSS`); PBS/SGE/LSF stay best-effort (qstat -f /
+            // qacct / bacct) — the same per-scheduler contract the
+            // BackendDriver uses.
+            let cluster_backend = match backend.as_str() {
+                "pbs" => oxo_flow_core::cluster::ClusterBackend::Pbs,
+                "sge" => oxo_flow_core::cluster::ClusterBackend::Sge,
+                "lsf" => oxo_flow_core::cluster::ClusterBackend::Lsf,
+                _ => oxo_flow_core::cluster::ClusterBackend::Slurm,
+            };
+            let executor = oxo_flow_core::backend::cluster::ClusterExecutor::new(
+                cluster_backend,
+                oxo_flow_core::cluster::ClusterJobConfig {
+                    backend: cluster_backend,
+                    queue: None,
+                    account: None,
+                    walltime: None,
+                    extra_args: Vec::new(),
+                },
             );
+            let logs = executor
+                .logs(&job_id)
+                .await
+                .context("failed to fetch job logs")?;
+            if logs.trim().is_empty() {
+                eprintln!(
+                    "{} No accounting records found for job ID {}",
+                    "Warning:".bold().yellow(),
+                    job_id
+                );
+            } else {
+                println!("{logs}");
+            }
         }
     }
     Ok(())
