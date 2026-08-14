@@ -323,7 +323,8 @@ jobs:
       - name: Install pinned toolchain with release target
         shell: bash
         run: |
-          # rust-toolchain.toml pins the toolchain (currently 1.92.0) and
+          # rust-toolchain.toml pins the toolchain (bumped deliberately; see
+          # rust-toolchain.toml for the current pin) and
           # cargo resolves every build to it — including `--target` builds.
           # dtolnay/rust-toolchain above installs "stable" only, so the
           # release target's std must be installed into the pinned
