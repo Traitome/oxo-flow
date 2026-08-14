@@ -90,26 +90,30 @@ Different schedulers handle GPU requests differently:
 
 ## SLURM Example
 
-oxo-flow generates SLURM job scripts automatically. For the `align` rule above, the generated script is:
+oxo-flow generates SLURM job scripts automatically. For the `align` rule
+above with a sample group `batch = ["S1", "S2", "S3"]`, the script generated
+for the first instance is:
 
 ```bash
 #!/bin/bash
-#SBATCH --job-name=align
+#SBATCH --job-name=align_batch_S1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
 #SBATCH --time=1-00:00:00
-#SBATCH --output=logs/align.out
-#SBATCH --error=logs/align.err
+#SBATCH --output=logs/align_batch_S1.out
+#SBATCH --error=logs/align_batch_S1.err
 
 set -e
 
 mkdir -p logs
-singularity exec --bind .:. docker://biocontainers/bwa:0.7.17 sh -c 'bwa mem -t 16 ref.fa {sample}_R1.fastq.gz | samtools sort -o aligned/{sample}.bam'
+singularity exec --bind .:. docker://biocontainers/bwa:0.7.17 sh -c 'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'
 ```
 
-Note: one script is generated per **rule** — `{sample}` and other
-placeholders stay literal in the script (the scheduler submits the rule as
-written; per-sample expansion happens in the execution layer).
+Note: one script is generated per **rule instance**. Wildcards expand before
+the scripts are written, exactly as they do for `run`, so a 3-sample scatter
+produces `align_batch_S1.sh`, `align_batch_S2.sh`, and `align_batch_S3.sh`
+with concrete paths in each. The instance names match the ones `dry-run`
+plans, so a script maps back to a planned rule by name.
 
 ---
 
@@ -117,15 +121,15 @@ written; per-sample expansion happens in the execution layer).
 
 ```bash
 #!/bin/bash
-#PBS -N align
+#PBS -N align_batch_S1
 #PBS -l nodes=1:ppn=16,mem=32G,walltime=1-00:00:00
-#PBS -o logs/align.out
-#PBS -e logs/align.err
+#PBS -o logs/align_batch_S1.out
+#PBS -e logs/align_batch_S1.err
 
 set -e
 
 mkdir -p logs
-singularity exec --bind .:. docker://biocontainers/bwa:0.7.17 sh -c 'bwa mem -t 16 ref.fa {sample}_R1.fastq.gz | samtools sort -o aligned/{sample}.bam'
+singularity exec --bind .:. docker://biocontainers/bwa:0.7.17 sh -c 'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'
 ```
 
 ---
@@ -134,17 +138,17 @@ singularity exec --bind .:. docker://biocontainers/bwa:0.7.17 sh -c 'bwa mem -t 
 
 ```bash
 #!/bin/bash
-#$ -N align
+#$ -N align_batch_S1
 #$ -pe smp 16
 #$ -l h_vmem=32G
 #$ -l h_rt=1-00:00:00
-#$ -o logs/align.out
-#$ -e logs/align.err
+#$ -o logs/align_batch_S1.out
+#$ -e logs/align_batch_S1.err
 
 set -e
 
 mkdir -p logs
-singularity exec --bind .:. docker://biocontainers/bwa:0.7.17 sh -c 'bwa mem -t 16 ref.fa {sample}_R1.fastq.gz | samtools sort -o aligned/{sample}.bam'
+singularity exec --bind .:. docker://biocontainers/bwa:0.7.17 sh -c 'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'
 ```
 
 ---

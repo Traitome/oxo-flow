@@ -776,6 +776,19 @@ pub enum ClusterAction {
         #[arg(short = 'a', long, help = "Cluster billing account")]
         account: Option<String>,
         #[arg(
+            long,
+            value_name = "SPEC",
+            help = "Wall-time limit for every job (24h, 2d, or 24:00:00); a rule's time_limit wins"
+        )]
+        walltime: Option<String>,
+        #[arg(
+            long = "extra-arg",
+            value_name = "ARG",
+            allow_hyphen_values = true,
+            help = "Extra scheduler argument, passed through verbatim (repeatable)"
+        )]
+        extra_args: Vec<String>,
+        #[arg(
             short = 'o',
             long,
             default_value = "cluster_scripts",
