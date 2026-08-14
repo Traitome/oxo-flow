@@ -270,8 +270,10 @@ export default function WorkflowCanvas({
         <Controls showInteractive={false} />
         {/* The minimap overlays the canvas — useful for monitoring a large
             DAG, intrusive while editing. */}
-        {/* Large-DAG navigation aid in every mode (issue #79 P2). */}
-        <MiniMap pannable zoomable className="rf-minimap" />
+        {/* Navigation aid for monitoring views only — in the editor the
+            minimap panel intercepts node clicks/double-clicks (e2e:
+            editor-canvas). minZoom 0.5 keeps large DAGs readable instead. */}
+        {!editable && <MiniMap pannable zoomable className="rf-minimap" />}
       </ReactFlow>
       {context === 'editor' && (
         <button className="rf-layout-btn" onClick={applyLayout} title="Auto-layout the DAG">
