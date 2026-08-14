@@ -50,6 +50,15 @@ impl SchedulerState {
         self.running.insert(rule.to_owned());
     }
 
+    /// Add a rule created mid-run (checkpoint re-entry, issue #78 P3).
+    /// Unknown names are pending and become schedulable once their
+    /// dependencies complete.
+    pub fn add_rule(&mut self, rule: &str) {
+        self.statuses
+            .entry(rule.to_string())
+            .or_insert(JobStatus::Pending);
+    }
+
     /// Mark a rule as completed with a record.
     pub fn mark_completed(&mut self, record: JobRecord) {
         self.statuses.insert(record.rule.clone(), record.status);
@@ -1037,5 +1046,53 @@ mod tests {
         let mem = effective_memory_mb(&rule, 2048);
         // Explicit memory takes precedence: 32G = 32768MB
         assert_eq!(mem, 32768);
+    }
+}
+
+#[cfg(test)]
+mod reentry_tests {
+    use super::*;
+    use crate::dag::WorkflowDag;
+
+    fn two_rule_dag() -> WorkflowDag {
+        let rules = vec![
+            Rule {
+                name: "a".to_string(),
+                input: vec![].into(),
+                output: vec!["a.txt".to_string()].into(),
+                shell: Some("true".to_string()),
+                ..Default::default()
+            },
+            Rule {
+                name: "b".to_string(),
+                input: vec!["a.txt".to_string()].into(),
+                output: vec!["b.txt".to_string()].into(),
+                shell: Some("true".to_string()),
+                ..Default::default()
+            },
+        ];
+        WorkflowDag::from_rules(&rules).unwrap()
+    }
+
+    #[test]
+    fn add_rule_makes_rule_ready_when_deps_done() {
+        let dag = two_rule_dag();
+        let mut sched = SchedulerState::new(&["a"]);
+        sched.mark_completed(JobRecord {
+            rule: "a".to_string(),
+            status: JobStatus::Success,
+            started_at: None,
+            finished_at: None,
+            exit_code: Some(0),
+            stdout: None,
+            stderr: None,
+            command: None,
+            retries: 0,
+            timeout: None,
+            skip_reason: None,
+        });
+        sched.add_rule("b");
+        let ready = sched.ready_rules(&dag).unwrap();
+        assert!(ready.contains(&"b".to_string()));
     }
 }

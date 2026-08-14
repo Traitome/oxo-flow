@@ -288,6 +288,43 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
         }
     }
 
+    // E013: checkpoint rule without a re-entry manifest (issue #78 P3)
+    for rule in &config.rules {
+        if rule.checkpoint && rule.checkpoint_manifest.is_none() {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                message: "checkpoint rule must declare checkpoint_manifest — the TOML file it writes at runtime to declare new re-entry values".to_string(),
+                rule: Some(rule.name.clone()),
+                code: "E013".to_string(),
+                suggestion: Some(
+                    "add `checkpoint_manifest = \"discover.toml\"` (the rule must write [reentry] sample = [...] to that file), or remove checkpoint = true".to_string(),
+                ),
+            });
+        }
+    }
+
+    // E014: checkpoint rule parameterized by sample/group wildcards
+    // (bounded re-entry: checkpoint rules never re-expand themselves)
+    for rule in &config.rules {
+        let text = format!(
+            "{} {} {}",
+            rule.shell.as_deref().unwrap_or(""),
+            rule.input.to_vec().join(" "),
+            rule.output.to_vec().join(" ")
+        );
+        if rule.checkpoint && (text.contains("{sample}") || text.contains("{group}")) {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                message: "checkpoint rule cannot be parameterized by {sample}/{group} — re-entry re-expansion is bounded to non-checkpoint rules".to_string(),
+                rule: Some(rule.name.clone()),
+                code: "E014".to_string(),
+                suggestion: Some(
+                    "move the wildcard into a downstream rule; the checkpoint rule itself runs once per round-0 plan".to_string(),
+                ),
+            });
+        }
+    }
+
     // E007: depends_on references non-existent rules
     let rule_names: std::collections::HashSet<&str> =
         config.rules.iter().map(|r| r.name.as_str()).collect();
@@ -1610,6 +1647,64 @@ mod tests {
         let result = validate_format(&config);
         assert!(!result.valid);
         assert!(result.errors().iter().any(|d| d.code == "E005"));
+    }
+
+    #[test]
+    fn validate_checkpoint_without_manifest_is_error() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "discover"
+            output = ["d.done"]
+            shell = "true"
+            checkpoint = true
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(result.errors().iter().any(|d| d.code == "E013"));
+    }
+
+    #[test]
+    fn validate_checkpoint_with_sample_wildcard_is_error() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "discover"
+            output = ["d.done"]
+            shell = "touch d_{sample}.done"
+            checkpoint = true
+            checkpoint_manifest = "d.toml"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(result.errors().iter().any(|d| d.code == "E014"));
+    }
+
+    #[test]
+    fn validate_checkpoint_with_manifest_passes() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "discover"
+            output = ["d.done"]
+            shell = "true"
+            checkpoint = true
+            checkpoint_manifest = "d.toml"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(
+            result
+                .errors()
+                .iter()
+                .all(|d| d.code != "E013" && d.code != "E014")
+        );
     }
 
     #[test]

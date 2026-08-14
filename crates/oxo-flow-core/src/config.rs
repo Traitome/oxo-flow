@@ -1132,6 +1132,11 @@ pub struct WorkflowConfig {
     /// (issue #63). Never serialized — user TOML cannot set it.
     #[serde(skip)]
     pub expansion_samples: HashMap<String, Vec<String>>,
+
+    /// Pre-expansion rule templates, captured on the first `expand_wildcards`
+    /// call — the source for checkpoint re-entry re-expansion (issue #78 P3).
+    #[serde(skip)]
+    pub rule_templates: Vec<Rule>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1925,6 +1930,11 @@ impl WorkflowConfig {
     /// rules reference its wildcards (this is not an error—those pairs are
     /// simply ignored).
     pub fn expand_wildcards(&mut self) -> Result<()> {
+        // Preserve the unexpanded templates on first expansion — checkpoint
+        // re-entry (issue #78 P3) re-expands from them with merged values.
+        if self.rule_templates.is_empty() {
+            self.rule_templates = self.rules.clone();
+        }
         use crate::wildcard::{
             expand_pattern, has_wildcards, validate_wildcard_constraints_compiled,
             wildcard_combinations_from_groups, wildcard_combinations_from_pairs,

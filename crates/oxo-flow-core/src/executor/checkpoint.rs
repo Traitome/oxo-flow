@@ -164,6 +164,13 @@ pub struct CheckpointState {
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub tombstones: HashMap<String, Vec<String>>,
+
+    /// Checkpoint re-entries (issue #78 P3): the values each checkpoint rule
+    /// contributed to the plan, so resumes replay them deterministically and
+    /// revoke them when the rule is invalidated. Legacy checkpoints load
+    /// with an empty list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reentries: Vec<crate::reentry::ReentryRecord>,
 }
 
 impl CheckpointState {
@@ -180,7 +187,15 @@ impl CheckpointState {
             rule_fingerprints: HashMap::new(),
             input_manifests: HashMap::new(),
             tombstones: HashMap::new(),
+            reentries: Vec::new(),
         }
+    }
+
+    /// Record a checkpoint re-entry, superseding any previous record for the
+    /// same checkpoint rule (issue #78 P3).
+    pub fn record_reentry(&mut self, record: crate::reentry::ReentryRecord) {
+        self.reentries.retain(|r| r.rule != record.rule);
+        self.reentries.push(record);
     }
 
     /// Record a checksum for an output file (provenance tracking).
@@ -1258,6 +1273,31 @@ mod tests {
         )
         .unwrap();
         assert!(legacy.tombstones.is_empty());
+        assert!(legacy.reentries.is_empty());
+    }
+
+    #[test]
+    fn checkpoint_reentry_roundtrip_and_supersede() {
+        let mut ck = CheckpointState::new();
+        ck.record_reentry(crate::reentry::ReentryRecord {
+            round: 1,
+            rule: "discover".into(),
+            group: None,
+            samples: vec!["S2".into()],
+        });
+        ck.record_reentry(crate::reentry::ReentryRecord {
+            round: 2,
+            rule: "discover".into(),
+            group: None,
+            samples: vec!["S2".into(), "S3".into()],
+        });
+        // Same rule → superseded, not appended.
+        assert_eq!(ck.reentries.len(), 1);
+        assert_eq!(ck.reentries[0].samples, vec!["S2", "S3"]);
+
+        let json = ck.to_json().unwrap();
+        let back = CheckpointState::from_json(&json).unwrap();
+        assert_eq!(back.reentries, ck.reentries);
     }
 
     // ─── Input manifest snapshots (issue #72) ─────────────────────────────

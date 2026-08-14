@@ -796,6 +796,12 @@ pub struct Rule {
     #[serde(skip_serializing_if = "is_false")]
     pub checkpoint: bool,
 
+    /// Path (relative to the workdir, `{config.x}`-expanded) of the TOML
+    /// manifest a checkpoint rule writes at runtime to declare re-entry
+    /// values (issue #78 P3). Required when `checkpoint = true`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint_manifest: Option<String>,
+
     /// Whether this rule is required (pipeline fails if this rule fails).
     #[serde(default)]
     #[serde(skip_serializing_if = "is_false")]
