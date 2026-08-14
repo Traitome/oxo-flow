@@ -127,6 +127,9 @@ The checkpoint file is JSON with the following structure:
   "rule_fingerprints": {
     "trim_reads": "sha256:1a2b3c…",
     "align": "sha256:4d5e6f…"
+  },
+  "tombstones": {
+    "align": ["aligned/S1.bam"]
   }
 }
 ```
@@ -134,6 +137,9 @@ The checkpoint file is JSON with the following structure:
 `config_snapshot` records the effective config values (sensitive keys stored
 as SHA-256 digests) and `rule_fingerprints` the structural fingerprints that
 drive [precise invalidation](run.md#config-changes-and-precise-invalidation).
+`tombstones` lists outputs of [`temporary`](run.md#temporary-rules-temporary-true)
+rules that were deleted after a successful run — the rule stays skipped until
+a dependent needs those outputs again.
 
 ---
 

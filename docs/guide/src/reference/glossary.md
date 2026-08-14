@@ -68,7 +68,7 @@ Sets of rules that can run simultaneously because they have no dependencies on e
 
 A persistent record of which rules have completed. Checkpoints enable resuming workflows after failures without re-running successful rules.
 
-Besides rule status, a checkpoint stores config snapshots, rule fingerprints, and input file manifests — the engine compares them on every run to invalidate rules whose config, definition, or input file set changed.
+Besides rule status, a checkpoint stores config snapshots, rule fingerprints, and input file manifests — the engine compares them on every run to invalidate rules whose config, definition, or input file set changed. It also records **tombstones**: rules marked `temporary = true` whose outputs were deleted after a successful run, so later runs skip them unless a dependent needs the outputs again.
 
 **File location**: `.oxo-flow/checkpoint.json`
 
