@@ -53,7 +53,7 @@ oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It 
 | **Cluster backends** | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF, k8s |
 | **Security** | Shell sanitization, path traversal prevention, rate limiting | Limited | Limited |
 | **AI Companion** | Built-in — generate, refine, diagnose, interpret | Not built-in | Not built-in |
-| **Testing** | 1,280+ tests (unit, integration, doc) | pytest-based | Varied |
+| **Testing** | 1,530+ tests (unit, integration, doc) | pytest-based | Varied |
 
 ## Design Principles
 

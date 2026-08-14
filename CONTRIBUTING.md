@@ -14,7 +14,7 @@ cargo build --workspace
 cargo fmt --all -- --check     # Formatting
 cargo clippy --workspace -- -D warnings  # Lint
 cargo build --workspace         # Compile
-cargo test --workspace --lib    # Tests (1,280+)
+cargo test --workspace --lib    # Tests (1,530+)
 ```
 
 ## Project Structure
@@ -36,7 +36,7 @@ Types: feat, fix, refactor, docs, test, chore, perf, ci
 
 ## Testing
 
-- **Rust**: 1,280+ unit, integration, and doc tests across workspace
+- **Rust**: 1,530+ unit, integration, and doc tests across workspace
 - **Run**: `cargo test --workspace`
 
 ## Code Style

@@ -129,7 +129,7 @@ const EXEC_LOG: &str = "exec_log.txt";
 /// 3. `run` with `run_args` on the identical state → executed set `S`.
 /// 4. Assert `W == S` (and that no preview-skipped rule executed).
 ///
-/// `run_args` receives the workflow path via `run_args[0]`.
+/// The workflow path must be the first element of both argument slices.
 fn assert_parity(
     dir: &Path,
     dry_args: &[&str],
