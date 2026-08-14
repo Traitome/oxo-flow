@@ -160,8 +160,9 @@ as a local content change does; unchanged etag → skipped. When neither side
 has an etag, matching degrades to size-only (documented
 conservative-for-availability fallback). Without a registered backend the
 entry is skipped with a warning — the run completes and the remaining local
-entries still invalidate as before. Only exact object references participate;
-remote globs and directories are not supported in this iteration.
+entries still invalidate as before. Only exact object references participate:
+remote globs and directory references are rejected (the same boundary
+staging enforces).
 
 ## Remote staging and upload
 

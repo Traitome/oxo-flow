@@ -96,10 +96,10 @@ pub fn extract_dry_run_preview(log: &str) -> Option<serde_json::Value> {
     // Grow the slice until serde accepts it (handles nested braces).
     let mut end = 1;
     while end <= tail.len() {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&tail[..end]) {
-            if value.get("checkpoint_preview").is_some() {
-                return Some(value);
-            }
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&tail[..end])
+            && value.get("checkpoint_preview").is_some()
+        {
+            return Some(value);
         }
         end += 1;
     }
