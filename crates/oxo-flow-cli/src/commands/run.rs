@@ -5,7 +5,7 @@ use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::config_impact::{ConfigChangeReport, config_value_string};
 use oxo_flow_core::dag::WorkflowDag;
 use oxo_flow_core::executor::{CheckpointState, ExecutorConfig, LocalExecutor, WorkdirLock};
-use oxo_flow_core::rule::parse_duration_secs;
+use oxo_flow_core::rule::{Rule, parse_duration_secs};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -536,9 +536,9 @@ pub async fn run_command(
         .expand_wildcards()
         .context("failed to expand wildcard rules")?;
 
-    let dag = WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;
+    let mut dag = WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;
 
-    let order = if target.is_empty() {
+    let mut order = if target.is_empty() {
         dag.execution_order()?
     } else {
         let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
@@ -1094,9 +1094,49 @@ pub async fn run_command(
     //
     // Concurrency is still bounded by -j (tokio Semaphore).  ResourcePool
     // (threads/memory/groups) is checked per-rule inside execute_rule_with_config.
-    let rule_names: Vec<&str> = order.iter().map(String::as_str).collect();
-    let mut sched = oxo_flow_core::scheduler::SchedulerState::new(&rule_names);
-    let order_set: std::collections::HashSet<&str> = order.iter().map(String::as_str).collect();
+
+    // ── Checkpoint re-entry replay (issue #78 P3) ────────────────────────
+    // Re-apply recorded re-entries whose checkpoint rule still stands, then
+    // rebuild the DAG so a resume reconstructs the same static plan a fresh
+    // run would. Invalidated checkpoint rules are revoked: their samples
+    // leave the plan until the rule re-runs and re-records.
+    {
+        let ck = checkpoint.lock().await;
+        if !ck.reentries.is_empty() {
+            let valid: std::collections::HashSet<String> = config
+                .rules
+                .iter()
+                .filter(|rule| {
+                    ck.is_completed(&rule.name)
+                        && !rerun
+                        && (tombstone_keep.contains(&rule.name)
+                            || crate::commands::run_preview::rule_outputs_exist(
+                                rule,
+                                workdir_actual.as_ref(),
+                                &wildcard_values,
+                            ))
+                })
+                .map(|r| r.name.clone())
+                .collect();
+            let replayed =
+                oxo_flow_core::reentry::replay_valid_reentries(&mut config, &ck.reentries, &valid)?;
+            tracing::info!(count = replayed.len(), "replayed checkpoint re-entries");
+            dag = WorkflowDag::from_rules(&config.rules)
+                .context("failed to rebuild workflow DAG after re-entry replay")?;
+            order = if target.is_empty() {
+                dag.execution_order()?
+            } else {
+                let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
+                dag.execution_order_for_targets(&target_refs)
+                    .with_context(|| "failed to resolve target rules")?
+            };
+        }
+    }
+
+    let rule_names: Vec<String> = order.to_vec();
+    let rule_name_refs: Vec<&str> = rule_names.iter().map(String::as_str).collect();
+    let mut sched = oxo_flow_core::scheduler::SchedulerState::new(&rule_name_refs);
+    let mut order_set: std::collections::HashSet<String> = order.iter().cloned().collect();
     let run_started = std::time::Instant::now();
     let semaphore = Arc::new(tokio::sync::Semaphore::new(jobs.max(1)));
     let mut join_set = tokio::task::JoinSet::new();
@@ -1153,16 +1193,24 @@ pub async fn run_command(
     // Returns rules that are ready to run: dependencies satisfied, not yet
     // submitted, and not blocked by a failed upstream rule.  Sorted by
     // priority (descending) then name for determinism.
+    // Priorities captured once: the closure may outlive config borrows
+    // across checkpoint re-entry (config mutates mid-run, issue #78 P3).
+    let priority_map: std::collections::HashMap<String, i32> = config
+        .rules
+        .iter()
+        .map(|r| (r.name.clone(), r.priority))
+        .collect();
     let compute_ready = |sched: &oxo_flow_core::scheduler::SchedulerState,
-                         submitted: &std::collections::HashSet<String>|
+                         submitted: &std::collections::HashSet<String>,
+                         dag: &WorkflowDag,
+                         order_set: &std::collections::HashSet<String>|
      -> Result<Vec<String>, anyhow::Error> {
-        let mut ready = sched.ready_rules(&dag)?;
-        ready
-            .retain(|name| order_set.contains(name.as_str()) && !submitted.contains(name.as_str()));
+        let mut ready = sched.ready_rules(dag)?;
+        ready.retain(|name| order_set.contains(name) && !submitted.contains(name));
         // Sort by priority (descending), then name.
         ready.sort_by(|a, b| {
-            let pa = config.get_rule(a).map(|r| r.priority).unwrap_or(0);
-            let pb = config.get_rule(b).map(|r| r.priority).unwrap_or(0);
+            let pa = priority_map.get(a).copied().unwrap_or(0);
+            let pb = priority_map.get(b).copied().unwrap_or(0);
             pb.cmp(&pa).then_with(|| a.cmp(b))
         });
         Ok(ready)
@@ -1183,7 +1231,7 @@ pub async fn run_command(
         }
 
         // Submit every rule whose dependencies are now satisfied.
-        let ready = compute_ready(&sched, &submitted)?;
+        let ready = compute_ready(&sched, &submitted, &dag, &order_set)?;
         for rule_name in &ready {
             // Skip rules blocked by a failed upstream dependency.
             let blocked_by = {
@@ -1429,7 +1477,7 @@ pub async fn run_command(
         }
 
         // Wait for the next rule to finish.
-        let (_completed_rule, status, record) = match join_set.join_next().await {
+        let (completed_rule, status, record) = match join_set.join_next().await {
             Some(Ok(v)) => v,
             Some(Err(e)) => {
                 if e.is_panic() {
@@ -1443,6 +1491,58 @@ pub async fn run_command(
 
         sched.mark_completed(record);
         progress.inc(1);
+
+        // ── Checkpoint re-entry processing (issue #78 P3) ───────────────────
+        // A successful checkpoint rule may declare new samples in its manifest;
+        // they merge into the plan and execute in this same run.
+        if status == oxo_flow_core::executor::JobStatus::Success
+            && let Some(cp_rule) = config.get_rule(&completed_rule).cloned()
+            && cp_rule.checkpoint
+            && let Err(e) = process_reentry(
+                &mut config,
+                &cp_rule,
+                workdir_actual.as_ref(),
+                &wildcard_values,
+                &mut sched,
+                &mut order,
+                &mut order_set,
+                &mut dag,
+                &checkpoint,
+            )
+            .await
+        {
+            tracing::error!(rule = %completed_rule, error = %e, "checkpoint re-entry failed");
+            // Fail the checkpoint rule and propagate like any failure.
+            {
+                let mut frs = failed_rules_set.lock().await;
+                frs.insert(completed_rule.clone());
+            }
+            {
+                let mut ck = checkpoint.lock().await;
+                ck.mark_failed(&completed_rule);
+                if let Err(save_err) = ck.save_to_file(&checkpoint_path) {
+                    tracing::warn!("Failed to save checkpoint: {save_err}");
+                }
+            }
+            {
+                let mut f = failures.lock().await;
+                f.push((completed_rule.clone(), format!("re-entry manifest: {e}")));
+            }
+            fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            sched.mark_completed(oxo_flow_core::executor::JobRecord {
+                rule: completed_rule.clone(),
+                status: oxo_flow_core::executor::JobStatus::Failed,
+                started_at: None,
+                finished_at: None,
+                exit_code: Some(1),
+                stdout: None,
+                stderr: None,
+                command: None,
+                retries: 0,
+                timeout: None,
+                skip_reason: Some(format!("re-entry manifest: {e}")),
+            });
+        }
 
         // Abort on first failure when not in keep_going mode.
         let fc = fail_count.load(std::sync::atomic::Ordering::Relaxed);
@@ -1494,7 +1594,7 @@ pub async fn run_command(
             let frs = failed_rules_set.lock().await;
             let mut worklist: Vec<String> = Vec::new();
             for rule_name in &rule_names {
-                if submitted.contains(*rule_name) {
+                if submitted.contains(rule_name) {
                     continue;
                 }
                 let deps = dag.dependencies(rule_name).unwrap_or_default();
@@ -1541,7 +1641,7 @@ pub async fn run_command(
                 {
                     let frs = failed_rules_set.lock().await;
                     for other in &rule_names {
-                        if submitted.contains(*other) || worklist.contains(&other.to_string()) {
+                        if submitted.contains(other) || worklist.contains(other) {
                             continue;
                         }
                         let deps = dag.dependencies(other).unwrap_or_default();
@@ -2506,6 +2606,77 @@ logical errors. Output format per rule:
 const DEFAULT_CHECKPOINT: &str = ".oxo-flow/checkpoint.json";
 
 /// Checkpoint rules ordered by wall-clock time (slowest first), plus total time.
+/// Process a checkpoint rule's re-entry manifest after it completes
+/// (issue #78 P3): merge new samples, re-expand from templates, extend the
+/// plan, and record the re-entry in the checkpoint. Errors fail the rule.
+#[allow(clippy::too_many_arguments)]
+async fn process_reentry(
+    config: &mut WorkflowConfig,
+    rule: &Rule,
+    workdir: &std::path::Path,
+    wildcard_values: &std::collections::HashMap<String, String>,
+    sched: &mut oxo_flow_core::scheduler::SchedulerState,
+    order: &mut Vec<String>,
+    order_set: &mut std::collections::HashSet<String>,
+    dag: &mut WorkflowDag,
+    checkpoint: &Arc<tokio::sync::Mutex<CheckpointState>>,
+) -> anyhow::Result<()> {
+    let manifest_path = rule.checkpoint_manifest.as_ref().ok_or_else(|| {
+        anyhow::anyhow!("checkpoint rule '{}' has no checkpoint_manifest", rule.name)
+    })?;
+    let expanded =
+        oxo_flow_core::executor::checkpoint::expand_config_in_path(manifest_path, wildcard_values);
+    let full = workdir.join(&expanded);
+    let content = std::fs::read_to_string(&full).map_err(|e| {
+        anyhow::anyhow!(
+            "checkpoint rule '{}' produced no readable manifest at '{}': {e}",
+            rule.name,
+            full.display()
+        )
+    })?;
+    let (group, samples) = oxo_flow_core::reentry::parse_manifest(&content)
+        .map_err(|e| anyhow::anyhow!("checkpoint rule '{}': {e}", rule.name))?;
+    if samples.is_empty() {
+        return Ok(()); // empty manifest = valid no-op
+    }
+    let new_names = oxo_flow_core::reentry::apply_reentry(config, group.as_deref(), &samples)?;
+    if new_names.is_empty() {
+        return Ok(()); // everything already present
+    }
+    let round = {
+        let mut ck = checkpoint.lock().await;
+        let round = ck.reentries.iter().map(|r| r.round).max().unwrap_or(0) + 1;
+        if round > oxo_flow_core::reentry::MAX_REENTRY_ROUNDS {
+            anyhow::bail!(
+                "re-entry round cap ({}) exceeded — checkpoint rule '{}' keeps discovering new values; this is a workflow bug",
+                oxo_flow_core::reentry::MAX_REENTRY_ROUNDS,
+                rule.name
+            );
+        }
+        ck.record_reentry(oxo_flow_core::reentry::ReentryRecord {
+            round,
+            rule: rule.name.clone(),
+            group,
+            samples,
+        });
+        round
+    };
+    for name in &new_names {
+        sched.add_rule(name);
+        order_set.insert(name.clone());
+        order.push(name.clone());
+    }
+    *dag = WorkflowDag::from_rules(&config.rules)
+        .context("failed to rebuild workflow DAG after re-entry")?;
+    tracing::info!(
+        rule = %rule.name,
+        round = round,
+        new_instances = ?new_names,
+        "checkpoint re-entry expanded the plan"
+    );
+    Ok(())
+}
+
 fn rule_timings(state: &CheckpointState) -> (Vec<(&str, f64)>, f64) {
     let mut timings: Vec<(&str, f64)> = state
         .benchmarks
