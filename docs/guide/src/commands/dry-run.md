@@ -26,8 +26,13 @@ oxo-flow dry-run [OPTIONS] [WORKFLOW]
 |---|---|---|
 | `--target` | `-t` | Run only specific target rules and their dependencies (repeatable, prefix matching) |
 | `--samples <LIST>` | — | Preview only a subset of samples: `first:N` (pilot), explicit names, or `ready` (samples whose entry inputs are complete; repeatable, comma-separated) |
-| `--workdir <DIR>` | — | Resolve relative paths against this directory (default: the workflow file's directory) |
+| `--workdir <DIR>` | `-d` | Resolve relative paths against this directory (default: the workflow file's directory) |
 | `--profile <NAME>` | — | Execution profile loaded from `profiles/<NAME>.toml` — the SAME merge semantics as `run` |
+| `--arg <KEY=VALUE>` | — | Set a workflow config value (overrides `[config]` defaults). Repeatable |
+| `KEY=VALUE`… | — | Direct config overrides as trailing positionals (`KEY=VALUE`, `--KEY=VALUE`, `--KEY VALUE`) — the same forms `run` accepts; command flags must come before them |
+| `--sample <SAMPLE>` | — | Add a sample to the preview (repeatable, merges with all sources) — same semantics as `run --sample` |
+| `--rerun` | — | Preview `run --rerun`: every rule in the execution set is forced (`when`-false rules still skip) |
+| `--resume-failed` | — | Preview `run --resume-failed`: failed rules re-run, completed rules stay skipped |
 | `--skip-ref-build` | — | Skip automatic reference/index building (assume pre-built) — the preview otherwise lists required builds |
 | `--ai` | — | Enable AI-powered analysis of the workflow |
 | `--ai-max-retries <N>` | — | Maximum AI analysis rounds (overrides `[ai]` config) |

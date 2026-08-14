@@ -25,6 +25,7 @@ oxo-flow touch [OPTIONS] <WORKFLOW>
 | Option | Short | Description |
 |---|---|---|
 | `--rule` | `-r` | Specific rule(s) whose outputs to touch |
+| `--workdir <DIR>` | `-d` | Working directory the outputs live in (default: the workflow file's directory) |
 
 ---
 

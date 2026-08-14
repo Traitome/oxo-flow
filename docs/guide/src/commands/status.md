@@ -26,7 +26,7 @@ oxo-flow status [OPTIONS] [CHECKPOINT]
 
 | Option | Short | Description |
 |---|---|---|
-| `--timing` | | Show per-rule wall-clock times and total runtime, slowest first |
+| `--timing` | | Show per-rule wall-clock times, sampled peak RSS, and total runtime, slowest first |
 | `--limit <LIMIT>` | `-n` | Maximum number of rules in the `--timing` view (default: 10; requires `--timing`) |
 | `--json` | | Output machine-readable JSON to stdout |
 | `--verbose` | `-v` | Enable debug-level logging |

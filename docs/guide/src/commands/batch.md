@@ -28,7 +28,7 @@ oxo-flow batch [OPTIONS] <TEMPLATE> [ITEMS...]
 | `--jobs` | `-j` | 1 | Number of parallel workers |
 | `--stop-on-error` | `-x` | — | Stop after first failure |
 | `--file` | `-f` | — | Read items from file |
-| `--json-output` | — | — | Output results as formatted JSON |
+| `--json-output` | — | — | Output results as formatted JSON (legacy alias — the global `--json` now drives the same output) |
 | `--dry-run` | `-n` | — | Preview without executing |
 | `--workdir` | `-d` | . | Working directory |
 | `--environment` | `-e` | — | Environment spec |

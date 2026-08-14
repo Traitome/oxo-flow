@@ -166,6 +166,7 @@ nav:
       - report: commands/report.md
       - resume: commands/resume.md
       - run: commands/run.md
+      - AI: commands/ai.md
       - schema: commands/schema.md
       - serve: commands/serve.md
       - status: commands/status.md
