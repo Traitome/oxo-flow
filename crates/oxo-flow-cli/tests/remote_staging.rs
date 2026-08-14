@@ -106,7 +106,7 @@ async fn etag_rewrite_invalidates_exactly_the_remote_input_rule() {
             return;
         }
     }
-    let backend = S3Storage::new();
+    let backend = S3Storage::with_client(S3Storage::build_client());
     let bucket = format!("oxo-e2e-{}", std::process::id());
     backend.ensure_bucket(&bucket).await.unwrap_or_else(|e| {
         panic!("MinIO bucket setup failed ({e:?}); is a server listening at AWS_ENDPOINT_URL?")
@@ -155,5 +155,91 @@ async fn etag_rewrite_invalidates_exactly_the_remote_input_rule() {
     assert!(
         stderr.contains("1 skipped") || stderr.contains("already completed"),
         "expected a skip after the re-execution: {stderr}"
+    );
+}
+
+/// #80 item 2 acceptance: s3:// input → local execution → output upload →
+/// cloud-input rewrite → precise invalidation → deleted cloud output → the
+/// freshness gate re-runs and re-uploads.
+#[tokio::test]
+async fn staged_input_and_uploaded_output_end_to_end() {
+    let Some(envs) = live_env() else {
+        eprintln!("skipped: OXO_S3_E2E is not set (no live S3 endpoint)");
+        return;
+    };
+    for (k, _) in &envs {
+        if std::env::var(k).is_err() {
+            eprintln!("skipped: {k} is not exported in the test process");
+            return;
+        }
+    }
+    let backend = S3Storage::with_client(S3Storage::build_client());
+    let bucket = format!("oxo-e2e-staging-{}", std::process::id());
+    backend.ensure_bucket(&bucket).await.unwrap();
+    let input_uri = format!("s3://{bucket}/k1");
+    let output_uri = format!("s3://{bucket}/out.txt");
+    let input_path = StoragePath::parse(&input_uri);
+    let output_path = StoragePath::parse(&output_uri);
+
+    backend.write(&input_path, b"v1-content-AAAA\n").await.unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let workflow = format!(
+        r#"
+[workflow]
+name = "staging-e2e"
+
+[[rules]]
+name = "consume"
+input = ["{input_uri}"]
+output = ["out.txt", "{output_uri}"]
+shell = "cat {{input[0]}} > out.txt && cp out.txt {{output[1]}}"
+"#
+    );
+    std::fs::write(dir.path().join("wf.oxoflow"), workflow).unwrap();
+
+    // Run 1: executes; the shell reads the staged input and the engine
+    // uploads the remote output.
+    let (ok, stderr) = run(dir.path());
+    assert!(ok, "run 1 failed: {stderr}");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("out.txt")).unwrap(),
+        "v1-content-AAAA\n"
+    );
+    assert_eq!(
+        backend.read_to_string(&output_path).await.unwrap(),
+        "v1-content-AAAA\n"
+    );
+
+    // Run 2: nothing changed — skipped (staged cache + cloud output exist).
+    let (ok, stderr) = run(dir.path());
+    assert!(ok, "run 2 failed: {stderr}");
+    assert!(stderr.contains("1 skipped") || stderr.contains("already completed"));
+
+    // Rewrite the cloud input (same size, new content) → precise
+    // invalidation → re-execution → re-upload.
+    backend.write(&input_path, b"v2-content-BBBB\n").await.unwrap();
+    let (ok, stderr) = run(dir.path());
+    assert!(ok, "run 3 failed: {stderr}");
+    assert!(stderr.contains("invalidated 1 rule"));
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("out.txt")).unwrap(),
+        "v2-content-BBBB\n"
+    );
+    assert_eq!(
+        backend.read_to_string(&output_path).await.unwrap(),
+        "v2-content-BBBB\n"
+    );
+
+    // Delete the cloud output → the freshness gate notices the object is
+    // gone → the rule re-runs and restores it.
+    backend.delete(&output_path).await.unwrap();
+    let (ok, stderr) = run(dir.path());
+    assert!(ok, "run 4 failed: {stderr}");
+    assert!(!stderr.contains("1 skipped"), "expected a re-run: {stderr}");
+    assert_eq!(
+        backend.read_to_string(&output_path).await.unwrap(),
+        "v2-content-BBBB\n",
+        "remote output must be re-uploaded after deletion"
     );
 }

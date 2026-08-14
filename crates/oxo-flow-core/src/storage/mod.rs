@@ -49,6 +49,15 @@ impl StorageScheme {
             Self::Local
         }
     }
+
+    /// Lowercase scheme name ("local" | "s3" | "gs").
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::S3 => "s3",
+            Self::Gcs => "gs",
+        }
+    }
 }
 
 /// A parsed storage URI, normalized into its scheme, bucket, and key parts.
@@ -118,6 +127,126 @@ pub struct RemoteStat {
     pub etag: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Engine-managed staging paths and the etag-keyed download cache (issue #80
+// item 2). Staged files live under `.oxo-flow/staged/` — engine-internal,
+// invisible to checkpoints, safe to delete (a later run re-downloads).
+// ---------------------------------------------------------------------------
+
+/// Deterministic local path for a staged remote **input**.
+pub fn staged_path(workdir: &Path, path: &StoragePath) -> PathBuf {
+    workdir
+        .join(".oxo-flow/staged/in")
+        .join(path.scheme.as_str())
+        .join(path.bucket.as_deref().unwrap_or("_"))
+        .join(&path.key)
+}
+
+/// Deterministic local path where a rule writes a remote **output** before
+/// the engine uploads it.
+pub fn upload_stage_path(workdir: &Path, path: &StoragePath) -> PathBuf {
+    workdir
+        .join(".oxo-flow/staged/out")
+        .join(path.scheme.as_str())
+        .join(path.bucket.as_deref().unwrap_or("_"))
+        .join(&path.key)
+}
+
+/// Sidecar cache metadata for a staged download: `{dest}.meta.json`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct StageCacheMeta {
+    size: u64,
+    etag: Option<String>,
+}
+
+/// Download a remote object into `dest` with an etag-keyed cache and an
+/// atomic replace (issue #80 item 2).
+///
+/// * `stat` — the current remote metadata (from `StorageBackend::head`).
+/// * `transfer` — writes the object's content into the file it receives
+///   (the `.part` staging file); on success the file is atomically renamed
+///   onto `dest` and the sidecar meta is refreshed.
+///
+/// Returns `true` when a download happened, `false` on a cache hit (the
+/// cached file keeps its original mtime, which the executor's freshness
+/// gate relies on). A failed transfer deletes the partial file and leaves
+/// any previous cache entry untouched.
+pub async fn stage_with_cache<F, Fut>(
+    stat: RemoteStat,
+    dest: &Path,
+    transfer: F,
+) -> Result<bool>
+where
+    F: FnOnce(tokio::fs::File) -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    let meta_path = {
+        let mut os = dest.as_os_str().to_owned();
+        os.push(".meta.json");
+        PathBuf::from(os)
+    };
+
+    // Cache hit: the object still matches the sidecar (etag when both sides
+    // have one; size otherwise) and the file is still present.
+    if dest.exists()
+        && let Ok(meta_json) = tokio::fs::read_to_string(&meta_path).await
+        && let Ok(meta) = serde_json::from_str::<StageCacheMeta>(&meta_json)
+        && meta.size == stat.size
+        && match (&meta.etag, &stat.etag) {
+            (Some(a), Some(b)) => a == b,
+            _ => true,
+        }
+    {
+        return Ok(false);
+    }
+
+    let Some(parent) = dest.parent() else {
+        return Err(OxoFlowError::Config {
+            message: format!("staging path has no parent: {}", dest.display()),
+        });
+    };
+    tokio::fs::create_dir_all(parent).await.map_err(|e| OxoFlowError::Config {
+        message: format!("failed to create staging dir {}: {e}", parent.display()),
+    })?;
+
+    let mut part_os = dest.as_os_str().to_owned();
+    part_os.push(".part");
+    let part = PathBuf::from(part_os);
+    let file = tokio::fs::File::create(&part).await.map_err(|e| OxoFlowError::Config {
+        message: format!("failed to create staging file {}: {e}", part.display()),
+    })?;
+
+    if let Err(e) = transfer(file).await {
+        let _ = tokio::fs::remove_file(&part).await;
+        return Err(e);
+    }
+
+    tokio::fs::rename(&part, dest)
+        .await
+        .map_err(|e| OxoFlowError::Config {
+            message: format!(
+                "failed to move staged file {} into place: {e}",
+                part.display()
+            ),
+        })?;
+    let meta = StageCacheMeta {
+        size: stat.size,
+        etag: stat.etag,
+    };
+    tokio::fs::write(
+        &meta_path,
+        serde_json::to_vec(&meta).map_err(|e| OxoFlowError::Config {
+            message: format!("failed to serialize stage cache meta: {e}"),
+        })?,
+    )
+    .await
+    .map_err(|e| OxoFlowError::Config {
+        message: format!("failed to write stage cache meta: {e}"),
+    })?;
+
+    Ok(true)
+}
+
 /// Storage backend trait - abstracts file operations across providers.
 ///
 /// Every method is async to support network-based backends. Local filesystem
@@ -181,8 +310,22 @@ pub trait StorageBackend: Send + Sync {
 /// Maintains a registry of backends keyed by scheme. The default resolver
 /// (created via [`StorageResolver::with_local`]) registers the local
 /// filesystem backend only.
+#[derive(Clone)]
 pub struct StorageResolver {
     backends: Vec<(StorageScheme, Arc<dyn StorageBackend>)>,
+}
+
+impl std::fmt::Debug for StorageResolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: Vec<&'static str> = self
+            .backends
+            .iter()
+            .map(|(scheme, _)| scheme.as_str())
+            .collect();
+        f.debug_struct("StorageResolver")
+            .field("backends", &names)
+            .finish()
+    }
 }
 
 impl StorageResolver {

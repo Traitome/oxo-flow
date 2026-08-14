@@ -833,6 +833,9 @@ pub async fn run_command(
         skip_env_setup,
         cache_dir: cache_dir.clone(),
         interpreter_map: config.workflow.interpreter_map.clone(),
+        // Shared with the manifest snapshot resolver so staging and
+        // invalidation always see the same backends (issue #80 item 2).
+        storage_resolver: crate::commands::run_preview::storage_resolver(),
     };
 
     // Fail fast if any rule's declared request can never fit an explicit

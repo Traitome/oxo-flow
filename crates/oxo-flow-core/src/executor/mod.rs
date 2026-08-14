@@ -8,6 +8,7 @@ use sysinfo::System;
 pub mod checkpoint;
 pub mod process;
 pub mod security;
+pub mod staging;
 pub mod timeout;
 pub mod workdir_lock;
 

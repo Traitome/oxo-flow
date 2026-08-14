@@ -28,7 +28,47 @@ use aws_sdk_s3::primitives::ByteStream;
 
 fn default_client() -> &'static S3Client {
     static CLIENT: OnceLock<S3Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
+    CLIENT.get_or_init(S3Storage::build_client)
+}
+
+/// S3 storage backend.
+///
+/// All methods use the AWS SDK's standard credential resolution and require
+/// the `s3-storage` feature flag.
+///
+/// ## Examples
+///
+/// ```rust,ignore
+/// use oxo_flow_core::storage::s3::S3Storage;
+/// use oxo_flow_core::storage::{StorageBackend, StoragePath};
+///
+/// let backend = S3Storage::new();
+/// let sp = StoragePath::parse("s3://my-bucket/data.fastq");
+/// let exists = backend.exists(&sp).await.unwrap();
+/// ```
+pub struct S3Storage {
+    client: S3Client,
+}
+
+impl S3Storage {
+    /// Create a new S3 backend using the default AWS credential chain.
+    ///
+    /// The underlying SDK client is initialised **once** and cached for the
+    /// lifetime of the process.
+    pub fn new() -> Self {
+        Self {
+            client: default_client().clone(),
+        }
+    }
+
+    /// Build a standalone SDK client with the standard env configuration.
+    ///
+    /// `new()` returns a process-wide singleton; code that runs on
+    /// multiple tokio runtimes (test suites, embedded hosts) should build
+    /// one client per runtime instead — an SDK client's HTTP connector
+    /// binds to the runtime it first serves requests on, and a dropped
+    /// runtime turns later requests into dispatch failures.
+    pub fn build_client() -> S3Client {
         // `Config::builder().build()` is synchronous (env/config-file
         // values are resolved lazily per request), so no runtime is
         // needed here — and none may be started inside an ambient one.
@@ -63,37 +103,11 @@ fn default_client() -> &'static S3Client {
             builder = builder.force_path_style(true);
         }
         S3Client::from_conf(builder.build())
-    })
-}
+    }
 
-/// S3 storage backend.
-///
-/// All methods use the AWS SDK's standard credential resolution and require
-/// the `s3-storage` feature flag.
-///
-/// ## Examples
-///
-/// ```rust,ignore
-/// use oxo_flow_core::storage::s3::S3Storage;
-/// use oxo_flow_core::storage::{StorageBackend, StoragePath};
-///
-/// let backend = S3Storage::new();
-/// let sp = StoragePath::parse("s3://my-bucket/data.fastq");
-/// let exists = backend.exists(&sp).await.unwrap();
-/// ```
-pub struct S3Storage {
-    client: S3Client,
-}
-
-impl S3Storage {
-    /// Create a new S3 backend using the default AWS credential chain.
-    ///
-    /// The underlying SDK client is initialised **once** and cached for the
-    /// lifetime of the process.
-    pub fn new() -> Self {
-        Self {
-            client: default_client().clone(),
-        }
+    /// Wrap a pre-configured client (test doubles, per-runtime isolation).
+    pub fn with_client(client: S3Client) -> Self {
+        Self { client }
     }
 
     /// Create the bucket if it does not exist (idempotent; an
@@ -122,6 +136,22 @@ impl S3Storage {
                 }
             }
         }
+    }
+
+    /// Delete an object (idempotent — deleting a missing key succeeds).
+    ///
+    /// Not part of the [`StorageBackend`] trait; used by ops tooling and
+    /// live integration tests.
+    pub async fn delete(&self, path: &StoragePath) -> Result<()> {
+        let bucket = require_bucket(path)?;
+        self.client
+            .delete_object()
+            .bucket(bucket)
+            .key(&path.key)
+            .send()
+            .await
+            .map(|_| ())
+            .map_err(|e| s3_error(format!("S3 delete_object error: {e:?}")))
     }
 }
 
@@ -241,35 +271,37 @@ impl StorageBackend for S3Storage {
     /// remote key structure under `workdir`.
     async fn stage(&self, path: &StoragePath, workdir: &Path) -> Result<PathBuf> {
         let bucket = require_bucket(path)?;
-        let local_path = workdir.join(&path.key);
-
-        if let Some(parent) = local_path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| s3_error(format!("failed to create local staging dir: {e}")))?;
-        }
-
-        let resp = self
-            .client
-            .get_object()
-            .bucket(bucket)
-            .key(&path.key)
-            .send()
-            .await
-            .map_err(|e| s3_error(format!("S3 stage get_object error: {e}")))?;
-
-        let bytes = resp
-            .body
-            .collect()
-            .await
-            .map_err(|e| s3_error(format!("S3 stage read body error: {e}")))?
-            .into_bytes();
-
-        tokio::fs::write(&local_path, bytes)
-            .await
-            .map_err(|e| s3_error(format!("failed to write staged file: {e}")))?;
-
-        Ok(local_path)
+        let dest = crate::storage::staged_path(workdir, path);
+        let stat = self.head(path).await?.ok_or_else(|| {
+            s3_error(format!(
+                "cannot stage {}: object does not exist",
+                path.raw
+            ))
+        })?;
+        let client = self.client.clone();
+        let bucket = bucket.to_string();
+        let key = path.key.clone();
+        crate::storage::stage_with_cache(stat, &dest, move |mut file| {
+            let client = client.clone();
+            let bucket = bucket.clone();
+            let key = key.clone();
+            async move {
+                let resp = client
+                    .get_object()
+                    .bucket(bucket)
+                    .key(key)
+                    .send()
+                    .await
+                    .map_err(|e| s3_error(format!("S3 stage get_object error: {e:?}")))?;
+                let mut body = resp.body.into_async_read();
+                tokio::io::copy(&mut body, &mut file)
+                    .await
+                    .map_err(|e| s3_error(format!("S3 stage read body error: {e}")))?;
+                Ok(())
+            }
+        })
+        .await?;
+        Ok(dest)
     }
 
     /// Upload a local file to a remote S3 location.

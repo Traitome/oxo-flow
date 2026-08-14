@@ -350,17 +350,30 @@ impl StorageBackend for GcsStorage {
 
     async fn stage(&self, path: &StoragePath, workdir: &Path) -> Result<PathBuf> {
         let bucket = require_gcs_bucket(path)?;
-        let local_path = workdir.join(&path.key);
-        if let Some(parent) = local_path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| gcs_io_error("stage mkdir", bucket, &path.key, &e.to_string()))?;
-        }
-        let bytes = gcs_get(bucket, &path.key).await?;
-        tokio::fs::write(&local_path, bytes)
-            .await
-            .map_err(|e| gcs_io_error("stage write", bucket, &path.key, &e.to_string()))?;
-        Ok(local_path)
+        let dest = crate::storage::staged_path(workdir, path);
+        let stat = self.head(path).await?.ok_or_else(|| {
+            gcs_io_error(
+                "stage head",
+                bucket,
+                &path.key,
+                "object does not exist",
+            )
+        })?;
+        let bucket = bucket.to_string();
+        let key = path.key.clone();
+        crate::storage::stage_with_cache(stat, &dest, move |mut file| {
+            let bucket = bucket.clone();
+            let key = key.clone();
+            async move {
+                let bytes = gcs_get(&bucket, &key).await?;
+                tokio::io::AsyncWriteExt::write_all(&mut file, &bytes)
+                    .await
+                    .map_err(|e| gcs_io_error("stage write", &bucket, &key, &e.to_string()))?;
+                Ok(())
+            }
+        })
+        .await?;
+        Ok(dest)
     }
 
     async fn upload(&self, local: &Path, remote: &StoragePath) -> Result<()> {

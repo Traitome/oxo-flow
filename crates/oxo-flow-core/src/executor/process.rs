@@ -2,7 +2,7 @@ use crate::environment::EnvironmentResolver;
 use crate::error::{OxoFlowError, Result};
 use crate::rule::{FilePatterns, Rule};
 use crate::scheduler::ResourcePool;
-use crate::storage::StoragePath;
+use crate::storage::StorageResolver;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -271,6 +271,9 @@ pub struct ExecutorConfig {
     pub skip_env_setup: bool,
     pub cache_dir: Option<PathBuf>,
     pub interpreter_map: HashMap<String, String>,
+    /// Storage backends for remote input staging / output upload
+    /// (issue #80 item 2). Defaults to the local backend only.
+    pub storage_resolver: StorageResolver,
 }
 
 impl Default for ExecutorConfig {
@@ -290,6 +293,7 @@ impl Default for ExecutorConfig {
             skip_env_setup: false,
             cache_dir: None,
             interpreter_map: HashMap::new(),
+            storage_resolver: StorageResolver::with_local(),
         }
     }
 }
@@ -672,17 +676,8 @@ impl LocalExecutor {
             skip_reason: None,
         };
 
-        let base_cmd =
-            match build_execution_command(rule, wildcard_values, &self.config.interpreter_map) {
-                Some(cmd) => cmd,
-                None => {
-                    record.status = JobStatus::Skipped;
-                    record.finished_at = Some(Utc::now());
-                    record.skip_reason = Some("no shell or script defined".to_string());
-                    return Ok(record);
-                }
-            };
-
+        // Condition evaluation happens before any remote staging so a rule
+        // whose `when` is false never triggers downloads.
         if let Some(ref condition) = rule.when {
             // Build condition values from typed config first (preserves
             // int/float/bool for numeric comparisons), then fall back to
@@ -704,20 +699,76 @@ impl LocalExecutor {
             }
         }
 
+        // Dry runs stay read-only: no staging, no downloads.
+        if self.config.dry_run {
+            record.status = JobStatus::Skipped;
+            record.finished_at = Some(Utc::now());
+            return Ok(record);
+        }
+
+        // Stage remote inputs and redirect remote outputs to local
+        // upload-stage paths (issue #80 item 2). The substitution lives on
+        // a copy of the rule — `config.rules` is never mutated and
+        // checkpoints keep recording the original remote URIs.
+        let (rule, uploads) = match super::staging::stage_remote_io(
+            rule,
+            &self.config.workdir,
+            wildcard_values,
+            &self.config.storage_resolver,
+        )
+        .await
+        {
+            Ok(Some(prep)) => {
+                if prep.missing_optional_input && rule.optional {
+                    record.status = JobStatus::Skipped;
+                    record.skip_reason = Some("optional inputs missing".to_string());
+                    record.finished_at = Some(Utc::now());
+                    return Ok(record);
+                }
+                (prep.rule, prep.uploads)
+            }
+            Ok(None) => (rule.clone(), Vec::new()),
+            Err(e) => {
+                record.status = JobStatus::Failed;
+                record.finished_at = Some(Utc::now());
+                record.exit_code = Some(-1);
+                record.stderr = Some(format!("\n[oxo-flow] {e}"));
+                return Ok(record);
+            }
+        };
+
+        let base_cmd =
+            match build_execution_command(&rule, wildcard_values, &self.config.interpreter_map) {
+                Some(cmd) => cmd,
+                None => {
+                    record.status = JobStatus::Skipped;
+                    record.finished_at = Some(Utc::now());
+                    record.skip_reason = Some("no shell or script defined".to_string());
+                    return Ok(record);
+                }
+            };
+
         // Optional rules skip (no error) when their declared inputs are
         // absent — e.g. analysis steps that only apply to some samples
-        // (issue #75). Evaluated before the freshness gate so a missing
-        // input never falls through to a failing shell command.
-        if super::checkpoint::optional_inputs_missing(rule, &self.config.workdir, wildcard_values) {
+        // (issue #75). Remote inputs were already resolved by staging
+        // (missing optional remote inputs skipped above); this checks the
+        // remaining local paths. Evaluated before the freshness gate so a
+        // missing input never falls through to a failing shell command.
+        if super::checkpoint::optional_inputs_missing(&rule, &self.config.workdir, wildcard_values)
+        {
             record.status = JobStatus::Skipped;
             record.skip_reason = Some("optional inputs missing".to_string());
             record.finished_at = Some(Utc::now());
             return Ok(record);
         }
 
+        // Freshness gate: outputs up-to-date. For remote outputs the
+        // uploaded objects are authoritative for existence — a locally
+        // cached upload stage is not proof the cloud still has the file.
         if !self.config.force_rerun
             && !self.config.force_rules.contains(&rule.name)
-            && super::checkpoint::should_skip_rule(rule, &self.config.workdir, wildcard_values)
+            && super::checkpoint::should_skip_rule(&rule, &self.config.workdir, wildcard_values)
+            && self.remote_outputs_present(&uploads).await
         {
             record.status = JobStatus::Skipped;
             record.skip_reason = Some("outputs up-to-date".to_string());
@@ -725,11 +776,8 @@ impl LocalExecutor {
             return Ok(record);
         }
 
-        let resolved_commands = vec![self.resolve_command(&base_cmd, rule)];
+        let resolved_commands = vec![self.resolve_command(&base_cmd, &rule)];
         record.command = resolved_commands.first().cloned();
-
-        // Detect remote storage paths in inputs/outputs (stub, no-op for now).
-        warn_if_remote_paths(rule, wildcard_values);
 
         validate_wildcard_injection(wildcard_values)?;
         for cmd in &resolved_commands {
@@ -751,12 +799,6 @@ impl LocalExecutor {
                 "GPU spec declared but running on local executor — GPU resources will not be verified. \
                  Use a cluster backend (slurm, pbs, sge, lsf) for GPU scheduling."
             );
-        }
-
-        if self.config.dry_run {
-            record.status = JobStatus::Skipped;
-            record.finished_at = Some(Utc::now());
-            return Ok(record);
         }
 
         // Create parent directories for all output files
@@ -784,9 +826,9 @@ impl LocalExecutor {
             }
         }
 
-        self.ensure_environment_ready(rule).await?;
+        self.ensure_environment_ready(&rule).await?;
         // check_resources waits for availability AND reserves atomically.
-        self.check_resources(rule).await?;
+        self.check_resources(&rule).await?;
 
         let _permit = self
             .semaphore
@@ -801,7 +843,7 @@ impl LocalExecutor {
         // ({config.x}, {input}, {output}) so hook commands see expanded
         // values instead of literal braces (issue #75).
         if let Some(ref pre_cmd) = rule.pre_exec {
-            let rendered = render_shell_command(pre_cmd, rule, wildcard_values);
+            let rendered = render_shell_command(pre_cmd, &rule, wildcard_values);
             validate_shell_safety(&rendered)?;
             let pre_result = Command::new("sh")
                 .arg("-c")
@@ -812,14 +854,14 @@ impl LocalExecutor {
                 .await;
             match pre_result {
                 Ok(output) if !output.status.success() => {
-                    self.release_resources(rule).await;
+                    self.release_resources(&rule).await;
                     return Err(OxoFlowError::Execution {
                         rule: rule.name.clone(),
                         message: "pre_exec hook failed".to_string(),
                     });
                 }
                 Err(e) => {
-                    self.release_resources(rule).await;
+                    self.release_resources(&rule).await;
                     return Err(OxoFlowError::Execution {
                         rule: rule.name.clone(),
                         message: format!("failed to spawn pre_exec hook: {e}"),
@@ -932,19 +974,40 @@ impl LocalExecutor {
         record.stdout = Some(combined_stdout);
         record.stderr = Some(combined_stderr);
 
-        self.release_resources(rule).await;
+        self.release_resources(&rule).await;
 
         if all_commands_succeeded {
             // Verify declared output files actually exist before marking success.
             // Shell commands can exit 0 even when tools fail internally
             // (e.g. "tool_a; rm -f temp" — rm succeeds, masking tool_a failure).
-            let missing = validate_outputs(rule, &self.config.workdir, wildcard_values);
+            let missing = validate_outputs(&rule, &self.config.workdir, wildcard_values);
             if missing.is_empty() {
                 record.status = JobStatus::Success;
-                if let Some(ref hook_cmd) = rule.on_success {
+                // Remote outputs land in the cloud only after the local
+                // copies passed validation (issue #80 item 2). An upload
+                // failure fails the rule — a declared remote output that
+                // did not land is a broken contract.
+                if let Err(e) = self.upload_remote_outputs(&rule.name, &uploads).await {
+                    record.status = JobStatus::Failed;
+                    record.exit_code = Some(-1);
+                    let msg = format!("\n[oxo-flow] remote output upload failed: {e}");
+                    if let Some(ref mut stderr) = record.stderr {
+                        stderr.push_str(&msg);
+                    } else {
+                        record.stderr = Some(msg);
+                    }
+                    if let Some(ref hook_cmd) = rule.on_failure {
+                        run_hook(
+                            &render_shell_command(hook_cmd, &rule, wildcard_values),
+                            &rule,
+                            &self.config.workdir,
+                        )
+                        .await;
+                    }
+                } else if let Some(ref hook_cmd) = rule.on_success {
                     run_hook(
-                        &render_shell_command(hook_cmd, rule, wildcard_values),
-                        rule,
+                        &render_shell_command(hook_cmd, &rule, wildcard_values),
+                        &rule,
                         &self.config.workdir,
                     )
                     .await;
@@ -968,11 +1031,11 @@ impl LocalExecutor {
                 } else {
                     record.stderr = Some(msg);
                 }
-                cleanup_temp_outputs(rule, &self.config.workdir).await;
+                cleanup_temp_outputs(&rule, &self.config.workdir).await;
                 if let Some(ref hook_cmd) = rule.on_failure {
                     run_hook(
-                        &render_shell_command(hook_cmd, rule, wildcard_values),
-                        rule,
+                        &render_shell_command(hook_cmd, &rule, wildcard_values),
+                        &rule,
                         &self.config.workdir,
                     )
                     .await;
@@ -980,11 +1043,11 @@ impl LocalExecutor {
             }
         } else {
             // Keep the status set in the loop (Failed or TimedOut)
-            cleanup_temp_outputs(rule, &self.config.workdir).await;
+            cleanup_temp_outputs(&rule, &self.config.workdir).await;
             if let Some(ref hook_cmd) = rule.on_failure {
                 run_hook(
-                    &render_shell_command(hook_cmd, rule, wildcard_values),
-                    rule,
+                    &render_shell_command(hook_cmd, &rule, wildcard_values),
+                    &rule,
                     &self.config.workdir,
                 )
                 .await;
@@ -992,6 +1055,52 @@ impl LocalExecutor {
         }
 
         Ok(record)
+    }
+
+    /// A rule whose outputs are remote is only "up to date" when both the
+    /// local upload-stage copies and the remote objects exist — the cloud
+    /// copy is authoritative for existence (issue #80 item 2).
+    async fn remote_outputs_present(
+        &self,
+        uploads: &[(crate::storage::StoragePath, PathBuf)],
+    ) -> bool {
+        for (remote, local) in uploads {
+            if !local.exists() {
+                return false;
+            }
+            let Some(backend) = self.config.storage_resolver.get_backend(&remote.scheme) else {
+                return false;
+            };
+            if !matches!(backend.head(remote).await, Ok(Some(_))) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Upload every prepared remote output; the first failure aborts.
+    async fn upload_remote_outputs(
+        &self,
+        rule_name: &str,
+        uploads: &[(crate::storage::StoragePath, PathBuf)],
+    ) -> Result<()> {
+        for (remote, local) in uploads {
+            let backend = self
+                .config
+                .storage_resolver
+                .get_backend(&remote.scheme)
+                .ok_or_else(|| OxoFlowError::Config {
+                    message: format!(
+                        "no storage backend registered for '{}' (rule '{rule_name}')",
+                        remote.raw
+                    ),
+                })?;
+            backend.upload(local, remote).await.map_err(|e| OxoFlowError::Execution {
+                rule: rule_name.to_string(),
+                message: format!("failed to upload remote output '{}': {e}", remote.raw),
+            })?;
+        }
+        Ok(())
     }
 
     pub fn dry_run_rules(&self, rules: &[Rule]) -> Vec<JobRecord> {
@@ -1427,32 +1536,4 @@ pub fn hostname() -> String {
     std::env::var("HOSTNAME")
         .or_else(|_| std::env::var("COMPUTERNAME"))
         .unwrap_or_else(|_| "unknown".to_string())
-}
-
-/// Check rule input/output paths for remote storage URIs and log a warning
-/// if any are found. Full remote-file integration is not yet implemented, so
-/// this serves as an early-detection signal to users.
-///
-/// This is a placeholder -- future work will wire up `StorageResolver` to
-/// transparently stage remote inputs and upload outputs.
-pub fn warn_if_remote_paths(rule: &Rule, wildcard_values: &HashMap<String, String>) {
-    let check_path = |path: &str| {
-        let rendered = render_shell_command(path, rule, wildcard_values);
-        let sp = StoragePath::parse(&rendered);
-        if sp.is_remote() {
-            tracing::warn!(
-                rule = %rule.name,
-                path = %rendered,
-                scheme = ?sp.scheme,
-                "remote storage path detected but full integration is not yet implemented; \
-                 this path may not be accessible"
-            );
-        }
-    };
-    for input in rule.input.iter() {
-        check_path(input);
-    }
-    for output in rule.output.iter() {
-        check_path(output);
-    }
 }
