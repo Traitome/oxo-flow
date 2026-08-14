@@ -39,6 +39,7 @@
 //! assert_eq!(order, vec!["step1"]);
 //! ```
 
+pub mod backend;
 pub mod clinical;
 #[cfg(feature = "cluster")]
 pub mod cluster;
