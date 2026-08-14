@@ -722,7 +722,11 @@ fn parity_arg_override_and_positional_forms_match_run() {
             let mut args = vec!["run"];
             args.extend_from_slice(override_args);
             args.extend_from_slice(&["-j", "2", "wf.oxoflow"]);
-            let out = oxo_flow().args(&args).current_dir(dir.path()).output().unwrap();
+            let out = oxo_flow()
+                .args(&args)
+                .current_dir(dir.path())
+                .output()
+                .unwrap();
             assert!(
                 out.status.success(),
                 "arg-form run failed: {}",
@@ -826,7 +830,7 @@ name = "bad_rule"
 output = ["bad.txt"]
 shell = "echo bad_rule >> exec_log.txt; exit 3"
 "#;
-    let wf = write_workflow(dir.path(), "wf.oxoflow", wf_toml);
+    let _wf = write_workflow(dir.path(), "wf.oxoflow", wf_toml);
     // First run: ok_rule completes, bad_rule fails.
     let out = oxo_flow()
         .args(["run", "wf.oxoflow", "-j", "2"])

@@ -468,7 +468,11 @@ pub fn format_command(workflow: PathBuf, output: Option<PathBuf>, check: bool) -
     Ok(())
 }
 
-pub fn touch_command(workflow: PathBuf, rules: Vec<String>) -> Result<()> {
+pub fn touch_command(
+    workflow: PathBuf,
+    rules: Vec<String>,
+    workdir: Option<PathBuf>,
+) -> Result<()> {
     print_banner();
     let mut config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
@@ -497,7 +501,13 @@ pub fn touch_command(workflow: PathBuf, rules: Vec<String>) -> Result<()> {
     let mut skipped = 0usize;
     let mut skipped_patterns: Vec<(String, String)> = Vec::new(); // (rule_name, pattern)
 
-    let base_dir = std::env::current_dir().unwrap_or_default();
+    // Outputs live next to the workflow file (--workdir overrides) — the
+    // same path-resolution convention every other workflow command uses.
+    // The old current_dir() default touched files in the caller's cwd
+    // when the workflow lived elsewhere (CLI alignment audit 2026-08-14).
+    let base_dir = workdir
+        .clone()
+        .unwrap_or_else(|| workflow.parent().map(Path::to_path_buf).unwrap_or_default());
 
     for rule in &rules_to_touch {
         for output in &rule.output {

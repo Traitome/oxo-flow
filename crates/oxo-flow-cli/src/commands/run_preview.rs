@@ -12,7 +12,7 @@
 use anyhow::{Context, Result};
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
-use oxo_flow_core::executor::checkpoint::{expand_config_in_path, CheckpointState};
+use oxo_flow_core::executor::checkpoint::{CheckpointState, expand_config_in_path};
 use oxo_flow_core::rule::Rule;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -75,7 +75,6 @@ pub struct RunPreview {
     pub cascade_chains: Vec<Vec<String>>,
 }
 
-
 /// The executor's freshness gate for a rule with no checkpoint entry:
 /// all outputs exist and (when inputs exist) every output is newer than
 /// every input. `run` skips such rules as "outputs up-to-date" even
@@ -86,13 +85,10 @@ fn rule_outputs_exist_fresh(
     wildcard_values: &HashMap<String, String>,
 ) -> bool {
     !rule.output.is_empty()
-        && rule
-            .output
-            .iter()
-            .all(|o| {
-                let expanded = expand_config_in_path(o, wildcard_values);
-                expanded.contains('{') || workdir.join(expanded).exists()
-            })
+        && rule.output.iter().all(|o| {
+            let expanded = expand_config_in_path(o, wildcard_values);
+            expanded.contains('{') || workdir.join(expanded).exists()
+        })
         && (rule.input.is_empty()
             || rule.input.iter().all(|i| {
                 let expanded = expand_config_in_path(i, wildcard_values);
@@ -1041,20 +1037,25 @@ version = "1.0"
     #[test]
     fn empty_checkpoint_with_fresh_outputs_skips_everything() {
         // The fixture pre-creates every declared output. With no checkpoint,
-        // `run` skips them all through the executor freshness gate — the
-        // preview mirrors that (SkippedFresh), it does not predict a rerun.
+        // `run` skips through the executor freshness gate — the preview
+        // mirrors that (SkippedFresh). The one exception mirrors the
+        // executor exactly: `combine` reads a GLOB input, and
+        // `file_is_newer` cannot stat a glob pattern, so the executor does
+        // NOT skip it either — it stays NeverCompleted.
         let dir = tempfile::tempdir().unwrap();
         let (config, dag, order, wildcard_values) = fixture(dir.path());
         let ck = CheckpointState::new();
         let preview = run_preview(&ck, &config, &dag, &order, dir.path(), &wildcard_values);
         assert_eq!(preview.plan.len(), 5);
-        assert!(
-            preview
-                .plan
-                .iter()
-                .all(|r| r.status == RuleStatus::SkippedFresh)
-        );
-        assert_eq!(preview.will_skip, 5);
+        for rule in &preview.plan {
+            let expected = if rule.name == "combine" {
+                RuleStatus::NeverCompleted
+            } else {
+                RuleStatus::SkippedFresh
+            };
+            assert_eq!(rule.status, expected, "wrong status for {}", rule.name);
+        }
+        assert_eq!(preview.will_skip, 4);
         assert_eq!(preview.protected_outside, 0);
         assert!(preview.cascade_chains.is_empty());
     }
@@ -1066,7 +1067,7 @@ version = "1.0"
         // Remove every declared output: nothing is fresh any more.
         for rule in &config.rules {
             for output in rule.output.iter() {
-                let p = dir.join(output);
+                let p = dir.path().join(output);
                 let _ = std::fs::remove_file(&p);
             }
         }

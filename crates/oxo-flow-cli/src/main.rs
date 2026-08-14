@@ -193,6 +193,19 @@ pub enum Commands {
         #[arg(long = "ai-max-retries", value_name = "N")]
         ai_max_retries: Option<u32>,
         #[arg(
+            short = 'k',
+            long,
+            help = "Continue execution when a job fails (same semantics as `run`)"
+        )]
+        keep_going: bool,
+        #[arg(
+            long,
+            default_value = "0",
+            help = "Timeout per job in seconds (0 = disabled), or a duration like 1h/30m"
+        )]
+        timeout: String,
+        #[arg(
+            short = 'd',
             long,
             help = "Working directory to resume in (default: the one recorded in the checkpoint)"
         )]
@@ -434,6 +447,7 @@ pub enum Commands {
         )]
         orphans: bool,
         #[arg(
+            short = 'd',
             long,
             help = "Working directory for .oxo-flow artifacts (default: the workflow file's directory)"
         )]
@@ -469,6 +483,12 @@ pub enum Commands {
         workflow: PathBuf,
         #[arg(short = 'r', long = "rule", help = "Rule names to touch")]
         rules: Vec<String>,
+        #[arg(
+            short = 'd',
+            long,
+            help = "Working directory the outputs live in (default: the workflow file's directory)"
+        )]
+        workdir: Option<PathBuf>,
     },
     /// Generate reports from workflow execution.
     Report {
@@ -490,6 +510,7 @@ pub enum Commands {
         )]
         ai: bool,
         #[arg(
+            short = 'd',
             long,
             help = "Working directory to look for .oxo-flow in (default: the workflow file's directory)"
         )]
@@ -629,10 +650,39 @@ pub enum Commands {
         )]
         deep: bool,
         #[arg(
+            short = 'd',
             long,
             help = "Working directory for the test run (default: the workflow file's directory)"
         )]
         workdir: Option<PathBuf>,
+        /// Execution profile for the --run step (same merge semantics as
+        /// `run`); the validation/dry-run steps use it for their preview.
+        #[arg(long)]
+        profile: Option<String>,
+        #[arg(
+            short = 't',
+            long,
+            help = "Run only specific target rules (repeatable, prefix matching) — applies to the --run step"
+        )]
+        target: Vec<String>,
+        #[arg(
+            long,
+            default_value = "0",
+            help = "Timeout per job in seconds (0 = disabled) — applies to the --run step"
+        )]
+        timeout: String,
+        #[arg(
+            long,
+            default_value = "0",
+            help = "Number of times to retry failed jobs — applies to the --run step"
+        )]
+        retry: u32,
+        #[arg(
+            short = 'k',
+            long,
+            help = "Continue execution when a job fails — applies to the --run step"
+        )]
+        keep_going: bool,
     },
     /// Publish a workflow with its environment files into a bundle.
     Publish {
@@ -1010,8 +1060,21 @@ async fn main() -> Result<()> {
             jobs,
             ai_recover,
             ai_max_retries,
+            keep_going,
+            timeout,
             workdir,
-        } => resume_command(checkpoint, jobs, ai_recover, ai_max_retries, workdir).await?,
+        } => {
+            resume_command(
+                checkpoint,
+                jobs,
+                ai_recover,
+                ai_max_retries,
+                keep_going,
+                timeout,
+                workdir,
+            )
+            .await?
+        }
         Commands::DryRun {
             workflow,
             target,
@@ -1156,7 +1219,11 @@ async fn main() -> Result<()> {
             strict,
             ai,
         } => lint_command(workflow, strict, cli.json, ai).await?,
-        Commands::Touch { workflow, rules } => touch_command(workflow, rules)?,
+        Commands::Touch {
+            workflow,
+            rules,
+            workdir,
+        } => touch_command(workflow, rules, workdir)?,
         Commands::Report {
             workflow,
             format,
@@ -1199,7 +1266,10 @@ async fn main() -> Result<()> {
                 jobs,
                 stop_on_error,
                 file,
-                json,
+                // The global --json and the legacy --json-output both drive
+                // JSON output (alignment audit 2026-08-14): the global flag
+                // was silently ignored here before.
+                cli.json || json,
                 dry_run,
                 workdir,
                 environment,
@@ -1224,6 +1294,11 @@ async fn main() -> Result<()> {
             samples_filter,
             deep,
             workdir,
+            profile,
+            target,
+            timeout,
+            retry,
+            keep_going,
         } => {
             use colored::Colorize;
             eprintln!(
@@ -1241,14 +1316,14 @@ async fn main() -> Result<()> {
             eprintln!("{} Dry-run...", "3.".bold());
             dry_run_command(
                 Some(workflow.clone()),
-                vec![],
+                target.clone(),
                 cli.verbose,
                 cli.json,
                 false,
                 None,
                 samples_filter.clone(),
                 workdir.clone(),
-                None,
+                profile.clone(),
                 false,
                 vec![],
                 vec![],
@@ -1267,13 +1342,13 @@ async fn main() -> Result<()> {
                 run_command(
                     Some(workflow),
                     jobs,
-                    false,           // keep_going
+                    keep_going,      // keep_going
                     workdir.clone(), // workdir
-                    vec![],          // target
-                    0,               // retry
-                    "0".to_string(), // timeout
+                    target.clone(),  // target
+                    retry,           // retry
+                    timeout.clone(), // timeout
                     false,           // resume_failed
-                    None,            // profile
+                    profile.clone(), // profile
                     0,               // max_threads
                     0,               // max_memory
                     false,           // skip_env_setup

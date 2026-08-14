@@ -292,7 +292,9 @@ fn cleanup_cache_dir(cache_dir: &std::path::Path, max_age_days: u64) -> usize {
 ///   --KEY=VALUE          long-flag form
 ///   --KEY VALUE          long-flag form with separate value
 ///   --arg KEY=VALUE      legacy `--arg` form (backward compatible)
-fn parse_cli_overrides(cli_args: Vec<String>) -> anyhow::Result<std::collections::HashMap<String, String>> {
+fn parse_cli_overrides(
+    cli_args: Vec<String>,
+) -> anyhow::Result<std::collections::HashMap<String, String>> {
     let mut cli_arg_values: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     let mut cli_args_iter = cli_args.into_iter().peekable();
@@ -451,6 +453,7 @@ fn merge_extra_samples(config: &mut WorkflowConfig, extra_samples: &[String]) {
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_command(
     workflow: Option<PathBuf>,
     jobs: usize,
@@ -2533,7 +2536,9 @@ pub async fn dry_run_command(
                             ("run-cascaded-upstream", Some(from.clone()))
                         }
                         crate::commands::run_preview::RuleStatus::Forced => ("run-forced", None),
-                        crate::commands::run_preview::RuleStatus::SkippedFresh => ("skip-fresh", None),
+                        crate::commands::run_preview::RuleStatus::SkippedFresh => {
+                            ("skip-fresh", None)
+                        }
                     };
                     serde_json::json!({
                         "name": r.name,
@@ -2882,6 +2887,24 @@ pub async fn handle_status(
                 .collect();
             output["timings"] = serde_json::Value::Object(timings_map);
             output["total_time_secs"] = serde_json::json!(total);
+            // Sampled peak-RSS measurements where recorded (issue #67 §4).
+            let memory_map: serde_json::Map<String, serde_json::Value> = state
+                .benchmarks
+                .iter()
+                .filter(|(_, b)| b.max_memory_mb.is_some())
+                .map(|(rule, b)| {
+                    (
+                        rule.to_string(),
+                        serde_json::json!({
+                            "max_memory_mb": b.max_memory_mb,
+                            "memory_limit_mb": b.memory_limit_mb,
+                        }),
+                    )
+                })
+                .collect();
+            if !memory_map.is_empty() {
+                output["memory"] = serde_json::Value::Object(memory_map);
+            }
         }
         println!("{}", serde_json::to_string_pretty(&output)?);
         return Ok(());
@@ -2905,7 +2928,22 @@ pub async fn handle_status(
                 total
             );
             for (rule, secs) in timings.iter().take(limit) {
-                eprintln!("  {} {} ({:.1}s)", "✓".green(), rule, secs);
+                let mem = state.benchmarks.get(*rule).and_then(|b| {
+                    b.max_memory_mb.map(|m| match b.memory_limit_mb {
+                        Some(l) if l > 0 => {
+                            if m * 100 >= l * 80 {
+                                format!("  peak {m}/{l} MiB ⚠")
+                            } else {
+                                format!("  peak {m}/{l} MiB")
+                            }
+                        }
+                        _ => format!("  peak {m} MiB"),
+                    })
+                });
+                match mem {
+                    Some(mem) => eprintln!("  {} {} ({:.1}s){}", "✓".green(), rule, secs, mem),
+                    None => eprintln!("  {} {} ({:.1}s)", "✓".green(), rule, secs),
+                }
             }
         }
     } else {
@@ -2932,6 +2970,8 @@ pub async fn resume_command(
     jobs: usize,
     ai_recover: bool,
     ai_max_retries: Option<u32>,
+    keep_going: bool,
+    timeout: String,
     workdir: Option<PathBuf>,
 ) -> Result<()> {
     // resume does not produce structured JSON output
@@ -3018,11 +3058,11 @@ pub async fn resume_command(
     run_command(
         Some(workflow_path),
         jobs,
-        false,             // keep_going
+        keep_going,        // keep_going (same semantics as `run`)
         effective_workdir, // workdir (recorded by the original run)
         Vec::new(),        // target
         0,                 // retry
-        "0".to_string(),   // timeout
+        timeout,           // timeout
         false,             // resume_failed (user can re-run with --resume-failed in 'run')
         None,              // profile
         0,                 // max_threads
