@@ -130,6 +130,7 @@ nav:
       - "13 — Germline Variant Calling": gallery/simple-variant-calling.md
       - "14 — Paired Experiment-Control": gallery/paired-experiment-control.md
       - "15 — Paired Experiment-Control (Pairs)": gallery/paired-experiment-control-pairs.md
+      - "16 — 16S Amplicon (QIIME2)": gallery/16s-qiime2.md
   - How-to Guides:
       - Create a Workflow: how-to/create-workflow.md
       - Build on the Web Canvas: how-to/web-editor.md

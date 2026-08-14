@@ -1,0 +1,125 @@
+# 16S amplicon analysis with QIIME2 (issue #79 R-10 — the missing 16S
+# ecosystem). Scientific backbone follows the standard QIIME2 "moving
+# pictures" pattern: import → primer trimming → DADA2 denoising → feature
+# table summary → taxonomy → phylogenetic diversity analysis → export.
+#
+# Prerequisites:
+#   - a QIIME2 conda env (e.g. `qiime2-amplicon-2024.10`) providing `qiime`
+#   - demultiplexed, gzipped paired-end FASTQs in raw/ named {sample}_R1.fastq.gz
+#   - a metadata.tsv with sample-id + barcode columns (diversity analysis)
+#   - optionally a pre-trained classifier for the target 16S region
+#     (e.g. silva-138-99-515-806-nb-classifier.qza)
+
+[workflow]
+name = "16s_qiime2_amplicon"
+version = "1.0.0"
+description = "16S rRNA amplicon pipeline: DADA2 denoising, taxonomy, and phylogenetic diversity via QIIME2"
+
+[config]
+trim_left_f = 0
+trim_left_r = 0
+trunc_len_f = 250
+trunc_len_r = 250
+sampling_depth = 1000
+
+[[rules]]
+name = "import_reads"
+output = ["qiime/paired-end-demux.qza"]
+shell = """
+qiime tools import \
+  --type 'SampleData[PairedEndSequencesWithQuality]' \
+  --input-path raw \
+  --input-format CasavaOneEightSingleLanePerSampleDirFmt \
+  --output-path qiime/paired-end-demux.qza
+"""
+
+[[rules]]
+name = "cutadapt_trim"
+input = ["qiime/paired-end-demux.qza"]
+output = ["qiime/trimmed-demux.qza"]
+shell = """
+qiime cutadapt trim-paired \
+  --i-demultiplexed-sequences qiime/paired-end-demux.qza \
+  --p-front-f {config.trim_left_f} \
+  --p-front-r {config.trim_left_r} \
+  --p-trunc-len-f {config.trunc_len_f} \
+  --p-trunc-len-r {config.trunc_len_r} \
+  --o-trimmed-sequences qiime/trimmed-demux.qza
+"""
+
+[[rules]]
+name = "dada2_denoise"
+input = ["qiime/trimmed-demux.qza"]
+output = ["qiime/table.qza", "qiime/rep-seqs.qza", "qiime/denoising-stats.qza"]
+shell = """
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs qiime/trimmed-demux.qza \
+  --p-trunc-len-f {config.trunc_len_f} \
+  --p-trunc-len-r {config.trunc_len_r} \
+  --o-table qiime/table.qza \
+  --o-representative-sequences qiime/rep-seqs.qza \
+  --o-denoising-stats qiime/denoising-stats.qza
+"""
+
+[[rules]]
+name = "feature_table_summary"
+input = ["qiime/table.qza"]
+output = ["qiime/table-summary.qzv"]
+shell = """
+qiime feature-table summarize \
+  --i-table qiime/table.qza \
+  --o-visualization qiime/table-summary.qzv \
+  --m-sample-metadata-file metadata.tsv
+"""
+
+[[rules]]
+name = "classify_taxonomy"
+input = ["qiime/rep-seqs.qza"]
+output = ["qiime/taxonomy.qza"]
+shell = """
+qiime feature-classifier classify-sklearn \
+  --i-classifier {config.classifier} \
+  --i-reads qiime/rep-seqs.qza \
+  --o-classification qiime/taxonomy.qza
+"""
+
+[[rules]]
+name = "build_tree"
+input = ["qiime/rep-seqs.qza"]
+output = ["qiime/rooted-tree.qza"]
+shell = """
+qiime phylogeny align-to-tree-mafft-fasttree \
+  --i-sequences qiime/rep-seqs.qza \
+  --o-alignment qiime/aligned-rep-seqs.qza \
+  --o-masked-alignment qiime/masked-aligned-rep-seqs.qza \
+  --o-tree qiime/unrooted-tree.qza \
+  --o-rooted-tree qiime/rooted-tree.qza
+"""
+
+[[rules]]
+name = "core_diversity"
+input = ["qiime/table.qza", "qiime/rooted-tree.qza"]
+output = ["qiime/core-metrics-results/"]
+shell = """
+qiime diversity core-metrics-phylogenetic \
+  --i-phylogeny qiime/rooted-tree.qza \
+  --i-table qiime/table.qza \
+  --p-sampling-depth {config.sampling_depth} \
+  --m-metadata-file metadata.tsv \
+  --output-dir qiime/core-metrics-results
+"""
+
+[[rules]]
+name = "export_biom"
+input = ["qiime/table.qza"]
+output = ["exported/feature-table.biom", "exported/feature-table.tsv"]
+shell = """
+mkdir -p exported && \
+qiime tools export \
+  --input-path qiime/table.qza \
+  --output-path exported/raw && \
+biom convert \
+  -i exported/raw/feature-table.biom \
+  -o exported/feature-table.tsv \
+  --to-tsv
+"""

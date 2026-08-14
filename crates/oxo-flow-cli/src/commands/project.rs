@@ -255,6 +255,10 @@ const EMBEDDED_GALLERY: &[(&str, &str)] = &[
         "15_paired_experiment_control_pairs",
         include_str!("../../templates/15_paired_experiment_control_pairs.oxoflow"),
     ),
+    (
+        "16_16s_qiime2_amplicon",
+        include_str!("../../templates/16_16s_qiime2_amplicon.oxoflow"),
+    ),
 ];
 
 /// Match an embedded template by exact stem or `_<name>` suffix (the same
