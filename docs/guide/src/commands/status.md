@@ -130,7 +130,15 @@ The checkpoint file is JSON with the following structure:
   },
   "tombstones": {
     "align": ["aligned/S1.bam"]
-  }
+  },
+  "reentries": [
+    {
+      "round": 1,
+      "rule": "discover",
+      "group": "batch",
+      "samples": ["S4", "S5"]
+    }
+  ]
 }
 ```
 
@@ -139,7 +147,10 @@ as SHA-256 digests) and `rule_fingerprints` the structural fingerprints that
 drive [precise invalidation](run.md#config-changes-and-precise-invalidation).
 `tombstones` lists outputs of [`temporary`](run.md#temporary-rules-temporary-true)
 rules that were deleted after a successful run — the rule stays skipped until
-a dependent needs those outputs again.
+a dependent needs those outputs again. `reentries` records checkpoint
+re-entry contributions (round, checkpoint rule, group, samples) so resumes
+replay them deterministically and revoke them when the rule is invalidated
+(see [Checkpoint re-entry](../reference/workflow-format.md#checkpoint-re-entry)).
 
 ---
 

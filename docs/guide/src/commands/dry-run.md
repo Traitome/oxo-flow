@@ -217,6 +217,15 @@ oxo-flow dry-run pipeline.oxoflow -v
 
 ---
 
+### Checkpoint re-entry in previews
+
+Recorded re-entries whose checkpoint rule is still up-to-date replay into the
+preview: the preview shows the same static plan a real run would execute
+(round-1 instances appear as up-to-date skips). Checkpoint rules that may add
+instances at runtime are listed under the `reentry` section of `--json`
+(`recorded` + `possible`). See
+[Workflow Format](../reference/workflow-format.md#checkpoint-re-entry).
+
 ## Output
 
 ```

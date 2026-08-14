@@ -179,6 +179,7 @@ nav:
       - DAG Engine: reference/dag-engine.md
       - DAG Edit API: reference/dag-edit-api.md
       - Environment System: reference/environment-system.md
+      - Execution Backends: reference/execution-backends.md
       - Reporting System: reference/reporting-system.md
       - Webhooks: reference/webhook.md
       - Web API: reference/web-api.md

@@ -126,6 +126,7 @@ interface that all backends implement:
 | `write` | Write bytes to a remote location |
 | `stage` | Download a remote file to a local directory |
 | `upload` | Upload a local file to a remote location |
+| `head` | Object metadata for invalidation: size + content identity (S3 ETag / GCS `md5Hash`) |
 | `name` | Human-readable backend name for diagnostics |
 
 The `StorageResolver` maintains a registry of backends keyed by URI
@@ -139,14 +140,41 @@ let mut resolver = StorageResolver::with_local();
 resolver.add_backend(StorageScheme::S3, Arc::new(s3_backend));
 ```
 
+## Content-addressed invalidation
+
+Input manifests now record remote inputs alongside local ones. When a rule's
+inputs include `s3://` / `gs://` URIs and a backend is registered for that
+scheme, the checkpoint's input manifest stores a remote entry —
+`(scheme, key, size, etag)` — and `manifests_match` compares them:
+
+- S3: the raw `ETag` from `HeadObject`. Composite `"hash-N"` ETags from
+  multipart uploads are recorded verbatim and compared for equality — they
+  are never recomputed locally. Same content re-uploaded with different
+  part boundaries produces a different ETag (a conservative, spurious
+  invalidation).
+- GCS: `md5Hash` (base64) from the `x-goog-hash` header — GCS has no native
+  ETag; the md5 hash is the stronger pure content hash.
+
+A same-size remote rewrite with a changed etag invalidates the rule exactly
+as a local content change does; unchanged etag → skipped. When neither side
+has an etag, matching degrades to size-only (documented
+conservative-for-availability fallback). Without a registered backend the
+entry is skipped with a warning — the run completes and the remaining local
+entries still invalidate as before. Only exact object references participate;
+remote globs and directories are not supported in this iteration.
+
 ## Current Limitations
 
-- **Not wired into the executor** — The engine only detects remote
-  URIs and logs a warning (`warn_if_remote_paths` in the executor is a
-  stub); it does not stage inputs or upload outputs during a run.
-  Workflows referencing `s3://`/`gs://` paths currently fail at
+- **Not wired into the executor for staging** — The engine records
+  remote inputs for invalidation and logs a warning
+  (`warn_if_remote_paths`); it does not stage inputs or upload outputs
+  during a run. Workflows referencing `s3://`/`gs://` paths currently fail at
   execution unless the tool handles the URI itself. Full staging and
   upload integration is planned.
+- **S3 adapter needs the toolchain bump** — the pinned rustc (1.92.0)
+  predates the current aws-sdk MSRV (1.94.1); the `s3-storage` feature does
+  not compile with the pinned toolchain (pre-existing condition). The GCS
+  backend compiles and is tested with the pinned toolchain.
 - **Feature-gated** — Both backends are opt-in at compile time.  The
   default build includes only the local filesystem backend.
 - **UTF-8 only** — `read_to_string` requires the content to be valid

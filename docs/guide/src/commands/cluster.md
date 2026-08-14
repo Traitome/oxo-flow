@@ -282,6 +282,13 @@ Different backends use different dependency syntax:
 ## Notes
 
 - `submit` generates shell scripts tailored for the specified cluster backend
+- Script generation goes through the `ExecutorBackend` trait
+  ([Execution Backends](../reference/execution-backends.md)) — the same
+  render layer the live submission path uses, so generated scripts and
+  submitted scripts can never drift apart
+- The `logs/` directory referenced by the scripts' `--output` directives is
+  created before the scripts are written (slurmd opens that file at job
+  launch, before the script body runs)
 - Resource requirements (threads, memory, gpu) from the workflow are automatically translated to cluster directives
 - **Environment wrapping is applied automatically** — conda, docker, singularity, pixi, venv, and module environments are properly wrapped in the generated scripts
 - `status` and `cancel` actively execute native cluster commands (like `squeue`, `scancel`) and print their outputs directly

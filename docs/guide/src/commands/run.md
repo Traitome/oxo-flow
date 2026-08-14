@@ -516,6 +516,17 @@ checkpoint records for rules outside the run.
 
 ---
 
+### Checkpoint re-entry (`checkpoint = true`)
+
+A checkpoint rule discovers new values at runtime: after it completes, the
+engine reads its `checkpoint_manifest`, merges the declared samples, and
+executes the newly created rule instances in the same run. The checkpoint
+records each re-entry (`reentries`), so a resume replays it and reconstructs
+the same plan; invalidating the checkpoint rule revokes its samples until it
+re-runs. A missing or unparsable manifest fails the checkpoint rule. See
+[Workflow Format](../reference/workflow-format.md#checkpoint-re-entry) for
+the config surface.
+
 ## Output
 
 ```

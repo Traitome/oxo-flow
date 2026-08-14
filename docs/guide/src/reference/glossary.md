@@ -270,6 +270,37 @@ The maximum time a job can run before being terminated by the scheduler.
 
 ---
 
+### Executor backend
+
+A pluggable execution adapter ([`ExecutorBackend`](./execution-backends.md))
+that maps the engine's static plan onto a scheduler API — submit, poll,
+cancel, logs. The first implementation targets SLURM/PBS/SGE/LSF; the plan
+itself stays executor-agnostic, so the dry-run preview is valid for every
+backend.
+
+### Static plan
+
+The fully determined execution plan computed before any execution:
+topological order, parallel groups, per-rule resource declarations, and the
+invalidation set. Executors consume the plan without re-deriving it.
+
+### Checkpoint re-entry
+
+A bounded dynamic-DAG mechanism ([Workflow Format](./workflow-format.md#checkpoint-re-entry)):
+a `checkpoint = true` rule writes a manifest at runtime declaring new samples;
+the engine merges them, re-expands the rule templates, and executes the new
+instances in the same run. Every round is still a static plan; the checkpoint
+records the rounds so resumes replay (and revoke) them deterministically.
+
+### Remote manifest entry
+
+The content identity of an `s3://` / `gs://` input recorded in a rule's
+input manifest: `(scheme, key, size, etag)` — S3 ETag or GCS `md5Hash`.
+Same-size remote rewrites invalidate the rule exactly as local content
+changes do ([Cloud Storage](./cloud-storage.md#content-addressed-invalidation)).
+
+---
+
 ## See Also
 
 - [Workflow Format Reference](./workflow-format.md) — complete TOML specification

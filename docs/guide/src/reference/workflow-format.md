@@ -424,7 +424,8 @@ memory = "32G"
 | `on_failure` | String | No | Command to run after rule fails (all retries exhausted) |
 | `retries` | Integer | No | Number of retry attempts on failure (default: 0) |
 | `interpreter` | String | No | Explicit interpreter for script execution |
-| `checkpoint` | Boolean | No | Rebuild DAG after this rule completes |
+| `checkpoint` | Boolean | No | Enable checkpoint re-entry after this rule completes (requires `checkpoint_manifest`) |
+| `checkpoint_manifest` | String | No | Path (relative to workdir, `{config.x}`-expanded) of the TOML manifest the checkpoint rule writes at runtime to declare new samples |
 | `scatter` | Table | No | Fan-out parallel execution over a variable with optional gather |
 | `expand_inputs` | Table | No | Cartesian product expansion of input patterns |
 | `priority` | Integer | No | Execution priority (higher = runs first; default: 0) |
@@ -811,7 +812,7 @@ temporary = true                             # Delete aligned/*.bam once all cal
 | `depends_on` | Array | — | Explicit rule dependencies (not inferred from files) |
 | `localrule` | Boolean | `false` | Always run locally, never submit to cluster |
 | `shadow` | String | — | Atomic execution mode: `"minimal"`, `"shallow"`, `"full"` |
-| `checkpoint` | Boolean | `false` | Enable dynamic DAG modification |
+| `checkpoint` | Boolean | `false` | Enable checkpoint re-entry (requires `checkpoint_manifest`; the rule must not use `{sample}`/`{group}`) |
 
 ```toml
 [[rules]]
@@ -1682,6 +1683,54 @@ To enable validation in VS Code, add the following to your `settings.json`:
 (Note: Although `.oxoflow` is TOML, many VS Code extensions can apply JSON schemas to multiple formats).
 
 ---
+
+## Checkpoint Re-entry
+
+A `checkpoint = true` rule discovers new values at runtime (Snakemake-style
+checkpoint re-entry): after it completes, the engine reads its
+`checkpoint_manifest` — a TOML file the rule itself wrote — and re-expands
+the workflow with the new values. Every round is still a static plan, so
+previews stay deterministic and resumes reconstruct the same plan.
+
+```toml
+[[rules]]
+name = "discover"
+output = ["discover.toml"]
+shell = "python discover.py > discover.toml"
+checkpoint = true
+checkpoint_manifest = "discover.toml"
+```
+
+The manifest declares new wildcard values:
+
+```toml
+[reentry]
+group = "batch"            # optional; defaults to the workflow's first sample group
+sample = ["S4", "S5"]      # appended (dedup) to that group
+```
+
+Semantics:
+
+- On success, the engine merges the samples and re-expands the **rule
+  templates**; newly created instances (e.g. `analyze_batch_S4`) execute in
+  the same run. Existing instances are untouched.
+- The checkpoint records each re-entry (`reentries` array: round, rule,
+  group, samples). A resume **replays** the records whose checkpoint rule is
+  still up-to-date — the plan reconstructs identically. If the checkpoint
+  rule is invalidated (input/config change), its contribution is
+  **revoked** until it re-runs and re-records.
+- An empty manifest (`sample = []`) is a valid no-op. A missing or
+  unparsable manifest **fails the checkpoint rule** with a clear error, and
+  its dependents do not run.
+- Bounds: checkpoint rules are never re-expanded themselves (no
+  `{sample}`/`{group}` — validation error E014) and re-entry is capped at 32
+  rounds — a rule that keeps discovering values past that is a workflow bug,
+  not an engine feature. Validation error E013 requires
+  `checkpoint_manifest` on every checkpoint rule.
+- `dry-run` previews replay recorded re-entries (the preview shows the same
+  static plan a run would execute) and mark checkpoint rules as possible
+  re-entry points; `--json` includes a `reentry` section.
+- [[pairs]]-driven re-entry is not supported in this iteration.
 
 ## See Also
 
