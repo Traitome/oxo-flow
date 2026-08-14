@@ -82,6 +82,31 @@ APP="target/release/bundle/macos/oxo-flow.app/Contents/MacOS/oxo-flow"
 curl -s http://127.0.0.1:8999/ | grep -q "__OXO_BASE__" && echo "SPA OK"
 ```
 
+## GitHub Release Assets
+
+Each tagged release publishes the desktop bundles alongside the raw
+tarballs (built by CI, not by hand):
+
+| Asset | Platform |
+|---|---|
+| `oxo-flow-<ver>-x86_64-apple-darwin.dmg` / `-app.zip` | macOS Intel (Rosetta on Apple Silicon) |
+| `oxo-flow-<ver>-aarch64-apple-darwin.dmg` / `-app.zip` | macOS Apple Silicon |
+| `oxo-flow-<ver>-amd64.deb` | Debian / Ubuntu |
+| `oxo-flow-<ver>-x86_64.rpm` | RHEL / Fedora / CentOS |
+| `oxo-flow-<ver>-x86_64.AppImage` | any Linux distribution |
+
+```bash
+# Linux one-liners
+sudo dpkg -i oxo-flow-*.deb          # Debian/Ubuntu
+sudo rpm -i oxo-flow-*.rpm           # RHEL/Fedora
+chmod +x oxo-flow-*.AppImage && ./oxo-flow-*.AppImage   # any distro
+```
+
+The AppImage runs `oxo-flow serve --open` on launch; the deb/rpm install
+`/usr/bin/oxo-flow` with the SPA under `/usr/share/oxo-flow/static`
+(resolved by the executable-relative frontend lookup, so no source
+checkout is needed).
+
 ## Notes
 
 - **Version**: the bundle inherits the crate version from the workspace.
