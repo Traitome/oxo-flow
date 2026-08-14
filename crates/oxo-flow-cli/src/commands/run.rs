@@ -2041,13 +2041,13 @@ pub async fn dry_run_command(
         .expand_wildcards()
         .context("failed to expand wildcard rules")?;
 
-    let dag = WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;
+    let mut dag = WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;
 
     // Compute the execution set (respects --target), then display it in
     // parallel-group order — the same grouping `run` uses for scheduling.
     // Independent rules at the same level appear adjacent, so the listing
     // reflects actual concurrency instead of an arbitrary topological order.
-    let order = if target.is_empty() {
+    let mut order = if target.is_empty() {
         let order_set: std::collections::HashSet<String> =
             dag.execution_order()?.into_iter().collect();
         let mut ordered: Vec<String> = Vec::new();
@@ -2110,7 +2110,7 @@ pub async fn dry_run_command(
         .map(|(key, _)| key.clone())
         .collect();
     let interpreter_map = config.workflow.interpreter_map.clone();
-    let preview = crate::commands::run_preview::preview_run_plan(
+    let mut preview = crate::commands::run_preview::preview_run_plan(
         &checkpoint_state,
         &config,
         &dag,
@@ -2121,6 +2121,72 @@ pub async fn dry_run_command(
         &interpreter_map,
         &checkpoint_path,
     );
+
+    // ── Checkpoint re-entry replay (issue #78 P3) ────────────────────────
+    // The round-0 preview determines which checkpoint rules are up-to-date
+    // (Skipped); their recorded re-entries replay and the preview recomputes
+    // on the re-expanded plan — the same static plan a run would execute.
+    if !checkpoint_state.reentries.is_empty() {
+        use crate::commands::run_preview::RuleStatus;
+        let valid: std::collections::HashSet<String> = preview
+            .plan
+            .iter()
+            .filter(|p| p.status == RuleStatus::Skipped)
+            .map(|p| p.name.clone())
+            .collect();
+        let replayed = oxo_flow_core::reentry::replay_valid_reentries(
+            &mut config,
+            &checkpoint_state.reentries,
+            &valid,
+        )?;
+        if !replayed.is_empty() {
+            tracing::info!(
+                count = replayed.len(),
+                "dry-run replayed checkpoint re-entries"
+            );
+            dag = WorkflowDag::from_rules(&config.rules)
+                .context("failed to rebuild workflow DAG after re-entry replay")?;
+            let new_order: Vec<String> = if target.is_empty() {
+                let order_set: std::collections::HashSet<String> =
+                    dag.execution_order()?.into_iter().collect();
+                let mut ordered: Vec<String> = Vec::new();
+                for group in dag.parallel_groups()? {
+                    let mut level: Vec<String> = group
+                        .into_iter()
+                        .filter(|n| order_set.contains(n))
+                        .collect();
+                    level.sort();
+                    ordered.extend(level);
+                }
+                ordered
+            } else {
+                let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
+                dag.execution_order_for_targets(&target_refs)
+                    .with_context(|| "failed to resolve target rules")?
+            };
+            let old_order_len = order.len();
+            order = new_order;
+            if order.len() != old_order_len {
+                eprintln!(
+                    "  {} re-entry replay: plan grew from {} to {} rules",
+                    "Replay:".bold().cyan(),
+                    old_order_len,
+                    order.len()
+                );
+            }
+            preview = crate::commands::run_preview::preview_run_plan(
+                &checkpoint_state,
+                &config,
+                &dag,
+                &order,
+                base_dir,
+                &wildcard_values,
+                &sensitive_keys,
+                &interpreter_map,
+                &checkpoint_path,
+            );
+        }
+    }
     {
         let p = &preview;
         let modified = p
@@ -2458,6 +2524,21 @@ pub async fn dry_run_command(
             "suggested_jobs": suggested_jobs,
             "samples": samples_block,
             "checkpoint_preview": checkpoint_block,
+            "reentry": {
+                // Recorded re-entries (checkpoint.json) — replayed when their
+                // checkpoint rule is up-to-date; revoked otherwise (issue #78 P3).
+                "recorded": checkpoint_state.reentries,
+                // Checkpoint rules that may add instances at runtime.
+                "possible": config
+                    .rules
+                    .iter()
+                    .filter(|r| r.checkpoint)
+                    .map(|r| serde_json::json!({
+                        "rule": r.name,
+                        "manifest": r.checkpoint_manifest,
+                    }))
+                    .collect::<Vec<_>>(),
+            },
             "profile": profile,
             "reference_builds": reference_builds,
         });

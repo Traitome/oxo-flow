@@ -371,3 +371,59 @@ fn backend_driver_executes_reentry_rounds() {
         "round-2 must follow the checkpoint"
     );
 }
+
+#[test]
+fn dry_run_preview_shows_reentry_section_and_possible_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    write_workflow(dir.path(), MANIFEST_TWO, r#""catalog.txt""#);
+    std::fs::write(dir.path().join("catalog.txt"), "v1\n").unwrap();
+
+    let out = Command::new(workspace_bin("oxo-flow"))
+        .args(["dry-run", "wf.oxoflow", "--json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let reentry = &json["reentry"];
+    assert_eq!(
+        reentry["recorded"].as_array().unwrap().len(),
+        0,
+        "fresh workdir has no recorded re-entries"
+    );
+    let possible = reentry["possible"].as_array().unwrap();
+    assert_eq!(possible.len(), 1);
+    assert_eq!(possible[0]["rule"].as_str().unwrap(), "discover");
+    assert_eq!(possible[0]["manifest"].as_str().unwrap(), "discover.toml");
+}
+
+#[test]
+fn dry_run_preview_reconstructs_recorded_reentry() {
+    let dir = tempfile::tempdir().unwrap();
+    write_workflow(dir.path(), MANIFEST_TWO, r#""catalog.txt""#);
+    std::fs::write(dir.path().join("catalog.txt"), "v1\n").unwrap();
+    let (ok, _) = run(dir.path(), &[]);
+    assert!(ok);
+
+    let out = Command::new(workspace_bin("oxo-flow"))
+        .args(["dry-run", "wf.oxoflow", "--json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+
+    // The recorded re-entry replays into the preview.
+    let recorded = json["reentry"]["recorded"].as_array().unwrap();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0]["rule"].as_str().unwrap(), "discover");
+
+    // Round-1 instances appear in the plan as up-to-date skips — the same
+    // static plan a real resume run would execute.
+    let plan = json["checkpoint_preview"]["plan"].as_array().unwrap();
+    let s4 = plan
+        .iter()
+        .find(|p| p["name"].as_str() == Some("analyze_batch_S4"))
+        .expect("round-2 instance present in preview");
+    assert_eq!(s4["status"].as_str().unwrap(), "skip");
+}
