@@ -25,7 +25,7 @@ pub mod gcs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::error::Result;
+use crate::error::{OxoFlowError, Result};
 
 /// URI scheme for storage backends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -131,6 +131,33 @@ pub trait StorageBackend: Send + Sync {
     /// exist. Local backends return `Ok(None)` — local invalidation uses
     /// size+mtime+sha256 (see [`RemoteStat`]).
     async fn head(&self, path: &StoragePath) -> Result<Option<RemoteStat>>;
+
+    /// Synchronous wrapper around [`StorageBackend::head`] for call sites
+    /// that cannot be async (manifest snapshots in the preview path).
+    ///
+    /// Runs the HEAD on a fresh runtime on a dedicated thread: blocking on
+    /// the ambient runtime panics inside async contexts, and nested runtimes
+    /// are forbidden, so a thread is the one shape that is correct in every
+    /// context. Only remote inputs reach this; local paths never call
+    /// `head`, so the thread cost is confined to cloud workflows.
+    fn head_blocking(&self, path: &StoragePath) -> Result<Option<RemoteStat>> {
+        let path = path.clone();
+        std::thread::scope(|scope| {
+            let fut = async { self.head(&path).await };
+            scope
+                .spawn(move || {
+                    tokio::runtime::Runtime::new()
+                        .map_err(|e| OxoFlowError::Config {
+                            message: format!("cannot create runtime for remote metadata: {e}"),
+                        })
+                        .and_then(|runtime| runtime.block_on(fut))
+                })
+                .join()
+                .map_err(|_| OxoFlowError::Config {
+                    message: "remote metadata thread panicked".to_string(),
+                })?
+        })
+    }
 
     /// Read the entire file at `path` into a UTF-8 string.
     async fn read_to_string(&self, path: &StoragePath) -> Result<String>;

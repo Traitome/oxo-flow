@@ -238,6 +238,7 @@ impl BackendDriver {
             }
 
             // 3. Poll and settle terminal jobs.
+            let mut settled_this_round = 0usize;
             if !inflight.is_empty() {
                 let ids: Vec<String> = inflight.keys().cloned().collect();
                 let statuses = self.backend.poll(&ids).await?;
@@ -250,6 +251,7 @@ impl BackendDriver {
                             && *s != BackendJobStatus::Unknown
                     })
                     .collect();
+                settled_this_round = settled.len();
                 for (job_id, f, status) in settled {
                     inflight.remove(&job_id);
                     let record = match status {
@@ -373,11 +375,17 @@ impl BackendDriver {
             if all_done && inflight.is_empty() {
                 break;
             }
-            // A stall is "nothing in flight AND nothing submitted this
-            // round": the wave above already tried every ready rule, so
-            // the remaining pending rules are blocked on deps that can
-            // never finish (plan/dependency mismatch).
-            if !all_done && inflight.is_empty() && submitted_this_round == 0 {
+            // A stall is "nothing in flight, nothing submitted AND nothing
+            // settled this round": the wave above already tried every ready
+            // rule, so the remaining pending rules are blocked on deps that
+            // can never finish (plan/dependency mismatch). Settling counts —
+            // a completion can unblock dependents that the NEXT round's wave
+            // will pick up.
+            if !all_done
+                && inflight.is_empty()
+                && submitted_this_round == 0
+                && settled_this_round == 0
+            {
                 return Err(OxoFlowError::Config {
                     message: "driver stall: no jobs in flight but rules remain pending (plan/dependency mismatch)".into(),
                 });

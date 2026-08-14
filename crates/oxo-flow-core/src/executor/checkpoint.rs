@@ -56,18 +56,37 @@ pub type InputManifest = Vec<InputManifestEntry>;
 /// Entries WITH a recorded hash compare content (mtime is irrelevant —
 /// touching a file no longer invalidates); legacy entries without one keep
 /// the size+mtime policy instead of invalidating everything once.
-pub fn manifests_match(recorded: &InputManifest, current: &InputManifest) -> bool {
+pub fn manifests_match(recorded: &[InputManifestEntry], current: &[InputManifestEntry]) -> bool {
     if recorded.len() != current.len() {
         return false;
     }
-    recorded.iter().zip(current).all(|(r, c)| {
-        r.path == c.path
-            && r.size == c.size
-            && match &r.hash {
-                Some(rec_hash) => c.hash.as_deref() == Some(rec_hash.as_str()),
-                None => r.mtime_nanos == c.mtime_nanos,
+    recorded
+        .iter()
+        .zip(current)
+        .all(|(r, c)| match (&r.remote, &c.remote) {
+            // Local entries: the existing size+mtime(+sha256) policy.
+            (None, None) => {
+                r.path == c.path
+                    && r.size == c.size
+                    && match &r.hash {
+                        Some(rec_hash) => c.hash.as_deref() == Some(rec_hash.as_str()),
+                        None => r.mtime_nanos == c.mtime_nanos,
+                    }
             }
-    })
+            // Remote entries (issue #78 P2): scheme+key+size+etag. When neither
+            // side has an etag, size is the only identity left (documented
+            // conservative-for-availability fallback).
+            (Some(rr), Some(rc)) => {
+                rr.scheme == rc.scheme
+                    && rr.key == rc.key
+                    && rr.size == rc.size
+                    && match (&rr.etag, &rc.etag) {
+                        (Some(a), Some(b)) => a == b,
+                        _ => true,
+                    }
+            }
+            _ => false,
+        })
 }
 
 /// Performance metrics recorded after executing a rule.
@@ -390,6 +409,7 @@ pub fn snapshot_input_manifest(
     rule: &Rule,
     workdir: &Path,
     wildcard_values: &HashMap<String, String>,
+    resolver: &crate::storage::StorageResolver,
 ) -> Result<Option<InputManifest>> {
     if rule.input.is_empty() {
         return Ok(None);
@@ -425,6 +445,43 @@ pub fn snapshot_input_manifest(
             continue;
         }
         saw_resolvable = true;
+
+        // Remote objects (issue #78 P2): record (scheme, key, size, etag)
+        // so the same manifests_match path serves local and cloud inputs.
+        let storage_path = crate::storage::StoragePath::parse(&expanded);
+        if storage_path.is_remote() {
+            match resolve_remote_stat(resolver, &storage_path) {
+                Ok(Some(stat)) => {
+                    entries.insert(
+                        expanded.clone(),
+                        InputManifestEntry {
+                            path: expanded.clone(),
+                            size: stat.size,
+                            mtime_nanos: 0,
+                            hash: None,
+                            remote: Some(RemoteManifestEntry {
+                                scheme: match storage_path.scheme {
+                                    crate::storage::StorageScheme::S3 => "s3",
+                                    crate::storage::StorageScheme::Gcs => "gs",
+                                    crate::storage::StorageScheme::Local => "local",
+                                }
+                                .to_string(),
+                                key: expanded.clone(),
+                                size: stat.size,
+                                etag: stat.etag,
+                            }),
+                        },
+                    );
+                }
+                Ok(None) => {
+                    tracing::warn!(input = %expanded, "remote input does not exist at snapshot time; entry skipped");
+                }
+                Err(e) => {
+                    tracing::warn!(input = %expanded, error = %e, "remote input metadata unavailable; entry skipped");
+                }
+            }
+            continue;
+        }
         collect_pattern_entries(&expanded, dir_filter.as_deref(), workdir, &mut entries)?;
     }
 
@@ -432,6 +489,26 @@ pub fn snapshot_input_manifest(
         return Ok(None);
     }
     Ok(Some(entries.into_values().collect()))
+}
+
+/// Resolve a remote object's metadata through the registered backend.
+///
+/// The snapshot function is synchronous (the preview path calls it from
+/// sync code); remote HEAD requests bridge onto the ambient tokio runtime.
+/// Local-only workflows never reach this function.
+fn resolve_remote_stat(
+    resolver: &crate::storage::StorageResolver,
+    path: &crate::storage::StoragePath,
+) -> Result<Option<crate::storage::RemoteStat>> {
+    let backend = match resolver.get_backend(&path.scheme) {
+        Some(b) => b.clone(),
+        None => {
+            return Err(OxoFlowError::Config {
+                message: format!("no storage backend registered for scheme '{}'", path.raw),
+            });
+        }
+    };
+    backend.head_blocking(path)
 }
 
 /// Input patterns (config-expanded) of `rule` that currently fail to
@@ -804,6 +881,171 @@ pub async fn cleanup_transform_chunks(rule: &Rule, workdir: &Path) {
 mod tests {
     use super::*;
     use crate::rule::FilePatterns;
+    use crate::storage::{RemoteStat, StorageBackend, StoragePath, StorageResolver, StorageScheme};
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    /// In-memory cloud backend with a mutable etag per key — the semantic
+    /// proof for issue #78 P2 (same-size remote rewrites invalidate).
+    struct FakeCloudStorage {
+        etags: Arc<Mutex<HashMap<String, String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl StorageBackend for FakeCloudStorage {
+        async fn exists(&self, path: &StoragePath) -> Result<bool> {
+            Ok(self.etags.lock().unwrap().contains_key(&path.raw))
+        }
+
+        async fn head(&self, path: &StoragePath) -> Result<Option<RemoteStat>> {
+            let etag = self.etags.lock().unwrap().get(&path.raw).cloned();
+            Ok(etag.map(|e| RemoteStat {
+                size: 100,
+                etag: Some(e),
+            }))
+        }
+
+        async fn read_to_string(&self, _path: &StoragePath) -> Result<String> {
+            Ok(String::new())
+        }
+
+        async fn write(&self, _path: &StoragePath, _data: &[u8]) -> Result<()> {
+            Ok(())
+        }
+
+        async fn stage(&self, _path: &StoragePath, _workdir: &Path) -> Result<PathBuf> {
+            Ok(PathBuf::new())
+        }
+
+        async fn upload(&self, _local: &Path, _remote: &StoragePath) -> Result<()> {
+            Ok(())
+        }
+
+        fn name(&self) -> &'static str {
+            "fake-cloud"
+        }
+    }
+
+    fn remote_rule() -> Rule {
+        Rule {
+            name: "remote-consumer".to_string(),
+            input: FilePatterns::List(vec!["s3://bucket/key".to_string()]),
+            output: FilePatterns::List(vec!["out.txt".to_string()]),
+            shell: Some("true".to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn resolver_with_fake(fake: Arc<FakeCloudStorage>) -> StorageResolver {
+        let mut resolver = StorageResolver::with_local();
+        resolver.add_backend(StorageScheme::S3, fake);
+        resolver
+    }
+
+    fn snapshot_remote(rule: &Rule, resolver: &StorageResolver) -> Option<InputManifest> {
+        snapshot_input_manifest(rule, Path::new("."), &HashMap::new(), resolver).unwrap()
+    }
+
+    #[tokio::test]
+    async fn same_size_etag_change_invalidates_remote_input() {
+        let fake = Arc::new(FakeCloudStorage {
+            etags: Arc::new(Mutex::new(HashMap::from([(
+                "s3://bucket/key".to_string(),
+                "v1".to_string(),
+            )]))),
+        });
+        let resolver = resolver_with_fake(fake.clone());
+        let rule = remote_rule();
+
+        let recorded = snapshot_remote(&rule, &resolver).expect("remote input snapshots");
+        assert_eq!(recorded.len(), 1);
+        let remote = recorded[0].remote.as_ref().expect("remote entry recorded");
+        assert_eq!(remote.scheme, "s3");
+        assert_eq!(remote.etag.as_deref(), Some("v1"));
+
+        // Same size, new etag → invalidated (the exact issue #78 P2 scenario).
+        *fake
+            .etags
+            .lock()
+            .unwrap()
+            .get_mut("s3://bucket/key")
+            .unwrap() = "v2".to_string();
+        let current = snapshot_remote(&rule, &resolver).unwrap();
+        assert!(!manifests_match(&recorded, &current));
+
+        // Unchanged etag → still matches.
+        let again = snapshot_remote(&rule, &resolver).unwrap();
+        assert!(manifests_match(&current, &again));
+    }
+
+    fn entry(remote: Option<RemoteManifestEntry>) -> InputManifestEntry {
+        InputManifestEntry {
+            path: "k".to_string(),
+            size: 100,
+            mtime_nanos: 0,
+            hash: None,
+            remote,
+        }
+    }
+
+    fn remote_entry(scheme: &str, size: u64, etag: Option<&str>) -> Option<RemoteManifestEntry> {
+        Some(RemoteManifestEntry {
+            scheme: scheme.to_string(),
+            key: "s3://b/k".to_string(),
+            size,
+            etag: etag.map(str::to_string),
+        })
+    }
+
+    #[test]
+    fn manifests_match_remote_matrix() {
+        let r = remote_entry("s3", 100, Some("a"));
+        // etag equal → match
+        assert!(manifests_match(
+            &[entry(remote_entry("s3", 100, Some("a")))],
+            &[entry(remote_entry("s3", 100, Some("a")))]
+        ));
+        // etag differs → mismatch
+        assert!(!manifests_match(
+            &[entry(remote_entry("s3", 100, Some("a")))],
+            &[entry(remote_entry("s3", 100, Some("b")))]
+        ));
+        // size differs → mismatch
+        assert!(!manifests_match(
+            &[entry(remote_entry("s3", 100, Some("a")))],
+            &[entry(remote_entry("s3", 200, Some("a")))]
+        ));
+        // scheme differs → mismatch
+        assert!(!manifests_match(
+            &[entry(remote_entry("s3", 100, Some("a")))],
+            &[entry(remote_entry("gs", 100, Some("a")))]
+        ));
+        // etag unavailable on both sides → size decides
+        assert!(manifests_match(
+            &[entry(remote_entry("s3", 100, None))],
+            &[entry(remote_entry("s3", 100, None))]
+        ));
+        assert!(!manifests_match(
+            &[entry(remote_entry("s3", 100, None))],
+            &[entry(remote_entry("s3", 200, None))]
+        ));
+        // local vs remote → mismatch
+        assert!(!manifests_match(
+            &[entry(None)],
+            &[entry(remote_entry("s3", 100, Some("a")))]
+        ));
+        assert!(!manifests_match(
+            &[entry(remote_entry("s3", 100, Some("a")))],
+            &[entry(None)]
+        ));
+        // local vs local unchanged behaviour
+        let local = entry(None);
+        assert!(manifests_match(
+            std::slice::from_ref(&local),
+            std::slice::from_ref(&local)
+        ));
+        let _ = r;
+    }
 
     fn small_file_manifest(dir: &Path, name: &str, content: &[u8]) -> InputManifest {
         let path = dir.join(name);
@@ -813,9 +1055,14 @@ mod tests {
             input: FilePatterns::List(vec![name.to_string()]),
             ..Default::default()
         };
-        snapshot_input_manifest(&rule, dir, &Default::default())
-            .unwrap()
-            .expect("small file input snapshots")
+        snapshot_input_manifest(
+            &rule,
+            dir,
+            &Default::default(),
+            &StorageResolver::with_local(),
+        )
+        .unwrap()
+        .expect("small file input snapshots")
     }
 
     #[test]
@@ -845,9 +1092,14 @@ mod tests {
             input: FilePatterns::List(vec!["big.bam".to_string()]),
             ..Default::default()
         };
-        let manifest = snapshot_input_manifest(&rule, dir.path(), &Default::default())
-            .unwrap()
-            .unwrap();
+        let manifest = snapshot_input_manifest(
+            &rule,
+            dir.path(),
+            &Default::default(),
+            &StorageResolver::with_local(),
+        )
+        .unwrap()
+        .unwrap();
         assert!(
             manifest[0].hash.is_none(),
             "files above the threshold keep the size+mtime policy"
@@ -1032,7 +1284,13 @@ mod tests {
     }
 
     fn snapshot(rule: &Rule, workdir: &Path) -> Option<InputManifest> {
-        snapshot_input_manifest(rule, workdir, &HashMap::new()).unwrap()
+        snapshot_input_manifest(
+            rule,
+            workdir,
+            &HashMap::new(),
+            &StorageResolver::with_local(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -1163,7 +1421,10 @@ mod tests {
     fn manifest_missing_input_is_err() {
         let wd = temp_workdir("missing");
         let rule = list_rule("r", &["data/nope.txt"]);
-        assert!(snapshot_input_manifest(&rule, &wd, &HashMap::new()).is_err());
+        assert!(
+            snapshot_input_manifest(&rule, &wd, &HashMap::new(), &StorageResolver::with_local())
+                .is_err()
+        );
         let _ = std::fs::remove_dir_all(&wd);
     }
 
@@ -1210,7 +1471,7 @@ mod tests {
         let rule = list_rule("r", &["{config.results_dir}/x.txt"]);
         let mut values = HashMap::new();
         values.insert("config.results_dir".to_string(), "out".to_string());
-        let manifest = snapshot_input_manifest(&rule, &wd, &values)
+        let manifest = snapshot_input_manifest(&rule, &wd, &values, &StorageResolver::with_local())
             .unwrap()
             .unwrap();
         assert_eq!(manifest[0].path, "out/x.txt");
