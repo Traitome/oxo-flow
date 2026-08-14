@@ -231,7 +231,13 @@ fn local_run_and_backend_run_produce_same_checkpoint_semantics() {
             },
         );
         if let Some(rule) = config.get_rule(&r.rule)
-            && let Some(manifest) = snapshot_input_manifest(rule, dir_b.path(), &values).unwrap()
+            && let Some(manifest) = snapshot_input_manifest(
+                rule,
+                dir_b.path(),
+                &values,
+                &oxo_flow_core::storage::StorageResolver::with_local(),
+            )
+            .unwrap()
         {
             ck.record_input_manifest(&r.rule, manifest);
         }

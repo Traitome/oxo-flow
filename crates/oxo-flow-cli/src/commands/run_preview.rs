@@ -67,22 +67,13 @@ pub struct RunPreview {
     pub cascade_chains: Vec<Vec<String>>,
 }
 
-/// Storage resolver for manifest snapshots: the local backend always;
-/// cloud backends register when the corresponding feature is enabled.
+/// Storage resolver for manifest snapshots: the local backend only for
+/// now. Cloud backends register here when the CLI crate opts into the
+/// `s3-storage` / `gcs-storage` features (issue #78 P2 follow-up: remote
+/// inputs then get etag-aware invalidation end to end).
 /// Shared by run and dry-run so their snapshot semantics cannot drift.
 pub fn storage_resolver() -> oxo_flow_core::storage::StorageResolver {
-    let mut resolver = oxo_flow_core::storage::StorageResolver::with_local();
-    #[cfg(feature = "s3-storage")]
-    resolver.add_backend(
-        oxo_flow_core::storage::StorageScheme::S3,
-        std::sync::Arc::new(oxo_flow_core::storage::s3::S3Storage::new()),
-    );
-    #[cfg(feature = "gcs-storage")]
-    resolver.add_backend(
-        oxo_flow_core::storage::StorageScheme::Gcs,
-        std::sync::Arc::new(oxo_flow_core::storage::gcs::GcsStorage::new()),
-    );
-    resolver
+    oxo_flow_core::storage::StorageResolver::with_local()
 }
 
 /// Compute the read-only preview for an execution set.
