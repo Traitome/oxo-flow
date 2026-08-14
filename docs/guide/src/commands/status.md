@@ -76,8 +76,8 @@ first):
   Failed:    0
 
 Rule timings: (top 3, total 45.2s)
-  ✓ align (30.1s)
-  ✓ sort_bam (12.3s)
+  ✓ align (30.1s)    peak 28.4/32.0 GiB ⚠
+  ✓ sort_bam (12.3s)  peak 8.1/32.0 GiB
   ✓ trim_reads (2.8s)
 ```
 

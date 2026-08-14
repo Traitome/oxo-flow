@@ -7,8 +7,15 @@ Simulate execution without running any commands. Shows the execution plan, rule 
 ## Usage
 
 ```
-oxo-flow dry-run [OPTIONS] [WORKFLOW]
+oxo-flow dry-run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 ```
+
+`dry-run` accepts the same configuration inputs as `run` — `--arg`,
+`--sample`, trailing `KEY=VALUE` overrides, `--profile`, `--rerun`, and
+`--resume-failed` — and predicts the execution set with the exact same
+machinery (issue #77 parity contract). The preview also mirrors the
+executor's freshness gate: a rule with no checkpoint entry whose outputs
+are up to date is predicted as skipped, exactly as `run` would skip it.
 
 ---
 
@@ -17,6 +24,7 @@ oxo-flow dry-run [OPTIONS] [WORKFLOW]
 | Argument | Description |
 |---|---|
 | `[WORKFLOW]` | Path to the `.oxoflow` workflow file. **Optional** — if not specified, auto-discovery searches for: (1) `main.oxoflow` in current directory, (2) alphabetically first `*.oxoflow` file in current directory. |
+| `[KEY=VALUE]...` | Direct config overrides as trailing positionals — the same three forms `run` accepts (`KEY=VALUE`, `--KEY=VALUE`, `--KEY VALUE`). Command flags must come **before** the overrides (see [run](run.md)). |
 
 ---
 
