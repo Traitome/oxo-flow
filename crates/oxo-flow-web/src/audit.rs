@@ -130,53 +130,7 @@ pub fn get_recent_audit_logs(days: u8) -> std::io::Result<Vec<String>> {
     Ok(entries)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
 
-    #[test]
-    fn test_audit_entry_serialization() {
-        let entry = AuditEntry {
-            timestamp: "2024-01-15T10:30:00Z".to_string(),
-            user: "testuser".to_string(),
-            action: "test.action".to_string(),
-            resource: "test-resource".to_string(),
-            result: "success".to_string(),
-        };
-
-        let json = serde_json::to_string(&entry).unwrap();
-        assert!(json.contains("testuser"));
-        assert!(json.contains("test.action"));
-        assert!(json.contains("test-resource"));
-
-        let parsed: AuditEntry = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.user, entry.user);
-        assert_eq!(parsed.action, entry.action);
-        assert_eq!(parsed.resource, entry.resource);
-    }
-
-    #[test]
-    fn test_write_and_read_audit_logs() {
-        let temp_dir = tempdir().unwrap();
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
-
-        // Write some entries
-        write_audit_log("user1", "login", "system", "success").unwrap();
-        write_audit_log("user2", "workflow.run", "test-workflow", "success").unwrap();
-
-        // Read them back
-        let logs = get_recent_audit_logs(1).unwrap();
-        assert_eq!(logs.len(), 2);
-
-        // Verify newest first
-        let first: AuditEntry = serde_json::from_str(&logs[0]).unwrap();
-        assert_eq!(first.action, "workflow.run");
-
-        std::env::set_current_dir(original_dir).unwrap();
-    }
-}
 
 /// Middleware: record every state-changing request (non-GET/HEAD/OPTIONS) in
 /// the `audit_logs` table — the single audit write point covering all
@@ -224,4 +178,52 @@ pub async fn audit_middleware(
     }
 
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_audit_entry_serialization() {
+        let entry = AuditEntry {
+            timestamp: "2024-01-15T10:30:00Z".to_string(),
+            user: "testuser".to_string(),
+            action: "test.action".to_string(),
+            resource: "test-resource".to_string(),
+            result: "success".to_string(),
+        };
+
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("testuser"));
+        assert!(json.contains("test.action"));
+        assert!(json.contains("test-resource"));
+
+        let parsed: AuditEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.user, entry.user);
+        assert_eq!(parsed.action, entry.action);
+        assert_eq!(parsed.resource, entry.resource);
+    }
+
+    #[test]
+    fn test_write_and_read_audit_logs() {
+        let temp_dir = tempdir().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        // Write some entries
+        write_audit_log("user1", "login", "system", "success").unwrap();
+        write_audit_log("user2", "workflow.run", "test-workflow", "success").unwrap();
+
+        // Read them back
+        let logs = get_recent_audit_logs(1).unwrap();
+        assert_eq!(logs.len(), 2);
+
+        // Verify newest first
+        let first: AuditEntry = serde_json::from_str(&logs[0]).unwrap();
+        assert_eq!(first.action, "workflow.run");
+
+        std::env::set_current_dir(original_dir).unwrap();
+    }
 }

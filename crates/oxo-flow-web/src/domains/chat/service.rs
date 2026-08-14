@@ -247,11 +247,10 @@ pub fn spawn_chat_agent(
         // A full or closed channel drops the event (observability loss only;
         // on client disconnect the closing channel ends the SSE stream,
         // which is the cancellation path).
-        let mut text_buffer = String::new();
         // Accumulate text so a round-cap failure can still deliver an
         // already-generated pipeline (issue #79 P1-10). Shared through an
-        // Rc so the sink closure can be `move` while the post-run read
-        // keeps its own handle.
+        // Arc so the sink closure can be `move` (it must stay Send) while
+        // the post-run read keeps its own handle.
         let text_buffer = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
         let sink_buffer = text_buffer.clone();
         let mut sink = move |e: AgentEvent| {
