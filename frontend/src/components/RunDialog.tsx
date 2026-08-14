@@ -1,11 +1,15 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CheckCircle, Play, X } from 'lucide-react';
+import { api } from '../api/client';
+import type { ClusterInfo } from '../api/types';
 
 export interface RunOptions {
   maxJobs: number;
   keepGoing: boolean;
   samples: string[];
   targets: string[];
+  /** Execute on this SSH cluster connection instead of the local host. */
+  clusterId?: string;
 }
 
 export interface RunDialogProps {
@@ -19,12 +23,19 @@ export default function RunDialog({ onClose, onSubmit }: RunDialogProps) {
   const [keepGoing, setKeepGoing] = useState(false);
   const [samples, setSamples] = useState('');
   const [targets, setTargets] = useState('');
+  const [clusterId, setClusterId] = useState('');
+  const [clusters, setClusters] = useState<ClusterInfo[]>([]);
+
+  useEffect(() => {
+    api.listClusters().then((c) => setClusters(c.filter((x) => x.enabled))).catch(() => setClusters([]));
+  }, []);
 
   const options = (): RunOptions => ({
     maxJobs: Number(maxJobs) || 4,
     keepGoing,
     samples: samples.split(',').map((s) => s.trim()).filter((s) => s !== ''),
     targets: targets.split(',').map((t) => t.trim()).filter((t) => t !== ''),
+    clusterId: clusterId || undefined,
   });
 
   return (
@@ -81,6 +92,19 @@ export default function RunDialog({ onClose, onSubmit }: RunDialogProps) {
             />
             <span>Keep going when a rule fails</span>
           </label>
+          {clusters.length > 0 && (
+            <label className="inspector-field">
+              <span>Execute on cluster (SSH) — default: this server</span>
+              <select value={clusterId} onChange={(e) => setClusterId(e.target.value)}>
+                <option value="">Local (this server)</option>
+                {clusters.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({c.ssh_host}){c.scheduler && c.scheduler !== 'auto' ? ` · ${c.scheduler}` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <p className="run-dialog-hint">
             Dry-Run produces the execution plan without running anything — the
             engine's checkpoint rules decide what would re-run. Start with a

@@ -2405,3 +2405,66 @@ async fn team_mode_api_keys_authenticate_and_revoke() {
         .unwrap();
     assert_eq!(after_revoke.status(), 401, "revoked keys are rejected");
 }
+
+// ===========================================================================
+// Remote cluster execution (issue #82 deployment modes) — GATED: runs only
+// when OXO_TEST_CLUSTER_SSH=1 and OXO_TEST_CLUSTER_HOST is set (a real SSH
+// host with the oxo-flow CLI on PATH, e.g. tx-ubuntu). CI skips it.
+// ===========================================================================
+
+#[tokio::test]
+async fn web_remote_cluster_run_executes_and_pulls_results() {
+    if std::env::var("OXO_TEST_CLUSTER_SSH").as_deref() != Ok("1") {
+        eprintln!("skipped: set OXO_TEST_CLUSTER_SSH=1 + OXO_TEST_CLUSTER_HOST to run");
+        return;
+    }
+    let host = std::env::var("OXO_TEST_CLUSTER_HOST").expect("OXO_TEST_CLUSTER_HOST required");
+
+    let dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.base.clone();
+
+    // Register the real cluster connection.
+    let reg = client
+        .post(format!("{base}/api/clusters"))
+        .json(&serde_json::json!({
+            "id": "e2e-remote", "name": "e2e remote", "ssh_host": host,
+            "ssh_port": 22,
+            "ssh_user": std::env::var("OXO_TEST_CLUSTER_USER").ok(),
+            "scheduler": "auto",
+            "remote_dir": "/tmp/oxo-remote-e2e",
+            "enabled": true,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reg.status(), 200, "cluster registration must succeed");
+
+    // The run executes remotely and its results are pulled back.
+    let created: serde_json::Value = client
+        .post(format!("{base}/api/runs"))
+        .json(&serde_json::json!({"toml_content": ISO_WORKFLOW, "cluster_id": "e2e-remote"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let run_id = created["run_id"].as_str().unwrap().to_string();
+    let status = wait_for_terminal(&client, &base, &run_id).await;
+    assert_eq!(status, "completed", "remote run must complete");
+
+    // Pulled-back results are downloadable through the normal file layer.
+    let resp = client
+        .get(format!("{base}/api/runs/{run_id}/files?path=hello.txt"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "pulled-back results must be downloadable"
+    );
+    assert_eq!(resp.text().await.unwrap(), "hi\n");
+}

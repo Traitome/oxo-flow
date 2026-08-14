@@ -141,7 +141,7 @@ export default function PipelineEditor() {
     return () => clearTimeout(timer);
   }, [toml, updateDag]);
 
-  const handleRun = async (dryRun = false, options: { maxJobs: number; keepGoing: boolean; samples: string[]; targets: string[] } = { maxJobs: 4, keepGoing: false, samples: [], targets: [] }) => {
+  const handleRun = async (dryRun = false, options: { maxJobs: number; keepGoing: boolean; samples: string[]; targets: string[]; clusterId?: string } = { maxJobs: 4, keepGoing: false, samples: [], targets: [] }) => {
     setRunning(true);
     try {
       // Issue #79 P1-12: runs launched from an opened saved pipeline must
@@ -156,6 +156,7 @@ export default function PipelineEditor() {
         samples: options.samples,
         targets: options.targets,
         pipeline_id: pipelineId,
+        cluster_id: options.clusterId,
       });
       session.setRunResult({
         runId: res.run_id,

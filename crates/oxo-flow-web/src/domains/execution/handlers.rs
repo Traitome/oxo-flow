@@ -113,6 +113,15 @@ pub async fn create_run(
         resource_budget: None,
     };
 
+    // Optional remote execution: a configured SSH cluster connection makes
+    // the run execute on that host (staged over tar-over-ssh, results
+    // pulled back — domains/clusters/remote.rs).
+    let cluster_id: Option<String> = req
+        .get("cluster_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+
     // Optional saved-pipeline linkage (issue #69): runs targeting a saved
     // pipeline execute in the pipeline's persistent workdir, so the CLI's
     // checkpoint (config snapshot, rule fingerprints, input manifests)
@@ -254,6 +263,40 @@ pub async fn create_run(
             quota_usage.1,
         );
         crate::infra::quota::reserve(&resp.run_id, &user.id, quota_usage.0, quota_usage.1);
+
+        // Remote execution: the local workdir is the staging area; the
+        // remote host runs the CLI and its results are pulled back.
+        if let Some(cid) = cluster_id.as_deref() {
+            let cluster_row: Option<models::ClusterRow> =
+                sqlx::query_as("SELECT * FROM clusters WHERE id = ? AND enabled = 1")
+                    .bind(cid)
+                    .fetch_optional(pool)
+                    .await
+                    .map_err(|e| {
+                        err(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "DB_ERROR",
+                            format!("DB error loading cluster {cid}: {e}"),
+                        )
+                    })?;
+            let cluster_row = cluster_row.ok_or_else(|| {
+                err(
+                    StatusCode::NOT_FOUND,
+                    "CLUSTER_NOT_FOUND",
+                    format!("Cluster {cid} not found or disabled"),
+                )
+            })?;
+            crate::domains::clusters::remote::spawn_remote_run(
+                resp.run_id.clone(),
+                user.id.clone(),
+                cluster_row,
+                run_dir,
+                req.get("max_jobs")
+                    .and_then(|v| v.as_u64())
+                    .map(|j| j as usize),
+            );
+            return Ok(Json(resp));
+        }
 
         crate::executor::spawn_background_run(
             resp.run_id.clone(),
@@ -998,6 +1041,21 @@ pub async fn cancel_run(
             tracing::warn!("SIGKILL failed for run {id} pgid {pgid}: {e}");
         }
         crate::process_control::unregister(&id);
+    } else if let Some(cluster_id) = crate::domains::clusters::remote::remote_cluster_of(&id) {
+        // Remote run: signal the remote wrapper script.
+        let cluster_row: Option<models::ClusterRow> =
+            sqlx::query_as("SELECT * FROM clusters WHERE id = ?")
+                .bind(&cluster_id)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
+        if let Some(cluster_row) = cluster_row {
+            if let Err(e) = crate::domains::clusters::remote::cancel_remote(&cluster_row, &id).await
+            {
+                tracing::warn!("remote cancel failed for run {id}: {e}");
+            }
+        }
+        crate::domains::clusters::remote::unregister_remote(&id);
     } else {
         tracing::warn!(
             "cancel for run {id}: no live process group registered (already finished or server restarted)"
