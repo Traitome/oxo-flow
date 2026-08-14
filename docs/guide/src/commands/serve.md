@@ -16,10 +16,11 @@ oxo-flow serve [OPTIONS]
 
 | Option | Short | Default | Description |
 |---|---|---|---|
-| `--host` | — | `127.0.0.1` | Host address to bind to |
-| `--port` | `-p` | `8080` | Port to listen on |
+| `--host` | — | `127.0.0.1` | Host address to bind to (env: `OXO_FLOW_HOST`) |
+| `--port` | `-p` | `8080` | Port to listen on (env: `OXO_FLOW_PORT`) |
 | `--mode` | — | `personal` | Deployment mode: `personal`, `team`, or `hpc` (env: `OXO_FLOW_MODE`) |
-| `--base-path` | — | `/` | Base path for mounting under a sub-path (e.g., `/oxo-flow`) |
+| `--base-path` | — | `/` | Base path for mounting under a sub-path, e.g. `/oxo-flow` (env: `OXO_FLOW_BASE_PATH`) |
+| `--open` | — | — | Open the interface in the default browser on startup (env: `OXO_FLOW_OPEN_BROWSER`) |
 | `--verbose` | `-v` | — | Enable debug-level logging |
 | `--quiet` | — | — | Suppress non-essential output (errors only) |
 | `--no-color` | — | — | Disable colored output |
@@ -46,6 +47,16 @@ oxo-flow serve --host 0.0.0.0 -p 3000
 ```bash
 oxo-flow serve --base-path /oxo-flow
 ```
+
+### Desktop-app experience
+
+```bash
+oxo-flow serve --open
+```
+
+Starts the server and opens the interface in the default browser. See
+[Desktop App Packaging](../how-to/desktop-app.md) for single-file
+`.app`/`.dmg` (macOS) and `.deb`/`.rpm`/`.AppImage` (Linux) bundles.
 
 When using `--base-path`, all API endpoints will be prefixed:
 ```

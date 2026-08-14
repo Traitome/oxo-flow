@@ -143,6 +143,7 @@ nav:
       - Conditional Rules: how-to/conditional-rules.md
       - China Mirrors: how-to/china-mirrors.md
       - Troubleshooting: how-to/troubleshooting.md
+      - Desktop App Packaging: how-to/desktop-app.md
   - Command Reference:
       - batch: commands/batch.md
       - clean: commands/clean.md

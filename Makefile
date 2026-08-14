@@ -52,3 +52,25 @@ dev: frontend-build
 contributors:
 	@echo "Human contributors (from git log):"
 	@git log --format="%aN" --all | grep -v "Claude\|noreply\|bot\|Copilot" | sort -u
+
+# ── Desktop packaging (cargo-bundle, docs/how-to/desktop-app.md) ──────────
+# The SPA build output is copied into the CLI crate so the bundle carries it
+# without ".." resource paths (cargo-bundle mangles those). Frontend must be
+# built first — assets are gitignored build artifacts.
+bundle-static:
+	@cd frontend && npm run build
+	@rm -rf crates/oxo-flow-cli/static
+	@cp -r crates/oxo-flow-web/static crates/oxo-flow-cli/static
+
+bundle-macos: bundle-static
+	cd crates/oxo-flow-cli && cargo bundle --release --format osx
+	cd crates/oxo-flow-cli && cargo bundle --release --format dmg
+
+bundle-deb: bundle-static
+	cd crates/oxo-flow-cli && cargo bundle --release --format deb
+
+bundle-rpm: bundle-static
+	cd crates/oxo-flow-cli && cargo bundle --release --format rpm
+
+bundle-appimage: bundle-static
+	cd crates/oxo-flow-cli && cargo bundle --release --format appimage

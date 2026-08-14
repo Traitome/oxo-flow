@@ -43,3 +43,25 @@ tempfile = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 assert_cmd = "2.2.0"
+
+# Desktop packaging (cargo-bundle): the single binary doubles as the
+# desktop app — `oxo-flow serve --open` starts the web interface and opens
+# the default browser. Bundles: .app/.dmg on macOS, .deb/.rpm/.AppImage on
+# Linux (see Makefile `bundle-*` targets and docs/how-to/desktop-app.md).
+[package.metadata.bundle]
+name = "oxo-flow"
+identifier = "org.oxoflow.oxoflow"
+category = "DeveloperTool"
+short_description = "Bioinformatics workflow engine with web interface"
+# The SPA build output ships inside the bundle (Contents/Resources/static
+# on macOS); the web server resolves it relative to the executable, so the
+# desktop app works on machines without a source checkout.
+# `crates/oxo-flow-cli/static/` is prepared by the Makefile bundle targets
+# (copy of the SPA build output) — a ".." resource path would be mangled.
+resources = ["static/"]
+long_description = """
+oxo-flow: Rust-native bioinformatics pipeline engine — DAG workflows,
+graphical editor, AI-assisted pipeline generation, and cluster execution.
+This desktop build starts the local web interface and opens it in your
+browser (`oxo-flow serve --open`).
+"""

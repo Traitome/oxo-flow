@@ -466,16 +466,32 @@ pub enum Commands {
         /// Server operation mode: personal, team, or hpc.
         #[arg(long, default_value = "personal", env = "OXO_FLOW_MODE")]
         mode: String,
-        #[arg(long, default_value = "127.0.0.1", help = "Address to bind")]
+        #[arg(
+            long,
+            default_value = "127.0.0.1",
+            env = "OXO_FLOW_HOST",
+            help = "Address to bind"
+        )]
         host: String,
-        #[arg(short = 'p', long, default_value = "8080", help = "Port to listen on")]
+        #[arg(
+            short = 'p',
+            long,
+            default_value = "8080",
+            env = "OXO_FLOW_PORT",
+            help = "Port to listen on"
+        )]
         port: u16,
         #[arg(
             long,
             default_value = "/",
+            env = "OXO_FLOW_BASE_PATH",
             help = "Base URL path for the web interface"
         )]
         base_path: String,
+        /// Open the web interface in the default browser on startup
+        /// (desktop-app experience).
+        #[arg(long = "open", env = "OXO_FLOW_OPEN_BROWSER")]
+        open_browser: bool,
     },
     /// Generate shell completions for oxo-flow.
     Completions {
@@ -1079,7 +1095,8 @@ async fn main() -> Result<()> {
             host,
             port,
             base_path,
-        } => crate::commands::web::handle_serve(mode, host, port, base_path).await?,
+            open_browser,
+        } => crate::commands::web::handle_serve(mode, host, port, base_path, open_browser).await?,
         Commands::Completions { shell } => handle_completions(shell)?,
         Commands::Export {
             workflow,

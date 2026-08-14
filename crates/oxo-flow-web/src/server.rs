@@ -40,8 +40,10 @@ pub async fn spa_index() -> impl IntoResponse {
             })
         })
         .unwrap_or_else(|| {
-            let compile_time_path = concat!(env!("CARGO_MANIFEST_DIR"), "/static/index.html");
-            std::fs::read_to_string(compile_time_path).unwrap_or_else(|_| fallback.to_string())
+            // Same resolution chain as the asset serving (frontend_dir()):
+            // env override → bundle-relative → compile-time.
+            std::fs::read_to_string(frontend_dir().join("index.html"))
+                .unwrap_or_else(|_| fallback.to_string())
         });
 
     // Sub-path mounts: inject the base so relative asset URLs and the
@@ -97,16 +99,39 @@ async fn api_not_found() -> impl IntoResponse {
     crate::ApiError::not_found("API endpoint not found", None)
 }
 
-/// Resolve the frontend directory at runtime.
+/// Resolve the frontend directory at runtime, first hit wins:
 ///
-/// Checks `OXO_FLOW_FRONTEND_DIR` env var first (for Docker/deployment),
-/// then falls back to the compile-time static directory (for dev).
+/// 1. `OXO_FLOW_FRONTEND_DIR` / `FRONTEND_DIR` env (Docker/deployment)
+/// 2. `../Resources/static` next to the executable (macOS .app bundle —
+///    the desktop packaging ships the SPA build in Contents/Resources)
+/// 3. `static` next to the executable (flat portable layout)
+/// 4. `../share/oxo-flow/static` (Linux prefix installs)
+/// 5. Compile-time `crates/oxo-flow-web/static/` (source checkout/dev)
 fn frontend_dir() -> std::path::PathBuf {
-    std::env::var("OXO_FLOW_FRONTEND_DIR")
+    let explicit = std::env::var("OXO_FLOW_FRONTEND_DIR")
         .ok()
         .or_else(|| std::env::var("FRONTEND_DIR").ok())
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/static")))
+        .map(std::path::PathBuf::from);
+    if let Some(dir) = explicit {
+        return dir;
+    }
+
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|p| p.to_path_buf()));
+    if let Some(exe_dir) = &exe_dir {
+        for candidate in [
+            exe_dir.join("../Resources/static"),
+            exe_dir.join("static"),
+            exe_dir.join("../share/oxo-flow/static"),
+        ] {
+            if candidate.join("index.html").exists() {
+                return candidate;
+            }
+        }
+    }
+
+    std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/static"))
 }
 
 /// Build the full application router for the given serve mode.
