@@ -47,13 +47,13 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
     const text = input.trim();
     if (!text || loading) return;
 
-    const userMsg: ChatMessage = { id: Date.now().toString(), role: 'user', content: text };
+    const userMsg: ChatMessage = { id: crypto.randomUUID(), role: 'user', content: text };
     setMessages(prev => [...prev, userMsg]);
     setInput('');
     setLoading(true);
 
     // Add assistant placeholder
-    const assistantId = (Date.now() + 1).toString();
+    const assistantId = crypto.randomUUID();
     setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: '', agentStatus: 'Thinking...' }]);
 
     try {
@@ -93,7 +93,7 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
             } else if (currentEvent === 'tool_call') {
               setMessages(prev => prev.map(m => m.id === assistantId ? {
                 ...m,
-                toolCalls: [...(m.toolCalls ?? []), { id: `${payload.name}-${Date.now()}`, name: payload.name, args: typeof payload.args === 'string' ? payload.args : JSON.stringify(payload.args) }],
+                toolCalls: [...(m.toolCalls ?? []), { id: `${payload.name}-${crypto.randomUUID()}`, name: payload.name, args: typeof payload.args === 'string' ? payload.args : JSON.stringify(payload.args) }],
               } : m));
             } else if (currentEvent === 'tool_result') {
               setMessages(prev => prev.map(m => m.id === assistantId ? {
@@ -148,7 +148,7 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
   const handleAction = (action: ChatAction) => {
     if (action.action === 'accept' && action.data) {
       onPipelineReady?.(action.data);
-      setMessages(prev => [...prev, { id: Date.now().toString(), role: 'system', content: 'Pipeline saved and ready to run.' }]);
+      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: 'Pipeline saved and ready to run.' }]);
     } else if (action.action === 'regenerate') {
       sendMessage();
     } else if (action.action === 'edit' && action.data) {
