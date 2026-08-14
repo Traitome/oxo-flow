@@ -42,7 +42,10 @@ pub async fn health() -> ApiResult<HealthResponse> {
         false
     };
 
-    let mut health = service::health_check("personal", db_healthy);
+    // The mode must come from the running server, not a hardcoded value —
+    // issue #79 (health reported "personal" on hpc/team deployments, one
+    // more piece of the status-consistency collapse).
+    let mut health = service::health_check(crate::server::running_mode(), db_healthy);
     if !db_healthy {
         health.status = "degraded".to_string();
     }
