@@ -1,10 +1,12 @@
 //! S3 storage backend backed by [`aws_sdk_s3`].
 //!
-//! Uses the standard AWS credential chain (env vars, ~/.aws/credentials,
-//! instance metadata, etc.) so no configuration is required beyond what
-//! the AWS SDK normally reads.  For local testing against MinIO or
-//! LocalStack, set `AWS_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID`, and
-//! `AWS_SECRET_ACCESS_KEY`.
+//! Configuration comes from environment variables: `AWS_REGION`,
+//! `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`
+//! (credentials; the SDK's profile-file/IMDS chain lives in aws_config's
+//! async loader and is deliberately not used here — the same env-only
+//! contract as the GCS backend). For local testing against MinIO or
+//! LocalStack, also set `AWS_ENDPOINT_URL` and `OXO_S3_FORCE_PATH_STYLE=1`
+//! (path-style addressing; the SDK has no env knob of its own for it).
 //!
 //! # Testing
 //!
@@ -30,10 +32,37 @@ fn default_client() -> &'static S3Client {
         // `Config::builder().build()` is synchronous (env/config-file
         // values are resolved lazily per request), so no runtime is
         // needed here — and none may be started inside an ambient one.
-        let config = aws_sdk_s3::config::Config::builder()
-            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
-            .build();
-        S3Client::from_conf(config)
+        //
+        // The service-level builder only reads the AWS_S3_* service keys;
+        // the generic AWS_ENDPOINT_URL / AWS_REGION env vars come from
+        // aws_config's async loader, so wire the two we document in
+        // `S3Storage` explicitly. Credentials are resolved per request by
+        // the SDK's default provider chain (env vars included).
+        let mut builder = aws_sdk_s3::config::Config::builder()
+            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest());
+        // A plain service-builder config has no credentials provider —
+        // requests would go out anonymous. The SDK's full default chain
+        // (profile files, IMDS) lives in aws_config's *async* loader, so
+        // this backend reads credentials from the environment only
+        // (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY /
+        // AWS_SESSION_TOKEN) — the same contract as the GCS backend.
+        builder = builder.credentials_provider(
+            aws_config::environment::credentials::EnvironmentVariableCredentialsProvider::new(),
+        );
+        if let Ok(region) = std::env::var("AWS_REGION") {
+            builder = builder.region(aws_sdk_s3::config::Region::new(region));
+        }
+        if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
+            builder = builder.endpoint_url(endpoint);
+        }
+        // S3-compatible servers (MinIO, LocalStack) require path-style
+        // addressing; the SDK has no env knob for it, so opt in explicitly.
+        if let Ok(v) = std::env::var("OXO_S3_FORCE_PATH_STYLE")
+            && (v == "1" || v.eq_ignore_ascii_case("true"))
+        {
+            builder = builder.force_path_style(true);
+        }
+        S3Client::from_conf(builder.build())
     })
 }
 
@@ -64,6 +93,34 @@ impl S3Storage {
     pub fn new() -> Self {
         Self {
             client: default_client().clone(),
+        }
+    }
+
+    /// Create the bucket if it does not exist (idempotent; an
+    /// `AlreadyOwnedByYou`/`BucketAlreadyExists` response is success).
+    ///
+    /// Not part of the [`StorageBackend`] trait — the engine never creates
+    /// buckets implicitly. Used by setup tooling and live integration tests.
+    pub async fn ensure_bucket(&self, bucket: &str) -> Result<()> {
+        match self
+            .client
+            .create_bucket()
+            .bucket(bucket)
+            .send()
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("BucketAlreadyOwnedByYou")
+                    || msg.contains("BucketAlreadyExists")
+                    || msg.contains("BucketAlreadyOwned")
+                {
+                    Ok(())
+                } else {
+                    Err(s3_error(format!("S3 create_bucket error: {e:?}")))
+                }
+            }
         }
     }
 }
@@ -129,7 +186,9 @@ impl StorageBackend for S3Storage {
                 if msg.contains("NotFound") || msg.contains("404") {
                     Ok(None)
                 } else {
-                    Err(s3_error(format!("S3 head_object error: {e}")))
+                    // Debug includes the full error chain (service message,
+                    // request id) that Display truncates.
+                    Err(s3_error(format!("S3 head_object error: {e:?}")))
                 }
             }
         }
