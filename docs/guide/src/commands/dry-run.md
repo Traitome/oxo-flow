@@ -164,6 +164,10 @@ prediction is machine-readable:
 }
 ```
 
+Top-level fields: `"profile"` (the `--profile` name, when given) and
+`"reference_builds"` (reference names whose build outputs are missing —
+`--skip-ref-build` empties the list).
+
 Status values: `run-never-completed`, `run-input-changed`,
 `run-config-changed`, `run-outputs-missing`, `run-cascaded`, `skip`,
 `skip-when-condition`.

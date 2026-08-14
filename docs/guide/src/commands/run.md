@@ -401,8 +401,8 @@ correctly when the split values change.
 
 The checkpoint also records an **input manifest** for every completed rule:
 the file set its inputs resolved to at completion time, with each file's
-path, size, and modification time. On every run, oxo-flow re-resolves the
-inputs and compares:
+path, size, and modification time — plus a content hash for files up to
+64 MiB. On every run, oxo-flow re-resolves the inputs and compares:
 
 - **Literal glob inputs** (`data/*.txt`) detect added and removed files —
   a new file matching the glob rebuilds the rule (and its DAG downstream).
@@ -410,8 +410,10 @@ inputs and compares:
   to a directory) are listed recursively, so files added or changed anywhere
   inside invalidate the rule. `Dir` inputs with a `pattern` filter track
   only matching files.
-- **Plain file inputs** detect edits through their size and mtime, closing
-  the same stale-reuse hole for ordinary files.
+- **Plain file inputs** are content-addressed up to 64 MiB: a same-size
+  rewrite is detected even when the mtime is preserved, and a mere `touch`
+  no longer invalidates. Larger files compare size and mtime, closing the
+  same stale-reuse hole for ordinary files.
 
 ```console
 # a new file appears in data/ after the last run
