@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
+use oxo_flow_core::backend::ExecutorBackend;
 use oxo_flow_core::cluster::ClusterBackend;
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
@@ -179,6 +180,14 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
 
             std::fs::create_dir_all(&output)?;
 
+            // The rendered scripts declare `#SBATCH --output=logs/<rule>.out`
+            // and slurmd opens that file at job launch — before the script
+            // body's `mkdir -p logs` runs. Create the directory now (issue #74
+            // phase-1 note 2).
+            if let Some(wf_dir) = workflow.parent() {
+                std::fs::create_dir_all(wf_dir.join("logs"))?;
+            }
+
             eprintln!(
                 "{} Generating {} job scripts for {} rules",
                 "Cluster:".bold().cyan(),
@@ -220,15 +229,29 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                     }
                 };
 
-                // Generate script with environment wrapping
-                let script = oxo_flow_core::cluster::generate_submit_script_with_env(
-                    &cluster_backend,
-                    rule,
-                    &shell_cmd,
-                    &cluster_config,
-                    &env_resolver,
-                )
-                .map_err(|e| anyhow::anyhow!("environment wrapping failed: {}", e))?;
+                // Render through the ExecutorBackend trait (issue #78): the
+                // command stays a thin render layer over the same directive
+                // generator the live submit path uses.
+                let wrapped_cmd = env_resolver
+                    .wrap_command(
+                        &shell_cmd,
+                        &rule.environment,
+                        Some(&rule.resources),
+                        Path::new("."),
+                    )
+                    .map_err(|e| anyhow::anyhow!("environment wrapping failed: {}", e))?;
+                let scheduled = oxo_flow_core::backend::ScheduledRule {
+                    rule: rule.clone(),
+                    shell_cmd: wrapped_cmd,
+                    workdir: std::path::PathBuf::from("."),
+                    dependencies: dag.dependencies(rule_name).unwrap_or_default(),
+                    wildcard_values: wildcard_values.clone(),
+                };
+                let executor = oxo_flow_core::backend::cluster::ClusterExecutor::new(
+                    cluster_backend,
+                    cluster_config.clone(),
+                );
+                let script = executor.render_script(&scheduled)?;
 
                 let script_path = output.join(format!("{rule_name}.sh"));
                 std::fs::write(&script_path, &script)?;

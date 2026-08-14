@@ -19,6 +19,10 @@ id=$((id + 1))
 mkdir -p "$dir/jobs/$id"
 echo "PENDING" > "$dir/jobs/$id/state"
 cp "$script" "$dir/jobs/$id/job.sh"
+# The subshell redirects ALL its fds: without this it inherits sbatch's
+# stdout pipe, keeping it open until the job finishes — a caller waiting on
+# sbatch's output would block for the job duration. Real sbatch returns
+# immediately; so must the mock.
 (
   # `set +e`: the parent script runs with `-e`, but a failing job must still
   # reach the state write below — otherwise FAILED is never recorded and
@@ -30,7 +34,7 @@ cp "$script" "$dir/jobs/$id/job.sh"
   code=$?
   if [ "$code" -eq 0 ]; then echo "COMPLETED" > "$dir/jobs/$id/state"; else echo "FAILED" > "$dir/jobs/$id/state"; fi
   echo "$code" > "$dir/jobs/$id/exit_code"
-) &
+) >/dev/null 2>&1 &
 if [ "$parsable" -eq 1 ]; then
   echo "$id"
 else
