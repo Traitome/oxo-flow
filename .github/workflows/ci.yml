@@ -631,8 +631,6 @@ jobs:
       - name: Run e2e tests
         working-directory: frontend
         run: npx playwright test
-        env:
-          PATH: ${{ github.workspace }}/target/debug:${{ env.PATH }}
 
   # ─── Deploy GitHub Pages (landing page + MkDocs documentation) ─────────────
   deploy-pages:
