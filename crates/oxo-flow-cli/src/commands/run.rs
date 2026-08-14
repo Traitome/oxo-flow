@@ -551,44 +551,10 @@ pub async fn run_command(
         order.len()
     );
 
-    // Load profile if specified and merge config values.
+    // Load profile if specified and merge config values — the SAME shared
+    // helper dry-run uses, so preview and execution can never drift apart.
     if let Some(ref profile_name) = profile {
-        let profile_paths = [
-            workflow_dir
-                .join("profiles")
-                .join(format!("{profile_name}.toml")),
-            workflow_dir
-                .join("profiles")
-                .join(format!("{profile_name}.oxoflow")),
-        ];
-        let profile_path = profile_paths.iter().find(|p| p.exists());
-        if let Some(path) = profile_path {
-            let profile_content = std::fs::read_to_string(path)
-                .with_context(|| format!("failed to read profile {}", path.display()))?;
-            let profile_toml: toml::Value = profile_content
-                .parse()
-                .with_context(|| format!("failed to parse profile {}", path.display()))?;
-            if let Some(config_table) = profile_toml.get("config").and_then(toml::Value::as_table) {
-                for (key, value) in config_table {
-                    config
-                        .config
-                        .entry(key.clone())
-                        .or_insert_with(|| value.clone());
-                }
-                eprintln!(
-                    "{} Merged {} config values from profile '{}'",
-                    "Profile:".bold().cyan(),
-                    config_table.len(),
-                    profile_name
-                );
-            }
-        } else {
-            eprintln!(
-                "{} Profile '{}' not found in profiles/ directory",
-                "Warning:".bold().yellow(),
-                profile_name
-            );
-        }
+        crate::commands::run_preview::merge_profile(&mut config, profile_name, &workflow_dir)?;
     }
     for (i, rule_name) in order.iter().enumerate() {
         eprintln!("  {}. {}", i + 1, rule_name);
@@ -1753,6 +1719,8 @@ pub async fn dry_run_command(
     _ai_max_retries: Option<u32>,
     samples_filter: Vec<String>,
     workdir: Option<PathBuf>,
+    profile: Option<String>,
+    skip_ref_build: bool,
 ) -> Result<()> {
     print_banner();
     let workflow = resolve_workflow(workflow)?;
@@ -1773,6 +1741,13 @@ pub async fn dry_run_command(
     } else {
         None
     };
+
+    // ── Execution profile (shared with run) ──────────────────────────────
+    // The SAME merge helper `run` uses: preview and execution can never
+    // drift apart on profile semantics.
+    if let Some(ref profile_name) = profile {
+        crate::commands::run_preview::merge_profile(&mut config, profile_name, &workflow_dir)?;
+    }
 
     // ── Scientific preflight (deterministic, evidence-backed) ────────────
     // Printed for every dry-run; with --ai the findings are also passed to
@@ -1862,72 +1837,93 @@ pub async fn dry_run_command(
     // exactly as `run` would — invalidation sources, downstream cascade,
     // and the protected remainder — without touching the checkpoint on disk.
     let checkpoint_path = base_dir.join(".oxo-flow/checkpoint.json");
-    let preview = match oxo_flow_core::executor::checkpoint::CheckpointState::load_from_file(
-        &checkpoint_path,
-    ) {
-        Ok(ck) => {
-            let sensitive_keys: std::collections::HashSet<String> = config
-                .config_meta
-                .iter()
-                .filter(|(_, def)| def.sensitive)
-                .map(|(key, _)| key.clone())
-                .collect();
-            let interpreter_map = config.workflow.interpreter_map.clone();
-            Some(crate::commands::run_preview::preview_run_plan(
-                &ck,
-                &config,
-                &dag,
-                &order,
-                base_dir,
-                &wildcard_values,
-                &sensitive_keys,
-                &interpreter_map,
-                &checkpoint_path,
-            ))
-        }
-        Err(e) => {
-            eprintln!(
-                "  {} unreadable checkpoint {}: {e}",
-                "⚠".yellow(),
-                checkpoint_path.display()
-            );
-            None
-        }
-    };
-    match &preview {
-        Some(p) => {
-            let modified = p
-                .checkpoint_modified
-                .map(|t| {
-                    chrono::DateTime::<chrono::Local>::from(t)
-                        .format("%Y-%m-%d %H:%M:%S")
-                        .to_string()
-                })
-                .unwrap_or_else(|| "unknown time".to_string());
-            eprintln!(
-                "{} {} (modified {})",
-                "Checkpoint:".bold().cyan(),
-                p.checkpoint_path.display(),
-                modified.dimmed()
-            );
-            let will_run = p.plan.len() - p.will_skip;
-            eprintln!(
-                "  completed: {} | will run: {} | will skip: {} | protected (outside this run): {}",
-                p.completed_total,
-                will_run.to_string().green(),
-                p.will_skip.to_string().dimmed(),
-                p.protected_outside
-            );
-            for chain in &p.cascade_chains {
-                eprintln!("  {} {}", "rerun cascade:".yellow(), chain.join(" → "));
+    // The preview is ALWAYS computed — with an empty state when no
+    // checkpoint exists. `when` conditions can skip rules even on a fresh
+    // run, so "every rule will execute" would be wrong without it.
+    let checkpoint_state =
+        match oxo_flow_core::executor::checkpoint::CheckpointState::load_from_file(&checkpoint_path)
+        {
+            Ok(ck) => ck,
+            Err(_) => {
+                eprintln!(
+                    "{} no checkpoint at {} — treating every rule as never completed",
+                    "⚠".yellow(),
+                    checkpoint_path.display()
+                );
+                oxo_flow_core::executor::checkpoint::CheckpointState::default()
             }
+        };
+    let sensitive_keys: std::collections::HashSet<String> = config
+        .config_meta
+        .iter()
+        .filter(|(_, def)| def.sensitive)
+        .map(|(key, _)| key.clone())
+        .collect();
+    let interpreter_map = config.workflow.interpreter_map.clone();
+    let preview = crate::commands::run_preview::preview_run_plan(
+        &checkpoint_state,
+        &config,
+        &dag,
+        &order,
+        base_dir,
+        &wildcard_values,
+        &sensitive_keys,
+        &interpreter_map,
+        &checkpoint_path,
+    );
+    {
+        let p = &preview;
+        let modified = p
+            .checkpoint_modified
+            .map(|t| {
+                chrono::DateTime::<chrono::Local>::from(t)
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string()
+            })
+            .unwrap_or_else(|| "unknown time".to_string());
+        eprintln!(
+            "{} {} (modified {})",
+            "Checkpoint:".bold().cyan(),
+            p.checkpoint_path.display(),
+            modified.dimmed()
+        );
+        let will_run = p.plan.len() - p.will_skip;
+        eprintln!(
+            "  completed: {} | will run: {} | will skip: {} | protected (outside this run): {}",
+            p.completed_total,
+            will_run.to_string().green(),
+            p.will_skip.to_string().dimmed(),
+            p.protected_outside
+        );
+        for chain in &p.cascade_chains {
+            eprintln!("  {} {}", "rerun cascade:".yellow(), chain.join(" → "));
         }
-        None => {
-            eprintln!(
-                "{} no checkpoint — every rule in this plan will execute",
-                "Checkpoint:".bold().cyan()
-            );
-        }
+    }
+
+    // ── Reference auto-builds (mirrors run's --skip-ref-build semantics) ──
+    // run builds any reference whose output is missing before scheduling;
+    // the preview surfaces that cost instead of hiding it.
+    let reference_builds: Vec<String> = if skip_ref_build {
+        Vec::new()
+    } else {
+        config
+            .references
+            .iter()
+            .filter(|r| !base_dir.join(&r.output).exists())
+            .map(|r| r.name.clone())
+            .collect()
+    };
+    if !reference_builds.is_empty() {
+        eprintln!(
+            "{} {} reference build(s) would run: {}",
+            "References:".bold().cyan(),
+            reference_builds.len(),
+            reference_builds.join(", ")
+        );
+        eprintln!(
+            "  {} pass --skip-ref-build to assume they are pre-built.",
+            "ℹ".dimmed()
+        );
     }
 
     // Sample readiness (issue #63). With `--samples ready` the report covers
@@ -1948,8 +1944,9 @@ pub async fn dry_run_command(
             .get_rule(rule_name)
             .ok_or_else(|| anyhow::anyhow!("rule '{}' not found", rule_name))?;
         let status_text = preview
-            .as_ref()
-            .and_then(|p| p.plan.iter().find(|r| r.name == *rule_name))
+            .plan
+            .iter()
+            .find(|r| r.name == *rule_name)
             .map(|r| match &r.status {
                 crate::commands::run_preview::RuleStatus::NeverCompleted => {
                     format!("{}", "[run: never completed]".bold())
@@ -1971,6 +1968,9 @@ pub async fn dry_run_command(
                 }
                 crate::commands::run_preview::RuleStatus::Skipped => {
                     format!("{}", "[skip: up to date]".dimmed())
+                }
+                crate::commands::run_preview::RuleStatus::SkippedByWhen => {
+                    format!("{}", "[skip: when condition false]".dimmed())
                 }
             })
             .unwrap_or_default();
@@ -2137,7 +2137,7 @@ pub async fn dry_run_command(
 
         // Machine-readable checkpoint preview (issue #66): the predicted
         // execution plan with per-rule status + reason.
-        let checkpoint_block = preview.as_ref().map(|p| {
+        let checkpoint_block = Some(&preview).map(|p| {
             let plan: Vec<serde_json::Value> = p
                 .plan
                 .iter()
@@ -2159,6 +2159,9 @@ pub async fn dry_run_command(
                             ("run-cascaded", Some(from.clone()))
                         }
                         crate::commands::run_preview::RuleStatus::Skipped => ("skip", None),
+                        crate::commands::run_preview::RuleStatus::SkippedByWhen => {
+                            ("skip-when-condition", None)
+                        }
                     };
                     serde_json::json!({
                         "name": r.name,
@@ -2199,6 +2202,8 @@ pub async fn dry_run_command(
             "suggested_jobs": suggested_jobs,
             "samples": samples_block,
             "checkpoint_preview": checkpoint_block,
+            "profile": profile,
+            "reference_builds": reference_builds,
         });
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
     }

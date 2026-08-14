@@ -27,6 +27,8 @@ oxo-flow dry-run [OPTIONS] [WORKFLOW]
 | `--target` | `-t` | Run only specific target rules and their dependencies (repeatable, prefix matching) |
 | `--samples <LIST>` | — | Preview only a subset of samples: `first:N` (pilot), explicit names, or `ready` (samples whose entry inputs are complete; repeatable, comma-separated) |
 | `--workdir <DIR>` | — | Resolve relative paths against this directory (default: the workflow file's directory) |
+| `--profile <NAME>` | — | Execution profile loaded from `profiles/<NAME>.toml` — the SAME merge semantics as `run` |
+| `--skip-ref-build` | — | Skip automatic reference/index building (assume pre-built) — the preview otherwise lists required builds |
 | `--ai` | — | Enable AI-powered analysis of the workflow |
 | `--ai-max-retries <N>` | — | Maximum AI analysis rounds (overrides `[ai]` config) |
 | `--verbose` | `-v` | Enable debug-level logging |
@@ -94,10 +96,12 @@ See [`run`](run.md#incremental-data-arrival-samples-ready) for the matching
 
 ## Checkpoint-Aware Rerun Preview
 
-When `.oxo-flow/checkpoint.json` exists, dry-run loads it **read-only** and
-classifies every rule in the execution set exactly the way `run` would —
-same config-impact fingerprints, same input manifests, same DAG downstream
-closure — so the preview matches what an actual `run` will do:
+dry-run loads `.oxo-flow/checkpoint.json` **read-only** and classifies every
+rule in the execution set exactly the way `run` would — same config-impact
+fingerprints, same input manifests, same DAG downstream closure — so the
+preview matches what an actual `run` will do. Without a checkpoint the same
+classification still runs against an empty state (every rule "never
+completed", `when` conditions still honored):
 
 ```console
 $ oxo-flow dry-run pipeline.oxoflow --samples NA12891
@@ -124,6 +128,7 @@ Per-rule status markers:
 | `[run: outputs missing]` | Declared outputs no longer exist |
 | `[rerun: downstream of X]` | Was completed, but sits downstream of a rule that will execute (the cascade) |
 | `[skip: up to date]` | Checkpoint hit — work stays protected |
+| `[skip: when condition false]` | The rule's `when` condition evaluates to false against the merged config — `run` skips it regardless of invalidation state |
 
 The summary line answers the two questions that matter before a targeted
 re-run: **how much will actually execute** (`will run`, including the
@@ -131,6 +136,14 @@ cascade) and **how much prior work survives** (`protected`). The cascade
 line makes the infection chain visible — one sample's data change
 reaching the queue-level rules is exactly the part users cannot see from
 the DAG alone.
+
+`--profile <NAME>` applies the SAME merge `run` uses (profile values fill in
+config keys the workflow does not set), so a preview computed with the
+profile matches what a profiled `run` would invalidate — and a preview
+without it flags exactly the drift. When references are declared and their
+build outputs are missing, the preview lists them ("References: N reference
+build(s) would run"); pass `--skip-ref-build` to assume they are pre-built,
+mirroring the run flag.
 
 The preview is strictly read-only and never mutates the checkpoint; it is
 orthogonal to `run --rerun` (which forces execution) — the preview only
@@ -152,7 +165,8 @@ prediction is machine-readable:
 ```
 
 Status values: `run-never-completed`, `run-input-changed`,
-`run-config-changed`, `run-outputs-missing`, `run-cascaded`, `skip`.
+`run-config-changed`, `run-outputs-missing`, `run-cascaded`, `skip`,
+`skip-when-condition`.
 
 ## Examples
 

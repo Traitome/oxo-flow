@@ -517,6 +517,68 @@ fn cli_dry_run_nonexistent() {
 /// dry-run reads the checkpoint (read-only) and predicts the actual
 /// incremental plan: protected rules, invalidated rules, and the
 /// downstream cascade (issue #66).
+/// dry-run's --profile must mirror run's profile semantics: the SAME
+/// merge helper fills config keys, so the checkpoint-aware preview sees
+/// the same config run executed with — and flags the drift without it.
+#[test]
+fn cli_dry_run_profile_parity_with_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("w.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "t"
+version = "1.0"
+
+[config]
+mode = "slow"
+
+[[rules]]
+name = "step1"
+output = ["out.txt"]
+shell = "echo {config.mode} {config.extra} > out.txt"
+"#,
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("profiles")).unwrap();
+    fs::write(
+        dir.path().join("profiles/batch.toml"),
+        "[config]\nextra = \"X\"\n",
+    )
+    .unwrap();
+
+    // Run WITH the profile: `extra` is filled in, checkpoint records it.
+    oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--profile", "batch", "-j", "2"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    // dry-run WITH the same profile: the merged config matches — all skip.
+    let out = oxo_flow_cmd()
+        .args(["dry-run", wf.to_str().unwrap(), "--profile", "batch"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("[skip: up to date]"), "{stderr}");
+
+    // dry-run WITHOUT the profile: `extra` is missing — the preview flags
+    // exactly what run would invalidate.
+    let out = oxo_flow_cmd()
+        .args(["dry-run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("[run: config changed]"),
+        "preview must flag the profile-driven config difference: {stderr}"
+    );
+}
+
 #[test]
 fn cli_dry_run_previews_checkpoint_status() {
     let dir = tempfile::tempdir().unwrap();

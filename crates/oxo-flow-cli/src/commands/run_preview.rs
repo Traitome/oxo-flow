@@ -9,6 +9,7 @@
 //! closure) but operates on a CLONED checkpoint — the preview is strictly
 //! read-only and never mutates the on-disk state.
 
+use anyhow::{Context, Result};
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
 use oxo_flow_core::executor::checkpoint::CheckpointState;
@@ -31,6 +32,9 @@ pub enum RuleStatus {
     Cascaded { from: String },
     /// Checkpoint hit — will be skipped.
     Skipped,
+    /// Its `when` condition evaluates to false — `run` skips it regardless
+    /// of invalidation state, so the preview does too.
+    SkippedByWhen,
 }
 
 /// One rule in the predicted plan.
@@ -109,7 +113,15 @@ pub fn preview_run_plan(
     let mut plan = Vec::with_capacity(order.len());
     let mut will_skip = 0usize;
     for name in order {
-        let status = if !completed_original.contains(name) {
+        let status = if config
+            .get_rule(name)
+            .is_some_and(|rule| when_condition_false(rule, config, wildcard_values))
+        {
+            // Evaluated exactly like run does (typed config values win over
+            // string wildcard values); a false condition dominates every
+            // other consideration — even forced re-runs.
+            RuleStatus::SkippedByWhen
+        } else if !completed_original.contains(name) {
             RuleStatus::NeverCompleted
         } else if config_invalidated.contains(name) {
             RuleStatus::ConfigInvalidated
@@ -128,7 +140,7 @@ pub fn preview_run_plan(
         } else {
             RuleStatus::Skipped
         };
-        if status == RuleStatus::Skipped {
+        if matches!(status, RuleStatus::Skipped | RuleStatus::SkippedByWhen) {
             will_skip += 1;
         }
         plan.push(PreviewRule {
@@ -270,7 +282,9 @@ pub fn detect_input_manifest_invalidations(
             wildcard_values,
         ) {
             Ok(Some(current)) => match ck.input_manifests.get(name) {
-                Some(recorded) if *recorded == current => {}
+                Some(recorded)
+                    if oxo_flow_core::executor::checkpoint::manifests_match(recorded, &current) => {
+                }
                 Some(_) => {
                     mismatched.insert(name.clone());
                 }
@@ -314,6 +328,82 @@ pub(crate) fn invalidate_with_downstream(
     let mut names: Vec<String> = invalidated.into_iter().collect();
     names.sort();
     names
+}
+
+/// Whether the rule's `when` condition evaluates to false against the
+/// merged config — the same inputs `run` evaluates it with (typed config
+/// values win over string wildcard values; process.rs mirrors this).
+fn when_condition_false(
+    rule: &Rule,
+    config: &WorkflowConfig,
+    wildcard_values: &HashMap<String, String>,
+) -> bool {
+    let Some(condition) = rule.when.as_deref() else {
+        return false;
+    };
+    let mut config_values: HashMap<String, toml::Value> = config.config.clone();
+    for (k, v) in wildcard_values {
+        if let Some(key) = k.strip_prefix("config.") {
+            config_values
+                .entry(key.to_string())
+                .or_insert_with(|| toml::Value::String(v.clone()));
+        }
+    }
+    !oxo_flow_core::executor::process::evaluate_condition(condition, &config_values)
+}
+
+/// Merge a profile's `[config]` table into the workflow config — the same
+/// semantics `run` applies. Profile values only FILL IN keys the workflow
+/// does not set (`or_insert`); profile lookup is workflow-dir-only:
+/// `<workflow-dir>/profiles/<NAME>.toml`, then `.oxoflow`; a missing
+/// profile warns and continues (matching run, issue #76 audit).
+pub(crate) fn merge_profile(
+    config: &mut WorkflowConfig,
+    profile_name: &str,
+    workflow_dir: &Path,
+) -> Result<()> {
+    use colored::Colorize;
+
+    let profile_paths = [
+        workflow_dir
+            .join("profiles")
+            .join(format!("{profile_name}.toml")),
+        workflow_dir
+            .join("profiles")
+            .join(format!("{profile_name}.oxoflow")),
+    ];
+    let profile_path = profile_paths.iter().find(|p| p.exists());
+    let Some(path) = profile_path else {
+        eprintln!(
+            "{} Profile '{}' not found in profiles/ directory",
+            "Warning:".bold().yellow(),
+            profile_name
+        );
+        return Ok(());
+    };
+    let profile_content = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read profile {}", path.display()))?;
+    // NOTE: `toml::Value::from_str` in toml 1.x parses a SINGLE inline
+    // value, not a document — `[config]` would fail with "unexpected
+    // content". Parse the document explicitly (this also fixes the
+    // pre-existing run --profile bug the shared extraction surfaced).
+    let profile_toml: toml::Value = toml::from_str(&profile_content)
+        .with_context(|| format!("failed to parse profile {}", path.display()))?;
+    if let Some(config_table) = profile_toml.get("config").and_then(toml::Value::as_table) {
+        for (key, value) in config_table {
+            config
+                .config
+                .entry(key.clone())
+                .or_insert_with(|| value.clone());
+        }
+        eprintln!(
+            "{} Merged {} config values from profile '{}'",
+            "Profile:".bold().cyan(),
+            config_table.len(),
+            profile_name
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -444,6 +534,134 @@ shell = "cat {input[0]} > {output[0]} && echo {config.ref}"
             .find(|r| r.name == name)
             .unwrap_or_else(|| panic!("{name} missing from plan"))
             .status
+    }
+
+    fn fixture_with_when(
+        threshold: &str,
+    ) -> (
+        WorkflowConfig,
+        WorkflowDag,
+        Vec<String>,
+        HashMap<String, String>,
+    ) {
+        let toml = format!(
+            r#"
+[workflow]
+name = "t"
+version = "1.0"
+
+[config]
+threshold = {threshold}
+
+[[rules]]
+name = "fast"
+input = ["in.txt"]
+output = ["out.txt"]
+when = "config.threshold >= 10"
+shell = "cp in.txt out.txt"
+"#
+        );
+        let mut config = WorkflowConfig::parse(&toml).unwrap();
+        config.apply_defaults();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        let order = dag.execution_order().unwrap();
+        let wildcard_values = config
+            .config
+            .iter()
+            .map(|(k, v)| {
+                (
+                    format!("config.{k}"),
+                    v.as_str().unwrap_or_default().to_string(),
+                )
+            })
+            .collect();
+        (config, dag, order, wildcard_values)
+    }
+
+    #[test]
+    fn when_false_dominates_every_other_consideration() {
+        let (config, dag, order, wildcard_values) = fixture_with_when("5");
+        let ck = CheckpointState::new();
+        let preview = run_preview(
+            &ck,
+            &config,
+            &dag,
+            &order,
+            std::path::Path::new("."),
+            &wildcard_values,
+        );
+        assert_eq!(
+            status_of(&preview, "fast"),
+            &RuleStatus::SkippedByWhen,
+            "a false when condition skips the rule even though it never completed"
+        );
+        assert_eq!(preview.will_skip, 1);
+    }
+
+    #[test]
+    fn when_true_classifies_normally() {
+        let (config, dag, order, wildcard_values) = fixture_with_when("10");
+        let ck = CheckpointState::new();
+        let preview = run_preview(
+            &ck,
+            &config,
+            &dag,
+            &order,
+            std::path::Path::new("."),
+            &wildcard_values,
+        );
+        assert_eq!(status_of(&preview, "fast"), &RuleStatus::NeverCompleted);
+        assert_eq!(preview.will_skip, 0);
+    }
+
+    #[test]
+    fn merge_profile_fills_missing_keys_only() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("profiles")).unwrap();
+        std::fs::write(
+            dir.path().join("profiles/batch.toml"),
+            r#"[config]
+threshold = 20
+mode = "fast"
+"#,
+        )
+        .unwrap();
+        let mut config = WorkflowConfig::parse(
+            r#"
+[workflow]
+name = "t"
+version = "1.0"
+
+[config]
+threshold = 5
+"#,
+        )
+        .unwrap();
+        merge_profile(&mut config, "batch", dir.path()).unwrap();
+        assert_eq!(
+            config.config["threshold"].as_integer(),
+            Some(5),
+            "existing keys are never overwritten"
+        );
+        assert_eq!(
+            config.config["mode"].as_str(),
+            Some("fast"),
+            "missing keys are filled in"
+        );
+    }
+
+    #[test]
+    fn merge_profile_missing_profile_warns_and_continues() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = WorkflowConfig::parse(
+            r#"
+[workflow]
+name = "t"
+version = "1.0"
+"#,
+        )
+        .unwrap();
+        assert!(merge_profile(&mut config, "nope", dir.path()).is_ok());
     }
 
     #[test]

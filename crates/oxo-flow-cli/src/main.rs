@@ -227,6 +227,15 @@ pub enum Commands {
             help = "Working directory to resolve paths against (default: the workflow file's directory)"
         )]
         workdir: Option<PathBuf>,
+        /// Execution profile name, loaded from profiles/<NAME>.toml — the
+        /// SAME merge semantics as `run` (profile values fill in missing
+        /// config keys), so the preview matches what run would execute.
+        #[arg(long)]
+        profile: Option<String>,
+        /// Skip automatic reference/index building (assume pre-built) —
+        /// mirrors the run flag; the preview lists required builds otherwise.
+        #[arg(long)]
+        skip_ref_build: bool,
     },
     /// Validate a .oxoflow workflow file.
     Validate {
@@ -932,6 +941,8 @@ async fn main() -> Result<()> {
             ai_max_retries,
             samples_filter,
             workdir,
+            profile,
+            skip_ref_build,
         } => {
             dry_run_command(
                 workflow,
@@ -942,6 +953,8 @@ async fn main() -> Result<()> {
                 ai_max_retries,
                 samples_filter,
                 workdir,
+                profile,
+                skip_ref_build,
             )
             .await?
         }
@@ -1143,6 +1156,8 @@ async fn main() -> Result<()> {
                 None,
                 samples_filter.clone(),
                 workdir.clone(),
+                None,
+                false,
             )
             .await?;
             // 4. Optional: deep health checks (issue #64)

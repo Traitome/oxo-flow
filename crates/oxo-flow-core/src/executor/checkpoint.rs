@@ -14,12 +14,40 @@ pub struct InputManifestEntry {
     pub size: u64,
     /// Last-modified time (nanoseconds since the Unix epoch) at snapshot time.
     pub mtime_nanos: i128,
+    /// `sha256:<hex>` content hash for files up to
+    /// [`MANIFEST_HASH_MAX_BYTES`]. `None` for larger files (size+mtime
+    /// policy) and for legacy checkpoints written before hashing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
 }
 
+/// Files up to this size are content-hashed in input manifests. Hashing
+/// multi-gigabyte intermediates (BAM, CRAM) on every run would cost more
+/// than the invalidation precision buys — those keep the size+mtime policy.
+pub const MANIFEST_HASH_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Sorted, deduplicated snapshot of a rule's resolved input files.
-/// Two manifests are equal iff the file set and every file's size + mtime
-/// are unchanged.
 pub type InputManifest = Vec<InputManifestEntry>;
+
+/// Whether a recorded manifest still matches the current file set —
+/// the hash-aware version of plain equality (see [`InputManifestEntry`]).
+///
+/// Entries WITH a recorded hash compare content (mtime is irrelevant —
+/// touching a file no longer invalidates); legacy entries without one keep
+/// the size+mtime policy instead of invalidating everything once.
+pub fn manifests_match(recorded: &InputManifest, current: &InputManifest) -> bool {
+    if recorded.len() != current.len() {
+        return false;
+    }
+    recorded.iter().zip(current).all(|(r, c)| {
+        r.path == c.path
+            && r.size == c.size
+            && match &r.hash {
+                Some(rec_hash) => c.hash.as_deref() == Some(rec_hash.as_str()),
+                None => r.mtime_nanos == c.mtime_nanos,
+            }
+    })
+}
 
 /// Performance metrics recorded after executing a rule.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -522,12 +550,18 @@ fn record_manifest_file(
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_nanos() as i128)
         .unwrap_or(0);
+    // Content-hash small files (best-effort: an unreadable file degrades to
+    // the size+mtime policy rather than failing the snapshot).
+    let hash = (md.len() <= MANIFEST_HASH_MAX_BYTES)
+        .then(|| compute_file_checksum(path).ok())
+        .flatten();
     entries.insert(
         rel.clone(),
         InputManifestEntry {
             path: rel,
             size: md.len(),
             mtime_nanos,
+            hash,
         },
     );
 }
@@ -704,6 +738,115 @@ pub async fn cleanup_transform_chunks(rule: &Rule, workdir: &Path) {
 mod tests {
     use super::*;
     use crate::rule::FilePatterns;
+
+    fn small_file_manifest(dir: &Path, name: &str, content: &[u8]) -> InputManifest {
+        let path = dir.join(name);
+        std::fs::write(&path, content).unwrap();
+        let rule = Rule {
+            name: "r".to_string(),
+            input: FilePatterns::List(vec![name.to_string()]),
+            ..Default::default()
+        };
+        snapshot_input_manifest(&rule, dir, &Default::default())
+            .unwrap()
+            .expect("small file input snapshots")
+    }
+
+    #[test]
+    fn manifest_snapshot_hashes_small_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = small_file_manifest(dir.path(), "in.txt", b"data");
+        let entry = &manifest[0];
+        assert_eq!(entry.size, 4);
+        let hash = entry
+            .hash
+            .as_deref()
+            .expect("small files get content hashes");
+        assert!(hash.starts_with("sha256:"), "{hash}");
+    }
+
+    #[test]
+    fn manifest_snapshot_skips_hash_for_large_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let big = dir.path().join("big.bam");
+        // Sparse file: declares the size without writing 64 MiB.
+        std::fs::File::create(&big)
+            .unwrap()
+            .set_len(MANIFEST_HASH_MAX_BYTES + 1)
+            .unwrap();
+        let rule = Rule {
+            name: "r".to_string(),
+            input: FilePatterns::List(vec!["big.bam".to_string()]),
+            ..Default::default()
+        };
+        let manifest = snapshot_input_manifest(&rule, dir.path(), &Default::default())
+            .unwrap()
+            .unwrap();
+        assert!(
+            manifest[0].hash.is_none(),
+            "files above the threshold keep the size+mtime policy"
+        );
+    }
+
+    #[test]
+    fn manifests_match_detects_same_size_rewrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let before = small_file_manifest(dir.path(), "in.txt", b"aaaa");
+        std::fs::write(dir.path().join("in.txt"), b"bbbb").unwrap();
+        let after = small_file_manifest(dir.path(), "in.txt", b"bbbb");
+
+        assert!(manifests_match(&before, &before));
+        assert!(
+            !manifests_match(&before, &after),
+            "same size + different content must invalidate (hash policy)"
+        );
+    }
+
+    #[test]
+    fn manifests_match_legacy_entries_keep_size_mtime_policy() {
+        // Pre-hash checkpoints have entries without hashes: they compare
+        // size+mtime against a fresh snapshot (which now carries hashes)
+        // instead of invalidating everything once.
+        let recorded = vec![InputManifestEntry {
+            path: "in.txt".to_string(),
+            size: 4,
+            mtime_nanos: 42,
+            hash: None,
+        }];
+        let current = vec![InputManifestEntry {
+            path: "in.txt".to_string(),
+            size: 4,
+            mtime_nanos: 42,
+            hash: Some("sha256:abc".to_string()),
+        }];
+        assert!(manifests_match(&recorded, &current));
+
+        let current_changed = vec![InputManifestEntry {
+            path: "in.txt".to_string(),
+            size: 5,
+            mtime_nanos: 42,
+            hash: Some("sha256:abc".to_string()),
+        }];
+        assert!(!manifests_match(&recorded, &current_changed));
+    }
+
+    #[test]
+    fn manifests_match_hash_wins_over_mtime() {
+        let recorded = vec![InputManifestEntry {
+            path: "in.txt".to_string(),
+            size: 4,
+            mtime_nanos: 1,
+            hash: Some("sha256:abc".to_string()),
+        }];
+        let current = vec![InputManifestEntry {
+            path: "in.txt".to_string(),
+            size: 4,
+            mtime_nanos: 999,
+            hash: Some("sha256:abc".to_string()),
+        }];
+        // Content identical: an mtime-only touch no longer invalidates.
+        assert!(manifests_match(&recorded, &current));
+    }
 
     #[tokio::test]
     async fn cleanup_transform_chunks_removes_chunk_files_and_empty_dirs() {
@@ -976,6 +1119,7 @@ mod tests {
                 path: "data/a.txt".to_string(),
                 size: 7,
                 mtime_nanos: 42,
+                hash: None,
             }],
         );
         let json = state.to_json().unwrap();
@@ -986,6 +1130,7 @@ mod tests {
                 path: "data/a.txt".to_string(),
                 size: 7,
                 mtime_nanos: 42,
+                hash: None,
             }]
         );
         // Older checkpoints without input_manifests still load.

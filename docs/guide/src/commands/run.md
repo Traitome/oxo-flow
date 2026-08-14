@@ -431,11 +431,16 @@ their outputs rebuild in the same run.
 
 **Limitations** (correctness-first, documented deliberately):
 
-- Detection is metadata-based (path + size + mtime), like `make` and
-  Snakemake's default mode — not content hashes. Hashing every input on
-  every run would cost O(total input bytes), prohibitive for
-  bioinformatics-scale files. A file rewritten with an identical size and a
-  deliberately preserved mtime is not detected; use `--rerun` to force.
+- Detection is a **hybrid policy**: files up to 64 MiB are content-hashed
+  (`sha256`), so a same-size rewrite is detected even when the mtime is
+  preserved — and a mere `touch` no longer invalidates. Larger files
+  (multi-gigabyte intermediates) keep the size+mtime policy, like `make`
+  and Snakemake's default mode: hashing every input on every run would cost
+  O(total input bytes), prohibitive for bioinformatics-scale files. A large
+  file rewritten with identical size and a deliberately preserved mtime is
+  not detected; use `--rerun` to force. Legacy checkpoints (entries written
+  before hashing) keep comparing size+mtime instead of invalidating
+  everything once.
 - Only one glob level is tracked per input pattern; brace-expansion
   patterns (`*.{txt,log}`) are not expanded by the manifest scanner, so
   their matched set is not tracked (the shell still expands them at
