@@ -445,6 +445,11 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
         user_id.as_deref(),
     );
 
+    // Release the run's quota reservation (issue #82 P1-9).
+    if let Some((user_id, threads, memory_mb)) = crate::infra::quota::release(run_id) {
+        crate::infra::quota::global_quota_tracker().record_complete(&user_id, threads, memory_mb);
+    }
+
     // Configured webhooks fire on terminal states (issue #82 P1-12).
     crate::domains::observability::webhook::notify_terminal(run_id, final_state).await;
 }
@@ -646,6 +651,9 @@ async fn mark_run_failed(run_id: &str) {
         user_id.as_deref(),
     );
 
+    if let Some((user_id, threads, memory_mb)) = crate::infra::quota::release(run_id) {
+        crate::infra::quota::global_quota_tracker().record_complete(&user_id, threads, memory_mb);
+    }
     crate::domains::observability::webhook::notify_terminal(run_id, "failed").await;
 }
 

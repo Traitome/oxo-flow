@@ -8,6 +8,16 @@ import { api } from '../api/client';
 import { useServerVersion } from '../api/version';
 import { useI18n } from '../context/I18n';
 
+function LicenseFooterLabel() {
+  const [label, setLabel] = useState<string>('');
+  useEffect(() => {
+    api.licenseStatus()
+      .then((l) => setLabel(l.license_type ? `${l.license_type} license` : 'academic license'))
+      .catch(() => setLabel('academic license'));
+  }, []);
+  return <span>{label}</span>;
+}
+
 type NavItem = { to: string; icon: typeof LayoutDashboard; key: string; roles?: string[] };
 
 const nav: NavItem[] = [
@@ -44,6 +54,15 @@ export default function Layout() {
   const [menuOpen, setMenuOpen] = useState(false);
   const version = useServerVersion();
   const { t, lang, setLang } = useI18n();
+  const [theme, setThemeState] = useState<string>(
+    () => localStorage.getItem('oxo_theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'),
+  );
+  const toggleTheme = () => {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    localStorage.setItem('oxo_theme', next);
+    document.documentElement.dataset.theme = next;
+    setThemeState(next);
+  };
   const [userName, setUserName] = useState<string | null>(null);
   const [userRole, setUserRole] = useState<string | null>(null);
   useEffect(() => {
@@ -106,6 +125,10 @@ export default function Layout() {
             title={lang === 'en' ? '切换到中文' : 'Switch to English'}>
             {t('lang.toggle')}
           </button>
+          <button className="btn-sm" style={{ marginRight: '8px' }} onClick={toggleTheme}
+            title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}>
+            {theme === 'dark' ? '☀️' : '🌙'}
+          </button>
           <span id="header-status" role="status" aria-label={STATUS_TITLES[serverStatus]} className={`status-dot ${serverStatus}`} title={STATUS_TITLES[serverStatus]} />
           {userName ? (
             <span className="header-user" title={t('nav.signedIn')}>{userName}</span>
@@ -130,7 +153,10 @@ export default function Layout() {
           </nav>
           <div className="sidebar-footer">
             <span>{version ? `oxo-flow v${version}` : 'oxo-flow'}</span>
-            <span>Academic License</span>
+            {/* License type renders from the server's own report, never a
+                hardcoded label (issue #82 P2-6: commercial deployments were
+                mislabeled "Academic"). */}
+            <LicenseFooterLabel />
           </div>
         </aside>
 

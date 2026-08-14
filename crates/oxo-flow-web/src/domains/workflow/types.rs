@@ -109,6 +109,10 @@ pub struct ValidationError {
     pub message: String,
     pub rule: Option<String>,
     pub suggestion: Option<String>,
+    /// 1-based source line when the error is a TOML syntax problem
+    /// (issue #82 P2-8: editor highlights the failing line).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
 }
 
 /// Result of pipeline preparation: expanded rules, wildcard combinations, env commands.

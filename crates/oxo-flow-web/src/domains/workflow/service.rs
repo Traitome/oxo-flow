@@ -140,6 +140,30 @@ pub fn parse_pipeline(
 ///
 /// Returns structured errors with diagnostic codes and suggestions.
 pub fn validate_pipeline(toml_content: &str) -> Result<ValidateResponse, String> {
+    // A raw TOML pass first: syntax errors carry byte spans, which we
+    // convert to 1-based line numbers so the editor can point at the
+    // offending line (issue #82 P2-8).
+    let toml_line = toml::from_str::<toml::Value>(toml_content)
+        .err()
+        .and_then(|e| e.span())
+        .map(|span| {
+            toml_content[..span.start.min(toml_content.len())]
+                .matches('\n')
+                .count()
+                + 1
+        });
+    if let Some(line) = toml_line {
+        return Ok(ValidateResponse {
+            valid: false,
+            errors: vec![ValidationError {
+                code: "PARSE_ERROR".into(),
+                message: "Workflow TOML is not valid TOML syntax".into(),
+                rule: None,
+                suggestion: Some("Fix the syntax error at the highlighted line".into()),
+                line: Some(line),
+            }],
+        });
+    }
     let config = WorkflowConfig::parse(toml_content).map_err(|e| format!("Parse: {e}"))?;
     let validation = oxo_flow_core::format::validate_format(&config);
     let lints = oxo_flow_core::format::lint_format(&config);
@@ -152,12 +176,14 @@ pub fn validate_pipeline(toml_content: &str) -> Result<ValidateResponse, String>
             message: d.message.clone(),
             rule: d.rule.clone(),
             suggestion: d.suggestion.clone(),
+            line: None,
         })
         .collect();
 
     errors.extend(lints.into_iter().map(|d| ValidationError {
         code: d.code,
         message: d.message,
+        line: None,
         rule: d.rule,
         suggestion: d.suggestion,
     }));
@@ -244,6 +270,7 @@ pub fn lint_workflow(toml_content: &str) -> Result<ValidateResponse, String> {
                 message: d.message,
                 rule: d.rule,
                 suggestion: d.suggestion,
+                line: None,
             })
             .collect(),
     })

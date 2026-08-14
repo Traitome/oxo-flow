@@ -43,7 +43,7 @@ export default function PipelineEditor() {
   const session = usePipelineSession();
   const [toml, setToml] = useState(() => session.state.pipelineToml || DEFAULT_TOML);
   const [dagJson, setDagJson] = useState<DagJson | null>(() => session.state.dagData);
-  const [validation, setValidation] = useState<{ valid: boolean; errors: Array<{ code: string; message: string; rule: string | null; suggestion: string | null }> } | null>(null);
+  const [validation, setValidation] = useState<{ valid: boolean; errors: Array<{ code: string; message: string; rule: string | null; suggestion: string | null; line?: number | null }> } | null>(null);
   const [showErrors, setShowErrors] = useState(false);
   // Monotonic edit sequence: debounced validation and canvas edits resolve
   // out of order — only the latest request may apply its result (issue #79
@@ -56,6 +56,7 @@ export default function PipelineEditor() {
   const [showRunDialog, setShowRunDialog] = useState(false);
   // Guided vs Power modes (issue #82 P1-5): form-based rule cards by
   // default; the canvas + TOML view for power users. The choice persists.
+  const [highlightLine, setHighlightLine] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<'guided' | 'canvas'>(() =>
     localStorage.getItem('oxo_editor_mode') === 'canvas' ? 'canvas' : 'guided',
   );
@@ -471,6 +472,13 @@ export default function PipelineEditor() {
               {validation.errors.map((e, i) => (
                 <div key={i} className="validation-error-row">
                   <span className="validation-error-code">{e.code}</span>
+                  {e.line != null && (
+                    <button className="btn-sm" style={{ fontSize: '0.7rem' }}
+                      title="Jump to this line in the editor"
+                      onClick={() => setHighlightLine(e.line!)}>
+                      line {e.line}
+                    </button>
+                  )}
                   <div className="validation-error-body">
                     <div>
                       {e.rule ? <strong>{e.rule}: </strong> : null}
@@ -482,7 +490,7 @@ export default function PipelineEditor() {
               ))}
             </div>
           )}
-          <TomlEditor value={toml} onChange={(v) => setToml(v)} />
+          <TomlEditor value={toml} onChange={(v) => setToml(v)} highlightLine={highlightLine} />
         </div>
       </div>
 

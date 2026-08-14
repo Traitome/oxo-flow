@@ -33,6 +33,22 @@ fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+/// Parse a memory declaration ("4GB", "512MB", "8G", bare number = MB)
+/// into megabytes (issue #82 P1-9 quota pre-flight).
+fn parse_memory_mb(value: &str) -> u64 {
+    let v = value.trim().to_lowercase();
+    let (num, mult) = if let Some(n) = v.strip_suffix("gb").or_else(|| v.strip_suffix('g')) {
+        (n.trim(), 1024u64)
+    } else if let Some(n) = v.strip_suffix("mb").or_else(|| v.strip_suffix('m')) {
+        (n.trim(), 1u64)
+    } else {
+        (v.as_str(), 1u64)
+    };
+    num.parse::<f64>()
+        .map(|n| (n * mult as f64) as u64)
+        .unwrap_or(0)
+}
+
 /// Fetch a run row and enforce ownership (issue #82 P0-4): admins may
 /// address any run, everyone else only their own. Foreign and unknown runs
 /// both 404 — the resource set itself is private, so existence must not
@@ -115,6 +131,34 @@ pub async fn create_run(
             StatusCode::BAD_REQUEST,
             "INVALID_PIPELINE_ID",
             format!("pipeline_id must be a UUID, got: {pid}"),
+        ));
+    }
+
+    // Quota enforcement (issue #82 P1-9): the tracker was fully
+    // implemented but never consulted — every run must pre-flight its
+    // resource reservation.
+    let quota_usage = oxo_flow_core::config::WorkflowConfig::parse(toml)
+        .map(|wf| {
+            let threads: u32 = wf.rules.iter().map(|r| r.effective_threads().max(1)).sum();
+            let memory_mb: u64 = wf
+                .rules
+                .iter()
+                .filter_map(|r| r.memory.clone())
+                .map(|m| parse_memory_mb(&m))
+                .sum();
+            (threads.max(1), memory_mb)
+        })
+        .unwrap_or((1, 0));
+    let quota =
+        crate::infra::quota::global_quota_tracker().check(&user.id, quota_usage.0, quota_usage.1);
+    if !quota.allowed {
+        return Err(err(
+            StatusCode::TOO_MANY_REQUESTS,
+            "QUOTA_EXCEEDED",
+            format!(
+                "Quota exceeded: {} — see /api/quota for limits",
+                quota.violations.join("; ")
+            ),
         ));
     }
 
@@ -201,6 +245,15 @@ pub async fn create_run(
         } else {
             tracing::info!("Saved workflow to {:?}", workflow_path);
         }
+
+        // Reserve the run's resources in the quota tracker; the executor
+        // releases them on the terminal state.
+        crate::infra::quota::global_quota_tracker().record_start(
+            &user.id,
+            quota_usage.0,
+            quota_usage.1,
+        );
+        crate::infra::quota::reserve(&resp.run_id, &user.id, quota_usage.0, quota_usage.1);
 
         crate::executor::spawn_background_run(
             resp.run_id.clone(),

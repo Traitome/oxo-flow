@@ -38,7 +38,7 @@ export interface Pipeline {
   id: string; user_id: string; name: string; version: string; toml_content: string;
   rules_count: number; forked_from?: string | null; visibility: string; created_at: string; updated_at: string;
 }
-export interface ValidateResponse { valid: boolean; errors: Array<{ code: string; message: string; rule: string | null; suggestion: string | null }>; }
+export interface ValidateResponse { valid: boolean; errors: Array<{ code: string; message: string; rule: string | null; suggestion: string | null; line?: number | null }>; }
 export interface ParseResponse {
   pipeline_id: string; name: string; version: string;
   rules: Array<{ name: string; shell: string | null; inputs: string[]; outputs: string[]; environment: string | null; threads: number | null }>;

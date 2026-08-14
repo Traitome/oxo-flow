@@ -48,7 +48,6 @@ export const api = {
   deleteCluster: (id: string) => del<{ deleted: string }>(`/api/clusters/${id}`),
   probeCluster: (id: string) => post<ClusterProbeResult>(`/api/clusters/${id}/probe`, {}),
   getRunPreview: (id: string) => get<DryRunPreview>(`/api/runs/${id}/preview`),
-  events: () => get<{ events: Array<Record<string, unknown>> }>('/api/events'),
 
   // ── Auth & License ──
   login: (username: string, password: string) => post<LoginResponse>('/api/auth/login', { username, password }),
