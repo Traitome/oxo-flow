@@ -506,3 +506,25 @@ body{font-family:var(--font-sans);font-size:.9375rem;line-height:1.6;color:var(-
   border-left: 3px solid #dc2626;
   padding-left: 8px;
 }
+
+/* Task-oriented dashboard entry cards (issue #82 P1-7) */
+.entry-card {
+  cursor: pointer;
+  text-align: left;
+  border: 1px solid var(--color-border);
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+}
+.entry-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--color-primary);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+.entry-card h3 {
+  font-size: 1rem;
+  margin: 0.5rem 0 0.25rem;
+}
+.entry-card p {
+  font-size: 0.82rem;
+  color: var(--color-text-secondary);
+  margin: 0;
+}

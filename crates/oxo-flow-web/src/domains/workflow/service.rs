@@ -28,6 +28,7 @@ pub fn parse_pipeline(
         .iter()
         .map(|r| RuleSummary {
             name: r.name.clone(),
+            shell: r.shell.clone(),
             inputs: r.input.iter().map(|p| p.to_string()).collect(),
             outputs: r.output.iter().map(|p| p.to_string()).collect(),
             environment: Some(r.environment.kind().to_string()),

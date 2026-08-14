@@ -9,6 +9,7 @@ import WorkflowCanvas from '../components/WorkflowCanvas';
 import RuleInspector from '../components/RuleInspector';
 import RunDialog from '../components/RunDialog';
 import TomlEditor from '../components/TomlEditor';
+import GuidedRuleBuilder from '../components/GuidedRuleBuilder';
 import { usePipelineSession } from '../context/PipelineSession';
 
 const DEFAULT_TOML = `[workflow]
@@ -53,6 +54,15 @@ export default function PipelineEditor() {
   const [leftTab, setLeftTab] = useState<LeftTab>('palette');
   const [inspector, setInspector] = useState<InspectorState | null>(null);
   const [showRunDialog, setShowRunDialog] = useState(false);
+  // Guided vs Power modes (issue #82 P1-5): form-based rule cards by
+  // default; the canvas + TOML view for power users. The choice persists.
+  const [viewMode, setViewMode] = useState<'guided' | 'canvas'>(() =>
+    localStorage.getItem('oxo_editor_mode') === 'canvas' ? 'canvas' : 'guided',
+  );
+  const switchViewMode = (mode: 'guided' | 'canvas') => {
+    localStorage.setItem('oxo_editor_mode', mode);
+    setViewMode(mode);
+  };
   const [revisions, setRevisions] = useState<Array<{ id: string; version: string; actor: string; created_at: string }> | null>(null);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -322,9 +332,33 @@ export default function PipelineEditor() {
 
   return (
     <div className="page">
-      <h1 className="page-title">Pipeline Editor</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+        <h1 className="page-title" style={{ margin: 0 }}>Pipeline Editor</h1>
+        <div style={{ display: 'flex', gap: '4px' }}>
+          <button
+            className={viewMode === 'guided' ? 'btn-run' : 'btn-sm'}
+            onClick={() => switchViewMode('guided')}
+            title="Form-based rule cards — no TOML needed"
+          >
+            🧭 Guided
+          </button>
+          <button
+            className={viewMode === 'canvas' ? 'btn-run' : 'btn-sm'}
+            onClick={() => switchViewMode('canvas')}
+            title="Canvas graph + raw TOML"
+          >
+            ⚡ Canvas + TOML
+          </button>
+        </div>
+      </div>
 
-      <div className="editor-layout">
+      {viewMode === 'guided' && (
+        <div style={{ marginTop: '1rem' }}>
+          <GuidedRuleBuilder toml={toml} onChange={(v) => setToml(v)} />
+        </div>
+      )}
+
+      <div className="editor-layout" style={{ display: viewMode === 'guided' ? 'none' : undefined }}>
         <div className="left-rail">
           <div className="left-rail-tabs" role="tablist">
             <button
@@ -342,6 +376,17 @@ export default function PipelineEditor() {
               onClick={() => setLeftTab('assistant')}
             >
               <Wand2 size={14} /> Assistant
+            </button>
+            <button
+              role="tab"
+              aria-selected={leftTab === 'history'}
+              className={`left-rail-tab ${leftTab === 'history' ? 'active' : ''}`}
+              onClick={() => {
+                setLeftTab('history');
+                setRevisions(null);
+              }}
+            >
+              🕘 History
             </button>
           </div>
           <div className="left-rail-body">

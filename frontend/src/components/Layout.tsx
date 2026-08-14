@@ -6,20 +6,28 @@ import ResultNotification from './ResultNotification';
 import { usePipelineSession } from '../context/PipelineSession';
 import { api } from '../api/client';
 import { useServerVersion } from '../api/version';
+import { useI18n } from '../context/I18n';
 
-const nav = [
-  { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/editor', icon: GitBranch, label: 'Pipeline Editor' },
-  { to: '/pipelines', icon: Library, label: 'Pipelines' },
-  { to: '/runs', icon: PlayCircle, label: 'Runs' },
-  { to: '/chat', icon: MessageCircle, label: 'AI Chat' },
-  { to: '/monitor', icon: BarChart3, label: 'Monitor' },
-  { to: '/docs', icon: BookOpen, label: 'API Docs' },
-  { to: '/clusters', icon: Server, label: 'Clusters' },
-  { to: '/users', icon: Users, label: 'Users' },
-  { to: '/audit', icon: ShieldCheck, label: 'Audit' },
-  { to: '/settings', icon: Settings, label: 'Settings' },
+type NavItem = { to: string; icon: typeof LayoutDashboard; key: string; roles?: string[] };
+
+const nav: NavItem[] = [
+  { to: '/', icon: LayoutDashboard, key: 'nav.dashboard' },
+  { to: '/editor', icon: GitBranch, key: 'nav.editor' },
+  { to: '/pipelines', icon: Library, key: 'nav.pipelines' },
+  { to: '/runs', icon: PlayCircle, key: 'nav.runs' },
+  { to: '/chat', icon: MessageCircle, key: 'nav.chat' },
+  { to: '/docs', icon: BookOpen, key: 'nav.docs' },
+  // Management entries: admins always; regular users see Clusters +
+  // Settings for their own AI config; viewers and guests see neither.
+  { to: '/clusters', icon: Server, key: 'nav.clusters', roles: ['admin', 'user'] },
+  { to: '/users', icon: Users, key: 'nav.users', roles: ['admin'] },
+  { to: '/audit', icon: ShieldCheck, key: 'nav.audit', roles: ['admin'] },
+  { to: '/settings', icon: Settings, key: 'nav.settings', roles: ['admin', 'user'] },
 ];
+
+// /monitor was a duplicate of /runs (issue #82 P1-15) — merged.
+const BarChart3Unused = BarChart3;
+void BarChart3Unused;
 
 type ServerStatus = 'checking' | 'ok' | 'degraded' | 'down';
 
@@ -35,12 +43,24 @@ const STATUS_POLL_MS = 30000;
 export default function Layout() {
   const [menuOpen, setMenuOpen] = useState(false);
   const version = useServerVersion();
+  const { t, lang, setLang } = useI18n();
   const [userName, setUserName] = useState<string | null>(null);
+  const [userRole, setUserRole] = useState<string | null>(null);
   useEffect(() => {
     api.authMe()
-      .then((me) => setUserName(me.authenticated ? (me.username ?? null) : null))
-      .catch(() => setUserName(null));
+      .then((me) => {
+        setUserName(me.authenticated ? (me.username ?? null) : null);
+        setUserRole(me.authenticated ? (me.role ?? 'user') : null);
+      })
+      .catch(() => { setUserName(null); setUserRole(null); });
   }, []);
+
+  // Role-trimmed navigation (issue #82 P1-15): guests/viewers see the core
+  // flow only; the backend independently enforces 403s on everything else.
+  const visibleNav = nav.filter((item) => {
+    if (!item.roles) return true;
+    return userRole !== null && item.roles.includes(userRole);
+  });
 
   const [serverStatus, setServerStatus] = useState<ServerStatus>('checking');
   const session = usePipelineSession();
@@ -75,18 +95,22 @@ export default function Layout() {
           <span className="header-ver">{version ? `v${version}` : ''}</span>
         </div>
         <nav className={`header-nav${menuOpen ? ' open' : ''}`}>
-          {nav.map(({ to, label }) => (
+          {visibleNav.map(({ to, key }) => (
             <NavLink key={to} to={to} end={to === '/'} onClick={() => setMenuOpen(false)} className={({ isActive }) => `header-link${isActive ? ' active' : ''}`}>
-              {label}
+              {t(key)}
             </NavLink>
           ))}
         </nav>
         <div className="header-right">
+          <button className="btn-sm" style={{ marginRight: '8px' }} onClick={() => setLang(lang === 'en' ? 'zh' : 'en')}
+            title={lang === 'en' ? '切换到中文' : 'Switch to English'}>
+            {t('lang.toggle')}
+          </button>
           <span id="header-status" role="status" aria-label={STATUS_TITLES[serverStatus]} className={`status-dot ${serverStatus}`} title={STATUS_TITLES[serverStatus]} />
           {userName ? (
-            <span className="header-user" title="Signed in">{userName}</span>
+            <span className="header-user" title={t('nav.signedIn')}>{userName}</span>
           ) : (
-            <Link to="/login" className="header-user">Guest — sign in</Link>
+            <Link to="/login" className="header-user">{t('nav.guest')}</Link>
           )}
         </div>
       </header>
@@ -95,10 +119,10 @@ export default function Layout() {
       <div className="app-body">
         <aside className="sidebar">
           <nav className="sidebar-nav">
-            {nav.map(({ to, icon: Icon, label }) => (
+            {visibleNav.map(({ to, icon: Icon, key }) => (
               <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
-                <Icon size={18} /><span>{label}</span>
-                {label === 'Runs' && session.state.activeRunId && (
+                <Icon size={18} /><span>{t(key)}</span>
+                {key === 'nav.runs' && session.state.activeRunId && (
                   <span style={{ marginLeft: 'auto', width: 6, height: 6, borderRadius: '50%', background: 'var(--color-primary)', animation: 'pulse 1.5s infinite' }} title="Active run" />
                 )}
               </NavLink>

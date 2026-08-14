@@ -45,7 +45,9 @@ export default function App() {
           <Route path="/templates" element={<Navigate to="/pipelines" replace />} />
           <Route path="/runs" element={<Suspense fallback={<PageFallback />}><MonitorReport /></Suspense>} />
           <Route path="/runs/:id" element={<Suspense fallback={<PageFallback />}><MonitorReport /></Suspense>} />
-          <Route path="/monitor" element={<Suspense fallback={<PageFallback />}><MonitorReport /></Suspense>} />
+          {/* /monitor merged into /runs (issue #82 P1-15) — redirect for old links */}
+          <Route path="/monitor" element={<Navigate to="/runs" replace />} />
+          <Route path="/monitor/:id" element={<Navigate to="/runs" replace />} />
           <Route path="/chat" element={<Suspense fallback={<PageFallback />}><ChatUI /></Suspense>} />
           <Route path="/settings" element={<Suspense fallback={<PageFallback />}><Settings /></Suspense>} />
           <Route path="/docs" element={<Suspense fallback={<PageFallback />}><ApiDocs /></Suspense>} />

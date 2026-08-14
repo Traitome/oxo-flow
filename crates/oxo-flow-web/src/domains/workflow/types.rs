@@ -22,6 +22,7 @@ pub struct ParseResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuleSummary {
     pub name: String,
+    pub shell: Option<String>,
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
     pub environment: Option<String>,

@@ -357,7 +357,7 @@ pub async fn get_share_landing(Path(token): Path<String>) -> ApiResult<serde_jso
             .bind(&share.pipeline_id)
             .fetch_optional(pool)
             .await
-            .map_err(|e| {
+            .map_err(|_| {
                 err(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "DB_ERROR",

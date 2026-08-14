@@ -41,7 +41,7 @@ export interface Pipeline {
 export interface ValidateResponse { valid: boolean; errors: Array<{ code: string; message: string; rule: string | null; suggestion: string | null }>; }
 export interface ParseResponse {
   pipeline_id: string; name: string; version: string;
-  rules: Array<{ name: string; inputs: string[]; outputs: string[]; environment: string; threads: number }>;
+  rules: Array<{ name: string; shell: string | null; inputs: string[]; outputs: string[]; environment: string | null; threads: number | null }>;
   dag: DagJson; stats: Record<string, unknown>;
 }
 export interface DagJsonNode {
@@ -91,7 +91,13 @@ export interface KnowledgeSkillsResponse {
 }
 
 // ── Runs ──
-export interface RunItem { id: string; user_id: string; pipeline_id: string; status: string; phase: string; pid: number | null; workdir: string | null; started_at: string | null; finished_at: string | null; created_at: string; }
+export interface RunItem {
+  id: string; user_id: string; pipeline_id: string | null;
+  /** Workflow name the run executed (backend enriches the list — issue #82 P1-3). */
+  workflow_name?: string | null;
+  status: string; phase: string; pid: number | null; workdir: string | null;
+  started_at: string | null; finished_at: string | null; created_at: string;
+}
 /** One expanded sample×rule instance from a run's checkpoint
  *  (issue #82 P1-1): `qc_auto-discovered_S1` → rule `qc`, sample `S1`. */
 export interface RunInstance {
