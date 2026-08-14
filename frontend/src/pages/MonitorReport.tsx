@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { RunItem, MonitorStatus, ReportData, DagStatus, Diagnostics } from '../api/types';
@@ -27,6 +27,11 @@ export default function MonitorReport() {
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
   const [tab, setTab] = useState<TabType>('monitor');
   const [, setLoading] = useState(true);
+  // Pagination: the full list is ≤100 rows (API LIMIT); render a page of
+  // 20 so the Run Detail card below is not buried under 5700px of history
+  // (issue #79 P2). "Show more" grows the page.
+  const [visibleCount, setVisibleCount] = useState(20);
+  const detailRef = useRef<HTMLDivElement>(null);
   const [qaInput, setQaInput] = useState('');
   const [qaAnswer, setQaAnswer] = useState<string | null>(null);
 
@@ -45,6 +50,9 @@ export default function MonitorReport() {
     try { setReportData(await api.runReport(id)); } catch { setReportData(null); }
     try { setDagStatus(await api.getDagStatus(id)); } catch { setDagStatus(null); }
     try { setDiagnostics(await api.getDiagnostics(id)); } catch { setDiagnostics(null); }
+    // A row click means the user wants the detail — bring it into view
+    // instead of leaving it below a long list (issue #79 P2).
+    requestAnimationFrame(() => detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   }, []);
 
   useEffect(() => {
@@ -434,8 +442,12 @@ export default function MonitorReport() {
         <table className="run-table">
           <thead><tr><th>ID</th><th>Status</th><th>Phase</th><th>Created</th><th>Monitor</th></tr></thead>
           <tbody>
-            {runs.map((r) => (
-              <tr key={r.id} style={selId === r.id ? { background: '#2563EB20' } : {}}>
+            {runs.slice(0, visibleCount).map((r) => (
+              <tr
+                key={r.id}
+                onClick={() => selectRun(r.id)}
+                style={selId === r.id ? { background: 'var(--color-primary-light)', cursor: 'pointer' } : { cursor: 'pointer' }}
+              >
                 <td className="mono">{r.id.slice(0, 8)}</td>
                 <td><span className={`status-badge ${r.status}`}>{r.status}</span></td>
                 <td>{r.phase || '-'}</td>
@@ -450,11 +462,16 @@ export default function MonitorReport() {
             ))}
           </tbody>
         </table>
+        {runs.length > visibleCount && (
+          <button className="btn-sm" style={{ marginTop: '0.5rem' }} onClick={() => setVisibleCount((n) => n + 20)}>
+            Show {Math.min(20, runs.length - visibleCount)} more of {runs.length} runs
+          </button>
+        )}
       </div>
 
       {/* Run Detail */}
       {(selId) && (
-        <div className="dash-card">
+        <div className="dash-card" ref={detailRef}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
             <div>
               <h3 style={{ fontSize: '1rem', fontFamily: 'var(--font-mono)' }}>Run {selId.slice(0, 12)}...</h3>
