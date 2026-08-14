@@ -21,6 +21,11 @@ trim_left_r = 0
 trunc_len_f = 250
 trunc_len_r = 250
 sampling_depth = 1000
+# Optional: pre-trained classifier for the target 16S region
+# (e.g. silva-138-99-515-806-nb-classifier.qza). Set via
+# `oxo-flow run wf.oxoflow classifier=/path/to/classifier.qza`;
+# without it, skip the classify step or train a classifier first.
+classifier = ""
 
 [[rules]]
 name = "import_reads"
