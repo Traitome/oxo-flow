@@ -147,6 +147,34 @@ Run all tests:
 cargo test --workspace --verbose
 ```
 
+### Parity contract tests (`tests/preview_parity.rs`)
+
+`run` and `dry-run` must agree on **what would execute**, not just on
+profile merging. `tests/preview_parity.rs` enforces this as an executable
+assertion matrix: for each scenario it predicts with `dry-run --json`
+(parsing `checkpoint_preview.plan`), then executes a real `run` on the
+identical state, and asserts the predicted will-run set equals the set of
+rules that actually executed (captured via an execution log each rule's
+shell appends to — file-system ground truth, independent of checkpoint
+bookkeeping).
+
+The matrix covers every invalidation source: fresh runs without a
+checkpoint, same-size input rewrites (content-hash path), large-file
+size changes (metadata path), config key changes, profile fill
+differences, `when` condition flips (both directions), deleted outputs,
+legacy checkpoints without manifest hashes, `--target` subsets, and
+`--samples` subsets with queue-level cascades.
+
+If you change `run`'s invalidation or skip semantics (or the preview's),
+add or extend a scenario here. If the change diverges from the preview,
+CI fails immediately with the predicted-vs-executed sets in the message —
+no human has to notice the drift.
+
+A useful self-check while developing in this area is mutation testing:
+temporarily break one side (e.g., drop the `when`-false skip from the
+preview classification, or ignore config-change invalidation in `run`)
+and confirm the matching scenario turns red before reverting.
+
 ---
 
 ## Documentation
