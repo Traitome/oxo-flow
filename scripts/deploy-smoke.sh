@@ -20,8 +20,16 @@
 
 set -u
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BIN="${OXO_BIN:-$REPO_ROOT/target/debug/oxo-flow}"
-WEB="${OXO_WEB:-$REPO_ROOT/target/debug/oxo-flow-web}"
+
+# Binary discovery: explicit override first, then repo-relative, then PATH.
+# (The script may run from anywhere — on a deployed server there is no
+# source checkout next to it.)
+resolve_bin() { # $1=binary name, $2=repo-relative path
+  if [ -x "$REPO_ROOT/$2" ]; then echo "$REPO_ROOT/$2"; return; fi
+  command -v "$1" 2>/dev/null || true
+}
+BIN="${OXO_BIN:-$(resolve_bin oxo-flow target/debug/oxo-flow)}"
+WEB="${OXO_WEB:-$(resolve_bin oxo-flow-web target/debug/oxo-flow-web)}"
 FRONTEND="${OXO_FRONTEND_DIR:-$REPO_ROOT/crates/oxo-flow-web/static}"
 APP_BUNDLE="${OXO_APP:-}"
 WORK="$(mktemp -d /tmp/oxo-deploy-smoke.XXXXXX)"
@@ -45,10 +53,20 @@ start_server() { # $1=logfile, rest=args
   return 1
 }
 
-cleanup() { [ -n "${SRV:-}" ] && kill "$SRV" 2>/dev/null; pkill -f "target/debug/oxo-flow" 2>/dev/null; pkill -f "oxo-flow serve" 2>/dev/null; }
+cleanup() {
+  [ -n "${SRV:-}" ] && kill "$SRV" 2>/dev/null
+  # Kill only servers this script started (by exact binary path) — broad
+  # patterns would also match the caller's own ssh session command line.
+  [ -n "${BIN:-}" ] && pkill -f "$BIN serve" 2>/dev/null
+  [ -n "${WEB:-}" ] && pkill -f "$WEB" 2>/dev/null
+}
 trap cleanup EXIT
 
 echo "== oxo-flow deployment smoke =="
+if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
+  echo "error: oxo-flow binary not found — build it or set OXO_BIN"
+  exit 1
+fi
 echo "binary: $BIN"
 
 # ── 1. Source build, personal mode ──────────────────────────────────────
