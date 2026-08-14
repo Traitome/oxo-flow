@@ -1980,3 +1980,197 @@ async fn web_run_status_carries_real_telemetry() {
         "every sample records memory: {timeline:?}"
     );
 }
+
+// ===========================================================================
+// Share closure + version history (issue #82 P0-6 / P1-14)
+// ===========================================================================
+
+/// P0-6: a share link opens as a public read-only landing page carrying
+/// the pipeline's identity, DAG shape, TOML, and provenance; importing it
+/// creates a copy owned by the importer.
+#[tokio::test]
+async fn web_share_landing_is_public_and_importable() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.base.clone();
+
+    let saved: serde_json::Value = client
+        .post(format!("{base}/api/pipelines"))
+        .json(&serde_json::json!({
+            "name": "share-me", "toml_content": ISO_WORKFLOW, "visibility": "private",
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let pipeline_id = saved["id"].as_str().unwrap().to_string();
+
+    let share: serde_json::Value = client
+        .post(format!("{base}/api/pipelines/{pipeline_id}/share"))
+        .json(&serde_json::json!({"visibility": "link"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let token = share["access_token"].as_str().unwrap().to_string();
+    // The share URL carries the ACTUAL bound port, not a hardcoded 3000.
+    let share_url = share["share_url"].as_str().unwrap();
+    let bound_port = base.rsplit(':').next().unwrap();
+    assert!(
+        share_url.contains(&format!(":{bound_port}/")),
+        "share URL must use the bound port: {share_url}"
+    );
+
+    // The landing payload is readable WITHOUT any session (that is the
+    // whole point of a share link).
+    let landing: serde_json::Value = client
+        .get(format!("{base}/api/share/{token}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(landing["pipeline"]["name"], "share-me");
+    assert_eq!(landing["pipeline"]["rules_count"], 1);
+    assert!(
+        landing["dag"].as_array().unwrap().iter().any(|r| r == "hello"),
+        "DAG summary lists rule names: {landing}"
+    );
+    assert!(landing["toml_content"].as_str().unwrap().contains("hello"));
+
+    // Import creates a copy (named with the imported suffix).
+    let imported: serde_json::Value = client
+        .post(format!("{base}/api/pipelines/import"))
+        .json(&serde_json::json!({"url": share_url}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let imported_id = imported["pipeline_id"].as_str().unwrap().to_string();
+    let copy: serde_json::Value = client
+        .get(format!("{base}/api/pipelines/{imported_id}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(copy["name"].as_str().unwrap().contains("imported"));
+    assert_eq!(copy["toml_content"], ISO_WORKFLOW);
+
+    // Expired links are gone.
+    let expired: serde_json::Value = client
+        .post(format!("{base}/api/pipelines/{pipeline_id}/share"))
+        .json(&serde_json::json!({"visibility": "link", "expires_in_days": 0}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let exp_token = expired["access_token"].as_str().unwrap();
+    let gone = client
+        .get(format!("{base}/api/share/{exp_token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(gone.status(), 410, "expired share must return GONE");
+}
+
+/// P1-14: every save/update snapshots a revision; rollback restores an old
+/// snapshot and keeps history intact (nothing is lost).
+#[tokio::test]
+async fn web_pipeline_revisions_and_rollback() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.base.clone();
+
+    let original = ISO_WORKFLOW.replace("hello", "hello_v1");
+    let mutated = ISO_WORKFLOW.replace("hello", "hello_v2");
+
+    let saved: serde_json::Value = client
+        .post(format!("{base}/api/pipelines"))
+        .json(&serde_json::json!({"name": "hist", "toml_content": original}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let pipeline_id = saved["id"].as_str().unwrap().to_string();
+
+    // One update → two revisions (initial save + pre-update snapshot).
+    let updated: serde_json::Value = client
+        .put(format!("{base}/api/pipelines/{pipeline_id}"))
+        .json(&serde_json::json!({"toml_content": mutated}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(updated["toml_content"].as_str().unwrap().contains("hello_v2"));
+
+    let revisions: serde_json::Value = client
+        .get(format!("{base}/api/pipelines/{pipeline_id}/revisions"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let revs = revisions.as_array().unwrap();
+    assert_eq!(revs.len(), 2, "one revision per save/update: {revisions}");
+
+    // The OLDEST revision holds the original content.
+    let oldest_id = revs
+        .iter()
+        .min_by_key(|r| r["created_at"].as_str().unwrap_or(""))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let snapshot: serde_json::Value = client
+        .get(format!("{base}/api/pipelines/{pipeline_id}/revisions/{oldest_id}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        snapshot["toml_content"].as_str().unwrap().contains("hello_v1"),
+        "oldest snapshot holds the original: {snapshot}"
+    );
+
+    // Rollback restores the original content and records ANOTHER revision.
+    let rolled: serde_json::Value = client
+        .post(format!("{base}/api/pipelines/{pipeline_id}/rollback"))
+        .json(&serde_json::json!({"revision_id": oldest_id}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(rolled["toml_content"].as_str().unwrap().contains("hello_v1"));
+
+    let after: serde_json::Value = client
+        .get(format!("{base}/api/pipelines/{pipeline_id}/revisions"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(after.as_array().unwrap().len(), 3, "rollback adds a revision");
+}

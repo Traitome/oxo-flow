@@ -213,6 +213,18 @@ pub fn build_router(mode: &str) -> Router {
         .route(
             "/api/pipelines/{id}",
             delete(workflow::handlers::delete_pipeline),
+        )
+        .route(
+            "/api/pipelines/{id}/revisions",
+            get(workflow::handlers::list_revisions),
+        )
+        .route(
+            "/api/pipelines/{id}/revisions/{rev}",
+            get(workflow::handlers::get_revision),
+        )
+        .route(
+            "/api/pipelines/{id}/rollback",
+            post(workflow::handlers::rollback_pipeline),
         );
 
     // ---- Run routes ----
@@ -408,6 +420,10 @@ pub fn build_router(mode: &str) -> Router {
         .route(
             "/api/pipelines/import",
             post(collaboration::handlers::import_pipeline),
+        )
+        .route(
+            "/api/share/{token}",
+            get(collaboration::handlers::get_share_landing),
         );
 
     // ---- Observability routes ----
@@ -646,6 +662,9 @@ async fn require_auth(
         // EventSource cannot set an Authorization header; sse_events
         // validates ?token= against the sessions table itself.
         || path == "/api/events"
+        // Share landing pages are the product of a share link — the share
+        // token IS the authorization (issue #82 P0-6).
+        || path.starts_with("/api/share/")
         // AI config GET is public (feature discoverability); writes are
         // gated (admin-only) inside the handler.
         || (path == "/api/ai/config" && method == axum::http::Method::GET)

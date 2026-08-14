@@ -23,6 +23,40 @@ fn can_write_pipeline(user: &CurrentUser, row: &models::PipelineRow) -> bool {
     user.is_admin() || row.user_id == user.id
 }
 
+/// Snapshot a pipeline into `pipeline_revisions` (issue #82 P1-14). Keeps
+/// the last 50 revisions per pipeline; older snapshots are pruned.
+async fn record_revision(
+    pool: &sqlx::SqlitePool,
+    pipeline_id: &str,
+    user_id: &str,
+    version: &str,
+    toml_content: &str,
+) {
+    let now = chrono::Utc::now().to_rfc3339();
+    let _ = sqlx::query(
+        "INSERT INTO pipeline_revisions (id, pipeline_id, user_id, version, toml_content, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(pipeline_id)
+    .bind(user_id)
+    .bind(version)
+    .bind(toml_content)
+    .bind(&now)
+    .execute(pool)
+    .await;
+    // Keep the history bounded: drop everything beyond the newest 50.
+    let _ = sqlx::query(
+        "DELETE FROM pipeline_revisions WHERE pipeline_id = ? AND id NOT IN \
+         (SELECT id FROM pipeline_revisions WHERE pipeline_id = ? \
+          ORDER BY created_at DESC, rowid DESC LIMIT 50)",
+    )
+    .bind(pipeline_id)
+    .bind(pipeline_id)
+    .execute(pool)
+    .await;
+}
+
 // ---------------------------------------------------------------------------
 // Error helpers
 // ---------------------------------------------------------------------------
@@ -352,6 +386,9 @@ pub async fn save_pipeline(
         )
     })?;
 
+    // The initial save is revision 1 of the pipeline's history.
+    record_revision(pool, &id, &user_id, version, toml_content).await;
+
     Ok(Json(Pipeline {
         id,
         user_id: user_id.clone(),
@@ -539,6 +576,8 @@ pub async fn update_pipeline(
         .unwrap_or(existing.rules_count);
 
     let now = now_iso();
+    // Snapshot the pre-update content so rollback can restore it.
+    record_revision(pool, &id, &user.id, &existing.version, &existing.toml_content).await;
     sqlx::query(
         "UPDATE pipelines SET name = ?, toml_content = ?, visibility = ?, rules_count = ?, updated_at = ? WHERE id = ?",
     )
@@ -1063,4 +1102,241 @@ pub async fn parse_samplesheet(Json(req): Json<serde_json::Value>) -> ApiResult<
             lines[0].split(',').map(|s| s.trim().to_string()).collect::<Vec<_>>()
         }
     })))
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline version history (issue #82 P1-14)
+// ---------------------------------------------------------------------------
+
+/// GET /api/pipelines/{id}/revisions — snapshot list, newest first.
+pub async fn list_revisions(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<Vec<serde_json::Value>> {
+    let user = resolve(authenticated.as_ref());
+    let pool = get_pool()?;
+
+    let pipeline: Option<models::PipelineRow> =
+        sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| {
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    format!("DB error fetching pipeline {id}: {e}"),
+                )
+            })?;
+    let pipeline = pipeline.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Pipeline {id} not found"),
+        )
+    })?;
+    if !can_read_pipeline(&user, &pipeline) {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Pipeline {id} not found"),
+        ));
+    }
+
+    let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+        "SELECT id, version, user_id, created_at FROM pipeline_revisions \
+         WHERE pipeline_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 50",
+    )
+    .bind(&id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            format!("DB error listing revisions: {e}"),
+        )
+    })?;
+
+    let revisions: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|(rid, version, user_id, created_at)| {
+            serde_json::json!({
+                "id": rid,
+                "version": version,
+                "actor": user_id,
+                "created_at": created_at,
+            })
+        })
+        .collect();
+    Ok(Json(revisions))
+}
+
+/// GET /api/pipelines/{id}/revisions/{rev} — one snapshot's full TOML.
+pub async fn get_revision(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path((id, rev)): Path<(String, String)>,
+) -> ApiResult<serde_json::Value> {
+    let user = resolve(authenticated.as_ref());
+    let pool = get_pool()?;
+
+    let pipeline: Option<models::PipelineRow> =
+        sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| {
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    format!("DB error fetching pipeline {id}: {e}"),
+                )
+            })?;
+    let pipeline = pipeline.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Pipeline {id} not found"),
+        )
+    })?;
+    if !can_read_pipeline(&user, &pipeline) {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Pipeline {id} not found"),
+        ));
+    }
+
+    let row: Option<(String, String, String, String)> = sqlx::query_as(
+        "SELECT id, version, user_id, toml_content FROM pipeline_revisions \
+         WHERE id = ? AND pipeline_id = ?",
+    )
+    .bind(&rev)
+    .bind(&id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            format!("DB error fetching revision: {e}"),
+        )
+    })?;
+    let (rid, version, actor, toml_content) = row.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Revision {rev} not found"),
+        )
+    })?;
+    Ok(Json(serde_json::json!({
+        "id": rid,
+        "pipeline_id": id,
+        "version": version,
+        "actor": actor,
+        "toml_content": toml_content,
+    })))
+}
+
+/// POST /api/pipelines/{id}/rollback — restore a revision as the current
+/// pipeline (creating a new revision, so nothing is lost).
+pub async fn rollback_pipeline(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<Pipeline> {
+    let user = resolve(authenticated.as_ref());
+    let pool = get_pool()?;
+
+    let pipeline: Option<models::PipelineRow> =
+        sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| {
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    format!("DB error fetching pipeline {id}: {e}"),
+                )
+            })?;
+    let pipeline = pipeline.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Pipeline {id} not found"),
+        )
+    })?;
+    if !can_write_pipeline(&user, &pipeline) {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Pipeline {id} not found"),
+        ));
+    }
+
+    let revision_id = req
+        .get("revision_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            err(
+                StatusCode::BAD_REQUEST,
+                "MISSING",
+                "revision_id required".into(),
+            )
+        })?;
+    let rev: Option<(String,)> = sqlx::query_as(
+        "SELECT toml_content FROM pipeline_revisions WHERE id = ? AND pipeline_id = ?",
+    )
+    .bind(revision_id)
+    .bind(&id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            format!("DB error fetching revision: {e}"),
+        )
+    })?;
+    let toml_content = rev
+        .map(|r| r.0)
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "NOT_FOUND", "Revision not found".into()))?;
+
+    // Restore = snapshot current + write the old content back.
+    record_revision(pool, &id, &user.id, &pipeline.version, &pipeline.toml_content).await;
+    let rules_count = oxo_flow_core::WorkflowConfig::parse(&toml_content)
+        .map(|wf| wf.rules.len() as i64)
+        .unwrap_or(pipeline.rules_count);
+    let now = now_iso();
+    sqlx::query(
+        "UPDATE pipelines SET toml_content = ?, rules_count = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(&toml_content)
+    .bind(rules_count)
+    .bind(&now)
+    .bind(&id)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("DB error rolling back pipeline {id}: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
+
+    Ok(Json(Pipeline {
+        id,
+        user_id: pipeline.user_id,
+        name: pipeline.name,
+        version: pipeline.version,
+        toml_content,
+        rules_count: rules_count as usize,
+        forked_from: pipeline.forked_from,
+        visibility: pipeline.visibility,
+        created_at: pipeline.created_at,
+        updated_at: now,
+    }))
 }

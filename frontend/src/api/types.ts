@@ -104,6 +104,17 @@ export interface RunInstance {
   exit_code?: number;
 }
 
+/** Public payload of a share link's landing page (issue #82 P0-6). */
+export interface ShareLanding {
+  pipeline: { name: string; version: string; rules_count: number; visibility: string };
+  dag: string[];
+  toml_content: string;
+  owner?: string | null;
+  created_at: string;
+  expires_at?: string | null;
+  recent_run?: { status: string; finished_at?: string } | null;
+}
+
 export interface RunStatus {
   status: string; phase: string;
   nodes: Array<{ rule: string; status: string; started_at: string | null; duration_ms: number | null; exit_code: number | null }>;

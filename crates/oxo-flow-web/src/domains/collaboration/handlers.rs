@@ -313,3 +313,106 @@ pub async fn import_pipeline(
         pipeline_id: import_id,
     }))
 }
+
+/// GET /api/share/{token} — public read-only landing payload for a share
+/// link (issue #82 P0-6): pipeline identity + DAG summary + the TOML +
+/// the most recent run's outcome. The share row IS the authorization —
+/// this endpoint deliberately sits on the anonymous whitelist so a share
+/// URL opens without a session.
+pub async fn get_share_landing(Path(token): Path<String>) -> ApiResult<serde_json::Value> {
+    let pool = get_pool()?;
+
+    let share: Option<models::ShareRow> = sqlx::query_as("SELECT * FROM shares WHERE token = ?")
+        .bind(&token)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error looking up share by token: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
+    let share = share.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            "Share not found or expired".into(),
+        )
+    })?;
+    if let Some(ref expires) = share.expires_at
+        && let Ok(exp) = chrono::DateTime::parse_from_rfc3339(expires)
+        && chrono::Utc::now() > exp
+    {
+        return Err(err(
+            StatusCode::GONE,
+            "EXPIRED",
+            "Share link has expired".into(),
+        ));
+    }
+
+    let pipeline: Option<models::PipelineRow> =
+        sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
+            .bind(&share.pipeline_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| {
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    "Internal database error".into(),
+                )
+            })?;
+    let pipeline = pipeline.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            "Source pipeline no longer exists".into(),
+        )
+    })?;
+
+    // DAG summary: rule names in execution order (no full layout — the
+    // landing page shows the shape, the importer gets the TOML).
+    let dag_names: Vec<String> = oxo_flow_core::WorkflowConfig::parse(&pipeline.toml_content)
+        .ok()
+        .and_then(|wf| oxo_flow_core::dag::WorkflowDag::from_rules(&wf.rules).ok())
+        .and_then(|d| d.execution_order().ok())
+        .unwrap_or_default();
+
+    // Most recent terminal run as provenance evidence.
+    let recent: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT status, finished_at FROM runs WHERE pipeline_id = ? \
+         AND status IN ('completed', 'failed', 'cancelled') \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(&share.pipeline_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let owner_username: Option<String> = sqlx::query_scalar(
+        "SELECT username FROM users WHERE id = ?",
+    )
+    .bind(&share.owner_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    Ok(Json(serde_json::json!({
+        "pipeline": {
+            "name": pipeline.name,
+            "version": pipeline.version,
+            "rules_count": pipeline.rules_count,
+            "visibility": pipeline.visibility,
+        },
+        "dag": dag_names,
+        "toml_content": pipeline.toml_content,
+        "owner": owner_username,
+        "created_at": share.created_at,
+        "expires_at": share.expires_at,
+        "recent_run": recent.map(|(status, finished_at)| {
+            serde_json::json!({"status": status, "finished_at": finished_at})
+        }),
+    })))
+}

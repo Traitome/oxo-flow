@@ -4,7 +4,7 @@ import type {
   ValidateResponse, ParseResponse, Pipeline, DagJson, DagStatus,
   RunItem, RunStatus, Diagnostics, RetryPlan, RunResponse,
   AiConfig, AiTranslateResponse, AiExplainResponse, AiInterpretResponse, AiOptimizeResponse,
-  Template, ForkResponse, ShareResponse, ImportResponse,
+  Template, ForkResponse, ShareResponse, ImportResponse, ShareLanding,
   DataAnalysis, ReferenceResult, AuditLogResponse, SearchResponse,
   DagEditResponse, DataPerceptionReport, MonitorStatus, RunInstance,
   ReportData, AiConfigFull, ServerAiConfig, UserAiConfig, AiConfigUpdate,
@@ -151,6 +151,10 @@ export const api = {
   sharePipeline: (id: string, visibility: string, expiresInDays?: number) =>
     post<ShareResponse>(`/api/pipelines/${id}/share`, { visibility, expires_in_days: expiresInDays }),
   importPipeline: (url: string) => post<ImportResponse>('/api/pipelines/import', { url }),
+  shareLanding: (token: string) => get<ShareLanding>(`/api/share/${token}`),
+  listRevisions: (id: string) => get<Array<{ id: string; version: string; actor: string; created_at: string }>>(`/api/pipelines/${id}/revisions`),
+  getRevision: (id: string, rev: string) => get<{ id: string; version: string; actor: string; toml_content: string }>(`/api/pipelines/${id}/revisions/${rev}`),
+  rollbackPipeline: (id: string, revision_id: string) => post<Pipeline>(`/api/pipelines/${id}/rollback`, { revision_id }),
 };
 
 export function createEventSource(): EventSource {

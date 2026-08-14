@@ -321,6 +321,15 @@ impl StorageBackend for SqliteBackend {
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS pipeline_revisions (
+                id TEXT PRIMARY KEY,
+                pipeline_id TEXT NOT NULL,
+                user_id TEXT NOT NULL DEFAULT 'default',
+                version TEXT NOT NULL DEFAULT '0.1.0',
+                toml_content TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
             "#,
         )
         .execute(&self.pool)
@@ -337,6 +346,7 @@ impl StorageBackend for SqliteBackend {
             CREATE INDEX IF NOT EXISTS idx_templates_category ON templates(category);
             CREATE INDEX IF NOT EXISTS idx_shares_pipeline_id ON shares(pipeline_id);
             CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_id ON chat_sessions(user_id);
+            CREATE INDEX IF NOT EXISTS idx_pipeline_revisions_pipeline ON pipeline_revisions(pipeline_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_shares_token ON shares(token);
             CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
 
