@@ -2215,12 +2215,12 @@ async fn web_webhook_fires_on_run_completion_with_hmac() {
     let captured: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     let captured_thread = captured.clone();
     let handle = std::thread::spawn(move || {
-        // Accept up to two connections (delivery + retry); the first 200
-        // answer stops the retry loop.
-        for _ in 0..2 {
-            let Ok((mut stream, _)) = listener.accept() else {
-                break;
-            };
+        // One delivery: accept, read, respond 200 (a successful answer
+        // stops the sender's retry loop).
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        {
             stream.set_read_timeout(Some(Duration::from_secs(20))).ok();
             use std::io::Read as _;
             let mut buf = [0u8; 8192];
@@ -2254,7 +2254,6 @@ async fn web_webhook_fires_on_run_completion_with_hmac() {
             *captured_thread.lock().unwrap() = request.clone();
             use std::io::Write as _;
             let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
-            break;
         }
     });
 

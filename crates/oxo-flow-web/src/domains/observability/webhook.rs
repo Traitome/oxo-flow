@@ -7,6 +7,15 @@ use oxo_flow_core::webhook::{
     HttpMethod, SignatureScheme, WebhookClient, WebhookConfig, WebhookEvent, WebhookPayload,
 };
 
+/// The runs row fields notify_terminal needs (workflow name, timestamps,
+/// workdir).
+type RunSummaryRow = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
 /// One config row (id=1) persisted by PUT /api/webhook.
 pub struct WebhookSettings {
     pub enabled: bool,
@@ -62,12 +71,7 @@ pub async fn notify_terminal(run_id: &str, final_state: &str) {
         Ok(p) => p,
         Err(_) => return,
     };
-    let row: Option<(
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    )> = sqlx::query_as(
+    let row: Option<RunSummaryRow> = sqlx::query_as(
         "SELECT workflow_name, started_at, finished_at, workdir FROM runs WHERE id = ?",
     )
     .bind(run_id)

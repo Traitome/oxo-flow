@@ -372,7 +372,7 @@ pub async fn list_runs(
             "Database not available".into(),
         )
     })?;
-    let limit = params.limit.unwrap_or(100).min(500).max(1) as i64;
+    let limit = params.limit.unwrap_or(100).clamp(1, 500) as i64;
 
     // Ownership scoping (issue #82 P0-4): non-admins see their own runs
     // only; admins see the whole fleet. Filters compose on top.
@@ -382,14 +382,14 @@ pub async fn list_runs(
         where_clauses.push("user_id = ?".to_string());
         binds.push(user.id.clone());
     }
-    if let Some(status) = &params.status {
-        if matches!(
+    if let Some(status) = &params.status
+        && matches!(
             status.as_str(),
             "queued" | "running" | "paused" | "completed" | "failed" | "cancelled"
-        ) {
-            where_clauses.push("status = ?".to_string());
-            binds.push(status.clone());
-        }
+        )
+    {
+        where_clauses.push("status = ?".to_string());
+        binds.push(status.clone());
     }
     if let Some(q) = &params.q
         && !q.trim().is_empty()
@@ -1049,11 +1049,10 @@ pub async fn cancel_run(
                 .fetch_optional(pool)
                 .await
                 .unwrap_or(None);
-        if let Some(cluster_row) = cluster_row {
-            if let Err(e) = crate::domains::clusters::remote::cancel_remote(&cluster_row, &id).await
-            {
-                tracing::warn!("remote cancel failed for run {id}: {e}");
-            }
+        if let Some(cluster_row) = cluster_row
+            && let Err(e) = crate::domains::clusters::remote::cancel_remote(&cluster_row, &id).await
+        {
+            tracing::warn!("remote cancel failed for run {id}: {e}");
         }
         crate::domains::clusters::remote::unregister_remote(&id);
     } else {
@@ -1574,13 +1573,14 @@ pub async fn resume_checkpoint(
         )
     })?;
 
-    let mut args: Vec<std::ffi::OsString> = Vec::new();
-    args.push("resume".into());
-    args.push(checkpoint.into_os_string());
-    args.push("--workdir".into());
-    args.push(workdir.clone().into());
-    args.push("-j".into());
-    args.push(jobs.to_string().into());
+    let args: Vec<std::ffi::OsString> = vec![
+        "resume".into(),
+        checkpoint.into_os_string(),
+        "--workdir".into(),
+        workdir.clone().into(),
+        "-j".into(),
+        jobs.to_string().into(),
+    ];
     crate::executor::spawn_background_run_with_args(
         new_run_id.clone(),
         user.id.clone(),

@@ -564,23 +564,19 @@ fn spawn_log_tailer(run_id: String, workdir: PathBuf) {
                         "rule_skipped",
                         line.trim_start_matches('⊝').trim().to_string(),
                     ))
-                } else if let Some(rule) = line
-                    .strip_prefix("✗ rule '")
-                    .and_then(|l| l.split_once("'"))
-                    .map(|(r, _)| r)
-                {
-                    Some(("rule_failed", rule.to_string()))
                 } else {
-                    None
+                    line.strip_prefix("✗ rule '")
+                        .and_then(|l| l.split_once("'"))
+                        .map(|(rule, _)| ("rule_failed", rule.to_string()))
                 };
-                if let Some((event_type, rule)) = event {
-                    if !rule.is_empty() {
-                        broadcast_event_for(
-                            event_type,
-                            &serde_json::json!({"run_id": run_id, "rule": rule}),
-                            user_id.as_deref(),
-                        );
-                    }
+                if let Some((event_type, rule)) = event
+                    && !rule.is_empty()
+                {
+                    broadcast_event_for(
+                        event_type,
+                        &serde_json::json!({"run_id": run_id, "rule": rule}),
+                        user_id.as_deref(),
+                    );
                 }
             }
         }
