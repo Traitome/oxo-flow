@@ -29,6 +29,15 @@ pub struct WebhookConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret: Option<String>,
 
+    /// Signature scheme for the `X-OxoFlow-Signature` header.
+    ///
+    /// Defaults to RFC-2104 HMAC-SHA256 (`hmac-sha256=<hex>`). The legacy
+    /// `sha256-keyed` scheme (`sha256=<hex(sha256(secret‖body))>`) predates
+    /// the standard and is frozen for existing consumers (issue #67 §4);
+    /// it will be removed in a future major version.
+    #[serde(default)]
+    pub signature_scheme: SignatureScheme,
+
     /// Timeout for webhook request in seconds.
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
@@ -52,6 +61,17 @@ fn default_timeout() -> u64 {
 
 fn default_retries() -> u32 {
     3
+}
+
+/// Signature scheme for the `X-OxoFlow-Signature` header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SignatureScheme {
+    /// RFC-2104 HMAC-SHA256 over the payload body (the default).
+    #[default]
+    HmacSha256,
+    /// Legacy keyed SHA-256 (`sha256(secret‖body)`); frozen, deprecated.
+    Sha256Keyed,
 }
 
 /// HTTP method for webhook requests.
@@ -220,9 +240,9 @@ impl WebhookClient {
             request = request.header(key, value);
         }
 
-        // Add HMAC signature if secret is configured
+        // Add signature if a secret is configured.
         if let Some(ref secret) = self.config.secret {
-            let signature = self.compute_hmac(body, secret);
+            let signature = self.compute_signature(body, secret);
             request = request.header("X-OxoFlow-Signature", signature);
         }
 
@@ -256,13 +276,27 @@ impl WebhookClient {
         Ok(())
     }
 
-    fn compute_hmac(&self, body: &str, secret: &str) -> String {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(secret.as_bytes());
-        hasher.update(body.as_bytes());
-        let result = hasher.finalize();
-        format!("sha256={}", hex::encode(result))
+    fn compute_signature(&self, body: &str, secret: &str) -> String {
+        match self.config.signature_scheme {
+            SignatureScheme::HmacSha256 => {
+                use hmac::{Hmac, Mac};
+                use sha2::Sha256;
+                let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
+                    .expect("HMAC accepts keys of any size");
+                mac.update(body.as_bytes());
+                format!("hmac-sha256={}", hex::encode(mac.finalize().into_bytes()))
+            }
+            SignatureScheme::Sha256Keyed => {
+                tracing::warn!(
+                    "webhook signature scheme 'sha256-keyed' is deprecated — switch to 'hmac-sha256'"
+                );
+                use sha2::{Digest, Sha256};
+                let mut hasher = Sha256::new();
+                hasher.update(secret.as_bytes());
+                hasher.update(body.as_bytes());
+                format!("sha256={}", hex::encode(hasher.finalize()))
+            }
+        }
     }
 }
 
@@ -396,21 +430,77 @@ mod tests {
     }
 
     #[test]
-    fn hmac_signature() {
+    fn hmac_sha256_matches_rfc4231_case1() {
+        // RFC 4231 test case 1: key = 0x0b × 20, data = "Hi There".
+        let key: String = std::iter::repeat_n(0x0bu8, 20).map(char::from).collect();
+        let config = WebhookConfig {
+            url: "https://example.com".to_string(),
+            method: HttpMethod::Post,
+            headers: HashMap::new(),
+            events: vec![WebhookEvent::WorkflowCompleted],
+            secret: Some(key),
+            signature_scheme: SignatureScheme::HmacSha256,
+            timeout_secs: 30,
+            max_retries: 0,
+        };
+        let client = WebhookClient::new(config);
+        let sig = client.compute_signature("Hi There", &"\u{0b}".repeat(20));
+        assert_eq!(
+            sig,
+            "hmac-sha256=b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+        );
+    }
+
+    #[test]
+    fn hmac_sha256_matches_rfc4231_case2() {
+        // RFC 4231 test case 2: key = "Jefe", data = "what do ya want for nothing?".
+        let config = WebhookConfig {
+            url: "https://example.com".to_string(),
+            method: HttpMethod::Post,
+            headers: HashMap::new(),
+            events: vec![WebhookEvent::WorkflowCompleted],
+            secret: Some("Jefe".to_string()),
+            signature_scheme: SignatureScheme::HmacSha256,
+            timeout_secs: 30,
+            max_retries: 0,
+        };
+        let client = WebhookClient::new(config);
+        let sig = client.compute_signature("what do ya want for nothing?", "Jefe");
+        assert_eq!(
+            sig,
+            "hmac-sha256=5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+    }
+
+    #[test]
+    fn legacy_sha256_keyed_still_available() {
         let config = WebhookConfig {
             url: "https://example.com".to_string(),
             method: HttpMethod::Post,
             headers: HashMap::new(),
             events: vec![WebhookEvent::WorkflowCompleted],
             secret: Some("test-secret".to_string()),
+            signature_scheme: SignatureScheme::Sha256Keyed,
             timeout_secs: 30,
             max_retries: 0,
         };
-
         let client = WebhookClient::new(config);
-        let sig = client.compute_hmac("test-body", "test-secret");
+        let sig = client.compute_signature("test-body", "test-secret");
         assert!(sig.starts_with("sha256="));
         assert_eq!(sig.len(), 71); // sha256= + 64 hex chars
+    }
+
+    #[test]
+    fn default_scheme_is_hmac_sha256() {
+        let config: WebhookConfig =
+            serde_json::from_str(r#"{"url": "https://example.com", "secret": "k"}"#).unwrap();
+        assert_eq!(config.signature_scheme, SignatureScheme::HmacSha256);
+
+        let explicit: WebhookConfig = serde_json::from_str(
+            r#"{"url": "https://example.com", "signature_scheme": "sha256-keyed"}"#,
+        )
+        .unwrap();
+        assert_eq!(explicit.signature_scheme, SignatureScheme::Sha256Keyed);
     }
 
     // ── HTTP method variants ───────────────────────────────────────────
@@ -446,6 +536,7 @@ mod tests {
             headers: std::collections::HashMap::new(),
             events: vec![WebhookEvent::WorkflowCompleted],
             secret: None,
+            signature_scheme: SignatureScheme::HmacSha256,
             timeout_secs: 5,
             max_retries: 0,
         };
@@ -471,11 +562,12 @@ mod tests {
             headers: std::collections::HashMap::new(),
             events: vec![WebhookEvent::WorkflowCompleted],
             secret: Some("".to_string()),
+            signature_scheme: SignatureScheme::HmacSha256,
             timeout_secs: 5,
             max_retries: 0,
         });
-        let sig = client.compute_hmac("body", "");
-        assert!(sig.starts_with("sha256="));
+        let sig = client.compute_signature("body", "");
+        assert!(sig.starts_with("hmac-sha256="));
     }
 
     #[test]
@@ -486,11 +578,12 @@ mod tests {
             headers: std::collections::HashMap::new(),
             events: vec![WebhookEvent::WorkflowCompleted],
             secret: Some("key".to_string()),
+            signature_scheme: SignatureScheme::HmacSha256,
             timeout_secs: 5,
             max_retries: 0,
         });
-        let sig = client.compute_hmac("", "key");
-        assert!(sig.starts_with("sha256="));
+        let sig = client.compute_signature("", "key");
+        assert!(sig.starts_with("hmac-sha256="));
     }
 
     // ── Slack payload conversion variants ────────────────────────────────
