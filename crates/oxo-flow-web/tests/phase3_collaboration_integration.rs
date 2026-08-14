@@ -166,7 +166,13 @@ async fn test_hpc_mode_has_hpc_route() {
         .body(Body::empty())
         .unwrap();
     let resp = app_hpc().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    // The route exists in hpc mode, but cluster internals are NOT
+    // anonymous (issue #82 P0-5): without a session it must 401, not 200.
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "/api/hpc must require authentication in hpc mode"
+    );
 }
 
 #[tokio::test]

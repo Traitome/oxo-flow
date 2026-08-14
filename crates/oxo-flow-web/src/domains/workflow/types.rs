@@ -299,9 +299,9 @@ mod tests {
             pipeline_id: "p1".into(),
             name: "test".into(),
             version: "1.0".into(),
-            rules: vec![shell: None,
-            RuleSummary {
+            rules: vec![RuleSummary {
                 name: "rule1".into(),
+                shell: None,
                 inputs: vec!["in.txt".into()],
                 outputs: vec!["out.txt".into()],
                 environment: Some("conda".into()),
@@ -358,7 +358,12 @@ mod tests {
                 message: "missing input".into(),
                 rule: Some("rule1".into()),
                 suggestion: Some("add input".into()),
+                line: Some(3),
             }],
+            rules: 1,
+            dependencies: 0,
+            missing_inputs: vec!["in.txt".into()],
+            warnings: vec![],
         };
         let json = serde_json::to_string(&resp).unwrap();
         let back: ValidateResponse = serde_json::from_str(&json).unwrap();
