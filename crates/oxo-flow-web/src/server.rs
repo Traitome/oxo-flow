@@ -251,6 +251,10 @@ pub fn build_router(mode: &str) -> Router {
             post(execution::handlers::resume_run),
         )
         .route(
+            "/api/runs/{id}/preview",
+            get(execution::handlers::get_run_preview),
+        )
+        .route(
             "/api/runs/{id}/ai-status",
             get(execution::handlers::get_ai_status),
         )

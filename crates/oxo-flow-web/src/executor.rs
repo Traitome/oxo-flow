@@ -84,6 +84,28 @@ fn extract_invalidation_summary(log: &str) -> Option<String> {
     }
 }
 
+/// Extract the CLI dry-run's machine-readable preview from the mixed
+/// stdout/stderr log. The banner and human sections interleave with the
+/// JSON — scan from the first occurrence of `checkpoint_preview`, back up
+/// to the enclosing `{`, and grow the slice until the document parses.
+pub fn extract_dry_run_preview(log: &str) -> Option<serde_json::Value> {
+    let start = log.find("\"checkpoint_preview\"")?;
+    // Back up to the enclosing '{' of the JSON document.
+    let object_start = log[..start].rfind('{')?;
+    let tail = &log[object_start..];
+    // Grow the slice until serde accepts it (handles nested braces).
+    let mut end = 1;
+    while end <= tail.len() {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&tail[..end]) {
+            if value.get("checkpoint_preview").is_some() {
+                return Some(value);
+            }
+        }
+        end += 1;
+    }
+    None
+}
+
 /// Map a subprocess exit status to the run status vocabulary.
 fn final_status_from_exit(success: bool) -> &'static str {
     if success { "completed" } else { "failed" }
@@ -126,14 +148,30 @@ pub fn build_cli_args(
 ) -> Vec<std::ffi::OsString> {
     let mut args: Vec<std::ffi::OsString> = Vec::new();
     if flags.dry_run {
+        // dry-run shares --samples/-t semantics with run (issue #79 P2:
+        // the web preview dropped them) and emits a machine-readable
+        // instance-level preview via --json.
         args.push("dry-run".into());
+        args.push("--json".into());
     } else {
         args.push("run".into());
     }
     args.push(workflow_file.as_os_str().to_owned());
     args.push("--workdir".into());
     args.push(run_dir.as_os_str().to_owned());
-    if !flags.dry_run {
+    if flags.dry_run {
+        if !flags.samples.is_empty() {
+            // --samples filters to the named subset (the CLI also accepts
+            // first:N / ready). --sample would APPEND phantom samples —
+            // the issue #79 P1-07 mis-wiring.
+            args.push("--samples".into());
+            args.push(flags.samples.join(",").into());
+        }
+        for target in &flags.targets {
+            args.push("-t".into());
+            args.push(target.into());
+        }
+    } else {
         if flags.keep_going {
             args.push("--keep-going".into());
         }
@@ -142,9 +180,6 @@ pub fn build_cli_args(
             args.push(jobs.to_string().into());
         }
         if !flags.samples.is_empty() {
-            // --samples filters to the named subset (the CLI also accepts
-            // first:N / ready). --sample would APPEND phantom samples —
-            // the issue #79 P1-07 mis-wiring.
             args.push("--samples".into());
             args.push(flags.samples.join(",").into());
         }
@@ -345,6 +380,15 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
     {
         error!("Failed to update final status for run {run_id}: {e}");
     }
+    // Persist the dry-run preview (instance-level plan) next to the log so
+    // /api/runs/{id}/preview can serve it without re-parsing the log.
+    if let Ok(log) = std::fs::read_to_string(log_path)
+        && let Some(preview) = extract_dry_run_preview(&log)
+        && let Ok(json) = serde_json::to_string_pretty(&preview)
+        && let Some(dir) = log_path.parent()
+    {
+        let _ = std::fs::write(dir.join("dry-run-preview.json"), json);
+    }
     info!("Run {run_id} finished: {final_state}");
 
     // Broadcast the terminal event (documented in the SSE API):
@@ -491,7 +535,9 @@ mod tests {
         );
         assert!(strs.contains(&"-t".to_string()));
         assert!(strs.contains(&"align".to_string()));
-        // dry-run omits execution-only flags
+        // dry-run shares --samples/-t (issue #79 P2: the preview dropped
+        // them) and asks for the machine-readable instance-level plan,
+        // but omits execution-only flags (-j / --keep-going).
         let dry = RunFlags {
             dry_run: true,
             ..flags
@@ -502,7 +548,13 @@ mod tests {
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
         assert_eq!(strs[0], "dry-run");
-        assert!(!strs.contains(&"--samples".to_string()));
+        assert!(strs.contains(&"--json".to_string()));
+        assert!(strs.contains(&"--samples".to_string()));
+        assert!(strs.contains(&"S1,S2".to_string()));
+        assert!(strs.contains(&"-t".to_string()));
+        assert!(strs.contains(&"align".to_string()));
+        assert!(!strs.contains(&"--keep-going".to_string()));
+        assert!(!strs.contains(&"-j".to_string()));
     }
 
     #[test]
@@ -573,5 +625,37 @@ mod tests {
         assert!(!re.is_match("root /etc/passwd"));
         assert!(!re.is_match(""));
         assert!(!re.is_match("UPPERCASE"));
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+
+    #[test]
+    fn extracts_preview_from_mixed_log() {
+        // Banner + human lines interleave with the JSON document (the real
+        // execution.log shape).
+        let log = "oxo-flow v0.11.0 — banner line\n\
+                   DAG: (dry-run) 2 rules would execute\n\
+                   {\"checkpoint_preview\":{\"summary\":{\"will_run\":2,\"will_skip\":0},\"plan\":[{\"name\":\"gather_cohort_S1\",\"status\":\"run-never-completed\"},{\"name\":\"gather_cohort_S2\",\"status\":\"run-never-completed\"}]},\"execution_order\":[\"gather_cohort_S1\",\"gather_cohort_S2\"]}\n";
+        let preview = extract_dry_run_preview(log).expect("preview must parse");
+        assert_eq!(preview["checkpoint_preview"]["summary"]["will_run"], 2);
+        let plan = preview["checkpoint_preview"]["plan"].as_array().unwrap();
+        assert_eq!(plan.len(), 2);
+        assert_eq!(plan[0]["name"], "gather_cohort_S1");
+    }
+
+    #[test]
+    fn returns_none_for_run_logs_without_preview() {
+        let log = "DAG: 2 rules in execution order\nRunning: a\n✓ a (0.1s)\nDone: 2 succeeded\n";
+        assert_eq!(extract_dry_run_preview(log), None);
+    }
+
+    #[test]
+    fn handles_nested_objects_until_parse_succeeds() {
+        let log = "{\"checkpoint_preview\":{\"summary\":{\"will_run\":1,\"will_skip\":0,\"protected_outside\":0},\"plan\":[{\"name\":\"a\",\"status\":\"run-never-completed\",\"cascaded_from\":null}],\"cascade_chains\":[]},\"command\":\"dry-run\",\"execution_order\":[\"a\"]}";
+        let preview = extract_dry_run_preview(log).expect("nested preview must parse");
+        assert_eq!(preview["command"], "dry-run");
     }
 }

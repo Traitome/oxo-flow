@@ -1,6 +1,6 @@
 import type {
   HealthResponse, SystemInfo, RuntimeMetrics, LoginResponse, UserInfo,
-  ClusterInfo, ClusterUpsert, ClusterProbeResult,
+  ClusterInfo, ClusterUpsert, ClusterProbeResult, DryRunPreview,
   ValidateResponse, ParseResponse, Pipeline, DagJson, DagStatus,
   RunItem, RunStatus, Diagnostics, RetryPlan, RunResponse,
   AiConfig, AiTranslateResponse, AiExplainResponse, AiInterpretResponse, AiOptimizeResponse,
@@ -47,6 +47,7 @@ export const api = {
   upsertCluster: (cluster: ClusterUpsert) => post<ClusterInfo>('/api/clusters', cluster),
   deleteCluster: (id: string) => del<{ deleted: string }>(`/api/clusters/${id}`),
   probeCluster: (id: string) => post<ClusterProbeResult>(`/api/clusters/${id}/probe`, {}),
+  getRunPreview: (id: string) => get<DryRunPreview>(`/api/runs/${id}/preview`),
   events: () => get<{ events: Array<Record<string, unknown>> }>('/api/events'),
 
   // ── Auth & License ──

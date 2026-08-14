@@ -160,6 +160,15 @@ export interface ClusterUpsert {
   remote_dir?: string;
   enabled?: boolean;
 }
+// ── Dry-run preview (instance-level plan) ──
+export interface DryRunPreview {
+  checkpoint_preview: {
+    summary: { will_run: number; will_skip: number; protected_outside: number };
+    plan: Array<{ name: string; status: string; cascaded_from?: string | null }>;
+    cascade_chains: string[][];
+  };
+  execution_order: string[];
+}
 export interface ClusterProbeResult {
   ok: boolean;
   hostname?: string | null;

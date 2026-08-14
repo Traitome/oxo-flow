@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
-import type { RunItem, MonitorStatus, ReportData, DagStatus, Diagnostics } from '../api/types';
+import type { RunItem, MonitorStatus, ReportData, DagStatus, Diagnostics, DryRunPreview } from '../api/types';
 import { Play, Pause, RotateCcw, BarChart3, Loader2, Bot } from 'lucide-react';
 import WorkflowCanvas from '../components/WorkflowCanvas';
 import { usePipelineSession } from '../context/PipelineSession';
@@ -25,6 +25,7 @@ export default function MonitorReport() {
   const [reportData, setReportData] = useState<ReportData | null>(null);
   const [dagStatus, setDagStatus] = useState<DagStatus | null>(null);
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
+  const [preview, setPreview] = useState<DryRunPreview | null>(null);
   const [tab, setTab] = useState<TabType>('monitor');
   const [, setLoading] = useState(true);
   // Pagination: the full list is ≤100 rows (API LIMIT); render a page of
@@ -50,6 +51,7 @@ export default function MonitorReport() {
     try { setReportData(await api.runReport(id)); } catch { setReportData(null); }
     try { setDagStatus(await api.getDagStatus(id)); } catch { setDagStatus(null); }
     try { setDiagnostics(await api.getDiagnostics(id)); } catch { setDiagnostics(null); }
+    try { setPreview(await api.getRunPreview(id)); } catch { setPreview(null); }
     // A row click means the user wants the detail — bring it into view
     // instead of leaving it below a long list (issue #79 P2).
     requestAnimationFrame(() => detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
@@ -468,6 +470,44 @@ export default function MonitorReport() {
           </button>
         )}
       </div>
+
+      {/* Dry-run preview: instance-level plan from the CLI's --json output
+          (issue #79 P2 — the preview used to show unexpanded rules). */}
+      {preview && (
+        <div className="dash-card" ref={detailRef}>
+          <h3 style={{ fontSize: '1rem', fontFamily: 'var(--font-mono)', marginBottom: '0.5rem' }}>
+            Dry-run preview
+          </h3>
+          <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+            <span className={`status-badge ${preview.checkpoint_preview.summary.will_run > 0 ? 'running' : 'skipped'}`}>
+              {preview.checkpoint_preview.summary.will_run} will run
+            </span>
+            <span className="status-badge skipped">
+              {preview.checkpoint_preview.summary.will_skip} will skip
+            </span>
+            <span style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>
+              {preview.checkpoint_preview.summary.protected_outside} completed outside this set (preserved)
+            </span>
+          </div>
+          <div className="overflow-x">
+            <table className="data-table">
+              <thead><tr><th>Instance</th><th>Status</th></tr></thead>
+              <tbody>
+                {preview.checkpoint_preview.plan.map((p) => (
+                  <tr key={p.name}>
+                    <td className="mono">{p.name}</td>
+                    <td>
+                      <span className={`status-badge ${p.status.includes('skip') ? 'skipped' : p.status.includes('rerun') ? 'running' : 'queued'}`}>
+                        {p.status.replace(/-/g, ' ')}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Run Detail */}
       {(selId) && (

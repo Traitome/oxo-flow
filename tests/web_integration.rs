@@ -1049,3 +1049,66 @@ async fn web_samples_filter_runs_subset_and_rejects_unknown() {
         "the CLI's unknown-sample warning must surface: {logs}"
     );
 }
+
+/// Issue #79 P2: the web dry-run preview previously showed unexpanded
+/// rules and dropped samples/targets. Now the CLI's --json preview is
+/// captured and served at /api/runs/{id}/preview with INSTANCE-level
+/// entries (gather_cohort_S1, …) and will_run/will_skip summary.
+#[tokio::test]
+async fn web_dry_run_serves_instance_level_preview() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.base.clone();
+
+    let toml = "[workflow]\nname = \"dry79\"\n\n\
+                [[sample_groups]]\nname = \"cohort\"\nsamples = [\"S1\", \"S2\"]\n\n\
+                [[rules]]\nname = \"gather\"\n\
+                output = [\"{sample}.txt\"]\n\
+                shell = \"echo {sample} > {sample}.txt\"\n";
+    let run: serde_json::Value = client
+        .post(format!("{base}/api/runs"))
+        .json(&serde_json::json!({
+            "toml_content": toml,
+            "dry_run": true,
+            "samples": ["S1"],
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let run_id = run["run_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        wait_for_terminal(&client, &base, &run_id).await,
+        "completed"
+    );
+
+    let preview: serde_json::Value = client
+        .get(format!("{base}/api/runs/{run_id}/preview"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let summary = &preview["checkpoint_preview"]["summary"];
+    assert_eq!(
+        summary["will_run"], 1,
+        "the --samples filter must reach the preview: {preview}"
+    );
+    let plan = preview["checkpoint_preview"]["plan"].as_array().unwrap();
+    let names: Vec<&str> = plan
+        .iter()
+        .filter_map(|p| p["name"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"gather_cohort_S1"),
+        "preview must list the EXPANDED instance name: {names:?}"
+    );
+    assert!(
+        !names.contains(&"gather_cohort_S2"),
+        "unselected sample must not appear: {names:?}"
+    );
+}

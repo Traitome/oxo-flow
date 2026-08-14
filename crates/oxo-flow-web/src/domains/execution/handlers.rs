@@ -932,6 +932,58 @@ pub async fn resume_run(
     })))
 }
 
+/// GET /api/runs/{id}/preview — the instance-level dry-run plan
+/// (checkpoint_preview + execution_order), persisted by the executor when
+/// a dry-run completes (issue #79 P2: the web preview previously showed
+/// unexpanded rules and dropped samples/targets).
+pub async fn get_run_preview(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
+    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error fetching run {id} for preview: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
+    let run = run.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Run {id} not found"),
+        )
+    })?;
+    let workdir = run.workdir.as_deref().unwrap_or("");
+    let content = std::fs::read_to_string(
+        std::path::Path::new(workdir).join("dry-run-preview.json"),
+    )
+    .map_err(|_| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NO_PREVIEW",
+            "No dry-run preview for this run".into(),
+        )
+    })?;
+    let value: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "PREVIEW_PARSE_ERROR",
+            format!("Preview file unreadable: {e}"),
+        )
+    })?;
+    Ok(Json(value))
+}
+
 /// GET /api/runs/{id}/ai-status
 pub async fn get_ai_status(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
