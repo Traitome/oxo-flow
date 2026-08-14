@@ -1,0 +1,12 @@
+#!/bin/bash
+# Mock scancel — kills the job process and marks it cancelled.
+set -eu
+dir="${MOCK_SCHEDULER_DIR:?MOCK_SCHEDULER_DIR not set}"
+for id in "$@"; do
+  [ -d "$dir/jobs/$id" ] || continue
+  if [ -f "$dir/jobs/$id/pid" ]; then
+    pid=$(cat "$dir/jobs/$id/pid")
+    kill "$pid" 2>/dev/null || true
+  fi
+  echo "CANCELLED" > "$dir/jobs/$id/state"
+done

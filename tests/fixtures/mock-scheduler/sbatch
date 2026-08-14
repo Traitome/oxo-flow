@@ -1,0 +1,35 @@
+#!/bin/bash
+# Mock SLURM sbatch — executes the submitted script in the background and
+# records state under $MOCK_SCHEDULER_DIR/jobs/<id>.
+# CI harness for scheduler integration tests without a cluster (issue #74
+# comment 3 / issue #78). Supports the driver's `sbatch --parsable <script>`.
+set -eu
+dir="${MOCK_SCHEDULER_DIR:?MOCK_SCHEDULER_DIR not set}"
+mkdir -p "$dir/jobs"
+parsable=0
+script=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --parsable) parsable=1; shift;;
+    *) script="$1"; shift;;
+  esac
+done
+id=$(find "$dir/jobs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+id=$((id + 1))
+mkdir -p "$dir/jobs/$id"
+echo "PENDING" > "$dir/jobs/$id/state"
+cp "$script" "$dir/jobs/$id/job.sh"
+(
+  echo "RUNNING" > "$dir/jobs/$id/state"
+  echo $$ > "$dir/jobs/$id/pid"
+  bash "$script" > "$dir/jobs/$id/stdout.log" 2> "$dir/jobs/$id/stderr.log"
+  code=$?
+  if [ "$code" -eq 0 ]; then echo "COMPLETED" > "$dir/jobs/$id/state"; else echo "FAILED" > "$dir/jobs/$id/state"; fi
+  echo "$code" > "$dir/jobs/$id/exit_code"
+) &
+if [ "$parsable" -eq 1 ]; then
+  echo "$id"
+else
+  echo "Submitted batch job $id" >&2
+  echo "$id"
+fi

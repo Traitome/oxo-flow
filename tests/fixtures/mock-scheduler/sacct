@@ -1,0 +1,16 @@
+#!/bin/bash
+# Mock sacct — answers `sacct -j <id> --format=JobID,State,ExitCode,Elapsed,MaxRSS`.
+set -eu
+dir="${MOCK_SCHEDULER_DIR:?MOCK_SCHEDULER_DIR not set}"
+id=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -j) id="$2"; shift 2;;
+    *) shift;;
+  esac
+done
+[ -d "$dir/jobs/$id" ] || { echo "slurm_load_jobs error: Invalid job id specified" >&2; exit 1; }
+state=$(cat "$dir/jobs/$id/state")
+code=$(cat "$dir/jobs/$id/exit_code" 2>/dev/null || echo "")
+echo "JobID|State|ExitCode|Elapsed|MaxRSS"
+echo "$id|$state|$code|00:00:05|1234K"

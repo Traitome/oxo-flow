@@ -1,0 +1,22 @@
+#!/bin/bash
+# Mock squeue — answers `squeue -j <ids> --noheader -o "%i|%t"`.
+set -eu
+dir="${MOCK_SCHEDULER_DIR:?MOCK_SCHEDULER_DIR not set}"
+ids=""
+fmt="%i|%t"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -j) ids="$2"; shift 2;;
+    -o) fmt="$2"; shift 2;;
+    --noheader) shift;;
+    *) shift;;
+  esac
+done
+for id in $(echo "$ids" | tr ',' ' '); do
+  [ -d "$dir/jobs/$id" ] || continue
+  state=$(cat "$dir/jobs/$id/state" 2>/dev/null || echo "PENDING")
+  line="$fmt"
+  line=${line//%i/$id}
+  line=${line//%t/$state}
+  echo "$line"
+done
