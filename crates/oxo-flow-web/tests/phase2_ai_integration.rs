@@ -9,6 +9,8 @@ use oxo_flow_web::server;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+mod common;
+
 fn app() -> axum::Router {
     server::build_router("personal")
 }
@@ -22,6 +24,7 @@ async fn json_body(body: axum::body::Body) -> Value {
 
 #[tokio::test]
 async fn test_ai_translate_requires_intent() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/ai/translate")
@@ -41,6 +44,7 @@ async fn test_ai_translate_requires_intent() {
 
 #[tokio::test]
 async fn test_ai_translate_empty_intent() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/ai/translate")
@@ -58,6 +62,7 @@ async fn test_ai_translate_empty_intent() {
 
 #[tokio::test]
 async fn test_ai_translate_missing_body() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/ai/translate")
@@ -75,6 +80,7 @@ async fn test_ai_translate_missing_body() {
 
 #[tokio::test]
 async fn test_ai_explain_endpoint_exists() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/ai/explain")
@@ -92,6 +98,7 @@ async fn test_ai_explain_endpoint_exists() {
 
 #[tokio::test]
 async fn test_ai_explain_bad_request() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/ai/explain")
@@ -106,6 +113,7 @@ async fn test_ai_explain_bad_request() {
 
 #[tokio::test]
 async fn test_ai_interpret_endpoint_exists() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/ai/interpret")
@@ -126,6 +134,7 @@ async fn test_ai_interpret_endpoint_exists() {
 
 #[tokio::test]
 async fn test_ai_optimize_endpoint_exists() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/ai/optimize")
@@ -148,6 +157,7 @@ async fn test_ai_optimize_endpoint_exists() {
 
 #[tokio::test]
 async fn test_ai_optimize_accepts_constraints() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/ai/optimize")
@@ -173,6 +183,7 @@ async fn test_ai_optimize_accepts_constraints() {
 
 #[tokio::test]
 async fn test_ai_translate_sse_endpoint_exists() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/ai/translate/stream")
@@ -206,6 +217,7 @@ async fn test_ai_translate_sse_endpoint_exists() {
 
 #[tokio::test]
 async fn test_ai_config_get() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("GET")
         .uri("/api/ai/config")

@@ -10,30 +10,10 @@ use oxo_flow_web::{process_control, server};
 use serde_json::json;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
-use std::sync::OnceLock;
 use std::time::Duration;
 use tower::ServiceExt;
 
-static DB_INIT: OnceLock<()> = OnceLock::new();
-
-/// Initialize the infra SQLite pool once per test binary (global OnceLock).
-///
-/// File-backed (not `sqlite::memory:`): in-memory databases are per-connection
-/// and vanish across the per-test tokio runtimes. `CARGO_TARGET_TMPDIR` is
-/// set by cargo for integration-test binaries.
-async fn ensure_db() {
-    if DB_INIT.get().is_none() {
-        let dir = std::env::var("CARGO_TARGET_TMPDIR")
-            .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
-        let db_path = format!("{dir}/pc-test.db");
-        let _ = std::fs::remove_file(&db_path);
-        // Single-colon `sqlite:` + explicit rwc, the same URL shape
-        // lib.rs tests use for file-backed test databases.
-        let url = format!("sqlite:{db_path}?mode=rwc");
-        oxo_flow_web::infra::db::sqlite::init_pool(&url).await;
-        let _ = DB_INIT.set(());
-    }
-}
+mod common;
 
 /// Spawn a `sleep` child in its own process group (like the executor does)
 /// and register it under `run_id`.
@@ -93,7 +73,7 @@ async fn post_json(uri: &str, body: serde_json::Value) -> (StatusCode, serde_jso
 
 #[tokio::test]
 async fn cancel_signals_the_process_group() {
-    ensure_db().await;
+    common::ensure_db().await;
     insert_run_row("pc-cancel", "running").await;
     let mut child = spawn_and_register("pc-cancel");
 
@@ -122,7 +102,7 @@ async fn cancel_signals_the_process_group() {
 
 #[tokio::test]
 async fn pause_freezes_then_resume_continues() {
-    ensure_db().await;
+    common::ensure_db().await;
     insert_run_row("pc-pause", "running").await;
     let mut child = spawn_and_register("pc-pause");
 
@@ -149,7 +129,7 @@ async fn pause_freezes_then_resume_continues() {
 
 #[tokio::test]
 async fn cancel_unknown_run_is_404() {
-    ensure_db().await;
+    common::ensure_db().await;
     let (status, body) = post_json("/api/runs/does-not-exist/cancel", json!({})).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body:?}");
     assert_eq!(body["code"], "NOT_FOUND");
@@ -157,7 +137,7 @@ async fn cancel_unknown_run_is_404() {
 
 #[tokio::test]
 async fn cancel_terminal_run_is_rejected() {
-    ensure_db().await;
+    common::ensure_db().await;
     insert_run_row("pc-done", "completed").await;
     let (status, body) = post_json("/api/runs/pc-done/cancel", json!({})).await;
     assert_eq!(status, StatusCode::CONFLICT, "{body:?}");

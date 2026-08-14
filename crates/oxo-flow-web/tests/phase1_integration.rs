@@ -9,6 +9,9 @@ use oxo_flow_web::server;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+mod common;
+
+// Shared DB harness: see `common`.
 fn app() -> axum::Router {
     server::build_router("personal")
 }
@@ -22,6 +25,7 @@ async fn json_body(body: axum::body::Body) -> Value {
 
 #[tokio::test]
 async fn test_data_analyze_valid_paths() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/data/analyze")
@@ -39,6 +43,7 @@ async fn test_data_analyze_valid_paths() {
 
 #[tokio::test]
 async fn test_data_analyze_empty_paths() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/data/analyze")
@@ -55,6 +60,7 @@ async fn test_data_analyze_empty_paths() {
 
 #[tokio::test]
 async fn test_data_analyze_bad_request() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/data/analyze")
@@ -69,6 +75,7 @@ async fn test_data_analyze_bad_request() {
 
 #[tokio::test]
 async fn test_data_reference_known_genome() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/data/reference")
@@ -86,6 +93,7 @@ async fn test_data_reference_known_genome() {
 
 #[tokio::test]
 async fn test_data_reference_empty_components() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/data/reference")
@@ -100,6 +108,7 @@ async fn test_data_reference_empty_components() {
 
 #[tokio::test]
 async fn test_data_reference_bad_request() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/data/reference")
@@ -114,6 +123,7 @@ async fn test_data_reference_bad_request() {
 
 #[tokio::test]
 async fn test_plugin_validate_valid_manifest() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/plugins/validate")
@@ -141,6 +151,7 @@ async fn test_plugin_validate_valid_manifest() {
 
 #[tokio::test]
 async fn test_plugin_validate_missing_fields() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/plugins/validate")
@@ -166,6 +177,7 @@ async fn test_plugin_validate_missing_fields() {
 
 #[tokio::test]
 async fn test_plugin_validate_bad_request() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/plugins/validate")
@@ -180,6 +192,7 @@ async fn test_plugin_validate_bad_request() {
 
 #[tokio::test]
 async fn test_pipeline_diff_identical() {
+    common::ensure_db().await;
     let toml = "[workflow]\nname = \"test\"\n[[rules]]\nname = \"step1\"\n";
     let req = Request::builder()
         .method("POST")
@@ -200,6 +213,7 @@ async fn test_pipeline_diff_identical() {
 
 #[tokio::test]
 async fn test_pipeline_diff_different() {
+    common::ensure_db().await;
     let toml_a = "[workflow]\nname = \"test-a\"\n[[rules]]\nname = \"step1\"\n";
     let toml_b = "[workflow]\nname = \"test-b\"\n[[rules]]\nname = \"step2\"\n";
     let req = Request::builder()
@@ -219,6 +233,7 @@ async fn test_pipeline_diff_different() {
 
 #[tokio::test]
 async fn test_pipeline_diff_invalid_toml() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/pipelines/diff")
@@ -240,6 +255,7 @@ async fn test_pipeline_diff_invalid_toml() {
 
 #[tokio::test]
 async fn test_health_endpoint_returns_ok() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("GET")
         .uri("/api/health")

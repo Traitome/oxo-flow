@@ -9,6 +9,8 @@ use oxo_flow_web::server;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+mod common;
+
 fn app_personal() -> axum::Router {
     server::build_router("personal")
 }
@@ -28,6 +30,7 @@ async fn json_body(body: axum::body::Body) -> Value {
 
 #[tokio::test]
 async fn test_fork_endpoint_exists() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/pipelines/nonexistent-id/fork")
@@ -47,6 +50,7 @@ async fn test_fork_endpoint_exists() {
 
 #[tokio::test]
 async fn test_share_endpoint_exists() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/pipelines/nonexistent-id/share")
@@ -67,6 +71,7 @@ async fn test_share_endpoint_exists() {
 
 #[tokio::test]
 async fn test_import_endpoint_exists() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/pipelines/import")
@@ -86,6 +91,7 @@ async fn test_import_endpoint_exists() {
 
 #[tokio::test]
 async fn test_import_invalid_url_format() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/pipelines/import")
@@ -100,6 +106,7 @@ async fn test_import_invalid_url_format() {
 
 #[tokio::test]
 async fn test_import_bad_request() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/pipelines/import")
@@ -114,6 +121,7 @@ async fn test_import_bad_request() {
 
 #[tokio::test]
 async fn test_personal_mode_health() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("GET")
         .uri("/api/health")
@@ -127,6 +135,7 @@ async fn test_personal_mode_health() {
 
 #[tokio::test]
 async fn test_team_mode_health() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("GET")
         .uri("/api/health")
@@ -138,6 +147,7 @@ async fn test_team_mode_health() {
 
 #[tokio::test]
 async fn test_hpc_mode_health() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("GET")
         .uri("/api/health")
@@ -149,6 +159,7 @@ async fn test_hpc_mode_health() {
 
 #[tokio::test]
 async fn test_hpc_mode_has_hpc_route() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("GET")
         .uri("/api/hpc")
@@ -160,6 +171,7 @@ async fn test_hpc_mode_has_hpc_route() {
 
 #[tokio::test]
 async fn test_personal_mode_no_hpc_route() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("GET")
         .uri("/api/hpc")
@@ -177,6 +189,7 @@ async fn test_personal_mode_no_hpc_route() {
 
 #[tokio::test]
 async fn test_all_modes_have_pipeline_routes() {
+    common::ensure_db().await;
     // Personal: unauthenticated access works
     let req = Request::builder()
         .method("POST")
@@ -211,6 +224,7 @@ async fn test_all_modes_have_pipeline_routes() {
 
 #[tokio::test]
 async fn test_all_modes_have_auth_routes() {
+    common::ensure_db().await;
     for (mode, app) in [
         ("personal", app_personal()),
         ("team", app_team()),
@@ -237,6 +251,7 @@ async fn test_all_modes_have_auth_routes() {
 
 #[tokio::test]
 async fn test_all_modes_have_ai_routes() {
+    common::ensure_db().await;
     for (mode, app) in [
         ("personal", app_personal()),
         ("team", app_team()),
@@ -259,6 +274,7 @@ async fn test_all_modes_have_ai_routes() {
 
 #[tokio::test]
 async fn test_license_header_present() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("GET")
         .uri("/api/health")
@@ -282,6 +298,7 @@ async fn test_license_header_present() {
 
 #[tokio::test]
 async fn test_version_header_present() {
+    common::ensure_db().await;
     let req = Request::builder()
         .method("GET")
         .uri("/api/health")

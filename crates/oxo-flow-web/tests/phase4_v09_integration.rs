@@ -11,6 +11,8 @@ use oxo_flow_web::server;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+mod common;
+
 fn app() -> axum::Router {
     server::build_router("personal")
 }
@@ -45,6 +47,7 @@ async fn get_json(uri: &str) -> axum::response::Response {
 
 #[tokio::test]
 async fn test_data_perceive_empty() {
+    common::ensure_db().await;
     let resp = post_json("/api/data/perceive", &json!({})).await;
     let body: Value = json_body(resp.into_body()).await;
     // Should return data_level 0 (intent only) since no paths or description
@@ -53,6 +56,7 @@ async fn test_data_perceive_empty() {
 
 #[tokio::test]
 async fn test_data_perceive_with_description() {
+    common::ensure_db().await;
     let resp = post_json(
         "/api/data/perceive",
         &json!({
@@ -76,6 +80,7 @@ async fn test_data_perceive_with_description() {
 
 #[tokio::test]
 async fn test_data_reference_status() {
+    common::ensure_db().await;
     let resp = get_json("/api/data/reference/status").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = json_body(resp.into_body()).await;
@@ -85,6 +90,7 @@ async fn test_data_reference_status() {
 
 #[tokio::test]
 async fn test_data_samplesheet_parse() {
+    common::ensure_db().await;
     let csv = "sample,fastq_r1,fastq_r2,condition\ns1,/data/s1_R1.fq,/data/s1_R2.fq,WT\ns2,/data/s2_R1.fq,/data/s2_R2.fq,KO\n";
     let resp = post_json("/api/data/samplesheet/parse", &json!({"content": csv})).await;
     assert_eq!(resp.status(), StatusCode::OK);
@@ -97,6 +103,7 @@ async fn test_data_samplesheet_parse() {
 
 #[tokio::test]
 async fn test_chat_send_json_basic() {
+    common::ensure_db().await;
     let resp = post_json(
         "/api/chat/send/json",
         &json!({
@@ -121,6 +128,7 @@ async fn test_chat_send_json_basic() {
 
 #[tokio::test]
 async fn test_chat_sessions() {
+    common::ensure_db().await;
     let resp = get_json("/api/chat/sessions").await;
     assert!(
         resp.status() == StatusCode::OK || resp.status().is_server_error(),
@@ -133,6 +141,7 @@ async fn test_chat_sessions() {
 
 #[tokio::test]
 async fn test_dag_edit_add_rule() {
+    common::ensure_db().await;
     let resp = post_json(
         "/api/pipeline/test-123/command",
         &json!({
@@ -154,6 +163,7 @@ async fn test_dag_edit_add_rule() {
 
 #[tokio::test]
 async fn test_dag_edit_invalid_operation() {
+    common::ensure_db().await;
     let resp = post_json(
         "/api/pipeline/test-123/command",
         &json!({
@@ -171,6 +181,7 @@ async fn test_dag_edit_invalid_operation() {
 
 #[tokio::test]
 async fn test_monitor_pause_nonexistent_run() {
+    common::ensure_db().await;
     let resp = post_json(
         "/api/runs/nonexistent-id/pause",
         &json!({
@@ -187,6 +198,7 @@ async fn test_monitor_pause_nonexistent_run() {
 
 #[tokio::test]
 async fn test_monitor_resume_nonexistent_run() {
+    common::ensure_db().await;
     let resp = post_json("/api/runs/nonexistent-id/resume", &json!({})).await;
     assert!(
         resp.status() == StatusCode::NOT_FOUND || resp.status().is_server_error(),
@@ -197,6 +209,7 @@ async fn test_monitor_resume_nonexistent_run() {
 
 #[tokio::test]
 async fn test_monitor_ai_status_nonexistent() {
+    common::ensure_db().await;
     let resp = get_json("/api/runs/nonexistent-id/ai-status").await;
     assert!(
         resp.status() == StatusCode::NOT_FOUND || resp.status().is_server_error(),
@@ -209,6 +222,7 @@ async fn test_monitor_ai_status_nonexistent() {
 
 #[tokio::test]
 async fn test_report_get_nonexistent() {
+    common::ensure_db().await;
     let resp = get_json("/api/runs/nonexistent-id/report").await;
     assert!(
         resp.status() == StatusCode::NOT_FOUND || resp.status().is_server_error(),
@@ -219,6 +233,7 @@ async fn test_report_get_nonexistent() {
 
 #[tokio::test]
 async fn test_report_ask_nonexistent() {
+    common::ensure_db().await;
     let resp = post_json(
         "/api/runs/nonexistent-id/report/ask",
         &json!({
@@ -235,6 +250,7 @@ async fn test_report_ask_nonexistent() {
 
 #[tokio::test]
 async fn test_report_visualize_nonexistent() {
+    common::ensure_db().await;
     let resp = post_json(
         "/api/runs/nonexistent-id/report/visualize",
         &json!({
@@ -253,6 +269,7 @@ async fn test_report_visualize_nonexistent() {
 
 #[tokio::test]
 async fn test_ai_config_effective() {
+    common::ensure_db().await;
     let resp = get_json("/api/ai/config/effective").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = json_body(resp.into_body()).await;
@@ -270,6 +287,7 @@ async fn test_ai_config_effective() {
 
 #[tokio::test]
 async fn test_ai_config_user() {
+    common::ensure_db().await;
     let resp = get_json("/api/ai/config/user").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = json_body(resp.into_body()).await;
@@ -282,6 +300,7 @@ async fn test_ai_config_user() {
 
 #[tokio::test]
 async fn test_ai_config_server() {
+    common::ensure_db().await;
     let resp = get_json("/api/ai/config/server").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = json_body(resp.into_body()).await;
@@ -293,6 +312,7 @@ async fn test_ai_config_server() {
 
 #[tokio::test]
 async fn test_ai_config_update_user() {
+    common::ensure_db().await;
     let resp = put_json(
         "/api/ai/config/user",
         &json!({
@@ -312,6 +332,7 @@ async fn test_ai_config_update_user() {
 
 #[tokio::test]
 async fn test_ai_config_update_server() {
+    common::ensure_db().await;
     let resp = put_json(
         "/api/ai/config/server",
         &json!({
@@ -332,6 +353,7 @@ async fn test_ai_config_update_server() {
 
 #[tokio::test]
 async fn test_ai_translate_endpoint_exists() {
+    common::ensure_db().await;
     let resp = post_json(
         "/api/ai/translate",
         &json!({
@@ -349,6 +371,7 @@ async fn test_ai_translate_endpoint_exists() {
 
 #[tokio::test]
 async fn test_ai_optimize_endpoint_exists() {
+    common::ensure_db().await;
     let resp = post_json(
         "/api/ai/optimize",
         &json!({
