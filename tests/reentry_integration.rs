@@ -230,3 +230,144 @@ fn empty_manifest_is_valid_noop() {
         .unwrap_or(0);
     assert_eq!(reentries, 0);
 }
+
+#[test]
+fn backend_driver_executes_reentry_rounds() {
+    // The same discovery workflow through BackendDriver + mock SLURM:
+    // round-1 discover completes → callback merges S4/S5 → round-2
+    // instances execute in the same driver run.
+    use oxo_flow_core::backend::ScheduledPlan;
+    use oxo_flow_core::backend::cluster::ClusterExecutor;
+    use oxo_flow_core::backend::driver::{BackendDriver, DriverConfig, DriverOptions};
+    use oxo_flow_core::cluster::{ClusterBackend, ClusterJobConfig};
+    use oxo_flow_core::config::WorkflowConfig;
+    use oxo_flow_core::dag::WorkflowDag;
+    use oxo_flow_core::environment::EnvironmentResolver;
+    use oxo_flow_core::executor::JobStatus;
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().unwrap();
+    write_workflow(dir.path(), MANIFEST_TWO, r#""catalog.txt""#);
+    std::fs::write(dir.path().join("catalog.txt"), "v1\n").unwrap();
+
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock-scheduler");
+    let state = tempfile::tempdir().unwrap();
+    let run_dir = tempfile::tempdir().unwrap();
+
+    let mut config = WorkflowConfig::from_file(&dir.path().join("wf.oxoflow")).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+    let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+    let values: HashMap<String, String> = config
+        .config
+        .iter()
+        .map(|(k, v)| (format!("config.{k}"), v.to_string()))
+        .collect();
+    let mut plan = ScheduledPlan::build(
+        &config,
+        &dag,
+        dir.path(),
+        &EnvironmentResolver::new(),
+        &values,
+    )
+    .unwrap();
+    let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+
+    // The checkpoint hook mutates the config (re-expansion) while the merge
+    // hook reads it — a Mutex serializes the two closures (both Send-safe).
+    let config = std::sync::Mutex::new(config);
+
+    let executor = Arc::new(
+        ClusterExecutor::new(
+            ClusterBackend::Slurm,
+            ClusterJobConfig {
+                backend: ClusterBackend::Slurm,
+                queue: None,
+                account: None,
+                walltime: None,
+                extra_args: vec![],
+            },
+        )
+        .with_scheduler_dir(fixtures)
+        .with_env("MOCK_SCHEDULER_DIR", &state.path().to_string_lossy()),
+    );
+    let driver = BackendDriver::new(
+        executor,
+        DriverConfig {
+            max_submitted: 4,
+            poll_interval: std::time::Duration::from_millis(50),
+            poll_timeout: Some(std::time::Duration::from_secs(30)),
+        },
+    );
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let records = runtime
+        .block_on(driver.run(
+            &mut plan,
+            &to_run,
+            DriverOptions {
+                run_dir: run_dir.path(),
+                on_checkpoint: Some(Box::new(|rule_name: &str| {
+                    let manifest = dir.path().join("discover.toml");
+                    let content = std::fs::read_to_string(&manifest).map_err(|e| {
+                        oxo_flow_core::error::OxoFlowError::Config {
+                            message: format!("{rule_name}: {e}"),
+                        }
+                    })?;
+                    let (group, samples) = oxo_flow_core::reentry::parse_manifest(&content)?;
+                    if samples.is_empty() {
+                        return Ok(Vec::new());
+                    }
+                    let mut cfg = config.lock().unwrap();
+                    oxo_flow_core::reentry::apply_reentry(&mut cfg, group.as_deref(), &samples)
+                })),
+                merge: Some(Box::new(
+                    |plan: &mut ScheduledPlan, new_names: &[String]| {
+                        let cfg = config.lock().unwrap();
+                        plan.merge_new_instances(
+                            &cfg,
+                            &dag,
+                            dir.path(),
+                            &EnvironmentResolver::new(),
+                            &values,
+                            new_names,
+                        )
+                    },
+                )),
+            },
+        ))
+        .unwrap();
+
+    let mut completed: Vec<&str> = records
+        .iter()
+        .filter(|r| r.status == JobStatus::Success)
+        .map(|r| r.rule.as_str())
+        .collect();
+    completed.sort();
+    assert_eq!(
+        completed,
+        vec![
+            "analyze_batch_S1",
+            "analyze_batch_S4",
+            "analyze_batch_S5",
+            "discover"
+        ]
+    );
+
+    // Round-2 jobs were submitted AFTER discover completed.
+    let events = std::fs::read_to_string(run_dir.path().join("events.jsonl")).unwrap();
+    let lines: Vec<&str> = events.lines().collect();
+    let discover_done = lines
+        .iter()
+        .position(|l| l.contains("\"COMPLETED\"") && l.contains("discover"))
+        .unwrap();
+    let s4_submitted = lines
+        .iter()
+        .position(|l| l.contains("\"SUBMITTED\"") && l.contains("analyze_batch_S4"))
+        .unwrap();
+    assert!(
+        s4_submitted > discover_done,
+        "round-2 must follow the checkpoint"
+    );
+}
