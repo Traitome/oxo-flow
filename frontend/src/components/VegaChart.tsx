@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 
 import embed from 'vega-embed';
+import { expressionInterpreter } from 'vega-interpreter';
 
 interface VegaChartProps {
   spec: Record<string, unknown>;
@@ -45,6 +46,12 @@ export default function VegaChart({ spec, data, title }: VegaChartProps) {
     embed(containerRef.current, fullSpec as unknown as Parameters<typeof embed>[1], {
       actions: { export: true, source: false, compiled: false, editor: false },
       renderer: 'canvas',
+      // CSP-safe expressions (issue #79 P2 "unsafe-eval on every page"):
+      // vega's default codegen compiles expressions with `new Function`,
+      // which our script-src policy blocks. AST mode + the official
+      // interpreter evaluates the same expressions without eval.
+      ast: true,
+      expr: expressionInterpreter,
     });
 
     return () => {
