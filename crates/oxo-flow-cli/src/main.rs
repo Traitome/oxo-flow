@@ -494,9 +494,13 @@ pub enum Commands {
     Report {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
-        #[arg(short = 'f', long, default_value = "html", help = "Output format")]
-        format: String,
-        #[arg(short = 'o', long, help = "Output file path")]
+        #[arg(
+            short = 'f',
+            long,
+            help = "Output format: html, json, md, pdf, pdf-command (default: html, or inferred from the -o extension)"
+        )]
+        format: Option<String>,
+        #[arg(short = 'o', long, help = "Output file path ('-' for stdout)")]
         output: Option<PathBuf>,
         #[arg(
             long = "checkpoint",
@@ -506,7 +510,7 @@ pub enum Commands {
         checkpoint_path: Option<PathBuf>,
         #[arg(
             long = "ai",
-            help = "AI result interpretation — plain-language summary of execution outcomes, caveats, and next steps"
+            help = "AI result interpretation — plain-language summary of execution outcomes, caveats, and next steps (stderr + report section)"
         )]
         ai: bool,
         #[arg(
@@ -515,6 +519,20 @@ pub enum Commands {
             help = "Working directory to look for .oxo-flow in (default: the workflow file's directory)"
         )]
         workdir: Option<PathBuf>,
+        #[arg(
+            long,
+            help = "Reproducible output: pin the generation timestamp (SOURCE_DATE_EPOCH or the Unix epoch) so identical state yields byte-identical reports"
+        )]
+        ci: bool,
+        #[arg(long, help = "Omit the generation timestamp from the report")]
+        no_timestamps: bool,
+        #[arg(
+            long,
+            help = "Fail (exit 2) when the checkpoint is missing or workflow report configuration is unsupported"
+        )]
+        strict: bool,
+        #[arg(long, help = "List available report sections and exit")]
+        list_sections: bool,
     },
     /// Start the web interface server.
     Serve {
@@ -1231,7 +1249,25 @@ async fn main() -> Result<()> {
             checkpoint_path,
             ai,
             workdir,
-        } => handle_report(workflow, format, output, checkpoint_path, ai, workdir).await?,
+            ci,
+            no_timestamps,
+            strict,
+            list_sections,
+        } => {
+            handle_report(
+                workflow,
+                format,
+                output,
+                checkpoint_path,
+                ai,
+                workdir,
+                ci,
+                no_timestamps,
+                strict,
+                list_sections,
+            )
+            .await?
+        }
         Commands::Serve {
             mode,
             host,

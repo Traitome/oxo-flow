@@ -135,11 +135,23 @@ pub struct ScatterPoint {
 /// Complete report document.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Report {
+    /// Schema version of the report JSON (issue #83 WS3). Bumped on any
+    /// breaking change to the model; consumers can gate on it.
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
+
+    /// Command that produced this report — makes the JSON self-identifying,
+    /// mirroring the `command` field of `status --json`.
+    #[serde(default = "default_command")]
+    pub command: String,
+
     /// Report title.
     pub title: String,
 
-    /// Report generation timestamp.
-    pub generated_at: DateTime<Utc>,
+    /// Report generation timestamp. `None` under `--no-timestamps`;
+    /// pinned via `SOURCE_DATE_EPOCH`/`--ci` for byte-reproducible output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated_at: Option<DateTime<Utc>>,
 
     /// Workflow name.
     pub workflow_name: String,
@@ -153,18 +165,41 @@ pub struct Report {
     /// Report metadata (arbitrary key-value pairs).
     #[serde(default)]
     pub metadata: HashMap<String, String>,
+
+    /// Provenance: path of the checkpoint this report was built from
+    /// (issue #83 WS2). Absent for template-only reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint_path: Option<String>,
+
+    /// Provenance: path of the workflow file the report describes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_path: Option<String>,
+}
+
+const REPORT_SCHEMA_VERSION: u32 = 1;
+
+fn default_schema_version() -> u32 {
+    REPORT_SCHEMA_VERSION
+}
+
+fn default_command() -> String {
+    "report".to_string()
 }
 
 impl Report {
     /// Create a new empty report.
     pub fn new(title: &str, workflow_name: &str, workflow_version: &str) -> Self {
         Self {
+            schema_version: REPORT_SCHEMA_VERSION,
+            command: "report".to_string(),
             title: title.to_string(),
-            generated_at: Utc::now(),
+            generated_at: Some(Utc::now()),
             workflow_name: workflow_name.to_string(),
             workflow_version: workflow_version.to_string(),
             sections: Vec::new(),
             metadata: HashMap::new(),
+            checkpoint_path: None,
+            workflow_path: None,
         }
     }
 
@@ -203,11 +238,15 @@ impl Report {
     /// Render the report as a self-contained HTML document.
     ///
     /// All CSS is embedded inline so the report can be viewed offline.
-    /// Includes dark mode support via `prefers-color-scheme` media query.
+    /// Includes dark mode support via `prefers-color-scheme` media query and
+    /// print styles, so the same file prints cleanly (issue #83).
+    ///
+    /// Every user-controlled string (workflow/rules names, commands, file
+    /// paths) is HTML-escaped — the report is safe to open and share.
     pub fn to_html(&self) -> String {
         let mut html = String::new();
         html.push_str("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n");
-        html.push_str(&format!("  <title>{}</title>\n", self.title));
+        html.push_str(&format!("  <title>{}</title>\n", escape_html(&self.title)));
         html.push_str("  <meta charset=\"utf-8\">\n");
         html.push_str(
             "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n",
@@ -221,9 +260,11 @@ impl Report {
         html.push_str("    }\n");
         html.push_str("    * { box-sizing: border-box; margin: 0; padding: 0; }\n");
         html.push_str("    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: var(--text); background: var(--bg); max-width: 960px; margin: 0 auto; padding: 2rem; line-height: 1.6; }\n");
+        html.push_str("    .skip-link { position: absolute; left: -999px; top: 0; background: var(--primary); color: #fff; padding: 0.5rem 1rem; z-index: 100; }\n");
+        html.push_str("    .skip-link:focus { left: 0; }\n");
         html.push_str("    header { border-bottom: 3px solid var(--primary); padding-bottom: 1rem; margin-bottom: 2rem; }\n");
         html.push_str("    header h1 { color: var(--primary); font-size: 1.8rem; }\n");
-        html.push_str("    .meta { color: #718096; font-size: 0.85rem; margin-top: 0.25rem; }\n");
+        html.push_str("    .meta { color: #4a5568; font-size: 0.85rem; margin-top: 0.25rem; }\n");
         html.push_str("    nav.toc { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.5rem; margin-bottom: 2rem; }\n");
         html.push_str(
             "    nav.toc h2 { font-size: 1rem; margin-bottom: 0.5rem; color: var(--primary); }\n",
@@ -246,18 +287,43 @@ impl Report {
         html.push_str("    pre { background: var(--code-bg); padding: 1rem; overflow-x: auto; border-radius: 4px; font-size: 0.85rem; }\n");
         html.push_str("    p { margin-bottom: 0.5rem; }\n");
         html.push_str("    .disclaimer { background: #fffbeb; border-left: 4px solid #f59e0b; padding: 1rem; border-radius: 4px; margin: 1rem 0; }\n");
-        html.push_str("    footer { margin-top: 3rem; border-top: 1px solid var(--border); padding-top: 0.5rem; color: #a0aec0; font-size: 0.75rem; text-align: center; }\n");
+        html.push_str("    footer { margin-top: 3rem; border-top: 1px solid var(--border); padding-top: 0.5rem; color: #4a5568; font-size: 0.75rem; text-align: center; }\n");
+        // Print styles — part of the default output so every report prints
+        // cleanly (issue #83 P2-5).
+        html.push_str("    @media print {\n");
+        html.push_str("      @page { margin: 2cm; size: A4; }\n");
+        html.push_str("      body { max-width: none; padding: 0; font-size: 10pt; }\n");
+        html.push_str("      nav.toc, .skip-link { display: none; }\n");
+        html.push_str(
+            "      section { page-break-inside: avoid; margin-bottom: 1cm; border: none; }\n",
+        );
+        html.push_str("      h2 { page-break-after: avoid; }\n");
+        html.push_str("      table { page-break-inside: avoid; }\n");
+        html.push_str("      footer { position: fixed; bottom: 0; left: 0; right: 0; }\n");
+        html.push_str("    }\n");
         html.push_str("  </style>\n</head>\n<body>\n");
+
+        html.push_str("<a class=\"skip-link\" href=\"#main\">Skip to content</a>\n");
 
         // Header
         html.push_str("<header>\n");
-        html.push_str(&format!("  <h1>{}</h1>\n", self.title));
+        html.push_str(&format!("  <h1>{}</h1>\n", escape_html(&self.title)));
+        let generated = match self.generated_at {
+            Some(ts) => format!(" &middot; Generated: {ts}"),
+            None => String::new(),
+        };
         html.push_str(&format!(
-            "  <p class=\"meta\">Workflow: {} v{} &middot; Generated: {}</p>\n",
-            self.workflow_name, self.workflow_version, self.generated_at
+            "  <p class=\"meta\">Workflow: {} v{}{}</p>\n",
+            escape_html(&self.workflow_name),
+            escape_html(&self.workflow_version),
+            generated
         ));
         for (key, value) in &self.metadata {
-            html.push_str(&format!("  <p class=\"meta\">{}: {}</p>\n", key, value));
+            html.push_str(&format!(
+                "  <p class=\"meta\">{}: {}</p>\n",
+                escape_html(key),
+                escape_html(value)
+            ));
         }
         html.push_str("</header>\n\n");
 
@@ -268,44 +334,36 @@ impl Report {
             for section in &self.sections {
                 html.push_str(&format!(
                     "    <li><a href=\"#{}\">{}</a></li>\n",
-                    section.id, section.title
+                    escape_html(&section.id),
+                    escape_html(&section.title)
                 ));
             }
             html.push_str("  </ul>\n</nav>\n\n");
         }
 
         // Sections
+        html.push_str("<main id=\"main\">\n");
         for section in &self.sections {
             render_section_html(&mut html, section, 2);
         }
+        html.push_str("</main>\n");
 
-        html.push_str("<footer>Generated by oxo-flow</footer>\n");
+        html.push_str(&format!(
+            "<footer>Generated by oxo-flow v{} &middot; {} v{}</footer>\n",
+            env!("CARGO_PKG_VERSION"),
+            escape_html(&self.workflow_name),
+            escape_html(&self.workflow_version)
+        ));
         html.push_str("</body>\n</html>");
         html
     }
 
     /// Render the report as HTML optimized for PDF generation.
     ///
-    /// This version includes print-specific CSS for better PDF output:
-    /// - Page breaks between major sections
-    /// - No navigation/UI elements
-    /// - Optimized typography for printing
+    /// Print styles are part of the default output (issue #83 P2-5), so this
+    /// is an alias kept for API compatibility.
     pub fn to_printable_html(&self) -> String {
-        let html = self.to_html();
-        // Add print-specific styles
-        let print_styles = r#"
-  <style media="print">
-    @page { margin: 2cm; size: A4; }
-    body { max-width: none; padding: 0; font-size: 10pt; }
-    nav.toc { display: none; }
-    section { page-break-inside: avoid; margin-bottom: 1cm; border: none; }
-    h2 { page-break-after: avoid; }
-    table { page-break-inside: avoid; }
-    footer { position: fixed; bottom: 0; left: 0; right: 0; }
-  </style>
-"#;
-        // Insert print styles before the closing </head>
-        html.replace("</head>", &format!("{}\n</head>", print_styles))
+        self.to_html()
     }
 
     /// Generate a PDF using wkhtmltopdf command.
@@ -420,6 +478,28 @@ impl Report {
             },
             subsections: Vec::new(),
         }
+    }
+
+    /// Render the report as Markdown with GFM tables — git-friendly and
+    /// doc-embeddable (issue #83 P1-9). A projection of the same model as
+    /// HTML/JSON, never a separate data path.
+    pub fn to_markdown(&self) -> String {
+        let mut md = String::new();
+        md.push_str(&format!("# {}\n\n", self.title));
+        match self.generated_at {
+            Some(ts) => md.push_str(&format!(
+                "Workflow: {} v{} · Generated: {ts}\n\n",
+                self.workflow_name, self.workflow_version
+            )),
+            None => md.push_str(&format!(
+                "Workflow: {} v{}\n\n",
+                self.workflow_name, self.workflow_version
+            )),
+        }
+        for section in &self.sections {
+            render_section_markdown(&mut md, section, 2);
+        }
+        md
     }
 }
 
@@ -917,54 +997,27 @@ impl ReportBuilder {
 
     /// Add a task summary section showing all rules with their shell commands.
     pub fn task_summary(mut self, rules: &[crate::rule::Rule]) -> Self {
-        let headers: Vec<String> = vec![
-            "Task",
-            "Type",
-            "Inputs",
-            "Outputs",
-            "Environment",
-            "Resources",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect();
-        let rows: Vec<Vec<String>> = rules
-            .iter()
-            .map(|r| {
-                let task_type = if r.shell.is_some() {
-                    "shell"
-                } else if r.script.is_some() {
-                    "script"
-                } else if r.transform.is_some() {
-                    "transform"
-                } else {
-                    "other"
-                };
-                let input_count = r.input.len();
-                let output_count = r.output.len();
-                let env = r.environment.kind();
-                let resources = format!(
-                    "t={} m={}",
-                    r.resources.threads,
-                    r.resources.memory.as_deref().unwrap_or("-")
-                );
-                vec![
-                    r.name.clone(),
-                    task_type.into(),
-                    input_count.to_string(),
-                    output_count.to_string(),
-                    env.to_string(),
-                    resources,
-                ]
-            })
-            .collect();
+        self.report.add_section(task_summary_section(rules));
+        self
+    }
 
-        self.report.add_section(ReportSection {
-            title: "Task Summary".into(),
-            id: "task-summary".into(),
-            content: ReportContent::Table { headers, rows },
-            subsections: vec![],
-        });
+    /// Provenance: the checkpoint path this report was built from
+    /// (issue #83 WS2).
+    pub fn checkpoint_path(mut self, path: Option<String>) -> Self {
+        self.report.checkpoint_path = path;
+        self
+    }
+
+    /// Provenance: the workflow file path the report describes.
+    pub fn workflow_path(mut self, path: Option<String>) -> Self {
+        self.report.workflow_path = path;
+        self
+    }
+
+    /// Pin the generation timestamp (`--ci` / `--no-timestamps`, issue #83
+    /// P1-4). `None` omits the timestamp from the output entirely.
+    pub fn generated_at(mut self, timestamp: Option<DateTime<Utc>>) -> Self {
+        self.report.generated_at = timestamp;
         self
     }
 
@@ -1212,11 +1265,146 @@ fn escape_html(s: &str) -> String {
         .replace('\'', "&#39;")
 }
 
+/// Escape a table cell for Markdown (GFM: backslash-escape pipes).
+fn md_cell(s: &str) -> String {
+    s.replace('|', "\\|")
+}
+
+/// Render one section (and its subsections) as Markdown.
+fn render_section_markdown(md: &mut String, section: &ReportSection, level: usize) {
+    let hashes = "#".repeat(level.min(6));
+    md.push_str(&format!("{hashes} {}\n\n", section.title));
+    match &section.content {
+        ReportContent::Text { text } => md.push_str(&format!("{text}\n\n")),
+        ReportContent::Markdown { markdown } => {
+            md.push_str("```text\n");
+            md.push_str(markdown);
+            md.push_str("\n```\n\n");
+        }
+        ReportContent::Html { .. } => {
+            // Raw HTML has no Markdown projection.
+        }
+        ReportContent::Table { headers, rows } => {
+            md.push_str(&format!(
+                "| {} |\n",
+                headers
+                    .iter()
+                    .map(|h| md_cell(h))
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            ));
+            md.push_str(&format!(
+                "|{}|\n",
+                headers.iter().map(|_| "---").collect::<Vec<_>>().join("|")
+            ));
+            for row in rows {
+                md.push_str(&format!(
+                    "| {} |\n",
+                    row.iter()
+                        .map(|c| md_cell(c))
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                ));
+            }
+            md.push('\n');
+        }
+        ReportContent::KeyValue { pairs } => {
+            for (key, value) in pairs {
+                md.push_str(&format!("- **{key}**: {value}\n"));
+            }
+            md.push('\n');
+        }
+        ReportContent::Json { data } => {
+            md.push_str("```json\n");
+            md.push_str(&serde_json::to_string_pretty(data).unwrap_or_default());
+            md.push_str("\n```\n\n");
+        }
+        ReportContent::Chart {
+            title,
+            labels,
+            values,
+            unit,
+        } => {
+            md.push_str(&format!("*{title}*\n\n"));
+            for (label, value) in labels.iter().zip(values.iter()) {
+                md.push_str(&format!("- {label}: {value:.1} {unit}\n"));
+            }
+            md.push('\n');
+        }
+        ReportContent::QcStatus {
+            metric,
+            value,
+            status,
+            threshold,
+        } => {
+            md.push_str(&format!(
+                "- **{metric}**: {value} ({status}; threshold: {threshold})\n\n"
+            ));
+        }
+        ReportContent::QcIndicatorGroup { items } => {
+            for item in items {
+                let mark = match item.status {
+                    QcStatusLevel::Pass => "\u{2705}",
+                    QcStatusLevel::Warn => "\u{26A0}\u{FE0F}",
+                    QcStatusLevel::Fail => "\u{274C}",
+                    QcStatusLevel::Info => "\u{2139}\u{FE0F}",
+                };
+                md.push_str(&format!(
+                    "- {mark} **{}**: {} — {}\n",
+                    item.label, item.value, item.description
+                ));
+            }
+            md.push('\n');
+        }
+        ReportContent::Hierarchy {
+            name,
+            value,
+            children,
+        } => {
+            let root = HierarchyNode {
+                name: name.clone(),
+                value: *value,
+                children: children.clone(),
+            };
+            fn flatten_md(nodes: &[HierarchyNode], md: &mut String, depth: usize) {
+                for node in nodes {
+                    md.push_str(&format!(
+                        "{}- {}: {}\n",
+                        "  ".repeat(depth),
+                        node.name,
+                        node.value
+                    ));
+                    flatten_md(&node.children, md, depth + 1);
+                }
+            }
+            flatten_md(&[root], md, 0);
+            md.push('\n');
+        }
+        ReportContent::ScatterPlot {
+            title,
+            x_label,
+            y_label,
+            points,
+        } => {
+            md.push_str(&format!("**{title}** ({x_label} vs {y_label})\n\n"));
+            md.push_str(&format!("| {x_label} | {y_label} |\n|---|---|\n"));
+            for point in points {
+                md.push_str(&format!("| {} | {} |\n", point.x, point.y));
+            }
+            md.push('\n');
+        }
+    }
+    for subsection in &section.subsections {
+        render_section_markdown(md, subsection, level + 1);
+    }
+}
+
 fn render_section_html(html: &mut String, section: &ReportSection, heading_level: u8) {
     let h = heading_level.min(6);
     html.push_str(&format!(
         "<h{h} id=\"{}\">{}</h{h}>\n",
-        section.id, section.title
+        escape_html(&section.id),
+        escape_html(&section.title)
     ));
 
     match &section.content {
@@ -1224,23 +1412,28 @@ fn render_section_html(html: &mut String, section: &ReportSection, heading_level
             html.push_str(&format!("<p>{}</p>\n", escape_html(text)));
         }
         ReportContent::Markdown { markdown } => {
-            // Simple markdown rendering (just wrap in pre for now)
-            html.push_str(&format!("<pre>{markdown}</pre>\n"));
+            // Markdown is rendered as an escaped preformatted block — no
+            // HTML interpretation (XSS-safe) and no fake formatting.
+            html.push_str(&format!("<pre>{}</pre>\n", escape_html(markdown)));
         }
         ReportContent::Html { html: content } => {
+            // Explicitly raw HTML — trusted content only, by contract.
             html.push_str(content);
             html.push('\n');
         }
         ReportContent::Table { headers, rows } => {
             html.push_str("<table>\n<thead><tr>\n");
             for header in headers {
-                html.push_str(&format!("  <th>{header}</th>\n"));
+                html.push_str(&format!(
+                    "  <th scope=\"col\">{}</th>\n",
+                    escape_html(header)
+                ));
             }
             html.push_str("</tr></thead>\n<tbody>\n");
             for row in rows {
                 html.push_str("<tr>\n");
                 for cell in row {
-                    html.push_str(&format!("  <td>{cell}</td>\n"));
+                    html.push_str(&format!("  <td>{}</td>\n", escape_html(cell)));
                 }
                 html.push_str("</tr>\n");
             }
@@ -1249,14 +1442,20 @@ fn render_section_html(html: &mut String, section: &ReportSection, heading_level
         ReportContent::KeyValue { pairs } => {
             html.push_str("<dl>\n");
             for (key, value) in pairs {
-                html.push_str(&format!("  <dt><strong>{key}</strong></dt>\n"));
-                html.push_str(&format!("  <dd>{value}</dd>\n"));
+                html.push_str(&format!(
+                    "  <dt><strong>{}</strong></dt>\n",
+                    escape_html(key)
+                ));
+                html.push_str(&format!("  <dd>{}</dd>\n", escape_html(value)));
             }
             html.push_str("</dl>\n");
         }
         ReportContent::Json { data } => {
             let json_str = serde_json::to_string_pretty(data).unwrap_or_default();
-            html.push_str(&format!("<pre><code>{json_str}</code></pre>\n"));
+            html.push_str(&format!(
+                "<pre><code>{}</code></pre>\n",
+                escape_html(&json_str)
+            ));
         }
         ReportContent::Chart {
             title,
@@ -1271,15 +1470,19 @@ fn render_section_html(html: &mut String, section: &ReportSection, heading_level
             let chart_width = 600;
             let svg_height = (bar_height + bar_gap) * values.len() + 40;
 
+            // role="img" + aria-label make the chart readable by screen
+            // readers; the title/labels are repeated in text form (issue #83
+            // P1-16).
             html.push_str(&format!(
-                "<svg width=\"{}\" height=\"{}\" xmlns=\"http://www.w3.org/2000/svg\">\n",
+                "<svg width=\"{}\" height=\"{}\" xmlns=\"http://www.w3.org/2000/svg\" role=\"img\" aria-label=\"{}\">\n",
                 chart_width + label_width + 80,
-                svg_height
+                svg_height,
+                escape_html(title)
             ));
             html.push_str(&format!(
                 "  <text x=\"{}\" y=\"20\" font-size=\"14\" font-weight=\"bold\" fill=\"var(--text, #1a202c)\">{}</text>\n",
                 (chart_width + label_width) / 2,
-                title
+                escape_html(title)
             ));
             for (i, (label, &value)) in labels.iter().zip(values.iter()).enumerate() {
                 let y = 30 + i * (bar_height + bar_gap);
@@ -1293,7 +1496,7 @@ fn render_section_html(html: &mut String, section: &ReportSection, heading_level
                     "  <text x=\"{}\" y=\"{}\" font-size=\"12\" text-anchor=\"end\" fill=\"var(--text, #1a202c)\">{}</text>\n",
                     label_width - 5,
                     y + bar_height / 2 + 4,
-                    label
+                    escape_html(label)
                 ));
                 // Bar
                 html.push_str(&format!(
@@ -1306,7 +1509,7 @@ fn render_section_html(html: &mut String, section: &ReportSection, heading_level
                     label_width + bar_w + 5,
                     y + bar_height / 2 + 4,
                     value,
-                    unit
+                    escape_html(unit)
                 ));
             }
             html.push_str("</svg>\n");
@@ -1317,11 +1520,12 @@ fn render_section_html(html: &mut String, section: &ReportSection, heading_level
             status,
             threshold,
         } => {
+            // Contrast-safe status colors (WCAG AA on white, issue #83 P1-16).
             let (icon, color) = match status.as_str() {
-                "pass" => ("\u{2713}", "#10b981"),
-                "warn" => ("\u{26A0}", "#f59e0b"),
-                "fail" => ("\u{2717}", "#ef4444"),
-                _ => ("\u{2139}", "#3b82f6"),
+                "pass" => ("\u{2713}", "#047857"),
+                "warn" => ("\u{26A0}", "#b45309"),
+                "fail" => ("\u{2717}", "#b91c1c"),
+                _ => ("\u{2139}", "#1d4ed8"),
             };
             html.push_str(&format!(
                 "<div style=\"display:flex;align-items:center;gap:0.5rem;padding:0.5rem;border-left:4px solid {color};margin:0.5rem 0;background:var(--card-bg)\">\n"
@@ -1330,7 +1534,10 @@ fn render_section_html(html: &mut String, section: &ReportSection, heading_level
                 "  <span style=\"color:{color};font-size:1.2rem\">{icon}</span>\n"
             ));
             html.push_str(&format!(
-                "  <strong>{metric}:</strong> {value} <span style=\"color:#718096\">(threshold: {threshold})</span>\n"
+                "  <strong>{}</strong> {} <span style=\"color:#4a5568\">(threshold: {})</span>\n",
+                escape_html(metric),
+                escape_html(value),
+                escape_html(threshold)
             ));
             html.push_str("</div>\n");
         }
@@ -1338,10 +1545,10 @@ fn render_section_html(html: &mut String, section: &ReportSection, heading_level
             html.push_str("<div style=\"display:flex;flex-wrap:wrap;gap:1rem;margin:1rem 0\">\n");
             for item in items {
                 let (icon, bg, border) = match item.status {
-                    QcStatusLevel::Pass => ("\u{2713}", "#ecfdf5", "#10b981"),
-                    QcStatusLevel::Warn => ("\u{26A0}", "#fffbeb", "#f59e0b"),
-                    QcStatusLevel::Fail => ("\u{2717}", "#fef2f2", "#ef4444"),
-                    QcStatusLevel::Info => ("\u{2139}", "#eff6ff", "#3b82f6"),
+                    QcStatusLevel::Pass => ("\u{2713}", "#ecfdf5", "#047857"),
+                    QcStatusLevel::Warn => ("\u{26A0}", "#fffbeb", "#b45309"),
+                    QcStatusLevel::Fail => ("\u{2717}", "#fef2f2", "#b91c1c"),
+                    QcStatusLevel::Info => ("\u{2139}", "#eff6ff", "#1d4ed8"),
                 };
                 html.push_str(&format!(
                     "<div style=\"flex:1;min-width:200px;background:{bg};border:1px solid {border};border-radius:8px;padding:1rem\">\n"
@@ -1354,11 +1561,11 @@ fn render_section_html(html: &mut String, section: &ReportSection, heading_level
                     escape_html(&item.value)
                 ));
                 html.push_str(&format!(
-                    "  <div style=\"color:#6b7280;font-size:0.85rem\">{}</div>\n",
+                    "  <div style=\"color:#4b5563;font-size:0.85rem\">{}</div>\n",
                     escape_html(&item.label)
                 ));
                 html.push_str(&format!(
-                    "  <div style=\"color:#9ca3af;font-size:0.75rem;margin-top:0.25rem\">{}</div>\n",
+                    "  <div style=\"color:#6b7280;font-size:0.75rem;margin-top:0.25rem\">{}</div>\n",
                     escape_html(&item.description)
                 ));
                 html.push_str("</div>\n");
@@ -1366,24 +1573,76 @@ fn render_section_html(html: &mut String, section: &ReportSection, heading_level
             html.push_str("</div>\n");
         }
         ReportContent::Hierarchy {
-            name: _,
-            value: _,
-            children: _,
+            name,
+            value,
+            children,
         } => {
-            html.push_str(
-                "<p><em>(Hierarchical data — best viewed with interactive renderer)</em></p>\n",
+            // Flat table rendering — real data instead of a dead promise
+            // about an interactive viewer (issue #83 P1-10).
+            let mut rows: Vec<Vec<String>> = Vec::new();
+            fn flatten(nodes: &[HierarchyNode], rows: &mut Vec<Vec<String>>) {
+                for node in nodes {
+                    rows.push(vec![
+                        node.name.clone(),
+                        node.value.to_string(),
+                        node.children.len().to_string(),
+                    ]);
+                    flatten(&node.children, rows);
+                }
+            }
+            flatten(
+                &[HierarchyNode {
+                    name: name.clone(),
+                    value: *value,
+                    children: children.clone(),
+                }],
+                &mut rows,
             );
+            html.push_str("<table>\n<thead><tr>\n");
+            html.push_str("  <th scope=\"col\">Node</th><th scope=\"col\">Value</th><th scope=\"col\">Children</th>\n");
+            html.push_str("</tr></thead>\n<tbody>\n");
+            for row in rows {
+                html.push_str("<tr>\n");
+                for cell in row {
+                    html.push_str(&format!("  <td>{}</td>\n", escape_html(&cell)));
+                }
+                html.push_str("</tr>\n");
+            }
+            html.push_str("</tbody>\n</table>\n");
         }
         ReportContent::ScatterPlot {
             title,
             x_label,
             y_label,
-            points: _,
+            points,
         } => {
+            // Table rendering of the points — real data instead of a dead
+            // promise about an interactive viewer (issue #83 P1-10).
+            let rows: Vec<Vec<String>> = points
+                .iter()
+                .map(|p| vec![p.x.to_string(), p.y.to_string()])
+                .collect();
             html.push_str(&format!(
-                "<p><em>Scatter plot: {}. X: {}, Y: {} — rendering requires interactive JS viewer</em></p>\n",
-                title, x_label, y_label
+                "<p><strong>{}</strong> — {} vs {}</p>\n",
+                escape_html(title),
+                escape_html(x_label),
+                escape_html(y_label)
             ));
+            html.push_str("<table>\n<thead><tr>\n");
+            html.push_str(&format!(
+                "  <th scope=\"col\">{}</th><th scope=\"col\">{}</th>\n",
+                escape_html(x_label),
+                escape_html(y_label)
+            ));
+            html.push_str("</tr></thead>\n<tbody>\n");
+            for row in rows {
+                html.push_str("<tr>\n");
+                for cell in row {
+                    html.push_str(&format!("  <td>{}</td>\n", escape_html(&cell)));
+                }
+                html.push_str("</tr>\n");
+            }
+            html.push_str("</tbody>\n</table>\n");
         }
     }
 
@@ -1420,36 +1679,43 @@ pub enum WorkflowDomain {
 }
 
 impl WorkflowDomain {
+    /// Classify a workflow from the tools its shell commands reference.
+    ///
+    /// Ordering matters: DNA tool signals (GATK/Picard/variant callers)
+    /// win over RNA aligner signals, because GATK-based variant calling
+    /// pipelines legitimately contain `STAR`/`featureCounts` rules —
+    /// the reverse (a pure RNA pipeline calling HaplotypeCaller) is rare
+    /// (issue #83 P0-3). `Clinical` is never inferred from commands alone:
+    /// no shell vocabulary reliably indicates clinical reporting, so it is
+    /// only reachable through explicit configuration.
     pub fn detect(rules: &[crate::rule::Rule]) -> Self {
         let shells: Vec<&str> = rules.iter().filter_map(|r| r.shell.as_deref()).collect();
         let joined = shells.join(" ").to_lowercase();
-        if joined.contains("haplotypecaller")
+        let has_dna_tools = joined.contains("haplotypecaller")
             || joined.contains("mutect2")
             || joined.contains("bwa mem")
             || joined.contains("bwa-mem")
             || joined.contains("gatk")
-            || joined.contains("picard")
-        {
-            if joined.contains("featurecounts")
-                || joined.contains(" star ")
-                || joined.contains("salmon")
-            {
-                return Self::RnaSequencing;
-            }
-            if joined.contains("macs2") || joined.contains("atac") || joined.contains("methylation")
-            {
+            || joined.contains("picard");
+        let has_rna_tools = joined.contains("star ")
+            || joined.contains("featurecounts")
+            || joined.contains("salmon")
+            || joined.contains("kallisto");
+        let has_epi_tools = joined.contains("macs2")
+            || joined.contains("macs3")
+            || joined.contains("atac")
+            || joined.contains("methylation");
+
+        if has_dna_tools {
+            if has_epi_tools {
                 return Self::Epigenomics;
             }
             return Self::DnaSequencing;
         }
-        if joined.contains("star ")
-            || joined.contains("featurecounts")
-            || joined.contains("salmon")
-            || joined.contains("kallisto")
-        {
+        if has_rna_tools {
             return Self::RnaSequencing;
         }
-        if joined.contains("macs2") || joined.contains("macs3") || joined.contains("atac") {
+        if has_epi_tools {
             return Self::Epigenomics;
         }
         Self::Generic
@@ -1461,6 +1727,10 @@ pub struct ReportContext<'a> {
     pub config: &'a WorkflowConfig,
     pub checkpoint: Option<&'a CheckpointState>,
     pub domain: WorkflowDomain,
+    /// Path of the workflow file the report describes (issue #83 WS2).
+    pub workflow_path: Option<&'a std::path::Path>,
+    /// Path of the checkpoint the report was built from, when present.
+    pub checkpoint_path: Option<&'a std::path::Path>,
 }
 
 /// Trait for pluggable report section generators.
@@ -1491,14 +1761,22 @@ impl SectionRegistry {
         let mut registry = Self::new();
         registry.register(Box::new(UniversalGenerator));
         registry.register(Box::new(ExecutionStatusGenerator));
+        registry.register(Box::new(FailureDiagnosisGenerator));
         registry.register(Box::new(ClinicalComplianceGenerator));
         registry.register(Box::new(WorkflowInfoGenerator));
         registry.register(Box::new(CommandManifestGenerator));
         registry.register(Box::new(IoManifestGenerator));
         registry.register(Box::new(EnvironmentInfoGenerator));
+        registry.register(Box::new(ProvenanceGenerator));
+        registry.register(Box::new(TaskSummaryGenerator));
         registry
     }
 
+    /// Generate sections. When a `filter` is given, generators listed in it
+    /// always run (an explicit choice overrides `applicable()` — e.g. the
+    /// clinical-compliance section is only otherwise shown for clinical
+    /// workflows); unlisted generators are skipped. Without a filter, each
+    /// generator's own `applicable()` decides (issue #83 P0-2/P2-1).
     pub fn generate(
         &self,
         ctx: &ReportContext,
@@ -1506,16 +1784,23 @@ impl SectionRegistry {
     ) -> Vec<ReportSection> {
         let mut sections = Vec::new();
         for generator in &self.generators {
-            if let Some(filter_set) = filter
-                && !filter_set.contains(generator.name())
-            {
-                continue;
-            }
-            if generator.applicable(ctx) {
-                sections.extend(generator.generate(ctx));
+            match filter {
+                Some(filter_set) if !filter_set.contains(generator.name()) => continue,
+                Some(_) => sections.extend(generator.generate(ctx)),
+                None if generator.applicable(ctx) => sections.extend(generator.generate(ctx)),
+                None => {}
             }
         }
         sections
+    }
+
+    /// Enumerate registered generators as `(name, description)` — the data
+    /// behind `report --list-sections` (issue #83 P2-7).
+    pub fn sections(&self) -> Vec<(&str, &str)> {
+        self.generators
+            .iter()
+            .map(|g| (g.name(), g.description()))
+            .collect()
     }
 }
 
@@ -1533,7 +1818,7 @@ impl ReportSectionGenerator for UniversalGenerator {
         "universal"
     }
     fn description(&self) -> &str {
-        "Dashboard, workflow metadata, QC indicators (always included)"
+        "Dashboard: pipeline status, task count, total runtime"
     }
     fn applicable(&self, _ctx: &ReportContext) -> bool {
         true
@@ -1542,12 +1827,38 @@ impl ReportSectionGenerator for UniversalGenerator {
         let total = ctx.config.rules.len();
         let completed = ctx.checkpoint.map(|c| c.completed_rules.len()).unwrap_or(0);
         let failed = ctx.checkpoint.map(|c| c.failed_rules.len()).unwrap_or(0);
-        let _total_runtime: Option<f64> = ctx.checkpoint.and_then(|c| {
+        let total_runtime: Option<f64> = ctx.checkpoint.and_then(|c| {
             c.benchmarks
                 .values()
                 .map(|b| Some(b.wall_time_secs))
                 .sum::<Option<f64>>()
         });
+
+        // Honest status vocabulary (issue #83 P0-8): a report without a
+        // checkpoint is "not run", not "all tasks completed".
+        let (status_value, status, status_desc) = match ctx.checkpoint {
+            None => (
+                format!("{total} tasks, 0 executed"),
+                QcStatusLevel::Info,
+                "No execution data — run the workflow first".to_string(),
+            ),
+            Some(_) if failed > 0 => (
+                format!("{completed}/{total} succeeded"),
+                QcStatusLevel::Warn,
+                format!("{failed} task(s) failed"),
+            ),
+            Some(_) if completed == total => (
+                format!("{completed}/{total} succeeded"),
+                QcStatusLevel::Pass,
+                "All tasks completed".to_string(),
+            ),
+            Some(_) => (
+                format!("{completed}/{total} succeeded"),
+                QcStatusLevel::Info,
+                "Partially complete (skipped or pending rules)".to_string(),
+            ),
+        };
+
         vec![ReportSection {
             title: "Dashboard".into(),
             id: "dashboard".into(),
@@ -1555,23 +1866,23 @@ impl ReportSectionGenerator for UniversalGenerator {
                 items: vec![
                     QcIndicator {
                         label: "Pipeline Status".into(),
-                        value: format!("{completed}/{total} succeeded"),
-                        status: if failed > 0 {
-                            QcStatusLevel::Warn
-                        } else {
-                            QcStatusLevel::Pass
-                        },
-                        description: if failed > 0 {
-                            "Some tasks failed".into()
-                        } else {
-                            "All tasks completed".into()
-                        },
+                        value: status_value,
+                        status,
+                        description: status_desc,
                     },
                     QcIndicator {
                         label: "Total Tasks".into(),
                         value: total.to_string(),
                         status: QcStatusLevel::Info,
                         description: "Rules in workflow".into(),
+                    },
+                    QcIndicator {
+                        label: "Total Runtime".into(),
+                        value: total_runtime
+                            .map(|t| format!("{t:.1}s"))
+                            .unwrap_or_else(|| "-".into()),
+                        status: QcStatusLevel::Info,
+                        description: "Sum of completed rule wall times".into(),
                     },
                 ],
             },
@@ -1594,39 +1905,63 @@ impl ReportSectionGenerator for ExecutionStatusGenerator {
     fn generate(&self, ctx: &ReportContext) -> Vec<ReportSection> {
         let cp = ctx.checkpoint.unwrap();
         let mut sections = Vec::new();
+
+        // Deterministic order — checkpoint sets are HashSets, and reports
+        // must be byte-stable for diffing (issue #83 P1-4).
+        let mut completed: Vec<&String> = cp.completed_rules.iter().collect();
+        completed.sort_unstable();
+        let mut failed: Vec<&String> = cp.failed_rules.iter().collect();
+        failed.sort_unstable();
+
         let mut rows: Vec<Vec<String>> = Vec::new();
-        for name in &cp.completed_rules {
+        for name in &completed {
             let wall = cp
                 .benchmarks
-                .get(name)
+                .get(*name)
                 .map(|b| format!("{:.1}s", b.wall_time_secs))
                 .unwrap_or_else(|| "-".into());
-            rows.push(vec![name.clone(), "success".into(), wall]);
+            rows.push(vec![(*name).clone(), "success".into(), wall, "-".into()]);
         }
-        for name in &cp.failed_rules {
-            rows.push(vec![name.clone(), "failed".into(), "-".into()]);
+        for name in &failed {
+            let exit = cp
+                .rule_runs
+                .get(*name)
+                .and_then(|r| r.exit_code)
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "-".into());
+            rows.push(vec![(*name).clone(), "failed".into(), "-".into(), exit]);
         }
         if !rows.is_empty() {
             sections.push(ReportSection {
                 title: "Execution Status".into(),
                 id: "execution-status".into(),
                 content: ReportContent::Table {
-                    headers: vec!["Rule".into(), "Status".into(), "Wall Time".into()],
+                    headers: vec![
+                        "Rule".into(),
+                        "Status".into(),
+                        "Wall Time".into(),
+                        "Exit Code".into(),
+                    ],
                     rows,
                 },
                 subsections: vec![],
             });
         }
+
+        // CPU seconds are not measured yet (checkpoint field is an explicit
+        // placeholder) — the column stays out of the report until real
+        // accounting exists (issue #83 P0-5): a missing column beats a
+        // misleading one.
+        let mut bench_names: Vec<&String> = cp.benchmarks.keys().collect();
+        bench_names.sort_unstable();
         let mut bench_rows: Vec<Vec<String>> = Vec::new();
-        for (name, b) in &cp.benchmarks {
+        for name in bench_names {
+            let b = &cp.benchmarks[name];
             bench_rows.push(vec![
                 name.clone(),
                 format!("{:.2}s", b.wall_time_secs),
                 b.max_memory_mb
                     .map(|m| format!("{}MB", m))
-                    .unwrap_or_else(|| "-".into()),
-                b.cpu_seconds
-                    .map(|c| format!("{:.1}s", c))
                     .unwrap_or_else(|| "-".into()),
                 b.retries.to_string(),
             ]);
@@ -1640,7 +1975,6 @@ impl ReportSectionGenerator for ExecutionStatusGenerator {
                         "Rule".into(),
                         "Wall Time".into(),
                         "Memory".into(),
-                        "CPU".into(),
                         "Retries".into(),
                     ],
                     rows: bench_rows,
@@ -1658,44 +1992,58 @@ impl ReportSectionGenerator for ClinicalComplianceGenerator {
         "clinical-compliance"
     }
     fn description(&self) -> &str {
-        "ACMG/AMP classification, audit trail, biomarker, gene panel info"
+        "Static capability statement — clinical classification frameworks modeled by oxo-flow (no clinical data is generated)"
     }
-    fn applicable(&self, _ctx: &ReportContext) -> bool {
-        true
+    fn applicable(&self, ctx: &ReportContext) -> bool {
+        // Only for clinical-domain workflows; explicitly listing the section
+        // in [report].sections overrides this gate (issue #83 P0-2).
+        ctx.domain == WorkflowDomain::Clinical
     }
     fn generate(&self, _ctx: &ReportContext) -> Vec<ReportSection> {
         vec![ReportSection {
             title: "Clinical Compliance".into(),
             id: "clinical-compliance".into(),
-            content: ReportContent::KeyValue {
-                pairs: vec![
-                    (
-                        "ACMG/AMP Framework".into(),
-                        "Tier I-IV (somatic) + Pathogenic-Benign (germline)".into(),
-                    ),
-                    (
-                        "Variant Classification".into(),
-                        "VariantClassification enum with 9 tiers".into(),
-                    ),
-                    (
-                        "Audit Trail".into(),
-                        "ComplianceEvent: timestamp, actor, evidence hash".into(),
-                    ),
-                    (
-                        "Gene Panel Support".into(),
-                        "GenePanel: name, version, genes, BED file".into(),
-                    ),
-                    (
-                        "Biomarker Tracking".into(),
-                        "BiomarkerResult: value, units, reference range, interpretation".into(),
-                    ),
-                    (
-                        "QC Thresholds".into(),
-                        "QcThreshold: min/max, unit, passes(value) validator".into(),
-                    ),
-                ],
+            content: ReportContent::Text {
+                text: "Static capability statement: this section describes the \
+                       classification frameworks modeled by oxo-flow's clinical \
+                       module. It does not certify this run as clinically compliant, \
+                       and no variant, biomarker, or audit data is generated by the \
+                       report system."
+                    .into(),
             },
-            subsections: vec![],
+            subsections: vec![ReportSection {
+                title: "Modeled Frameworks".into(),
+                id: "clinical-frameworks".into(),
+                content: ReportContent::KeyValue {
+                    pairs: vec![
+                        (
+                            "ACMG/AMP Framework".into(),
+                            "Tier I-IV (somatic) + Pathogenic-Benign (germline)".into(),
+                        ),
+                        (
+                            "Variant Classification".into(),
+                            "VariantClassification enum with 9 tiers".into(),
+                        ),
+                        (
+                            "Audit Trail".into(),
+                            "ComplianceEvent: timestamp, actor, evidence hash".into(),
+                        ),
+                        (
+                            "Gene Panel Support".into(),
+                            "GenePanel: name, version, genes, BED file".into(),
+                        ),
+                        (
+                            "Biomarker Tracking".into(),
+                            "BiomarkerResult: value, units, reference range, interpretation".into(),
+                        ),
+                        (
+                            "QC Thresholds".into(),
+                            "QcThreshold: min/max, unit, passes(value) validator".into(),
+                        ),
+                    ],
+                },
+                subsections: vec![],
+            }],
         }]
     }
 }
@@ -1716,6 +2064,7 @@ impl ReportSectionGenerator for WorkflowInfoGenerator {
             ("Name".into(), ctx.config.workflow.name.clone()),
             ("Version".into(), ctx.config.workflow.version.clone()),
             ("Total Rules".into(), ctx.config.rules.len().to_string()),
+            ("Detected Domain".into(), format!("{:?}", ctx.domain)),
         ];
         if let Some(ref desc) = ctx.config.workflow.description {
             pairs.push(("Description".into(), desc.clone()));
@@ -1727,12 +2076,14 @@ impl ReportSectionGenerator for WorkflowInfoGenerator {
             pairs.push(("Genome Build".into(), genome.clone()));
         }
         if !ctx.config.config.is_empty() {
+            // Deterministic order — HashMap iteration is arbitrary and
+            // reports must be byte-stable (issue #83 P1-4).
+            let mut keys: Vec<&String> = ctx.config.config.keys().collect();
+            keys.sort_unstable();
             pairs.push((
                 "Config Variables".into(),
-                ctx.config
-                    .config
-                    .keys()
-                    .cloned()
+                keys.iter()
+                    .map(|k| (*k).clone())
                     .collect::<Vec<_>>()
                     .join(", "),
             ));
@@ -1764,7 +2115,7 @@ impl ReportSectionGenerator for CommandManifestGenerator {
         "commands"
     }
     fn description(&self) -> &str {
-        "Expanded shell commands for every rule"
+        "Executed commands — expanded from the checkpoint when available, declared templates otherwise"
     }
     fn applicable(&self, _ctx: &ReportContext) -> bool {
         true
@@ -1775,10 +2126,16 @@ impl ReportSectionGenerator for CommandManifestGenerator {
             .rules
             .iter()
             .map(|r| {
-                vec![
-                    r.name.clone(),
-                    r.shell.clone().unwrap_or_else(|| "(none)".into()),
-                ]
+                let declared = r.shell.clone().unwrap_or_else(|| "(none)".into());
+                match ctx.checkpoint.and_then(|c| c.rule_runs.get(&r.name)) {
+                    // The command that actually ran, with wildcards and
+                    // {config.x} resolved (issue #83 P0-6).
+                    Some(run) => vec![r.name.clone(), run.command.clone().unwrap_or(declared)],
+                    None => vec![
+                        r.name.clone(),
+                        format!("{declared} (declared template — no execution record)"),
+                    ],
+                }
             })
             .collect();
         vec![ReportSection {
@@ -1799,52 +2156,202 @@ impl ReportSectionGenerator for IoManifestGenerator {
         "file-manifest"
     }
     fn description(&self) -> &str {
-        "Input and output file listings"
+        "Real files on disk — checkpoint-recorded inputs and outputs (path, size, mtime, sha256)"
     }
     fn applicable(&self, _ctx: &ReportContext) -> bool {
         true
     }
     fn generate(&self, ctx: &ReportContext) -> Vec<ReportSection> {
-        let inputs: Vec<Vec<String>> = ctx
-            .config
-            .rules
-            .iter()
-            .flat_map(|r| r.input.iter().map(|i| vec![i.clone()]))
-            .collect();
-        let outputs: Vec<Vec<String>> = ctx
-            .config
-            .rules
-            .iter()
-            .flat_map(|r| r.output.iter().map(|o| vec![o.clone()]))
-            .collect();
-        vec![ReportSection {
-            title: "File Manifest".into(),
-            id: "file-manifest".into(),
-            content: ReportContent::Text {
-                text: String::new(),
-            },
-            subsections: vec![
-                ReportSection {
-                    title: "Input Files".into(),
-                    id: "input-files".into(),
-                    content: ReportContent::Table {
-                        headers: vec!["Pattern".into()],
-                        rows: inputs,
+        match ctx.checkpoint {
+            Some(cp) => {
+                // Inputs: checkpoint input manifests — the actual file set
+                // each rule's inputs resolved to when it completed, with
+                // size + mtime recorded at snapshot time (issue #83 P0-6).
+                let mut rules: Vec<&String> = cp.input_manifests.keys().collect();
+                rules.sort_unstable();
+                let mut inputs: Vec<Vec<String>> = Vec::new();
+                for rule in rules {
+                    for entry in &cp.input_manifests[rule] {
+                        inputs.push(vec![
+                            rule.clone(),
+                            entry.path.clone(),
+                            human_size(entry.size),
+                            format_mtime_nanos(entry.mtime_nanos),
+                        ]);
+                    }
+                }
+
+                // Outputs: checkpoint checksums (sha256 recorded when the
+                // rule completed), with current disk size/mtime where the
+                // file still exists.
+                let mut checksums: Vec<(&String, &String)> = cp.checksums.iter().collect();
+                checksums.sort_unstable();
+                let workdir = report_workdir(ctx);
+                let mut outputs: Vec<Vec<String>> = Vec::new();
+                for (path, sha) in checksums {
+                    let (size, mtime) = workdir
+                        .as_deref()
+                        .and_then(|wd| std::fs::metadata(wd.join(path)).ok())
+                        .map(|m| {
+                            (
+                                human_size(m.len()),
+                                m.modified()
+                                    .ok()
+                                    .map(format_system_time)
+                                    .unwrap_or_else(|| "-".into()),
+                            )
+                        })
+                        .unwrap_or_else(|| ("-".into(), "-".into()));
+                    outputs.push(vec![path.clone(), sha.clone(), size, mtime]);
+                }
+
+                let mut note = String::from(
+                    "Files recorded in the checkpoint when each rule completed \
+                     (input manifests + output checksums). Inputs are listed with \
+                     snapshot size/mtime; outputs with their recorded sha256 and \
+                     current on-disk size/mtime.",
+                );
+                if inputs.is_empty() {
+                    note.push_str(
+                        " No input manifests recorded — rules without inputs (or that \
+                         never completed) record nothing.",
+                    );
+                }
+                if outputs.is_empty() {
+                    note.push_str(
+                        " No output checksums recorded — run with --provenance to \
+                         record sha256 for outputs.",
+                    );
+                }
+                vec![ReportSection {
+                    title: "File Manifest".into(),
+                    id: "file-manifest".into(),
+                    content: ReportContent::Text { text: note },
+                    subsections: vec![
+                        ReportSection {
+                            title: "Input Files".into(),
+                            id: "input-files".into(),
+                            content: ReportContent::Table {
+                                headers: vec![
+                                    "Rule".into(),
+                                    "Path".into(),
+                                    "Size".into(),
+                                    "Modified".into(),
+                                ],
+                                rows: inputs,
+                            },
+                            subsections: vec![],
+                        },
+                        ReportSection {
+                            title: "Output Files".into(),
+                            id: "output-files".into(),
+                            content: ReportContent::Table {
+                                headers: vec![
+                                    "Path".into(),
+                                    "SHA-256".into(),
+                                    "Size".into(),
+                                    "Modified".into(),
+                                ],
+                                rows: outputs,
+                            },
+                            subsections: vec![],
+                        },
+                    ],
+                }]
+            }
+            None => {
+                // Honest fallback: without a checkpoint there is no
+                // execution data, so only declared patterns can be shown —
+                // clearly labeled as such (issue #83 P0-6).
+                let inputs: Vec<Vec<String>> = ctx
+                    .config
+                    .rules
+                    .iter()
+                    .flat_map(|r| r.input.iter().map(|i| vec![i.clone()]))
+                    .collect();
+                let outputs: Vec<Vec<String>> = ctx
+                    .config
+                    .rules
+                    .iter()
+                    .flat_map(|r| r.output.iter().map(|o| vec![o.clone()]))
+                    .collect();
+                vec![ReportSection {
+                    title: "File Manifest".into(),
+                    id: "file-manifest".into(),
+                    content: ReportContent::Text {
+                        text: "No execution data — showing declared patterns only. \
+                                Run the workflow first for a real file listing."
+                            .into(),
                     },
-                    subsections: vec![],
-                },
-                ReportSection {
-                    title: "Output Files".into(),
-                    id: "output-files".into(),
-                    content: ReportContent::Table {
-                        headers: vec!["Pattern".into()],
-                        rows: outputs,
-                    },
-                    subsections: vec![],
-                },
-            ],
-        }]
+                    subsections: vec![
+                        ReportSection {
+                            title: "Declared Input Patterns".into(),
+                            id: "input-files".into(),
+                            content: ReportContent::Table {
+                                headers: vec!["Pattern".into()],
+                                rows: inputs,
+                            },
+                            subsections: vec![],
+                        },
+                        ReportSection {
+                            title: "Declared Output Patterns".into(),
+                            id: "output-files".into(),
+                            content: ReportContent::Table {
+                                headers: vec!["Pattern".into()],
+                                rows: outputs,
+                            },
+                            subsections: vec![],
+                        },
+                    ],
+                }]
+            }
+        }
     }
+}
+
+/// Working directory files resolve against: the checkpoint's recorded
+/// workdir, falling back to the workflow file's directory.
+fn report_workdir(ctx: &ReportContext) -> Option<std::path::PathBuf> {
+    if let Some(cp) = ctx.checkpoint
+        && let Some(wd) = cp.workdir.as_deref()
+    {
+        return Some(std::path::PathBuf::from(wd));
+    }
+    ctx.workflow_path
+        .map(crate::parent_dir)
+        .map(|p| p.to_path_buf())
+}
+
+/// Human-readable file size (binary units).
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} {}", UNITS[0])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+/// Format a nanosecond Unix epoch timestamp as UTC, or "-" when invalid.
+fn format_mtime_nanos(nanos: i128) -> String {
+    // Realistic mtimes fit comfortably in i64 nanoseconds (the epoch is
+    // ~1.77e18 ns in 2026; i64 max is 9.2e18).
+    i64::try_from(nanos)
+        .ok()
+        .map(DateTime::from_timestamp_nanos)
+        .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .unwrap_or_else(|| "-".into())
+}
+
+fn format_system_time(t: std::time::SystemTime) -> String {
+    let dt: DateTime<Utc> = t.into();
+    dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 struct EnvironmentInfoGenerator;
@@ -1853,26 +2360,283 @@ impl ReportSectionGenerator for EnvironmentInfoGenerator {
         "environment"
     }
     fn description(&self) -> &str {
-        "Available backends and oxo-flow version"
+        "Engine version, platform, and the environments declared by the workflow's rules"
     }
     fn applicable(&self, _ctx: &ReportContext) -> bool {
         true
     }
-    fn generate(&self, _ctx: &ReportContext) -> Vec<ReportSection> {
+    fn generate(&self, ctx: &ReportContext) -> Vec<ReportSection> {
+        // Real facts only (issue #83 P0-6): engine version, platform, and
+        // the environments the workflow declares — no guessed list of
+        // "available backends".
+        let mut env_counts: std::collections::BTreeMap<&str, usize> =
+            std::collections::BTreeMap::new();
+        for rule in &ctx.config.rules {
+            *env_counts.entry(rule.environment.kind()).or_default() += 1;
+        }
+        let declared = if env_counts.is_empty() {
+            "(no rules)".to_string()
+        } else {
+            env_counts
+                .iter()
+                .map(|(kind, count)| format!("{kind} ({count} rule(s))"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         vec![ReportSection {
             title: "Environment".into(),
             id: "environment".into(),
             content: ReportContent::KeyValue {
                 pairs: vec![
-                    (
-                        "Available Backends".into(),
-                        "conda, mamba, pixi, docker, singularity, venv, system, modules".into(),
-                    ),
                     ("oxo-flow Version".into(), env!("CARGO_PKG_VERSION").into()),
+                    (
+                        "Platform".into(),
+                        format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+                    ),
+                    ("Declared Rule Environments".into(), declared),
                 ],
             },
             subsections: vec![],
         }]
+    }
+}
+
+/// Failure diagnosis — the first screen of a failed run's report: per failed
+/// rule, the exit code, affected downstream rules, a stderr excerpt when
+/// available, and a suggested next step (issue #83 P0-4).
+struct FailureDiagnosisGenerator;
+impl ReportSectionGenerator for FailureDiagnosisGenerator {
+    fn name(&self) -> &str {
+        "failure-diagnosis"
+    }
+    fn description(&self) -> &str {
+        "Failed rules: exit code, cascade impact, stderr excerpt, suggested next steps"
+    }
+    fn applicable(&self, ctx: &ReportContext) -> bool {
+        ctx.checkpoint
+            .map(|c| !c.failed_rules.is_empty())
+            .unwrap_or(false)
+    }
+    fn generate(&self, ctx: &ReportContext) -> Vec<ReportSection> {
+        let cp = ctx.checkpoint.unwrap();
+        let mut failed: Vec<&String> = cp.failed_rules.iter().collect();
+        failed.sort_unstable();
+
+        let dag = crate::dag::WorkflowDag::from_rules(&ctx.config.rules).ok();
+        let mut subsections = Vec::new();
+        for rule in &failed {
+            let run = cp.rule_runs.get(*rule);
+            let exit = run.and_then(|r| r.exit_code);
+            let tail = run.and_then(|r| r.stderr_tail.as_deref());
+
+            let cascade = affected_downstream(rule, dag.as_ref());
+            let cascade_text = if cascade.is_empty() {
+                "none — no rules consume this rule's outputs".to_string()
+            } else {
+                format!("{} ({} rule(s))", cascade.join(", "), cascade.len())
+            };
+
+            let pairs = vec![
+                (
+                    "Exit Code".into(),
+                    exit.map(|c| c.to_string())
+                        .unwrap_or_else(|| "unknown (engine-level failure)".into()),
+                ),
+                ("Affected Downstream".into(), cascade_text),
+                ("Suggested Next Step".into(), failure_suggestion(exit, tail)),
+            ];
+
+            let mut details = vec![ReportSection {
+                title: "Details".into(),
+                id: format!("failure-{}-details", sanitize_id(rule)),
+                content: ReportContent::KeyValue { pairs },
+                subsections: vec![],
+            }];
+            if let Some(tail) = tail {
+                details.push(ReportSection {
+                    title: "Stderr Excerpt".into(),
+                    id: format!("failure-{}-stderr", sanitize_id(rule)),
+                    content: ReportContent::Markdown {
+                        markdown: tail.to_string(),
+                    },
+                    subsections: vec![],
+                });
+            }
+            subsections.push(ReportSection {
+                title: (*rule).clone(),
+                id: format!("failure-{}", sanitize_id(rule)),
+                content: ReportContent::Text {
+                    text: format!("Rule '{rule}' failed."),
+                },
+                subsections: details,
+            });
+        }
+        vec![ReportSection {
+            title: "Failure Diagnosis".into(),
+            id: "failure-diagnosis".into(),
+            content: ReportContent::Text {
+                text: format!(
+                    "{} rule(s) failed. For each: exit code, affected downstream rules, \
+                     a stderr excerpt when available, and a suggested next step.",
+                    failed.len()
+                ),
+            },
+            subsections,
+        }]
+    }
+}
+
+/// All rules a failure propagates to: transitive dependents in the DAG.
+fn affected_downstream(rule: &str, dag: Option<&crate::dag::WorkflowDag>) -> Vec<String> {
+    let Some(dag) = dag else { return Vec::new() };
+    let mut visited: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    visited.insert(rule.to_string());
+    let mut queue = vec![rule.to_string()];
+    let mut affected = Vec::new();
+    while let Some(current) = queue.pop() {
+        for dep in dag.dependents(&current).unwrap_or_default() {
+            if visited.insert(dep.clone()) {
+                affected.push(dep.clone());
+                queue.push(dep);
+            }
+        }
+    }
+    affected
+}
+
+/// A concrete next step for the most common failure signatures, grounded in
+/// POSIX exit-code conventions (issue #83 P0-4).
+fn failure_suggestion(exit_code: Option<i32>, stderr_tail: Option<&str>) -> String {
+    let stderr = stderr_tail.unwrap_or("").to_lowercase();
+    if stderr.contains("no space left") {
+        return "disk full — free space in the working directory, then re-run with --resume-failed"
+            .into();
+    }
+    match exit_code {
+        Some(127) => "command not found (exit 127) — verify the tool is installed in this \
+                      rule's environment"
+            .into(),
+        Some(126) => {
+            "not executable / permission denied (exit 126) — check file permissions".into()
+        }
+        Some(137) => {
+            "killed (exit 137), likely out of memory — raise the rule's memory limit".into()
+        }
+        Some(124) => "timed out (exit 124) — raise the timeout or split the rule".into(),
+        Some(-1) | None => "engine-level failure before the command completed — check resource \
+                            limits and environment setup"
+            .into(),
+        Some(code) => format!(
+            "inspect the stderr excerpt above, then re-run with --resume-failed (exit {code})"
+        ),
+    }
+}
+
+/// HTML-fragment-safe identifier for a rule name.
+fn sanitize_id(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+/// Execution provenance: engine version, workflow file identity, and
+/// checkpoint location — the audit-trail anchor of the report (issue #83
+/// P1-8).
+struct ProvenanceGenerator;
+impl ReportSectionGenerator for ProvenanceGenerator {
+    fn name(&self) -> &str {
+        "provenance"
+    }
+    fn description(&self) -> &str {
+        "Engine version, workflow file checksum, checkpoint location"
+    }
+    fn applicable(&self, _ctx: &ReportContext) -> bool {
+        true
+    }
+    fn generate(&self, ctx: &ReportContext) -> Vec<ReportSection> {
+        let mut pairs = vec![("oxo-flow Version".into(), env!("CARGO_PKG_VERSION").into())];
+        if let Some(path) = ctx.workflow_path {
+            pairs.push(("Workflow File".into(), path.display().to_string()));
+            match crate::executor::checkpoint::compute_file_checksum(path) {
+                Ok(checksum) => pairs.push(("Workflow Checksum".into(), checksum)),
+                Err(_) => pairs.push(("Workflow Checksum".into(), "-".into())),
+            }
+        }
+        if let Some(path) = ctx.checkpoint_path {
+            pairs.push(("Checkpoint".into(), path.display().to_string()));
+        }
+        vec![ReportSection {
+            title: "Provenance".into(),
+            id: "provenance".into(),
+            content: ReportContent::KeyValue { pairs },
+            subsections: vec![],
+        }]
+    }
+}
+
+/// Task summary — every rule with type, I/O counts, environment, and
+/// resources. A filterable section like all others (issue #83 P2-1).
+struct TaskSummaryGenerator;
+impl ReportSectionGenerator for TaskSummaryGenerator {
+    fn name(&self) -> &str {
+        "task-summary"
+    }
+    fn description(&self) -> &str {
+        "All rules with type, inputs/outputs, environment, and resources"
+    }
+    fn applicable(&self, _ctx: &ReportContext) -> bool {
+        true
+    }
+    fn generate(&self, ctx: &ReportContext) -> Vec<ReportSection> {
+        vec![task_summary_section(&ctx.config.rules)]
+    }
+}
+
+fn task_summary_section(rules: &[crate::rule::Rule]) -> ReportSection {
+    let headers: Vec<String> = vec![
+        "Task",
+        "Type",
+        "Inputs",
+        "Outputs",
+        "Environment",
+        "Resources",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    let rows: Vec<Vec<String>> = rules
+        .iter()
+        .map(|r| {
+            let task_type = if r.shell.is_some() {
+                "shell"
+            } else if r.script.is_some() {
+                "script"
+            } else if r.transform.is_some() {
+                "transform"
+            } else {
+                "other"
+            };
+            let env = r.environment.kind();
+            let resources = format!(
+                "t={} m={}",
+                r.resources.threads,
+                r.resources.memory.as_deref().unwrap_or("-")
+            );
+            vec![
+                r.name.clone(),
+                task_type.into(),
+                r.input.len().to_string(),
+                r.output.len().to_string(),
+                env.to_string(),
+                resources,
+            ]
+        })
+        .collect();
+    ReportSection {
+        title: "Task Summary".into(),
+        id: "task-summary".into(),
+        content: ReportContent::Table { headers, rows },
+        subsections: vec![],
     }
 }
 
@@ -2316,5 +3080,450 @@ mod tests {
             }
             _ => panic!("expected Chart content"),
         }
+    }
+
+    // ── Issue #83: honesty, execution truth, determinism, XSS ──────────────
+
+    /// Parse a workflow config from an inline TOML body.
+    fn workflow_config(extra: &str) -> WorkflowConfig {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wf.oxoflow");
+        std::fs::write(
+            &path,
+            format!("[workflow]\nname = \"test\"\nversion = \"0.1\"\n{extra}"),
+        )
+        .unwrap();
+        WorkflowConfig::from_file(&path).unwrap()
+    }
+
+    fn fixture_checkpoint() -> CheckpointState {
+        let mut cp = CheckpointState::new();
+        cp.completed_rules.insert("align".to_string());
+        cp.completed_rules.insert("bwa".to_string());
+        cp.failed_rules.insert("call".to_string());
+        cp.benchmarks.insert(
+            "align".to_string(),
+            crate::executor::checkpoint::BenchmarkRecord {
+                rule: "align".to_string(),
+                wall_time_secs: 12.5,
+                max_memory_mb: Some(120),
+                memory_limit_mb: Some(2048),
+                cpu_seconds: None,
+                retries: 1,
+            },
+        );
+        cp.rule_runs.insert(
+            "call".to_string(),
+            crate::executor::checkpoint::RuleRunRecord {
+                exit_code: Some(127),
+                command: Some("gatk HaplotypeCaller -I out.bam".to_string()),
+                stderr_tail: Some("gatk: command not found".to_string()),
+            },
+        );
+        cp.checksums
+            .insert("out.bam".to_string(), "sha256:aaaa".to_string());
+        cp.input_manifests.insert(
+            "align".to_string(),
+            vec![crate::executor::checkpoint::InputManifestEntry {
+                path: "in.fastq".to_string(),
+                size: 1024,
+                mtime_nanos: 1_700_000_000_000_000_000,
+                hash: Some("sha256:bbbb".to_string()),
+                remote: None,
+            }],
+        );
+        cp
+    }
+
+    fn ctx_for<'a>(
+        config: &'a WorkflowConfig,
+        checkpoint: Option<&'a CheckpointState>,
+        workflow_path: Option<&'a std::path::Path>,
+    ) -> ReportContext<'a> {
+        ReportContext {
+            config,
+            checkpoint,
+            domain: WorkflowDomain::detect(&config.rules),
+            workflow_path,
+            checkpoint_path: None,
+        }
+    }
+
+    #[test]
+    fn domain_detect_ordering() {
+        // gatk + STAR is a variant-calling pipeline, not RNA-seq (issue #83 P0-3).
+        let config = workflow_config(
+            r#"[[rules]]
+name = "align"
+shell = "STAR --runThreadN 4"
+[[rules]]
+name = "call"
+shell = "gatk HaplotypeCaller"
+"#,
+        );
+        assert_eq!(
+            WorkflowDomain::detect(&config.rules),
+            WorkflowDomain::DnaSequencing
+        );
+
+        let config = workflow_config(
+            r#"[[rules]]
+name = "align"
+shell = "STAR --runThreadN 4"
+[[rules]]
+name = "count"
+shell = "featureCounts"
+"#,
+        );
+        assert_eq!(
+            WorkflowDomain::detect(&config.rules),
+            WorkflowDomain::RnaSequencing
+        );
+
+        let config = workflow_config(
+            r#"[[rules]]
+name = "peak"
+shell = "macs2 callpeak"
+"#,
+        );
+        assert_eq!(
+            WorkflowDomain::detect(&config.rules),
+            WorkflowDomain::Epigenomics
+        );
+
+        let config = workflow_config(
+            r#"[[rules]]
+name = "hello"
+shell = "echo hi"
+"#,
+        );
+        assert_eq!(
+            WorkflowDomain::detect(&config.rules),
+            WorkflowDomain::Generic
+        );
+    }
+
+    #[test]
+    fn clinical_compliance_gated_by_domain_and_filter() {
+        let config = workflow_config(
+            r#"[[rules]]
+name = "hello"
+shell = "echo hi"
+"#,
+        );
+        let ctx = ctx_for(&config, None, None);
+        let registry = SectionRegistry::with_defaults();
+        // Generic workflow: no clinical section by default (issue #83 P0-2).
+        let sections = registry.generate(&ctx, None);
+        assert!(!sections.iter().any(|s| s.id == "clinical-compliance"));
+        // Explicit selection overrides the gate.
+        let filter: std::collections::HashSet<String> = ["clinical-compliance".into()].into();
+        let sections = registry.generate(&ctx, Some(&filter));
+        assert!(sections.iter().any(|s| s.id == "clinical-compliance"));
+    }
+
+    #[test]
+    fn dashboard_marks_unrun_without_checkpoint() {
+        let config = workflow_config(
+            r#"[[rules]]
+name = "hello"
+shell = "echo hi"
+"#,
+        );
+        let ctx = ctx_for(&config, None, None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        let dashboard = sections.iter().find(|s| s.id == "dashboard").unwrap();
+        let mut html = String::new();
+        render_section_html(&mut html, dashboard, 2);
+        // Never claim completion for a run that never happened (issue #83 P0-8).
+        assert!(!html.contains("All tasks completed"));
+        assert!(html.contains("No execution data"));
+    }
+
+    #[test]
+    fn html_escapes_user_controlled_strings() {
+        let mut report = Report::new("T", "wf</title>", "1.0.0");
+        report.add_section(ReportSection {
+            title: "<img src=x onerror=alert(1)>".to_string(),
+            id: "evil\" onclick=\"alert(1)".to_string(),
+            content: ReportContent::Table {
+                headers: vec!["<th>".to_string()],
+                rows: vec![vec!["<script>alert(1)</script>".to_string()]],
+            },
+            subsections: vec![],
+        });
+        report.add_section(ReportSection {
+            title: "kv".to_string(),
+            id: "kv".to_string(),
+            content: ReportContent::KeyValue {
+                pairs: vec![("<script>".to_string(), "a&b <i>".to_string())],
+            },
+            subsections: vec![],
+        });
+        let html = report.to_html();
+        assert!(!html.contains("<script>alert(1)</script>"));
+        assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+        assert!(!html.contains("<img src=x onerror"));
+        assert!(!html.contains("</title><script>"));
+        // The explicit-raw-Html variant stays raw by contract.
+        report.add_section(ReportSection {
+            title: "raw".to_string(),
+            id: "raw".to_string(),
+            content: ReportContent::Html {
+                html: "<b>trusted</b>".to_string(),
+            },
+            subsections: vec![],
+        });
+        assert!(report.to_html().contains("<b>trusted</b>"));
+    }
+
+    #[test]
+    fn execution_status_sorted_with_exit_codes() {
+        let config = workflow_config(
+            r#"[[rules]]
+name = "hello"
+shell = "echo hi"
+"#,
+        );
+        let cp = fixture_checkpoint();
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        let status = sections
+            .iter()
+            .find(|s| s.id == "execution-status")
+            .unwrap();
+        match &status.content {
+            ReportContent::Table { headers, rows } => {
+                assert!(headers.contains(&"Exit Code".to_string()));
+                // Deterministic order (issue #83 P1-4): align, bwa, call.
+                let names: Vec<&str> = rows.iter().map(|r| r[0].as_str()).collect();
+                assert_eq!(names, vec!["align", "bwa", "call"]);
+                let call_row = rows.iter().find(|r| r[0] == "call").unwrap();
+                assert_eq!(call_row[3], "127");
+            }
+            _ => panic!("expected table"),
+        }
+        // Benchmarks table has no placeholder CPU column (issue #83 P0-5).
+        let bench = sections.iter().find(|s| s.id == "benchmarks").unwrap();
+        match &bench.content {
+            ReportContent::Table { headers, .. } => {
+                assert!(!headers.contains(&"CPU".to_string()));
+                assert!(headers.contains(&"Memory".to_string()));
+            }
+            _ => panic!("expected table"),
+        }
+    }
+
+    #[test]
+    fn failure_diagnosis_includes_cascade_and_suggestion() {
+        let config = workflow_config(
+            r#"[[rules]]
+name = "align"
+shell = "touch out.bam"
+output = ["out.bam"]
+[[rules]]
+name = "call"
+shell = "gatk"
+input = ["out.bam"]
+"#,
+        );
+        let mut cp = fixture_checkpoint();
+        cp.failed_rules.clear();
+        cp.failed_rules.insert("align".to_string());
+        cp.rule_runs.insert(
+            "align".to_string(),
+            crate::executor::checkpoint::RuleRunRecord {
+                exit_code: Some(137),
+                command: None,
+                stderr_tail: Some("Killed".to_string()),
+            },
+        );
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        let diag = sections
+            .iter()
+            .find(|s| s.id == "failure-diagnosis")
+            .unwrap();
+        let mut html = String::new();
+        render_section_html(&mut html, diag, 2);
+        // Downstream rule named in the cascade, 137 → memory suggestion.
+        assert!(html.contains("call"));
+        assert!(html.contains("memory"));
+        assert!(html.contains("137"));
+    }
+
+    #[test]
+    fn failure_suggestions_cover_common_exit_codes() {
+        assert!(failure_suggestion(Some(127), None).contains("command not found"));
+        assert!(failure_suggestion(Some(126), None).contains("permission"));
+        assert!(failure_suggestion(Some(137), None).contains("memory"));
+        assert!(failure_suggestion(Some(124), None).contains("timeout"));
+        assert!(failure_suggestion(None, None).contains("engine-level"));
+        assert!(failure_suggestion(Some(1), Some("no space left on device")).contains("disk"));
+    }
+
+    #[test]
+    fn file_manifest_shows_recorded_files() {
+        let config = workflow_config(
+            r#"[[rules]]
+name = "hello"
+shell = "echo hi"
+"#,
+        );
+        let cp = fixture_checkpoint();
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        let manifest = sections.iter().find(|s| s.id == "file-manifest").unwrap();
+        let mut html = String::new();
+        render_section_html(&mut html, manifest, 2);
+        assert!(html.contains("in.fastq"));
+        assert!(html.contains("out.bam"));
+        assert!(html.contains("sha256:aaaa"));
+        // No pattern-only tables when execution data exists (issue #83 P0-6).
+        assert!(!html.contains(">Pattern<"));
+    }
+
+    #[test]
+    fn task_summary_respects_section_filter() {
+        let config = workflow_config(
+            r#"[[rules]]
+name = "hello"
+shell = "echo hi"
+"#,
+        );
+        let ctx = ctx_for(&config, None, None);
+        // Present by default...
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        assert!(sections.iter().any(|s| s.id == "task-summary"));
+        // ...and removable via the filter (issue #83 P2-1).
+        let filter: std::collections::HashSet<String> = ["universal".into()].into();
+        let sections = SectionRegistry::with_defaults().generate(&ctx, Some(&filter));
+        assert!(sections.iter().any(|s| s.id == "dashboard"));
+        assert!(!sections.iter().any(|s| s.id == "task-summary"));
+    }
+
+    #[test]
+    fn provenance_section_records_workflow_checksum() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wf.oxoflow");
+        std::fs::write(&path, "[workflow]\nname = \"t\"\nversion = \"0.1\"\n").unwrap();
+        let config = WorkflowConfig::from_file(&path).unwrap();
+        let ctx = ctx_for(&config, None, Some(&path));
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        let prov = sections.iter().find(|s| s.id == "provenance").unwrap();
+        match &prov.content {
+            ReportContent::KeyValue { pairs } => {
+                let checksum = pairs
+                    .iter()
+                    .find(|(k, _)| k == "Workflow Checksum")
+                    .unwrap();
+                assert!(checksum.1.starts_with("sha256:"));
+                assert_eq!(checksum.1.len(), "sha256:".len() + 64);
+            }
+            _ => panic!("expected key-value pairs"),
+        }
+    }
+
+    #[test]
+    fn report_json_has_schema_and_command_fields() {
+        let report = Report::new("T", "w", "0.1");
+        let json = report.to_json().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["command"], "report");
+    }
+
+    #[test]
+    fn report_rendering_is_deterministic_with_pinned_timestamp() {
+        let config = workflow_config(
+            r#"[[rules]]
+name = "hello"
+shell = "echo hi"
+"#,
+        );
+        let cp = fixture_checkpoint();
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let pinned = DateTime::from_timestamp(0, 0);
+
+        // Sections are generated twice (registry generate is deterministic;
+        // nothing is cloned) — both renders must be byte-identical.
+        let render = |sections: &[ReportSection], generated_at: Option<DateTime<Utc>>| {
+            let mut report = Report::new("T", "w", "0.1");
+            report.generated_at = generated_at;
+            for section in sections {
+                report.add_section(section.clone());
+            }
+            report
+        };
+        let sections_a = SectionRegistry::with_defaults().generate(&ctx, None);
+        let sections_b = SectionRegistry::with_defaults().generate(&ctx, None);
+        let html_a = render(&sections_a, pinned).to_html();
+        let html_b = render(&sections_b, pinned).to_html();
+        assert_eq!(html_a, html_b);
+        let json_a = render(&sections_a, pinned).to_json().unwrap();
+        let json_b = render(&sections_b, pinned).to_json().unwrap();
+        assert_eq!(json_a, json_b);
+    }
+
+    #[test]
+    fn markdown_renders_gfm_tables() {
+        let mut report = Report::new("T", "w", "0.1");
+        report.add_section(ReportSection {
+            title: "S".to_string(),
+            id: "s".to_string(),
+            content: ReportContent::Table {
+                headers: vec!["A".to_string(), "B".to_string()],
+                rows: vec![vec!["1".to_string(), "2|x".to_string()]],
+            },
+            subsections: vec![],
+        });
+        let md = report.to_markdown();
+        assert!(md.contains("| A | B |"));
+        assert!(md.contains("| 1 | 2\\|x |"));
+    }
+
+    #[test]
+    fn hierarchy_and_scatter_render_as_tables() {
+        let mut report = Report::new("T", "w", "0.1");
+        report.add_section(ReportSection {
+            title: "S".to_string(),
+            id: "s".to_string(),
+            content: ReportContent::ScatterPlot {
+                title: "t".to_string(),
+                x_label: "x".to_string(),
+                y_label: "y".to_string(),
+                points: vec![ScatterPoint {
+                    x: 1.0,
+                    y: 2.0,
+                    label: None,
+                    group: None,
+                    size: None,
+                }],
+            },
+            subsections: vec![],
+        });
+        let html = report.to_html();
+        // Real table rendering, not a dead promise (issue #83 P1-10).
+        assert!(!html.contains("interactive"));
+        assert!(html.contains("<table>"));
+    }
+
+    #[test]
+    fn html_includes_a11y_landmarks() {
+        let mut report = Report::new("T", "w", "0.1");
+        report.add_section(ReportSection {
+            title: "S".to_string(),
+            id: "s".to_string(),
+            content: ReportContent::Table {
+                headers: vec!["A".to_string()],
+                rows: vec![vec!["1".to_string()]],
+            },
+            subsections: vec![],
+        });
+        let html = report.to_html();
+        assert!(html.contains("role=\"img\"") || html.contains("skip-link"));
+        assert!(html.contains("<main id=\"main\">"));
+        assert!(html.contains("scope=\"col\""));
+        assert!(html.contains("@media print"));
     }
 }

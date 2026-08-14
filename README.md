@@ -35,7 +35,7 @@ oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It 
 - 📦 **8 environment backends** — conda, mamba, pixi, docker, singularity, venv, system, and HPC modules — with per-rule isolation
 - ⚡ **Rust performance** — Fearless concurrency, zero-cost abstractions, `#![forbid(unsafe_code)]` in core and web crates
 - 🌐 **Professional Web UI** — React 19 SPA with DAG visualization (cytoscape.js), TOML editor (CodeMirror 6), AI chat, and Vega-Lite charts
-- 📊 **Built-in reporting** — HTML/JSON/PDF reports with execution summaries, resource metrics, and output file browsers
+- 📊 **Built-in reporting** — HTML/JSON/Markdown/PDF reports with execution summaries, failure diagnosis, resource metrics, and checkpoint-verified file manifests
 - 🔒 **Security hardened** — Shell injection prevention, path traversal protection, secret scanning, and per-IP rate limiting
 - 🗄️ **Checkpoint & resume** — JSON-persisted execution state; resume interrupted workflows from the last completed rule
 - 🚀 **Three deployment modes** — Personal workstation, team server with OAuth2, or HPC submit panel — same binary
@@ -49,7 +49,7 @@ oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It 
 | **Workflow format** | TOML (`.oxoflow`) — declarative, composable | Snakefile (Python DSL) | Nextflow DSL (Groovy) |
 | **Environment support** | 8 backends — conda, mamba, pixi, docker, singularity, venv, system, modules — per-rule | conda, singularity, docker | conda, docker, singularity, modules |
 | **Web interface** | Built-in React 19 SPA + REST API | External Snakemake-UI | Nextflow Tower (commercial) |
-| **Reporting** | Built-in HTML/JSON/PDF reports with metrics | Via MultiQC | Via Nextflow Tower |
+| **Reporting** | Built-in HTML/JSON/Markdown/PDF reports from checkpoint data (execution truth, failure diagnosis, file checksums) | Via MultiQC | Via Nextflow Tower |
 | **Cluster backends** | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF, k8s |
 | **Security** | Shell sanitization, path traversal prevention, rate limiting | Limited | Limited |
 | **AI Companion** | Built-in — generate, refine, diagnose, interpret | Not built-in | Not built-in |

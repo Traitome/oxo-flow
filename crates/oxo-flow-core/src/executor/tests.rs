@@ -396,6 +396,63 @@ fn checkpoint_json_round_trip() {
 }
 
 #[test]
+fn checkpoint_record_run_persists_diagnostics() {
+    let mut state = CheckpointState::new();
+    let record = JobRecord {
+        rule: "call".to_string(),
+        status: JobStatus::Failed,
+        started_at: None,
+        finished_at: None,
+        exit_code: Some(127),
+        stdout: None,
+        stderr: Some("gatk: command not found".to_string()),
+        command: Some("gatk HaplotypeCaller -I out.bam".to_string()),
+        retries: 0,
+        timeout: None,
+        skip_reason: None,
+        max_rss_mb: None,
+    };
+    state.record_run(&record);
+    state.mark_failed("call");
+
+    // Round-trips through JSON so legacy/forward compatibility is covered.
+    let json = state.to_json().unwrap();
+    let restored = CheckpointState::from_json(&json).unwrap();
+    let run = restored.rule_runs.get("call").unwrap();
+    assert_eq!(run.exit_code, Some(127));
+    assert_eq!(
+        run.command.as_deref(),
+        Some("gatk HaplotypeCaller -I out.bam")
+    );
+    assert_eq!(run.stderr_tail.as_deref(), Some("gatk: command not found"));
+}
+
+#[test]
+fn checkpoint_stderr_tail_is_bounded() {
+    let mut state = CheckpointState::new();
+    let long = "x".repeat(10_000);
+    let record = JobRecord {
+        rule: "noisy".to_string(),
+        status: JobStatus::Failed,
+        started_at: None,
+        finished_at: None,
+        exit_code: Some(1),
+        stdout: None,
+        stderr: Some(long),
+        command: None,
+        retries: 0,
+        timeout: None,
+        skip_reason: None,
+        max_rss_mb: None,
+    };
+    state.record_run(&record);
+    let tail = state.rule_runs["noisy"].stderr_tail.as_deref().unwrap();
+    assert!(tail.starts_with('…'));
+    // 2048 chars of content + the "…\n" truncation marker.
+    assert!(tail.chars().count() <= 2048 + 2, "tail must stay bounded");
+}
+
+#[test]
 fn file_is_newer_with_real_files() {
     let dir = tempfile::tempdir().unwrap();
     let older = dir.path().join("older.txt");
