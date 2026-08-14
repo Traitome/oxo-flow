@@ -27,14 +27,13 @@ use aws_sdk_s3::primitives::ByteStream;
 fn default_client() -> &'static S3Client {
     static CLIENT: OnceLock<S3Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
-        let rt = tokio::runtime::Runtime::new()
-            .expect("failed to create tokio runtime for S3 client init");
-        rt.block_on(async {
-            let config = aws_sdk_s3::config::Config::builder()
-                .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
-                .build();
-            S3Client::from_conf(config)
-        })
+        // `Config::builder().build()` is synchronous (env/config-file
+        // values are resolved lazily per request), so no runtime is
+        // needed here — and none may be started inside an ambient one.
+        let config = aws_sdk_s3::config::Config::builder()
+            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
+            .build();
+        S3Client::from_conf(config)
     })
 }
 
@@ -128,12 +127,11 @@ impl StorageBackend for S3Storage {
             Err(e) => {
                 let msg = e.to_string();
                 if msg.contains("NotFound") || msg.contains("404") {
-                    Ok(false)
+                    Ok(None)
                 } else {
                     Err(s3_error(format!("S3 head_object error: {e}")))
                 }
             }
-            Err(e) => Err(s3_error(format!("S3 head_object error: {e}"))),
         }
     }
 

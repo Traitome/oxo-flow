@@ -227,7 +227,7 @@ async fn gcs_head_stat(bucket: &str, key: &str) -> Result<Option<RemoteStat>> {
             Ok(Some(RemoteStat { size, etag }))
         }
         404 => Ok(None),
-        status => {
+        _ => {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             Err(gcs_io_error(
