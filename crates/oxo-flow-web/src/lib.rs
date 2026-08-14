@@ -243,6 +243,12 @@ pub fn broadcast_event(event_type: &str, data: &serde_json::Value) {
     crate::sse::broadcast_event(event_type, data);
 }
 
+/// Broadcast an SSE event scoped to one user's run (issue #82 P0-5) on the
+/// active SSE channel.
+pub fn broadcast_event_for(event_type: &str, data: &serde_json::Value, user: Option<&str>) {
+    crate::sse::broadcast_event_for(event_type, data, user);
+}
+
 // ---------------------------------------------------------------------------
 // Data types
 // ---------------------------------------------------------------------------

@@ -1,8 +1,9 @@
 //! HTTP handlers for cluster connections (SSH endpoints).
 
 use axum::extract::Path;
-use axum::{Json, http::StatusCode};
+use axum::{Extension, Json, http::StatusCode};
 
+use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::workflow::handlers::{ApiError, err};
 use crate::infra::db::models;
 
@@ -25,6 +26,21 @@ fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+/// Cluster connections hold SSH credentials shared by the whole platform.
+/// Managing them (upsert/delete) is admin-only outside personal mode
+/// (issue #82 P0-5); listing and probing stay available to any
+/// authenticated user so they can pick a cluster for their runs.
+fn require_cluster_admin(user: &CurrentUser) -> Result<(), (StatusCode, Json<ApiError>)> {
+    if crate::server::running_mode() != "personal" && !user.is_admin() {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "ACCESS_DENIED",
+            "Admin role required to manage cluster connections".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// GET /api/clusters — list configured cluster connections.
 pub async fn list_clusters() -> ApiResult<Vec<ClusterInfo>> {
     let pool = get_pool()?;
@@ -43,7 +59,12 @@ pub async fn list_clusters() -> ApiResult<Vec<ClusterInfo>> {
 }
 
 /// POST /api/clusters — create or update a cluster connection (upsert by id).
-pub async fn upsert_cluster(Json(req): Json<ClusterUpsertRequest>) -> ApiResult<ClusterInfo> {
+pub async fn upsert_cluster(
+    authenticated: Option<Extension<CurrentUser>>,
+    Json(req): Json<ClusterUpsertRequest>,
+) -> ApiResult<ClusterInfo> {
+    let user = resolve(authenticated.as_ref());
+    require_cluster_admin(&user)?;
     service::validate(&req).map_err(|e| err(StatusCode::BAD_REQUEST, "INVALID_CLUSTER", e))?;
     let pool = get_pool()?;
     let now = now_iso();
@@ -91,7 +112,12 @@ pub async fn upsert_cluster(Json(req): Json<ClusterUpsertRequest>) -> ApiResult<
 }
 
 /// DELETE /api/clusters/{id}
-pub async fn delete_cluster(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
+pub async fn delete_cluster(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<serde_json::Value> {
+    let user = resolve(authenticated.as_ref());
+    require_cluster_admin(&user)?;
     let pool = get_pool()?;
     let deleted = sqlx::query("DELETE FROM clusters WHERE id = ?")
         .bind(&id)

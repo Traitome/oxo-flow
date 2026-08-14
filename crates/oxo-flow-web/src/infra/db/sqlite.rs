@@ -313,6 +313,14 @@ impl StorageBackend for SqliteBackend {
                 meta TEXT,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS chat_sessions (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL DEFAULT 'default',
+                title TEXT NOT NULL DEFAULT 'New Chat',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             "#,
         )
         .execute(&self.pool)
@@ -328,6 +336,7 @@ impl StorageBackend for SqliteBackend {
             CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
             CREATE INDEX IF NOT EXISTS idx_templates_category ON templates(category);
             CREATE INDEX IF NOT EXISTS idx_shares_pipeline_id ON shares(pipeline_id);
+            CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_id ON chat_sessions(user_id);
             CREATE INDEX IF NOT EXISTS idx_shares_token ON shares(token);
             CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
 

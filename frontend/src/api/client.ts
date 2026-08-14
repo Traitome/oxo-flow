@@ -144,14 +144,22 @@ export const api = {
   deleteTemplate: (id: string) => del<{ deleted: string }>(`/api/templates/${id}`),
 
   // ── Collaboration ──
-  forkPipeline: (id: string, userId = 'default') => post<ForkResponse>(`/api/pipelines/${id}/fork`, { user_id: userId }),
+  // Ownership comes from the session server-side (issue #82 P0-4); the
+  // client never sends user ids.
+  forkPipeline: (id: string) => post<ForkResponse>(`/api/pipelines/${id}/fork`, {}),
   sharePipeline: (id: string, visibility: string, expiresInDays?: number) =>
     post<ShareResponse>(`/api/pipelines/${id}/share`, { visibility, expires_in_days: expiresInDays }),
   importPipeline: (url: string) => post<ImportResponse>('/api/pipelines/import', { url }),
 };
 
 export function createEventSource(): EventSource {
-  return new EventSource('/api/events');
+  // EventSource cannot set an Authorization header, so the session token
+  // travels as ?token= (validated by the SSE endpoint in team/hpc modes —
+  // issue #82 P0-5). Personal mode has no token and connects anonymously.
+  const base = (window as { __OXO_BASE__?: string }).__OXO_BASE__ ?? '';
+  const token = localStorage.getItem('oxo_token');
+  const query = token ? `?token=${encodeURIComponent(token)}` : '';
+  return new EventSource(`${base}/api/events${query}`);
 }
 export { ApiError };
 

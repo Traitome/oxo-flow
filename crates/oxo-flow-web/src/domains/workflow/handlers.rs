@@ -3,12 +3,25 @@
 //! Thin adapters: parse HTTP request → call service → serialize response.
 //! Zero business logic here — all logic lives in `service.rs`.
 
-use axum::{Json, extract::Path, http::StatusCode};
+use axum::{Extension, Json, extract::Path, http::StatusCode};
 
 use super::service;
 use super::types::*;
+use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::observability::types::*;
 use crate::infra::db::models;
+
+/// Pipeline read permission (issue #82 P0-4): admins and the owner always
+/// pass; `workspace`-visibility pipelines are readable by any
+/// authenticated user; everything else is private.
+fn can_read_pipeline(user: &CurrentUser, row: &models::PipelineRow) -> bool {
+    user.is_admin() || row.user_id == user.id || row.visibility == "workspace"
+}
+
+/// Pipeline write permission: owner or admin only.
+fn can_write_pipeline(user: &CurrentUser, row: &models::PipelineRow) -> bool {
+    user.is_admin() || row.user_id == user.id
+}
 
 // ---------------------------------------------------------------------------
 // Error helpers
@@ -42,7 +55,7 @@ fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
-fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)> {
+pub fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)> {
     crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -278,7 +291,7 @@ pub async fn search_pipelines(Json(req): Json<SearchRequest>) -> ApiResult<Searc
 
 /// POST /api/pipelines — create a new pipeline from TOML
 pub async fn save_pipeline(
-    authenticated: Option<axum::Extension<Option<String>>>,
+    authenticated: Option<axum::Extension<CurrentUser>>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<Pipeline> {
     let pool = get_pool()?;
@@ -304,23 +317,18 @@ pub async fn save_pipeline(
         .get("visibility")
         .and_then(|v| v.as_str())
         .unwrap_or("private");
+    if !matches!(visibility, "private" | "workspace" | "link") {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "INVALID_VISIBILITY",
+            format!("visibility must be private, workspace, or link — got '{visibility}'"),
+        ));
+    }
     // Attribute the pipeline to the acting user (team/hpc mode) or the
-    // 'default' pseudo-user (personal mode). The auth middleware inserts the
-    // session's user_id, which may be a username — resolve it against the
-    // users table for the FK, falling back to 'default'.
-    let user_id = match authenticated.and_then(|ext| ext.0) {
-        Some(uid) => {
-            let row: Option<(String,)> =
-                sqlx::query_as("SELECT id FROM users WHERE id = ? OR username = ?")
-                    .bind(&uid)
-                    .bind(&uid)
-                    .fetch_optional(pool)
-                    .await
-                    .unwrap_or(None);
-            row.map(|r| r.0).unwrap_or_else(|| "default".into())
-        }
-        None => "default".into(),
-    };
+    // 'default' pseudo-user (personal mode). The auth middleware resolves
+    // the session into a canonical users.id; client-supplied user ids are
+    // never trusted (issue #82 P0-4).
+    let user_id = crate::domains::auth::current_user::resolve(authenticated.as_ref()).id;
 
     let rules_count = oxo_flow_core::WorkflowConfig::parse(toml_content)
         .map(|wf| wf.rules.len() as i64)
@@ -359,21 +367,35 @@ pub async fn save_pipeline(
 }
 
 /// GET /api/pipelines
-pub async fn list_pipelines() -> ApiResult<Vec<Pipeline>> {
+pub async fn list_pipelines(
+    authenticated: Option<Extension<CurrentUser>>,
+) -> ApiResult<Vec<Pipeline>> {
+    let user = resolve(authenticated.as_ref());
     let pool = get_pool()?;
 
-    let rows: Vec<models::PipelineRow> =
+    // Ownership scoping (issue #82 P0-4): non-admins see their own
+    // pipelines plus workspace-visible ones; admins see everything.
+    let rows: Vec<models::PipelineRow> = if user.is_admin() {
         sqlx::query_as("SELECT * FROM pipelines ORDER BY updated_at DESC LIMIT 100")
             .fetch_all(pool)
             .await
-            .map_err(|e| {
-                tracing::error!("DB error listing pipelines: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
+    } else {
+        sqlx::query_as(
+            "SELECT * FROM pipelines WHERE user_id = ? OR visibility = 'workspace' \
+             ORDER BY updated_at DESC LIMIT 100",
+        )
+        .bind(&user.id)
+        .fetch_all(pool)
+        .await
+    }
+    .map_err(|e| {
+        tracing::error!("DB error listing pipelines: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     let list: Vec<Pipeline> = rows
         .into_iter()
@@ -395,7 +417,11 @@ pub async fn list_pipelines() -> ApiResult<Vec<Pipeline>> {
 }
 
 /// GET /api/pipelines/{id}
-pub async fn get_pipeline(Path(id): Path<String>) -> ApiResult<Pipeline> {
+pub async fn get_pipeline(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<Pipeline> {
+    let user = resolve(authenticated.as_ref());
     let pool = get_pool()?;
 
     let row: Option<models::PipelineRow> = sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
@@ -410,6 +436,18 @@ pub async fn get_pipeline(Path(id): Path<String>) -> ApiResult<Pipeline> {
                 "Internal database error".into(),
             )
         })?;
+
+    // Enforce read permission; foreign private pipelines 404 (existence
+    // must not leak — issue #82 P0-4).
+    if let Some(r) = &row
+        && !can_read_pipeline(&user, r)
+    {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Pipeline {id} not found"),
+        ));
+    }
 
     match row {
         Some(r) => Ok(Json(Pipeline {
@@ -434,9 +472,11 @@ pub async fn get_pipeline(Path(id): Path<String>) -> ApiResult<Pipeline> {
 
 /// PUT /api/pipelines/{id}
 pub async fn update_pipeline(
+    authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<Pipeline> {
+    let user = resolve(authenticated.as_ref());
     let pool = get_pool()?;
 
     let existing: Option<models::PipelineRow> =
@@ -461,6 +501,16 @@ pub async fn update_pipeline(
         )
     })?;
 
+    // Write permission: owner or admin. Foreign pipelines 404 so ownership
+    // itself stays private (issue #82 P0-4).
+    if !can_write_pipeline(&user, &existing) {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Pipeline {id} not found"),
+        ));
+    }
+
     let name = req
         .get("name")
         .and_then(|v| v.as_str())
@@ -476,6 +526,13 @@ pub async fn update_pipeline(
         .and_then(|v| v.as_str())
         .unwrap_or(&existing.visibility)
         .to_string();
+    if !matches!(visibility.as_str(), "private" | "workspace" | "link") {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "INVALID_VISIBILITY",
+            format!("visibility must be private, workspace, or link — got '{visibility}'"),
+        ));
+    }
 
     let rules_count = oxo_flow_core::WorkflowConfig::parse(&toml_content)
         .map(|wf| wf.rules.len() as i64)
@@ -517,7 +574,11 @@ pub async fn update_pipeline(
 }
 
 /// DELETE /api/pipelines/{id}
-pub async fn delete_pipeline(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
+pub async fn delete_pipeline(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<serde_json::Value> {
+    let user = resolve(authenticated.as_ref());
     let pool = get_pool()?;
 
     let existing: Option<models::PipelineRow> =
@@ -534,7 +595,16 @@ pub async fn delete_pipeline(Path(id): Path<String>) -> ApiResult<serde_json::Va
                 )
             })?;
 
-    if existing.is_none() {
+    let existing = existing.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Pipeline {id} not found"),
+        )
+    })?;
+
+    // Write permission: owner or admin (issue #82 P0-4).
+    if !can_write_pipeline(&user, &existing) {
         return Err(err(
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
@@ -639,7 +709,11 @@ pub async fn get_template(Path(id): Path<String>) -> ApiResult<Template> {
 }
 
 /// POST /api/templates
-pub async fn save_template(Json(req): Json<serde_json::Value>) -> ApiResult<Template> {
+pub async fn save_template(
+    authenticated: Option<Extension<CurrentUser>>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<Template> {
+    let user = resolve(authenticated.as_ref());
     let pool = get_pool()?;
 
     let name = req
@@ -678,6 +752,15 @@ pub async fn save_template(Json(req): Json<serde_json::Value>) -> ApiResult<Temp
         .get("is_system")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    // System templates are shared resources — only admins may create or
+    // promote them (issue #81 template-DELETE-auth companion fix).
+    if is_system && !user.is_admin() {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "ACCESS_DENIED",
+            "Admin role required to create system templates".into(),
+        ));
+    }
 
     let now = now_iso();
     let id = if template_id.is_empty() {
@@ -685,6 +768,23 @@ pub async fn save_template(Json(req): Json<serde_json::Value>) -> ApiResult<Temp
     } else {
         template_id.to_string()
     };
+
+    // Updating an existing system template is an admin operation too.
+    if !template_id.is_empty() && !user.is_admin() {
+        let existing_is_system: Option<i64> =
+            sqlx::query_scalar("SELECT is_system FROM templates WHERE id = ?")
+                .bind(&id)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
+        if existing_is_system == Some(1) {
+            return Err(err(
+                StatusCode::FORBIDDEN,
+                "ACCESS_DENIED",
+                "Only admins may modify system templates".into(),
+            ));
+        }
+    }
 
     let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
 
@@ -698,7 +798,7 @@ pub async fn save_template(Json(req): Json<serde_json::Value>) -> ApiResult<Temp
     .bind(&tags_json)
     .bind(toml_content)
     .bind(if is_system { 1_i64 } else { 0_i64 })
-    .bind(None::<String>)
+    .bind(Some(&user.id))
     .bind(&now)
     .bind(&now)
     .execute(pool)
@@ -720,7 +820,7 @@ pub async fn save_template(Json(req): Json<serde_json::Value>) -> ApiResult<Temp
         tags,
         toml_content: Some(toml_content.to_string()),
         is_system,
-        created_by: None,
+        created_by: Some(user.id),
         usage_count: 0_u64,
         created_at: now.clone(),
         updated_at: now,
@@ -728,7 +828,11 @@ pub async fn save_template(Json(req): Json<serde_json::Value>) -> ApiResult<Temp
 }
 
 /// DELETE /api/templates/{id}
-pub async fn delete_template(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
+pub async fn delete_template(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<serde_json::Value> {
+    let user = resolve(authenticated.as_ref());
     let pool = get_pool()?;
 
     let existing: Option<models::TemplateRow> =
@@ -745,11 +849,26 @@ pub async fn delete_template(Path(id): Path<String>) -> ApiResult<serde_json::Va
                 )
             })?;
 
-    if existing.is_none() {
-        return Err(err(
+    let existing = existing.ok_or_else(|| {
+        err(
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
             format!("Template {id} not found"),
+        )
+    })?;
+
+    // System templates are admin-only; user templates belong to their
+    // creator (issue #81: template DELETE had no authorization at all).
+    let may_delete = if existing.is_system != 0 {
+        user.is_admin()
+    } else {
+        user.is_admin() || existing.created_by.as_deref() == Some(user.id.as_str())
+    };
+    if !may_delete {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "ACCESS_DENIED",
+            "Only the template owner or an admin may delete this template".into(),
         ));
     }
 

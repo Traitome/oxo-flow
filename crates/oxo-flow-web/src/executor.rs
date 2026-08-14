@@ -6,7 +6,7 @@ use tokio::process::Command;
 use tracing::{error, info, warn};
 
 use crate::workspace::get_run_directory;
-use crate::{broadcast_event, db};
+use crate::{broadcast_event_for, db};
 
 /// Locate the `oxo-flow` CLI binary.
 ///
@@ -222,8 +222,9 @@ pub fn spawn_background_run(
             return;
         }
 
-        // Broadcast run start event
-        broadcast_event(
+        // Broadcast run start event, scoped to the run owner (issue #82
+        // P0-5: SSE subscribers only receive their own runs' events).
+        broadcast_event_for(
             "run_started",
             &serde_json::json!({
                 "run_id": run_id,
@@ -231,6 +232,7 @@ pub fn spawn_background_run(
                 "status": "running",
                 "started_at": now.to_rfc3339(),
             }),
+            Some(&username),
         );
 
         let run_dir = workdir.unwrap_or_else(|| get_run_directory(&username, &run_id));
@@ -404,7 +406,13 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
     let summary = std::fs::read_to_string(log_path)
         .ok()
         .and_then(|log| extract_invalidation_summary(&log));
-    broadcast_event(
+    // Scope the terminal event to the run owner (issue #82 P0-5).
+    let user_id: Option<String> = sqlx::query_scalar("SELECT user_id FROM runs WHERE id = ?")
+        .bind(run_id)
+        .fetch_optional(db::pool())
+        .await
+        .unwrap_or(None);
+    broadcast_event_for(
         event,
         &serde_json::json!({
             "run_id": run_id,
@@ -412,6 +420,7 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
             "finished_at": end.to_rfc3339(),
             "summary": summary,
         }),
+        user_id.as_deref(),
     );
 }
 
@@ -457,14 +466,20 @@ async fn mark_run_failed(run_id: &str) {
         error!("Failed to mark run {run_id} as failed: {e}");
     }
 
-    // Broadcast run failure event
-    broadcast_event(
+    // Broadcast run failure event, scoped to the run owner (issue #82 P0-5).
+    let user_id: Option<String> = sqlx::query_scalar("SELECT user_id FROM runs WHERE id = ?")
+        .bind(run_id)
+        .fetch_optional(db::pool())
+        .await
+        .unwrap_or(None);
+    broadcast_event_for(
         "run_failed",
         &serde_json::json!({
             "run_id": run_id,
             "status": "failed",
             "finished_at": end.to_rfc3339(),
         }),
+        user_id.as_deref(),
     );
 }
 

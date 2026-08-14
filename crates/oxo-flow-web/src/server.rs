@@ -559,6 +559,19 @@ pub fn set_base_path(path: &str) {
     let _ = BASE_PATH.set(path.to_string());
 }
 
+/// Port the server actually bound (issue #82 P0-6): share URLs must point
+/// at the real listener, not a hardcoded default.
+static BOUND_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+
+pub fn set_bound_port(port: u16) {
+    let _ = BOUND_PORT.set(port);
+}
+
+/// The bound port, if the server has started binding yet.
+pub fn bound_port() -> Option<u16> {
+    BOUND_PORT.get().copied()
+}
+
 /// Add standard security headers to every response.
 async fn security_headers(
     request: axum::extract::Request,
@@ -608,24 +621,28 @@ async fn require_auth(
 ) -> axum::response::Response {
     let path = request.uri().path();
 
-    // Allow public endpoints without auth
-    if path == "/api/auth/login"
+    // Allow public endpoints without auth. The list is deliberately narrow
+    // (issue #82 P0-5): system/metrics/hpc metrics and AI-config writes are
+    // NOT public in team/hpc modes — anonymous callers must not see cluster
+    // internals or reconfigure the shared AI provider.
+    let method = request.method().clone();
+    let is_public = path == "/api/auth/login"
         || path == "/api/auth/me"
         || path.starts_with("/api/auth/oauth")
         || path == "/api/health"
         || path == "/api/openapi.json"
         || path == "/api/license"
-        || path == "/api/system"
-        || path == "/api/metrics"
-        || path == "/api/ai/config"
-        || path == "/api/ai/test"
-        || path == "/api/hpc"
+        // EventSource cannot set an Authorization header; sse_events
+        // validates ?token= against the sessions table itself.
         || path == "/api/events"
+        // AI config GET is public (feature discoverability); writes are
+        // gated (admin-only) inside the handler.
+        || (path == "/api/ai/config" && method == axum::http::Method::GET)
         || path == "/"
         || path.starts_with("/assets/")
         || path == "/favicon.svg"
-        || path == "/icons.svg"
-    {
+        || path == "/icons.svg";
+    if is_public {
         return next.run(request).await;
     }
 
@@ -673,11 +690,53 @@ async fn require_auth(
     };
 
     if let Some(session) = session {
-        // Handlers resolve the acting user from this extension
-        // (save_pipeline ownership, per-user AI config).
+        // Resolve the canonical user id + role and hand them to handlers via
+        // request extensions (issue #82 P0-4: every ownership check consumes
+        // this; nothing trusts client-supplied user ids).
+        //
+        // sessions.user_id holds the login name — for API-created users that
+        // is a username, not the UUID users.id. The users table disambiguates;
+        // legacy env-password logins without a users row keep the username as
+        // their identity (role: 'admin' for the admin bootstrap password,
+        // 'user' otherwise).
+        let (user_id, role) = match crate::infra::db::sqlite::try_pool() {
+            Ok(pool) => {
+                let row: Option<(String, String)> =
+                    sqlx::query_as("SELECT id, role FROM users WHERE id = ? OR username = ?")
+                        .bind(&session.user_id)
+                        .bind(&session.user_id)
+                        .fetch_optional(pool)
+                        .await
+                        .unwrap_or(None);
+                match row {
+                    Some((id, role)) => (id, role),
+                    None => (
+                        session.user_id.clone(),
+                        if session.user_id == "admin" {
+                            "admin".to_string()
+                        } else {
+                            "user".to_string()
+                        },
+                    ),
+                }
+            }
+            // DB unavailable — reject everything (fail-secure).
+            Err(_) => {
+                tracing::error!("require_auth: DB pool not available, rejecting request");
+                return (
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    axum::Json(serde_json::json!({
+                        "code": "AUTH_REQUIRED",
+                        "message": "Authentication required in team/hpc mode",
+                    })),
+                )
+                    .into_response();
+            }
+        };
         request
             .extensions_mut()
-            .insert::<Option<String>>(Some(session.user_id));
+            .insert(crate::domains::auth::current_user::CurrentUser { id: user_id, role });
         return next.run(request).await;
     }
 

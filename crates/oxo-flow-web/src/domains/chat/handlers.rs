@@ -2,6 +2,7 @@
 //!
 //! Thin adapters: parse HTTP request → call service → stream SSE response.
 
+use axum::Extension;
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -9,6 +10,7 @@ use std::convert::Infallible;
 
 use super::service;
 use super::types::*;
+use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::workflow::handlers::{ApiError, err};
 use crate::infra::db::models;
 
@@ -24,20 +26,87 @@ fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)>
     })
 }
 
+/// Server-side chat persistence (issue #81): upsert the session row and
+/// append the user's message. Best-effort — chat works without a DB.
+async fn persist_user_message(
+    pool: Option<&sqlx::SqlitePool>,
+    user: &CurrentUser,
+    session_id: &str,
+    message: &str,
+) {
+    let Some(pool) = pool else { return };
+    let now = chrono::Utc::now().to_rfc3339();
+    let title: String = message.chars().take(60).collect();
+    let _ = sqlx::query(
+        "INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?) \
+         ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at",
+    )
+    .bind(session_id)
+    .bind(&user.id)
+    .bind(&title)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await;
+    let _ = sqlx::query(
+        "INSERT INTO chat_messages (id, session_id, role, content, meta, created_at) \
+         VALUES (?, ?, 'user', ?, NULL, ?)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(session_id)
+    .bind(message)
+    .bind(&now)
+    .execute(pool)
+    .await;
+}
+
+/// Append the assistant's final answer to the session.
+async fn persist_assistant_message(
+    pool: Option<&sqlx::SqlitePool>,
+    session_id: &str,
+    content: &str,
+) {
+    let Some(pool) = pool else { return };
+    let now = chrono::Utc::now().to_rfc3339();
+    let _ = sqlx::query(
+        "INSERT INTO chat_messages (id, session_id, role, content, meta, created_at) \
+         VALUES (?, ?, 'assistant', ?, NULL, ?)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(session_id)
+    .bind(content)
+    .bind(&now)
+    .execute(pool)
+    .await;
+    let _ = sqlx::query("UPDATE chat_sessions SET updated_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(session_id)
+        .execute(pool)
+        .await;
+}
+
 /// POST /api/chat/send — SSE streaming chat endpoint.
 ///
 /// Runs the REAL agent loop (oxo-flow-ai Orchestrator with the web tool
 /// registry) and forwards its events as typed SSE:
 /// `status` → `tool_call` → `tool_result` → `text` → `action` → `done` | `error`.
 pub async fn chat_send(
+    authenticated: Option<Extension<CurrentUser>>,
     Json(req): Json<ChatRequest>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
+    let user = resolve(authenticated.as_ref());
     let message = req.message.clone();
     let context = req.context.clone();
     let session_id = req
         .session_id
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    // Server-side persistence (issue #81): the session + user message are
+    // recorded up front; the assistant's answer is appended on completion.
+    let pool = crate::infra::db::sqlite::try_pool().ok();
+    persist_user_message(pool, &user, &session_id, &message).await;
 
     let run = service::spawn_chat_agent(message, session_id.clone(), context, req.run_id);
 
@@ -108,6 +177,9 @@ pub async fn chat_send(
                             "session_id": session_id,
                             "rounds": outcome.rounds,
                         }).to_string()));
+                    if let Some(content) = outcome.content.as_deref() {
+                        persist_assistant_message(pool, &session_id, content).await;
+                    }
                 }
             }
         }
@@ -121,7 +193,11 @@ pub async fn chat_send(
 }
 
 /// POST /api/chat/send/json — non-streaming JSON response.
-pub async fn chat_send_json(Json(req): Json<ChatRequest>) -> ApiResult<serde_json::Value> {
+pub async fn chat_send_json(
+    authenticated: Option<Extension<CurrentUser>>,
+    Json(req): Json<ChatRequest>,
+) -> ApiResult<serde_json::Value> {
+    let user = resolve(authenticated.as_ref());
     let templates: Vec<String> = if let Ok(pool) = get_pool() {
         sqlx::query_as::<_, models::TemplateRow>(
             "SELECT * FROM templates ORDER BY usage_count DESC LIMIT 20",
@@ -140,6 +216,9 @@ pub async fn chat_send_json(Json(req): Json<ChatRequest>) -> ApiResult<serde_jso
         .session_id
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
+    let pool = crate::infra::db::sqlite::try_pool().ok();
+    persist_user_message(pool, &user, &session_id, &req.message).await;
+
     match service::process_chat(
         &req.message,
         Some(&session_id),
@@ -148,17 +227,25 @@ pub async fn chat_send_json(Json(req): Json<ChatRequest>) -> ApiResult<serde_jso
     )
     .await
     {
-        Ok((_text, data)) => Ok(Json(data)),
+        Ok((text, data)) => {
+            persist_assistant_message(pool, &session_id, &text).await;
+            Ok(Json(data))
+        }
         Err(e) => Err(err(StatusCode::BAD_REQUEST, "CHAT_ERROR", e)),
     }
 }
 
-/// GET /api/chat/sessions — list chat sessions.
-pub async fn list_sessions() -> ApiResult<Vec<ChatSession>> {
+/// GET /api/chat/sessions — list the acting user's chat sessions
+/// (issue #81: server-side persistence + per-user scoping).
+pub async fn list_sessions(
+    authenticated: Option<Extension<CurrentUser>>,
+) -> ApiResult<Vec<ChatSession>> {
+    let user = resolve(authenticated.as_ref());
     let sessions = if let Ok(pool) = get_pool() {
         sqlx::query_as::<_, models::ChatSessionRow>(
-            "SELECT * FROM chat_sessions ORDER BY updated_at DESC LIMIT 20",
+            "SELECT * FROM chat_sessions WHERE user_id = ? ORDER BY updated_at DESC LIMIT 20",
         )
+        .bind(&user.id)
         .fetch_all(pool)
         .await
         .unwrap_or_default()

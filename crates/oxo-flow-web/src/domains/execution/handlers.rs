@@ -6,7 +6,8 @@
 use crate::domains::ai::agents::monitor_agent::{self, NodeExecutionStatus, ResourceUsage};
 use crate::domains::ai::agents::report_agent;
 use crate::domains::ai::agents::types::ReportFile;
-use axum::{Json, extract::Path, http::StatusCode};
+use crate::domains::auth::current_user::{self, CurrentUser};
+use axum::{Extension, Json, extract::Path, http::StatusCode};
 
 use super::checkpoint_status;
 use super::service;
@@ -32,8 +33,52 @@ fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+/// Fetch a run row and enforce ownership (issue #82 P0-4): admins may
+/// address any run, everyone else only their own. Foreign and unknown runs
+/// both 404 — the resource set itself is private, so existence must not
+/// leak through a 403.
+async fn load_owned_run(
+    pool: &sqlx::SqlitePool,
+    user: &CurrentUser,
+    id: &str,
+) -> Result<models::RunRow, (StatusCode, Json<ApiError>)> {
+    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error fetching run {id}: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
+
+    let run = run.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Run {id} not found"),
+        )
+    })?;
+
+    if !user.is_admin() && run.user_id != user.id {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Run {id} not found"),
+        ));
+    }
+    Ok(run)
+}
+
 /// POST /api/runs
-pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateRunResponse> {
+pub async fn create_run(
+    authenticated: Option<Extension<CurrentUser>>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<CreateRunResponse> {
+    let user = current_user::resolve(authenticated.as_ref());
     let toml = req
         .get("toml_content")
         .and_then(|v| v.as_str())
@@ -106,16 +151,16 @@ pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateR
                         format!("Pipeline {pid} not found"),
                     ));
                 }
-                crate::workspace::setup_pipeline_directory("local_user", pid)
+                crate::workspace::setup_pipeline_directory(&user.id, pid)
                     .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e.to_string()))?
             }
-            None => crate::workspace::setup_run_directory("local_user", &resp.run_id)
+            None => crate::workspace::setup_run_directory(&user.id, &resp.run_id)
                 .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e.to_string()))?,
         };
 
         let run = models::RunRow {
             id: resp.run_id.clone(),
-            user_id: "default".to_string(),
+            user_id: user.id.clone(),
             pipeline_id: pipeline_id.clone(),
             pipeline_snapshot: toml.to_string(),
             status: "queued".to_string(),
@@ -159,7 +204,7 @@ pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateR
 
         crate::executor::spawn_background_run(
             resp.run_id.clone(),
-            "local_user".to_string(),
+            user.id.clone(),
             "none".to_string(),
             "local".to_string(),
             Some(run_dir),
@@ -204,7 +249,10 @@ pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateR
 }
 
 /// GET /api/runs
-pub async fn list_runs() -> ApiResult<Vec<serde_json::Value>> {
+pub async fn list_runs(
+    authenticated: Option<Extension<CurrentUser>>,
+) -> ApiResult<Vec<serde_json::Value>> {
+    let user = current_user::resolve(authenticated.as_ref());
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -213,18 +261,26 @@ pub async fn list_runs() -> ApiResult<Vec<serde_json::Value>> {
         )
     })?;
 
-    let rows: Vec<models::RunRow> =
+    // Ownership scoping (issue #82 P0-4): non-admins see their own runs
+    // only; admins see the whole fleet.
+    let rows: Vec<models::RunRow> = if user.is_admin() {
         sqlx::query_as("SELECT * FROM runs ORDER BY created_at DESC LIMIT 100")
             .fetch_all(pool)
             .await
-            .map_err(|e| {
-                tracing::error!("DB error listing runs: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
+    } else {
+        sqlx::query_as("SELECT * FROM runs WHERE user_id = ? ORDER BY created_at DESC LIMIT 100")
+            .bind(&user.id)
+            .fetch_all(pool)
+            .await
+    }
+    .map_err(|e| {
+        tracing::error!("DB error listing runs: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     let list: Vec<serde_json::Value> = rows
         .into_iter()
@@ -233,6 +289,7 @@ pub async fn list_runs() -> ApiResult<Vec<serde_json::Value>> {
                 "id": r.id,
                 "user_id": r.user_id,
                 "pipeline_id": r.pipeline_id,
+                "workflow_name": r.workflow_name,
                 "status": r.status,
                 "phase": r.phase,
                 "pid": r.pid,
@@ -248,7 +305,10 @@ pub async fn list_runs() -> ApiResult<Vec<serde_json::Value>> {
 }
 
 /// GET /api/runs/{id}
-pub async fn get_run(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
+pub async fn get_run(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<serde_json::Value> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -256,44 +316,29 @@ pub async fn get_run(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
             "Database not available".into(),
         )
     })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id}: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    match run {
-        Some(r) => Ok(Json(serde_json::json!({
-            "id": r.id,
-            "user_id": r.user_id,
-            "pipeline_id": r.pipeline_id,
-            "pipeline_snapshot": r.pipeline_snapshot,
-            "status": r.status,
-            "phase": r.phase,
-            "pid": r.pid,
-            "workdir": r.workdir,
-            "started_at": r.started_at,
-            "finished_at": r.finished_at,
-            "created_at": r.created_at,
-        }))),
-        None => Err(err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )),
-    }
+    Ok(Json(serde_json::json!({
+        "id": run.id,
+        "user_id": run.user_id,
+        "pipeline_id": run.pipeline_id,
+        "pipeline_snapshot": run.pipeline_snapshot,
+        "status": run.status,
+        "phase": run.phase,
+        "pid": run.pid,
+        "workdir": run.workdir,
+        "started_at": run.started_at,
+        "finished_at": run.finished_at,
+        "created_at": run.created_at,
+    })))
 }
 
 /// GET /api/runs/{id}/status
-pub async fn get_run_status(Path(id): Path<String>) -> ApiResult<RunStatusResponse> {
+pub async fn get_run_status(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<RunStatusResponse> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -302,26 +347,8 @@ pub async fn get_run_status(Path(id): Path<String>) -> ApiResult<RunStatusRespon
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for status: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
 
     // Node status comes from the engine's checkpoint state (single source of
     // truth), merged with the full rule list so unrun rules show as pending.
@@ -351,7 +378,10 @@ pub async fn get_run_status(Path(id): Path<String>) -> ApiResult<RunStatusRespon
 }
 
 /// GET /api/runs/{id}/dag-status
-pub async fn get_dag_status(Path(id): Path<String>) -> ApiResult<DagStatusResponse> {
+pub async fn get_dag_status(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<DagStatusResponse> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -360,26 +390,8 @@ pub async fn get_dag_status(Path(id): Path<String>) -> ApiResult<DagStatusRespon
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for DAG status: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
 
     // Parse the pipeline snapshot to build DAG
     let dag = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
@@ -475,7 +487,10 @@ pub async fn get_dag_status(Path(id): Path<String>) -> ApiResult<DagStatusRespon
 }
 
 /// GET /api/runs/{id}/diagnostics
-pub async fn get_diagnostics(Path(id): Path<String>) -> ApiResult<DiagnosticsResponse> {
+pub async fn get_diagnostics(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<DiagnosticsResponse> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -484,26 +499,8 @@ pub async fn get_diagnostics(Path(id): Path<String>) -> ApiResult<DiagnosticsRes
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for diagnostics: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
 
     let node_items = checkpoint_status::load_node_statuses(
         std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
@@ -526,7 +523,10 @@ pub async fn get_diagnostics(Path(id): Path<String>) -> ApiResult<DiagnosticsRes
 }
 
 /// GET /api/runs/{id}/logs
-pub async fn get_run_logs(Path(id): Path<String>) -> ApiResult<String> {
+pub async fn get_run_logs(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<String> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -535,26 +535,8 @@ pub async fn get_run_logs(Path(id): Path<String>) -> ApiResult<String> {
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for logs: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
 
     let log_content = run
         .workdir
@@ -566,7 +548,10 @@ pub async fn get_run_logs(Path(id): Path<String>) -> ApiResult<String> {
 }
 
 /// GET /api/runs/{id}/results
-pub async fn get_run_results(Path(id): Path<String>) -> ApiResult<Vec<serde_json::Value>> {
+pub async fn get_run_results(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<Vec<serde_json::Value>> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -575,26 +560,8 @@ pub async fn get_run_results(Path(id): Path<String>) -> ApiResult<Vec<serde_json
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for results: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
 
     // List files in the workdir recursively so nested products (e.g.
     // results/sample1/peaks.bed) are visible (issue #79 P1-08).
@@ -621,6 +588,7 @@ pub async fn get_run_results(Path(id): Path<String>) -> ApiResult<Vec<serde_json
 
 /// POST /api/runs/{id}/retry
 pub async fn retry_run(
+    authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<RetryResponse> {
@@ -632,26 +600,8 @@ pub async fn retry_run(
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for retry: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
 
     let from_rule = req.get("from_rule").and_then(|v| v.as_str());
     let skip_succeeded = req
@@ -681,7 +631,10 @@ pub async fn retry_run(
 }
 
 /// POST /api/runs/{id}/cancel
-pub async fn cancel_run(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
+pub async fn cancel_run(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<serde_json::Value> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -690,26 +643,8 @@ pub async fn cancel_run(Path(id): Path<String>) -> ApiResult<serde_json::Value> 
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for cancellation: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
 
     // Terminal states are final — cancelling a finished run would silently
     // rewrite its result.
@@ -771,9 +706,10 @@ pub async fn cancel_run(Path(id): Path<String>) -> ApiResult<serde_json::Value> 
         );
     }
 
-    crate::broadcast_event(
+    crate::broadcast_event_for(
         "run_cancelled",
         &serde_json::json!({"run_id": id, "cancelled_at": now}),
+        Some(&run.user_id),
     );
 
     Ok(Json(serde_json::json!({
@@ -785,6 +721,7 @@ pub async fn cancel_run(Path(id): Path<String>) -> ApiResult<serde_json::Value> 
 
 /// POST /api/runs/{id}/pause
 pub async fn pause_run(
+    authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<serde_json::Value> {
@@ -796,26 +733,8 @@ pub async fn pause_run(
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for pause: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let _run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let _run = load_owned_run(pool, &user, &id).await?;
     let reason = req
         .get("reason")
         .and_then(|v| v.as_str())
@@ -847,9 +766,10 @@ pub async fn pause_run(
             )
         })?;
 
-    crate::broadcast_event(
+    crate::broadcast_event_for(
         "run_paused",
         &serde_json::json!({"run_id": id, "reason": reason}),
+        Some(&_run.user_id),
     );
 
     Ok(Json(serde_json::json!({
@@ -862,6 +782,7 @@ pub async fn pause_run(
 
 /// POST /api/runs/{id}/resume
 pub async fn resume_run(
+    authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<serde_json::Value> {
@@ -873,26 +794,8 @@ pub async fn resume_run(
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for resume: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let _run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let _run = load_owned_run(pool, &user, &id).await?;
     let from_rule = req.get("from_rule").and_then(|v| v.as_str());
 
     // Unfreeze the live process group.
@@ -920,9 +823,10 @@ pub async fn resume_run(
             )
         })?;
 
-    crate::broadcast_event(
+    crate::broadcast_event_for(
         "run_resumed",
         &serde_json::json!({"run_id": id, "from_rule": from_rule}),
+        Some(&_run.user_id),
     );
 
     Ok(Json(serde_json::json!({
@@ -936,7 +840,10 @@ pub async fn resume_run(
 /// (checkpoint_preview + execution_order), persisted by the executor when
 /// a dry-run completes (issue #79 P2: the web preview previously showed
 /// unexpanded rules and dropped samples/targets).
-pub async fn get_run_preview(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
+pub async fn get_run_preview(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<serde_json::Value> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -944,25 +851,8 @@ pub async fn get_run_preview(Path(id): Path<String>) -> ApiResult<serde_json::Va
             "Database not available".into(),
         )
     })?;
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for preview: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
     let workdir = run.workdir.as_deref().unwrap_or("");
     let content =
         std::fs::read_to_string(std::path::Path::new(workdir).join("dry-run-preview.json"))
@@ -984,7 +874,10 @@ pub async fn get_run_preview(Path(id): Path<String>) -> ApiResult<serde_json::Va
 }
 
 /// GET /api/runs/{id}/ai-status
-pub async fn get_ai_status(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
+pub async fn get_ai_status(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<serde_json::Value> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -993,26 +886,8 @@ pub async fn get_ai_status(Path(id): Path<String>) -> ApiResult<serde_json::Valu
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for AI status: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let _run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let _run = load_owned_run(pool, &user, &id).await?;
 
     let exec_nodes: Vec<NodeExecutionStatus> = checkpoint_status::load_node_statuses(
         std::path::Path::new(_run.workdir.as_deref().unwrap_or("")),
@@ -1072,7 +947,10 @@ fn build_report_for_run(run: &models::RunRow) -> crate::domains::ai::agents::typ
     report_agent::generate_report(&pipeline_name, &files, &log_summary, &[])
 }
 
-pub async fn get_run_report(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
+pub async fn get_run_report(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<serde_json::Value> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1081,26 +959,8 @@ pub async fn get_run_report(Path(id): Path<String>) -> ApiResult<serde_json::Val
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for report: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
 
     let report = build_report_for_run(&run);
 
@@ -1109,6 +969,7 @@ pub async fn get_run_report(Path(id): Path<String>) -> ApiResult<serde_json::Val
 
 /// POST /api/runs/{id}/report/ask
 pub async fn ask_report_question(
+    authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<String> {
@@ -1124,25 +985,8 @@ pub async fn ask_report_question(
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for report question: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
 
     // Answer from the same deterministic report the report page shows.
     let report = build_report_for_run(&run);
@@ -1152,6 +996,7 @@ pub async fn ask_report_question(
 
 /// POST /api/runs/{id}/report/visualize
 pub async fn visualize_report(
+    authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<serde_json::Value> {
@@ -1167,25 +1012,8 @@ pub async fn visualize_report(
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for report visualization: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
 
     // Real data sources: the run's file tree, or per-rule timings from the
     // engine's checkpoint. No canned rows.

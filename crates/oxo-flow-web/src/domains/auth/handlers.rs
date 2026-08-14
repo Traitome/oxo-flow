@@ -181,6 +181,23 @@ pub async fn login(Json(req): Json<LoginRequest>) -> ApiResult<LoginResponse> {
     // Persist session to database so the token is actually valid.
     // Without this, require_auth and auth_me would reject the token.
     if let Ok(pool) = get_pool() {
+        // Auto-provision a users row for env-password logins (issue #82
+        // P1-16): those previously accepted ANY username with no user
+        // record, collapsing every login onto the 'default' pseudo-user
+        // and making audit trails useless. id = username for these
+        // legacy identities; UNIQUE(username) makes the insert a no-op
+        // for API-created accounts (which already have a UUID row).
+        let _ = sqlx::query(
+            "INSERT OR IGNORE INTO users (id, username, role, auth_type, os_user, created_at) \
+             VALUES (?, ?, ?, 'password', '', ?)",
+        )
+        .bind(&result.username)
+        .bind(&result.username)
+        .bind(&result.role)
+        .bind(now_iso())
+        .execute(pool)
+        .await;
+
         let expires = chrono::Utc::now() + chrono::Duration::hours(24);
         let insert_result = sqlx::query(
             "INSERT OR REPLACE INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",

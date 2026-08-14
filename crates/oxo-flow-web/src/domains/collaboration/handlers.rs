@@ -2,10 +2,11 @@
 //!
 //! Thin adapters: parse HTTP request → call service → serialize response.
 
-use axum::{Json, extract::Path, http::StatusCode};
+use axum::{Extension, Json, extract::Path, http::StatusCode};
 
+use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::collaboration::types::*;
-use crate::domains::workflow::handlers::{ApiError, err};
+use crate::domains::workflow::handlers::{ApiError, err, get_pool};
 use crate::infra::db::models;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
@@ -14,39 +15,15 @@ fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
-fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)> {
-    crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })
-}
-
-async fn get_or_default_user(pool: &sqlx::SqlitePool, fallback: &str) -> String {
-    sqlx::query_as::<_, crate::infra::db::models::UserRow>(
-        "SELECT * FROM users WHERE role = 'admin' LIMIT 1",
-    )
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None)
-    .map(|u| u.id)
-    .unwrap_or_else(|| fallback.to_string())
-}
-
 /// POST /api/pipelines/{id}/fork
 pub async fn fork_pipeline(
+    authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
-    Json(body): Json<serde_json::Value>,
 ) -> ApiResult<ForkResponse> {
     let pool = get_pool()?;
-    let user_id = body
-        .get("user_id")
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .unwrap_or_else(|| "default".into());
-    let user_id = get_or_default_user(pool, &user_id).await;
+    // Ownership comes from the session, never from the request body
+    // (issue #82 P0-4: client-supplied user ids were trusted before).
+    let user = resolve(authenticated.as_ref());
 
     // Fetch the source pipeline
     let source: Option<models::PipelineRow> =
@@ -71,6 +48,16 @@ pub async fn fork_pipeline(
         )
     })?;
 
+    // Read permission applies to forking too: owners, admins, and
+    // workspace-visible pipelines may be forked.
+    if !(user.is_admin() || source.user_id == user.id || source.visibility == "workspace") {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Pipeline {id} not found"),
+        ));
+    }
+
     // Create a new pipeline as a fork
     let forked_id = uuid::Uuid::new_v4().to_string();
     let now = now_iso();
@@ -78,7 +65,7 @@ pub async fn fork_pipeline(
 
     let new_pipeline = models::PipelineRow {
         id: forked_id.clone(),
-        user_id: user_id.clone(),
+        user_id: user.id.clone(),
         name: name.clone(),
         version: source.version.clone(),
         toml_content: source.toml_content.clone(),
@@ -118,7 +105,7 @@ pub async fn fork_pipeline(
         "INSERT INTO audit_logs (id, user_id, action, target, metadata, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(uuid::Uuid::new_v4().to_string())
-    .bind(user_id)
+    .bind(&user.id)
     .bind("fork_pipeline")
     .bind(&forked_id)
     .bind(Some(format!("{{\"forked_from\": \"{id}\"}}")))
@@ -131,12 +118,14 @@ pub async fn fork_pipeline(
 
 /// POST /api/pipelines/{id}/share
 pub async fn share_pipeline(
+    authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
     Json(body): Json<ShareRequest>,
 ) -> ApiResult<ShareResponse> {
     let pool = get_pool()?;
+    let user = resolve(authenticated.as_ref());
 
-    // Verify pipeline exists
+    // Verify pipeline exists and the caller may share it (owner or admin).
     let pipeline: Option<models::PipelineRow> =
         sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
             .bind(&id)
@@ -151,7 +140,14 @@ pub async fn share_pipeline(
                 )
             })?;
 
-    if pipeline.is_none() {
+    let pipeline = pipeline.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Pipeline {id} not found"),
+        )
+    })?;
+    if !(user.is_admin() || pipeline.user_id == user.id) {
         return Err(err(
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
@@ -165,12 +161,11 @@ pub async fn share_pipeline(
         .expires_in_days
         .map(|d| (chrono::Utc::now() + chrono::Duration::days(d as i64)).to_rfc3339());
 
-    // Save share to DB
-    let owner_id = get_or_default_user(pool, "default").await;
+    // Save share to DB, attributed to the acting user.
     let share = models::ShareRow {
         id: uuid::Uuid::new_v4().to_string(),
         pipeline_id: id.clone(),
-        owner_id,
+        owner_id: user.id.clone(),
         token: token.clone(),
         visibility: body.visibility.clone(),
         expires_at: expires_at.clone(),
@@ -199,7 +194,9 @@ pub async fn share_pipeline(
     })?;
 
     let host = std::env::var("OXO_FLOW_HOST").unwrap_or_else(|_| "localhost".into());
-    let port = std::env::var("OXO_FLOW_PORT").unwrap_or_else(|_| "3000".into());
+    // Use the port the server actually bound (issue #82 P0-6: the URL was
+    // hardcoded to 3000 even when serving on 8080 or any -p value).
+    let port = crate::server::bound_port().unwrap_or(3000);
     Ok(Json(ShareResponse {
         share_url: format!("oxo+https://{host}:{port}/share/{token}"),
         access_token: token,
@@ -208,7 +205,10 @@ pub async fn share_pipeline(
 }
 
 /// POST /api/pipelines/import
-pub async fn import_pipeline(Json(body): Json<ImportRequest>) -> ApiResult<ImportResponse> {
+pub async fn import_pipeline(
+    authenticated: Option<Extension<CurrentUser>>,
+    Json(body): Json<ImportRequest>,
+) -> ApiResult<ImportResponse> {
     // Validate URL format
     if !body.url.starts_with("oxo+https://") && !body.url.starts_with("oxo+http://") {
         return Err(err(
@@ -222,6 +222,7 @@ pub async fn import_pipeline(Json(body): Json<ImportRequest>) -> ApiResult<Impor
     let token = body.url.rsplit('/').next().unwrap_or("").to_string();
 
     let pool = get_pool()?;
+    let user = resolve(authenticated.as_ref());
 
     // Look up the share by token
     let share: Option<models::ShareRow> = sqlx::query_as("SELECT * FROM shares WHERE token = ?")
@@ -280,16 +281,15 @@ pub async fn import_pipeline(Json(body): Json<ImportRequest>) -> ApiResult<Impor
         )
     })?;
 
-    // Create imported copy
+    // Create imported copy, attributed to the acting user (issue #82 P0-4).
     let import_id = uuid::Uuid::new_v4().to_string();
     let now = now_iso();
-    let owner_id = get_or_default_user(pool, "default").await;
 
     sqlx::query(
         "INSERT INTO pipelines (id, user_id, name, version, toml_content, rules_count, forked_from, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&import_id)
-    .bind(&owner_id)
+    .bind(&user.id)
     .bind(format!("{} (imported)", pipeline.name))
     .bind(&pipeline.version)
     .bind(&pipeline.toml_content)

@@ -196,7 +196,7 @@ async fn web_pipeline_rerun_rebuilds_only_config_affected_rules() {
     assert_eq!(
         std::fs::read_to_string(
             dir.path()
-                .join("workspace/users/local_user/pipelines")
+                .join("workspace/users/default/pipelines")
                 .join(&pipeline_id)
                 .join("down.txt")
         )
@@ -267,7 +267,7 @@ async fn web_pipeline_rerun_rebuilds_only_config_affected_rules() {
     assert_eq!(
         std::fs::read_to_string(
             dir.path()
-                .join("workspace/users/local_user/pipelines")
+                .join("workspace/users/default/pipelines")
                 .join(&pipeline_id)
                 .join("down.txt")
         )
@@ -415,7 +415,7 @@ async fn web_dry_run_flag_previews_without_executing() {
     // Nothing was executed anywhere in the sandbox.
     assert!(
         !dir.path()
-            .join("workspace/users/local_user/runs")
+            .join("workspace/users/default/runs")
             .join(&run_id)
             .join("produced.txt")
             .exists(),
@@ -1107,5 +1107,508 @@ async fn web_dry_run_serves_instance_level_preview() {
     assert!(
         !names.contains(&"gather_cohort_S2"),
         "unselected sample must not appear: {names:?}"
+    );
+}
+
+// ===========================================================================
+// Team-mode multi-tenancy isolation matrix (issue #82 P0-4 / P0-5)
+// ===========================================================================
+
+/// Team-mode server: auth middleware on, seeded env credentials.
+struct TeamServer {
+    server: TestServer,
+    admin_token: String,
+}
+
+async fn login_as(client: &reqwest::Client, base: &str, username: &str, password: &str) -> String {
+    let body: serde_json::Value = client
+        .post(format!("{base}/api/auth/login"))
+        .json(&serde_json::json!({"username": username, "password": password}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    body["token"]
+        .as_str()
+        .expect("login must return a token")
+        .to_string()
+}
+
+impl TeamServer {
+    async fn start(dir: &std::path::Path) -> Self {
+        let port = free_port();
+        let child = StdCommand::new(workspace_bin("oxo-flow-web"))
+            .current_dir(dir)
+            .env("OXO_FLOW_BIN", workspace_bin("oxo-flow"))
+            .env("OXO_FLOW_HOST", "127.0.0.1")
+            .env("OXO_FLOW_PORT", port.to_string())
+            .env("OXO_FLOW_MODE", "team")
+            .env("OXO_FLOW_ADMIN_PASSWORD", "admin-secret")
+            .env("OXO_FLOW_USER_PASSWORD", "user-secret")
+            .env("OXO_FLOW_VIEWER_PASSWORD", "viewer-secret")
+            .env(
+                "OXO_FLOW_FRONTEND_DIR",
+                dir.join("missing-frontend").to_str().unwrap(),
+            )
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("team web server must start");
+
+        let base = format!("http://127.0.0.1:{port}");
+        let client = reqwest::Client::new();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if Instant::now() > deadline {
+                panic!("team web server did not become ready at {base}");
+            }
+            // /api/health stays public in every mode (load-balancer probe).
+            if client
+                .get(format!("{base}/api/health"))
+                .send()
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        let admin_token = login_as(&client, &base, "admin", "admin-secret").await;
+        Self {
+            server: TestServer { child, base },
+            admin_token,
+        }
+    }
+
+    async fn login(&self, client: &reqwest::Client, username: &str, password: &str) -> String {
+        login_as(client, &self.server.base, username, password).await
+    }
+}
+
+const ISO_WORKFLOW: &str = "[workflow]\nname = \"iso\"\nversion = \"1.0.0\"\n\n\
+     [[rules]]\nname = \"hello\"\noutput = [\"hello.txt\"]\n\
+     shell = \"echo hi > hello.txt\"\n";
+
+/// P0-4: runs are private per user — foreign runs 404 on read AND control;
+/// admins retain full visibility.
+#[tokio::test]
+async fn team_mode_run_ownership_isolation() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TeamServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.server.base.clone();
+
+    let alice = server.login(&client, "alice", "user-secret").await;
+    let bob = server.login(&client, "bob", "user-secret").await;
+
+    // Alice creates a run — the row must be attributed to alice's users.id.
+    let created: serde_json::Value = client
+        .post(format!("{base}/api/runs"))
+        .bearer_auth(&alice)
+        .json(&serde_json::json!({"toml_content": ISO_WORKFLOW}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let run_id = created["run_id"].as_str().unwrap().to_string();
+
+    // Owner sees the run.
+    let owner_view = client
+        .get(format!("{base}/api/runs/{run_id}"))
+        .bearer_auth(&alice)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(owner_view.status(), 200);
+
+    // Foreign user gets 404 on read and on every control endpoint.
+    for (method, path) in [
+        ("get", format!("/api/runs/{run_id}")),
+        ("get", format!("/api/runs/{run_id}/status")),
+        ("get", format!("/api/runs/{run_id}/logs")),
+        ("get", format!("/api/runs/{run_id}/results")),
+        ("get", format!("/api/runs/{run_id}/diagnostics")),
+        ("post", format!("/api/runs/{run_id}/cancel")),
+        ("post", format!("/api/runs/{run_id}/pause")),
+        ("post", format!("/api/runs/{run_id}/resume")),
+    ] {
+        let resp = match method {
+            "get" => client.get(format!("{base}{path}")).bearer_auth(&bob),
+            _ => client
+                .post(format!("{base}{path}"))
+                .bearer_auth(&bob)
+                .json(&serde_json::json!({})),
+        }
+        .send()
+        .await
+        .unwrap();
+        assert_eq!(
+            resp.status(),
+            404,
+            "bob must get 404 (not 403 — existence must not leak) on {method} {path}"
+        );
+    }
+
+    // Bob's run list excludes alice's run.
+    let bob_list: serde_json::Value = client
+        .get(format!("{base}/api/runs"))
+        .bearer_auth(&bob)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let bob_ids: Vec<&str> = bob_list
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["id"].as_str())
+        .collect();
+    assert!(
+        !bob_ids.contains(&run_id.as_str()),
+        "bob's run list must not contain alice's run"
+    );
+
+    // Admin sees and can control the run.
+    let admin_view = client
+        .get(format!("{base}/api/runs/{run_id}"))
+        .bearer_auth(&server.admin_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(admin_view.status(), 200);
+    let admin_cancel = client
+        .post(format!("{base}/api/runs/{run_id}/cancel"))
+        .bearer_auth(&server.admin_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(admin_cancel.status(), 200);
+}
+
+/// P0-4: pipelines are scoped per user; 'workspace' visibility is readable
+/// by everyone but still writable only by its owner.
+#[tokio::test]
+async fn team_mode_pipeline_ownership_and_visibility() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TeamServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.server.base.clone();
+
+    let alice = server.login(&client, "alice", "user-secret").await;
+    let bob = server.login(&client, "bob", "user-secret").await;
+
+    let save_client = client.clone();
+    let save = |token: &str, name: &str, visibility: &str| {
+        let base = base.clone();
+        let client = save_client.clone();
+        let token = token.to_string();
+        let name = name.to_string();
+        let visibility = visibility.to_string();
+        async move {
+            client
+                .post(format!("{base}/api/pipelines"))
+                .bearer_auth(&token)
+                .json(&serde_json::json!({
+                    "name": name, "toml_content": ISO_WORKFLOW, "visibility": visibility,
+                }))
+                .send()
+                .await
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap()
+        }
+    };
+
+    let private = save(&alice, "alice-private", "private").await;
+    let private_id = private["id"].as_str().unwrap().to_string();
+    let shared = save(&alice, "alice-workspace", "workspace").await;
+    let shared_id = shared["id"].as_str().unwrap().to_string();
+
+    // Bob cannot read/write/delete alice's private pipeline.
+    for (method, path) in [
+        ("get", format!("/api/pipelines/{private_id}")),
+        ("put", format!("/api/pipelines/{private_id}")),
+        ("delete", format!("/api/pipelines/{private_id}")),
+    ] {
+        let resp = match method {
+            "get" => client.get(format!("{base}{path}")).bearer_auth(&bob),
+            "put" => client
+                .put(format!("{base}{path}"))
+                .bearer_auth(&bob)
+                .json(&serde_json::json!({"name": "hijacked"})),
+            _ => client.delete(format!("{base}{path}")).bearer_auth(&bob),
+        }
+        .send()
+        .await
+        .unwrap();
+        assert_eq!(
+            resp.status(),
+            404,
+            "bob on alice's private pipeline: {method} {path}"
+        );
+    }
+
+    // Workspace-visible: bob can read but not write.
+    let bob_read = client
+        .get(format!("{base}/api/pipelines/{shared_id}"))
+        .bearer_auth(&bob)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        bob_read.status(),
+        200,
+        "workspace pipeline must be readable"
+    );
+    let bob_write = client
+        .put(format!("{base}/api/pipelines/{shared_id}"))
+        .bearer_auth(&bob)
+        .json(&serde_json::json!({"name": "hijacked"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        bob_write.status(),
+        404,
+        "workspace pipeline is NOT writable by others"
+    );
+
+    // Bob's list contains the workspace pipeline but not the private one.
+    let bob_list: serde_json::Value = client
+        .get(format!("{base}/api/pipelines"))
+        .bearer_auth(&bob)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let ids: Vec<&str> = bob_list
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|p| p["id"].as_str())
+        .collect();
+    assert!(
+        ids.contains(&shared_id.as_str()),
+        "workspace pipeline in bob's list"
+    );
+    assert!(
+        !ids.contains(&private_id.as_str()),
+        "private pipeline hidden from bob"
+    );
+
+    // Fork is attributed to the forking user, not taken from the body.
+    let fork: serde_json::Value = client
+        .post(format!("{base}/api/pipelines/{shared_id}/fork"))
+        .bearer_auth(&bob)
+        .json(&serde_json::json!({"user_id": "admin"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let forked_id = fork["forked_id"].as_str().unwrap().to_string();
+    let admin_view: serde_json::Value = client
+        .get(format!("{base}/api/pipelines/{forked_id}"))
+        .bearer_auth(&server.admin_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let fork_owner = admin_view["user_id"].as_str().unwrap();
+    let bob_users: serde_json::Value = client
+        .get(format!("{base}/api/users"))
+        .bearer_auth(&server.admin_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let bob_row = bob_users
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|u| u["username"] == "bob")
+        .expect("bob's user row exists after login");
+    assert_eq!(
+        fork_owner,
+        bob_row["id"].as_str().unwrap(),
+        "fork must be owned by the acting user (bob), never the body-supplied user_id"
+    );
+}
+
+/// P0-5: anonymous endpoints are closed in team mode; SSE requires ?token=.
+#[tokio::test]
+async fn team_mode_anonymous_endpoints_require_auth() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TeamServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.server.base.clone();
+
+    for path in ["/api/system", "/api/metrics"] {
+        let resp = client.get(format!("{base}{path}")).send().await.unwrap();
+        assert_eq!(resp.status(), 401, "{path} must require auth in team mode");
+    }
+    // /api/hpc exists only in hpc mode — team mode must not expose it at
+    // all (404), never anonymously (401 would also be acceptable).
+    let hpc = client.get(format!("{base}/api/hpc")).send().await.unwrap();
+    assert!(
+        matches!(hpc.status().as_u16(), 401 | 404),
+        "/api/hpc must not be anonymously reachable in team mode"
+    );
+
+    // SSE without a token is rejected.
+    let events_no_token = client
+        .get(format!("{base}/api/events"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        events_no_token.status(),
+        401,
+        "/api/events must require ?token="
+    );
+
+    // SSE with a valid token connects (headers arrive immediately).
+    let alice = server.login(&client, "alice", "user-secret").await;
+    let events_ok = client
+        .get(format!("{base}/api/events?token={alice}"))
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        events_ok.status(),
+        200,
+        "SSE connects with a valid session token"
+    );
+
+    // AI config GET stays public; writes are gated (see next test).
+    let ai_config = client
+        .get(format!("{base}/api/ai/config"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ai_config.status(), 200, "GET /api/ai/config stays public");
+}
+
+/// P0-5 + P1-16: AI provider writes are admin-only; env-password logins
+/// auto-provision a real user row instead of the any-username hole.
+#[tokio::test]
+async fn team_mode_ai_config_admin_only_and_env_login_provisions_user() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TeamServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.server.base.clone();
+
+    let bob = server.login(&client, "bob", "user-secret").await;
+
+    // Non-admin writes to the shared AI provider are forbidden.
+    let bob_config = client
+        .post(format!("{base}/api/ai/config"))
+        .bearer_auth(&bob)
+        .json(&serde_json::json!({"provider": "noop"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        bob_config.status(),
+        403,
+        "AI config write must be admin-only"
+    );
+    let bob_test = client
+        .post(format!("{base}/api/ai/test"))
+        .bearer_auth(&bob)
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        bob_test.status(),
+        403,
+        "AI provider test must be admin-only"
+    );
+    let admin_test = client
+        .post(format!("{base}/api/ai/test"))
+        .bearer_auth(&server.admin_token)
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(admin_test.status(), 200, "admin may test the AI provider");
+
+    // Cluster management is admin-only too (SSH credentials).
+    let bob_cluster = client
+        .post(format!("{base}/api/clusters"))
+        .bearer_auth(&bob)
+        .json(&serde_json::json!({
+            "id": "evil", "name": "evil", "ssh_host": "10.0.0.1", "ssh_port": 22,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        bob_cluster.status(),
+        403,
+        "cluster management must be admin-only"
+    );
+
+    // Env-password login auto-provisions a real users row (id = username).
+    let carol = server.login(&client, "carol", "user-secret").await;
+    let users: serde_json::Value = client
+        .get(format!("{base}/api/users"))
+        .bearer_auth(&server.admin_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let carol_row = users
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|u| u["username"] == "carol")
+        .expect("carol's users row must be auto-provisioned");
+    assert_eq!(carol_row["role"], "user");
+
+    // Carol's run is attributed to her users.id (her username), so audit
+    // trails point at a real identity.
+    let created: serde_json::Value = client
+        .post(format!("{base}/api/runs"))
+        .bearer_auth(&carol)
+        .json(&serde_json::json!({"toml_content": ISO_WORKFLOW}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let run_id = created["run_id"].as_str().unwrap().to_string();
+    let run_view: serde_json::Value = client
+        .get(format!("{base}/api/runs/{run_id}"))
+        .bearer_auth(&server.admin_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        run_view["user_id"].as_str().unwrap(),
+        carol_row["id"].as_str().unwrap(),
+        "run must be owned by carol's canonical user id"
     );
 }

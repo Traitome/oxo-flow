@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { api } from '../api/client';
+import { api, createEventSource } from '../api/client';
 import type { RunItem, MonitorStatus, ReportData, DagStatus, Diagnostics, DryRunPreview } from '../api/types';
 import { Play, Pause, RotateCcw, BarChart3, Loader2, Bot } from 'lucide-react';
 import WorkflowCanvas from '../components/WorkflowCanvas';
@@ -77,7 +77,7 @@ export default function MonitorReport() {
   // Update monitor status in real-time via SSE
   useEffect(() => {
     if (!selId) return;
-    const es = new EventSource('/api/events');
+    const es = createEventSource();
     const interval = setInterval(async () => {
       try {
         const status = await api.aiStatus(selId);
@@ -88,7 +88,11 @@ export default function MonitorReport() {
     es.onmessage = (evt) => {
       try {
         const event = JSON.parse(evt.data);
-        if (event.data?.run_id === selId) {
+        // Events are scoped to their owning user (issue #82 P0-5); the
+        // server already filters the stream, this is a belt-and-suspenders
+        // guard for anonymous/personal-mode streams.
+        const mine = !event.user || event.user === localStorage.getItem('oxo_user_id');
+        if (mine && event.data?.run_id === selId) {
           if (event.type === 'run_completed' || event.type === 'run_failed') {
             clearInterval(interval);
             api.listRuns().then(setRuns);
