@@ -20,6 +20,10 @@ mkdir -p "$dir/jobs/$id"
 echo "PENDING" > "$dir/jobs/$id/state"
 cp "$script" "$dir/jobs/$id/job.sh"
 (
+  # `set +e`: the parent script runs with `-e`, but a failing job must still
+  # reach the state write below — otherwise FAILED is never recorded and
+  # drivers poll RUNNING forever.
+  set +e
   echo "RUNNING" > "$dir/jobs/$id/state"
   echo $$ > "$dir/jobs/$id/pid"
   bash "$script" > "$dir/jobs/$id/stdout.log" 2> "$dir/jobs/$id/stderr.log"

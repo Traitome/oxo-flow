@@ -9,7 +9,7 @@ use super::{BackendJobStatus, ScheduledRule};
 use crate::cluster::{ClusterBackend, ClusterJobConfig, generate_submit_script};
 use crate::error::{OxoFlowError, Result};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Parse the scheduler-assigned job id from a submission's output.
 ///
@@ -115,21 +115,49 @@ pub fn parse_status_line(
 pub struct ClusterExecutor {
     backend: ClusterBackend,
     cluster: ClusterJobConfig,
+    /// Optional directory holding the scheduler binaries (sbatch, squeue,
+    /// …) — for nonstandard installations and the mock-scheduler CI harness
+    /// (`tests/fixtures/mock-scheduler`).
+    bin_dir: Option<PathBuf>,
+    /// Extra environment for scheduler commands (e.g. `MOCK_SCHEDULER_DIR`).
+    env: Vec<(String, String)>,
 }
 
 impl ClusterExecutor {
     pub fn new(backend: ClusterBackend, cluster: ClusterJobConfig) -> Self {
-        Self { backend, cluster }
+        Self {
+            backend,
+            cluster,
+            bin_dir: None,
+            env: Vec::new(),
+        }
     }
 
-    async fn run_cmd(program: &str, args: &[&str]) -> Result<std::process::Output> {
-        let out = tokio::process::Command::new(program)
+    /// Resolve scheduler commands from `dir` instead of `PATH`.
+    pub fn with_scheduler_dir(mut self, dir: std::path::PathBuf) -> Self {
+        self.bin_dir = Some(dir);
+        self
+    }
+
+    /// Add an environment variable for scheduler commands.
+    pub fn with_env(mut self, key: &str, value: &str) -> Self {
+        self.env.push((key.to_string(), value.to_string()));
+        self
+    }
+
+    async fn run_cmd(&self, program: &str, args: &[&str]) -> Result<std::process::Output> {
+        let resolved = match &self.bin_dir {
+            Some(dir) => dir.join(program),
+            None => PathBuf::from(program),
+        };
+        let out = tokio::process::Command::new(&resolved)
             .args(args)
+            .envs(self.env.iter().cloned())
             .kill_on_drop(true)
             .output()
             .await
             .map_err(|e| OxoFlowError::Config {
-                message: format!("failed to run '{program}': {e}"),
+                message: format!("failed to run '{}': {e}", resolved.display()),
             })?;
         if !out.status.success() {
             return Err(OxoFlowError::Config {
@@ -149,7 +177,7 @@ impl ClusterExecutor {
         job_ids: &[String],
     ) -> Result<HashMap<String, BackendJobStatus>> {
         let args: Vec<&str> = job_ids.iter().map(String::as_str).collect();
-        let out = Self::run_cmd(program, &args).await?;
+        let out = self.run_cmd(program, &args).await?;
         let mut statuses = HashMap::new();
         for line in String::from_utf8_lossy(&out.stdout)
             .lines()
@@ -191,7 +219,9 @@ impl super::ExecutorBackend for ClusterExecutor {
         }
         let path_str = script_path.to_string_lossy().to_string();
         args.push(&path_str);
-        let out = Self::run_cmd(crate::cluster::submit_command(&self.backend), &args).await?;
+        let out = self
+            .run_cmd(crate::cluster::submit_command(&self.backend), &args)
+            .await?;
         parse_job_id(
             &self.backend,
             &String::from_utf8_lossy(&out.stdout),
@@ -203,8 +233,9 @@ impl super::ExecutorBackend for ClusterExecutor {
         match self.backend {
             ClusterBackend::Slurm => {
                 let list = job_ids.join(",");
-                let out =
-                    Self::run_cmd("squeue", &["-j", &list, "--noheader", "-o", "%i|%t"]).await?;
+                let out = self
+                    .run_cmd("squeue", &["-j", &list, "--noheader", "-o", "%i|%t"])
+                    .await?;
                 let mut statuses = HashMap::new();
                 for line in String::from_utf8_lossy(&out.stdout)
                     .lines()
@@ -223,7 +254,7 @@ impl super::ExecutorBackend for ClusterExecutor {
                 // qstat -j pairs "job_number:" with "state:" lines.
                 let mut statuses = HashMap::new();
                 for id in job_ids {
-                    let out = Self::run_cmd("qstat", &["-j", id]).await?;
+                    let out = self.run_cmd("qstat", &["-j", id]).await?;
                     let mut number = None;
                     let mut state = BackendJobStatus::Unknown;
                     for line in String::from_utf8_lossy(&out.stdout).lines().map(str::trim) {
@@ -255,7 +286,7 @@ impl super::ExecutorBackend for ClusterExecutor {
             ClusterBackend::Pbs | ClusterBackend::Sge => "qdel",
             ClusterBackend::Lsf => "bkill",
         };
-        Self::run_cmd(cmd, &[job_id]).await.map(|_| ())
+        self.run_cmd(cmd, &[job_id]).await.map(|_| ())
     }
 
     async fn logs(&self, job_id: &str) -> Result<String> {
@@ -268,7 +299,7 @@ impl super::ExecutorBackend for ClusterExecutor {
             ClusterBackend::Sge => ("qacct", vec!["-j", job_id]),
             ClusterBackend::Lsf => ("bacct", vec![job_id]),
         };
-        let out = Self::run_cmd(program, &args).await?;
+        let out = self.run_cmd(program, &args).await?;
         Ok(String::from_utf8_lossy(&out.stdout).to_string())
     }
 }

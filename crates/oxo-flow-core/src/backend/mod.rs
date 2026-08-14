@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 #[cfg(feature = "cluster")]
 pub mod cluster;
+pub mod driver;
 
 /// Scheduler-agnostic job state, mapped from each backend's native codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
