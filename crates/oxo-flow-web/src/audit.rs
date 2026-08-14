@@ -130,8 +130,6 @@ pub fn get_recent_audit_logs(days: u8) -> std::io::Result<Vec<String>> {
     Ok(entries)
 }
 
-
-
 /// Middleware: record every state-changing request (non-GET/HEAD/OPTIONS) in
 /// the `audit_logs` table — the single audit write point covering all
 /// mutation handlers (issue #79 P1-05: the table had schema but zero write
