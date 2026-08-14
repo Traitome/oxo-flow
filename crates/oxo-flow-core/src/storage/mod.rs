@@ -105,6 +105,19 @@ impl StoragePath {
     }
 }
 
+/// Metadata of a remote object, used for content-addressed invalidation
+/// (issue #78 P2). Local files have no `RemoteStat` — local invalidation
+/// keeps the size+mtime+sha256 policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteStat {
+    /// Object size in bytes.
+    pub size: u64,
+    /// Content identity as reported by the object store: S3 ETag (raw, may
+    /// be a composite multipart hash) or GCS `md5Hash` (base64). `None`
+    /// when the store cannot provide one.
+    pub etag: Option<String>,
+}
+
 /// Storage backend trait - abstracts file operations across providers.
 ///
 /// Every method is async to support network-based backends. Local filesystem
@@ -113,6 +126,11 @@ impl StoragePath {
 pub trait StorageBackend: Send + Sync {
     /// Check whether a path exists.
     async fn exists(&self, path: &StoragePath) -> Result<bool>;
+
+    /// Return metadata for a remote object, or `Ok(None)` when it does not
+    /// exist. Local backends return `Ok(None)` — local invalidation uses
+    /// size+mtime+sha256 (see [`RemoteStat`]).
+    async fn head(&self, path: &StoragePath) -> Result<Option<RemoteStat>>;
 
     /// Read the entire file at `path` into a UTF-8 string.
     async fn read_to_string(&self, path: &StoragePath) -> Result<String>;
@@ -254,5 +272,16 @@ mod tests {
     fn stage_remote_missing_backend_error() {
         let sp = StoragePath::parse("s3://bucket/key");
         assert!(sp.is_remote());
+    }
+
+    #[tokio::test]
+    async fn head_local_is_none() {
+        let resolver = StorageResolver::with_local();
+        let backend = resolver.get_backend(&StorageScheme::Local).unwrap();
+        let stat = backend
+            .head(&StoragePath::parse("/any/path"))
+            .await
+            .unwrap();
+        assert!(stat.is_none());
     }
 }

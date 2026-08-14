@@ -26,7 +26,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::error::{OxoFlowError, Result};
-use crate::storage::{StorageBackend, StoragePath};
+use crate::storage::{RemoteStat, StorageBackend, StoragePath};
 
 use hmac::{Hmac, Mac};
 use md5::Digest;
@@ -191,6 +191,12 @@ async fn gcs_get(bucket: &str, key: &str) -> Result<Vec<u8>> {
 
 /// Make a signed HEAD request and return whether the object exists.
 async fn gcs_head(bucket: &str, key: &str) -> Result<bool> {
+    Ok(gcs_head_stat(bucket, key).await?.is_some())
+}
+
+/// HEAD with metadata: object size + `md5Hash` (base64, GCS has no native
+/// ETag — the md5 hash is the stronger pure content hash; issue #78 P2).
+async fn gcs_head_stat(bucket: &str, key: &str) -> Result<Option<RemoteStat>> {
     let creds = load_credentials()?;
     let url = gcs_url(bucket, key);
     let date = rfc1123_date();
@@ -206,8 +212,21 @@ async fn gcs_head(bucket: &str, key: &str) -> Result<bool> {
         .map_err(|e| gcs_io_error("HEAD", bucket, key, &e.to_string()))?;
 
     match resp.status().as_u16() {
-        200 => Ok(true),
-        404 => Ok(false),
+        200 => {
+            let size = resp
+                .headers()
+                .get(reqwest::header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(0);
+            let etag = parse_md5_hash_header(
+                resp.headers()
+                    .get("x-goog-hash")
+                    .and_then(|v| v.to_str().ok()),
+            );
+            Ok(Some(RemoteStat { size, etag }))
+        }
+        404 => Ok(None),
         status => {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
@@ -219,6 +238,21 @@ async fn gcs_head(bucket: &str, key: &str) -> Result<bool> {
             ))
         }
     }
+}
+
+/// Parse the `md5=` component of an `x-goog-hash` header (base64, kept
+/// verbatim — never recomputed locally, equality comparison only).
+fn parse_md5_hash_header(header: Option<&str>) -> Option<String> {
+    header?
+        .split(',')
+        .map(str::trim)
+        .find_map(|part| part.strip_prefix("md5="))
+        .filter(|v| {
+            !v.is_empty()
+                && v.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=')
+        })
+        .map(str::to_string)
 }
 
 /// Make a signed PUT request with a body.
@@ -296,6 +330,11 @@ impl StorageBackend for GcsStorage {
         gcs_head(bucket, &path.key).await
     }
 
+    async fn head(&self, path: &StoragePath) -> Result<Option<RemoteStat>> {
+        let bucket = require_gcs_bucket(path)?;
+        gcs_head_stat(bucket, &path.key).await
+    }
+
     async fn read_to_string(&self, path: &StoragePath) -> Result<String> {
         let bucket = require_gcs_bucket(path)?;
         let bytes = gcs_get(bucket, &path.key).await?;
@@ -349,6 +388,21 @@ mod tests {
     #[test]
     fn name_is_gcs() {
         assert_eq!(GcsStorage.name(), "gcs");
+    }
+
+    #[test]
+    fn parse_gcs_md5_hash_header() {
+        assert_eq!(
+            parse_md5_hash_header(Some("md5=oVPGkKJcW4+2nW/eW3B+WA==")),
+            Some("oVPGkKJcW4+2nW/eW3B+WA==".to_string())
+        );
+        assert_eq!(
+            parse_md5_hash_header(Some("crc32c=xyz,md5=abc==")),
+            Some("abc==".to_string())
+        );
+        assert_eq!(parse_md5_hash_header(None), None);
+        assert_eq!(parse_md5_hash_header(Some("md5=bad*chars")), None);
+        assert_eq!(parse_md5_hash_header(Some("crc32c=xyz")), None);
     }
 
     #[test]

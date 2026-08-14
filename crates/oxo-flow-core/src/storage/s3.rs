@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use crate::error::{OxoFlowError, Result};
-use crate::storage::{StorageBackend, StoragePath};
+use crate::storage::{RemoteStat, StorageBackend, StoragePath};
 
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_s3::primitives::ByteStream;
@@ -105,6 +105,13 @@ impl StorageBackend for S3Storage {
     /// Returns `Ok(true)` when the object exists, `Ok(false)` on a 404 /
     /// NotFound error, and propagates other errors.
     async fn exists(&self, path: &StoragePath) -> Result<bool> {
+        Ok(self.head(path).await?.is_some())
+    }
+
+    /// HEAD with metadata: object size + ETag. Composite ETags from
+    /// multipart uploads (`"hash-N"`) are recorded verbatim — equality
+    /// comparison only, never recomputed locally (issue #78 P2).
+    async fn head(&self, path: &StoragePath) -> Result<Option<RemoteStat>> {
         let bucket = require_bucket(path)?;
         match self
             .client
@@ -114,7 +121,10 @@ impl StorageBackend for S3Storage {
             .send()
             .await
         {
-            Ok(_) => Ok(true),
+            Ok(resp) => Ok(Some(RemoteStat {
+                size: resp.content_length().unwrap_or(0) as u64,
+                etag: resp.e_tag().map(str::to_string),
+            })),
             Err(e) => {
                 let msg = e.to_string();
                 if msg.contains("NotFound") || msg.contains("404") {

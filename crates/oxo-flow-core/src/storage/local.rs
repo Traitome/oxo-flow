@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
-use crate::storage::{StorageBackend, StoragePath};
+use crate::storage::{RemoteStat, StorageBackend, StoragePath};
 
 /// Local filesystem implementation of [`StorageBackend`].
 ///
@@ -19,6 +19,10 @@ pub struct LocalStorage;
 impl StorageBackend for LocalStorage {
     async fn exists(&self, path: &StoragePath) -> Result<bool> {
         Ok(tokio::fs::try_exists(&path.key).await?)
+    }
+
+    async fn head(&self, _path: &StoragePath) -> Result<Option<RemoteStat>> {
+        Ok(None)
     }
 
     async fn read_to_string(&self, path: &StoragePath) -> Result<String> {
