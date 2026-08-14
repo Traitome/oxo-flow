@@ -964,16 +964,15 @@ pub async fn get_run_preview(Path(id): Path<String>) -> ApiResult<serde_json::Va
         )
     })?;
     let workdir = run.workdir.as_deref().unwrap_or("");
-    let content = std::fs::read_to_string(
-        std::path::Path::new(workdir).join("dry-run-preview.json"),
-    )
-    .map_err(|_| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NO_PREVIEW",
-            "No dry-run preview for this run".into(),
-        )
-    })?;
+    let content =
+        std::fs::read_to_string(std::path::Path::new(workdir).join("dry-run-preview.json"))
+            .map_err(|_| {
+                err(
+                    StatusCode::NOT_FOUND,
+                    "NO_PREVIEW",
+                    "No dry-run preview for this run".into(),
+                )
+            })?;
     let value: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
         err(
             StatusCode::INTERNAL_SERVER_ERROR,

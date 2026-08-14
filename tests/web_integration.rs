@@ -1099,10 +1099,7 @@ async fn web_dry_run_serves_instance_level_preview() {
         "the --samples filter must reach the preview: {preview}"
     );
     let plan = preview["checkpoint_preview"]["plan"].as_array().unwrap();
-    let names: Vec<&str> = plan
-        .iter()
-        .filter_map(|p| p["name"].as_str())
-        .collect();
+    let names: Vec<&str> = plan.iter().filter_map(|p| p["name"].as_str()).collect();
     assert!(
         names.contains(&"gather_cohort_S1"),
         "preview must list the EXPANDED instance name: {names:?}"

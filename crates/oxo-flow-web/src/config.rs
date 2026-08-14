@@ -82,7 +82,9 @@ pub fn load() -> Option<WebConfig> {
         .ok()
         .map(std::path::PathBuf::from)
         .into_iter()
-        .chain(std::iter::once(std::path::PathBuf::from("oxo-flow.web.toml")))
+        .chain(std::iter::once(std::path::PathBuf::from(
+            "oxo-flow.web.toml",
+        )))
         .chain(home_config())
         .collect();
 
@@ -108,9 +110,9 @@ pub fn load() -> Option<WebConfig> {
 }
 
 fn home_config() -> Option<std::path::PathBuf> {
-    std::env::var("HOME").ok().map(|home| {
-        std::path::PathBuf::from(home).join(".config/oxo-flow/web.toml")
-    })
+    std::env::var("HOME")
+        .ok()
+        .map(|home| std::path::PathBuf::from(home).join(".config/oxo-flow/web.toml"))
 }
 
 #[cfg(test)]
