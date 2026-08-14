@@ -227,3 +227,12 @@ The `env check` command verifies:
 - [Use Environments how-to](../how-to/use-environments.md) — practical recipes
 - [`env` command](../commands/env.md) — CLI reference
 - [`run` command](../commands/run.md) — `--skip-env-setup` and `--cache-dir` options
+
+---
+
+## See Also
+
+- [China Network Mirrors](china-mirrors.md) — measured reachability of the
+  conda/bioconda, PyPI, Rust, and Docker mirrors users on mainland-China
+  networks configure for environment provisioning (includes a re-runnable
+  probe script).
