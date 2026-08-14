@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api, createEventSource } from '../api/client';
 import type { RunItem, MonitorStatus, ReportData, DagStatus, Diagnostics, DryRunPreview, RunInstance } from '../api/types';
-import { Play, Pause, RotateCcw, BarChart3, Loader2, Bot, Ban } from 'lucide-react';
+import { Play, Pause, RotateCcw, BarChart3, Loader2, Bot, Ban, Trash2, StepForward } from 'lucide-react';
 import WorkflowCanvas from '../components/WorkflowCanvas';
 import { usePipelineSession } from '../context/PipelineSession';
 
@@ -288,6 +288,27 @@ export default function MonitorReport() {
             <button className="btn-sm" onClick={handleRetry} title="Retry"><RotateCcw size={14} /></button>
             <button className="btn-sm" style={{ color: '#DC2626', borderColor: '#DC2626' }}
               onClick={handleCancel} title="Cancel run"><Ban size={14} /></button>
+            <button className="btn-sm" title="Resume from checkpoint (re-runs unfinished rules)"
+              onClick={async () => {
+                if (!selId) return;
+                if (!window.confirm('Resume this run from its checkpoint? Unfinished rules continue in place.')) return;
+                try {
+                  const res = await api.resumeCheckpoint(selId);
+                  setSelId(res.run_id);
+                } catch { /* ignore */ }
+              }}>
+              <StepForward size={14} />
+            </button>
+            <button className="btn-sm" title="Clean run workdir (chunks + stale state)"
+              onClick={async () => {
+                if (!selId) return;
+                if (!window.confirm('Clean this run\'s workdir? Chunk files and stale state are removed (checkpoint stays).')) return;
+                try {
+                  await api.cleanRun(selId);
+                } catch { /* ignore */ }
+              }}>
+              <Trash2 size={14} />
+            </button>
           </div>
         </div>
 

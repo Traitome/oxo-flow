@@ -95,11 +95,24 @@ pub struct ValidateRequest {
     pub pipeline_id: Option<String>,
 }
 
-/// Validation result (empty errors = valid pipeline).
+/// Validation result (empty errors = valid pipeline). The extra fields
+/// mirror the CLI's `validate --json` envelope (issue #81 parity).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidateResponse {
     pub valid: bool,
     pub errors: Vec<ValidationError>,
+    #[serde(default)]
+    pub rules: usize,
+    #[serde(default)]
+    pub dependencies: usize,
+    /// Non-wildcard inputs that no rule produces and that do not exist
+    /// relative to the request's base_dir (default: server cwd).
+    #[serde(default)]
+    pub missing_inputs: Vec<String>,
+    /// Lint-level findings, kept separate from errors (the CLI keeps
+    /// `lint` its own command — issue #81).
+    #[serde(default)]
+    pub warnings: Vec<ValidationError>,
 }
 
 /// A single validation error with error code, message, and optional fix suggestion.

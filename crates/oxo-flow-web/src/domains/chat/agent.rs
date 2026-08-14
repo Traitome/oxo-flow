@@ -73,7 +73,7 @@ impl Agent for ChatAgent {
     /// Grounded validation: the extracted TOML must pass the core engine's
     /// own validation — errors feed back into the loop for correction.
     fn validate(&self, content: &str, _ctx: &AgentContext) -> ValidationResult {
-        match workflow_svc::validate_pipeline(content) {
+        match workflow_svc::validate_pipeline(content, None) {
             Ok(v) if v.valid => ValidationResult::passed(),
             Ok(v) => ValidationResult {
                 passed: false,

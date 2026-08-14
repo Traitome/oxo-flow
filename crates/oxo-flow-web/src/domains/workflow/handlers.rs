@@ -124,7 +124,13 @@ pub async fn validate_pipeline(Json(req): Json<serde_json::Value>) -> ApiResult<
                 "toml_content is required".into(),
             )
         })?;
-    service::validate_pipeline(toml)
+    // Missing-input existence checks resolve against the caller's base_dir
+    // (issue #81 parity: the CLI checks against the workflow's directory).
+    let base_dir = req
+        .get("base_dir")
+        .and_then(|v| v.as_str())
+        .map(std::path::PathBuf::from);
+    service::validate_pipeline(toml, base_dir.as_deref())
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "VALIDATE_ERROR", e))
 }
@@ -762,21 +768,26 @@ pub async fn list_templates() -> ApiResult<Vec<Template>> {
 }
 
 /// GET /api/templates/{id}
+///
+/// Accepts the template UUID OR its name (`?template=` supports both —
+/// issue #81: the editor only understood UUIDs before).
 pub async fn get_template(Path(id): Path<String>) -> ApiResult<Template> {
     let pool = get_pool()?;
 
-    let row: Option<models::TemplateRow> = sqlx::query_as("SELECT * FROM templates WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching template {id}: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
+    let row: Option<models::TemplateRow> =
+        sqlx::query_as("SELECT * FROM templates WHERE id = ? OR name = ? LIMIT 1")
+            .bind(&id)
+            .bind(&id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error fetching template {id}: {e}");
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    "Internal database error".into(),
+                )
+            })?;
 
     match row {
         Some(r) => Ok(Json(Template {

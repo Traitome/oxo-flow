@@ -561,3 +561,15 @@ body{font-family:var(--font-sans);font-size:.9375rem;line-height:1.6;color:var(-
   color: var(--color-text-secondary);
   margin: 0;
 }
+
+/* Transform-rule marker (issue #81: split→map→combine nodes) */
+.rf-transform-badge {
+  margin-left: 6px;
+  font-size: 0.7rem;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--color-info-bg);
+  color: var(--color-info);
+  border: 1px solid var(--color-info);
+  vertical-align: 2px;
+}

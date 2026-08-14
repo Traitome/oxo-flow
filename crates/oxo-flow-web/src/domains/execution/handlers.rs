@@ -1381,3 +1381,160 @@ pub async fn visualize_report(
 
     Ok(Json(plot_json))
 }
+
+// ---------------------------------------------------------------------------
+// CLI command exposure (issue #81): clean and checkpoint-resume were CLI
+// high-frequency commands with no web equivalent.
+// ---------------------------------------------------------------------------
+
+/// POST /api/runs/{id}/clean — run the CLI's `clean` against the run's
+/// workdir (chunk files + stale state). Quick, synchronous, output echoed.
+pub async fn clean_run(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<serde_json::Value> {
+    let user = current_user::resolve(authenticated.as_ref());
+    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+    let run = load_owned_run(pool, &user, &id).await?;
+    let workdir = run.workdir.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NO_WORKDIR",
+            "Run has no workdir".into(),
+        )
+    })?;
+
+    let bin = crate::executor::find_oxo_flow_binary();
+    let workflow = std::path::Path::new(&workdir).join("workflow.oxoflow");
+    let output = tokio::process::Command::new(bin)
+        .arg("clean")
+        .arg(&workflow)
+        .arg("--workdir")
+        .arg(&workdir)
+        .arg("--force")
+        .output()
+        .await
+        .map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "CLEAN_ERROR",
+                format!("Failed to run clean: {e}"),
+            )
+        })?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    Ok(Json(serde_json::json!({
+        "run_id": id,
+        "exit_code": output.status.code(),
+        "stdout": stdout.lines().last().unwrap_or(""),
+        "stderr": stderr.lines().last().unwrap_or(""),
+    })))
+}
+
+/// POST /api/runs/{id}/resume-checkpoint — resume an unfinished run from
+/// its checkpoint via the CLI's `resume` command, recorded as a NEW run
+/// (the same pattern as retry).
+pub async fn resume_checkpoint(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<serde_json::Value> {
+    let user = current_user::resolve(authenticated.as_ref());
+    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+    let run = load_owned_run(pool, &user, &id).await?;
+    let workdir = run.workdir.clone().ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NO_WORKDIR",
+            "Run has no workdir".into(),
+        )
+    })?;
+
+    let checkpoint = std::path::Path::new(&workdir)
+        .join(".oxo-flow")
+        .join("checkpoint.json");
+    if !checkpoint.exists() {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "NO_CHECKPOINT",
+            format!("No checkpoint at {}", checkpoint.display()),
+        ));
+    }
+    let jobs = req.get("max_jobs").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+
+    // New run row; same workdir so the resume continues in place.
+    let new_run_id = uuid::Uuid::new_v4().to_string();
+    let now = now_iso();
+    let new_run = models::RunRow {
+        id: new_run_id.clone(),
+        user_id: user.id.clone(),
+        pipeline_id: run.pipeline_id.clone(),
+        pipeline_snapshot: run.pipeline_snapshot.clone(),
+        workflow_name: run.workflow_name.clone(),
+        status: "queued".to_string(),
+        phase: "resuming".to_string(),
+        pid: None,
+        workdir: Some(workdir.clone()),
+        started_at: None,
+        finished_at: None,
+        created_at: now.clone(),
+    };
+    sqlx::query(
+        "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, pid, workdir, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&new_run.id)
+    .bind(&new_run.user_id)
+    .bind(&new_run.pipeline_id)
+    .bind(&new_run.pipeline_snapshot)
+    .bind(&new_run.workflow_name)
+    .bind(&new_run.status)
+    .bind(&new_run.phase)
+    .bind(new_run.pid)
+    .bind(&new_run.workdir)
+    .bind(&new_run.started_at)
+    .bind(&new_run.finished_at)
+    .bind(&new_run.created_at)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            format!("DB error inserting resume run: {e}"),
+        )
+    })?;
+
+    let mut args: Vec<std::ffi::OsString> = Vec::new();
+    args.push("resume".into());
+    args.push(checkpoint.into_os_string());
+    args.push("--workdir".into());
+    args.push(workdir.clone().into());
+    args.push("-j".into());
+    args.push(jobs.to_string().into());
+    crate::executor::spawn_background_run_with_args(
+        new_run_id.clone(),
+        user.id.clone(),
+        "none".to_string(),
+        "local".to_string(),
+        Some(std::path::PathBuf::from(workdir)),
+        args,
+    );
+
+    Ok(Json(serde_json::json!({
+        "run_id": new_run_id,
+        "resumed_from": id,
+        "max_jobs": jobs,
+    })))
+}

@@ -139,7 +139,10 @@ pub fn parse_pipeline(
 /// Validate pipeline TOML content against the .oxoflow schema.
 ///
 /// Returns structured errors with diagnostic codes and suggestions.
-pub fn validate_pipeline(toml_content: &str) -> Result<ValidateResponse, String> {
+pub fn validate_pipeline(
+    toml_content: &str,
+    base_dir: Option<&std::path::Path>,
+) -> Result<ValidateResponse, String> {
     // A raw TOML pass first: syntax errors carry byte spans, which we
     // convert to 1-based line numbers so the editor can point at the
     // offending line (issue #82 P2-8).
@@ -162,13 +165,19 @@ pub fn validate_pipeline(toml_content: &str) -> Result<ValidateResponse, String>
                 suggestion: Some("Fix the syntax error at the highlighted line".into()),
                 line: Some(line),
             }],
+            rules: 0,
+            dependencies: 0,
+            missing_inputs: vec![],
+            warnings: vec![],
         });
     }
     let config = WorkflowConfig::parse(toml_content).map_err(|e| format!("Parse: {e}"))?;
     let validation = oxo_flow_core::format::validate_format(&config);
     let lints = oxo_flow_core::format::lint_format(&config);
 
-    let mut errors: Vec<ValidationError> = validation
+    // Errors vs warnings stay separate (issue #81: lints previously
+    // inflated the error count — the CLI keeps lint its own command).
+    let errors: Vec<ValidationError> = validation
         .diagnostics
         .iter()
         .map(|d| ValidationError {
@@ -180,17 +189,55 @@ pub fn validate_pipeline(toml_content: &str) -> Result<ValidateResponse, String>
         })
         .collect();
 
-    errors.extend(lints.into_iter().map(|d| ValidationError {
-        code: d.code,
-        message: d.message,
-        line: None,
-        rule: d.rule,
-        suggestion: d.suggestion,
-    }));
+    let warnings: Vec<ValidationError> = lints
+        .into_iter()
+        .map(|d| ValidationError {
+            code: d.code,
+            message: d.message,
+            line: None,
+            rule: d.rule,
+            suggestion: d.suggestion,
+        })
+        .collect();
+
+    // CLI-parity summary fields (issue #81): rule/dependency counts and
+    // the missing-input list (non-wildcard, not produced by any rule, not
+    // present relative to the caller's base_dir).
+    let rule_count = config.rules.len();
+    let dependency_count = config
+        .rules
+        .iter()
+        .map(|r| r.depends_on.len())
+        .sum::<usize>();
+    let produced: std::collections::HashSet<&str> = config
+        .rules
+        .iter()
+        .flat_map(|r| r.output.iter())
+        .map(|p| p.as_str())
+        .collect();
+    let mut missing_inputs: Vec<String> = Vec::new();
+    for rule in &config.rules {
+        for input in &rule.input {
+            if input.contains('{') || produced.contains(input.as_str()) {
+                continue;
+            }
+            // base_dir comes from the caller; default to the server cwd.
+            // Existence is the same check the CLI runs against the
+            // workflow's directory.
+            let exists = base_dir.map(|b| b.join(&*input).exists()).unwrap_or(false);
+            if !exists {
+                missing_inputs.push(input.to_string());
+            }
+        }
+    }
 
     Ok(ValidateResponse {
         valid: !validation.has_errors(),
         errors,
+        rules: rule_count,
+        dependencies: dependency_count,
+        missing_inputs,
+        warnings,
     })
 }
 
@@ -263,7 +310,8 @@ pub fn lint_workflow(toml_content: &str) -> Result<ValidateResponse, String> {
     let diagnostics = oxo_flow_core::format::lint_format(&config);
     Ok(ValidateResponse {
         valid: true,
-        errors: diagnostics
+        errors: vec![],
+        warnings: diagnostics
             .into_iter()
             .map(|d| ValidationError {
                 code: d.code,
@@ -273,6 +321,9 @@ pub fn lint_workflow(toml_content: &str) -> Result<ValidateResponse, String> {
                 line: None,
             })
             .collect(),
+        rules: 0,
+        dependencies: 0,
+        missing_inputs: vec![],
     })
 }
 

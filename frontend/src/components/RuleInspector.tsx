@@ -63,7 +63,22 @@ function formFromRule(name: string, rule: Record<string, unknown>): RuleFormStat
   f.script = typeof rule.script === 'string' ? rule.script : '';
   f.input = Array.isArray(rule.input) ? rule.input.filter((v): v is string => typeof v === 'string') : [];
   f.output = Array.isArray(rule.output) ? rule.output.filter((v): v is string => typeof v === 'string') : [];
-  const env = (rule.environment ?? {}) as Record<string, unknown>;
+  // Environment may be an object ({ backend, spec }) OR a string
+  // ("bioconda::fastp") as emitted by the AI generator — the string form
+  // was silently dropped before (issue #81).
+  const rawEnv = rule.environment;
+  // "bioconda::fastp" → { bioconda: "fastp" } so the backend-key lookup
+  // below (ENV_BACKENDS) finds it; "conda" stays conda, unknown backends
+  // map to conda with the full string as spec (never silently dropped).
+  const env = typeof rawEnv === 'string'
+    ? (() => {
+        const [backend, spec] = rawEnv.split('::');
+        const key = ENV_BACKENDS.includes(backend) ? backend : 'conda';
+        const out: Record<string, unknown> = {};
+        out[key] = spec || backend || rawEnv;
+        return out;
+      })()
+    : ((rawEnv ?? {}) as Record<string, unknown>);
   const envKey = ENV_BACKENDS.find((k) => env[k] !== undefined && env[k] !== null);
   if (envKey) {
     f.environment = envKey;

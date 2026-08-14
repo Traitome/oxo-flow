@@ -120,6 +120,8 @@ export const api = {
   cancelRun: (id: string) => post<{ run_id: string; status: string }>(`/api/runs/${id}/cancel`, {}),
   pauseRun: (id: string, reason = 'user_request') => post<{ run_id: string; status: string }>(`/api/runs/${id}/pause`, { reason }),
   resumeRun: (id: string, from_rule?: string) => post<{ run_id: string; status: string }>(`/api/runs/${id}/resume`, { from_rule }),
+  cleanRun: (id: string) => post<{ run_id: string; exit_code: number | null; stdout: string; stderr: string }>(`/api/runs/${id}/clean`, {}),
+  resumeCheckpoint: (id: string, maxJobs = 1) => post<{ run_id: string; resumed_from: string; max_jobs: number }>(`/api/runs/${id}/resume-checkpoint`, { max_jobs: maxJobs }),
   aiStatus: (id: string) => get<MonitorStatus>(`/api/runs/${id}/ai-status`),
 
   // ── Report ──

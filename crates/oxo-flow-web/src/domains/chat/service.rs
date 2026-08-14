@@ -55,7 +55,7 @@ pub async fn process_chat(
     let toml_content =
         extract_toml_from_response(&ai_response).unwrap_or_else(|| ai_response.clone());
 
-    let validation = workflow_svc::validate_pipeline(&toml_content)?;
+    let validation = workflow_svc::validate_pipeline(&toml_content, None)?;
 
     // Phase 5: Build response
     let pipeline_id = uuid::Uuid::new_v4().to_string();

@@ -6101,3 +6101,32 @@
 {"n": "zol", "v": "1.6.18", "t": "zol (& fai): large-scale targeted detection and evolutionary investigation of gene clusters.", "p": "LM"}
 {"n": "zorro", "v": "2011.12.01", "t": "ZORRO is a probabilistic masking program that assigns confidence scores to each column in a multiple sequence alignment.", "p": "LM"}
 {"n": "zpca", "v": "0.8.3.post1", "t": "PCA analysis for genes or transcripts.", "p": "?"}
+{"n": "q2-alignment", "v": "2025.5", "t": "QIIME2 plugin for generating and manipulating alignments (mafft/mask).", "p": "LM"}
+{"n": "q2-clawback", "v": "2025.5", "t": "QIIME2 plugin for assembling weights from taxonomies (clawback method).", "p": "LM"}
+{"n": "q2-composition", "v": "2025.5", "t": "QIIME2 plugin for compositionality-aware analyses (ANCOM/ANCOM-BC).", "p": "LM"}
+{"n": "q2-cutadapt", "v": "2025.5", "t": "QIIME2 plugin for adapter/quality trimming via cutadapt.", "p": "LM"}
+{"n": "q2-dada2", "v": "2025.5", "t": "QIIME2 plugin for denoising amplicon reads with DADA2.", "p": "HM"}
+{"n": "q2-deblur", "v": "2025.5", "t": "QIIME2 plugin for de novo 16S sequence denoising (Deblur).", "p": "HM"}
+{"n": "q2-demux", "v": "2025.5", "t": "QIIME2 plugin for demultiplexing and summarizing sequence data.", "p": "HM"}
+{"n": "q2-diversity", "v": "2025.5", "t": "QIIME2 plugin for alpha/beta diversity and ordination (core metrics).", "p": "HM"}
+{"n": "q2-diversity-lib", "v": "2025.5", "t": "QIIME2 plugin for non-phylogenetic diversity metrics (scikit-bio).", "p": "LM"}
+{"n": "q2-emperor", "v": "2025.5", "t": "QIIME2 plugin for 3D PCoA visualization via Emperor.", "p": "LM"}
+{"n": "q2-feature-classifier", "v": "2025.5", "t": "QIIME2 plugin for taxonomy classification of features (naive Bayes, VSEARCH).", "p": "HM"}
+{"n": "q2-feature-table", "v": "2025.5", "t": "QIIME2 plugin for feature-table operations (filter, summarize, rarefy).", "p": "HM"}
+{"n": "q2-fragment-insertion", "v": "2025.5", "t": "QIIME2 plugin for phylogenetic placement (SEPP).", "p": "LM"}
+{"n": "q2-gneiss", "v": "2025.5", "t": "QIIME2 plugin for compositional balances (ILR transforms).", "p": "LM"}
+{"n": "q2-longitudinal", "v": "2025.5", "t": "QIIME2 plugin for longitudinal/paired-sample analyses.", "p": "LM"}
+{"n": "q2-metadata", "v": "2025.5", "t": "QIIME2 plugin for metadata tabulation and manipulation.", "p": "LM"}
+{"n": "q2-mystery-stew", "v": "2025.5", "t": "QIIME2 plugin for training naive Bayes classifiers from reference sequences.", "p": "LM"}
+{"n": "q2-phylogeny", "v": "2025.5", "t": "QIIME2 plugin for phylogenetic tree construction (fasttree/iqtree/raxml).", "p": "HM"}
+{"n": "q2-quality-control", "v": "2025.5", "t": "QIIME2 plugin for quality control of feature tables/sequences.", "p": "LM"}
+{"n": "q2-quality-filter", "v": "2025.5", "t": "QIIME2 plugin for PHRED-based quality filtering.", "p": "LM"}
+{"n": "q2-sample-classifier", "v": "2025.5", "t": "QIIME2 plugin for supervised learning on sample metadata.", "p": "LM"}
+{"n": "q2-taxa", "v": "2025.5", "t": "QIIME2 plugin for taxonomy visualizations (barplots).", "p": "HM"}
+{"n": "q2-types", "v": "2025.5", "t": "QIIME2 plugin defining shared semantic types.", "p": "LM"}
+{"n": "q2-vsearch", "v": "2025.5", "t": "QIIME2 plugin for OTU clustering and chimera filtering via VSEARCH.", "p": "HM"}
+{"n": "q2-feature-frequency", "v": "2025.5", "t": "QIIME2 plugin for frequency-based analyses of features.", "p": "LM"}
+{"n": "q2-ordination", "v": "2025.5", "t": "QIIME2 plugin for non-Emperor ordination (PCA/CCA/RDA) visualization.", "p": "LM"}
+{"n": "q2templates", "v": "2025.5", "t": "QIIME2 plugin packaging template for developers.", "p": "LM"}
+{"n": "q2cli", "v": "2025.5", "t": "QIIME2 command-line interface (qiime).", "p": "HM"}
+{"n": "qiime2", "v": "2025.5", "t": "QIIME2 framework core (rachis) — plugin API, artifact model.", "p": "HM"}

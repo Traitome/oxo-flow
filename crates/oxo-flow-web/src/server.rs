@@ -248,6 +248,11 @@ pub fn build_router(mode: &str) -> Router {
             "/api/runs/{id}/instances",
             get(execution::handlers::get_run_instances),
         )
+        .route("/api/runs/{id}/clean", post(execution::handlers::clean_run))
+        .route(
+            "/api/runs/{id}/resume-checkpoint",
+            post(execution::handlers::resume_checkpoint),
+        )
         .route(
             "/api/runs/{id}/logs",
             get(execution::handlers::get_run_logs),

@@ -27,6 +27,8 @@ type RuleNodeData = Record<string, unknown> & {
   shell: string;
   description: string;
   status?: string;
+  /** Split→map→combine rules carry a visual marker (issue #81). */
+  transform?: boolean;
   /** called on double-click (editable canvas only) */
   onEdit?: (name: string) => void;
 };
@@ -53,7 +55,10 @@ function RuleNodeCard({ data, selected }: NodeProps) {
       title={d.description || d.label}
     >
       <Handle type="target" position={Position.Left} className="rf-handle" />
-      <div className="rf-rule-name">{d.label}</div>
+      <div className="rf-rule-name">
+        {d.label}
+        {d.transform && <span className="rf-transform-badge" title="Transform rule (split → map → combine)">⇄</span>}
+      </div>
       <div className="rf-rule-meta">
         <span className={`rf-env-dot rf-env-${d.environment}`} aria-hidden />
         <span className="rf-env-label">{ENV_LABELS[d.environment] ?? d.environment}</span>
@@ -175,6 +180,7 @@ export default function WorkflowCanvas({
             environment: n.environment,
             shell: typeof n.rule.shell === 'string' ? n.rule.shell : '',
             description: typeof n.rule.description === 'string' ? n.rule.description : '',
+            transform: n.rule.transform !== undefined && n.rule.transform !== null,
             status: statusById?.[n.id],
             onEdit: editable ? onEditRule : undefined,
           },

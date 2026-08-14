@@ -16,7 +16,7 @@ use crate::{broadcast_event_for, db};
 ///   3. Next to the current executable (same target dir)
 ///   4. One level above the current executable (cargo test places test binaries in `deps/`)
 ///   5. Fall back to `"oxo-flow"` (PATH lookup)
-fn find_oxo_flow_binary() -> PathBuf {
+pub(crate) fn find_oxo_flow_binary() -> PathBuf {
     if let Ok(path) = std::env::var("OXO_FLOW_BIN") {
         return PathBuf::from(path);
     }
@@ -219,6 +219,25 @@ pub fn spawn_background_run(
     workdir: Option<PathBuf>,
     flags: RunFlags,
 ) {
+    // The CLI invocation is derived from RunFlags + the workflow file the
+    // caller wrote into the workdir.
+    let run_dir = workdir
+        .clone()
+        .unwrap_or_else(|| get_run_directory(&username, &run_id));
+    let args = build_cli_args(&run_dir.join("workflow.oxoflow"), &run_dir, &flags);
+    spawn_background_run_with_args(run_id, username, auth_type, os_user, workdir, args);
+}
+
+/// Spawn a background CLI run with an explicit argument vector (used by
+/// the checkpoint-resume path, issue #81 web exposure).
+pub fn spawn_background_run_with_args(
+    run_id: String,
+    username: String,
+    auth_type: String,
+    os_user: String,
+    workdir: Option<PathBuf>,
+    cli_args: Vec<std::ffi::OsString>,
+) {
     tokio::spawn(async move {
         info!("Starting background run {} for user {}", run_id, username);
 
@@ -250,7 +269,6 @@ pub fn spawn_background_run(
         );
 
         let run_dir = workdir.unwrap_or_else(|| get_run_directory(&username, &run_id));
-        let workflow_file = run_dir.join("workflow.oxoflow");
 
         // Validate OS username to prevent injection in sudo mode
         let os_user_regex = Regex::new(r"^[a-z_][a-z0-9_-]*[$]?$")
@@ -263,11 +281,10 @@ pub fn spawn_background_run(
 
         let oxo_bin = find_oxo_flow_binary();
 
-        // Issue #69 follow-up: honor the run request's execution flags.
-        // `dry_run` spawns the preview subcommand (nothing executes);
-        // max_jobs and keep_going map to -j / -k. Only explicitly requested
-        // jobs are passed — the CLI default stays in charge otherwise.
-        let oxo_args = build_cli_args(&workflow_file, &run_dir, &flags);
+        // The caller supplies the exact CLI arguments: normal runs build
+        // them from RunFlags + the workflow file; checkpoint resumes pass
+        // `resume <checkpoint>` directly (issue #81 web exposure).
+        let oxo_args = cli_args;
 
         // Inner command: the CLI itself, optionally through sudo.
         let mut payload: Vec<std::ffi::OsString> = Vec::new();

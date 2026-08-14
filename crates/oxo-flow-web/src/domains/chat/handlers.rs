@@ -153,7 +153,7 @@ pub async fn chat_send(
                         }
                     };
                     if let Some(toml) = outcome.content.as_deref() {
-                        let validation = crate::domains::workflow::service::validate_pipeline(toml)
+                        let validation = crate::domains::workflow::service::validate_pipeline(toml, None)
                             .map(|v| serde_json::json!({
                                 "valid": v.valid,
                                 "errors": v.errors.iter().map(|e| serde_json::json!({

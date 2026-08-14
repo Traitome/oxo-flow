@@ -19,6 +19,25 @@ static LOG_DIR: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None
 static EVENT_WRITER: std::sync::OnceLock<Mutex<Option<BufWriter<File>>>> =
     std::sync::OnceLock::new();
 
+/// Append one structured event line to events.jsonl (issue #81: the file
+/// was created at startup but nothing ever wrote to it — audit events now
+/// feed the structured stream alongside the DB rows).
+pub fn log_event(event_type: &str, data: serde_json::Value) {
+    let entry = serde_json::json!({
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "event": event_type,
+        "data": data,
+    });
+    if let Some(writer) = EVENT_WRITER.get()
+        && let Ok(mut guard) = writer.lock()
+        && let Some(w) = guard.as_mut()
+    {
+        use std::io::Write;
+        let _ = writeln!(w, "{}", serde_json::to_string(&entry).unwrap_or_default());
+        let _ = w.flush();
+    }
+}
+
 /// Initialize the logging system.
 ///
 /// Creates the log directory and opens the structured event stream.
