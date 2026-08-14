@@ -269,7 +269,13 @@ pub fn build_router(mode: &str) -> Router {
         .route(
             "/api/runs/{id}/report/visualize",
             post(execution::handlers::visualize_report),
-        );
+        )
+        .route("/api/runs/{id}/files", get(execution::files::get_run_file));
+
+    // ---- File service routes (issue #82 P0-1/P0-2) ----
+    let file_routes = Router::new()
+        .route("/api/files", post(execution::files::upload_files))
+        .route("/api/files", get(execution::files::list_uploaded_files));
 
     // ---- Data routes ----
     let data_routes = Router::new()
@@ -441,6 +447,7 @@ pub fn build_router(mode: &str) -> Router {
         .merge(auth_routes)
         .merge(license_routes)
         .merge(chat_routes)
+        .merge(file_routes)
         .merge(cluster_routes)
         .merge(dag_edit_routes)
         .merge(ai_routes)

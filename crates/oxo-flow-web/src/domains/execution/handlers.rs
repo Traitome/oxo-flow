@@ -37,7 +37,7 @@ fn now_iso() -> String {
 /// address any run, everyone else only their own. Foreign and unknown runs
 /// both 404 — the resource set itself is private, so existence must not
 /// leak through a 403.
-async fn load_owned_run(
+pub(crate) async fn load_owned_run(
     pool: &sqlx::SqlitePool,
     user: &CurrentUser,
     id: &str,

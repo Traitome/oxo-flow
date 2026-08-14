@@ -1612,3 +1612,197 @@ async fn team_mode_ai_config_admin_only_and_env_login_provisions_user() {
         "run must be owned by carol's canonical user id"
     );
 }
+
+// ===========================================================================
+// File service layer (issue #82 P0-1 / P0-2): download, preview, zip, upload
+// ===========================================================================
+
+/// P0-1: results are retrievable — file download with correct headers,
+/// traversal protection, text preview, Range support, and directory zip.
+#[tokio::test]
+async fn web_run_files_download_preview_and_zip() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.base.clone();
+
+    // Produce a run with two output files, one nested.
+    let workflow = "[workflow]\nname = \"files\"\nversion = \"1.0.0\"\n\n\
+        [[rules]]\nname = \"emit\"\noutput = [\"hello.txt\", \"sub/data.csv\"]\n\
+        shell = \"mkdir -p sub && echo hi > hello.txt && echo 'a,b\\n1,2' > sub/data.csv\"\n";
+    let created: serde_json::Value = client
+        .post(format!("{base}/api/runs"))
+        .json(&serde_json::json!({"toml_content": workflow}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let run_id = created["run_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        wait_for_terminal(&client, &base, &run_id).await,
+        "completed"
+    );
+
+    // File download: bytes + attachment disposition + etag.
+    let resp = client
+        .get(format!("{base}/api/runs/{run_id}/files?path=hello.txt"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "file download must succeed");
+    assert_eq!(
+        resp.headers()
+            .get("content-disposition")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "attachment; filename=\"hello.txt\""
+    );
+    assert!(resp.headers().contains_key("etag"), "etag header required");
+    assert_eq!(resp.text().await.unwrap(), "hi\n");
+
+    // Range request: bytes=0-1 → 206 with exactly the first two bytes.
+    let range_resp = client
+        .get(format!("{base}/api/runs/{run_id}/files?path=hello.txt"))
+        .header("Range", "bytes=0-1")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(range_resp.status(), 206, "single range must be served");
+    assert_eq!(
+        range_resp
+            .headers()
+            .get("content-range")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "bytes 0-1/3"
+    );
+    assert_eq!(range_resp.text().await.unwrap(), "hi");
+
+    // Nested path resolves relative to the workdir.
+    let nested = client
+        .get(format!("{base}/api/runs/{run_id}/files?path=sub/data.csv"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(nested.status(), 200);
+
+    // Text preview: truncated JSON with mime + content.
+    let preview: serde_json::Value = client
+        .get(format!(
+            "{base}/api/runs/{run_id}/files?path=sub/data.csv&preview=true"
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(preview["mime"], "text/csv");
+    assert!(preview["content"].as_str().unwrap().contains("a,b"));
+
+    // Traversal is rejected outright.
+    let traversal = client
+        .get(format!(
+            "{base}/api/runs/{run_id}/files?path=../../etc/passwd"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        matches!(traversal.status().as_u16(), 400 | 404),
+        "path traversal must be rejected, got {}",
+        traversal.status()
+    );
+
+    // Missing file → 404.
+    let missing = client
+        .get(format!("{base}/api/runs/{run_id}/files?path=nope.txt"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+
+    // Directory download → zip archive containing the nested layout.
+    let zip_resp = client
+        .get(format!("{base}/api/runs/{run_id}/files?path=."))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(zip_resp.status(), 200);
+    assert_eq!(
+        zip_resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "application/zip"
+    );
+    let body = zip_resp.bytes().await.unwrap();
+    assert!(body.len() > 100, "zip must contain entries");
+    // ZIP magic: local file header signature.
+    assert_eq!(&body[0..4], &[0x50, 0x4b, 0x03, 0x04]);
+}
+
+/// P0-2: multipart upload lands in the user's inputs workspace, with
+/// name sanitization and quota enforcement.
+#[tokio::test]
+async fn web_file_upload_saves_to_inputs_workspace() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.base.clone();
+
+    // Multipart upload with a subdirectory hint.
+    let form = reqwest::multipart::Form::new().text("path", "fastq").part(
+        "file",
+        reqwest::multipart::Part::bytes(b"@SEQ\nACGT\n+\n!!!!\n".to_vec())
+            .file_name("sample1.fastq"),
+    );
+    let upload: serde_json::Value = client
+        .post(format!("{base}/api/files"))
+        .multipart(form)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let files = upload["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1, "one file uploaded: {upload}");
+    assert_eq!(files[0]["name"], "sample1.fastq");
+
+    // The file landed under workspace/users/default/inputs/fastq/.
+    let saved = dir
+        .path()
+        .join("workspace/users/default/inputs/fastq/sample1.fastq");
+    assert!(saved.exists(), "upload must land at {saved:?}");
+    assert_eq!(
+        std::fs::read_to_string(&saved).unwrap(),
+        "@SEQ\nACGT\n+\n!!!!\n"
+    );
+
+    // Uploaded inputs are listable for workflow authoring.
+    let listing: serde_json::Value = client
+        .get(format!("{base}/api/files"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let names: Vec<&str> = listing
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|f| f["name"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"sample1.fastq"),
+        "listing contains upload: {listing:?}"
+    );
+}
