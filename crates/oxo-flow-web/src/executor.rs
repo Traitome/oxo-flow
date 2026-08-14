@@ -89,6 +89,17 @@ fn final_status_from_exit(success: bool) -> &'static str {
     if success { "completed" } else { "failed" }
 }
 
+/// Wrapper script the CLI runs inside: `f="$1"; shift; "$@"; rc=$?;
+/// printf '%s' "$rc" > "$f"; exit "$rc"`.
+///
+/// `$0` is a dummy, `$1` the exit-record path, and the remaining positional
+/// parameters form the real command line. The record lets startup recovery
+/// attribute a run honestly after a web-server crash — the same pattern
+/// Nextflow uses (`.exitcode` files). Positional forwarding avoids any
+/// shell-quoting of user-controlled arguments.
+const EXIT_CODE_WRAPPER_SCRIPT: &str =
+    r#"f="$1"; shift; "$@"; rc=$?; printf '%s' "$rc" > "$f"; exit "$rc""#;
+
 /// Execution options carried from the run request to the CLI subprocess.
 #[derive(Debug, Clone, Default)]
 pub struct RunFlags {
@@ -98,8 +109,10 @@ pub struct RunFlags {
     pub keep_going: bool,
     /// Explicitly requested parallelism (`-j`); `None` keeps the CLI default.
     pub max_jobs: Option<usize>,
-    /// Sample filters (`--sample <name>` each) — restrict execution to
-    /// these samples. Empty = all discovered samples.
+    /// Sample filters (`--samples` filter semantics) — restrict execution
+    /// to these samples. Supports names, `first:N`, and `ready`, matching
+    /// the CLI. Unknown names warn; a selection matching nothing fails the
+    /// run instead of executing a phantom sample. Empty = all samples.
     pub samples: Vec<String>,
     /// Explicit target rules (`-t <name>` each). Empty = engine default.
     pub targets: Vec<String>,
@@ -128,9 +141,12 @@ pub fn build_cli_args(
             args.push("-j".into());
             args.push(jobs.to_string().into());
         }
-        for sample in &flags.samples {
-            args.push("--sample".into());
-            args.push(sample.into());
+        if !flags.samples.is_empty() {
+            // --samples filters to the named subset (the CLI also accepts
+            // first:N / ready). --sample would APPEND phantom samples —
+            // the issue #79 P1-07 mis-wiring.
+            args.push("--samples".into());
+            args.push(flags.samples.join(",").into());
         }
         for target in &flags.targets {
             args.push("-t".into());
@@ -160,7 +176,7 @@ pub fn spawn_background_run(
         // Update status to running
         let now = Utc::now();
         if let Err(e) =
-            sqlx::query("UPDATE runs SET status = 'running', started_at = ? WHERE id = ?")
+            sqlx::query("UPDATE runs SET status = 'running', phase = 'executing', started_at = ? WHERE id = ?")
                 .bind(now)
                 .bind(&run_id)
                 .execute(db::pool())
@@ -201,16 +217,27 @@ pub fn spawn_background_run(
         // jobs are passed — the CLI default stays in charge otherwise.
         let oxo_args = build_cli_args(&workflow_file, &run_dir, &flags);
 
-        let mut cmd = if auth_type == "sudo" && os_user != "oxo-flow" {
-            let mut c = Command::new("sudo");
-            c.arg("-n").arg("-u").arg(&os_user).arg(&oxo_bin);
-            c.args(&oxo_args);
-            c
-        } else {
-            let mut c = Command::new(&oxo_bin);
-            c.args(&oxo_args);
-            c
-        };
+        // Inner command: the CLI itself, optionally through sudo.
+        let mut payload: Vec<std::ffi::OsString> = Vec::new();
+        if auth_type == "sudo" && os_user != "oxo-flow" {
+            payload.push("sudo".into());
+            payload.push("-n".into());
+            payload.push("-u".into());
+            payload.push(os_user.into());
+        }
+        payload.push(oxo_bin.into_os_string());
+        payload.extend(oxo_args);
+
+        // Wrap the payload in `sh -c` so the CLI's exit code is persisted to
+        // `<workdir>/.exit-code`. If the web server crashes before reaping
+        // the child, startup recovery reads that record instead of blindly
+        // marking the run failed (issue #79 P1-02).
+        let exit_file = run_dir.join(".exit-code");
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(EXIT_CODE_WRAPPER_SCRIPT);
+        cmd.arg("sh");
+        cmd.arg(&exit_file);
+        cmd.args(payload);
 
         // Capture output to files in the run directory
         let log_file_path = run_dir.join("execution.log");
@@ -260,59 +287,10 @@ pub fn spawn_background_run(
                 // Wait for process completion
                 match child.wait().await {
                     Ok(status) => {
-                        crate::process_control::unregister(&run_id);
-                        let final_state = final_status_from_exit(status.success());
-                        let end = Utc::now();
-                        // A concurrent cancel sets status='cancelled' and emits
-                        // run_cancelled; the exit here is the SIGKILL fallout
-                        // and must not overwrite it back to completed/failed.
-                        let cancelled: bool = sqlx::query_scalar(
-                            "SELECT COUNT(*) FROM runs WHERE id = ? AND status = 'cancelled'",
-                        )
-                        .bind(&run_id)
-                        .fetch_one(db::pool())
-                        .await
-                        .map(|n: i64| n > 0)
-                        .unwrap_or(false);
-                        if !cancelled {
-                            if let Err(e) = sqlx::query(
-                                "UPDATE runs SET status = ?, finished_at = ? WHERE id = ?",
-                            )
-                            .bind(final_state)
-                            .bind(end)
-                            .bind(&run_id)
-                            .execute(db::pool())
-                            .await
-                            {
-                                error!("Failed to update final status for run {run_id}: {e}");
-                            }
-                            info!("Run {run_id} finished: {final_state}");
-
-                            // Broadcast the terminal event (documented in the SSE
-                            // API): run_completed on success, run_failed otherwise.
-                            let event = if status.success() {
-                                "run_completed"
-                            } else {
-                                "run_failed"
-                            };
-                            // Surfacing the CLI's invalidation summary (issue #69):
-                            // config changes, rule-definition edits, and input-set
-                            // changes that invalidated checkpoint records this run.
-                            let summary = std::fs::read_to_string(&log_file_path)
-                                .ok()
-                                .and_then(|log| extract_invalidation_summary(&log));
-                            broadcast_event(
-                                event,
-                                &serde_json::json!({
-                                    "run_id": run_id,
-                                    "status": final_state,
-                                    "finished_at": end.to_rfc3339(),
-                                    "summary": summary,
-                                }),
-                            );
-                        } else {
-                            info!("Run {run_id} exited after cancel; keeping 'cancelled'");
-                        }
+                        // The exit record was only needed for crash recovery —
+                        // this live path reaped the child directly.
+                        let _ = tokio::fs::remove_file(&exit_file).await;
+                        finalize_run(&run_id, status.code(), &log_file_path).await;
                     }
                     Err(e) => {
                         crate::process_control::unregister(&run_id);
@@ -329,10 +307,101 @@ pub fn spawn_background_run(
     });
 }
 
+/// Persist the terminal state of a finished run and broadcast the SSE event.
+///
+/// Shared by the live wait path and crash-recovery monitoring so both
+/// attribute runs with identical semantics. `exit_code` is the CLI's exit
+/// code; `None` means the process was killed without leaving a record and is
+/// attributed as failed. A run already marked 'cancelled' is left untouched:
+/// the terminal write happened at cancel time and the kill fallout must not
+/// overwrite it back to completed/failed.
+pub(crate) async fn finalize_run(
+    run_id: &str,
+    exit_code: Option<i32>,
+    log_path: &std::path::Path,
+) {
+    crate::process_control::unregister(run_id);
+    let success = exit_code == Some(0);
+    let final_state = final_status_from_exit(success);
+
+    let cancelled: bool = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM runs WHERE id = ? AND status = 'cancelled'",
+    )
+    .bind(run_id)
+    .fetch_one(db::pool())
+    .await
+    .map(|n: i64| n > 0)
+    .unwrap_or(false);
+    if cancelled {
+        info!("Run {run_id} exited after cancel; keeping 'cancelled'");
+        return;
+    }
+
+    let end = Utc::now();
+    if let Err(e) = sqlx::query("UPDATE runs SET status = ?, phase = ?, finished_at = ? WHERE id = ?")
+        .bind(final_state)
+        .bind(final_state)
+        .bind(end)
+        .bind(run_id)
+        .execute(db::pool())
+        .await
+    {
+        error!("Failed to update final status for run {run_id}: {e}");
+    }
+    info!("Run {run_id} finished: {final_state}");
+
+    // Broadcast the terminal event (documented in the SSE API):
+    // run_completed on success, run_failed otherwise.
+    let event = if success { "run_completed" } else { "run_failed" };
+    // Surfacing the CLI's invalidation summary (issue #69): config changes,
+    // rule-definition edits, and input-set changes that invalidated
+    // checkpoint records this run.
+    let summary = std::fs::read_to_string(log_path)
+        .ok()
+        .and_then(|log| extract_invalidation_summary(&log));
+    broadcast_event(
+        event,
+        &serde_json::json!({
+            "run_id": run_id,
+            "status": final_state,
+            "finished_at": end.to_rfc3339(),
+            "summary": summary,
+        }),
+    );
+}
+
+/// Monitor a run that was re-attached after a server restart (crash
+/// recovery, issue #79 P1-02).
+///
+/// The web server is no longer the CLI's parent, so completion is detected
+/// by polling the `.exit-code` record (written by the wrapper shell the
+/// moment the CLI exits — the primary signal) and process liveness (the
+/// fallback for a process killed without a record). Finalization goes
+/// through [`finalize_run`] so semantics match the live wait path exactly.
+pub fn resume_monitoring(run_id: String, pid: i32, workdir: PathBuf) {
+    tokio::spawn(async move {
+        let exit_file = workdir.join(".exit-code");
+        let log_path = workdir.join("execution.log");
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            if let Ok(content) = tokio::fs::read_to_string(&exit_file).await {
+                let code = content.trim().parse::<i32>().ok();
+                finalize_run(&run_id, code, &log_path).await;
+                break;
+            }
+            if !crate::process_control::probe_alive(pid) {
+                // Killed without leaving a record (SIGKILL to the group).
+                finalize_run(&run_id, None, &log_path).await;
+                break;
+            }
+        }
+    });
+}
+
 /// Mark a run as failed with the current timestamp.
 async fn mark_run_failed(run_id: &str) {
     let end = Utc::now();
-    if let Err(e) = sqlx::query("UPDATE runs SET status = 'failed', finished_at = ? WHERE id = ?")
+    if let Err(e) = sqlx::query("UPDATE runs SET status = 'failed', phase = 'failed', finished_at = ? WHERE id = ?")
         .bind(end)
         .bind(run_id)
         .execute(db::pool())
@@ -356,6 +425,42 @@ async fn mark_run_failed(run_id: &str) {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn wrapper_script_records_exit_code() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let exit_file = dir.path().join(".exit-code");
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(EXIT_CODE_WRAPPER_SCRIPT);
+        cmd.arg("sh");
+        cmd.arg(&exit_file);
+        cmd.arg("/bin/sh").arg("-c").arg("exit 3");
+        let status = cmd.status().await.expect("wrapper runs");
+        assert_eq!(status.code(), Some(3));
+        assert_eq!(
+            std::fs::read_to_string(&exit_file).unwrap().trim(),
+            "3",
+            "exit record must carry the CLI's exit code"
+        );
+    }
+
+    #[tokio::test]
+    async fn wrapper_script_forwards_arguments_positionally() {
+        // Metacharacters must survive the wrapper untouched — that is the
+        // point of positional ("$@") forwarding.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let exit_file = dir.path().join(".exit-code");
+        let value = "a b'c\"d $HOME; rm -rf /";
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(EXIT_CODE_WRAPPER_SCRIPT);
+        cmd.arg("sh");
+        cmd.arg(&exit_file);
+        cmd.arg("/bin/echo").arg(value);
+        let out = cmd.output().await.expect("wrapper runs");
+        assert_eq!(out.status.code(), Some(0));
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim_end(), value);
+        assert_eq!(std::fs::read_to_string(&exit_file).unwrap().trim(), "0");
+    }
+
     #[test]
     fn build_cli_args_includes_samples_and_targets() {
         let flags = RunFlags {
@@ -376,9 +481,8 @@ mod tests {
             .collect();
         assert_eq!(strs[0], "run");
         assert!(strs.contains(&"--keep-going".to_string()));
-        assert!(strs.contains(&"--sample".to_string()));
-        assert!(strs.contains(&"S1".to_string()));
-        assert!(strs.contains(&"S2".to_string()));
+        assert!(strs.contains(&"--samples".to_string()));
+        assert!(strs.contains(&"S1,S2".to_string()), "samples join into one --samples value: {strs:?}");
         assert!(strs.contains(&"-t".to_string()));
         assert!(strs.contains(&"align".to_string()));
         // dry-run omits execution-only flags
@@ -392,7 +496,7 @@ mod tests {
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
         assert_eq!(strs[0], "dry-run");
-        assert!(!strs.contains(&"--sample".to_string()));
+        assert!(!strs.contains(&"--samples".to_string()));
     }
 
     #[test]

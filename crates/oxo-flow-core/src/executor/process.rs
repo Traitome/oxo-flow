@@ -845,22 +845,18 @@ impl LocalExecutor {
             combined_stderr.clear();
 
             for cmd in &resolved_commands {
-                #[cfg(unix)]
+                // Rules deliberately inherit the caller's process group instead
+                // of starting their own (`process_group(0)`): one run = one
+                // process group, so a supervisor (web cancel/pause/resume) or a
+                // terminal Ctrl+C signals the run as a whole and no rule is ever
+                // orphaned. Timeout enforcement kills the rule's subtree instead
+                // (see timeout::kill_process_tree), so per-rule semantics are
+                // unchanged.
                 let child = Command::new("sh")
                     .arg("-c")
                     .arg(cmd)
                     .current_dir(&self.config.workdir)
                     .envs(&rule.envvars)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .process_group(0)
-                    .spawn();
-
-                #[cfg(not(unix))]
-                let child = Command::new("sh")
-                    .arg("-c")
-                    .arg(cmd)
-                    .current_dir(&self.config.workdir)
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
                     .spawn();

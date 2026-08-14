@@ -63,6 +63,7 @@ pub async fn init_db(database_url: &str) -> Result<()> {
             role TEXT NOT NULL,
             auth_type TEXT NOT NULL,
             os_user TEXT NOT NULL,
+            password_hash TEXT,
             created_at DATETIME NOT NULL
         );
 
@@ -174,6 +175,13 @@ pub async fn init_db(database_url: &str) -> Result<()> {
     .execute(&pool)
     .await?;
 
+    // Migration (issue #79 P1-06): password hashes for DB-created accounts.
+    // Idempotent — safe to run on every init.
+    sqlx::query("ALTER TABLE users ADD COLUMN password_hash TEXT")
+        .execute(&pool)
+        .await
+        .ok();
+
     let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
         .fetch_one(&pool)
         .await?;
@@ -232,26 +240,93 @@ pub fn pool() -> &'static SqlitePool {
         .expect("Database pool not initialized — call init_db() first")
 }
 
-/// Recover runs left in the 'running' state after a server crash.
+/// Recover runs left in flight ('running'/'paused') after a server crash
+/// (issue #79 P1-02: the old behavior blindly marked every in-flight run
+/// failed, so a crash-restart lied about runs whose CLI kept executing).
+///
+/// With a recorded pid the truth is probed: a still-alive CLI is re-attached
+/// to the process registry (cancel/pause/resume work again) and monitored to
+/// its natural end; a dead one is attributed from the `.exit-code` record the
+/// wrapper shell wrote (0 → completed, other → failed) or marked failed as
+/// interrupted when no record exists. Rows without a pid keep the old
+/// grace-period blind marking for legacy data.
 pub async fn recover_orphaned_runs() -> Result<()> {
-    let now = Utc::now();
-    // Only mark runs as orphaned if they were started more than 60 seconds ago.
-    // This avoids killing runs that are still initialising after a quick restart.
-    let cutoff = now - chrono::Duration::seconds(60);
-    let result = sqlx::query(
-        "UPDATE runs SET status = 'failed', finished_at = ? WHERE status = 'running' AND started_at < ?",
+    let rows: Vec<(String, Option<i64>, Option<String>)> = sqlx::query_as(
+        "SELECT id, pid, workdir FROM runs WHERE status IN ('running', 'paused')",
     )
-    .bind(now)
-    .bind(cutoff)
-    .execute(pool())
+    .fetch_all(pool())
     .await?;
 
-    if result.rows_affected() > 0 {
-        tracing::warn!(
-            "Recovered {} orphaned run(s) (started before {}). Runs started within the last 60s were left untouched.",
-            result.rows_affected(),
-            cutoff.format("%Y-%m-%d %H:%M:%S")
-        );
+    for (id, pid, workdir) in rows {
+        match pid {
+            Some(pid) => {
+                let pid = pid as i32;
+                if crate::process_control::probe_alive(pid) {
+                    if !crate::process_control::looks_like_oxo_flow(pid) {
+                        // The pid was recycled by an unrelated process — the
+                        // CLI is gone and cannot be attributed.
+                        tracing::warn!(
+                            "Run {id}: pid {pid} is alive but not an oxo-flow process (recycled?) — marking failed"
+                        );
+                        crate::executor::finalize_run(
+                            &id,
+                            None,
+                            &workdir
+                                .as_deref()
+                                .map(|wd| std::path::Path::new(wd).join("execution.log"))
+                                .unwrap_or_default(),
+                        )
+                        .await;
+                        continue;
+                    }
+                    // Re-attach: the CLI is the group leader (spawned with
+                    // `process_group(0)`), so its pid doubles as the pgid.
+                    crate::process_control::register(&id, pid);
+                    tracing::info!("Run {id}: re-attached live CLI (pid {pid}) after restart");
+                    if let Some(wd) = workdir {
+                        crate::executor::resume_monitoring(id, pid, wd.into());
+                    }
+                } else {
+                    // The CLI died while the server was down: attribute from
+                    // the exit record instead of guessing.
+                    let workdir = workdir.unwrap_or_default();
+                    let exit_code = std::fs::read_to_string(
+                        std::path::Path::new(&workdir).join(".exit-code"),
+                    )
+                    .ok()
+                    .and_then(|c| c.trim().parse::<i32>().ok());
+                    tracing::info!(
+                        "Run {id}: CLI already dead after restart (exit record: {exit_code:?}) — attributing"
+                    );
+                    crate::executor::finalize_run(
+                        &id,
+                        exit_code,
+                        &std::path::Path::new(&workdir).join("execution.log"),
+                    )
+                    .await;
+                }
+            }
+            None => {
+                // Legacy row without a recorded pid: nothing to probe. Keep
+                // the old grace period so a run that just started (its pid
+                // write raced the crash) is not falsely killed.
+                let now = Utc::now();
+                let cutoff = now - chrono::Duration::seconds(60);
+                let result = sqlx::query(
+                    "UPDATE runs SET status = 'failed', finished_at = ? WHERE id = ? AND status IN ('running','paused') AND started_at < ?",
+                )
+                .bind(now)
+                .bind(&id)
+                .bind(cutoff)
+                .execute(pool())
+                .await?;
+                if result.rows_affected() > 0 {
+                    tracing::warn!(
+                        "Run {id}: no pid recorded — marked failed after grace period (legacy)"
+                    );
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -481,6 +556,32 @@ pub async fn log_action(user_id: &str, action: &str, target: &str) -> Result<()>
     .bind(user_id)
     .bind(action)
     .bind(target)
+    .bind(now)
+    .execute(pool())
+    .await?;
+    Ok(())
+}
+
+/// Insert one audit record with explicit result + metadata (the storage
+/// backend for the audit middleware — issue #79 P1-05).
+pub async fn insert_audit_row(
+    user_id: &str,
+    action: &str,
+    target: &str,
+    result: &str,
+    metadata: &str,
+) -> Result<()> {
+    let id = Uuid::new_v4().to_string();
+    let now = Utc::now();
+    sqlx::query(
+        "INSERT INTO audit_logs (id, user_id, action, target, result, metadata, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(id)
+    .bind(user_id)
+    .bind(action)
+    .bind(target)
+    .bind(result)
+    .bind(metadata)
     .bind(now)
     .execute(pool())
     .await?;
