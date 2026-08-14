@@ -7,7 +7,7 @@
 //! matching the CLI's "Running: <rule>" lines in execution.log (valid only
 //! while the run is live). There is no web-side state to drift.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use oxo_flow_core::executor::CheckpointState;
@@ -70,21 +70,76 @@ pub fn load_node_statuses(run_dir: &Path, is_running: bool) -> Vec<NodeStatusIte
 
 /// Merge checkpoint-derived statuses with the full rule list, so rules that
 /// have not run yet appear as `Pending` instead of being absent.
+///
+/// The checkpoint stores EXPANDED instance names (`qc_S1`, `qc_S2`) while the
+/// pipeline snapshot's DAG holds base rule names (`qc`). Instance statuses
+/// are aggregated onto their base rule (issue #79 P1-03: the old exact-string
+/// match made every wildcard rule show `Pending` and the derived status stuck
+/// at `queued` for the whole run). Longest base name wins, so `qc_fast_S1`
+/// is attributed to `qc_fast`, never to a shorter `qc`; instances of rules
+/// absent from the snapshot are surfaced under their own names.
 pub fn with_all_rules(items: Vec<NodeStatusItem>, all_rules: &[String]) -> Vec<NodeStatusItem> {
-    let mut by_rule: HashMap<String, NodeStatusItem> =
-        items.into_iter().map(|i| (i.rule.clone(), i)).collect();
+    let mut groups: HashMap<String, Vec<NodeStatusItem>> = HashMap::new();
+    for item in items {
+        let base = all_rules
+            .iter()
+            .filter(|r| item.rule == **r || item.rule.starts_with(&format!("{r}_")))
+            .max_by_key(|r| r.len())
+            .cloned()
+            .unwrap_or_else(|| item.rule.clone());
+        groups.entry(base).or_default().push(item);
+    }
+
     let mut out = Vec::with_capacity(all_rules.len());
+    let mut emitted: HashSet<String> = HashSet::new();
     for rule in all_rules {
-        out.push(by_rule.remove(rule).unwrap_or_else(|| NodeStatusItem {
-            rule: rule.clone(),
+        emitted.insert(rule.clone());
+        out.push(aggregate_rule(rule, groups.remove(rule)));
+    }
+    // Instances of rules missing from the snapshot (workflow edited since the
+    // run) are kept as their own rows rather than silently dropped.
+    for (name, items) in groups {
+        if !emitted.contains(&name) {
+            out.push(aggregate_rule(&name, Some(items)));
+        }
+    }
+    out
+}
+
+/// Combine one rule's instance statuses into a single rule-level status.
+///
+/// Priority: Failed > Running > Success (with at least one success) >
+/// Skipped > Pending. Duration is the max across instances.
+fn aggregate_rule(name: &str, items: Option<Vec<NodeStatusItem>>) -> NodeStatusItem {
+    let Some(items) = items else {
+        return NodeStatusItem {
+            rule: name.to_string(),
             status: NodeStatus::Pending,
             started_at: None,
             duration_ms: None,
             exit_code: None,
             progress_pct: None,
-        }));
+        };
+    };
+    let status = if items.iter().any(|i| i.status == NodeStatus::Failed) {
+        NodeStatus::Failed
+    } else if items.iter().any(|i| i.status == NodeStatus::Running) {
+        NodeStatus::Running
+    } else if items.iter().any(|i| i.status == NodeStatus::Success) {
+        NodeStatus::Success
+    } else if items.iter().all(|i| i.status == NodeStatus::Skipped) {
+        NodeStatus::Skipped
+    } else {
+        NodeStatus::Pending
+    };
+    NodeStatusItem {
+        rule: name.to_string(),
+        status,
+        started_at: items.iter().filter_map(|i| i.started_at.clone()).next(),
+        duration_ms: items.iter().filter_map(|i| i.duration_ms).max(),
+        exit_code: items.iter().find_map(|i| i.exit_code),
+        progress_pct: items.iter().filter_map(|i| i.progress_pct).max(),
     }
-    out
 }
 
 #[cfg(test)]
@@ -168,5 +223,78 @@ mod tests {
         assert!(matches!(statuses[0], NodeStatus::Success));
         assert!(matches!(statuses[1], NodeStatus::Pending));
         assert!(matches!(statuses[2], NodeStatus::Pending));
+    }
+}
+
+#[cfg(test)]
+mod aggregation_tests {
+    use super::*;
+
+    fn item(rule: &str, status: NodeStatus) -> NodeStatusItem {
+        NodeStatusItem {
+            rule: rule.into(),
+            status,
+            started_at: None,
+            duration_ms: None,
+            exit_code: None,
+            progress_pct: None,
+        }
+    }
+
+    #[test]
+    fn wildcard_instances_aggregate_onto_base_rule() {
+        // The exact scenario of issue #79 P1-03: checkpoint holds expanded
+        // instance names, the snapshot DAG holds the base name.
+        let items = vec![
+            item("qc_S1", NodeStatus::Success),
+            item("qc_S2", NodeStatus::Success),
+        ];
+        let all = with_all_rules(items, &["qc".into(), "report".into()]);
+        assert_eq!(all.len(), 2);
+        let qc = all.iter().find(|i| i.rule == "qc").unwrap();
+        assert_eq!(qc.status, NodeStatus::Success);
+        let report = all.iter().find(|i| i.rule == "report").unwrap();
+        assert_eq!(report.status, NodeStatus::Pending);
+    }
+
+    #[test]
+    fn partial_instance_failure_marks_rule_failed() {
+        let items = vec![
+            item("qc_S1", NodeStatus::Success),
+            item("qc_S2", NodeStatus::Failed),
+        ];
+        let all = with_all_rules(items, &["qc".into()]);
+        assert_eq!(all[0].status, NodeStatus::Failed);
+    }
+
+    #[test]
+    fn running_instance_marks_rule_running() {
+        let items = vec![
+            item("qc_S1", NodeStatus::Success),
+            item("qc_S2", NodeStatus::Running),
+        ];
+        let all = with_all_rules(items, &["qc".into()]);
+        assert_eq!(all[0].status, NodeStatus::Running);
+    }
+
+    #[test]
+    fn longest_base_rule_wins_attribution() {
+        // `qc_fast_S1` must belong to `qc_fast`, never to `qc`.
+        let items = vec![item("qc_fast_S1", NodeStatus::Success)];
+        let all = with_all_rules(items, &["qc".into(), "qc_fast".into()]);
+        let qc = all.iter().find(|i| i.rule == "qc").unwrap();
+        assert_eq!(qc.status, NodeStatus::Pending);
+        let fast = all.iter().find(|i| i.rule == "qc_fast").unwrap();
+        assert_eq!(fast.status, NodeStatus::Success);
+    }
+
+    #[test]
+    fn unknown_instances_are_kept_not_dropped() {
+        // Rule removed from the workflow after the run — its checkpoint rows
+        // must not silently disappear.
+        let items = vec![item("deleted_rule_S1", NodeStatus::Success)];
+        let all = with_all_rules(items, &["kept".into()]);
+        assert!(all.iter().any(|i| i.rule == "deleted_rule_S1"));
+        assert!(all.iter().any(|i| i.rule == "kept"));
     }
 }

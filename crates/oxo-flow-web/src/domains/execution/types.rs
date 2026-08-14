@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum RunStatus {
     Queued,
     Running,
+    Paused,
     Completed,
     Failed,
     Cancelled,
@@ -15,6 +16,7 @@ impl std::fmt::Display for RunStatus {
         match self {
             Self::Queued => write!(f, "queued"),
             Self::Running => write!(f, "running"),
+            Self::Paused => write!(f, "paused"),
             Self::Completed => write!(f, "completed"),
             Self::Failed => write!(f, "failed"),
             Self::Cancelled => write!(f, "cancelled"),

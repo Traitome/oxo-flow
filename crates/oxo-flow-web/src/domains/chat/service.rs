@@ -247,19 +247,88 @@ pub fn spawn_chat_agent(
         // A full or closed channel drops the event (observability loss only;
         // on client disconnect the closing channel ends the SSE stream,
         // which is the cancellation path).
+        let mut text_buffer = String::new();
+        // Accumulate text so a round-cap failure can still deliver an
+        // already-generated pipeline (issue #79 P1-10). Shared through an
+        // Rc so the sink closure can be `move` while the post-run read
+        // keeps its own handle.
+        let text_buffer = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let sink_buffer = text_buffer.clone();
         let mut sink = move |e: AgentEvent| {
+            if let AgentEvent::Text(ref chunk) = e {
+                // Lock is held for a push_str only; contention is a single
+                // writer and the post-run read.
+                if let Ok(mut buf) = sink_buffer.lock() {
+                    buf.push_str(chunk);
+                }
+            }
             let _ = event_tx.try_send(ChatStreamEvent::Agent(e));
         };
-        let result = run_chat_agent(
+        let mut result = run_chat_agent(
             &message,
             context.as_ref(),
             run_id.as_deref(),
             Some(&mut sink),
         )
         .await;
+        // Degradation path: the agent burned its round budget after
+        // generating a workflow — deliver the generated TOML instead of
+        // discarding it. Validation in the SSE handler still gates it, so
+        // garbage never reaches the editor.
+        if let Err(e) = &result
+            && e.contains("exceeded max rounds")
+            && let Some(toml) = extract_generated_toml(&text_buffer.lock().map(|b| b.clone()).unwrap_or_default())
+        {
+            tracing::info!(
+                "agent hit its round cap — delivering generated pipeline as degraded outcome"
+            );
+            result = Ok(AgentOutcome {
+                success: true,
+                content: Some(toml),
+                rounds: u32::MAX / 2, // unknown; keep it out of the way
+                summary: "Delivered with the generated pipeline after the agent exceeded its correction-round budget (degraded mode — review before running).".into(),
+                confidence: 0.5,
+                session: oxo_flow_ai::session::AiSession::default(),
+            });
+        }
         let _ = outcome_tx.try_send(ChatStreamEvent::Outcome(Box::new(result)));
     });
     ChatAgentRun { events: event_rx }
+}
+
+/// Best-effort extraction of a pipeline TOML from accumulated model text —
+/// the degradation path for a round-cap failure (issue #79 P1-10). Prefers
+/// a fenced ```toml block; falls back to everything from the first
+/// `[workflow]` line to the end. Both forms must contain at least one rules
+/// table so prose is never mistaken for a pipeline.
+pub fn extract_generated_toml(text: &str) -> Option<String> {
+    fn looks_like_pipeline(candidate: &str) -> bool {
+        candidate.contains("[workflow]")
+            && candidate
+                .lines()
+                .any(|l| l.trim_start().starts_with("[[rules]]") || l.trim_start().starts_with("[rules]"))
+    }
+
+    for fence in ["```toml", "```TOML", "```"] {
+        if let Some(start) = text.find(fence) {
+            let after = &text[start + fence.len()..];
+            let end = after.find("```");
+            let block = match end {
+                Some(e) => after[..e].trim().to_string(),
+                None => after.trim().to_string(),
+            };
+            if looks_like_pipeline(&block) {
+                return Some(block);
+            }
+        }
+    }
+    let idx = text.find("[workflow]")?;
+    let candidate = text[idx..].trim().to_string();
+    if looks_like_pipeline(&candidate) {
+        Some(candidate)
+    } else {
+        None
+    }
 }
 
 pub async fn run_chat_agent(
@@ -332,5 +401,37 @@ mod tests {
         assert!(prompt.contains("RNA-seq"));
         assert!(prompt.contains("rnaseq"));
         assert!(prompt.contains("[workflow]"));
+    }
+}
+
+#[cfg(test)]
+mod extraction_tests {
+    use super::*;
+
+    #[test]
+    fn extracts_fenced_toml_block() {
+        let text = "Here is your workflow:\n\n```toml\n[workflow]\nname = \"scrna\"\n\n[[rules]]\nname = \"qc\"\nshell = \"fastqc\"\n```\n\nGood luck!";
+        let toml = extract_generated_toml(text).expect("fenced block must extract");
+        assert!(toml.contains("[workflow]"));
+        assert!(toml.contains("[[rules]]"));
+        assert!(!toml.contains("Here is your workflow"));
+        assert!(!toml.contains("Good luck"));
+    }
+
+    #[test]
+    fn falls_back_to_trailing_workflow_text() {
+        let text = "Sorry for the wait. [workflow]\nname = \"x\"\n\n[[rules]]\nname = \"a\"\nshell = \"echo hi\"\n\nThat is all.";
+        let toml = extract_generated_toml(text).expect("trailing text must extract");
+        assert!(toml.starts_with("[workflow]"));
+        assert!(toml.contains("[[rules]]"));
+    }
+
+    #[test]
+    fn rejects_prose_without_rules_table() {
+        assert_eq!(extract_generated_toml("No workflow here, just prose."), None);
+        assert_eq!(
+            extract_generated_toml("[workflow]\nname = \"x\"\nbut no rules follow"),
+            None
+        );
     }
 }

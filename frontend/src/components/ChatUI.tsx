@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, Loader2, Check, Wrench } from 'lucide-react';
 import { usePipelineSession, type ChatContextType, type ChatMessage, type ChatAction } from '../context/PipelineSession';
+import { useServerVersion } from '../api/version';
+import { api } from '../api/client';
+import { useNavigate } from 'react-router-dom';
 
 const CONTEXT_LABELS: Record<ChatContextType, string> = {
   dashboard: 'Pipeline Generation',
@@ -24,6 +27,8 @@ interface ChatUIProps {
 
 export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatUIProps) {
   const session = usePipelineSession();
+  const version = useServerVersion();
+  const navigate = useNavigate();
   const [messages, setMessages] = useState<ChatMessage[]>(() => session.state.chatMessages[context] || []);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -145,10 +150,27 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
     setLoading(false);
   };
 
-  const handleAction = (action: ChatAction) => {
+  const handleAction = async (action: ChatAction) => {
     if (action.action === 'accept' && action.data) {
-      onPipelineReady?.(action.data);
-      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: 'Pipeline saved and ready to run.' }]);
+      // Issue #79 P1-10: Accept claimed "saved" without saving anything.
+      // The pipeline is persisted for real, gated by the validation the
+      // backend attached to the pipeline_ready payload.
+      const data = action.data as { toml_content?: string; validation?: { valid?: boolean } | null };
+      if (data.validation && data.validation.valid === false) {
+        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: '❌ The generated pipeline did not pass validation — use ✏️ Edit to review it in the editor.' }]);
+        return;
+      }
+      try {
+        const toml = data.toml_content ?? '';
+        const name = toml.match(/name\s*=\s*"([^"]+)"/)?.[1] || 'ai-generated-pipeline';
+        await api.createPipeline({ name, toml_content: toml });
+        session.setPipelineToml(toml);
+        onPipelineReady?.(action.data);
+        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: `✅ Pipeline "${name}" saved and opened in the editor.` }]);
+        navigate('/editor');
+      } catch (err: unknown) {
+        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: `❌ Save failed: ${err instanceof Error ? err.message : 'unknown error'}` }]);
+      }
     } else if (action.action === 'regenerate') {
       sendMessage();
     } else if (action.action === 'edit' && action.data) {
@@ -163,7 +185,7 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
         <Bot size={18} color="var(--color-primary)" />
         <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>AI Companion</span>
         <span style={{ fontSize: '0.65rem', color: 'var(--color-primary)', background: 'var(--color-primary-light)', padding: '1px 6px', borderRadius: '3px', fontWeight: 500 }}>{CONTEXT_LABELS[context]}</span>
-        <span style={{ fontSize: '0.7rem', color: 'var(--color-text-tertiary)', marginLeft: 'auto' }}>v0.9.2</span>
+        <span style={{ fontSize: '0.7rem', color: 'var(--color-text-tertiary)', marginLeft: 'auto' }}>{version ? `v${version}` : ''}</span>
       </div>
 
       {/* Messages */}

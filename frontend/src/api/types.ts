@@ -134,7 +134,7 @@ export interface DataAnalysis {
 export interface ReferenceResult { found: string[]; missing: string[]; download_commands: string[]; }
 
 // ── Audit ──
-export interface AuditLogResponse { entries: Array<{ timestamp: string; user: string; action: string; resource: string }>; days: number; }
+export interface AuditLogResponse { entries: Array<{ timestamp: string; user: string; action: string; resource: string; result?: string }>; days: number; }
 
 // ── Search ──
 export interface SearchResponse { query: string; total: number; results: Array<{ id: string; name: string; source: string; category: string; description: string; rules_count: number }>; }

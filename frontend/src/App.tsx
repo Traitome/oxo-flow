@@ -10,6 +10,8 @@ const Settings = lazy(() => import('./pages/Settings'));
 const ApiDocs = lazy(() => import('./pages/ApiDocs'));
 const ChatUI = lazy(() => import('./components/ChatUI'));
 const MonitorReport = lazy(() => import('./pages/MonitorReport'));
+const Users = lazy(() => import('./pages/Users'));
+const Audit = lazy(() => import('./pages/Audit'));
 
 function PageFallback() {
   return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '50vh' }}>
@@ -33,6 +35,8 @@ export default function App() {
           <Route path="/chat" element={<Suspense fallback={<PageFallback />}><ChatUI /></Suspense>} />
           <Route path="/settings" element={<Suspense fallback={<PageFallback />}><Settings /></Suspense>} />
           <Route path="/docs" element={<Suspense fallback={<PageFallback />}><ApiDocs /></Suspense>} />
+          <Route path="/users" element={<Suspense fallback={<PageFallback />}><Users /></Suspense>} />
+          <Route path="/audit" element={<Suspense fallback={<PageFallback />}><Audit /></Suspense>} />
         </Route>
       </Routes>
     </BrowserRouter>

@@ -48,9 +48,19 @@ export default function Settings() {
   const handleSave = async () => {
     setSaving(true); setTestResult(null);
     try {
+      // Two channels (issue #79 §9b claim #9 was falsified: Save only
+      // touched memory and the config vanished on restart):
+      //  1. POST /api/ai/config — reconfigures the live provider now
+      //  2. PUT /api/ai/config/user — persists to DB, restored on startup
       await api.aiUpdateConfig(provider, apiKey || undefined, apiUrl || undefined, model || undefined);
+      await api.aiUpdateConfigUser({
+        provider,
+        api_key: apiKey || undefined,
+        api_url: apiUrl || undefined,
+        model: model || undefined,
+      });
       const c = await api.aiConfig(); setAiConfig(c);
-      setTestResult('✅ Saved. Provider: ' + c.provider);
+      setTestResult('✅ Saved & persisted. Provider: ' + c.provider);
     } catch (err: unknown) { setTestResult('❌ ' + (err instanceof Error ? err.message : 'Save failed')); }
     setSaving(false);
   };

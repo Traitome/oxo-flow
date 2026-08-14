@@ -22,9 +22,17 @@ pub async fn edit_command(
         .map_err(|e| err(StatusCode::BAD_REQUEST, "DAG_EDIT_ERROR", e))
 }
 
+#[derive(serde::Deserialize)]
+pub struct CurrentToml {
+    pub toml_content: String,
+}
+
 /// POST /api/pipeline/{id}/undo
-pub async fn undo_command(Path(id): Path<String>) -> AR<serde_json::Value> {
-    match super::service::undo(&id) {
+pub async fn undo_command(
+    Path(id): Path<String>,
+    Json(body): Json<CurrentToml>,
+) -> AR<serde_json::Value> {
+    match super::service::undo(&id, &body.toml_content) {
         Ok(Some(toml)) => Ok(Json(serde_json::json!({"toml_content": toml}))),
         Ok(None) => Err(err(
             StatusCode::NOT_FOUND,
@@ -36,8 +44,11 @@ pub async fn undo_command(Path(id): Path<String>) -> AR<serde_json::Value> {
 }
 
 /// POST /api/pipeline/{id}/redo
-pub async fn redo_command(Path(id): Path<String>) -> AR<serde_json::Value> {
-    match super::service::redo(&id) {
+pub async fn redo_command(
+    Path(id): Path<String>,
+    Json(body): Json<CurrentToml>,
+) -> AR<serde_json::Value> {
+    match super::service::redo(&id, &body.toml_content) {
         Ok(Some(toml)) => Ok(Json(serde_json::json!({"toml_content": toml}))),
         Ok(None) => Err(err(
             StatusCode::NOT_FOUND,

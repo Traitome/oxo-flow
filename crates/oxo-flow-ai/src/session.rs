@@ -49,6 +49,28 @@ pub struct AiSession {
     pub error: Option<String>,
 }
 
+impl Default for AiSession {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            started_at: chrono::Utc::now(),
+            ended_at: None,
+            command: String::new(),
+            workflow: None,
+            user_intent: String::new(),
+            messages: Vec::new(),
+            tool_calls: Vec::new(),
+            modifications: Vec::new(),
+            provider: String::new(),
+            model: String::new(),
+            total_usage: crate::types::Usage::default(),
+            outcome: SessionOutcome::Running,
+            confidence: 0.0,
+            error: None,
+        }
+    }
+}
+
 impl AiSession {
     /// Create a new session with a unique ID.
     pub fn new(command: &str, user_intent: &str, provider: &str, model: &str) -> Self {

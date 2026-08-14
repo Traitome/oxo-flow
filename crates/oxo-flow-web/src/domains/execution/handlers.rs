@@ -339,7 +339,7 @@ pub async fn get_run_status(Path(id): Path<String>) -> ApiResult<RunStatusRespon
         None => node_items,
     };
 
-    let overall = service::compute_overall_status(&node_items);
+    let overall = service::compute_overall_status(&node_items, Some(&run.status));
 
     Ok(Json(RunStatusResponse {
         status: overall,
@@ -592,26 +592,23 @@ pub async fn get_run_results(Path(id): Path<String>) -> ApiResult<Vec<serde_json
         )
     })?;
 
-    // List files in workdir if it exists
+    // List files in the workdir recursively so nested products (e.g.
+    // results/sample1/peaks.bed) are visible (issue #79 P1-08).
     let results: Vec<serde_json::Value> = run
         .workdir
         .as_ref()
-        .and_then(|wd| {
-            std::fs::read_dir(wd).ok().map(|entries| {
-                entries
-                    .filter_map(|e| e.ok())
-                    .map(|e| {
-                        let path = e.path();
-                        let meta = path.metadata().ok();
-                        serde_json::json!({
-                            "name": e.file_name().to_string_lossy(),
-                            "path": path.to_string_lossy(),
-                            "size_bytes": meta.as_ref().map(|m| m.len()).unwrap_or(0),
-                            "is_dir": meta.map(|m| m.is_dir()).unwrap_or(false),
-                        })
+        .map(|wd| {
+            service::list_files_recursive(std::path::Path::new(wd))
+                .into_iter()
+                .map(|f| {
+                    serde_json::json!({
+                        "name": f.name,
+                        "path": f.path,
+                        "size_bytes": f.size_bytes,
+                        "is_dir": f.is_dir,
                     })
-                    .collect()
-            })
+                })
+                .collect()
         })
         .unwrap_or_default();
 
@@ -725,7 +722,7 @@ pub async fn cancel_run(Path(id): Path<String>) -> ApiResult<serde_json::Value> 
     // checks for a 'cancelled' row and skips its own terminal write, so the
     // kill fallout can never flip the status back to completed/failed.
     let now = now_iso();
-    sqlx::query("UPDATE runs SET status = 'cancelled', finished_at = ? WHERE id = ?")
+    sqlx::query("UPDATE runs SET status = 'cancelled', phase = 'cancelled', finished_at = ? WHERE id = ?")
         .bind(&now)
         .bind(&id)
         .execute(pool)
@@ -990,24 +987,22 @@ fn build_report_for_run(run: &models::RunRow) -> crate::domains::ai::agents::typ
         .map(|c| c.workflow.name.clone())
         .unwrap_or_else(|| "pipeline".into());
 
+    // Recursive listing: nested products must reach the report page and the
+    // AI narrative (issue #79 P1-08 — the narrative claimed "4 output files"
+    // while the real products lived in subdirectories).
     let files: Vec<ReportFile> = run
         .workdir
         .as_ref()
-        .and_then(|wd| std::fs::read_dir(wd).ok())
-        .map(|entries| {
-            entries
-                .filter_map(|e| e.ok())
-                .map(|e| {
-                    let path = e.path();
-                    let meta = path.metadata().ok();
-                    ReportFile {
-                        path: path.to_string_lossy().to_string(),
-                        name: e.file_name().to_string_lossy().to_string(),
-                        size_bytes: meta.as_ref().map(|m| m.len() as i64).unwrap_or(0),
-                        is_dir: meta.map(|m| m.is_dir()).unwrap_or(false),
-                    }
+        .map(|wd| {
+            service::list_files_recursive(std::path::Path::new(wd))
+                .into_iter()
+                .map(|f| ReportFile {
+                    path: f.path,
+                    name: f.name,
+                    size_bytes: f.size_bytes,
+                    is_dir: f.is_dir,
                 })
-                .collect::<Vec<_>>()
+                .collect()
         })
         .unwrap_or_default();
 

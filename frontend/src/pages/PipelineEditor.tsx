@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { Play, CheckCircle, AlertCircle, Undo2, Redo2, Save, Wand2, Blocks } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
@@ -43,6 +43,11 @@ export default function PipelineEditor() {
   const [toml, setToml] = useState(() => session.state.pipelineToml || DEFAULT_TOML);
   const [dagJson, setDagJson] = useState<DagJson | null>(() => session.state.dagData);
   const [validation, setValidation] = useState<{ valid: boolean; errors: Array<{ code: string; message: string; rule: string | null; suggestion: string | null }> } | null>(null);
+  const [showErrors, setShowErrors] = useState(false);
+  // Monotonic edit sequence: debounced validation and canvas edits resolve
+  // out of order — only the latest request may apply its result (issue #79
+  // P1-09: stale responses interleaved content into garbled state).
+  const editSeq = useRef(0);
   const [running, setRunning] = useState(false);
   const [pipelineId] = useState(() => 'draft-' + Math.random().toString(36).slice(2, 9));
   const [leftTab, setLeftTab] = useState<LeftTab>('palette');
@@ -107,8 +112,10 @@ export default function PipelineEditor() {
   }, [dagJson, session]);
 
   const updateDag = useCallback(async (content: string) => {
+    const seq = ++editSeq.current;
     try {
       const [dag, val] = await Promise.all([api.buildDag(content), api.validate(content)]);
+      if (seq !== editSeq.current) return; // a newer edit superseded this one
       setDagJson(dag);
       setValidation(val);
     } catch (err: unknown) {
@@ -125,12 +132,18 @@ export default function PipelineEditor() {
   const handleRun = async (dryRun = false, options: { maxJobs: number; keepGoing: boolean; samples: string[]; targets: string[] } = { maxJobs: 4, keepGoing: false, samples: [], targets: [] }) => {
     setRunning(true);
     try {
+      // Issue #79 P1-12: runs launched from an opened saved pipeline must
+      // carry its pipeline_id so the backend reuses the persistent workdir —
+      // checkpoint invalidation then skips up-to-date rules (incremental
+      // reruns) instead of rebuilding everything from a fresh sandbox.
+      const pipelineId = searchParams.get('pipeline') ?? undefined;
       const res = await api.createRun(toml, {
         max_jobs: options.maxJobs,
         dry_run: dryRun,
         keep_going: options.keepGoing,
         samples: options.samples,
         targets: options.targets,
+        pipeline_id: pipelineId,
       });
       session.setRunResult({
         runId: res.run_id,
@@ -151,8 +164,10 @@ export default function PipelineEditor() {
   // Every canvas/inspector/palette edit runs through the backend command API;
   // the returned canonical TOML replaces the local state (single source of truth).
   const runEdit = async (operation: string, payload: Record<string, unknown>) => {
+    const seq = ++editSeq.current;
     try {
       const res = await api.dagCommand(pipelineId, toml, operation, payload);
+      if (seq !== editSeq.current) return; // superseded by a newer edit
       setToml(res.toml_content);
       const errors = res.validation_errors ?? [];
       if (!res.success && errors.length > 0) {
@@ -195,7 +210,7 @@ export default function PipelineEditor() {
 
   const handleUndo = async () => {
     try {
-      const res = await api.dagUndo(pipelineId);
+      const res = await api.dagUndo(pipelineId, toml);
       setToml(res.toml_content);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Nothing to undo';
@@ -204,7 +219,7 @@ export default function PipelineEditor() {
   };
   const handleRedo = async () => {
     try {
-      const res = await api.dagRedo(pipelineId);
+      const res = await api.dagRedo(pipelineId, toml);
       setToml(res.toml_content);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Nothing to redo';
@@ -213,8 +228,26 @@ export default function PipelineEditor() {
   };
 
   const handleSave = async () => {
+    // Issue #79 P1-09: Save reported success even for TOML with 23 errors
+    // or cycles. Invalid content is refused with the error list instead.
+    if (validation && !validation.valid) {
+      setShowErrors(true);
+      session.setRunResult({
+        message: `Not saved: ${validation.errors.length} validation error(s) — see the panel below`,
+        type: 'error',
+      });
+      return;
+    }
     try {
       const name = toml.match(/name\s*=\s*"([^"]+)"/)?.[1] || 'untitled-pipeline';
+      const savedId = searchParams.get('pipeline');
+      if (savedId) {
+        // Editing an existing saved pipeline updates it in place (the old
+        // behavior always created a duplicate row).
+        await api.updatePipeline(savedId, { name, toml_content: toml });
+        session.setRunResult({ message: `Pipeline "${name}" updated`, type: 'success' });
+        return;
+      }
       const res = await api.createPipeline({ name, toml_content: toml });
       session.setRunResult({ message: `Pipeline "${name}" saved (ID: ${res.id.slice(0, 8)}...)`, type: 'success' });
     } catch (err: unknown) {
@@ -302,10 +335,15 @@ export default function PipelineEditor() {
             <span>Workflow TOML</span>
             <div className="panel-actions">
               {validation && (
-                <span className={`val-badge ${validation.valid ? 'valid' : 'invalid'}`}>
+                <button
+                  className={`val-badge ${validation.valid ? 'valid' : 'invalid'}`}
+                  style={{ background: 'transparent', border: 'none', cursor: validation.valid ? 'default' : 'pointer' }}
+                  onClick={() => setShowErrors((v) => !v)}
+                  title={validation.valid ? 'Workflow is valid' : 'Show validation errors'}
+                >
                   {validation.valid ? <CheckCircle size={14} /> : <AlertCircle size={14} />}
                   {validation.valid ? ' Valid' : `${validation.errors.length} error(s)`}
-                </span>
+                </button>
               )}
               <button onClick={handleSave} className="btn-sm" style={{ background: 'transparent', border: '1px solid var(--color-border)' }}>
                 <Save size={14} /> Save
@@ -315,6 +353,22 @@ export default function PipelineEditor() {
               </button>
             </div>
           </div>
+          {showErrors && validation && !validation.valid && (
+            <div className="validation-errors">
+              {validation.errors.map((e, i) => (
+                <div key={i} className="validation-error-row">
+                  <span className="validation-error-code">{e.code}</span>
+                  <div className="validation-error-body">
+                    <div>
+                      {e.rule ? <strong>{e.rule}: </strong> : null}
+                      {e.message}
+                    </div>
+                    {e.suggestion && <div className="validation-error-suggestion">→ {e.suggestion}</div>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
           <TomlEditor value={toml} onChange={(v) => setToml(v)} />
         </div>
       </div>

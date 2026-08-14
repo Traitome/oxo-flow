@@ -74,8 +74,8 @@ export const api = {
   // ── DAG Editor ──
   dagCommand: (id: string, toml_content: string, operation: string, payload: Record<string, unknown>) =>
     post<DagEditResponse>(`/api/pipeline/${id}/command`, { toml_content, source: 'dag_editor', operation, payload }),
-  dagUndo: (id: string) => post<{ toml_content: string }>(`/api/pipeline/${id}/undo`, {}),
-  dagRedo: (id: string) => post<{ toml_content: string }>(`/api/pipeline/${id}/redo`, {}),
+  dagUndo: (id: string, toml_content: string) => post<{ toml_content: string }>(`/api/pipeline/${id}/undo`, { toml_content }),
+  dagRedo: (id: string, toml_content: string) => post<{ toml_content: string }>(`/api/pipeline/${id}/redo`, { toml_content }),
 
   // ── Knowledge (editor palette) ──
   knowledgeTools: (q: string, limit = 20) =>
@@ -92,8 +92,8 @@ export const api = {
   // ── Execution ──
   createRun: (
     toml_content: string,
-    options: { max_jobs?: number; dry_run?: boolean; keep_going?: boolean; samples?: string[]; targets?: string[] } = {},
-  ) => post<RunResponse>('/api/runs', { toml_content, max_jobs: options.max_jobs ?? 4, dry_run: options.dry_run ?? false, keep_going: options.keep_going ?? false, samples: options.samples ?? [], targets: options.targets ?? [] }),
+    options: { max_jobs?: number; dry_run?: boolean; keep_going?: boolean; samples?: string[]; targets?: string[]; pipeline_id?: string } = {},
+  ) => post<RunResponse>('/api/runs', { toml_content, max_jobs: options.max_jobs ?? 4, dry_run: options.dry_run ?? false, keep_going: options.keep_going ?? false, samples: options.samples ?? [], targets: options.targets ?? [], pipeline_id: options.pipeline_id ?? null }),
   listRuns: () => get<RunItem[]>('/api/runs'),
   getRun: (id: string) => get<RunItem>(`/api/runs/${id}`),
   getRunStatus: (id: string) => get<RunStatus>(`/api/runs/${id}/status`),

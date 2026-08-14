@@ -57,7 +57,7 @@ export default function RunDialog({ onClose, onSubmit }: RunDialogProps) {
           </div>
           <div className="inspector-grid">
             <label className="inspector-field">
-              <span>Samples (comma-separated; empty = all)</span>
+              <span>Samples — run only this subset (names, first:N, ready; empty = all)</span>
               <input
                 placeholder="S1, S2"
                 value={samples}

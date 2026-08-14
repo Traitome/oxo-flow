@@ -63,18 +63,36 @@ pub fn create_run(
 }
 
 /// Compute overall run status from node statuses.
-pub fn compute_overall_status(nodes: &[NodeStatusItem]) -> RunStatus {
-    if nodes.iter().any(|n| n.status == NodeStatus::Failed) {
+///
+/// `db_status` is the executor-written status column. It is the terminal
+/// truth — the executor attributes it from the CLI's exit code — so terminal
+/// values override any node-level derivation (the checkpoint may lag the
+/// final write). For live runs whose nodes have nothing to say yet (no log
+/// lines, no checkpoint entries), the DB's running/paused must win over a
+/// derived `Queued` — the issue #79 P1-03 "stuck at queued while running"
+/// complaint.
+pub fn compute_overall_status(nodes: &[NodeStatusItem], db_status: Option<&str>) -> RunStatus {
+    let derived = if nodes.iter().any(|n| n.status == NodeStatus::Failed) {
         RunStatus::Failed
-    } else if nodes
-        .iter()
-        .all(|n| n.status == NodeStatus::Success || n.status == NodeStatus::Skipped)
+    } else if !nodes.is_empty()
+        && nodes
+            .iter()
+            .all(|n| n.status == NodeStatus::Success || n.status == NodeStatus::Skipped)
     {
         RunStatus::Completed
     } else if nodes.iter().any(|n| n.status == NodeStatus::Running) {
         RunStatus::Running
     } else {
         RunStatus::Queued
+    };
+
+    match db_status {
+        Some("completed") => RunStatus::Completed,
+        Some("failed") => RunStatus::Failed,
+        Some("cancelled") => RunStatus::Cancelled,
+        Some("paused") => RunStatus::Paused,
+        Some("running") if derived == RunStatus::Queued => RunStatus::Running,
+        _ => derived,
     }
 }
 
@@ -271,7 +289,7 @@ output = ["b.txt"]
             exit_code: Some(0),
             progress_pct: None,
         }];
-        assert_eq!(compute_overall_status(&nodes), RunStatus::Completed);
+        assert_eq!(compute_overall_status(&nodes, None), RunStatus::Completed);
     }
 
     #[test]
@@ -294,7 +312,7 @@ output = ["b.txt"]
                 progress_pct: None,
             },
         ];
-        assert_eq!(compute_overall_status(&nodes), RunStatus::Failed);
+        assert_eq!(compute_overall_status(&nodes, None), RunStatus::Failed);
     }
 
     #[test]
@@ -317,7 +335,7 @@ output = ["b.txt"]
                 progress_pct: None,
             },
         ];
-        assert_eq!(compute_overall_status(&nodes), RunStatus::Running);
+        assert_eq!(compute_overall_status(&nodes, None), RunStatus::Running);
     }
 
     #[test]
@@ -349,5 +367,107 @@ output = ["b.txt"]
         );
         assert_eq!(resp.warnings.len(), 1);
         assert_eq!(resp.warnings[0].pattern, "skipped");
+    }
+}
+
+/// One entry in a recursive workdir listing.
+#[derive(Debug, Clone)]
+pub struct FileListingEntry {
+    pub name: String,
+    pub path: String,
+    pub size_bytes: i64,
+    pub is_dir: bool,
+}
+
+/// Recursive workdir listing for result browsers and reports (issue #79
+/// P1-08: the old top-level-only `read_dir` hid real products nested in
+/// output directories — peaks.bed, sam/bam, taxa.tsv were invisible).
+///
+/// The engine's internal `.oxo-flow` directory is skipped. Depth and count
+/// caps keep pathological workdirs (thousands of chunk files) from bloating
+/// responses.
+pub fn list_files_recursive(root: &std::path::Path) -> Vec<FileListingEntry> {
+    const MAX_DEPTH: usize = 4;
+    const MAX_ENTRIES: usize = 500;
+
+    fn walk(
+        dir: &std::path::Path,
+        depth: usize,
+        out: &mut Vec<FileListingEntry>,
+    ) {
+        if depth > MAX_DEPTH || out.len() >= MAX_ENTRIES {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let mut entries: Vec<std::fs::DirEntry> = entries.filter_map(|e| e.ok()).collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            if out.len() >= MAX_ENTRIES {
+                return;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if depth == 0 && name == ".oxo-flow" {
+                continue;
+            }
+            let path = entry.path();
+            let Ok(meta) = path.metadata() else {
+                continue;
+            };
+            let is_dir = meta.is_dir();
+            out.push(FileListingEntry {
+                name,
+                path: path.to_string_lossy().to_string(),
+                size_bytes: if is_dir { 0 } else { meta.len() as i64 },
+                is_dir,
+            });
+            if is_dir {
+                walk(&path, depth + 1, out);
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    walk(root, 0, &mut out);
+    out
+}
+
+#[cfg(test)]
+mod file_listing_tests {
+    use super::*;
+
+    #[test]
+    fn recursive_listing_reaches_nested_outputs_and_skips_internals() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("results/sample1")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".oxo-flow")).unwrap();
+        std::fs::write(dir.path().join("top.txt"), "a").unwrap();
+        std::fs::write(dir.path().join("results/sample1/peaks.bed"), "b").unwrap();
+        std::fs::write(dir.path().join(".oxo-flow/checkpoint.json"), "{}").unwrap();
+
+        let files = list_files_recursive(dir.path());
+        let names: Vec<&str> = files.iter().map(|f| f.name.as_str()).collect();
+        assert!(names.contains(&"top.txt"));
+        assert!(names.contains(&"results"));
+        assert!(names.contains(&"peaks.bed"), "nested product must be listed: {names:?}");
+        assert!(
+            !files.iter().any(|f| f.path.contains(".oxo-flow")),
+            "engine internals must be excluded: {files:?}"
+        );
+        let bed = files.iter().find(|f| f.name == "peaks.bed").unwrap();
+        assert_eq!(bed.size_bytes, 1);
+        assert!(!bed.is_dir);
+    }
+
+    #[test]
+    fn caps_bound_listing_size() {
+        let dir = tempfile::tempdir().unwrap();
+        // 600 files at depth 1 — the cap must hold.
+        for i in 0..600 {
+            std::fs::write(dir.path().join(format!("f{i:03}.txt")), "x").unwrap();
+        }
+        let files = list_files_recursive(dir.path());
+        assert!(files.len() <= 500);
     }
 }

@@ -52,8 +52,10 @@ export default function Login() {
           <KeyRound size={14} /> {loading ? 'Signing in…' : 'Sign in'}
         </button>
         <p className="run-dialog-hint">
-          Team/HPC servers require a session for protected endpoints. Personal
-          mode does not need a login.
+          Credentials come from OXO_FLOW_ADMIN_PASSWORD / OXO_FLOW_USER_PASSWORD
+          / OXO_FLOW_VIEWER_PASSWORD, or from accounts created on the Users
+          page. Team/HPC servers require a session for protected endpoints;
+          personal mode does not need a login.
         </p>
       </form>
     </div>

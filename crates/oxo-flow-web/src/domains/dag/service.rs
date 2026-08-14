@@ -23,8 +23,13 @@ pub struct DagEditResponse {
 }
 
 #[allow(clippy::type_complexity)]
-static EDIT_STACKS: std::sync::LazyLock<Mutex<HashMap<String, (Vec<String>, Vec<String>)>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Undo/redo history per draft id: each entry is a (from, to) TOML
+/// transition, so redo can actually restore the post-edit state (issue #79
+/// P1-09: the old design stored only pre-edit snapshots, so redo could not
+/// produce the state it claimed to restore — and never pushed back either).
+static EDIT_STACKS: std::sync::LazyLock<
+    Mutex<HashMap<String, (Vec<(String, String)>, Vec<(String, String)>)>>,
+> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn stack_id(pipeline_id: &str) -> String {
     pipeline_id.to_string()
@@ -70,17 +75,6 @@ pub fn execute_edit(
     command: &DagEditCommand,
 ) -> Result<DagEditResponse, String> {
     let mut config = WorkflowConfig::parse(toml_content).map_err(|e| format!("Parse: {e}"))?;
-
-    // Save undo state
-    {
-        let mut stacks = EDIT_STACKS.lock().map_err(|_| "Lock poisoned")?;
-        let entry = stacks.entry(stack_id(pipeline_id)).or_default();
-        entry.0.push(toml_content.to_string());
-        if entry.0.len() > 50 {
-            entry.0.remove(0);
-        }
-        entry.1.clear();
-    }
 
     // Apply operation
     match command.operation.as_str() {
@@ -218,6 +212,18 @@ pub fn execute_edit(
         .map(|e| e.message.clone())
         .collect();
 
+    // Record the (from, to) transition only now — rejected edits leave the
+    // history untouched (atomic rollback).
+    {
+        let mut stacks = EDIT_STACKS.lock().map_err(|_| "Lock poisoned")?;
+        let entry = stacks.entry(stack_id(pipeline_id)).or_default();
+        entry.0.push((toml_content.to_string(), new_toml.clone()));
+        if entry.0.len() > 50 {
+            entry.0.remove(0);
+        }
+        entry.1.clear();
+    }
+
     Ok(DagEditResponse {
         success: validation.valid,
         toml_content: new_toml,
@@ -225,21 +231,50 @@ pub fn execute_edit(
     })
 }
 
-pub fn undo(pipeline_id: &str) -> Result<Option<String>, String> {
+/// Undo the latest edit, given the client's current TOML.
+///
+/// The (from, to) transition is verified against `current` — a stale or
+/// racing client simply gets `None` ("nothing to undo") instead of
+/// corrupting its state.
+pub fn undo(pipeline_id: &str, current: &str) -> Result<Option<String>, String> {
     let mut stacks = EDIT_STACKS.lock().map_err(|_| "Lock poisoned")?;
     let entry = stacks.entry(stack_id(pipeline_id)).or_default();
-    if let Some(prev) = entry.0.pop() {
-        entry.1.push(prev.clone());
-        Ok(Some(prev))
+    // The top transition's `to` must equal the client's current state.
+    // (Checked before popping — the borrow of `last()` cannot overlap the
+    // mutable `pop()`.)
+    let top_matches = entry
+        .0
+        .last()
+        .is_some_and(|(_, to)| to.as_str() == current);
+    if top_matches
+        && let Some((from, to)) = entry.0.pop()
+    {
+        entry.1.push((from.clone(), to));
+        Ok(Some(from))
     } else {
         Ok(None)
     }
 }
 
-pub fn redo(pipeline_id: &str) -> Result<Option<String>, String> {
+/// Redo the latest undone edit, given the client's current TOML.
+///
+/// Pushes the transition back onto the undo stack (issue #79 P1-09: the old
+/// redo popped without pushing back, so the next undo had nothing to undo).
+pub fn redo(pipeline_id: &str, current: &str) -> Result<Option<String>, String> {
     let mut stacks = EDIT_STACKS.lock().map_err(|_| "Lock poisoned")?;
     let entry = stacks.entry(stack_id(pipeline_id)).or_default();
-    Ok(entry.1.pop())
+    let top_matches = entry
+        .1
+        .last()
+        .is_some_and(|(from, _)| from.as_str() == current);
+    if top_matches
+        && let Some((from, to)) = entry.1.pop()
+    {
+        entry.0.push((from, to.clone()));
+        Ok(Some(to))
+    } else {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -287,19 +322,45 @@ mod tests {
     }
 
     #[test]
-    fn test_undo_redo() {
+    fn test_undo_redo_roundtrip() {
         let cmd = DagEditCommand {
             source: "dag".into(),
             operation: "add_rule".into(),
             payload: serde_json::json!({"name": "ux", "shell": "ux"}),
         };
-        execute_edit(TEST_TOML, "ur-test", &cmd).unwrap();
-        let undone = undo("ur-test").unwrap();
-        assert!(undone.is_some());
+        let edited = execute_edit(TEST_TOML, "ur-test", &cmd).unwrap();
+        assert!(edited.toml_content.contains("ux"));
+
+        // Undo with the edited state as current.
+        let undone = undo("ur-test", &edited.toml_content).unwrap().unwrap();
         assert!(
-            !undone.unwrap().contains("ux"),
-            "undo should restore original"
+            !undone.contains("ux"),
+            "undo should restore the pre-edit state"
         );
+
+        // Redo with the undone state as current — must restore the edit
+        // (the old redo returned the wrong state and never pushed back).
+        let redone = redo("ur-test", &undone).unwrap().unwrap();
+        assert!(redone.contains("ux"), "redo must restore the edit");
+
+        // And undo again — the redo must have pushed the pair back, so the
+        // stack is not exhausted (issue #79 P1-09 "redo 不回填栈").
+        let undone_again = undo("ur-test", &redone).unwrap().unwrap();
+        assert!(!undone_again.contains("ux"));
+    }
+
+    #[test]
+    fn test_undo_rejects_stale_client_state() {
+        let cmd = DagEditCommand {
+            source: "dag".into(),
+            operation: "add_rule".into(),
+            payload: serde_json::json!({"name": "ux", "shell": "ux"}),
+        };
+        let edited = execute_edit(TEST_TOML, "stale-test", &cmd).unwrap();
+        // A client whose state no longer matches the top transition gets
+        // None instead of a corrupting rollback.
+        assert!(undo("stale-test", TEST_TOML).unwrap().is_none());
+        assert!(undo("stale-test", &edited.toml_content).unwrap().is_some());
     }
 
     #[test]

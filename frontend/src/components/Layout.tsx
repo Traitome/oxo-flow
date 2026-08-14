@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet } from 'react-router-dom';
-import { LayoutDashboard, GitBranch, PlayCircle, BarChart3, Library, Settings, BookOpen, FlaskConical, Menu, X, MessageCircle } from 'lucide-react';
+import { LayoutDashboard, GitBranch, PlayCircle, BarChart3, Library, Settings, BookOpen, FlaskConical, Menu, X, MessageCircle, Users, ShieldCheck } from 'lucide-react';
 import Toast from './Toast';
 import ResultNotification from './ResultNotification';
 import { usePipelineSession } from '../context/PipelineSession';
 import { api } from '../api/client';
+import { useServerVersion } from '../api/version';
 
 const nav = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -14,6 +15,8 @@ const nav = [
   { to: '/chat', icon: MessageCircle, label: 'AI Chat' },
   { to: '/monitor', icon: BarChart3, label: 'Monitor' },
   { to: '/docs', icon: BookOpen, label: 'API Docs' },
+  { to: '/users', icon: Users, label: 'Users' },
+  { to: '/audit', icon: ShieldCheck, label: 'Audit' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
 
@@ -30,6 +33,7 @@ const STATUS_POLL_MS = 30000;
 
 export default function Layout() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const version = useServerVersion();
   const [userName, setUserName] = useState<string | null>(null);
   useEffect(() => {
     api.authMe()
@@ -67,7 +71,7 @@ export default function Layout() {
           </button>
           <FlaskConical size={20} />
           <span className="header-brand">oxo-flow</span>
-          <span className="header-ver">v0.9.2</span>
+          <span className="header-ver">{version ? `v${version}` : ''}</span>
         </div>
         <nav className={`header-nav${menuOpen ? ' open' : ''}`}>
           {nav.map(({ to, label }) => (
@@ -100,7 +104,7 @@ export default function Layout() {
             ))}
           </nav>
           <div className="sidebar-footer">
-            <span>oxo-flow v0.9.2</span>
+            <span>{version ? `oxo-flow v${version}` : 'oxo-flow'}</span>
             <span>Academic License</span>
           </div>
         </aside>
@@ -113,7 +117,7 @@ export default function Layout() {
 
       {/* Footer */}
       <footer className="app-footer">
-        <span>oxo-flow v0.9.2 — Academic License. Free for academic use. Commercial use requires authorization.</span>
+        <span>{version ? `oxo-flow v${version}` : 'oxo-flow'} — Academic License. Free for academic use. Commercial use requires authorization.</span>
         <span>Contact: w_shixiang@163.com</span>
       </footer>
 
