@@ -511,7 +511,7 @@ impl std::fmt::Display for ReferenceDatabase {
 /// experiment = "SAMPLE_EXP_02"
 /// control    = "SAMPLE_CTRL_02"
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExperimentControlPair {
     /// Unique identifier for this pair (available as `{pair_id}`).
     pub pair_id: String,

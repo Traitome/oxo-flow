@@ -315,12 +315,17 @@ fn backend_driver_executes_reentry_rounds() {
                             message: format!("{rule_name}: {e}"),
                         }
                     })?;
-                    let (group, samples) = oxo_flow_core::reentry::parse_manifest(&content)?;
-                    if samples.is_empty() {
+                    let (group, samples, pairs) = oxo_flow_core::reentry::parse_manifest(&content)?;
+                    if samples.is_empty() && pairs.is_empty() {
                         return Ok(Vec::new());
                     }
                     let mut cfg = config.lock().unwrap();
-                    oxo_flow_core::reentry::apply_reentry(&mut cfg, group.as_deref(), &samples)
+                    oxo_flow_core::reentry::apply_reentry(
+                        &mut cfg,
+                        group.as_deref(),
+                        &samples,
+                        &pairs,
+                    )
                 })),
                 merge: Some(Box::new(
                     |plan: &mut ScheduledPlan, new_names: &[String]| {
@@ -426,4 +431,88 @@ fn dry_run_preview_reconstructs_recorded_reentry() {
         .find(|p| p["name"].as_str() == Some("analyze_batch_S4"))
         .expect("round-2 instance present in preview");
     assert_eq!(s4["status"].as_str().unwrap(), "skip");
+}
+
+// ── pairs-driven re-entry (issue #80 item 3) ─────────────────────────────
+
+/// A checkpoint rule announces two new pairs; round-2 pair instances
+/// execute in the same run, resumes replay them, and invalidating the
+/// checkpoint rule revokes them.
+#[test]
+fn reentry_pairs_round2_execute_resume_replay_and_revoke() {
+    let dir = tempfile::tempdir().unwrap();
+    let workflow = r#"
+[workflow]
+name = "reentry-pairs-e2e"
+
+[[pairs]]
+pair_id = "CASE_001"
+experiment = "T1"
+control = "N1"
+
+[[rules]]
+name = "discover"
+input = ["catalog.txt"]
+output = ["discover.toml"]
+shell = "printf '%s' '[reentry]\npairs = [{ pair_id = \"CASE_002\", tumor = \"T2\", normal = \"N2\" }, { pair_id = \"CASE_003\", experiment = \"T3\", control = \"N3\" }]\n' > discover.toml"
+checkpoint = true
+checkpoint_manifest = "discover.toml"
+
+[[rules]]
+name = "call"
+input = ["discover.toml"]
+output = ["out/{pair_id}.txt"]
+shell = "echo {pair_id} > out/{pair_id}.txt"
+"#;
+    std::fs::write(dir.path().join("wf.oxoflow"), workflow).unwrap();
+    std::fs::write(dir.path().join("catalog.txt"), "v1\n").unwrap();
+
+    // Run 1: round-0 pair executes; the manifest adds two pairs; round-2
+    // instances execute in the same run.
+    let (ok, stderr) = run(dir.path(), &[]);
+    assert!(ok, "run failed: {stderr}");
+    assert!(dir.path().join("out/CASE_001.txt").exists());
+    assert!(dir.path().join("out/CASE_002.txt").exists(), "{stderr}");
+    assert!(dir.path().join("out/CASE_003.txt").exists(), "{stderr}");
+
+    // The checkpoint records the pair re-entry.
+    let ck = checkpoint(dir.path());
+    let reentries = ck["reentries"].as_array().unwrap();
+    assert_eq!(reentries.len(), 1);
+    assert_eq!(reentries[0]["rule"].as_str().unwrap(), "discover");
+    let pairs = reentries[0]["pairs"].as_array().unwrap();
+    let ids: Vec<&str> = pairs
+        .iter()
+        .map(|p| p["pair_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec!["CASE_002", "CASE_003"]);
+
+    // Resume: nothing re-runs, the same plan reconstructs.
+    let first = completed(dir.path());
+    let (ok, stderr) = run(dir.path(), &[]);
+    assert!(ok, "resume failed: {stderr}");
+    assert_eq!(completed(dir.path()), first);
+
+    // Invalidating the checkpoint rule revokes its pairs: the round-2
+    // instances leave the plan, and the re-recorded manifest (now only
+    // CASE_002) supersedes.
+    std::fs::write(dir.path().join("catalog.txt"), "v2\n").unwrap();
+    let workflow = std::fs::read_to_string(dir.path().join("wf.oxoflow")).unwrap();
+    std::fs::write(
+        dir.path().join("wf.oxoflow"),
+        workflow.replace(
+            "pairs = [{ pair_id = \\\"CASE_002\\\", tumor = \\\"T2\\\", normal = \\\"N2\\\" }, { pair_id = \\\"CASE_003\\\", experiment = \\\"T3\\\", control = \\\"N3\\\" }]",
+            "pairs = [{ pair_id = \\\"CASE_002\\\", tumor = \\\"T2\\\", normal = \\\"N2\\\" }]",
+        ),
+    )
+    .unwrap();
+    let (ok, stderr) = run(dir.path(), &[]);
+    assert!(ok, "re-run after invalidation failed: {stderr}");
+    let ck = checkpoint(dir.path());
+    let pairs = ck["reentries"][0]["pairs"].as_array().unwrap();
+    assert_eq!(pairs.len(), 1, "superseded, not appended");
+    assert_eq!(pairs[0]["pair_id"].as_str().unwrap(), "CASE_002");
+    // CASE_003's outputs remain on disk but its instance is no longer
+    // part of the plan (revoked contribution).
+    assert!(dir.path().join("out/CASE_002.txt").exists());
 }

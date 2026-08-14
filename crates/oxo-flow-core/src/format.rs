@@ -303,7 +303,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
         }
     }
 
-    // E014: checkpoint rule parameterized by sample/group wildcards
+    // E014: checkpoint rule parameterized by sample/group/pair wildcards
     // (bounded re-entry: checkpoint rules never re-expand themselves)
     for rule in &config.rules {
         let text = format!(
@@ -312,10 +312,21 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
             rule.input.to_vec().join(" "),
             rule.output.to_vec().join(" ")
         );
-        if rule.checkpoint && (text.contains("{sample}") || text.contains("{group}")) {
+        let sample_wildcard = text.contains("{sample}") || text.contains("{group}");
+        // Pair-driven re-entry (issue #80 item 3) is bounded the same way:
+        // a checkpoint rule parameterized by pair values would re-expand
+        // itself when new pairs arrive.
+        let pair_wildcard = text.contains("{pair_id}")
+            || text.contains("{experiment}")
+            || text.contains("{tumor}")
+            || text.contains("{control}")
+            || text.contains("{normal}")
+            || text.contains("{experiment_type}")
+            || text.contains("{tumor_type}");
+        if rule.checkpoint && (sample_wildcard || pair_wildcard) {
             diagnostics.push(Diagnostic {
                 severity: Severity::Error,
-                message: "checkpoint rule cannot be parameterized by {sample}/{group} — re-entry re-expansion is bounded to non-checkpoint rules".to_string(),
+                message: "checkpoint rule cannot be parameterized by {sample}/{group}/{pair_id} — re-entry re-expansion is bounded to non-checkpoint rules".to_string(),
                 rule: Some(rule.name.clone()),
                 code: "E014".to_string(),
                 suggestion: Some(

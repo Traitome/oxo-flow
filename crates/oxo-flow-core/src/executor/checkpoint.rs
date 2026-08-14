@@ -1284,12 +1284,14 @@ mod tests {
             rule: "discover".into(),
             group: None,
             samples: vec!["S2".into()],
+            pairs: vec![],
         });
         ck.record_reentry(crate::reentry::ReentryRecord {
             round: 2,
             rule: "discover".into(),
             group: None,
             samples: vec!["S2".into(), "S3".into()],
+            pairs: vec![],
         });
         // Same rule → superseded, not appended.
         assert_eq!(ck.reentries.len(), 1);
