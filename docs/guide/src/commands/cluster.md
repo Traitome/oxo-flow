@@ -19,7 +19,7 @@ oxo-flow cluster <ACTION> [OPTIONS]
 | `submit` | Submit a workflow to a cluster scheduler |
 | `status` | Show the status of submitted cluster jobs |
 | `cancel` | Cancel submitted cluster jobs |
-| `logs` | Fetch logs for a submitted cluster job (not yet implemented) |
+| `logs` | Fetch the accounting record for a submitted cluster job |
 
 ---
 
@@ -29,6 +29,7 @@ oxo-flow cluster <ACTION> [OPTIONS]
 |---|---|
 | `<WORKFLOW>` | Path to the `.oxoflow` workflow file (for `submit`) |
 | `[JOB_IDS]...` | Optional cluster job IDs (for `status` and `cancel`) |
+| `<JOB_ID>` | Job ID (for `logs`) |
 
 ---
 
@@ -122,6 +123,16 @@ oxo-flow cluster status -b slurm
 ```bash
 oxo-flow cluster cancel -b slurm 12345 12346
 ```
+
+### Fetch a job's accounting record
+
+```bash
+oxo-flow cluster logs -b slurm 12345
+```
+
+SLURM prints the job's `sacct` record (`JobID|State|ExitCode|Elapsed|MaxRSS`);
+PBS/SGE/LSF are best-effort (`qstat -f` / `qacct` / `bacct`). Requires the
+scheduler's client commands on `PATH`.
 
 ---
 

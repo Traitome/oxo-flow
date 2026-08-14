@@ -1701,36 +1701,52 @@ checkpoint = true
 checkpoint_manifest = "discover.toml"
 ```
 
-The manifest declares new wildcard values:
+The manifest declares new wildcard values — new samples and/or new
+experiment-control pairs in the same round:
 
 ```toml
 [reentry]
 group = "batch"            # optional; defaults to the workflow's first sample group
 sample = ["S4", "S5"]      # appended (dedup) to that group
+pairs = [                  # optional; appended (dedup by pair_id) to [[pairs]]
+  { pair_id = "CASE_007", tumor = "T7", normal = "N7", tumor_type = "tumor" },
+]
 ```
+
+Pair entries mirror `[[pairs]]` fields: `pair_id` (required), `experiment`
+(required, alias `tumor`), `control` (alias `normal`), `experiment_type`
+(alias `tumor_type`), and an optional `metadata` table. `tumor_type` and
+`metadata` are optional.
 
 Semantics:
 
-- On success, the engine merges the samples and re-expands the **rule
-  templates**; newly created instances (e.g. `analyze_batch_S4`) execute in
-  the same run. Existing instances are untouched.
+- On success, the engine merges the samples and pairs, then re-expands the
+  **rule templates**; newly created instances (e.g. `analyze_batch_S4`,
+  `call_CASE_007`) execute in the same run. Existing instances are untouched.
 - The checkpoint records each re-entry (`reentries` array: round, rule,
-  group, samples). A resume **replays** the records whose checkpoint rule is
-  still up-to-date — the plan reconstructs identically. If the checkpoint
-  rule is invalidated (input/config change), its contribution is
-  **revoked** until it re-runs and re-records.
-- An empty manifest (`sample = []`) is a valid no-op. A missing or
-  unparsable manifest **fails the checkpoint rule** with a clear error, and
-  its dependents do not run.
+  group, samples, pairs). A resume **replays** the records whose checkpoint
+  rule is still up-to-date — the plan reconstructs identically. If the
+  checkpoint rule is invalidated (input/config change), its contribution is
+  **revoked** (samples and pairs) until it re-runs and re-records.
+- Pair identity is the `pair_id`: an existing id with identical content is a
+  no-op; an existing id with different content is an error (E015) — silently
+  superseding it would corrupt already-run pair outputs. The same sample
+  appearing in several pairs is not an ambiguity: pair instances are keyed
+  by `pair_id`, so each pair is its own instance.
+- A discovered `pair_id` whose instance name collides with an existing
+  instance (e.g. a sample-group instance `analyze_CASE_007`) is an error
+  (E016).
+- An empty manifest (`sample = []`, no `pairs`) is a valid no-op. A missing
+  or unparsable manifest **fails the checkpoint rule** with a clear error,
+  and its dependents do not run.
 - Bounds: checkpoint rules are never re-expanded themselves (no
-  `{sample}`/`{group}` — validation error E014) and re-entry is capped at 32
-  rounds — a rule that keeps discovering values past that is a workflow bug,
-  not an engine feature. Validation error E013 requires
-  `checkpoint_manifest` on every checkpoint rule.
+  `{sample}`/`{group}`/`{pair_id}`/`{experiment}` — validation error E014)
+  and re-entry is capped at 32 rounds — a rule that keeps discovering values
+  past that is a workflow bug, not an engine feature. Validation error E013
+  requires `checkpoint_manifest` on every checkpoint rule.
 - `dry-run` previews replay recorded re-entries (the preview shows the same
   static plan a run would execute) and mark checkpoint rules as possible
   re-entry points; `--json` includes a `reentry` section.
-- [[pairs]]-driven re-entry is not supported in this iteration.
 
 ## See Also
 

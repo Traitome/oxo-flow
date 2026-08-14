@@ -116,6 +116,7 @@ The checkpoint file is JSON with the following structure:
       "rule": "trim_reads",
       "wall_time_secs": 42.5,
       "max_memory_mb": 1024,
+      "memory_limit_mb": 4096,
       "cpu_seconds": 38.2,
       "retries": 0
     }
@@ -136,7 +137,8 @@ The checkpoint file is JSON with the following structure:
       "round": 1,
       "rule": "discover",
       "group": "batch",
-      "samples": ["S4", "S5"]
+      "samples": ["S4", "S5"],
+      "pairs": []
     }
   ]
 }
@@ -148,7 +150,7 @@ drive [precise invalidation](run.md#config-changes-and-precise-invalidation).
 `tombstones` lists outputs of [`temporary`](run.md#temporary-rules-temporary-true)
 rules that were deleted after a successful run — the rule stays skipped until
 a dependent needs those outputs again. `reentries` records checkpoint
-re-entry contributions (round, checkpoint rule, group, samples) so resumes
+re-entry contributions (round, checkpoint rule, group, samples, pairs) so resumes
 replay them deterministically and revoke them when the rule is invalidated
 (see [Checkpoint re-entry](../reference/workflow-format.md#checkpoint-re-entry)).
 

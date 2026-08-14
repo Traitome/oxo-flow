@@ -163,20 +163,55 @@ entry is skipped with a warning — the run completes and the remaining local
 entries still invalidate as before. Only exact object references participate;
 remote globs and directories are not supported in this iteration.
 
+## Remote staging and upload
+
+When a backend is registered for a scheme, the local executor stages remote
+inputs before running a rule and uploads remote outputs after it succeeds:
+
+- **Inputs** download into `.oxo-flow/staged/in/<scheme>/<bucket>/<key>`
+  before execution. Downloads are cached against a sidecar metadata file
+  (`<file>.meta.json` holding size + etag): an unchanged object is never
+  re-downloaded, and the cached file keeps its original mtime so the
+  executor's freshness gate keeps working. A changed etag re-downloads
+  atomically (`.part` → rename) and the fresh mtime correctly marks the
+  rule stale.
+- **Outputs** declared as remote URIs are written locally to
+  `.oxo-flow/staged/out/<scheme>/<bucket>/<key>` — reference them in the
+  shell via `{output[n]}` / `{output.name}`. After output validation the
+  engine uploads them; an upload failure fails the rule (a declared remote
+  output that did not land is a broken contract). Remote outputs are only
+  "up to date" while the uploaded object still exists (verified with a
+  `head()` on every freshness check), so deleting a cloud result re-runs
+  and re-uploads the rule.
+- **Shells see staged paths only through placeholders** — the
+  substitution happens on a copy of the rule, so `{input[n]}` renders the
+  staged local path. A raw `s3://…` URI typed directly into the shell text
+  is not rewritten (the engine warns about it). Checkpoint manifests keep
+  recording the original remote URIs, so invalidation stays etag-driven.
+- **Scope** — staging is a local-executor feature. Cluster runs
+  (`BackendDriver`) submit scripts unchanged: nodes use their own shared
+  storage. `dry-run` never stages or downloads. Remote globs and directory
+  references are rejected (exact object URIs only), remote `temp_output`s
+  are unsupported.
+
+Deleting `.oxo-flow/staged/` is safe — a later run re-downloads (and may
+re-execute) instead of using the cache.
+
 ## Current Limitations
 
-- **Not wired into the executor for staging** — The engine records
-  remote inputs for invalidation and logs a warning
-  (`warn_if_remote_paths`); it does not stage inputs or upload outputs
-  during a run. Workflows referencing `s3://`/`gs://` paths currently fail at
-  execution unless the tool handles the URI itself. Full staging and
-  upload integration is planned.
-- **S3 adapter needs the toolchain bump** — the pinned rustc (1.92.0)
-  predates the current aws-sdk MSRV (1.94.1); the `s3-storage` feature does
-  not compile with the pinned toolchain (pre-existing condition). The GCS
-  backend compiles and is tested with the pinned toolchain.
-- **Feature-gated** — Both backends are opt-in at compile time.  The
-  default build includes only the local filesystem backend.
+- **Feature-gated** — Both backends are opt-in at compile time: enable
+  `oxo-flow-cli`'s `s3-storage` / `gcs-storage` features to register them
+  in the shared run/dry-run storage resolver. The default build includes
+  only the local filesystem backend. The `s3-storage` feature compiles and
+  is tested (unit fixtures + a live MinIO E2E suite, see
+  `crates/oxo-flow-cli/tests/remote_staging.rs`).
+- **S3 credentials come from the environment** —
+  `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN`
+  (plus `AWS_REGION`); the SDK's profile-file/IMDS chain lives in
+  aws_config's async loader and is deliberately not loaded — the same
+  env-only contract the GCS backend has. S3-compatible servers (MinIO,
+  LocalStack) additionally need `AWS_ENDPOINT_URL` and
+  `OXO_S3_FORCE_PATH_STYLE=1` (path-style addressing).
 - **UTF-8 only** — `read_to_string` requires the content to be valid
   UTF-8.  Binary files should use `stage` instead.
 - **Azure Blob Storage** — Not yet supported.  Contributions are

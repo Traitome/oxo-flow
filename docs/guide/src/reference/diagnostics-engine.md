@@ -84,8 +84,27 @@ Response:
 }
 ```
 
-The `resource_bottlenecks` field is reserved for future use — the engine
-does not currently populate it.
+`resource_bottlenecks` lists rules whose measured memory use pressed against
+their declared limit (issue #67 §4):
+
+```json
+resource_bottlenecks: [{
+  "rule": "markdup",
+  "metric": "max_memory_mb",
+  "actual": 31.0,
+  "limit": 32.0
+}]
+```
+
+- `actual` is the rule's sampled peak RSS in MiB (recorded by the local
+  executor into the checkpoint's benchmark records) and `limit` is its
+  declared memory limit (`memory` / `resources.memory`, resolved at
+  execution time).
+- A rule is flagged when `actual ≥ 80% × limit` — a conservative threshold
+  because the peak is **sampled every 200 ms** across the rule's process
+  subtree, not an exact `getrusage` maximum; sub-interval spikes can be
+  missed. Cluster-executed rules carry no measurement (`None`), and legacy
+  checkpoints degrade to an empty list.
 
 ## Extending the Pattern Library
 

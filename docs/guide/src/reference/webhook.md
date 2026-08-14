@@ -83,15 +83,25 @@ For Slack-compatible endpoints, `WebhookPayload::to_slack_payload()` converts th
 
 ## Security (HMAC Signatures)
 
-If you set the `secret` field, oxo-flow computes an HMAC-SHA256 signature over the payload body and includes it in the `X-OxoFlow-Signature` HTTP header:
+If you set the `secret` field, oxo-flow computes an RFC-2104 HMAC-SHA256
+signature over the payload body and includes it in the
+`X-OxoFlow-Signature` HTTP header (verified against the published RFC 4231
+test vectors):
 
 ```http
 POST /alerts HTTP/1.1
 Host: api.my-monitoring.com
 Content-Type: application/json
-X-OxoFlow-Signature: sha256=abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
+X-OxoFlow-Signature: hmac-sha256=abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
 
 {"event": "rule_failed", ...}
 ```
 
 Your receiving endpoint can use this signature to verify that the webhook request genuinely originated from your oxo-flow execution and that the payload was not tampered with in transit.
+
+**Legacy scheme.** The original implementation signed with a non-standard
+keyed SHA-256 (`sha256=hex(sha256(secret‖body))`), which is *not*
+HMAC-SHA256 despite the header name. It remains available via
+`signature_scheme = "sha256-keyed"` for existing consumers and is frozen:
+emit a warning, switch your verifier to `hmac-sha256`, and it will be
+removed in a future major version. The default is `"hmac-sha256"`.
