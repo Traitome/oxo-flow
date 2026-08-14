@@ -22,11 +22,24 @@ pub async fn init_pool(database_url: &str) {
     if DB_POOL.get().is_some() {
         return;
     }
-    let backend = SqliteBackend::new(database_url)
-        .await
-        .expect("Failed to create SqliteBackend");
-    backend.init().await.expect("Failed to initialize database");
-    let _ = DB_POOL.set(backend.pool.clone());
+    // Transient filesystem errors (SQLITE_IOERR) happen on busy ephemeral
+    // disks (CI runners under parallel test load); retry a few times before
+    // giving up.
+    let mut last_err = String::new();
+    for attempt in 1..=3 {
+        match SqliteBackend::new(database_url).await {
+            Ok(backend) => match backend.init().await {
+                Ok(()) => {
+                    let _ = DB_POOL.set(backend.pool.clone());
+                    return;
+                }
+                Err(e) => last_err = e,
+            },
+            Err(e) => last_err = e,
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100 * attempt as u64)).await;
+    }
+    panic!("Failed to initialize database after 3 attempts: {last_err}");
 }
 
 /// Obtain a reference to the global pool.
