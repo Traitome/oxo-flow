@@ -513,7 +513,11 @@ async fn web_cancel_terminates_rule_processes() {
             // tempdir), not the test process's.
             let wd = {
                 let p = PathBuf::from(wd);
-                if p.is_absolute() { p } else { dir.path().join(p) }
+                if p.is_absolute() {
+                    p
+                } else {
+                    dir.path().join(p)
+                }
             };
             if wd.join("started.txt").exists() {
                 break wd;
@@ -606,7 +610,11 @@ async fn web_restart_reattaches_live_cli_and_cancel_still_works() {
             .unwrap();
         if let Some(wd) = info["workdir"].as_str() {
             let p = PathBuf::from(wd);
-            let wd = if p.is_absolute() { p } else { dir.path().join(p) };
+            let wd = if p.is_absolute() {
+                p
+            } else {
+                dir.path().join(p)
+            };
             if wd.join("started.txt").exists() {
                 break;
             }
@@ -730,11 +738,7 @@ async fn web_rate_limit_returns_429_on_burst() {
 
     let mut throttled = 0usize;
     for _ in 0..110 {
-        let resp = client
-            .get(format!("{base}/api/runs"))
-            .send()
-            .await
-            .unwrap();
+        let resp = client.get(format!("{base}/api/runs")).send().await.unwrap();
         if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
             throttled += 1;
         }
@@ -789,13 +793,15 @@ async fn web_mutations_write_audit_logs() {
         .unwrap();
     let entries = audit["entries"].as_array().expect("audit entries array");
     assert!(
-        entries.iter().any(|e| e["action"] == "POST /api/pipelines"
-            && e["result"] == "success"),
+        entries
+            .iter()
+            .any(|e| e["action"] == "POST /api/pipelines" && e["result"] == "success"),
         "successful mutation must be audited: {audit}"
     );
     assert!(
-        entries.iter().any(|e| e["action"] == "POST /api/runs"
-            && e["result"] == "failure"),
+        entries
+            .iter()
+            .any(|e| e["action"] == "POST /api/runs" && e["result"] == "failure"),
         "failed mutation must be audited: {audit}"
     );
 }

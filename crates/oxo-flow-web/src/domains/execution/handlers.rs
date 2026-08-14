@@ -722,19 +722,21 @@ pub async fn cancel_run(Path(id): Path<String>) -> ApiResult<serde_json::Value> 
     // checks for a 'cancelled' row and skips its own terminal write, so the
     // kill fallout can never flip the status back to completed/failed.
     let now = now_iso();
-    sqlx::query("UPDATE runs SET status = 'cancelled', phase = 'cancelled', finished_at = ? WHERE id = ?")
-        .bind(&now)
-        .bind(&id)
-        .execute(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error cancelling run {id}: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
+    sqlx::query(
+        "UPDATE runs SET status = 'cancelled', phase = 'cancelled', finished_at = ? WHERE id = ?",
+    )
+    .bind(&now)
+    .bind(&id)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("DB error cancelling run {id}: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     // Signal the live process group: paused groups need SIGCONT first so the
     // SIGTERM can be delivered, then a bounded grace window before SIGKILL.

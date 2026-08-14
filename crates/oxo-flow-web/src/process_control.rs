@@ -75,9 +75,7 @@ pub fn probe_alive(pid: i32) -> bool {
         .args(["-p", &pid.to_string(), "-o", "stat="])
         .output()
     {
-        Ok(out) if out.status.success() => {
-            !String::from_utf8_lossy(&out.stdout).contains('Z')
-        }
+        Ok(out) if out.status.success() => !String::from_utf8_lossy(&out.stdout).contains('Z'),
         _ => true,
     }
 }

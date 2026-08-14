@@ -76,7 +76,10 @@ impl FetchUrlTool {
             // model into retry loops during pipeline generation (issue #79
             // P1-10). Timeouts bound hanging fetches inside the agent loop.
             client: reqwest::Client::builder()
-                .user_agent(format!("oxo-flow/{} (+https://github.com/Traitome/oxo-flow)", env!("CARGO_PKG_VERSION")))
+                .user_agent(format!(
+                    "oxo-flow/{} (+https://github.com/Traitome/oxo-flow)",
+                    env!("CARGO_PKG_VERSION")
+                ))
                 .timeout(std::time::Duration::from_secs(15))
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),

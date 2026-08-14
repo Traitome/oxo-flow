@@ -251,11 +251,10 @@ pub fn pool() -> &'static SqlitePool {
 /// interrupted when no record exists. Rows without a pid keep the old
 /// grace-period blind marking for legacy data.
 pub async fn recover_orphaned_runs() -> Result<()> {
-    let rows: Vec<(String, Option<i64>, Option<String>)> = sqlx::query_as(
-        "SELECT id, pid, workdir FROM runs WHERE status IN ('running', 'paused')",
-    )
-    .fetch_all(pool())
-    .await?;
+    let rows: Vec<(String, Option<i64>, Option<String>)> =
+        sqlx::query_as("SELECT id, pid, workdir FROM runs WHERE status IN ('running', 'paused')")
+            .fetch_all(pool())
+            .await?;
 
     for (id, pid, workdir) in rows {
         match pid {
@@ -290,11 +289,10 @@ pub async fn recover_orphaned_runs() -> Result<()> {
                     // The CLI died while the server was down: attribute from
                     // the exit record instead of guessing.
                     let workdir = workdir.unwrap_or_default();
-                    let exit_code = std::fs::read_to_string(
-                        std::path::Path::new(&workdir).join(".exit-code"),
-                    )
-                    .ok()
-                    .and_then(|c| c.trim().parse::<i32>().ok());
+                    let exit_code =
+                        std::fs::read_to_string(std::path::Path::new(&workdir).join(".exit-code"))
+                            .ok()
+                            .and_then(|c| c.trim().parse::<i32>().ok());
                     tracing::info!(
                         "Run {id}: CLI already dead after restart (exit record: {exit_code:?}) — attributing"
                     );

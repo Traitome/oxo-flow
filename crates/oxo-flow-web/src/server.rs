@@ -51,9 +51,8 @@ pub async fn spa_index() -> impl IntoResponse {
     let html = if base.is_empty() || base == "/" {
         html
     } else {
-        let tag = format!(
-            "<base href=\"{base}/\"><script>window.__OXO_BASE__=\"{base}\";</script>"
-        );
+        let tag =
+            format!("<base href=\"{base}/\"><script>window.__OXO_BASE__=\"{base}\";</script>");
         match html.find("</head>") {
             Some(head_end) => format!("{}{}{}", &html[..head_end], tag, &html[head_end..]),
             None => html,

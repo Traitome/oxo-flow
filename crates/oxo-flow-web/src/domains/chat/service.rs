@@ -277,7 +277,8 @@ pub fn spawn_chat_agent(
         // garbage never reaches the editor.
         if let Err(e) = &result
             && e.contains("exceeded max rounds")
-            && let Some(toml) = extract_generated_toml(&text_buffer.lock().map(|b| b.clone()).unwrap_or_default())
+            && let Some(toml) =
+                extract_generated_toml(&text_buffer.lock().map(|b| b.clone()).unwrap_or_default())
         {
             tracing::info!(
                 "agent hit its round cap — delivering generated pipeline as degraded outcome"
@@ -304,9 +305,9 @@ pub fn spawn_chat_agent(
 pub fn extract_generated_toml(text: &str) -> Option<String> {
     fn looks_like_pipeline(candidate: &str) -> bool {
         candidate.contains("[workflow]")
-            && candidate
-                .lines()
-                .any(|l| l.trim_start().starts_with("[[rules]]") || l.trim_start().starts_with("[rules]"))
+            && candidate.lines().any(|l| {
+                l.trim_start().starts_with("[[rules]]") || l.trim_start().starts_with("[rules]")
+            })
     }
 
     for fence in ["```toml", "```TOML", "```"] {
@@ -428,7 +429,10 @@ mod extraction_tests {
 
     #[test]
     fn rejects_prose_without_rules_table() {
-        assert_eq!(extract_generated_toml("No workflow here, just prose."), None);
+        assert_eq!(
+            extract_generated_toml("No workflow here, just prose."),
+            None
+        );
         assert_eq!(
             extract_generated_toml("[workflow]\nname = \"x\"\nbut no rules follow"),
             None

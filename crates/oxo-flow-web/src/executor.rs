@@ -175,12 +175,13 @@ pub fn spawn_background_run(
 
         // Update status to running
         let now = Utc::now();
-        if let Err(e) =
-            sqlx::query("UPDATE runs SET status = 'running', phase = 'executing', started_at = ? WHERE id = ?")
-                .bind(now)
-                .bind(&run_id)
-                .execute(db::pool())
-                .await
+        if let Err(e) = sqlx::query(
+            "UPDATE runs SET status = 'running', phase = 'executing', started_at = ? WHERE id = ?",
+        )
+        .bind(now)
+        .bind(&run_id)
+        .execute(db::pool())
+        .await
         {
             error!("Failed to update run {run_id} to running: {e}");
             return;
@@ -315,36 +316,32 @@ pub fn spawn_background_run(
 /// attributed as failed. A run already marked 'cancelled' is left untouched:
 /// the terminal write happened at cancel time and the kill fallout must not
 /// overwrite it back to completed/failed.
-pub(crate) async fn finalize_run(
-    run_id: &str,
-    exit_code: Option<i32>,
-    log_path: &std::path::Path,
-) {
+pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path: &std::path::Path) {
     crate::process_control::unregister(run_id);
     let success = exit_code == Some(0);
     let final_state = final_status_from_exit(success);
 
-    let cancelled: bool = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM runs WHERE id = ? AND status = 'cancelled'",
-    )
-    .bind(run_id)
-    .fetch_one(db::pool())
-    .await
-    .map(|n: i64| n > 0)
-    .unwrap_or(false);
+    let cancelled: bool =
+        sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE id = ? AND status = 'cancelled'")
+            .bind(run_id)
+            .fetch_one(db::pool())
+            .await
+            .map(|n: i64| n > 0)
+            .unwrap_or(false);
     if cancelled {
         info!("Run {run_id} exited after cancel; keeping 'cancelled'");
         return;
     }
 
     let end = Utc::now();
-    if let Err(e) = sqlx::query("UPDATE runs SET status = ?, phase = ?, finished_at = ? WHERE id = ?")
-        .bind(final_state)
-        .bind(final_state)
-        .bind(end)
-        .bind(run_id)
-        .execute(db::pool())
-        .await
+    if let Err(e) =
+        sqlx::query("UPDATE runs SET status = ?, phase = ?, finished_at = ? WHERE id = ?")
+            .bind(final_state)
+            .bind(final_state)
+            .bind(end)
+            .bind(run_id)
+            .execute(db::pool())
+            .await
     {
         error!("Failed to update final status for run {run_id}: {e}");
     }
@@ -352,7 +349,11 @@ pub(crate) async fn finalize_run(
 
     // Broadcast the terminal event (documented in the SSE API):
     // run_completed on success, run_failed otherwise.
-    let event = if success { "run_completed" } else { "run_failed" };
+    let event = if success {
+        "run_completed"
+    } else {
+        "run_failed"
+    };
     // Surfacing the CLI's invalidation summary (issue #69): config changes,
     // rule-definition edits, and input-set changes that invalidated
     // checkpoint records this run.
@@ -401,11 +402,13 @@ pub fn resume_monitoring(run_id: String, pid: i32, workdir: PathBuf) {
 /// Mark a run as failed with the current timestamp.
 async fn mark_run_failed(run_id: &str) {
     let end = Utc::now();
-    if let Err(e) = sqlx::query("UPDATE runs SET status = 'failed', phase = 'failed', finished_at = ? WHERE id = ?")
-        .bind(end)
-        .bind(run_id)
-        .execute(db::pool())
-        .await
+    if let Err(e) = sqlx::query(
+        "UPDATE runs SET status = 'failed', phase = 'failed', finished_at = ? WHERE id = ?",
+    )
+    .bind(end)
+    .bind(run_id)
+    .execute(db::pool())
+    .await
     {
         error!("Failed to mark run {run_id} as failed: {e}");
     }
@@ -482,7 +485,10 @@ mod tests {
         assert_eq!(strs[0], "run");
         assert!(strs.contains(&"--keep-going".to_string()));
         assert!(strs.contains(&"--samples".to_string()));
-        assert!(strs.contains(&"S1,S2".to_string()), "samples join into one --samples value: {strs:?}");
+        assert!(
+            strs.contains(&"S1,S2".to_string()),
+            "samples join into one --samples value: {strs:?}"
+        );
         assert!(strs.contains(&"-t".to_string()));
         assert!(strs.contains(&"align".to_string()));
         // dry-run omits execution-only flags

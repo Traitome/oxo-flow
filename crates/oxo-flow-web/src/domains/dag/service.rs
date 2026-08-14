@@ -242,13 +242,8 @@ pub fn undo(pipeline_id: &str, current: &str) -> Result<Option<String>, String> 
     // The top transition's `to` must equal the client's current state.
     // (Checked before popping — the borrow of `last()` cannot overlap the
     // mutable `pop()`.)
-    let top_matches = entry
-        .0
-        .last()
-        .is_some_and(|(_, to)| to.as_str() == current);
-    if top_matches
-        && let Some((from, to)) = entry.0.pop()
-    {
+    let top_matches = entry.0.last().is_some_and(|(_, to)| to.as_str() == current);
+    if top_matches && let Some((from, to)) = entry.0.pop() {
         entry.1.push((from.clone(), to));
         Ok(Some(from))
     } else {
@@ -267,9 +262,7 @@ pub fn redo(pipeline_id: &str, current: &str) -> Result<Option<String>, String> 
         .1
         .last()
         .is_some_and(|(from, _)| from.as_str() == current);
-    if top_matches
-        && let Some((from, to)) = entry.1.pop()
-    {
+    if top_matches && let Some((from, to)) = entry.1.pop() {
         entry.0.push((from, to.clone()));
         Ok(Some(to))
     } else {

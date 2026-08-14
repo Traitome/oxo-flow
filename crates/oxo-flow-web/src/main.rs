@@ -186,7 +186,10 @@ async fn main() -> Result<()> {
         // nest — route it explicitly so the mount root serves the SPA.
         let base = &cli.base_path;
         axum::Router::new()
-            .route(&format!("{base}/"), axum::routing::get(oxo_flow_web::server::spa_index))
+            .route(
+                &format!("{base}/"),
+                axum::routing::get(oxo_flow_web::server::spa_index),
+            )
             .nest(base, app)
     };
 

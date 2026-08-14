@@ -390,11 +390,7 @@ pub fn list_files_recursive(root: &std::path::Path) -> Vec<FileListingEntry> {
     const MAX_DEPTH: usize = 4;
     const MAX_ENTRIES: usize = 500;
 
-    fn walk(
-        dir: &std::path::Path,
-        depth: usize,
-        out: &mut Vec<FileListingEntry>,
-    ) {
+    fn walk(dir: &std::path::Path, depth: usize, out: &mut Vec<FileListingEntry>) {
         if depth > MAX_DEPTH || out.len() >= MAX_ENTRIES {
             return;
         }
@@ -450,7 +446,10 @@ mod file_listing_tests {
         let names: Vec<&str> = files.iter().map(|f| f.name.as_str()).collect();
         assert!(names.contains(&"top.txt"));
         assert!(names.contains(&"results"));
-        assert!(names.contains(&"peaks.bed"), "nested product must be listed: {names:?}");
+        assert!(
+            names.contains(&"peaks.bed"),
+            "nested product must be listed: {names:?}"
+        );
         assert!(
             !files.iter().any(|f| f.path.contains(".oxo-flow")),
             "engine internals must be excluded: {files:?}"

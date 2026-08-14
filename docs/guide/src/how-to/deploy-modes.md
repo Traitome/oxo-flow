@@ -24,7 +24,7 @@ oxo-flow serve --mode hpc
 |---------|-------|
 | Network | `127.0.0.1:8080` (localhost only) |
 | Database | SQLite file (`oxo-flow.db`) |
-| Auth | None (single user) |
+| Auth | None (single user) — management endpoints (Users, Audit) follow the same localhost trust model |
 | Workspace | `workspace/users/local_user/runs/<run_id>` |
 
 ```bash
@@ -71,6 +71,13 @@ oxo-flow serve --mode team
 login endpoints when their client credentials are configured — there is no
 automatic fallback chain between mechanisms.
 
+**User management**: beyond the env-var credentials, accounts created on
+the **Users** page (or `POST /api/users`) carry a bcrypt-hashed password in
+the database and sign in through the same `/api/auth/login` endpoint.
+Every state-changing request (create/update/delete/run actions) is recorded
+in the audit trail — **Audit** page or `GET /api/audit` — with the acting
+user and the real outcome.
+
 **Workspace isolation**:
 ```
 workspace/
@@ -95,10 +102,32 @@ workspace/
 oxo-flow serve --mode hpc
 ```
 
-**HPC workflow** (current implementation status):
-1. User creates/imports pipeline in Web UI
-2. oxo-flow can generate cluster job scripts (`oxo-flow cluster submit` on the CLI)
-3. The Web UI does not yet submit jobs or poll scheduler status — use the CLI for cluster submission and your scheduler's native tools to monitor
+**Connecting the app to a cluster** (the deployment model):
+
+- **App anywhere, cluster elsewhere.** The web UI can run on your
+  workstation, a lab portal server, or any cloud VM — it does not need to
+  live on the cluster. Cluster execution happens where the CLI runs:
+  SSH into the login node (or run the CLI there directly) and use
+  `oxo-flow cluster submit` / `oxo-flow run --profile cluster` to dispatch
+  work through SLURM/PBS/LSF/SGE.
+- **App on the login node (`--mode hpc`).** When the web server itself runs
+  on a cluster login node, hpc mode detects the scheduler at startup
+  (`sinfo`/`qstat`/`pbsnodes`/`bjobs`) and exposes `GET /api/hpc` with live
+  queue/partition status in the UI.
+- **App mounted at a sub-path.** On shared portal servers the app can be
+  mounted under any prefix with `--base-path /oxo-flow` — the router, the
+  SPA, and all asset URLs follow the mount point automatically (the SPA
+  index gets a `<base>` tag injected at serve time), so it composes with
+  reverse proxies without a rebuild.
+
+```bash
+# App on the login node, mounted under /oxo-flow
+oxo-flow serve --mode hpc --base-path /oxo-flow
+
+# App on your workstation, cluster execution via the CLI on the login node
+ssh login-node
+oxo-flow cluster submit workflow.oxoflow --scheduler slurm
+```
 
 ## Switching Modes
 
@@ -122,6 +151,21 @@ Serve: Starting oxo-flow web server in personal mode on 127.0.0.1:8080
 ```
 
 Log lines carry timestamps in a terminal, and the mode, host, and port follow `--mode`/`--host`/`-p`.
+
+## Run Control Truth (all modes)
+
+Run control is backed by real process signaling, and crash recovery tells
+the truth:
+
+- **Cancel** sends SIGTERM (then SIGKILL after a 5 s grace) to the run's
+  process group — rules run *inside* the run group, so no rule process
+  survives a cancel.
+- **Pause/resume** freezes and thaws the same group (SIGSTOP/SIGCONT).
+- **Crash restart**: on startup, runs left `running`/`paused` are probed —
+  a live CLI is re-attached (cancel/pause keep working) and monitored to
+  its end; a finished one is attributed from the exit record the wrapper
+  shell wrote (`.exit-code`), so a completed run is never rewritten to
+  `failed` by a restart.
 
 ## Performance
 

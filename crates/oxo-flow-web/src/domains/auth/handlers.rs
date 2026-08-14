@@ -156,24 +156,21 @@ pub async fn login(Json(req): Json<LoginRequest>) -> ApiResult<LoginResponse> {
         Ok(response) => response,
         Err(env_err) => {
             let pool = get_pool()?;
-            let user: Option<(String, Option<String>)> = sqlx::query_as(
-                "SELECT role, password_hash FROM users WHERE username = ?",
-            )
-            .bind(&req.username)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error looking up user '{}': {e}", req.username);
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
+            let user: Option<(String, Option<String>)> =
+                sqlx::query_as("SELECT role, password_hash FROM users WHERE username = ?")
+                    .bind(&req.username)
+                    .fetch_optional(pool)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("DB error looking up user '{}': {e}", req.username);
+                        err(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "DB_ERROR",
+                            "Internal database error".into(),
+                        )
+                    })?;
             match user {
-                Some((role, Some(hash)))
-                    if service::verify_db_password(&req.password, &hash) =>
-                {
+                Some((role, Some(hash))) if service::verify_db_password(&req.password, &hash) => {
                     service::login_response_for(req.username.clone(), role)
                 }
                 _ => return Err(err(StatusCode::UNAUTHORIZED, "AUTH_FAILED", env_err)),
