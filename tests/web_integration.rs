@@ -1263,7 +1263,7 @@ async fn team_mode_run_ownership_isolation() {
         .json()
         .await
         .unwrap();
-    let bob_ids: Vec<&str> = bob_list
+    let bob_ids: Vec<&str> = bob_list["items"]
         .as_array()
         .unwrap()
         .iter()
@@ -2039,7 +2039,11 @@ async fn web_share_landing_is_public_and_importable() {
     assert_eq!(landing["pipeline"]["name"], "share-me");
     assert_eq!(landing["pipeline"]["rules_count"], 1);
     assert!(
-        landing["dag"].as_array().unwrap().iter().any(|r| r == "hello"),
+        landing["dag"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r == "hello"),
         "DAG summary lists rule names: {landing}"
     );
     assert!(landing["toml_content"].as_str().unwrap().contains("hello"));
@@ -2118,7 +2122,12 @@ async fn web_pipeline_revisions_and_rollback() {
         .json()
         .await
         .unwrap();
-    assert!(updated["toml_content"].as_str().unwrap().contains("hello_v2"));
+    assert!(
+        updated["toml_content"]
+            .as_str()
+            .unwrap()
+            .contains("hello_v2")
+    );
 
     let revisions: serde_json::Value = client
         .get(format!("{base}/api/pipelines/{pipeline_id}/revisions"))
@@ -2140,7 +2149,9 @@ async fn web_pipeline_revisions_and_rollback() {
         .unwrap()
         .to_string();
     let snapshot: serde_json::Value = client
-        .get(format!("{base}/api/pipelines/{pipeline_id}/revisions/{oldest_id}"))
+        .get(format!(
+            "{base}/api/pipelines/{pipeline_id}/revisions/{oldest_id}"
+        ))
         .send()
         .await
         .unwrap()
@@ -2148,7 +2159,10 @@ async fn web_pipeline_revisions_and_rollback() {
         .await
         .unwrap();
     assert!(
-        snapshot["toml_content"].as_str().unwrap().contains("hello_v1"),
+        snapshot["toml_content"]
+            .as_str()
+            .unwrap()
+            .contains("hello_v1"),
         "oldest snapshot holds the original: {snapshot}"
     );
 
@@ -2162,7 +2176,12 @@ async fn web_pipeline_revisions_and_rollback() {
         .json()
         .await
         .unwrap();
-    assert!(rolled["toml_content"].as_str().unwrap().contains("hello_v1"));
+    assert!(
+        rolled["toml_content"]
+            .as_str()
+            .unwrap()
+            .contains("hello_v1")
+    );
 
     let after: serde_json::Value = client
         .get(format!("{base}/api/pipelines/{pipeline_id}/revisions"))
@@ -2172,5 +2191,217 @@ async fn web_pipeline_revisions_and_rollback() {
         .json()
         .await
         .unwrap();
-    assert_eq!(after.as_array().unwrap().len(), 3, "rollback adds a revision");
+    assert_eq!(
+        after.as_array().unwrap().len(),
+        3,
+        "rollback adds a revision"
+    );
+}
+
+// ===========================================================================
+// Webhook notifications (issue #82 P1-12)
+// ===========================================================================
+
+/// A run reaching a terminal state POSTs an HMAC-signed payload to the
+/// configured webhook endpoint (raw TCP listener captures the request;
+/// the signature format is verified against the core HMAC scheme, whose
+/// RFC 4231 vectors are unit-tested in core).
+#[tokio::test]
+async fn web_webhook_fires_on_run_completion_with_hmac() {
+    use std::sync::{Arc, Mutex};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let captured: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let captured_thread = captured.clone();
+    let handle = std::thread::spawn(move || {
+        // Accept up to two connections (delivery + retry); the first 200
+        // answer stops the retry loop.
+        for _ in 0..2 {
+            let Ok((mut stream, _)) = listener.accept() else {
+                break;
+            };
+            stream.set_read_timeout(Some(Duration::from_secs(20))).ok();
+            use std::io::Read as _;
+            let mut buf = [0u8; 8192];
+            let mut request = String::new();
+            // Read until headers end, then honor Content-Length.
+            loop {
+                let n = stream.read(&mut buf).unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                request.push_str(&String::from_utf8_lossy(&buf[..n]));
+                if request.contains("\r\n\r\n") {
+                    break;
+                }
+            }
+            let body_start = request.find("\r\n\r\n").map(|i| i + 4).unwrap_or(0);
+            let content_len: usize = request
+                .lines()
+                .find(|l| l.to_lowercase().starts_with("content-length:"))
+                .and_then(|l| l.split(':').nth(1))
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0);
+            let mut body = request[body_start..].to_string();
+            while body.len() < content_len {
+                let n = stream.read(&mut buf).unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                body.push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
+            *captured_thread.lock().unwrap() = request.clone();
+            use std::io::Write as _;
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            break;
+        }
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.base.clone();
+
+    // Configure the webhook to hit the capture listener.
+    let saved: serde_json::Value = client
+        .put(format!("{base}/api/webhook"))
+        .json(&serde_json::json!({
+            "enabled": true,
+            "url": format!("http://{addr}/hook"),
+            "secret": "s3cret-key",
+            "events": ["workflow_completed", "workflow_failed"],
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(saved["status"], "saved");
+
+    // The GET must never echo the secret.
+    let config: serde_json::Value = client
+        .get(format!("{base}/api/webhook"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(config["secret_set"], true);
+    assert!(
+        config.get("secret").is_none(),
+        "secret must never be echoed"
+    );
+
+    // A completed run fires the webhook.
+    let created: serde_json::Value = client
+        .post(format!("{base}/api/runs"))
+        .json(&serde_json::json!({"toml_content": ISO_WORKFLOW}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let run_id = created["run_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        wait_for_terminal(&client, &base, &run_id).await,
+        "completed"
+    );
+
+    handle.join().unwrap();
+    let request = captured.lock().unwrap().clone();
+    assert!(
+        request.starts_with("POST /hook"),
+        "webhook must POST to the configured path: {request}"
+    );
+    assert!(
+        request.contains("\"event\":\"workflow_completed\"")
+            || request.contains("\"event\":\"WorkflowCompleted\""),
+        "payload carries the terminal event: {request}"
+    );
+    assert!(
+        request.contains("\"workflow_name\":\"iso\""),
+        "payload names the workflow"
+    );
+    // HMAC-SHA256 signature header (scheme prefix + 64 hex chars).
+    let sig = request
+        .lines()
+        .find(|l| l.to_lowercase().starts_with("x-oxoflow-signature:"))
+        .unwrap_or("");
+    let value = sig.split(':').nth(1).unwrap_or("").trim();
+    assert!(
+        value.len() == "hmac-sha256=".len() + 64 && value.starts_with("hmac-sha256="),
+        "signature must use the hmac-sha256 scheme: '{value}'"
+    );
+}
+
+/// P1-13: API keys authenticate machine clients with the same ownership
+/// scoping as sessions; revocation is immediate.
+#[tokio::test]
+async fn team_mode_api_keys_authenticate_and_revoke() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TeamServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.server.base.clone();
+
+    let alice = server.login(&client, "alice", "user-secret").await;
+
+    // Create a key as alice.
+    let created: serde_json::Value = client
+        .post(format!("{base}/api/auth/keys"))
+        .bearer_auth(&alice)
+        .json(&serde_json::json!({"name": "ci-bot"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let key = created["key"].as_str().unwrap().to_string();
+    let key_id = created["id"].as_str().unwrap().to_string();
+    assert!(key.starts_with("oxo_"), "key format: {key}");
+
+    // The listing never echoes the plaintext.
+    let listed: serde_json::Value = client
+        .get(format!("{base}/api/auth/keys"))
+        .bearer_auth(&alice)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert!(
+        listed.as_array().unwrap()[0].get("key").is_none(),
+        "plaintext never listed"
+    );
+
+    // The key authenticates machine requests.
+    let via_key = client
+        .get(format!("{base}/api/runs"))
+        .header("X-API-Key", &key)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(via_key.status(), 200, "API key must authenticate");
+
+    // Revocation is immediate.
+    let revoked = client
+        .delete(format!("{base}/api/auth/keys/{key_id}"))
+        .bearer_auth(&alice)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(revoked.status(), 200);
+    let after_revoke = client
+        .get(format!("{base}/api/runs"))
+        .header("X-API-Key", &key)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(after_revoke.status(), 401, "revoked keys are rejected");
 }

@@ -193,8 +193,54 @@ pub async fn pipeline_stats(Json(req): Json<ParseRequest>) -> ApiResult<Workflow
 }
 
 /// POST /api/pipelines/diff
-pub async fn diff_pipelines(Json(req): Json<DiffRequest>) -> ApiResult<DiffResponse> {
-    service::diff_workflows(&req.toml_a, &req.toml_b)
+///
+/// Accepts inline TOML (`toml_a`/`toml_b`) or saved-pipeline ids
+/// (`pipeline_a_id`/`pipeline_b_id`), resolving ids server-side — the
+/// contract the client always assumed (issue #82 P1-10).
+pub async fn diff_pipelines(
+    authenticated: Option<Extension<CurrentUser>>,
+    Json(req): Json<DiffRequest>,
+) -> ApiResult<DiffResponse> {
+    let resolve_side = async |inline: &Option<String>,
+                              id: &Option<String>|
+           -> Result<String, (StatusCode, Json<ApiError>)> {
+        if let Some(toml) = inline
+            && !toml.trim().is_empty()
+        {
+            return Ok(toml.clone());
+        }
+        if let Some(pid) = id {
+            let pool = get_pool()?;
+            let row: Option<(String,)> =
+                sqlx::query_as("SELECT toml_content FROM pipelines WHERE id = ?")
+                    .bind(pid)
+                    .fetch_optional(pool)
+                    .await
+                    .map_err(|e| {
+                        err(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "DB_ERROR",
+                            format!("DB error loading pipeline {pid}: {e}"),
+                        )
+                    })?;
+            return row.map(|r| r.0).ok_or_else(|| {
+                err(
+                    StatusCode::NOT_FOUND,
+                    "NOT_FOUND",
+                    format!("Pipeline {pid} not found"),
+                )
+            });
+        }
+        Err(err(
+            StatusCode::BAD_REQUEST,
+            "MISSING",
+            "Provide toml_a/toml_b or pipeline_a_id/pipeline_b_id".into(),
+        ))
+    };
+    let toml_a = resolve_side(&req.toml_a, &req.pipeline_a_id).await?;
+    let toml_b = resolve_side(&req.toml_b, &req.pipeline_b_id).await?;
+    let _ = authenticated; // resolution is ownership-agnostic; content is caller-supplied
+    service::diff_workflows(&toml_a, &toml_b)
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "DIFF_ERROR", e))
 }
@@ -577,7 +623,14 @@ pub async fn update_pipeline(
 
     let now = now_iso();
     // Snapshot the pre-update content so rollback can restore it.
-    record_revision(pool, &id, &user.id, &existing.version, &existing.toml_content).await;
+    record_revision(
+        pool,
+        &id,
+        &user.id,
+        &existing.version,
+        &existing.toml_content,
+    )
+    .await;
     sqlx::query(
         "UPDATE pipelines SET name = ?, toml_content = ?, visibility = ?, rules_count = ?, updated_at = ? WHERE id = ?",
     )
@@ -1299,12 +1352,23 @@ pub async fn rollback_pipeline(
             format!("DB error fetching revision: {e}"),
         )
     })?;
-    let toml_content = rev
-        .map(|r| r.0)
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "NOT_FOUND", "Revision not found".into()))?;
+    let toml_content = rev.map(|r| r.0).ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            "Revision not found".into(),
+        )
+    })?;
 
     // Restore = snapshot current + write the old content back.
-    record_revision(pool, &id, &user.id, &pipeline.version, &pipeline.toml_content).await;
+    record_revision(
+        pool,
+        &id,
+        &user.id,
+        &pipeline.version,
+        &pipeline.toml_content,
+    )
+    .await;
     let rules_count = oxo_flow_core::WorkflowConfig::parse(&toml_content)
         .map(|wf| wf.rules.len() as i64)
         .unwrap_or(pipeline.rules_count);

@@ -7,7 +7,7 @@ use crate::domains::ai::agents::monitor_agent::{self, NodeExecutionStatus, Resou
 use crate::domains::ai::agents::report_agent;
 use crate::domains::ai::agents::types::ReportFile;
 use crate::domains::auth::current_user::{self, CurrentUser};
-use axum::{Extension, Json, extract::Path, http::StatusCode};
+use axum::{Extension, Json, extract::Path, extract::Query, http::StatusCode};
 
 use super::checkpoint_status;
 use super::service;
@@ -250,10 +250,24 @@ pub async fn create_run(
     Ok(Json(resp))
 }
 
-/// GET /api/runs
+/// GET /api/runs — cursor-paginated run list (issue #82 P1-3/P1-13).
+///
+/// Query: `limit` (default 100, max 500), `cursor` (created_at of the last
+/// row of the previous page), `status` filter, `q` search (workflow name
+/// or run id prefix). Response envelope: `{items, next_cursor, total}` —
+/// `next_cursor: null` means the last page.
+#[derive(serde::Deserialize)]
+pub struct ListRunsQuery {
+    pub limit: Option<usize>,
+    pub cursor: Option<String>,
+    pub status: Option<String>,
+    pub q: Option<String>,
+}
+
 pub async fn list_runs(
     authenticated: Option<Extension<CurrentUser>>,
-) -> ApiResult<Vec<serde_json::Value>> {
+    Query(params): Query<ListRunsQuery>,
+) -> ApiResult<serde_json::Value> {
     let user = current_user::resolve(authenticated.as_ref());
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
@@ -262,20 +276,53 @@ pub async fn list_runs(
             "Database not available".into(),
         )
     })?;
+    let limit = params.limit.unwrap_or(100).min(500).max(1) as i64;
 
     // Ownership scoping (issue #82 P0-4): non-admins see their own runs
-    // only; admins see the whole fleet.
-    let rows: Vec<models::RunRow> = if user.is_admin() {
-        sqlx::query_as("SELECT * FROM runs ORDER BY created_at DESC LIMIT 100")
-            .fetch_all(pool)
-            .await
-    } else {
-        sqlx::query_as("SELECT * FROM runs WHERE user_id = ? ORDER BY created_at DESC LIMIT 100")
-            .bind(&user.id)
-            .fetch_all(pool)
-            .await
+    // only; admins see the whole fleet. Filters compose on top.
+    let mut where_clauses: Vec<String> = Vec::new();
+    let mut binds: Vec<String> = Vec::new();
+    if !user.is_admin() {
+        where_clauses.push("user_id = ?".to_string());
+        binds.push(user.id.clone());
     }
-    .map_err(|e| {
+    if let Some(status) = &params.status {
+        if matches!(
+            status.as_str(),
+            "queued" | "running" | "paused" | "completed" | "failed" | "cancelled"
+        ) {
+            where_clauses.push("status = ?".to_string());
+            binds.push(status.clone());
+        }
+    }
+    if let Some(q) = &params.q
+        && !q.trim().is_empty()
+    {
+        where_clauses.push("(workflow_name LIKE ? OR id LIKE ?)".to_string());
+        let pattern = format!("%{}%", q.trim());
+        binds.push(pattern.clone());
+        binds.push(pattern);
+    }
+    if let Some(cursor) = &params.cursor {
+        where_clauses.push("created_at < ?".to_string());
+        binds.push(cursor.clone());
+    }
+    let where_sql = if where_clauses.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", where_clauses.join(" AND "))
+    };
+
+    // Fetch limit+1 to detect a next page without a COUNT(*).
+    let sql = format!(
+        "SELECT * FROM runs{where_sql} ORDER BY created_at DESC LIMIT {}",
+        limit + 1
+    );
+    let mut query = sqlx::query_as::<_, models::RunRow>(&sql);
+    for bind in &binds {
+        query = query.bind(bind);
+    }
+    let rows: Vec<models::RunRow> = query.fetch_all(pool).await.map_err(|e| {
         tracing::error!("DB error listing runs: {e}");
         err(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -284,9 +331,37 @@ pub async fn list_runs(
         )
     })?;
 
-    let list: Vec<serde_json::Value> = rows
-        .into_iter()
+    let has_more = rows.len() as i64 > limit;
+    let rows = if has_more {
+        &rows[..limit as usize]
+    } else {
+        &rows[..]
+    };
+    let next_cursor = rows.last().map(|r| r.created_at.clone());
+
+    // Total = number of rows matching the filters (no LIMIT). Bounded by
+    // SQLite's rowid; fine for a per-deployment run log.
+    let count_sql = format!("SELECT COUNT(*) FROM runs{where_sql}");
+    let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql);
+    for bind in &binds {
+        count_query = count_query.bind(bind);
+    }
+    let total: i64 = count_query.fetch_one(pool).await.unwrap_or(0);
+
+    let items: Vec<serde_json::Value> = rows
+        .iter()
         .map(|r| {
+            let duration_secs = match (&r.started_at, &r.finished_at) {
+                (Some(s), Some(f)) => {
+                    let start = chrono::DateTime::parse_from_rfc3339(s).ok();
+                    let end = chrono::DateTime::parse_from_rfc3339(f).ok();
+                    match (start, end) {
+                        (Some(a), Some(b)) => Some((b - a).num_seconds().max(0)),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
             serde_json::json!({
                 "id": r.id,
                 "user_id": r.user_id,
@@ -299,11 +374,16 @@ pub async fn list_runs(
                 "started_at": r.started_at,
                 "finished_at": r.finished_at,
                 "created_at": r.created_at,
+                "duration_secs": duration_secs,
             })
         })
         .collect();
 
-    Ok(Json(list))
+    Ok(Json(serde_json::json!({
+        "items": items,
+        "next_cursor": next_cursor,
+        "total": total,
+    })))
 }
 
 /// GET /api/runs/{id}

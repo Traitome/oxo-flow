@@ -522,3 +522,155 @@ pub async fn upload_license(Json(req): Json<serde_json::Value>) -> ApiResult<Lic
 
     Ok(Json(service::license_status()))
 }
+
+// ---------------------------------------------------------------------------
+// API keys (issue #82 P1-13) — machine credentials, stored hashed,
+// individually revocable. The plaintext is shown exactly once.
+// ---------------------------------------------------------------------------
+
+fn hash_api_key(key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(key.as_bytes());
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// POST /api/auth/keys — create a key; the plaintext is returned ONCE.
+pub async fn create_api_key(
+    authenticated: Option<axum::Extension<crate::domains::auth::current_user::CurrentUser>>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<serde_json::Value> {
+    let user = crate::domains::auth::current_user::resolve(authenticated.as_ref());
+    let name = req
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unnamed")
+        .trim()
+        .to_string();
+    if name.is_empty() || name.len() > 64 {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "INVALID_NAME",
+            "name must be 1-64 characters".into(),
+        ));
+    }
+    let pool = get_pool()?;
+    let plaintext = format!("oxo_{}", uuid::Uuid::new_v4().simple());
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = now_iso();
+    sqlx::query(
+        "INSERT INTO api_keys (id, user_id, name, key_hash, created_at, last_used_at, revoked) \
+         VALUES (?, ?, ?, ?, ?, NULL, 0)",
+    )
+    .bind(&id)
+    .bind(&user.id)
+    .bind(&name)
+    .bind(hash_api_key(&plaintext))
+    .bind(&now)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("DB error creating API key: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({
+        "id": id,
+        "name": name,
+        "key": plaintext,
+    })))
+}
+
+/// GET /api/auth/keys — the acting user's keys (hashes only, never
+/// plaintext).
+pub async fn list_api_keys(
+    authenticated: Option<axum::Extension<crate::domains::auth::current_user::CurrentUser>>,
+) -> ApiResult<Vec<serde_json::Value>> {
+    let user = crate::domains::auth::current_user::resolve(authenticated.as_ref());
+    let pool = get_pool()?;
+    let rows: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, name, created_at, last_used_at FROM api_keys \
+         WHERE user_id = ? AND revoked = 0 ORDER BY created_at DESC",
+    )
+    .bind(&user.id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            format!("DB error listing API keys: {e}"),
+        )
+    })?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|(id, name, created_at, last_used_at)| {
+                serde_json::json!({
+                    "id": id, "name": name, "created_at": created_at,
+                    "last_used_at": last_used_at,
+                })
+            })
+            .collect(),
+    ))
+}
+
+/// DELETE /api/auth/keys/{id} — revoke one of the acting user's keys.
+pub async fn revoke_api_key(
+    authenticated: Option<axum::Extension<crate::domains::auth::current_user::CurrentUser>>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> ApiResult<serde_json::Value> {
+    let user = crate::domains::auth::current_user::resolve(authenticated.as_ref());
+    let pool = get_pool()?;
+    let affected = sqlx::query("UPDATE api_keys SET revoked = 1 WHERE id = ? AND user_id = ?")
+        .bind(&id)
+        .bind(&user.id)
+        .execute(pool)
+        .await
+        .map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                format!("DB error revoking API key: {e}"),
+            )
+        })?
+        .rows_affected();
+    if affected == 0 {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            "API key not found".into(),
+        ));
+    }
+    Ok(Json(serde_json::json!({"revoked": id})))
+}
+
+/// Resolve an `X-API-Key` header to a CurrentUser, touching last_used_at.
+/// Used by the auth middleware when no Bearer session is present.
+pub async fn resolve_api_key(key: &str) -> Option<crate::domains::auth::current_user::CurrentUser> {
+    let pool = crate::infra::db::sqlite::try_pool().ok()?;
+    let hash = hash_api_key(key);
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT k.user_id, u.role FROM api_keys k \
+         LEFT JOIN users u ON u.id = k.user_id \
+         WHERE k.key_hash = ? AND k.revoked = 0",
+    )
+    .bind(&hash)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+    let (user_id, role) = row?;
+    let _ = sqlx::query("UPDATE api_keys SET last_used_at = ? WHERE key_hash = ?")
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(&hash)
+        .execute(pool)
+        .await;
+    Some(crate::domains::auth::current_user::CurrentUser { id: user_id, role })
+}

@@ -120,12 +120,18 @@ pub struct PrepareResponse {
     pub environment_setup_cmds: Vec<String>,
 }
 
-/// Request to diff two pipelines by their TOML content.
+/// Request to diff two pipelines: inline TOML, or saved-pipeline ids the
+/// server resolves (issue #82 P1-10: the client sent ids while the
+/// handler required inline TOML — the two shapes never agreed).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiffRequest {
-    pub toml_a: String,
-    pub toml_b: String,
+    #[serde(default)]
+    pub toml_a: Option<String>,
+    #[serde(default)]
+    pub toml_b: Option<String>,
+    #[serde(default)]
     pub pipeline_a_id: Option<String>,
+    #[serde(default)]
     pub pipeline_b_id: Option<String>,
 }
 
@@ -276,7 +282,8 @@ mod tests {
             pipeline_id: "p1".into(),
             name: "test".into(),
             version: "1.0".into(),
-            rules: vec![RuleSummary {
+            rules: vec![shell: None,
+            RuleSummary {
                 name: "rule1".into(),
                 inputs: vec!["in.txt".into()],
                 outputs: vec!["out.txt".into()],

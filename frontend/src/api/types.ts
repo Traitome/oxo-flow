@@ -91,10 +91,19 @@ export interface KnowledgeSkillsResponse {
 }
 
 // ── Runs ──
+/** Cursor-paginated run list envelope (issue #82 P1-3/P1-13). */
+export interface RunList {
+  items: RunItem[];
+  next_cursor: string | null;
+  total: number;
+}
+
 export interface RunItem {
   id: string; user_id: string; pipeline_id: string | null;
   /** Workflow name the run executed (backend enriches the list — issue #82 P1-3). */
   workflow_name?: string | null;
+  /** The TOML the run executed (get_run only — powers Manual Edit). */
+  pipeline_snapshot?: string;
   status: string; phase: string; pid: number | null; workdir: string | null;
   started_at: string | null; finished_at: string | null; created_at: string;
 }

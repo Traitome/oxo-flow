@@ -337,6 +337,12 @@ pub fn build_router(mode: &str) -> Router {
         .route(
             "/api/auth/oauth/callback",
             post(auth::handlers::oauth_callback),
+        )
+        .route("/api/auth/keys", get(auth::handlers::list_api_keys))
+        .route("/api/auth/keys", post(auth::handlers::create_api_key))
+        .route(
+            "/api/auth/keys/{id}",
+            delete(auth::handlers::revoke_api_key),
         );
 
     // ---- License routes ----
@@ -446,7 +452,15 @@ pub fn build_router(mode: &str) -> Router {
         )
         .route("/api/events", get(crate::sse::sse_events))
         .route("/api/audit", get(observability::handlers::get_audit_logs))
-        .route("/api/quota", get(observability::handlers::quota_status));
+        .route("/api/quota", get(observability::handlers::quota_status))
+        .route(
+            "/api/webhook",
+            get(observability::handlers::get_webhook_config),
+        )
+        .route(
+            "/api/webhook",
+            put(observability::handlers::put_webhook_config),
+        );
 
     // ---- HPC routes ----
     let hpc_routes = Router::new().route("/api/hpc", get(observability::handlers::hpc_status));
@@ -674,6 +688,27 @@ async fn require_auth(
         || path == "/icons.svg";
     if is_public {
         return next.run(request).await;
+    }
+
+    // API keys are first-class machine credentials (issue #82 P1-13):
+    // X-API-Key resolves to the same CurrentUser the session path
+    // produces, so ownership scoping applies identically.
+    if let Some(api_key) = headers.get("x-api-key").and_then(|v| v.to_str().ok())
+        && !api_key.is_empty()
+    {
+        if let Some(user) = auth::handlers::resolve_api_key(api_key).await {
+            request.extensions_mut().insert(user);
+            return next.run(request).await;
+        }
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            axum::Json(serde_json::json!({
+                "code": "INVALID_API_KEY",
+                "message": "Invalid or revoked API key",
+            })),
+        )
+            .into_response();
     }
 
     // Extract Bearer token

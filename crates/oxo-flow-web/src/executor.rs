@@ -342,6 +342,7 @@ pub fn spawn_background_run(
                 if let Some(pid) = child.id() {
                     spawn_resource_sampler(run_id.clone(), pid, run_dir.clone());
                 }
+                spawn_log_tailer(run_id.clone(), run_dir.clone());
 
                 // Wait for process completion
                 match child.wait().await {
@@ -443,6 +444,9 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
         }),
         user_id.as_deref(),
     );
+
+    // Configured webhooks fire on terminal states (issue #82 P1-12).
+    crate::domains::observability::webhook::notify_terminal(run_id, final_state).await;
 }
 
 /// Monitor a run that was re-attached after a server restart (crash
@@ -454,10 +458,12 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
 /// fallback for a process killed without a record). Finalization goes
 /// through [`finalize_run`] so semantics match the live wait path exactly.
 pub fn resume_monitoring(run_id: String, pid: i32, workdir: PathBuf) {
-    // Crash-recovery re-attach also samples resources (issue #82 P1-2).
+    // Crash-recovery re-attach also samples resources and tails the log
+    // (issue #82 P1-2 / P1-18).
     if pid > 0 {
         spawn_resource_sampler(run_id.clone(), pid as u32, workdir.clone());
     }
+    spawn_log_tailer(run_id.clone(), workdir.clone());
     tokio::spawn(async move {
         let exit_file = workdir.join(".exit-code");
         let log_path = workdir.join("execution.log");
@@ -472,6 +478,88 @@ pub fn resume_monitoring(run_id: String, pid: i32, workdir: PathBuf) {
                 // Killed without leaving a record (SIGKILL to the group).
                 finalize_run(&run_id, None, &log_path).await;
                 break;
+            }
+        }
+    });
+}
+
+/// Tail `workdir/execution.log` and broadcast per-rule SSE events
+/// (issue #82 P1-18: previously only terminal events existed and the
+/// frontend polled to fill the gap). Parses the CLI's stable log lines:
+/// `Running: <rule>` / `✓ <rule>` / `✗ rule '<rule>' failed` /
+/// `⊝ <rule>` (skipped).
+fn spawn_log_tailer(run_id: String, workdir: PathBuf) {
+    tokio::spawn(async move {
+        let log_path = workdir.join("execution.log");
+        let mut offset: u64 = 0;
+        let user_id: Option<String> = sqlx::query_scalar("SELECT user_id FROM runs WHERE id = ?")
+            .bind(&run_id)
+            .fetch_optional(db::pool())
+            .await
+            .unwrap_or(None);
+        let mut ticker = tokio::time::interval(std::time::Duration::from_millis(1500));
+        ticker.tick().await; // fire immediately
+        loop {
+            ticker.tick().await;
+            let active: Option<String> = sqlx::query_scalar("SELECT status FROM runs WHERE id = ?")
+                .bind(&run_id)
+                .fetch_optional(db::pool())
+                .await
+                .unwrap_or(None);
+            match active.as_deref() {
+                Some("running") | Some("paused") | Some("queued") => {}
+                _ => break,
+            }
+            let Ok(meta) = std::fs::metadata(&log_path) else {
+                continue;
+            };
+            let len = meta.len();
+            if len < offset {
+                offset = 0; // log rotated/truncated
+            }
+            if len == offset {
+                continue;
+            }
+            let Ok(mut file) = std::fs::File::open(&log_path) else {
+                continue;
+            };
+            use std::io::{Read, Seek, SeekFrom};
+            if file.seek(SeekFrom::Start(offset)).is_err() {
+                continue;
+            }
+            let mut buf = String::new();
+            if file.read_to_string(&mut buf).is_err() {
+                continue;
+            }
+            offset = len;
+            for line in buf.lines() {
+                let event = if let Some(rest) = line.strip_prefix("Running: ") {
+                    Some(("rule_started", rest.trim().to_string()))
+                } else if let Some(rest) = line.strip_prefix('✓') {
+                    Some(("rule_completed", rest.trim().to_string()))
+                } else if line.starts_with('⊝') {
+                    Some((
+                        "rule_skipped",
+                        line.trim_start_matches('⊝').trim().to_string(),
+                    ))
+                } else if let Some(rule) = line
+                    .strip_prefix("✗ rule '")
+                    .and_then(|l| l.split_once("'"))
+                    .map(|(r, _)| r)
+                {
+                    Some(("rule_failed", rule.to_string()))
+                } else {
+                    None
+                };
+                if let Some((event_type, rule)) = event {
+                    if !rule.is_empty() {
+                        broadcast_event_for(
+                            event_type,
+                            &serde_json::json!({"run_id": run_id, "rule": rule}),
+                            user_id.as_deref(),
+                        );
+                    }
+                }
             }
         }
     });
@@ -557,6 +645,8 @@ async fn mark_run_failed(run_id: &str) {
         }),
         user_id.as_deref(),
     );
+
+    crate::domains::observability::webhook::notify_terminal(run_id, "failed").await;
 }
 
 #[cfg(test)]

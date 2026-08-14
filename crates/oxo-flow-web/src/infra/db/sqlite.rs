@@ -322,6 +322,25 @@ impl StorageBackend for SqliteBackend {
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                key_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                last_used_at TEXT,
+                revoked INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS webhook_config (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                url TEXT NOT NULL DEFAULT '',
+                secret TEXT,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                events TEXT NOT NULL DEFAULT '[]',
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS pipeline_revisions (
                 id TEXT PRIMARY KEY,
                 pipeline_id TEXT NOT NULL,

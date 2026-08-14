@@ -32,6 +32,7 @@ export default function MonitorReport() {
   const [logRule, setLogRule] = useState('');
   const [instances, setInstances] = useState<RunInstance[] | null>(null);
   const [onlyFailed, setOnlyFailed] = useState(false);
+  const [explainState, setExplainState] = useState<Record<string, { loading?: boolean; text?: string }>>({});
   const [, setLoading] = useState(true);
   // Pagination: the full list is ≤100 rows (API LIMIT); render a page of
   // 20 so the Run Detail card below is not buried under 5700px of history
@@ -76,7 +77,7 @@ export default function MonitorReport() {
   };
 
   useEffect(() => {
-    api.listRuns().then(r => { setRuns(r); setLoading(false); }).catch(() => setLoading(false));
+    api.listRuns().then((r) => { setRuns(r.items); setLoading(false); }).catch(() => setLoading(false));
   }, []);
 
   // Update monitor status in real-time via SSE
@@ -100,7 +101,7 @@ export default function MonitorReport() {
         if (mine && event.data?.run_id === selId) {
           if (event.type === 'run_completed' || event.type === 'run_failed') {
             clearInterval(interval);
-            api.listRuns().then(setRuns);
+            api.listRuns().then((r) => setRuns(r.items));
           }
         }
       } catch { /* ignore */ }
@@ -141,7 +142,7 @@ export default function MonitorReport() {
     if (!window.confirm('Cancel this run? Its processes will be terminated.')) return;
     try {
       await api.cancelRun(selId);
-      api.listRuns().then(setRuns);
+      api.listRuns().then((r) => setRuns(r.items));
       const s = await api.aiStatus(selId);
       setMonitorStatus(s);
     } catch { /* ignore */ }
@@ -321,8 +322,19 @@ export default function MonitorReport() {
                   </div>
                   {alert.auto_fixable && (
                     <div style={{ marginTop: '8px', display: 'flex', gap: '6px' }}>
-                      <button className="btn-sm" style={{ background: '#059669', color: '#fff' }}>🔧 Fix & Retry</button>
-                      <button className="btn-sm">📝 Manual Edit</button>
+                      {/* issue #82 P1-4: these were dead buttons — retry is
+                          now a real run, manual edit opens the snapshot in
+                          the editor. */}
+                      <button className="btn-sm" style={{ background: '#059669', color: '#fff' }}
+                        onClick={() => void handleRetry()}>🔧 Fix & Retry</button>
+                      <button className="btn-sm" onClick={async () => {
+                        if (!selId) return;
+                        try {
+                          const run = await api.getRun(selId);
+                          session.setPipelineToml(run.pipeline_snapshot ?? '');
+                          navigate('/editor');
+                        } catch { /* ignore */ }
+                      }}>📝 Manual Edit</button>
                     </div>
                   )}
                 </div>
@@ -498,17 +510,46 @@ export default function MonitorReport() {
     if (!hasIssues) return <div className="empty-state">✅ No issues detected — pipeline looks healthy</div>;
     return (
       <div>
-        {diagnostics.failed_nodes.map((fn, i) => (
-          <div key={i} className="dash-card" style={{ background: 'var(--color-error-bg)', border: '1px solid var(--color-error)', marginBottom: '8px' }}>
-            <div style={{ fontWeight: 600, color: 'var(--color-error)' }}>❌ {fn.rule}</div>
-            <div style={{ fontSize: '0.85rem' }}>{fn.likely_cause}</div>
-            {fn.suggestions.length > 0 && (
-              <ul style={{ margin: '4px 0', paddingLeft: '1.2rem', fontSize: '0.82rem' }}>
-                {fn.suggestions.map((s, j) => <li key={j}>{s}</li>)}
-              </ul>
-            )}
-          </div>
-        ))}
+        {diagnostics.failed_nodes.map((fn, i) => {
+          const exp = explainState[fn.rule];
+          return (
+            <div key={i} className="dash-card" style={{ background: 'var(--color-error-bg)', border: '1px solid var(--color-error)', marginBottom: '8px' }}>
+              <div style={{ fontWeight: 600, color: 'var(--color-error)' }}>❌ {fn.rule}</div>
+              <div style={{ fontSize: '0.85rem' }}>{fn.likely_cause}</div>
+              {fn.suggestions.length > 0 && (
+                <ul style={{ margin: '4px 0', paddingLeft: '1.2rem', fontSize: '0.82rem' }}>
+                  {fn.suggestions.map((s, j) => <li key={j}>{s}</li>)}
+                </ul>
+              )}
+              {/* AI explanation grounded in the deterministic diagnosis
+                  (issue #82 P1-10: the explain endpoint existed but the
+                  UI never called it). */}
+              <button className="btn-sm" style={{ marginTop: '6px' }}
+                disabled={exp?.loading}
+                onClick={async () => {
+                  setExplainState((prev) => ({ ...prev, [fn.rule]: { loading: true } }));
+                  try {
+                    // Run-scoped explain (issue #82 P1-10): deterministic
+                    // grounding + LLM prose, optionally in Chinese.
+                    const result = selId ? await api.aiExplain(selId, 'zh') : null;
+                    const text = result
+                      ? `${result.summary}${result.fix_suggestion ? `\n→ ${result.fix_suggestion.action}` : ''}`
+                      : 'AI explanation unavailable — the deterministic diagnosis above is authoritative.';
+                    setExplainState((prev) => ({ ...prev, [fn.rule]: { text } }));
+                  } catch {
+                    setExplainState((prev) => ({ ...prev, [fn.rule]: { text: 'AI explanation unavailable — the deterministic diagnosis above is authoritative.' } }));
+                  }
+                }}>
+                {exp?.loading ? 'Explaining…' : '🤖 AI 解释'}
+              </button>
+              {exp?.text && (
+                <div style={{ marginTop: '6px', fontSize: '0.82rem', background: 'var(--color-bg-tertiary)', padding: '8px', borderRadius: 'var(--radius-sm)' }}>
+                  {exp.text}
+                </div>
+              )}
+            </div>
+          );
+        })}
         {diagnostics.warnings.map((w, i) => (
           <div key={i} className="dash-card" style={{ background: 'var(--color-warning-bg)', border: '1px solid var(--color-warning)', marginBottom: '6px', fontSize: '0.85rem' }}>
             ⚠️ <strong>{w.rule}</strong>: {w.pattern} — {w.suggestion}
@@ -566,7 +607,7 @@ export default function MonitorReport() {
       <div className="section">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
           <h2 className="section-title" style={{ marginBottom: 0 }}>Run History</h2>
-          <button className="btn-sm" onClick={() => api.listRuns().then(setRuns)}>Refresh</button>
+          <button className="btn-sm" onClick={() => api.listRuns().then((r) => setRuns(r.items))}>Refresh</button>
         </div>
         <table className="run-table">
           <thead><tr><th>ID</th><th>Status</th><th>Phase</th><th>Created</th><th>Monitor</th></tr></thead>
