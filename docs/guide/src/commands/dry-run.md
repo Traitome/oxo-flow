@@ -127,6 +127,7 @@ Per-rule status markers:
 | `[run: config changed]` | Config value or rule definition changed since completion |
 | `[run: outputs missing]` | Declared outputs no longer exist |
 | `[rerun: downstream of X]` | Was completed, but sits downstream of a rule that will execute (the cascade) |
+| `[rerun: upstream of X]` | A completed producer regenerates first because rule X needs its (tombstoned or missing) outputs — lazy cascade-up |
 | `[skip: up to date]` | Checkpoint hit — work stays protected |
 | `[skip: when condition false]` | The rule's `when` condition evaluates to false against the merged config — `run` skips it regardless of invalidation state |
 
@@ -144,6 +145,15 @@ without it flags exactly the drift. When references are declared and their
 build outputs are missing, the preview lists them ("References: N reference
 build(s) would run"); pass `--skip-ref-build` to assume they are pre-built,
 mirroring the run flag.
+
+Temporary rules (`temporary = true`) are modeled exactly like `run` treats
+them: a tombstoned rule whose outputs were deleted by design shows
+`[skip: up to date]` while no dependent needs them, and flips to
+`[rerun: upstream of X]` the moment a dependent will execute again —
+regenerating the intermediate is part of the predicted plan, so the preview
+and the actual run stay identical. See
+[`run`](run.md#temporary-rules-temporary-true) for the execution-side
+semantics.
 
 The preview is strictly read-only and never mutates the checkpoint; it is
 orthogonal to `run --rerun` (which forces execution) — the preview only
@@ -169,8 +179,8 @@ Top-level fields: `"profile"` (the `--profile` name, when given) and
 `--skip-ref-build` empties the list).
 
 Status values: `run-never-completed`, `run-input-changed`,
-`run-config-changed`, `run-outputs-missing`, `run-cascaded`, `skip`,
-`skip-when-condition`.
+`run-config-changed`, `run-outputs-missing`, `run-cascaded`,
+`run-cascaded-upstream`, `skip`, `skip-when-condition`.
 
 ## Examples
 

@@ -116,6 +116,14 @@ pub struct CheckpointState {
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub input_manifests: HashMap<String, InputManifest>,
+
+    /// Tombstones for `temporary = true` rules whose outputs were deleted
+    /// after a fully successful run. Maps rule name → deleted output paths;
+    /// a future run regenerates them via cascade-up (the completed producer
+    /// is re-executed when a dependent needs the missing inputs).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub tombstones: HashMap<String, Vec<String>>,
 }
 
 impl CheckpointState {
@@ -131,6 +139,7 @@ impl CheckpointState {
             config_snapshot: HashMap::new(),
             rule_fingerprints: HashMap::new(),
             input_manifests: HashMap::new(),
+            tombstones: HashMap::new(),
         }
     }
 
@@ -402,6 +411,41 @@ pub fn snapshot_input_manifest(
         return Ok(None);
     }
     Ok(Some(entries.into_values().collect()))
+}
+
+/// Input patterns (config-expanded) of `rule` that currently fail to
+/// resolve, in declaration order. Mirrors [`snapshot_input_manifest`]'s
+/// per-pattern walk — same expansion, same skip rules — so callers can tell
+/// WHICH inputs are missing: tombstone-aware callers need the exact
+/// producers, not just "cannot verify".
+#[must_use]
+pub fn missing_input_patterns(
+    rule: &Rule,
+    workdir: &Path,
+    wildcard_values: &HashMap<String, String>,
+) -> Vec<String> {
+    if rule.input.is_empty() || rule.cleanup_chunks {
+        return Vec::new();
+    }
+    let dir_filter = match &rule.input {
+        FilePatterns::Dir { pattern, .. } => pattern
+            .as_ref()
+            .map(|p| expand_config_in_path(p, wildcard_values)),
+        _ => None,
+    };
+    let mut missing = Vec::new();
+    for pattern in rule.input.to_vec() {
+        let expanded = expand_config_in_path(&pattern, wildcard_values);
+        if expanded.contains('{') || expanded.starts_with(".oxo-flow/chunks") {
+            continue;
+        }
+        let mut entries = std::collections::BTreeMap::new();
+        if collect_pattern_entries(&expanded, dir_filter.as_deref(), workdir, &mut entries).is_err()
+        {
+            missing.push(expanded);
+        }
+    }
+    missing
 }
 
 /// Literal glob characters — distinct from `{engine}` wildcards
@@ -916,6 +960,27 @@ mod tests {
         assert_eq!(loaded.workflow_path.as_deref(), Some("/wf/p.oxoflow"));
     }
 
+    #[test]
+    fn tombstones_roundtrip_and_legacy_checkpoints_load_empty() {
+        let mut state = CheckpointState::new();
+        state
+            .tombstones
+            .insert("trim_S1".to_string(), vec!["trimmed/S1.fq".to_string()]);
+        let json = serde_json::to_string(&state).unwrap();
+        let loaded: CheckpointState = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            loaded.tombstones.get("trim_S1").map(Vec::as_slice),
+            Some(&["trimmed/S1.fq".to_string()][..])
+        );
+
+        // Pre-tombstone checkpoints load with an empty map.
+        let legacy: CheckpointState = serde_json::from_str(
+            r#"{"completed_rules":[],"failed_rules":[],"benchmarks":{},"workflow_path":"/wf/p.oxoflow"}"#,
+        )
+        .unwrap();
+        assert!(legacy.tombstones.is_empty());
+    }
+
     // ─── Input manifest snapshots (issue #72) ─────────────────────────────
 
     fn temp_workdir(tag: &str) -> std::path::PathBuf {
@@ -953,6 +1018,21 @@ mod tests {
         assert_eq!(manifest[0].path, "data/a.txt");
         assert_eq!(manifest[0].size, 5);
         assert!(manifest[0].mtime_nanos > 0);
+        let _ = std::fs::remove_dir_all(&wd);
+    }
+
+    #[test]
+    fn missing_input_patterns_lists_only_unresolvable_patterns() {
+        let wd = temp_workdir("missing");
+        write_file(&wd, "data/a.txt", "a");
+        let rule = list_rule("r", &["data/a.txt", "data/missing.txt"]);
+        assert_eq!(
+            missing_input_patterns(&rule, &wd, &HashMap::new()),
+            vec!["data/missing.txt".to_string()]
+        );
+        // Engine wildcards and chunk paths are skipped, like the snapshot walk.
+        let wildcard_rule = list_rule("w", &["{sample}.fq", ".oxo-flow/chunks/x.bam"]);
+        assert!(missing_input_patterns(&wildcard_rule, &wd, &HashMap::new()).is_empty());
         let _ = std::fs::remove_dir_all(&wd);
     }
 

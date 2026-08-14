@@ -442,6 +442,7 @@ memory = "32G"
 | `extends` | String | No | Inherit settings from a base rule |
 | `retry_delay` | String | No | Delay between retries (e.g., `"5s"`, `"30s"`, `"2m"`) |
 | `temp_output` | Array | No | Temporary outputs cleaned up after downstream rules complete |
+| `temporary` | Boolean | No | Delete the rule's outputs after a fully successful run once every dependent has completed, recording a tombstone so a future run regenerates them on demand (leaf rules keep their outputs) |
 | `protected_output` | Array | No | Outputs that must never be overwritten or deleted |
 | `tags` | Array | No | Categorization tags (e.g., `["qc", "alignment"]`) |
 | `shadow` | String | No | Shadow directory mode: `"minimal"`, `"shallow"`, or `"full"` |
@@ -669,6 +670,12 @@ oxo-flow automatically cleans up temporary outputs:
 | Success + `temp_output` | Cleaned after successful completion |
 | Failure + `temp_output` | Cleaned to prevent stale partial files |
 | Transform with `cleanup=true` | Chunk files cleaned after the whole run finishes successfully (kept on failed runs for debugging; re-runs recompute the map rules) |
+| Success + `temporary = true` | Outputs deleted after the run once every dependent rule has completed; a tombstone is recorded in the checkpoint so a later run that needs the outputs regenerates the rule first (lazy cascade-up). Leaf rules (no dependents) keep their outputs. |
+
+`temporary` is for whole intermediates (e.g. multi-GB per-sample BAMs kept
+only until the queue-level callers finish): the deletion is checkpoint-aware,
+so a plain re-run skips the rule and does NOT regenerate the file — it comes
+back only when a dependent actually needs it again.
 
 ### Timeout Enforcement
 
@@ -787,12 +794,14 @@ name = "pipeline"
 |-------|------|-------------|
 | `temp_output` | Array | Temporary outputs cleaned after downstream rules complete |
 | `protected_output` | Array | Protected outputs never overwritten or deleted |
+| `temporary` | Boolean | Delete the rule's outputs after a fully successful run once every dependent has completed (tombstone + lazy regeneration; leaf rules keep outputs) |
 
 ```toml
 [[rules]]
 name = "align"
 output = ["aligned/{sample}.bam", "aligned/{sample}.bam.bai"]
 temp_output = ["aligned/{sample}.tmp.bam"]  # Cleaned after downstream use
+temporary = true                             # Delete aligned/*.bam once all callers finish
 ```
 
 ### Execution Control

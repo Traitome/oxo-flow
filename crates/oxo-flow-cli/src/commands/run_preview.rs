@@ -35,6 +35,9 @@ pub enum RuleStatus {
     /// Its `when` condition evaluates to false — `run` skips it regardless
     /// of invalidation state, so the preview does too.
     SkippedByWhen,
+    /// Was completed, but a dependent's inputs are missing — it re-executes
+    /// first to regenerate them (cascade-up after tombstoned temporaries).
+    CascadedUpstream { from: String },
 }
 
 /// One rule in the predicted plan.
@@ -96,13 +99,59 @@ pub fn preview_run_plan(
     let config_invalidated: HashSet<String> = config_report.invalidated.iter().cloned().collect();
 
     // 2. Input-manifest invalidation (issue #72) — on the clone only.
-    let (manifest_invalidated, _baselined) =
-        detect_input_manifest_invalidations(&mut clone, config, order, workdir, wildcard_values);
+    //    Missing inputs (typically tombstoned temporaries) cascade UP: the
+    //    completed producers re-execute first, exactly like run.
+    let (manifest_invalidated, missing_inputs, _baselined) = detect_input_manifest_invalidations(
+        &mut clone,
+        config,
+        dag,
+        order,
+        workdir,
+        wildcard_values,
+    );
+    // Genuinely missing inputs cascade UP: every completed producer of the
+    // missing files re-executes first (exactly like run).
+    let mut upstream_set: HashSet<String> = cascade_up(&mut clone, dag, &missing_inputs)
+        .into_iter()
+        .collect();
 
     // 3. DAG downstream closure of the manifest mismatches — the same
     //    cascade `run` applies.
     let seeds: HashSet<String> = manifest_invalidated.iter().cloned().collect();
     invalidate_with_downstream(&mut clone, dag, &seeds);
+
+    // 3b. Tombstone-aware skip: a tombstoned rule stays skipped while every
+    //     dependent remains completed (mirrors run's skip loop).
+    let tombstone_keep: HashSet<String> = clone
+        .tombstones
+        .keys()
+        .filter(|rule| {
+            dag.dependents(rule)
+                .map(|deps| deps.iter().all(|d| clone.completed_rules.contains(d)))
+                .unwrap_or(true)
+        })
+        .cloned()
+        .collect();
+
+    // 3c. Rules that WILL execute (never completed, invalidated, cascaded,
+    //     or completed with outputs missing) may depend on tombstoned
+    //     producers whose outputs were deleted by design — those producers
+    //     must regenerate first, like run's lazy cascade-up.
+    let will_run_seeds: HashSet<String> = order
+        .iter()
+        .filter(|name| {
+            !clone.completed_rules.contains(*name)
+                || (!tombstone_keep.contains(*name)
+                    && !config
+                        .get_rule(name)
+                        .is_some_and(|rule| when_condition_false(rule, config, wildcard_values))
+                    && config
+                        .get_rule(name)
+                        .is_some_and(|rule| !rule_outputs_exist(rule, workdir, wildcard_values)))
+        })
+        .cloned()
+        .collect();
+    upstream_set.extend(cascade_up_tombstoned(&mut clone, dag, &will_run_seeds));
 
     // 4. Classify every rule in the execution set.
     let seeds_for_cascade: HashSet<String> = config_invalidated
@@ -127,6 +176,18 @@ pub fn preview_run_plan(
             RuleStatus::ConfigInvalidated
         } else if manifest_invalidated.contains(name) {
             RuleStatus::InputInvalidated
+        } else if tombstone_keep.contains(name) && !upstream_set.contains(name) {
+            // Outputs were deleted by design; nothing downstream needs them.
+            RuleStatus::Skipped
+        } else if upstream_set.contains(name) {
+            // A completed producer whose outputs a dependent needs again —
+            // it re-executes before that dependent. Attribute the nearest
+            // dependent that triggered the regeneration.
+            let upstream_seeds: HashSet<String> =
+                missing_inputs.union(&will_run_seeds).cloned().collect();
+            RuleStatus::CascadedUpstream {
+                from: dependent_seed(name, dag, &upstream_seeds),
+            }
         } else if let Some(rule) = config.get_rule(name)
             && !rule_outputs_exist(rule, workdir, wildcard_values)
         {
@@ -203,6 +264,21 @@ fn cascade_chain(seed: &str, dag: &WorkflowDag, order_set: HashSet<&str>) -> Vec
     chain
 }
 
+/// The (sorted-first) missing-input rule that depends on `name` — the
+/// "from" attribution for cascade-up.
+fn dependent_seed(name: &str, dag: &WorkflowDag, seeds: &HashSet<String>) -> String {
+    let mut sorted: Vec<&String> = seeds.iter().collect();
+    sorted.sort();
+    for seed in sorted {
+        if let Ok(dependencies) = dag.dependencies(seed)
+            && dependencies.iter().any(|d| d == name)
+        {
+            return seed.clone();
+        }
+    }
+    "<unknown>".to_string()
+}
+
 /// Nearest invalidation seed that reaches `rule` through dependents.
 fn nearest_seed(rule: &str, dag: &WorkflowDag, seeds: &HashSet<String>) -> String {
     if seeds.contains(rule) {
@@ -257,17 +333,22 @@ pub fn rule_outputs_exist(
 
 /// Compare completed rules' input manifests against the current file set.
 ///
-/// Returns (mismatched rule names, number of legacy-baseline adoptions).
+/// Returns (content-mismatched rule names, rules whose inputs are MISSING,
+/// number of legacy-baseline adoptions). The missing set drives cascade-up:
+/// the completed producers of those inputs must re-execute first.
+///
 /// Mutates `ck` by recording baselines for legacy checkpoints — exactly
 /// like `run` does; pass a clone for a read-only preview.
 pub fn detect_input_manifest_invalidations(
     ck: &mut CheckpointState,
     config: &WorkflowConfig,
+    dag: &WorkflowDag,
     order: &[String],
     workdir: &Path,
     wildcard_values: &HashMap<String, String>,
-) -> (HashSet<String>, usize) {
+) -> (HashSet<String>, HashSet<String>, usize) {
     let mut mismatched: HashSet<String> = HashSet::new();
+    let mut missing_inputs: HashSet<String> = HashSet::new();
     let mut baselined = 0usize;
     for name in order {
         if !ck.completed_rules.contains(name) {
@@ -296,12 +377,92 @@ pub fn detect_input_manifest_invalidations(
             },
             Ok(None) => {}
             Err(_) => {
-                // Inputs cannot be resolved — cannot verify, so don't reuse.
-                mismatched.insert(name.clone());
+                // Inputs cannot be resolved — files are missing. If every
+                // unresolvable input is the tombstone of a completed
+                // producer (a temporary rule deleted its outputs by design
+                // after all dependents finished), nothing needs to happen:
+                // the rule stays completed. Genuinely missing inputs
+                // invalidate the rule and cascade up to the producers.
+                let missing = oxo_flow_core::executor::checkpoint::missing_input_patterns(
+                    rule,
+                    workdir,
+                    wildcard_values,
+                );
+                let explained_by_tombstones = !missing.is_empty()
+                    && missing.iter().all(|pattern| {
+                        dag.producer_of(pattern).is_some_and(|producer| {
+                            ck.tombstones.contains_key(producer)
+                                && ck.completed_rules.contains(producer)
+                        })
+                    });
+                if !explained_by_tombstones {
+                    mismatched.insert(name.clone());
+                    missing_inputs.insert(name.clone());
+                }
             }
         }
     }
-    (mismatched, baselined)
+    (mismatched, missing_inputs, baselined)
+}
+
+/// Remove the completed UPSTREAM dependencies of `seeds` from the completed
+/// set (cascade-up): a rule whose inputs are missing needs its producers to
+/// re-execute first. Returns every affected producer, sorted.
+pub(crate) fn cascade_up(
+    ck: &mut CheckpointState,
+    dag: &WorkflowDag,
+    seeds: &HashSet<String>,
+) -> Vec<String> {
+    let mut upstream: HashSet<String> = HashSet::new();
+    for seed in seeds {
+        if let Ok(dependencies) = dag.dependencies(seed) {
+            for dep in dependencies {
+                if ck.completed_rules.contains(&dep) {
+                    upstream.insert(dep);
+                }
+            }
+        }
+    }
+    for name in &upstream {
+        ck.completed_rules.remove(name);
+    }
+    let mut names: Vec<String> = upstream.into_iter().collect();
+    names.sort();
+    names
+}
+
+/// Remove completed TOMBSTONED producers needed by `seeds` (rules that will
+/// execute) from the completed set — lazy regeneration: a temporary rule's
+/// outputs were deleted by design, so any rule about to consume them needs
+/// its producer to re-execute first. Walks transitively so a chain of
+/// tombstoned producers regenerates from the deepest one. Returns every
+/// affected producer, sorted.
+pub(crate) fn cascade_up_tombstoned(
+    ck: &mut CheckpointState,
+    dag: &WorkflowDag,
+    seeds: &HashSet<String>,
+) -> Vec<String> {
+    let mut upstream: HashSet<String> = HashSet::new();
+    let mut frontier: Vec<String> = seeds.iter().cloned().collect();
+    while let Some(name) = frontier.pop() {
+        let Ok(dependencies) = dag.dependencies(&name) else {
+            continue;
+        };
+        for dep in dependencies {
+            if ck.tombstones.contains_key(&dep)
+                && ck.completed_rules.contains(&dep)
+                && upstream.insert(dep.clone())
+            {
+                frontier.push(dep);
+            }
+        }
+    }
+    for name in &upstream {
+        ck.completed_rules.remove(name);
+    }
+    let mut names: Vec<String> = upstream.into_iter().collect();
+    names.sort();
+    names
 }
 
 /// Remove `seeds` and their DAG downstream from the completed set, returning
@@ -333,7 +494,7 @@ pub(crate) fn invalidate_with_downstream(
 /// Whether the rule's `when` condition evaluates to false against the
 /// merged config — the same inputs `run` evaluates it with (typed config
 /// values win over string wildcard values; process.rs mirrors this).
-fn when_condition_false(
+pub(crate) fn when_condition_false(
     rule: &Rule,
     config: &WorkflowConfig,
     wildcard_values: &HashMap<String, String>,
@@ -576,6 +737,78 @@ shell = "cp in.txt out.txt"
             })
             .collect();
         (config, dag, order, wildcard_values)
+    }
+
+    #[test]
+    fn missing_input_cascades_up_to_completed_producer() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, dag, order, wildcard_values) = fixture(dir.path());
+        let ck = completed_checkpoint(&config, &order, dir.path(), &wildcard_values);
+
+        // Delete the trim output: align's manifest snapshot now errors.
+        std::fs::remove_file(dir.path().join("trimmed/S1.fq")).unwrap();
+
+        let preview = run_preview(&ck, &config, &dag, &order, dir.path(), &wildcard_values);
+        assert_eq!(
+            status_of(&preview, "trim_cohort_S1"),
+            &RuleStatus::CascadedUpstream {
+                from: "align_cohort_S1".to_string()
+            },
+            "the completed producer re-executes first"
+        );
+        assert_eq!(
+            status_of(&preview, "align_cohort_S1"),
+            &RuleStatus::InputInvalidated
+        );
+    }
+
+    #[test]
+    fn tombstoned_rule_stays_skipped_while_dependents_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, dag, order, wildcard_values) = fixture(dir.path());
+        let mut ck = completed_checkpoint(&config, &order, dir.path(), &wildcard_values);
+        // Simulate a past tombstone: trim_S1's outputs deleted, recorded.
+        ck.tombstones.insert(
+            "trim_cohort_S1".to_string(),
+            vec!["trimmed/S1.fq".to_string()],
+        );
+        std::fs::remove_file(dir.path().join("trimmed/S1.fq")).unwrap();
+
+        let preview = run_preview(&ck, &config, &dag, &order, dir.path(), &wildcard_values);
+        assert_eq!(
+            status_of(&preview, "trim_cohort_S1"),
+            &RuleStatus::Skipped,
+            "nothing downstream needs the output — stay skipped"
+        );
+        assert_eq!(status_of(&preview, "align_cohort_S1"), &RuleStatus::Skipped);
+    }
+
+    #[test]
+    fn tombstoned_producer_regenerates_when_dependent_will_rerun() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, dag, order, wildcard_values) = fixture(dir.path());
+        let mut ck = completed_checkpoint(&config, &order, dir.path(), &wildcard_values);
+        ck.tombstones.insert(
+            "trim_cohort_S1".to_string(),
+            vec!["trimmed/S1.fq".to_string()],
+        );
+        std::fs::remove_file(dir.path().join("trimmed/S1.fq")).unwrap();
+        // align_S1's OWN outputs vanished → it will re-run and needs the
+        // tombstoned producer's outputs again.
+        std::fs::remove_file(dir.path().join("aligned/S1.bam")).unwrap();
+
+        let preview = run_preview(&ck, &config, &dag, &order, dir.path(), &wildcard_values);
+        assert_eq!(
+            status_of(&preview, "trim_cohort_S1"),
+            &RuleStatus::CascadedUpstream {
+                from: "align_cohort_S1".to_string()
+            },
+            "the tombstoned producer regenerates before its dependent"
+        );
+        assert_eq!(
+            status_of(&preview, "align_cohort_S1"),
+            &RuleStatus::OutputsMissing
+        );
     }
 
     #[test]

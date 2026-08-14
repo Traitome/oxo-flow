@@ -4359,6 +4359,44 @@ mod tests {
     }
 
     #[test]
+    fn temporary_rule_field_parses_and_defaults_false() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "keep"
+            shell = "echo keep"
+
+            [[rules]]
+            name = "ephemeral"
+            output = ["intermediate.bam"]
+            shell = "echo ephemeral"
+            temporary = true
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        assert!(
+            !config
+                .rules
+                .iter()
+                .find(|r| r.name == "keep")
+                .unwrap()
+                .temporary,
+            "temporary defaults to false"
+        );
+        assert!(
+            config
+                .rules
+                .iter()
+                .find(|r| r.name == "ephemeral")
+                .unwrap()
+                .temporary,
+            "temporary = true parses"
+        );
+    }
+
+    #[test]
     fn transform_validation_missing_split_values() {
         let toml = r#"
             [workflow]

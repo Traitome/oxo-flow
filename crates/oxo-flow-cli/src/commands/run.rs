@@ -661,14 +661,27 @@ pub async fn run_command(
         let mut ck = checkpoint.lock().await;
         // Shared with dry-run's read-only preview (issue #66) — keep the
         // detection semantics in ONE place.
-        let (mismatched, baselined) =
+        let (mismatched, missing_inputs, baselined) =
             crate::commands::run_preview::detect_input_manifest_invalidations(
                 &mut ck,
                 &config,
+                &dag,
                 &order,
                 workdir_actual.as_ref(),
                 &wildcard_values,
             );
+        // Cascade-up: missing inputs (tombstoned temporaries) re-run their
+        // completed producers first — the same semantics the preview shows.
+        if !missing_inputs.is_empty() {
+            let upstream = crate::commands::run_preview::cascade_up(&mut ck, &dag, &missing_inputs);
+            force_rules.extend(upstream.iter().cloned());
+            eprintln!(
+                "  {} missing intermediate inputs — re-running {} producer rule(s): {}",
+                "↻".yellow(),
+                upstream.len(),
+                upstream.join(", ")
+            );
+        }
         if !mismatched.is_empty() {
             let invalidated = crate::commands::run_preview::invalidate_with_downstream(
                 &mut ck,
@@ -693,6 +706,67 @@ pub async fn run_command(
             && let Err(e) = ck.save_to_file(&checkpoint_path)
         {
             tracing::warn!(error = %e, "failed to save checkpoint after input-manifest detection");
+        }
+    }
+
+    // Tombstone-aware skip (temporary rules): a tombstoned rule whose
+    // outputs are deleted stays SKIPPED while no dependent needs them;
+    // when a dependent will run, cascade-up has already removed it from
+    // completed so it re-executes first. Mirrored by the dry-run preview.
+    let tombstone_keep: std::collections::HashSet<String> = {
+        let ck = checkpoint.lock().await;
+        ck.tombstones
+            .keys()
+            .filter(|rule| {
+                dag.dependents(rule)
+                    .map(|deps| deps.iter().all(|d| ck.completed_rules.contains(d)))
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect()
+    };
+
+    // Lazy regeneration (temporary rules): any rule that will execute may
+    // consume the tombstoned outputs of completed producers — cascade up so
+    // those producers re-execute first. Mirrored by the dry-run preview.
+    if !rerun {
+        let will_run_seeds: std::collections::HashSet<String> = {
+            let ck = checkpoint.lock().await;
+            order
+                .iter()
+                .filter(|name| {
+                    !ck.completed_rules.contains(*name)
+                        || (!tombstone_keep.contains(*name)
+                            && !config.get_rule(name).is_some_and(|rule| {
+                                crate::commands::run_preview::when_condition_false(
+                                    rule,
+                                    &config,
+                                    &wildcard_values,
+                                )
+                            })
+                            && config.get_rule(name).is_some_and(|rule| {
+                                !crate::commands::run_preview::rule_outputs_exist(
+                                    rule,
+                                    workdir_actual.as_ref(),
+                                    &wildcard_values,
+                                )
+                            }))
+                })
+                .cloned()
+                .collect()
+        };
+        let upstream = {
+            let mut ck = checkpoint.lock().await;
+            crate::commands::run_preview::cascade_up_tombstoned(&mut ck, &dag, &will_run_seeds)
+        };
+        if !upstream.is_empty() {
+            force_rules.extend(upstream.iter().cloned());
+            eprintln!(
+                "  {} temporary outputs needed again — re-running {} producer rule(s): {}",
+                "↻".yellow(),
+                upstream.len(),
+                upstream.join(", ")
+            );
         }
     }
 
@@ -1038,16 +1112,19 @@ pub async fn run_command(
                 && !submitted.contains(rule_name.as_str())
             {
                 // Shared with dry-run's read-only preview (issue #66).
-                let outputs_ok = config
-                    .get_rule(rule_name)
-                    .map(|rule| {
-                        crate::commands::run_preview::rule_outputs_exist(
-                            rule,
-                            workdir_actual.as_ref(),
-                            &wildcard_values,
-                        )
-                    })
-                    .unwrap_or(true);
+                // Tombstoned rules count as up to date while no dependent
+                // needs their outputs.
+                let outputs_ok = tombstone_keep.contains(rule_name)
+                    || config
+                        .get_rule(rule_name)
+                        .map(|rule| {
+                            crate::commands::run_preview::rule_outputs_exist(
+                                rule,
+                                workdir_actual.as_ref(),
+                                &wildcard_values,
+                            )
+                        })
+                        .unwrap_or(true);
                 if outputs_ok {
                     submitted.insert(rule_name.clone());
                     sched.mark_completed(oxo_flow_core::executor::JobRecord {
@@ -1489,18 +1566,28 @@ pub async fn run_command(
     let success_count = success_count.load(std::sync::atomic::Ordering::Relaxed);
     let fail_count = fail_count.load(std::sync::atomic::Ordering::Relaxed);
     let skipped_count = skipped_count.load(std::sync::atomic::Ordering::Relaxed);
-    let checkpoint = checkpoint.lock().await;
+    let mut checkpoint = checkpoint.lock().await;
     let failures = failures.lock().await;
     let blocked = blocked.lock().await;
 
     progress.finish_and_clear();
 
     // Environment-cache aging (issue #75): --cache-dir would grow without
-    // bound; files untouched for CACHE_MAX_AGE_DAYS are removed after the
-    // run so the next one starts clean.
-    const CACHE_MAX_AGE_DAYS: u64 = 30;
-    if let Some(ref cache_dir) = cache_dir {
-        let removed = cleanup_cache_dir(cache_dir, CACHE_MAX_AGE_DAYS);
+    // bound; files untouched beyond the age limit are removed after the
+    // run so the next one starts clean. Default 90 days, overridable with
+    // the `cache_max_age_days` workflow config key (0 disables aging).
+    const DEFAULT_CACHE_MAX_AGE_DAYS: u64 = 90;
+    let cache_max_age_days: u64 = config
+        .config
+        .get("cache_max_age_days")
+        .and_then(toml::Value::as_integer)
+        .filter(|d| *d >= 0)
+        .map(|d| d as u64)
+        .unwrap_or(DEFAULT_CACHE_MAX_AGE_DAYS);
+    if cache_max_age_days > 0
+        && let Some(ref cache_dir) = cache_dir
+    {
+        let removed = cleanup_cache_dir(cache_dir, cache_max_age_days);
         if removed > 0 {
             tracing::info!(
                 removed,
@@ -1606,6 +1693,65 @@ pub async fn run_command(
             if rule.cleanup_chunks && checkpoint.is_completed(&rule.name) {
                 oxo_flow_core::executor::checkpoint::cleanup_transform_chunks(rule, workdir_actual)
                     .await;
+            }
+        }
+
+        // Temporary rules: after a FULLY successful run, delete their
+        // outputs once every dependent is complete and record a tombstone.
+        // A future run regenerates them via cascade-up (missing inputs
+        // re-run the completed producer). Leaf rules keep their outputs.
+        let mut new_tombstones: Vec<(String, Vec<String>)> = Vec::new();
+        for rule in &config.rules {
+            if !rule.temporary || !checkpoint.is_completed(&rule.name) {
+                continue;
+            }
+            let dependents = dag.dependents(&rule.name).unwrap_or_default();
+            if dependents.is_empty() {
+                eprintln!(
+                    "  {} temporary rule '{}' is a leaf — outputs kept",
+                    "ℹ".dimmed(),
+                    rule.name
+                );
+                continue;
+            }
+            if !dependents.iter().all(|d| checkpoint.is_completed(d)) {
+                continue;
+            }
+            let mut deleted = Vec::new();
+            for output in &rule.output {
+                let expanded = oxo_flow_core::executor::checkpoint::expand_config_in_path(
+                    output,
+                    &wildcard_values,
+                );
+                if expanded.contains('{') {
+                    continue;
+                }
+                let resolved = workdir_actual.join(&expanded);
+                let removed = if resolved.is_dir() {
+                    std::fs::remove_dir_all(&resolved)
+                } else {
+                    std::fs::remove_file(&resolved)
+                };
+                if removed.is_ok() {
+                    deleted.push(expanded);
+                }
+            }
+            if !deleted.is_empty() {
+                eprintln!(
+                    "  {} temporary outputs deleted for '{}' ({} file(s), regenerated on demand)",
+                    "⊘".dimmed(),
+                    rule.name,
+                    deleted.len()
+                );
+                new_tombstones.push((rule.name.clone(), deleted));
+            }
+        }
+        if !new_tombstones.is_empty() {
+            for (rule, paths) in new_tombstones {
+                checkpoint.tombstones.insert(rule, paths);
+            }
+            if let Err(e) = checkpoint.save_to_file(&checkpoint_path) {
+                tracing::warn!(error = %e, "failed to save checkpoint after tombstoning");
             }
         }
     }
@@ -1972,6 +2118,9 @@ pub async fn dry_run_command(
                 crate::commands::run_preview::RuleStatus::SkippedByWhen => {
                     format!("{}", "[skip: when condition false]".dimmed())
                 }
+                crate::commands::run_preview::RuleStatus::CascadedUpstream { from } => {
+                    format!("{}", format!("[rerun: upstream of {from}]").bold().yellow())
+                }
             })
             .unwrap_or_default();
         eprintln!("  {}. {}  {}", i + 1, rule_name.bold().cyan(), status_text);
@@ -2161,6 +2310,9 @@ pub async fn dry_run_command(
                         crate::commands::run_preview::RuleStatus::Skipped => ("skip", None),
                         crate::commands::run_preview::RuleStatus::SkippedByWhen => {
                             ("skip-when-condition", None)
+                        }
+                        crate::commands::run_preview::RuleStatus::CascadedUpstream { from } => {
+                            ("run-cascaded-upstream", Some(from.clone()))
                         }
                     };
                     serde_json::json!({

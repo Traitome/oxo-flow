@@ -3556,6 +3556,146 @@ fn cli_run_blocked_rule_is_not_checkpointed() {
     }
 }
 
+/// Full `temporary = true` lifecycle: after a successful run the intermediate
+/// is deleted and tombstoned; a plain rerun skips the whole chain; deleting a
+/// dependent's output lazily regenerates the producer first.
+#[test]
+fn cli_run_temporary_lifecycle_tombstone_and_lazy_regeneration() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("tmp.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"tmp\"\nversion = \"1.0.0\"\n\n\
+         [[rules]]\nname = \"gen\"\noutput = [\"big.bam\"]\n\
+         shell = \"echo data > {output[0]}\"\ntemporary = true\n\n\
+         [[rules]]\nname = \"use\"\ninput = [\"big.bam\"]\noutput = [\"result.txt\"]\n\
+         depends_on = [\"gen\"]\nshell = \"cat {input[0]} > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    // 1. First run: both rules execute; the temporary output is deleted
+    //    afterwards and a tombstone is recorded in the checkpoint.
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("2 succeeded"), "first run: {stderr}");
+    assert!(
+        !dir.path().join("big.bam").exists(),
+        "temporary output deleted after success"
+    );
+    assert!(dir.path().join("result.txt").exists());
+    let checkpoint = dir.path().join(".oxo-flow/checkpoint.json");
+    let raw = fs::read_to_string(&checkpoint).unwrap();
+    assert!(raw.contains("tombstones"), "tombstone recorded: {raw}");
+    assert!(raw.contains("\"gen\""), "producer tombstoned: {raw}");
+
+    // 2. Plain rerun: nothing needs the intermediate — both rules skip and
+    //    the deleted output stays deleted.
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("0 succeeded, 2 skipped"),
+        "rerun skips both: {stderr}"
+    );
+    assert!(!dir.path().join("big.bam").exists());
+
+    // 3. Delete the dependent's output: `use` must re-run, which lazily
+    //    regenerates `gen` first; the intermediate is deleted again after.
+    fs::remove_file(dir.path().join("result.txt")).unwrap();
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("2 succeeded"),
+        "lazy regeneration runs producer + dependent: {stderr}"
+    );
+    assert!(dir.path().join("result.txt").exists());
+    assert!(
+        !dir.path().join("big.bam").exists(),
+        "temporary output deleted again after regeneration"
+    );
+}
+
+/// `cache_max_age_days` controls environment-cache aging after a run: the
+/// 90-day default removes only files untouched beyond it; 0 disables aging.
+#[test]
+fn cli_run_cache_aging_default_and_override() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("envs");
+    fs::create_dir_all(&cache).unwrap();
+    let old = cache.join("old.tar.gz");
+    fs::write(&old, "old").unwrap();
+    let old_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        - 100 * 24 * 3600;
+    let old_ts = filetime::FileTime::from_unix_time(old_unix as i64, 0);
+    filetime::set_file_mtime(&old, old_ts).unwrap();
+    let fresh = cache.join("fresh.tar.gz");
+    fs::write(&fresh, "fresh").unwrap();
+
+    let wf = dir.path().join("aging.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"aging\"\nversion = \"1.0.0\"\n\n\
+         [[rules]]\nname = \"hello\"\noutput = [\"hello.txt\"]\n\
+         shell = \"echo hi > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    // Default (90 days): only the backdated file goes.
+    oxo_flow_cmd()
+        .args([
+            "run",
+            wf.to_str().unwrap(),
+            "--cache-dir",
+            cache.to_str().unwrap(),
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        !old.exists(),
+        "default aging removes files older than 90 days"
+    );
+    assert!(fresh.exists(), "fresh cache entries survive");
+
+    // Override 0: aging disabled.
+    fs::write(&old, "old again").unwrap();
+    filetime::set_file_mtime(&old, old_ts).unwrap();
+    let wf0 = dir.path().join("aging0.oxoflow");
+    fs::write(
+        &wf0,
+        "[workflow]\nname = \"aging0\"\nversion = \"1.0.0\"\n\n\
+         [config]\ncache_max_age_days = 0\n\n\
+         [[rules]]\nname = \"hello\"\noutput = [\"hello.txt\"]\n\
+         shell = \"echo hi > {output[0]}\"\n",
+    )
+    .unwrap();
+    oxo_flow_cmd()
+        .args([
+            "run",
+            wf0.to_str().unwrap(),
+            "--cache-dir",
+            cache.to_str().unwrap(),
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(old.exists(), "cache_max_age_days = 0 disables aging");
+}
+
 /// A rule skipped by a false `when` condition must be counted once, not once
 /// by a pre-pass and again by the executor that actually evaluates it.
 #[test]

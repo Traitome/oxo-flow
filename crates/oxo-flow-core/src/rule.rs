@@ -715,6 +715,14 @@ pub struct Rule {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub when: Option<String>,
 
+    /// Temporary intermediate outputs: deleted after a fully successful run
+    /// once every dependent rule is complete, with a tombstone recorded in
+    /// the checkpoint so a future run can regenerate them (cascade-up).
+    /// Leaf rules (no dependents) keep their outputs even when marked.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "is_false")]
+    pub temporary: bool,
+
     /// Scatter configuration for parallel execution across a variable.
     ///
     /// Fans out this rule into multiple parallel instances, one per element

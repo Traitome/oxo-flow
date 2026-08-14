@@ -378,6 +378,14 @@ impl WorkflowDag {
         self.output_to_node.contains_key(output)
     }
 
+    /// Returns the name of the rule producing an output pattern, if any.
+    #[must_use]
+    pub fn producer_of(&self, output: &str) -> Option<&str> {
+        self.output_to_node
+            .get(output)
+            .map(|&node| self.graph[node].name.as_str())
+    }
+
     /// Returns rules that have no edges (neither produce outputs consumed by others
     /// nor consume outputs of others). These are isolated in the graph.
     #[must_use]

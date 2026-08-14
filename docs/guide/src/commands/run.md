@@ -35,7 +35,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--max-memory` | — | `0` (auto-detect) | Maximum memory in MB available for execution |
 | `--skip-env-setup` | — | — | Skip environment setup (assume environments are ready) |
 | `--skip-ref-build` | — | — | Skip automatic reference/index building (assume pre-built) |
-| `--cache-dir` | — | — | Directory for caching environment setup state (entries untouched for 30 days are cleaned up after each run) |
+| `--cache-dir` | — | — | Directory for caching environment setup state (entries untouched for 90 days are cleaned up after each run; override with the `cache_max_age_days` config key, `0` disables aging) |
 | `--resume-failed` | — | — | Resume only failed rules from a previous run |
 | `--profile` | — | — | Execution profile name, loaded from `profiles/<NAME>.toml` or `profiles/<NAME>.oxoflow` (see [Execution profiles](#execution-profiles)) |
 | `--provenance` | — | — | Track output file checksums for later verification |
@@ -161,6 +161,16 @@ oxo-flow run pipeline.oxoflow --max-threads 16 --max-memory 32768
 ```bash
 # Cache environment setup state for faster subsequent runs
 oxo-flow run pipeline.oxoflow --cache-dir .oxo-flow/cache
+```
+
+The cache would otherwise grow without bound, so after each run files
+untouched for **90 days** are removed (the next run starts clean). The age
+limit is configurable per workflow — set `cache_max_age_days = 0` to disable
+aging entirely, or any other value to change the window:
+
+```toml
+[config]
+cache_max_age_days = 30   # prune after 30 days instead of the 90-day default
 ```
 
 ### Skip environment setup (when environments are pre-built)
@@ -458,6 +468,44 @@ their outputs rebuild in the same run.
   current file set as a one-time baseline (the first post-upgrade run
   reuses everything); changes made before that baseline cannot be
   detected.
+
+### Temporary rules (`temporary = true`)
+
+Pipeline intermediates are usually the largest files in a run (per-sample
+BAMs, unsorted alignments) and often useless once every downstream rule has
+consumed them. Marking a rule `temporary = true` deletes its outputs after
+a **fully successful** run — once every dependent has completed — and
+records a **tombstone** in the checkpoint:
+
+```toml
+[[rules]]
+name = "align"
+output = ["aligned/{sample}.bam"]
+temporary = true
+```
+
+This is checkpoint-aware, not a blind delete:
+
+- A plain re-run **skips** the rule like any completed rule — the output is
+  not regenerated just because it is missing.
+- When a dependent actually needs the outputs again (its own outputs were
+  deleted, its inputs changed, or the config changed), the producer is
+  **regenerated first** (lazy cascade-up), then the dependent runs — the
+  same order as the original run.
+- Failed runs keep the outputs (the deletion only happens when nothing
+  failed), so debugging a broken run never has to re-fetch intermediates.
+- Leaf rules (no dependents) keep their outputs — there is no downstream
+  work for them to enable.
+
+```console
+  ↻ temporary outputs needed again — re-running 1 producer rule(s): trim_S1
+  …
+  ⊘ temporary outputs deleted for 'trim_S1' (1 file(s), regenerated on demand)
+```
+
+Dry-run predicts exactly when a tombstoned rule will regenerate
+(`[rerun: upstream of X]`) — see
+[Checkpoint-aware rerun preview](./dry-run.md#checkpoint-aware-rerun-preview).
 
 ### Forcing Execution
 
