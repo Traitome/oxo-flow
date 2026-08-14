@@ -138,6 +138,14 @@ pub struct RunFlags {
     pub samples: Vec<String>,
     /// Explicit target rules (`-t <name>` each). Empty = engine default.
     pub targets: Vec<String>,
+    /// Re-run only rules that failed in the previous run (`--resume-failed`).
+    /// Used by the web retry path (issue #82 P0-3): plain `run` would skip
+    /// failed rules as already-attempted and the retry would be a no-op.
+    pub resume_failed: bool,
+    /// Force execution ignoring up-to-date checks (`--rerun`). Paired with
+    /// resume_failed, this makes the retry actually execute the failed set
+    /// (their outputs exist, so freshness alone would skip them again).
+    pub rerun: bool,
 }
 
 /// Build the CLI argument vector for a run (pure — unit-tested).
@@ -174,6 +182,12 @@ pub fn build_cli_args(
     } else {
         if flags.keep_going {
             args.push("--keep-going".into());
+        }
+        if flags.resume_failed {
+            args.push("--resume-failed".into());
+        }
+        if flags.rerun {
+            args.push("--rerun".into());
         }
         if let Some(jobs) = flags.max_jobs {
             args.push("-j".into());
@@ -322,6 +336,13 @@ pub fn spawn_background_run(
                     crate::process_control::register(&run_id, pid as i32);
                 }
 
+                // Real resource telemetry (issue #82 P1-2): sample the
+                // CLI's process tree every 5s into workdir/metrics.jsonl so
+                // the monitor cards show measured memory/CPU, not defaults.
+                if let Some(pid) = child.id() {
+                    spawn_resource_sampler(run_id.clone(), pid, run_dir.clone());
+                }
+
                 // Wait for process completion
                 match child.wait().await {
                     Ok(status) => {
@@ -433,6 +454,10 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
 /// fallback for a process killed without a record). Finalization goes
 /// through [`finalize_run`] so semantics match the live wait path exactly.
 pub fn resume_monitoring(run_id: String, pid: i32, workdir: PathBuf) {
+    // Crash-recovery re-attach also samples resources (issue #82 P1-2).
+    if pid > 0 {
+        spawn_resource_sampler(run_id.clone(), pid as u32, workdir.clone());
+    }
     tokio::spawn(async move {
         let exit_file = workdir.join(".exit-code");
         let log_path = workdir.join("execution.log");
@@ -450,6 +475,57 @@ pub fn resume_monitoring(run_id: String, pid: i32, workdir: PathBuf) {
             }
         }
     });
+}
+
+/// Sample the run's process-tree memory/CPU every 5 seconds into
+/// `workdir/metrics.jsonl` (issue #82 P1-2: real telemetry behind the
+/// monitor trend cards, replacing the fabricated defaults). Stops when the
+/// run reaches a terminal DB state.
+fn spawn_resource_sampler(run_id: String, cli_pid: u32, workdir: PathBuf) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
+        ticker.tick().await; // fire immediately, then every 5s
+        loop {
+            ticker.tick().await;
+            let active: Option<String> = sqlx::query_scalar("SELECT status FROM runs WHERE id = ?")
+                .bind(&run_id)
+                .fetch_optional(db::pool())
+                .await
+                .unwrap_or(None);
+            match active.as_deref() {
+                Some("running") | Some("paused") | Some("queued") => {}
+                _ => break,
+            }
+            if let Some((memory_mb, cpu_pct, processes)) = crate::sys::process_tree_usage(cli_pid) {
+                let line = format!(
+                    r#"{{"ts":"{}","memory_mb":{:.1},"cpu_pct":{:.1},"processes":{}}}"#,
+                    Utc::now().to_rfc3339(),
+                    memory_mb,
+                    cpu_pct,
+                    processes
+                );
+                append_metrics(&workdir, &line).await;
+            }
+        }
+    });
+}
+
+/// Append one sample to `workdir/metrics.jsonl`, keeping at most the last
+/// 2000 lines (≈2.7 h at 5 s ticks) so long runs cannot grow the file
+/// unboundedly.
+async fn append_metrics(workdir: &std::path::Path, line: &str) {
+    const MAX_METRICS_LINES: usize = 2000;
+    let path = workdir.join("metrics.jsonl");
+    let mut content = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+    content.push_str(line);
+    content.push('\n');
+    let lines: Vec<&str> = content.lines().collect();
+    let keep = if lines.len() > MAX_METRICS_LINES {
+        &lines[lines.len() - MAX_METRICS_LINES..]
+    } else {
+        &lines[..]
+    };
+    let _ = tokio::fs::write(&path, format!("{}\n", keep.join("\n"))).await;
 }
 
 /// Mark a run as failed with the current timestamp.
@@ -527,6 +603,8 @@ mod tests {
     fn build_cli_args_includes_samples_and_targets() {
         let flags = RunFlags {
             dry_run: false,
+            resume_failed: false,
+            rerun: false,
             keep_going: true,
             max_jobs: Some(4),
             samples: vec!["S1".into(), "S2".into()],
@@ -555,6 +633,8 @@ mod tests {
         // but omits execution-only flags (-j / --keep-going).
         let dry = RunFlags {
             dry_run: true,
+            resume_failed: false,
+            rerun: false,
             ..flags
         };
         let args = build_cli_args(std::path::Path::new("w"), std::path::Path::new("d"), &dry);

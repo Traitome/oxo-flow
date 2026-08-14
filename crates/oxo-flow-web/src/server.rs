@@ -233,6 +233,10 @@ pub fn build_router(mode: &str) -> Router {
             get(execution::handlers::get_diagnostics),
         )
         .route(
+            "/api/runs/{id}/instances",
+            get(execution::handlers::get_run_instances),
+        )
+        .route(
             "/api/runs/{id}/logs",
             get(execution::handlers::get_run_logs),
         )

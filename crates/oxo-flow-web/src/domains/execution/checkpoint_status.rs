@@ -308,3 +308,18 @@ pub fn load_benchmarks(
         .map(|ck| ck.benchmarks)
         .unwrap_or_default()
 }
+
+/// Load the run's sampled resource telemetry from `workdir/metrics.jsonl`
+/// (written by the executor's per-run sampler, issue #82 P1-2). Returns
+/// JSON samples in chronological order: `{ts, memory_mb, cpu_pct,
+/// processes}`. An absent or unreadable file yields an empty list — the
+/// monitor then shows "no telemetry" instead of fabricated numbers.
+pub fn load_metrics(run_dir: &Path) -> Vec<serde_json::Value> {
+    let Ok(content) = std::fs::read_to_string(run_dir.join("metrics.jsonl")) else {
+        return Vec::new();
+    };
+    content
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .collect()
+}

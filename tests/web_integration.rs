@@ -1806,3 +1806,177 @@ async fn web_file_upload_saves_to_inputs_workspace() {
         "listing contains upload: {listing:?}"
     );
 }
+
+// ===========================================================================
+// Run-loop closure (issue #82 P0-3 / P1-1 / P1-2)
+// ===========================================================================
+
+/// P0-3: retry is a REAL run — the plan's new_run_id exists in the
+/// database and executes to a terminal state (previously it was a ghost).
+#[tokio::test]
+async fn web_retry_actually_spawns_a_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.base.clone();
+
+    let failing = "[workflow]\nname = \"retry\"\nversion = \"1.0.0\"\n\n\
+        [[rules]]\nname = \"boom\"\noutput = [\"boom.txt\"]\n\
+        shell = \"echo oops > boom.txt && exit 1\"\n";
+    let created: serde_json::Value = client
+        .post(format!("{base}/api/runs"))
+        .json(&serde_json::json!({"toml_content": failing}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let run_id = created["run_id"].as_str().unwrap().to_string();
+    assert_eq!(wait_for_terminal(&client, &base, &run_id).await, "failed");
+
+    let plan: serde_json::Value = client
+        .post(format!("{base}/api/runs/{run_id}/retry"))
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let new_id = plan["new_run_id"].as_str().unwrap().to_string();
+    assert!(
+        plan["will_rerun"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r == "boom"),
+        "the failed rule must be in will_rerun: {plan}"
+    );
+
+    // The retried run really exists and really executes.
+    let retried = client
+        .get(format!("{base}/api/runs/{new_id}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        retried.status(),
+        200,
+        "retry run must exist in the database"
+    );
+    assert_eq!(
+        wait_for_terminal(&client, &base, &new_id).await,
+        "failed",
+        "the retried run must reach a terminal state"
+    );
+}
+
+/// P1-1: the instance table answers "which sample under which rule failed"
+/// with sample×rule granularity.
+#[tokio::test]
+async fn web_run_instances_expose_sample_rule_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.base.clone();
+
+    // Two samples discovered from the data dir, one rule each:
+    // S1 succeeds, S2 fails. The web run executes in its own sandbox
+    // workdir, so the sample_pattern uses an absolute path.
+    let data_dir = dir.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    std::fs::write(data_dir.join("S1.fq"), "@seq\nACGT\n").unwrap();
+    std::fs::write(data_dir.join("S2.fq"), "@seq\nACGT\n").unwrap();
+    let data_str = data_dir.to_string_lossy();
+    let workflow = format!(
+        "[workflow]\nname = \"inst\"\nversion = \"1.0.0\"\n\
+        sample_pattern = \"{data_str}/{{sample}}.fq\"\n\n\
+        [[rules]]\nname = \"qc\"\ninput = [\"{{sample}}.fq\"]\n\
+        output = [\"qc_{{sample}}.txt\"]\n\
+        shell = \"[ \\\"{{sample}}\\\" = S1 ] && echo ok > qc_{{sample}}.txt || exit 1\"\n"
+    );
+    let created: serde_json::Value = client
+        .post(format!("{base}/api/runs"))
+        .json(&serde_json::json!({
+            "toml_content": workflow,
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let run_id = created["run_id"].as_str().unwrap().to_string();
+    assert_eq!(wait_for_terminal(&client, &base, &run_id).await, "failed");
+
+    let instances: serde_json::Value = client
+        .get(format!("{base}/api/runs/{run_id}/instances"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let rows = instances.as_array().unwrap();
+    let s1 = rows
+        .iter()
+        .find(|r| r["sample"] == "S1")
+        .expect("S1 instance present");
+    let s2 = rows
+        .iter()
+        .find(|r| r["sample"] == "S2")
+        .expect("S2 instance present");
+    assert_eq!(s1["status"], "success", "S1 succeeded: {instances}");
+    assert_eq!(s2["status"], "failed", "S2 failed: {instances}");
+    assert_eq!(s1["rule"], "qc", "base rule attribution");
+}
+
+/// P1-2: real telemetry — a run long enough for the sampler to tick leaves
+/// a timeline in /ai-status and metrics in /status (not fabricated
+/// defaults).
+#[tokio::test]
+async fn web_run_status_carries_real_telemetry() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.base.clone();
+
+    let slow = "[workflow]\nname = \"slow\"\nversion = \"1.0.0\"\n\n\
+        [[rules]]\nname = \"nap\"\noutput = [\"nap.txt\"]\n\
+        shell = \"sleep 7 && echo done > nap.txt\"\n";
+    let created: serde_json::Value = client
+        .post(format!("{base}/api/runs"))
+        .json(&serde_json::json!({"toml_content": slow}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let run_id = created["run_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        wait_for_terminal(&client, &base, &run_id).await,
+        "completed"
+    );
+
+    // The sampler ticked at least once during the 7s run.
+    let ai_status: serde_json::Value = client
+        .get(format!("{base}/api/runs/{run_id}/ai-status"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let empty: Vec<serde_json::Value> = vec![];
+    let timeline = ai_status["timeline"].as_array().unwrap_or(&empty);
+    assert!(
+        !timeline.is_empty(),
+        "timeline must carry real samples: {ai_status}"
+    );
+    assert!(
+        timeline.iter().all(|t| t["memory_mb"].is_number()),
+        "every sample records memory: {timeline:?}"
+    );
+}

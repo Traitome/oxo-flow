@@ -209,6 +209,8 @@ pub async fn create_run(
             "local".to_string(),
             Some(run_dir),
             crate::executor::RunFlags {
+                resume_failed: false,
+                rerun: false,
                 dry_run: req
                     .get("dry_run")
                     .and_then(|v| v.as_bool())
@@ -368,12 +370,37 @@ pub async fn get_run_status(
 
     let overall = service::compute_overall_status(&node_items, Some(&run.status));
 
+    // Real telemetry timeline (issue #82 P1-2): the executor's per-run
+    // sampler appends to workdir/metrics.jsonl; an absent file yields an
+    // empty timeline (never fabricated numbers).
+    let workdir = std::path::Path::new(run.workdir.as_deref().unwrap_or(""));
+    let metrics = checkpoint_status::load_metrics(workdir);
+    let last = metrics.last();
+    let resources = ResourceSnapshot {
+        cpu_pct: last.and_then(|m| m["cpu_pct"].as_f64()).unwrap_or(0.0),
+        memory_mb: last.and_then(|m| m["memory_mb"].as_f64()).unwrap_or(0.0) as u64,
+        disk_mb: 0,
+    };
+    let timeline: Vec<TimelineEvent> = metrics
+        .iter()
+        .map(|m| TimelineEvent {
+            timestamp: m["ts"].as_str().unwrap_or("").to_string(),
+            event: "metrics".to_string(),
+            node: None,
+            message: Some(format!(
+                "{:.0} MB RAM · {:.0}% CPU",
+                m["memory_mb"].as_f64().unwrap_or(0.0),
+                m["cpu_pct"].as_f64().unwrap_or(0.0)
+            )),
+        })
+        .collect();
+
     Ok(Json(RunStatusResponse {
         status: overall,
         phase: run.phase,
         nodes: node_items,
-        timeline: vec![],
-        resources: ResourceSnapshot::default(),
+        timeline,
+        resources,
     }))
 }
 
@@ -484,6 +511,77 @@ pub async fn get_dag_status(
             eta_ms,
         },
     }))
+}
+
+/// GET /api/runs/{id}/instances — the sample×rule instance table
+/// (issue #82 P1-1): which concrete sample under which rule failed, ran,
+/// or is still pending. The checkpoint stores EXPANDED instance names
+/// (`qc_S1`); the base rule is recovered by longest-prefix matching
+/// against the DAG, the same attribution `with_all_rules` uses.
+pub async fn get_run_instances(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<Vec<serde_json::Value>> {
+    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
+
+    let workdir = run.workdir.as_deref().unwrap_or("");
+    let items = checkpoint_status::load_node_statuses(
+        std::path::Path::new(workdir),
+        run.status == "running",
+    );
+    let dag = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
+        .ok()
+        .and_then(|wf| oxo_flow_core::dag::WorkflowDag::from_rules(&wf.rules).ok());
+    let rules: Vec<String> = dag
+        .as_ref()
+        .and_then(|d| d.execution_order().ok())
+        .unwrap_or_default();
+
+    let instances: Vec<serde_json::Value> = items
+        .iter()
+        .map(|n| {
+            let base = rules
+                .iter()
+                .filter(|r| n.rule == **r || n.rule.starts_with(&format!("{r}_")))
+                .max_by_key(|r| r.len())
+                .cloned()
+                .unwrap_or_else(|| n.rule.clone());
+            // Instance names embed the sample group:
+            // `qc_auto-discovered_S1` → base `qc`, sample `S1`. The sample
+            // is the LAST underscore-separated segment of the remainder
+            // (group names may contain hyphens but samples are the trailing
+            // identifier; anything before it is the group).
+            let remainder = n.rule.strip_prefix(&format!("{base}_"));
+            let (group, sample) = match remainder {
+                Some(rest) => match rest.rsplit_once('_') {
+                    Some((group_part, sample_part)) => {
+                        (Some(group_part.to_string()), Some(sample_part.to_string()))
+                    }
+                    None => (None, Some(rest.to_string())),
+                },
+                None => (None, None),
+            };
+            serde_json::json!({
+                "instance": n.rule,
+                "rule": base,
+                "sample": sample,
+                "group": group,
+                "status": n.status.to_string(),
+                "duration_ms": n.duration_ms,
+                "exit_code": n.exit_code,
+            })
+        })
+        .collect();
+
+    Ok(Json(instances))
 }
 
 /// GET /api/runs/{id}/diagnostics
@@ -625,9 +723,76 @@ pub async fn retry_run(
             )
         })?;
 
-    service::compute_retry_plan(&node_items, &dag, from_rule, skip_succeeded)
-        .map(Json)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "RETRY_ERROR", e))
+    let plan = service::compute_retry_plan(&node_items, &dag, from_rule, skip_succeeded)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "RETRY_ERROR", e))?;
+
+    // The retry is a REAL run (issue #82 P0-3 — previously the plan was
+    // returned with a new_run_id that never existed). Re-executing in the
+    // SAME workdir lets the CLI's checkpoint do the work: failed rules have
+    // no success record and re-run, and the engine's cascade invalidation
+    // marks their downstream dependents dirty too — exactly the computed
+    // plan, verified against the same single source of truth.
+    let new_run_id = plan.new_run_id.clone();
+    let now = now_iso();
+    let new_run = models::RunRow {
+        id: new_run_id.clone(),
+        user_id: user.id.clone(),
+        pipeline_id: run.pipeline_id.clone(),
+        pipeline_snapshot: run.pipeline_snapshot.clone(),
+        workflow_name: run.workflow_name.clone(),
+        status: "queued".to_string(),
+        phase: "parsing".to_string(),
+        pid: None,
+        workdir: run.workdir.clone(),
+        started_at: None,
+        finished_at: None,
+        created_at: now.clone(),
+    };
+    sqlx::query(
+        "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, pid, workdir, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&new_run.id)
+    .bind(&new_run.user_id)
+    .bind(&new_run.pipeline_id)
+    .bind(&new_run.pipeline_snapshot)
+    .bind(&new_run.workflow_name)
+    .bind(&new_run.status)
+    .bind(&new_run.phase)
+    .bind(new_run.pid)
+    .bind(&new_run.workdir)
+    .bind(&new_run.started_at)
+    .bind(&new_run.finished_at)
+    .bind(&new_run.created_at)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("DB error inserting retry run {new_run_id}: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
+
+    // Same workdir → checkpoint-driven partial re-execution.
+    crate::executor::spawn_background_run(
+        new_run_id.clone(),
+        user.id.clone(),
+        "none".to_string(),
+        "local".to_string(),
+        run.workdir.clone().map(std::path::PathBuf::from),
+        crate::executor::RunFlags {
+            dry_run: false,
+            keep_going: false,
+            max_jobs: None,
+            samples: vec![],
+            targets: vec![],
+            resume_failed: true,
+            rerun: true,
+        },
+    );
+
+    Ok(Json(plan))
 }
 
 /// POST /api/runs/{id}/cancel
@@ -903,10 +1068,29 @@ pub async fn get_ai_status(
     })
     .collect();
 
-    let resources = ResourceUsage::default();
+    // Real telemetry (issue #82 P1-2): memory/CPU of the run's process
+    // tree, sampled by the executor; the trend timeline travels in the
+    // response alongside the derived analysis.
+    let workdir = std::path::Path::new(_run.workdir.as_deref().unwrap_or(""));
+    let metrics = checkpoint_status::load_metrics(workdir);
+    let last = metrics.last();
+    let host = crate::sys::get_host_resources();
+    let resources = ResourceUsage {
+        cpu_pct: last.and_then(|m| m["cpu_pct"].as_f64()).unwrap_or(0.0),
+        memory_mb: last.and_then(|m| m["memory_mb"].as_f64()).unwrap_or(0.0),
+        memory_pct: last
+            .and_then(|m| m["memory_mb"].as_f64())
+            .map(|mb| mb * 100.0 / host.total_memory_mb as f64)
+            .unwrap_or(0.0),
+        memory_total_mb: host.total_memory_mb as f64,
+        disk_pct: 0.0,
+        disk_mb: 0.0,
+    };
     let status = monitor_agent::analyze_run_status(&exec_nodes, &resources);
+    let mut payload = serde_json::json!(status);
+    payload["timeline"] = serde_json::json!(metrics);
 
-    Ok(Json(serde_json::json!(status)))
+    Ok(Json(payload))
 }
 
 /// GET /api/runs/{id}/report

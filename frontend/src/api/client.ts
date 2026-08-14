@@ -6,7 +6,7 @@ import type {
   AiConfig, AiTranslateResponse, AiExplainResponse, AiInterpretResponse, AiOptimizeResponse,
   Template, ForkResponse, ShareResponse, ImportResponse,
   DataAnalysis, ReferenceResult, AuditLogResponse, SearchResponse,
-  DagEditResponse, DataPerceptionReport, MonitorStatus,
+  DagEditResponse, DataPerceptionReport, MonitorStatus, RunInstance,
   ReportData, AiConfigFull, ServerAiConfig, UserAiConfig, AiConfigUpdate,
   KnowledgeToolsResponse, KnowledgeSkillsResponse,
 } from './types';
@@ -106,6 +106,7 @@ export const api = {
   getDagStatus: (id: string) => get<DagStatus>(`/api/runs/${id}/dag-status`),
   getDiagnostics: (id: string) => get<Diagnostics>(`/api/runs/${id}/diagnostics`),
   getRunLogs: (id: string) => get<string>(`/api/runs/${id}/logs`),
+  getRunInstances: (id: string) => get<RunInstance[]>(`/api/runs/${id}/instances`),
   getRunResults: (id: string) => get<Array<{ name: string; path: string; size_bytes: number; is_dir: boolean }>>(`/api/runs/${id}/results`),
   retryRun: (id: string, skipSucceeded = true) => post<RetryPlan>(`/api/runs/${id}/retry`, { skip_succeeded: skipSucceeded }),
   cancelRun: (id: string) => post<{ run_id: string; status: string }>(`/api/runs/${id}/cancel`, {}),

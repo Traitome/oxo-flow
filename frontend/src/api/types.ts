@@ -92,6 +92,18 @@ export interface KnowledgeSkillsResponse {
 
 // ── Runs ──
 export interface RunItem { id: string; user_id: string; pipeline_id: string; status: string; phase: string; pid: number | null; workdir: string | null; started_at: string | null; finished_at: string | null; created_at: string; }
+/** One expanded sample×rule instance from a run's checkpoint
+ *  (issue #82 P1-1): `qc_auto-discovered_S1` → rule `qc`, sample `S1`. */
+export interface RunInstance {
+  instance: string;
+  rule: string;
+  sample?: string;
+  group?: string;
+  status: string;
+  duration_ms?: number;
+  exit_code?: number;
+}
+
 export interface RunStatus {
   status: string; phase: string;
   nodes: Array<{ rule: string; status: string; started_at: string | null; duration_ms: number | null; exit_code: number | null }>;
