@@ -7,6 +7,27 @@ see on the canvas is exactly what the CLI would run.
 
 ---
 
+## Guided vs Canvas modes
+
+The editor offers two views for the same workflow (TOML stays the single
+source of truth):
+
+- **Guided** (default for new users): one form card per rule — name,
+  command, inputs, outputs, threads, memory, environment. Every change is
+  converted to workflow TOML immediately; cards round-trip through canvas
+  or AI edits (the backend parser returns each rule's shell).
+- **Canvas + TOML**: the graph editor and raw TOML, for power users.
+
+The choice persists across sessions. Validation errors now carry line
+numbers; clicking a `line N` chip scrolls the TOML editor to the failing
+line.
+
+## History
+
+The left-rail History tab lists every saved revision (up to 50): load a
+snapshot into the editor or roll the pipeline back — the current version
+is preserved as a new revision first.
+
 ## The three panes
 
 | Pane | What it does |
@@ -71,6 +92,12 @@ produces the execution plan without running anything; **Run** starts the real
 pipeline and opens the monitor. Both honor the engine's checkpoint semantics:
 re-runs reuse completed rules unless inputs, config, or rule definitions
 changed.
+
+## Look & feel
+
+Dark mode (follows the OS or the header 🌙 toggle), Chinese interface
+chrome (header 中文 toggle), and bilingual glossary tooltips on core
+terms (pipeline, rule, wildcard, checkpoint, dry-run, depends_on).
 
 ## See also
 

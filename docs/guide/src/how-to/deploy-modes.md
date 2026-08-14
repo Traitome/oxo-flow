@@ -191,6 +191,26 @@ and detects the scheduler (`slurm`/`pbs`/`lsf`/`sge`) with its version.
 Unknown fields in the config file are rejected loudly, not silently
 ignored.
 
+## Multi-Tenancy (v0.11 hardening)
+
+Team/HPC modes scope every resource to the acting user:
+
+- **Ownership**: runs and pipelines are owned by the session's user;
+  foreign resources 404 (existence never leaks). Admins see and control
+  everything; viewers/guests get read access to workspace-visible
+  pipelines only.
+- **Anonymous surface**: `/api/system`, `/api/metrics`, `/api/ai/test`,
+  and `/api/hpc` require authentication; `GET /api/ai/config` stays
+  public; `/api/events` requires `?token=` (EventSource cannot set
+  headers) and streams only the subscriber's runs; `/api/share/{token}`
+  is public by design (the token is the credential).
+- **Env-password logins** auto-provision a real users row (previously any
+  username shared the `default` pseudo-user's identity).
+- **API keys** (`X-API-Key: oxo_…`) are first-class machine credentials
+  with the owner's exact permissions; stored hashed, instantly revocable.
+- **Shared infrastructure**: the server AI provider, webhook endpoint, and
+  SSH cluster connections are admin-managed outside personal mode.
+
 ## Run Control Truth (all modes)
 
 Run control is backed by real process signaling, and crash recovery tells
