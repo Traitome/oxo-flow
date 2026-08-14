@@ -112,9 +112,19 @@ async fn validate_token(
 }
 
 /// Require admin role — returns 403 if the caller is not an admin.
+///
+/// Personal mode is a single-user, localhost-bound deployment where the rest
+/// of the API surface is unauthenticated; management endpoints follow the
+/// same trust model instead of being permanently unusable (issue #79 P1-06:
+/// create-user returned 401 forever in personal mode). Team/HPC modes keep
+/// full session + role enforcement.
 async fn require_admin(
     headers: &axum::http::HeaderMap,
 ) -> Result<String, (StatusCode, Json<ApiError>)> {
+    if crate::server::running_mode() == "personal" {
+        return Ok("local_user".into());
+    }
+
     let token = extract_token(headers).ok_or_else(|| {
         err(
             StatusCode::UNAUTHORIZED,
@@ -139,8 +149,37 @@ async fn require_admin(
 
 /// POST /api/auth/login
 pub async fn login(Json(req): Json<LoginRequest>) -> ApiResult<LoginResponse> {
-    let result = service::authenticate(&req.username, &req.password)
-        .map_err(|e| err(StatusCode::UNAUTHORIZED, "AUTH_FAILED", e))?;
+    // Env-var credentials first (admin/user/viewer passwords); on failure,
+    // fall back to DB-created accounts (bcrypt hash in users.password_hash,
+    // issue #79 P1-06 — users created via the API must be able to sign in).
+    let result = match service::authenticate(&req.username, &req.password) {
+        Ok(response) => response,
+        Err(env_err) => {
+            let pool = get_pool()?;
+            let user: Option<(String, Option<String>)> = sqlx::query_as(
+                "SELECT role, password_hash FROM users WHERE username = ?",
+            )
+            .bind(&req.username)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error looking up user '{}': {e}", req.username);
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    "Internal database error".into(),
+                )
+            })?;
+            match user {
+                Some((role, Some(hash)))
+                    if service::verify_db_password(&req.password, &hash) =>
+                {
+                    service::login_response_for(req.username.clone(), role)
+                }
+                _ => return Err(err(StatusCode::UNAUTHORIZED, "AUTH_FAILED", env_err)),
+            }
+        }
+    };
 
     // Persist session to database so the token is actually valid.
     // Without this, require_auth and auth_me would reject the token.
@@ -251,17 +290,38 @@ pub async fn create_user(
     let _admin = require_admin(&headers).await?;
     let pool = get_pool()?;
 
+    let role = req.role.as_deref().unwrap_or("user");
+    if !matches!(role, "admin" | "user" | "viewer") {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "INVALID_ROLE",
+            format!("Invalid role '{role}' — must be admin, user, or viewer"),
+        ));
+    }
+
+    // The account must be able to sign in: hash the password (bcrypt) into
+    // users.password_hash, verified by the login handler's DB fallback.
+    let password_hash = req
+        .password
+        .as_deref()
+        .map(service::hash_password)
+        .transpose()
+        .map_err(|e| err(StatusCode::BAD_REQUEST, "BAD_PASSWORD", e))?;
+
     let id = uuid::Uuid::new_v4().to_string();
     let now = now_iso();
 
     sqlx::query(
-        "INSERT INTO users (id, username, role, auth_type, os_user, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO users (id, username, role, auth_type, os_user, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&req.username)
-    .bind(&req.role)
+    .bind(role)
     .bind("password")
-    .bind(None::<String>)
+    // The legacy users schema declares os_user NOT NULL; password accounts
+    // have no OS-level user, so store the empty string.
+    .bind("")
+    .bind(password_hash)
     .bind(&now)
     .execute(pool)
     .await
@@ -277,7 +337,7 @@ pub async fn create_user(
     Ok(Json(UserResponse {
         id,
         username: req.username,
-        role: req.role.unwrap_or_else(|| "user".to_string()),
+        role: role.to_string(),
         auth_type: Some("password".to_string()),
         os_user: None,
         created_at: now,

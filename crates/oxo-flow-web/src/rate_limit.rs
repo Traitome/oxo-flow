@@ -97,42 +97,61 @@ pub struct RateLimitResponse {
 pub async fn rate_limit_middleware(request: Request<axum::body::Body>, next: Next) -> Response {
     use axum::Json;
 
-    // Extract the rate limiter from extensions (if present).
-    let limiter = request.extensions().get::<RateLimiter>().cloned();
+    // A missing limiter is a wiring bug (layer order), not a license to skip
+    // rate limiting silently — fail loud and closed (issue #79 P1-04).
+    // Note the Arc: the Extension layer inserts an `Arc<RateLimiter>`, and
+    // request extensions are typed — a lookup by the bare type never matches
+    // (the second half of the original bug, alongside the layer order).
+    let limiter = request
+        .extensions()
+        .get::<std::sync::Arc<RateLimiter>>()
+        .cloned();
+    let Some(limiter) = limiter else {
+        tracing::error!(
+            "RateLimiter missing from request extensions — the rate-limit \
+             middleware must sit inside the Extension layer in server.rs"
+        );
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(RateLimitResponse {
+                error: "Server misconfiguration: rate limiter unavailable".to_string(),
+                retry_after_secs: 0,
+            }),
+        )
+            .into_response();
+    };
 
-    if let Some(limiter) = limiter {
-        // Derive client key: X-Forwarded-For > X-Real-IP > fallback
-        let key = request
-            .headers()
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.split(',').next())
-            .map(|s| s.trim().to_string())
-            .or_else(|| {
-                request
-                    .headers()
-                    .get("x-real-ip")
-                    .and_then(|v| v.to_str().ok())
-                    .map(|s| s.to_string())
-            })
-            .unwrap_or_else(|| "unknown".to_string());
+    // Derive client key: X-Forwarded-For > X-Real-IP > fallback
+    let key = request
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(|s| s.trim().to_string())
+        .or_else(|| {
+            request
+                .headers()
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
 
-        if let Err(retry_after) = limiter.check_rate_limit(&key) {
-            let body = RateLimitResponse {
-                error: "Rate limit exceeded".to_string(),
-                retry_after_secs: retry_after,
-            };
-            return (
-                StatusCode::TOO_MANY_REQUESTS,
-                [(
-                    header::RETRY_AFTER,
-                    HeaderValue::from_str(&retry_after.to_string())
-                        .unwrap_or_else(|_| HeaderValue::from_static("60")),
-                )],
-                Json(body),
-            )
-                .into_response();
-        }
+    if let Err(retry_after) = limiter.check_rate_limit(&key) {
+        let body = RateLimitResponse {
+            error: "Rate limit exceeded".to_string(),
+            retry_after_secs: retry_after,
+        };
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(
+                header::RETRY_AFTER,
+                HeaderValue::from_str(&retry_after.to_string())
+                    .unwrap_or_else(|_| HeaderValue::from_static("60")),
+            )],
+            Json(body),
+        )
+            .into_response();
     }
 
     next.run(request).await

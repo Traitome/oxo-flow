@@ -205,6 +205,7 @@ impl StorageBackend for SqliteBackend {
                 role TEXT NOT NULL,
                 auth_type TEXT NOT NULL,
                 os_user TEXT,
+                password_hash TEXT,
                 created_at TEXT NOT NULL
             );
 
@@ -382,6 +383,13 @@ impl StorageBackend for SqliteBackend {
         }
         // Migration: add usage_count to templates if missing
         sqlx::query("ALTER TABLE templates ADD COLUMN usage_count INTEGER NOT NULL DEFAULT 0")
+            .execute(&self.pool)
+            .await
+            .ok();
+
+        // Migration (issue #79 P1-06): user password hashes for DB-created
+        // accounts. Idempotent — safe to run on every init.
+        sqlx::query("ALTER TABLE users ADD COLUMN password_hash TEXT")
             .execute(&self.pool)
             .await
             .ok();
@@ -986,7 +994,7 @@ mod tests {
         // Legacy schema: pipeline_id NOT NULL, no workflow_name.
         // Individual statements (sqlx does not batch multi-statement SQL).
         for stmt in [
-            "CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, role TEXT NOT NULL, auth_type TEXT NOT NULL, os_user TEXT, created_at TEXT NOT NULL)",
+            "CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, role TEXT NOT NULL, auth_type TEXT NOT NULL, os_user TEXT, password_hash TEXT, created_at TEXT NOT NULL)",
             "CREATE TABLE pipelines (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, version TEXT NOT NULL, toml_content TEXT NOT NULL, rules_count INTEGER NOT NULL DEFAULT 0, forked_from TEXT, visibility TEXT NOT NULL DEFAULT 'private', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)",
             "CREATE TABLE runs (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, pipeline_id TEXT NOT NULL, pipeline_snapshot TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued', phase TEXT NOT NULL DEFAULT 'parsing', pid INTEGER, workdir TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE)",
         ] {

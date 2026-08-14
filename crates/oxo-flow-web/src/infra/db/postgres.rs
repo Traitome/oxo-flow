@@ -76,6 +76,7 @@ impl StorageBackend for PostgresBackend {
                 role TEXT NOT NULL,
                 auth_type TEXT NOT NULL,
                 os_user TEXT,
+                password_hash TEXT,
                 created_at TEXT NOT NULL
             );
 

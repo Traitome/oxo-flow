@@ -177,3 +177,51 @@ mod tests {
         std::env::set_current_dir(original_dir).unwrap();
     }
 }
+
+/// Middleware: record every state-changing request (non-GET/HEAD/OPTIONS) in
+/// the `audit_logs` table — the single audit write point covering all
+/// mutation handlers (issue #79 P1-05: the table had schema but zero write
+/// call sites).
+///
+/// Must be layered INSIDE `require_auth` (server.rs) so the authenticated
+/// user id inserted into request extensions is visible; personal-mode
+/// requests fall back to the 'default' pseudo-user. The insert is
+/// fire-and-forget — auditing must never block or fail the request.
+pub async fn audit_middleware(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::http::Method;
+
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+    let user = request
+        .extensions()
+        .get::<Option<String>>()
+        .and_then(|u| u.clone())
+        .unwrap_or_else(|| "default".to_string());
+
+    let response = next.run(request).await;
+
+    if matches!(method, Method::GET | Method::HEAD | Method::OPTIONS) {
+        return response;
+    }
+
+    let status = response.status().as_u16();
+    let action = format!("{method} {path}");
+    let result = if (200..300).contains(&status) {
+        "success"
+    } else {
+        "failure"
+    };
+    let metadata = serde_json::json!({ "status": status }).to_string();
+
+    // Awaited, not fire-and-forget: an audit trail that can silently lose
+    // rows is not an audit trail. One indexed INSERT per mutation is cheap
+    // and the response is already computed.
+    if let Err(e) = crate::db::insert_audit_row(&user, &action, &path, result, &metadata).await {
+        tracing::error!("audit insert failed for {action}: {e}");
+    }
+
+    response
+}

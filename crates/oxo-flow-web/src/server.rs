@@ -101,6 +101,7 @@ fn frontend_dir() -> std::path::PathBuf {
 /// * `hpc` — bind to 0.0.0.0, scheduler awareness
 pub fn build_router(mode: &str) -> Router {
     tracing::info!("Building router for mode: {mode}");
+    set_running_mode(mode);
 
     // Mode flag: auth is required for team and hpc modes
     let auth_required = mode == "team" || mode == "hpc";
@@ -390,6 +391,11 @@ pub fn build_router(mode: &str) -> Router {
         router = router.merge(hpc_routes);
     }
 
+    // Audit layer sits INSIDE require_auth so it sees the authenticated user
+    // id the auth middleware inserts into request extensions (issue #79
+    // P1-05: the single write point for all mutation handlers).
+    router = router.layer(axum::middleware::from_fn(crate::audit::audit_middleware));
+
     // Team/HPC mode: apply auth layer to non-auth, non-health endpoints
     if auth_required {
         router = router.layer(axum::middleware::from_fn(require_auth));
@@ -448,11 +454,32 @@ pub fn build_router(mode: &str) -> Router {
         .merge(spa_fallback)
         .layer(LicenseHeaderLayer)
         .layer(axum::middleware::from_fn(security_headers))
-        .layer(axum::Extension(rate_limiter))
+        // Layer order matters (issue #79 P1-04): in axum the LAST layer is
+        // outermost, and the middleware must sit INSIDE the Extension layer
+        // to see the RateLimiter in the request extensions. The previous
+        // order made the limiter invisible — the middleware silently skipped
+        // rate limiting entirely (40/120/150-request bursts passed with zero
+        // 429s in the evaluation).
         .layer(axum::middleware::from_fn(
             crate::rate_limit::rate_limit_middleware,
         ))
+        .layer(axum::Extension(rate_limiter))
         .layer(cors)
+}
+
+/// Deployment mode of the running server ("personal" | "team" | "hpc"),
+/// set once at router construction. Handlers consult it for mode-specific
+/// trust decisions (e.g. personal-mode management endpoints).
+static RUNNING_MODE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Current deployment mode; defaults to "personal" before the router is built.
+pub fn running_mode() -> &'static str {
+    RUNNING_MODE.get().map(String::as_str).unwrap_or("personal")
+}
+
+/// Record the deployment mode (first call wins — a server process has one mode).
+pub fn set_running_mode(mode: &str) {
+    let _ = RUNNING_MODE.set(mode.to_string());
 }
 
 /// Add standard security headers to every response.

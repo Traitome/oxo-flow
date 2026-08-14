@@ -133,6 +133,30 @@ fn generate_token() -> String {
     Uuid::new_v4().to_string()
 }
 
+/// Hash a password for storage (bcrypt, default cost).
+///
+/// DB-created accounts (POST /api/users) store this hash in
+/// `users.password_hash`; env-var credentials are unaffected.
+pub fn hash_password(password: &str) -> Result<String, String> {
+    bcrypt::hash(password, bcrypt::DEFAULT_COST)
+        .map_err(|e| format!("Failed to hash password: {e}"))
+}
+
+/// Verify a password against a stored bcrypt hash.
+pub fn verify_db_password(password: &str, hash: &str) -> bool {
+    bcrypt::verify(password, hash).unwrap_or(false)
+}
+
+/// Build a login response for a DB-verified account (role from the users
+/// table, not the env-var vocabulary).
+pub fn login_response_for(username: String, role: String) -> LoginResponse {
+    LoginResponse {
+        token: generate_token(),
+        username,
+        role,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // OAuth2 service functions
 // ---------------------------------------------------------------------------

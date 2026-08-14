@@ -82,6 +82,7 @@ pub struct AuditLogRow {
     pub user_id: String,
     pub action: String,
     pub target: String,
+    pub result: String,
     pub metadata: Option<String>,
     pub timestamp: String,
 }
