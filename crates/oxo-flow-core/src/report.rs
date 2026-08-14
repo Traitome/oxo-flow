@@ -1946,6 +1946,7 @@ mod tests {
                 retries: 0,
                 timeout: None,
                 skip_reason: None,
+                max_rss_mb: None,
             },
         );
 
@@ -2303,6 +2304,7 @@ mod tests {
                 retries: 0,
                 timeout: None,
                 skip_reason: None,
+                max_rss_mb: None,
             },
         );
         let section = execution_time_chart(&records);

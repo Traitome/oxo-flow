@@ -152,12 +152,14 @@ pub async fn stage_remote_io(
         }
         let local = crate::storage::upload_stage_path(workdir, &storage_path);
         if let Some(parent) = local.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(|e| OxoFlowError::Config {
-                message: format!(
-                    "failed to create upload staging dir {}: {e}",
-                    parent.display()
-                ),
-            })?;
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| OxoFlowError::Config {
+                    message: format!(
+                        "failed to create upload staging dir {}: {e}",
+                        parent.display()
+                    ),
+                })?;
         }
         let rel = local
             .strip_prefix(workdir)
@@ -223,10 +225,15 @@ mod tests {
         }
 
         async fn head(&self, path: &StoragePath) -> Result<Option<RemoteStat>> {
-            Ok(self.objects.lock().await.get(&path.raw).map(|(c, etag)| RemoteStat {
-                size: c.len() as u64,
-                etag: Some(etag.clone()),
-            }))
+            Ok(self
+                .objects
+                .lock()
+                .await
+                .get(&path.raw)
+                .map(|(c, etag)| RemoteStat {
+                    size: c.len() as u64,
+                    etag: Some(etag.clone()),
+                }))
         }
 
         async fn read_to_string(&self, path: &StoragePath) -> Result<String> {
@@ -277,9 +284,11 @@ mod tests {
         }
 
         async fn upload(&self, local: &Path, remote: &StoragePath) -> Result<()> {
-            let content = tokio::fs::read(local).await.map_err(|e| OxoFlowError::Config {
-                message: e.to_string(),
-            })?;
+            let content = tokio::fs::read(local)
+                .await
+                .map_err(|e| OxoFlowError::Config {
+                    message: e.to_string(),
+                })?;
             self.write(remote, &content).await
         }
 
@@ -336,12 +345,12 @@ output = ["out.txt"]
             .expect("remote prep");
         assert_eq!(
             prep.rule.input.to_vec(),
-            vec![".oxo-flow/staged/in/s3/b/k.fq".to_string(), "data/local.fq".into()]
+            vec![
+                ".oxo-flow/staged/in/s3/b/k.fq".to_string(),
+                "data/local.fq".into()
+            ]
         );
-        assert!(dir
-            .path()
-            .join(".oxo-flow/staged/in/s3/b/k.fq")
-            .exists());
+        assert!(dir.path().join(".oxo-flow/staged/in/s3/b/k.fq").exists());
         assert_eq!(
             fake.stage_calls.load(std::sync::atomic::Ordering::Relaxed),
             1

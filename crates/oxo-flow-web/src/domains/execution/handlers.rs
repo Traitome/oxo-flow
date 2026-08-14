@@ -517,7 +517,11 @@ pub async fn get_diagnostics(Path(id): Path<String>) -> ApiResult<DiagnosticsRes
         .map(|wd| std::fs::read_to_string(format!("{wd}/execution.log")).unwrap_or_default())
         .unwrap_or_default();
 
-    let diagnostics = service::diagnose_run(&node_items, &log_output);
+    let benchmarks = checkpoint_status::load_benchmarks(std::path::Path::new(
+        run.workdir.as_deref().unwrap_or(""),
+    ));
+
+    let diagnostics = service::diagnose_run(&node_items, &log_output, &benchmarks);
     Ok(Json(diagnostics))
 }
 

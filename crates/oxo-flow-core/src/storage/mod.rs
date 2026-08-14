@@ -171,11 +171,7 @@ struct StageCacheMeta {
 /// cached file keeps its original mtime, which the executor's freshness
 /// gate relies on). A failed transfer deletes the partial file and leaves
 /// any previous cache entry untouched.
-pub async fn stage_with_cache<F, Fut>(
-    stat: RemoteStat,
-    dest: &Path,
-    transfer: F,
-) -> Result<bool>
+pub async fn stage_with_cache<F, Fut>(stat: RemoteStat, dest: &Path, transfer: F) -> Result<bool>
 where
     F: FnOnce(tokio::fs::File) -> Fut,
     Fut: std::future::Future<Output = Result<()>>,
@@ -205,16 +201,20 @@ where
             message: format!("staging path has no parent: {}", dest.display()),
         });
     };
-    tokio::fs::create_dir_all(parent).await.map_err(|e| OxoFlowError::Config {
-        message: format!("failed to create staging dir {}: {e}", parent.display()),
-    })?;
+    tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|e| OxoFlowError::Config {
+            message: format!("failed to create staging dir {}: {e}", parent.display()),
+        })?;
 
     let mut part_os = dest.as_os_str().to_owned();
     part_os.push(".part");
     let part = PathBuf::from(part_os);
-    let file = tokio::fs::File::create(&part).await.map_err(|e| OxoFlowError::Config {
-        message: format!("failed to create staging file {}: {e}", part.display()),
-    })?;
+    let file = tokio::fs::File::create(&part)
+        .await
+        .map_err(|e| OxoFlowError::Config {
+            message: format!("failed to create staging file {}: {e}", part.display()),
+        })?;
 
     if let Err(e) = transfer(file).await {
         let _ = tokio::fs::remove_file(&part).await;

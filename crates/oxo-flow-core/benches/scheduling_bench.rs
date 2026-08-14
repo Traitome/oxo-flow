@@ -103,6 +103,7 @@ fn simulate_100(c: &mut Criterion) {
                         retries: 0,
                         timeout: None,
                         skip_reason: None,
+                        max_rss_mb: None,
                     });
                 }
             }

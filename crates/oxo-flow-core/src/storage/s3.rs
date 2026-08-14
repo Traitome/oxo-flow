@@ -116,13 +116,7 @@ impl S3Storage {
     /// Not part of the [`StorageBackend`] trait — the engine never creates
     /// buckets implicitly. Used by setup tooling and live integration tests.
     pub async fn ensure_bucket(&self, bucket: &str) -> Result<()> {
-        match self
-            .client
-            .create_bucket()
-            .bucket(bucket)
-            .send()
-            .await
-        {
+        match self.client.create_bucket().bucket(bucket).send().await {
             Ok(_) => Ok(()),
             Err(e) => {
                 let msg = e.to_string();
@@ -272,12 +266,10 @@ impl StorageBackend for S3Storage {
     async fn stage(&self, path: &StoragePath, workdir: &Path) -> Result<PathBuf> {
         let bucket = require_bucket(path)?;
         let dest = crate::storage::staged_path(workdir, path);
-        let stat = self.head(path).await?.ok_or_else(|| {
-            s3_error(format!(
-                "cannot stage {}: object does not exist",
-                path.raw
-            ))
-        })?;
+        let stat = self
+            .head(path)
+            .await?
+            .ok_or_else(|| s3_error(format!("cannot stage {}: object does not exist", path.raw)))?;
         let client = self.client.clone();
         let bucket = bucket.to_string();
         let key = path.key.clone();

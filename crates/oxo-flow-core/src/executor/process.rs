@@ -244,6 +244,10 @@ pub struct JobRecord {
     pub timeout: Option<std::time::Duration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skip_reason: Option<String>,
+    /// Sampled peak RSS of the rule's process subtree in MiB
+    /// (`None` when no child was spawned; issue #67 §4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_rss_mb: Option<u64>,
 }
 
 /// Configuration for the executor.
@@ -309,6 +313,8 @@ pub struct LocalExecutor {
     system_threads: u32,
     /// Detected system total memory in MB (respects cgroup limits on Linux).
     system_memory_mb: u64,
+    /// Shared per-run peak-RSS sampler (issue #67 §4).
+    rss_sampler: Arc<super::rss::RssSampler>,
 }
 
 /// Detect total system memory in MB using the most reliable method available
@@ -377,6 +383,7 @@ impl LocalExecutor {
             resource_notify: Arc::new(tokio::sync::Notify::new()),
             system_threads: max_threads,
             system_memory_mb: max_memory_mb,
+            rss_sampler: Arc::new(super::rss::RssSampler::new()),
         }
     }
 
@@ -674,6 +681,7 @@ impl LocalExecutor {
             retries: 0,
             timeout,
             skip_reason: None,
+            max_rss_mb: None,
         };
 
         // Condition evaluation happens before any remote staging so a rule
@@ -876,6 +884,8 @@ impl LocalExecutor {
         let mut combined_stdout = String::new();
         let mut combined_stderr = String::new();
         let mut last_exit_code: Option<i32> = None;
+        // Sampled peak RSS across every attempt (issue #67 §4).
+        let mut peak_bytes: u64 = 0;
 
         for attempt in 0..max_attempts {
             if attempt > 0 {
@@ -910,6 +920,8 @@ impl LocalExecutor {
 
                 let child_id = child.id();
 
+                let rss_handle = child_id.map(|pid| self.rss_sampler.track(pid));
+
                 let cmd_result = if let Some(duration) = timeout {
                     match tokio::time::timeout(duration, child.wait_with_output()).await {
                         Ok(inner) => inner,
@@ -922,6 +934,9 @@ impl LocalExecutor {
                             record.status = JobStatus::TimedOut;
                             last_exit_code = Some(124);
                             combined_stderr.push_str("command timed out");
+                            if let Some(handle) = rss_handle {
+                                peak_bytes = peak_bytes.max(handle.finish());
+                            }
                             break;
                         }
                     }
@@ -937,6 +952,9 @@ impl LocalExecutor {
                         if !output.status.success() {
                             all_commands_succeeded = false;
                             record.status = JobStatus::Failed;
+                            if let Some(handle) = rss_handle {
+                                peak_bytes = peak_bytes.max(handle.finish());
+                            }
                             break;
                         }
                     }
@@ -944,8 +962,15 @@ impl LocalExecutor {
                         all_commands_succeeded = false;
                         record.status = JobStatus::Failed;
                         combined_stderr.push_str(&e.to_string());
+                        if let Some(handle) = rss_handle {
+                            peak_bytes = peak_bytes.max(handle.finish());
+                        }
                         break;
                     }
+                }
+
+                if let Some(handle) = rss_handle {
+                    peak_bytes = peak_bytes.max(handle.finish());
                 }
             }
 
@@ -973,6 +998,9 @@ impl LocalExecutor {
         record.exit_code = last_exit_code;
         record.stdout = Some(combined_stdout);
         record.stderr = Some(combined_stderr);
+        if peak_bytes > 0 {
+            record.max_rss_mb = Some(peak_bytes.div_ceil(1024 * 1024));
+        }
 
         self.release_resources(&rule).await;
 
@@ -1095,10 +1123,13 @@ impl LocalExecutor {
                         remote.raw
                     ),
                 })?;
-            backend.upload(local, remote).await.map_err(|e| OxoFlowError::Execution {
-                rule: rule_name.to_string(),
-                message: format!("failed to upload remote output '{}': {e}", remote.raw),
-            })?;
+            backend
+                .upload(local, remote)
+                .await
+                .map_err(|e| OxoFlowError::Execution {
+                    rule: rule_name.to_string(),
+                    message: format!("failed to upload remote output '{}': {e}", remote.raw),
+                })?;
         }
         Ok(())
     }
@@ -1144,6 +1175,7 @@ impl LocalExecutor {
                     retries: 0,
                     timeout: self.get_timeout(rule),
                     skip_reason: None,
+                    max_rss_mb: None,
                 }
             })
             .collect()

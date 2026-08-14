@@ -139,9 +139,45 @@ pub fn compute_retry_plan(
     })
 }
 
+/// Memory-pressure threshold: a rule whose sampled peak RSS reached this
+/// fraction of its declared limit counts as a resource bottleneck
+/// (issue #67 §4). Sampled peaks underestimate true maxima, so the
+/// threshold is conservative.
+const MEMORY_BOTTLENECK_THRESHOLD_PCT: u64 = 80;
+
 /// Diagnose a failed run using the deterministic diagnostics engine.
-pub fn diagnose_run(run_nodes: &[NodeStatusItem], log_output: &str) -> DiagnosticsResponse {
+///
+/// `benchmarks` carries the engine's per-rule measurements (sampled peak
+/// RSS + declared limit) from the run's checkpoint — the source for the
+/// resource-bottleneck list.
+pub fn diagnose_run(
+    run_nodes: &[NodeStatusItem],
+    log_output: &str,
+    benchmarks: &std::collections::HashMap<
+        String,
+        oxo_flow_core::executor::checkpoint::BenchmarkRecord,
+    >,
+) -> DiagnosticsResponse {
     let engine = DiagnosticsEngine::new();
+
+    // Sampled peak RSS at ≥80% of the declared memory limit = sustained
+    // memory pressure worth surfacing.
+    let resource_bottlenecks: Vec<ResourceBottleneck> = benchmarks
+        .iter()
+        .filter_map(|(rule, b)| {
+            let actual = b.max_memory_mb?;
+            let limit = b.memory_limit_mb?;
+            if limit == 0 || actual * 100 < limit * MEMORY_BOTTLENECK_THRESHOLD_PCT {
+                return None;
+            }
+            Some(ResourceBottleneck {
+                rule: rule.clone(),
+                metric: "max_memory_mb".into(),
+                actual: actual as f64,
+                limit: limit as f64,
+            })
+        })
+        .collect();
 
     // If there are no nodes at all, the run failed before execution (e.g. parsing/validation).
     if run_nodes.is_empty() && !log_output.is_empty() {
@@ -163,7 +199,7 @@ pub fn diagnose_run(run_nodes: &[NodeStatusItem], log_output: &str) -> Diagnosti
                 relevant_log_lines: lines.into_iter().map(|s| s.to_string()).collect(),
             }],
             warnings: vec![],
-            resource_bottlenecks: vec![],
+            resource_bottlenecks,
         };
     }
 
@@ -208,7 +244,7 @@ pub fn diagnose_run(run_nodes: &[NodeStatusItem], log_output: &str) -> Diagnosti
     DiagnosticsResponse {
         failed_nodes,
         warnings,
-        resource_bottlenecks: vec![],
+        resource_bottlenecks,
     }
 }
 
@@ -359,7 +395,7 @@ output = ["b.txt"]
             },
         ];
         let log = "FATAL: out of memory\nprocess killed";
-        let resp = diagnose_run(&nodes, log);
+        let resp = diagnose_run(&nodes, log, &Default::default());
         assert_eq!(resp.failed_nodes.len(), 1);
         assert_eq!(
             resp.failed_nodes[0].error_pattern.as_deref(),
@@ -468,5 +504,61 @@ mod file_listing_tests {
         }
         let files = list_files_recursive(dir.path());
         assert!(files.len() <= 500);
+    }
+
+    #[test]
+    fn diagnose_flags_memory_bottleneck_at_or_above_80pct() {
+        use oxo_flow_core::executor::checkpoint::BenchmarkRecord;
+        let mut benchmarks = std::collections::HashMap::new();
+        benchmarks.insert(
+            "tight_rule".to_string(),
+            BenchmarkRecord {
+                rule: "tight_rule".into(),
+                wall_time_secs: 10.0,
+                max_memory_mb: Some(810),
+                memory_limit_mb: Some(1000),
+                cpu_seconds: None,
+                retries: 0,
+            },
+        );
+        benchmarks.insert(
+            "comfy_rule".to_string(),
+            BenchmarkRecord {
+                rule: "comfy_rule".into(),
+                wall_time_secs: 5.0,
+                max_memory_mb: Some(790),
+                memory_limit_mb: Some(1000),
+                cpu_seconds: None,
+                retries: 0,
+            },
+        );
+        let resp = diagnose_run(&[], "", &benchmarks);
+        assert_eq!(resp.resource_bottlenecks.len(), 1);
+        let b = &resp.resource_bottlenecks[0];
+        assert_eq!(b.rule, "tight_rule");
+        assert_eq!(b.metric, "max_memory_mb");
+        assert_eq!(b.actual, 810.0);
+        assert_eq!(b.limit, 1000.0);
+    }
+
+    #[test]
+    fn diagnose_degrades_to_empty_bottlenecks_without_measurements() {
+        let resp = diagnose_run(&[], "", &Default::default());
+        assert!(resp.resource_bottlenecks.is_empty());
+        // A measured peak without a declared limit is not a bottleneck.
+        let mut benchmarks = std::collections::HashMap::new();
+        benchmarks.insert(
+            "no_limit".to_string(),
+            oxo_flow_core::executor::checkpoint::BenchmarkRecord {
+                rule: "no_limit".into(),
+                wall_time_secs: 1.0,
+                max_memory_mb: Some(5000),
+                memory_limit_mb: None,
+                cpu_seconds: None,
+                retries: 0,
+            },
+        );
+        let resp = diagnose_run(&[], "", &benchmarks);
+        assert!(resp.resource_bottlenecks.is_empty());
     }
 }

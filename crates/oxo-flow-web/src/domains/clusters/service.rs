@@ -88,7 +88,11 @@ pub async fn probe(cluster: &ClusterInfo) -> ClusterProbeResult {
                 scheduler: None,
                 version: None,
                 error: Some(
-                    stderr.lines().next().unwrap_or("ssh probe failed").to_string(),
+                    stderr
+                        .lines()
+                        .next()
+                        .unwrap_or("ssh probe failed")
+                        .to_string(),
                 ),
                 duration_ms,
             }
@@ -96,10 +100,10 @@ pub async fn probe(cluster: &ClusterInfo) -> ClusterProbeResult {
         Err(e) => {
             let duration_ms = started.elapsed().as_millis() as u64;
             ClusterProbeResult {
-            ok: false,
-            hostname: None,
-            scheduler: None,
-            version: None,
+                ok: false,
+                hostname: None,
+                scheduler: None,
+                version: None,
                 error: Some(format!("failed to run ssh: {e}")),
                 duration_ms,
             }
@@ -179,7 +183,10 @@ mod tests {
         assert_eq!(detect_scheduler("n1\nslurm 23.11.7\n"), "slurm");
         assert_eq!(detect_scheduler("n1\npbs\n"), "pbs");
         assert_eq!(detect_scheduler("n1\n"), "none");
-        assert_eq!(scheduler_version("n1\nslurm 23.11.7\n"), Some("slurm 23.11.7".into()));
+        assert_eq!(
+            scheduler_version("n1\nslurm 23.11.7\n"),
+            Some("slurm 23.11.7".into())
+        );
     }
 
     /// The probe against a nonexistent host must fail gracefully and fast.

@@ -181,7 +181,10 @@ async fn staged_input_and_uploaded_output_end_to_end() {
     let input_path = StoragePath::parse(&input_uri);
     let output_path = StoragePath::parse(&output_uri);
 
-    backend.write(&input_path, b"v1-content-AAAA\n").await.unwrap();
+    backend
+        .write(&input_path, b"v1-content-AAAA\n")
+        .await
+        .unwrap();
 
     let dir = tempfile::tempdir().unwrap();
     let workflow = format!(
@@ -218,7 +221,10 @@ shell = "cat {{input[0]}} > out.txt && cp out.txt {{output[1]}}"
 
     // Rewrite the cloud input (same size, new content) → precise
     // invalidation → re-execution → re-upload.
-    backend.write(&input_path, b"v2-content-BBBB\n").await.unwrap();
+    backend
+        .write(&input_path, b"v2-content-BBBB\n")
+        .await
+        .unwrap();
     let (ok, stderr) = run(dir.path());
     assert!(ok, "run 3 failed: {stderr}");
     assert!(stderr.contains("invalidated 1 rule"));

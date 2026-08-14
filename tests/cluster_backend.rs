@@ -226,6 +226,7 @@ fn local_run_and_backend_run_produce_same_checkpoint_semantics() {
                 rule: r.rule.clone(),
                 wall_time_secs: wall,
                 max_memory_mb: None,
+                memory_limit_mb: None,
                 cpu_seconds: None,
                 retries: 0,
             },
@@ -447,7 +448,6 @@ async fn cluster_logs_command_uses_mock_sacct() {
     // `cluster logs` is the last CLI stub resolved (issue #67 §4): SLURM
     // fetches the accounting record through the shared ExecutorBackend::logs
     // implementation — the same path BackendDriver uses.
-    let dir = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();
     let job_dir = state.path().join("jobs/12345");
     std::fs::create_dir_all(&job_dir).unwrap();
@@ -458,16 +458,23 @@ async fn cluster_logs_command_uses_mock_sacct() {
     let out = cmd
         .args(["cluster", "logs", "--backend", "slurm", "12345"])
         .env("MOCK_SCHEDULER_DIR", state.path())
-        .env("PATH", format!("{}:{}", fixtures_dir().display(), std::env::var("PATH").unwrap()))
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                fixtures_dir().display(),
+                std::env::var("PATH").unwrap()
+            ),
+        )
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "cluster logs failed: {stderr}");
     assert!(
-        out.status.success(),
-        "cluster logs failed: {stderr}"
+        stdout.contains("12345|COMPLETED|0:0|00:00:05|1234K"),
+        "got: {stdout}"
     );
-    assert!(stdout.contains("12345|COMPLETED|0:0|00:00:05|1234K"), "got: {stdout}");
 
     // Unknown backend falls back to SLURM; missing scheduler binary fails
     // loudly instead of silently succeeding.
@@ -475,7 +482,14 @@ async fn cluster_logs_command_uses_mock_sacct() {
     let out = bad
         .args(["cluster", "logs", "--backend", "slurm", "99999"])
         .env("MOCK_SCHEDULER_DIR", state.path())
-        .env("PATH", format!("{}:{}", fixtures_dir().display(), std::env::var("PATH").unwrap()))
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                fixtures_dir().display(),
+                std::env::var("PATH").unwrap()
+            ),
+        )
         .output()
         .unwrap();
     assert!(!out.status.success(), "unknown job id should fail");

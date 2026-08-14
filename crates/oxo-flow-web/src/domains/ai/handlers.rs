@@ -145,7 +145,11 @@ pub async fn explain(Json(req): Json<ExplainRequest>) -> ApiResult<ExplainRespon
                 .and_then(|wd| std::fs::read_to_string(format!("{wd}/execution.log")).ok())
                 .unwrap_or_default();
 
-            let diagnostics = crate::domains::execution::service::diagnose_run(&node_items, &log);
+            let benchmarks = crate::domains::execution::checkpoint_status::load_benchmarks(
+                std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
+            );
+            let diagnostics =
+                crate::domains::execution::service::diagnose_run(&node_items, &log, &benchmarks);
             (diagnostics, log)
         } else {
             (

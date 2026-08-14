@@ -96,8 +96,14 @@ pub struct BenchmarkRecord {
     pub rule: String,
     /// Wall-clock time in seconds.
     pub wall_time_secs: f64,
-    /// Peak resident memory in megabytes (placeholder — not yet measured).
+    /// Sampled peak RSS in megabytes (issue #67 §4; `None` for cluster
+    /// executors and legacy checkpoints).
     pub max_memory_mb: Option<u64>,
+    /// The rule's declared memory limit in megabytes (`effective_memory()`
+    /// resolved at execution time) — the "limit" side of bottleneck
+    /// detection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_limit_mb: Option<u64>,
     /// Total CPU seconds consumed (placeholder — not yet measured).
     pub cpu_seconds: Option<f64>,
     /// Number of retry attempts before success (0 = first attempt succeeded).

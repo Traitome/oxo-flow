@@ -352,12 +352,7 @@ impl StorageBackend for GcsStorage {
         let bucket = require_gcs_bucket(path)?;
         let dest = crate::storage::staged_path(workdir, path);
         let stat = self.head(path).await?.ok_or_else(|| {
-            gcs_io_error(
-                "stage head",
-                bucket,
-                &path.key,
-                "object does not exist",
-            )
+            gcs_io_error("stage head", bucket, &path.key, "object does not exist")
         })?;
         let bucket = bucket.to_string();
         let key = path.key.clone();

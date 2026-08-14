@@ -298,3 +298,13 @@ mod aggregation_tests {
         assert!(all.iter().any(|i| i.rule == "kept"));
     }
 }
+
+/// Benchmark records from the run's checkpoint (empty when unavailable) —
+/// the `actual` side of resource-bottleneck detection (issue #67 §4).
+pub fn load_benchmarks(
+    run_dir: &Path,
+) -> HashMap<String, oxo_flow_core::executor::checkpoint::BenchmarkRecord> {
+    CheckpointState::load_from_file(&CheckpointState::default_path(run_dir))
+        .map(|ck| ck.benchmarks)
+        .unwrap_or_default()
+}

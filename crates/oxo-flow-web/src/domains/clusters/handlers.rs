@@ -43,11 +43,8 @@ pub async fn list_clusters() -> ApiResult<Vec<ClusterInfo>> {
 }
 
 /// POST /api/clusters — create or update a cluster connection (upsert by id).
-pub async fn upsert_cluster(
-    Json(req): Json<ClusterUpsertRequest>,
-) -> ApiResult<ClusterInfo> {
-    service::validate(&req)
-        .map_err(|e| err(StatusCode::BAD_REQUEST, "INVALID_CLUSTER", e))?;
+pub async fn upsert_cluster(Json(req): Json<ClusterUpsertRequest>) -> ApiResult<ClusterInfo> {
+    service::validate(&req).map_err(|e| err(StatusCode::BAD_REQUEST, "INVALID_CLUSTER", e))?;
     let pool = get_pool()?;
     let now = now_iso();
     sqlx::query(
@@ -176,10 +173,7 @@ pub async fn import_from_config(definitions: &[crate::config::ClusterDefinition]
             enabled: def.enabled,
         };
         if service::validate(&req).is_err() {
-            tracing::warn!(
-                "platform config cluster '{}' is invalid — skipped",
-                def.id
-            );
+            tracing::warn!("platform config cluster '{}' is invalid — skipped", def.id);
             continue;
         }
         let pool = match crate::infra::db::sqlite::try_pool() {

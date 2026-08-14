@@ -1182,6 +1182,7 @@ pub async fn run_command(
                         retries: 0,
                         timeout: None,
                         skip_reason: None,
+                        max_rss_mb: None,
                     });
                     skipped_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     if !is_tty {
@@ -1263,6 +1264,7 @@ pub async fn run_command(
                     retries: 0,
                     timeout: None,
                     skip_reason: Some("blocked by failed upstream dependency".into()),
+                    max_rss_mb: None,
                 });
                 if !is_tty {
                     eprintln!(
@@ -1344,7 +1346,10 @@ pub async fn run_command(
                                 oxo_flow_core::executor::checkpoint::BenchmarkRecord {
                                     rule: rule_name.clone(),
                                     wall_time_secs: duration,
-                                    max_memory_mb: None,
+                                    max_memory_mb: record.max_rss_mb,
+                                    memory_limit_mb: rule
+                                        .effective_memory()
+                                        .and_then(oxo_flow_core::scheduler::parse_memory_mb),
                                     cpu_seconds: None,
                                     retries: record.retries,
                                 };
@@ -1461,6 +1466,7 @@ pub async fn run_command(
                             retries: 0,
                             timeout: None,
                             skip_reason: None,
+                            max_rss_mb: None,
                         };
                         if keep_going {
                             let mut f = failures.lock().await;
@@ -1544,6 +1550,7 @@ pub async fn run_command(
                 retries: 0,
                 timeout: None,
                 skip_reason: Some(format!("re-entry manifest: {e}")),
+                max_rss_mb: None,
             });
         }
 
@@ -1634,6 +1641,7 @@ pub async fn run_command(
                     retries: 0,
                     timeout: None,
                     skip_reason: Some("blocked by failed upstream dependency".into()),
+                    max_rss_mb: None,
                 });
                 progress.inc(1);
                 if !is_tty {

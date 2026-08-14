@@ -143,6 +143,7 @@ impl BackendDriver {
                         retries: 0,
                         timeout: None,
                         skip_reason: Some("blocked by failed upstream dependency".into()),
+                        max_rss_mb: None,
                     });
                     done.insert(name.clone(), JobStatus::Skipped);
                     emit(
@@ -184,6 +185,7 @@ impl BackendDriver {
                             retries: 0,
                             timeout: None,
                             skip_reason: Some("no shell or script defined".into()),
+                            max_rss_mb: None,
                         });
                         done.insert(name.clone(), JobStatus::Skipped);
                         emit(
@@ -316,6 +318,7 @@ impl BackendDriver {
                                 retries: 0,
                                 timeout: None,
                                 skip_reason: None,
+                                max_rss_mb: None,
                             }
                         }
                         BackendJobStatus::Failed => {
@@ -337,6 +340,7 @@ impl BackendDriver {
                                 retries: 0,
                                 timeout: None,
                                 skip_reason: None,
+                                max_rss_mb: None,
                             }
                         }
                         BackendJobStatus::Cancelled => JobRecord {
@@ -351,6 +355,7 @@ impl BackendDriver {
                             retries: 0,
                             timeout: None,
                             skip_reason: Some("cancelled".into()),
+                            max_rss_mb: None,
                         },
                         _ => unreachable!("non-terminal states filtered above"),
                     };
@@ -466,6 +471,7 @@ fn return_record_failure(
         retries: 0,
         timeout: None,
         skip_reason: Some(format!("re-entry manifest: {e}")),
+        max_rss_mb: None,
     });
     done.insert(f.rule.clone(), JobStatus::Failed);
 }

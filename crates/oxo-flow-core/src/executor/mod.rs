@@ -7,6 +7,7 @@ use sysinfo::System;
 
 pub mod checkpoint;
 pub mod process;
+pub mod rss;
 pub mod security;
 pub mod staging;
 pub mod timeout;
