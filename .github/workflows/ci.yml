@@ -348,6 +348,18 @@ jobs:
           key: ${{ runner.os }}-cargo-registry-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-registry-${{ matrix.target }}-
 
+      - name: Setup Node (frontend build for the desktop bundle)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build frontend (SPA assets ship inside the app bundle)
+        shell: bash
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
       - name: Build release binaries
         run: |
           cargo build --release --target ${{ matrix.target }} -p oxo-flow-cli
@@ -367,12 +379,49 @@ jobs:
             "dist/oxo-flow-web-${RELEASE_TAG}-${{ matrix.target }}.tar.gz" \
             "oxo-flow-web"
 
+      - name: Package desktop app (.app + .dmg)
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+        shell: bash
+        run: |
+          set -euxo pipefail
+          TARGET_DIR="target/${{ matrix.target }}/release"
+          mkdir -p dist
+          # Hand-rolled .app bundle (same layout cargo-bundle produces):
+          # the CLI binary doubles as the desktop entry (serve --open), and
+          # the SPA build ships in Contents/Resources/static so the app is
+          # self-contained (see docs/how-to/desktop-app.md).
+          APP="oxo-flow.app"
+          mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
+          cp "${TARGET_DIR}/oxo-flow" "${APP}/Contents/MacOS/oxo-flow"
+          cp -r crates/oxo-flow-web/static "${APP}/Contents/Resources/static"
+          # (printf instead of a heredoc: YAML block scalars cannot host a
+          # heredoc terminator at column 0.)
+          PLIST="${APP}/Contents/Info.plist"
+          printf '<?xml version="1.0" encoding="UTF-8"?>\n' > "$PLIST"
+          printf '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n' >> "$PLIST"
+          printf '<plist version="1.0"><dict>\n' >> "$PLIST"
+          printf '  <key>CFBundleName</key><string>oxo-flow</string>\n' >> "$PLIST"
+          printf '  <key>CFBundleDisplayName</key><string>oxo-flow</string>\n' >> "$PLIST"
+          printf '  <key>CFBundleIdentifier</key><string>org.oxoflow.oxoflow</string>\n' >> "$PLIST"
+          printf '  <key>CFBundleVersion</key><string>%s</string>\n' "${RELEASE_TAG#v}" >> "$PLIST"
+          printf '  <key>CFBundleShortVersionString</key><string>%s</string>\n' "${RELEASE_TAG#v}" >> "$PLIST"
+          printf '  <key>CFBundlePackageType</key><string>APPL</string>\n' >> "$PLIST"
+          printf '  <key>CFBundleExecutable</key><string>oxo-flow</string>\n' >> "$PLIST"
+          printf '  <key>LSMinimumSystemVersion</key><string>11.0</string>\n' >> "$PLIST"
+          printf '</dict></plist>\n' >> "$PLIST"
+          (cd dist && zip -qry "oxo-flow-${RELEASE_TAG}-${{ matrix.target }}-app.zip" "../${APP}")
+          hdiutil create -volname "oxo-flow" -srcfolder "${APP}" -ov -format UDZO \
+            "dist/oxo-flow-${RELEASE_TAG}-${{ matrix.target }}.dmg"
+
       - name: Upload artifact
         if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
         uses: actions/upload-artifact@v4
         with:
           name: binaries-${{ matrix.target }}
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.dmg
+            dist/*-app.zip
           retention-days: 7
 
   # ─── GitHub Release ────────────────────────────────────────────────────────
@@ -411,12 +460,109 @@ jobs:
         with:
           path: artifacts
 
+      - name: Package Debian desktop bundle (.deb)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          # The desktop Linux distribution form: the CLI binary + SPA assets
+          # under /usr/share/oxo-flow (resolved by the executable-relative
+          # frontend lookup). Built from the host-target binaries artifact.
+          mkdir -p deb-root/DEBIAN deb-root/usr/bin deb-root/usr/share/oxo-flow
+          tar -xzf artifacts/binaries-x86_64-unknown-linux-gnu/oxo-flow-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz \
+            -C deb-root/usr/bin
+          # The SPA build output was produced by build-macos (not an artifact);
+          # rebuild it here so the deb is self-contained.
+          cd frontend && npm ci && npm run build && cd ..
+          cp -r crates/oxo-flow-web/static deb-root/usr/share/oxo-flow/static
+          VERSION="${RELEASE_TAG#v}"
+          printf 'Package: oxo-flow\n' > deb-root/DEBIAN/control
+          printf 'Version: %s\n' "${VERSION}" >> deb-root/DEBIAN/control
+          printf 'Section: science\n' >> deb-root/DEBIAN/control
+          printf 'Priority: optional\n' >> deb-root/DEBIAN/control
+          printf 'Architecture: amd64\n' >> deb-root/DEBIAN/control
+          printf 'Maintainer: Traitome <w_shixiang@163.com>\n' >> deb-root/DEBIAN/control
+          printf 'Description: Bioinformatics workflow engine with web interface\n' >> deb-root/DEBIAN/control
+          printf ' Rust-native pipeline engine: DAG workflows, graphical editor,\n' >> deb-root/DEBIAN/control
+          printf ' AI-assisted generation, cluster execution. The desktop build\n' >> deb-root/DEBIAN/control
+          printf ' starts the local web interface (oxo-flow serve --open).\n' >> deb-root/DEBIAN/control
+          mkdir -p artifacts/dist
+          dpkg-deb --build deb-root "artifacts/dist/oxo-flow-${RELEASE_TAG}-amd64.deb"
+
+      - name: Package Red Hat bundle (.rpm)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          # RPM for RHEL/Fedora/CentOS — same payload as the deb, built with
+          # rpmbuild (installed from apt on this runner).
+          sudo apt-get update -qq && sudo apt-get install -y -qq rpm
+          VERSION="${RELEASE_TAG#v}"
+          mkdir -p rpm-build/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          # (The spec goes through stdin — heredocs cannot terminate at
+          # column 0 inside a YAML block scalar.)
+          printf '%s\n' \
+            'Name: oxo-flow' \
+            'Version: %{version}' \
+            'Release: 1' \
+            'Summary: Bioinformatics workflow engine with web interface' \
+            'License: Academic (free for academic use)' \
+            'URL: https://github.com/Traitome/oxo-flow' \
+            'BuildArch: x86_64' \
+            '%description' \
+            'Rust-native pipeline engine: DAG workflows, graphical editor,' \
+            'AI-assisted generation, cluster execution. The desktop build' \
+            'starts the local web interface (oxo-flow serve --open).' \
+            '%install' \
+            'mkdir -p %{buildroot}/usr/bin %{buildroot}/usr/share/oxo-flow' \
+            "cp $PWD/deb-root/usr/bin/oxo-flow %{buildroot}/usr/bin/oxo-flow" \
+            "cp -r $PWD/deb-root/usr/share/oxo-flow/static %{buildroot}/usr/share/oxo-flow/static" \
+            '%files' \
+            '/usr/bin/oxo-flow' \
+            '/usr/share/oxo-flow/static' \
+            > rpm-build/SPECS/oxo-flow.spec
+          rpmbuild --define "_topdir $PWD/rpm-build" --define "version ${VERSION}" \
+            -bb rpm-build/SPECS/oxo-flow.spec
+          mkdir -p artifacts/dist
+          cp rpm-build/RPMS/x86_64/oxo-flow-${VERSION}-1.x86_64.rpm \
+            "artifacts/dist/oxo-flow-${RELEASE_TAG}-x86_64.rpm"
+
+      - name: Package universal Linux bundle (.AppImage)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          APPDIR="oxo-flow.AppDir"
+          mkdir -p "${APPDIR}/usr/bin" "${APPDIR}/usr/share/oxo-flow"
+          cp deb-root/usr/bin/oxo-flow "${APPDIR}/usr/bin/oxo-flow"
+          cp -r deb-root/usr/share/oxo-flow/static "${APPDIR}/usr/share/oxo-flow/static"
+          printf '%s\n' '#!/bin/sh' \
+            '# Desktop entry: start the local web interface and open the browser.' \
+            'HERE="$(dirname "$(readlink -f "$0")")"' \
+            'exec "${HERE}/usr/bin/oxo-flow" serve --open "$@"' \
+            > "${APPDIR}/AppRun"
+          chmod +x "${APPDIR}/AppRun"
+          printf '%s\n' \
+            '[Desktop Entry]' \
+            'Type=Application' \
+            'Name=oxo-flow' \
+            'Comment=Bioinformatics workflow engine with web interface' \
+            'Exec=AppRun' \
+            'Icon=oxo-flow' \
+            'Terminal=false' \
+            'Categories=Science;Development;' \
+            > "${APPDIR}/oxo-flow.desktop"
+          cp crates/oxo-flow-web/static/favicon.svg "${APPDIR}/oxo-flow.svg"
+          curl -sL -o appimagetool \
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+          chmod +x appimagetool
+          mkdir -p artifacts/dist
+          ./appimagetool "${APPDIR}" "artifacts/dist/oxo-flow-${RELEASE_TAG}-x86_64.AppImage"
+
       - name: Generate SHA256 checksums
         shell: bash
         run: |
           mkdir -p artifacts/checksums
           cd artifacts
-          find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) -print0 \
+          find . -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.dmg' -o -name '*.deb' \) -print0 \
             | while IFS= read -r -d '' f; do
                 sha256sum "$f" | awk -v name="$(basename "$f")" '{print $1 "  " name}'
               done \
@@ -439,6 +585,8 @@ jobs:
           files: |
             artifacts/**/*.tar.gz
             artifacts/**/*.zip
+            artifacts/**/*.dmg
+            artifacts/**/*.deb
             artifacts/checksums/SHA256SUMS.txt
           draft: false
           prerelease: false
