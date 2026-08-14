@@ -26,7 +26,7 @@ use crate::infra::license::LicenseHeaderLayer;
 /// 1. `OXO_FLOW_FRONTEND_DIR` env var (set in Docker/deployment)
 /// 2. `--frontend-dir` CLI flag (via FRONTEND_DIR env var)
 /// 3. Compile-time `crates/oxo-flow-web/static/` (dev)
-async fn spa_index() -> impl IntoResponse {
+pub async fn spa_index() -> impl IntoResponse {
     let fallback = r#"<!doctype html><html><body><h1>oxo-flow</h1><p>SPA not built. Run <code>npm run build</code> in frontend/ first.</p></body></html>"#;
 
     let html = std::env::var("OXO_FLOW_FRONTEND_DIR")
@@ -43,6 +43,22 @@ async fn spa_index() -> impl IntoResponse {
             let compile_time_path = concat!(env!("CARGO_MANIFEST_DIR"), "/static/index.html");
             std::fs::read_to_string(compile_time_path).unwrap_or_else(|_| fallback.to_string())
         });
+
+    // Sub-path mounts: inject the base so relative asset URLs and the
+    // frontend router resolve under the mount point. Root mounts stay
+    // untouched (byte-identical output).
+    let base = base_path();
+    let html = if base.is_empty() || base == "/" {
+        html
+    } else {
+        let tag = format!(
+            "<base href=\"{base}/\"><script>window.__OXO_BASE__=\"{base}\";</script>"
+        );
+        match html.find("</head>") {
+            Some(head_end) => format!("{}{}{}", &html[..head_end], tag, &html[head_end..]),
+            None => html,
+        }
+    };
 
     (
         StatusCode::OK,
@@ -472,6 +488,12 @@ pub fn build_router(mode: &str) -> Router {
 /// trust decisions (e.g. personal-mode management endpoints).
 static RUNNING_MODE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
+/// Base path the app is mounted under ("" or "/" = root mount). The served
+/// SPA index gets a `<base>` tag + `window.__OXO_BASE__` injected so the
+/// frontend router and relative asset URLs work from any mount point
+/// (issue #79 deployment modes: "the app mounts somewhere").
+static BASE_PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 /// Current deployment mode; defaults to "personal" before the router is built.
 pub fn running_mode() -> &'static str {
     RUNNING_MODE.get().map(String::as_str).unwrap_or("personal")
@@ -480,6 +502,16 @@ pub fn running_mode() -> &'static str {
 /// Record the deployment mode (first call wins — a server process has one mode).
 pub fn set_running_mode(mode: &str) {
     let _ = RUNNING_MODE.set(mode.to_string());
+}
+
+/// Mount path of the app ("" or "/" = root).
+pub fn base_path() -> &'static str {
+    BASE_PATH.get().map(String::as_str).unwrap_or("/")
+}
+
+/// Record the mount path (first call wins).
+pub fn set_base_path(path: &str) {
+    let _ = BASE_PATH.set(path.to_string());
 }
 
 /// Add standard security headers to every response.

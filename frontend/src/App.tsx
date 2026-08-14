@@ -19,9 +19,19 @@ function PageFallback() {
   </div>;
 }
 
+// Mount-aware routing: the server injects window.__OXO_BASE__ into
+// index.html when the app is served under a sub-path (--base-path); the
+// BrowserRouter basename must match or every route 404s the SPA fallback.
+declare global {
+  interface Window {
+    __OXO_BASE__?: string;
+  }
+}
+const appBasename = window.__OXO_BASE__ && window.__OXO_BASE__ !== '/' ? window.__OXO_BASE__ : undefined;
+
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={appBasename}>
       <Routes>
         <Route element={<Layout />}>
           <Route path="/" element={<Suspense fallback={<PageFallback />}><Dashboard /></Suspense>} />

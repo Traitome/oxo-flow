@@ -257,7 +257,10 @@ export default function WorkflowCanvas({
         nodeTypes={nodeTypes}
         fitView
         fitViewOptions={{ padding: 0.25, maxZoom: 1.2 }}
-        minZoom={0.2}
+        // Issue #79 (P2): minZoom 0.2 rendered node text at ~4px on large
+        // DAGs — unreadable. 0.5 keeps the minimum glyph height legible
+        // while still zooming out far enough for 30+ node graphs.
+        minZoom={0.5}
         maxZoom={2}
         proOptions={{ hideAttribution: true }}
         nodesConnectable={editable}
@@ -267,7 +270,8 @@ export default function WorkflowCanvas({
         <Controls showInteractive={false} />
         {/* The minimap overlays the canvas — useful for monitoring a large
             DAG, intrusive while editing. */}
-        {!editable && <MiniMap pannable zoomable className="rf-minimap" />}
+        {/* Large-DAG navigation aid in every mode (issue #79 P2). */}
+        <MiniMap pannable zoomable className="rf-minimap" />
       </ReactFlow>
       {context === 'editor' && (
         <button className="rf-layout-btn" onClick={applyLayout} title="Auto-layout the DAG">

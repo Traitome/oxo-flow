@@ -697,11 +697,18 @@ pub async fn start_server_with_mode(
     // Initialize AI provider
     crate::ai_provider::AiProviderRegistry::global().init_from_env();
 
+    crate::server::set_base_path(base_path);
     let app = crate::server::build_router(mode);
     let app = if base_path.is_empty() || base_path == "/" {
         app
     } else {
-        axum::Router::new().nest(base_path, app)
+        // See main.rs: `nest` leaves the trailing-slash mount root unrouted.
+        axum::Router::new()
+            .route(
+                &format!("{base_path}/"),
+                axum::routing::get(crate::server::spa_index),
+            )
+            .nest(base_path, app)
     };
 
     let addr = format!("{host}:{port}");

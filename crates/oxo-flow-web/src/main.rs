@@ -173,7 +173,22 @@ async fn main() -> Result<()> {
     tracing::info!("Starting oxo-flow-web server on {}", addr);
 
     // Use the domain-driven router from server.rs, merged with frontend
+    oxo_flow_web::server::set_base_path(&cli.base_path);
     let app = oxo_flow_web::server::build_router(&mode_str);
+    // Mount the whole app under --base-path when set (sub-path deployments,
+    // e.g. behind a reverse proxy at /oxoflow). The flag was previously
+    // parsed but never applied (issue #79 deployment modes).
+    let app = if cli.base_path.is_empty() || cli.base_path == "/" {
+        app
+    } else {
+        // `nest` registers GET <base_path> itself, but a request with the
+        // trailing slash (/oxoflow/) lands on an empty remainder inside the
+        // nest — route it explicitly so the mount root serves the SPA.
+        let base = &cli.base_path;
+        axum::Router::new()
+            .route(&format!("{base}/"), axum::routing::get(oxo_flow_web::server::spa_index))
+            .nest(base, app)
+    };
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Listening on http://{addr}");
