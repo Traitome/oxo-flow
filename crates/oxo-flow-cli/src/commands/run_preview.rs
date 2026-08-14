@@ -67,6 +67,24 @@ pub struct RunPreview {
     pub cascade_chains: Vec<Vec<String>>,
 }
 
+/// Storage resolver for manifest snapshots: the local backend always;
+/// cloud backends register when the corresponding feature is enabled.
+/// Shared by run and dry-run so their snapshot semantics cannot drift.
+pub fn storage_resolver() -> oxo_flow_core::storage::StorageResolver {
+    let mut resolver = oxo_flow_core::storage::StorageResolver::with_local();
+    #[cfg(feature = "s3-storage")]
+    resolver.add_backend(
+        oxo_flow_core::storage::StorageScheme::S3,
+        std::sync::Arc::new(oxo_flow_core::storage::s3::S3Storage::new()),
+    );
+    #[cfg(feature = "gcs-storage")]
+    resolver.add_backend(
+        oxo_flow_core::storage::StorageScheme::Gcs,
+        std::sync::Arc::new(oxo_flow_core::storage::gcs::GcsStorage::new()),
+    );
+    resolver
+}
+
 /// Compute the read-only preview for an execution set.
 ///
 /// Mirrors `run`'s preprocessing exactly: config-impact detection first,
@@ -361,6 +379,7 @@ pub fn detect_input_manifest_invalidations(
             rule,
             workdir,
             wildcard_values,
+            &storage_resolver(),
         ) {
             Ok(Some(current)) => match ck.input_manifests.get(name) {
                 Some(recorded)
@@ -655,7 +674,8 @@ shell = "cat {input[0]} > {output[0]} && echo {config.ref}"
         for name in order {
             ck.completed_rules.insert(name.clone());
             if let Some(rule) = config.get_rule(name)
-                && let Ok(Some(manifest)) = snapshot_input_manifest(rule, dir, wildcard_values)
+                && let Ok(Some(manifest)) =
+                    snapshot_input_manifest(rule, dir, wildcard_values, &storage_resolver())
             {
                 ck.record_input_manifest(name, manifest);
             }

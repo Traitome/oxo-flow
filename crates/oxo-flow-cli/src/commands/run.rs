@@ -1260,10 +1260,14 @@ pub async fn run_command(
                 // the manifest records what the rule is about to consume, so
                 // files added mid-run are not silently baked into the
                 // recorded baseline.
+                // Remote inputs record (scheme, key, size, etag) when a cloud
+                // backend is registered (issue #78 P2); without one they
+                // degrade gracefully (warning + entry skipped).
                 let input_manifest = oxo_flow_core::executor::checkpoint::snapshot_input_manifest(
                     &rule,
                     workdir_actual.as_ref(),
                     &wildcard_values,
+                    &crate::commands::run_preview::storage_resolver(),
                 )
                 .ok()
                 .flatten();
