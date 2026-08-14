@@ -223,6 +223,7 @@ pub enum Commands {
         )]
         samples_filter: Vec<String>,
         #[arg(
+            short = 'd',
             long,
             help = "Working directory to resolve paths against (default: the workflow file's directory)"
         )]
@@ -236,6 +237,39 @@ pub enum Commands {
         /// mirrors the run flag; the preview lists required builds otherwise.
         #[arg(long)]
         skip_ref_build: bool,
+        /// Set a workflow config value (overrides [config] defaults).
+        /// Repeatable — same forms as `run` (issue #77 parity).
+        #[arg(
+            long = "arg",
+            value_name = "KEY=VALUE",
+            help = "Set a workflow config value (overrides [config] defaults). Repeatable."
+        )]
+        args: Vec<String>,
+        /// Direct config overrides in the same trailing positional form
+        /// `run` accepts: KEY=VALUE, --KEY=VALUE, or --KEY VALUE.
+        #[arg(
+            value_name = "KEY=VALUE",
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            help = "Direct config overrides: KEY=VALUE, --KEY=VALUE, or --KEY VALUE"
+        )]
+        config_overrides: Vec<String>,
+        /// Add a sample to the preview (repeatable, merges with all
+        /// sources) — same semantics as `run --sample`.
+        #[arg(
+            long = "sample",
+            value_name = "SAMPLE",
+            help = "Add a sample to the run (repeatable, merges with all sources)"
+        )]
+        extra_samples: Vec<String>,
+        /// Force re-execution of this run's rules (ignore up-to-date
+        /// checks) — previews exactly what `run --rerun` would execute.
+        #[arg(long)]
+        rerun: bool,
+        /// Resume only failed rules from a previous run — mirrors the run
+        /// flag's execution set.
+        #[arg(long)]
+        resume_failed: bool,
     },
     /// Validate a .oxoflow workflow file.
     Validate {
@@ -762,21 +796,18 @@ async fn main() -> Result<()> {
         if let Some(cfg) = oxo_flow_web::config::load() {
             if let Some(mode) = cfg.server.mode {
                 let mode = clap::builder::OsStr::from(mode);
-                command = command.mut_subcommand("serve", |c| {
-                    c.mut_arg("mode", |a| a.default_value(mode))
-                });
+                command = command
+                    .mut_subcommand("serve", |c| c.mut_arg("mode", |a| a.default_value(mode)));
             }
             if let Some(host) = cfg.server.host {
                 let host = clap::builder::OsStr::from(host);
-                command = command.mut_subcommand("serve", |c| {
-                    c.mut_arg("host", |a| a.default_value(host))
-                });
+                command = command
+                    .mut_subcommand("serve", |c| c.mut_arg("host", |a| a.default_value(host)));
             }
             if let Some(port) = cfg.server.port {
                 let port = clap::builder::OsStr::from(port.to_string());
-                command = command.mut_subcommand("serve", |c| {
-                    c.mut_arg("port", |a| a.default_value(port))
-                });
+                command = command
+                    .mut_subcommand("serve", |c| c.mut_arg("port", |a| a.default_value(port)));
             }
             if let Some(base_path) = cfg.server.base_path {
                 let base_path = clap::builder::OsStr::from(base_path);
@@ -990,7 +1021,16 @@ async fn main() -> Result<()> {
             workdir,
             profile,
             skip_ref_build,
+            args,
+            config_overrides,
+            extra_samples,
+            rerun,
+            resume_failed,
         } => {
+            // Same merge rule as `run`: trailing KEY=VALUE positionals first,
+            // --arg entries after (later entries win on duplicate keys).
+            let mut merged_args = config_overrides;
+            merged_args.extend(args);
             dry_run_command(
                 workflow,
                 target,
@@ -1002,6 +1042,10 @@ async fn main() -> Result<()> {
                 workdir,
                 profile,
                 skip_ref_build,
+                merged_args,
+                extra_samples,
+                rerun,
+                resume_failed,
             )
             .await?
         }
@@ -1205,6 +1249,10 @@ async fn main() -> Result<()> {
                 samples_filter.clone(),
                 workdir.clone(),
                 None,
+                false,
+                vec![],
+                vec![],
+                false,
                 false,
             )
             .await?;

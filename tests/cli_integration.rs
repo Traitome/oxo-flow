@@ -4483,7 +4483,7 @@ shell = "echo q={config.min_quality} > {output}"
     assert!(!out.status.success(), "--json after KEY=VALUE must error");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("run flag, not a config override"),
+        stderr.contains("command flag, not a config override"),
         "expected actionable guidance, got: {stderr}"
     );
     assert!(
@@ -4504,7 +4504,7 @@ shell = "echo q={config.min_quality} > {output}"
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("run flag, not a config override") && stderr.contains("-j"),
+        stderr.contains("command flag, not a config override") && stderr.contains("-j"),
         "short flags need the same guidance: {stderr}"
     );
 

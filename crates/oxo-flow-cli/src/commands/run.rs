@@ -286,6 +286,171 @@ fn cleanup_cache_dir(cache_dir: &std::path::Path, max_age_days: u64) -> usize {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Parse CLI config overrides — the SAME accepted forms for `run` and
+/// `dry-run` (issue #77 parity):
+///   KEY=VALUE            direct positional form
+///   --KEY=VALUE          long-flag form
+///   --KEY VALUE          long-flag form with separate value
+///   --arg KEY=VALUE      legacy `--arg` form (backward compatible)
+fn parse_cli_overrides(cli_args: Vec<String>) -> anyhow::Result<std::collections::HashMap<String, String>> {
+    let mut cli_arg_values: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut cli_args_iter = cli_args.into_iter().peekable();
+    while let Some(arg_str) = cli_args_iter.next() {
+        // issue #71: run flags swallowed by the trailing overrides positional
+        // get a targeted error instead of a confusing parse failure.
+        let swallowed_flag = arg_str
+            .strip_prefix("--")
+            .map(|flag| flag.split('=').next().unwrap_or(flag))
+            .filter(|name| RUN_FLAG_NAMES.contains(name))
+            .map(|name| format!("--{name}"))
+            .or_else(|| {
+                arg_str
+                    .strip_prefix('-')
+                    .filter(|rest| !rest.starts_with('-'))
+                    .map(|flag| flag.split('=').next().unwrap_or(flag))
+                    .filter(|name| RUN_SHORT_FLAGS.contains(name))
+                    .map(|name| format!("-{name}"))
+            });
+        if let Some(flag) = swallowed_flag {
+            anyhow::bail!(
+                "'{flag}' is a command flag, not a config override.\n  \
+                 Command flags must come before KEY=VALUE overrides, e.g.:\n  \
+                 oxo-flow run <workflow.oxoflow> --json min_quality=30\n  \
+                 For a config key that itself starts with dashes, use --arg KEY=VALUE\n  \
+                 (also placed before positional overrides)."
+            );
+        }
+        let (k, v) = if let Some(eq) = arg_str.find('=') {
+            let k = arg_str[..eq].trim_start_matches('-').to_string();
+            (k, arg_str[eq + 1..].to_string())
+        } else if let Some(k) = arg_str.strip_prefix("--") {
+            // `--KEY VALUE` — consume the next argument as the value
+            let v = cli_args_iter.next().with_context(|| {
+                format!("invalid config flag: '{arg_str}' — expected --KEY=VALUE or --KEY VALUE")
+            })?;
+            (k.to_string(), v)
+        } else {
+            anyhow::bail!(
+                "invalid config value format: '{arg_str}' — expected KEY=VALUE, --KEY=VALUE, or --KEY VALUE"
+            );
+        };
+        if k.is_empty() || v.is_empty() {
+            anyhow::bail!(
+                "invalid config value format: '{arg_str}' — KEY and VALUE must be non-empty"
+            );
+        }
+        cli_arg_values.insert(k, v);
+    }
+    Ok(cli_arg_values)
+}
+
+/// Apply parsed overrides and the defaults of declarative config entries
+/// (`key = { default, required, … }` in `[config]`). Shared by `run` and
+/// `dry-run` so preview and execution validate identically.
+fn apply_cli_overrides(
+    config: &mut WorkflowConfig,
+    cli_arg_values: &std::collections::HashMap<String, String>,
+) -> anyhow::Result<()> {
+    for (name, cfg_def) in &config.config_meta {
+        let effective_value = if let Some(val) = cli_arg_values.get(name) {
+            validate_config_value(name, val, cfg_def)?;
+            config
+                .config
+                .insert(name.clone(), toml::Value::String(val.clone()));
+            val.clone()
+        } else if let Some(ref default) = cfg_def.default {
+            validate_config_value(name, default, cfg_def)?;
+            config
+                .config
+                .entry(name.clone())
+                .or_insert_with(|| toml::Value::String(default.clone()));
+            default.clone()
+        } else if cfg_def.required {
+            let help_suffix = cfg_def
+                .help
+                .as_deref()
+                .map(|h| format!("\n  {h}"))
+                .unwrap_or_default();
+            let display_name = if cfg_def.sensitive {
+                format!("{name} (sensitive)")
+            } else {
+                name.clone()
+            };
+            anyhow::bail!(
+                "required config '{display_name}' not set. Use --{name} <value>{help_suffix}"
+            );
+        } else {
+            continue;
+        };
+        // Mask sensitive values in all non-execution output
+        if cfg_def.sensitive {
+            tracing::info!("config '{}' = **** (sensitive)", name);
+        } else {
+            tracing::debug!("config '{}' = '{}'", name, effective_value);
+        }
+    }
+    // Inject undeclared KEY=VALUE values as {config.xxx} — a CLI override
+    // must win over the workflow's [config] table (issue #62).
+    for (k, v) in cli_arg_values {
+        config
+            .config
+            .insert(k.clone(), toml::Value::String(v.clone()));
+    }
+    Ok(())
+}
+
+/// Merge `--sample` CLI flags into sample groups and `samples_list` — the
+/// same merge `run` performs (shared with dry-run, issue #77 parity).
+fn merge_extra_samples(config: &mut WorkflowConfig, extra_samples: &[String]) {
+    if extra_samples.is_empty() {
+        return;
+    }
+    if let Some(group) = config
+        .sample_groups
+        .iter_mut()
+        .find(|g| g.name == "auto-discovered")
+    {
+        for s in extra_samples {
+            if !group.samples.contains(s) {
+                group.samples.push(s.clone());
+            }
+        }
+    } else {
+        config
+            .sample_groups
+            .push(oxo_flow_core::config::SampleGroup {
+                name: "cli-specified".to_string(),
+                samples: extra_samples.to_vec(),
+                metadata: std::collections::HashMap::new(),
+            });
+    }
+    let existing = config
+        .config
+        .get("samples_list")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let mut merged: Vec<String> = existing
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect();
+    for s in extra_samples {
+        if !merged.contains(s) {
+            merged.push(s.clone());
+        }
+    }
+    config.config.insert(
+        "samples_list".to_string(),
+        toml::Value::String(merged.join(",")),
+    );
+    eprintln!(
+        "  {} Added {} sample(s) via --sample flag",
+        "Samples:".cyan(),
+        extra_samples.len()
+    );
+}
+
 pub async fn run_command(
     workflow: Option<PathBuf>,
     jobs: usize,
@@ -359,163 +524,13 @@ pub async fn run_command(
     let mut config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
-    // ── Parse and merge CLI config overrides ────────────────────────────
-    // Accepted forms (all map to `config.<key>` values):
-    //   KEY=VALUE            direct positional form
-    //   --KEY=VALUE          long-flag form
-    //   --KEY VALUE          long-flag form with separate value
-    //   --arg KEY=VALUE      legacy `--arg` form (backward compatible)
+    // ── Parse and merge CLI config overrides (shared with dry-run) ─────
+    let cli_arg_values = parse_cli_overrides(cli_args)?;
 
-    let mut cli_arg_values: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-    let mut cli_args_iter = cli_args.into_iter().peekable();
-    while let Some(arg_str) = cli_args_iter.next() {
-        // issue #71: run flags swallowed by the trailing overrides positional
-        // get a targeted error instead of a confusing parse failure.
-        let swallowed_flag = arg_str
-            .strip_prefix("--")
-            .map(|flag| flag.split('=').next().unwrap_or(flag))
-            .filter(|name| RUN_FLAG_NAMES.contains(name))
-            .map(|name| format!("--{name}"))
-            .or_else(|| {
-                arg_str
-                    .strip_prefix('-')
-                    .filter(|rest| !rest.starts_with('-'))
-                    .map(|flag| flag.split('=').next().unwrap_or(flag))
-                    .filter(|name| RUN_SHORT_FLAGS.contains(name))
-                    .map(|name| format!("-{name}"))
-            });
-        if let Some(flag) = swallowed_flag {
-            anyhow::bail!(
-                "'{flag}' is a run flag, not a config override.\n  \
-                 Run flags must come before KEY=VALUE overrides, e.g.:\n  \
-                 oxo-flow run <workflow.oxoflow> --json min_quality=30\n  \
-                 For a config key that itself starts with dashes, use --arg KEY=VALUE\n  \
-                 (also placed before positional overrides)."
-            );
-        }
-        let (k, v) = if let Some(eq) = arg_str.find('=') {
-            let k = arg_str[..eq].trim_start_matches('-').to_string();
-            (k, arg_str[eq + 1..].to_string())
-        } else if let Some(k) = arg_str.strip_prefix("--") {
-            // `--KEY VALUE` — consume the next argument as the value
-            let v = cli_args_iter.next().with_context(|| {
-                format!("invalid config flag: '{arg_str}' — expected --KEY=VALUE or --KEY VALUE")
-            })?;
-            (k.to_string(), v)
-        } else {
-            anyhow::bail!(
-                "invalid config value format: '{arg_str}' — expected KEY=VALUE, --KEY=VALUE, or --KEY VALUE"
-            );
-        };
-        if k.is_empty() || v.is_empty() {
-            anyhow::bail!(
-                "invalid config value format: '{arg_str}' — KEY and VALUE must be non-empty"
-            );
-        }
-        cli_arg_values.insert(k, v);
-    }
-
-    // Apply CLI overrides and defaults from declarative config entries.
-    // config_meta holds the declaration (required/default/help) for keys
-    // that use the `key = { default, required, … }` syntax in [config].
-    for (name, cfg_def) in &config.config_meta {
-        let effective_value = if let Some(val) = cli_arg_values.get(name) {
-            validate_config_value(name, val, cfg_def)?;
-            config
-                .config
-                .insert(name.clone(), toml::Value::String(val.clone()));
-            val.clone()
-        } else if let Some(ref default) = cfg_def.default {
-            validate_config_value(name, default, cfg_def)?;
-            config
-                .config
-                .entry(name.clone())
-                .or_insert_with(|| toml::Value::String(default.clone()));
-            default.clone()
-        } else if cfg_def.required {
-            let help_suffix = cfg_def
-                .help
-                .as_deref()
-                .map(|h| format!("\n  {h}"))
-                .unwrap_or_default();
-            let display_name = if cfg_def.sensitive {
-                format!("{name} (sensitive)")
-            } else {
-                name.clone()
-            };
-            anyhow::bail!(
-                "required config '{display_name}' not set. Use --{name} <value>{help_suffix}"
-            );
-        } else {
-            continue;
-        };
-        // Mask sensitive values in all non-execution output
-        if cfg_def.sensitive {
-            tracing::info!("config '{}' = **** (sensitive)", name);
-        } else {
-            tracing::debug!("config '{}' = '{}'", name, effective_value);
-        }
-    }
-
-    // Also inject any undeclared KEY=VALUE values as {config.xxx}.
-    // insert() (not entry().or_insert()) — a CLI override must win over a
-    // value already set in the workflow's [config] table, even when the key
-    // has no config_meta declaration (issue #62: `oxo-flow run wf min_quality=30`
-    // depends on this).
-    for (k, v) in &cli_arg_values {
-        config
-            .config
-            .insert(k.clone(), toml::Value::String(v.clone()));
-    }
+    apply_cli_overrides(&mut config, &cli_arg_values)?;
 
     // ── Merge --sample CLI flags into sample groups and samples_list ───
-
-    if !extra_samples.is_empty() {
-        if let Some(group) = config
-            .sample_groups
-            .iter_mut()
-            .find(|g| g.name == "auto-discovered")
-        {
-            for s in &extra_samples {
-                if !group.samples.contains(s) {
-                    group.samples.push(s.clone());
-                }
-            }
-        } else {
-            config
-                .sample_groups
-                .push(oxo_flow_core::config::SampleGroup {
-                    name: "cli-specified".to_string(),
-                    samples: extra_samples.clone(),
-                    metadata: std::collections::HashMap::new(),
-                });
-        }
-        let existing = config
-            .config
-            .get("samples_list")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let mut merged: Vec<String> = existing
-            .split(',')
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-            .collect();
-        for s in &extra_samples {
-            if !merged.contains(s) {
-                merged.push(s.clone());
-            }
-        }
-        config.config.insert(
-            "samples_list".to_string(),
-            toml::Value::String(merged.join(",")),
-        );
-        eprintln!(
-            "  {} Added {} sample(s) via --sample flag",
-            "Samples:".cyan(),
-            extra_samples.len()
-        );
-    }
+    merge_extra_samples(&mut config, &extra_samples);
 
     // ── Filter to a sample subset (--samples first:N / names / ready) ────
     // Runs after CLI overrides so `ready` resolution sees the final config
@@ -1982,6 +1997,10 @@ pub async fn dry_run_command(
     workdir: Option<PathBuf>,
     profile: Option<String>,
     skip_ref_build: bool,
+    cli_args: Vec<String>,
+    extra_samples: Vec<String>,
+    rerun: bool,
+    resume_failed: bool,
 ) -> Result<()> {
     print_banner();
     let workflow = resolve_workflow(workflow)?;
@@ -1992,6 +2011,14 @@ pub async fn dry_run_command(
 
     let mut config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
+
+    // ── CLI config overrides + --sample (shared with run, issue #77) ─────
+    // Applied in run's exact order: overrides first, then --sample, then
+    // the --samples subset filter — so the preview config is structurally
+    // identical to what `run` would execute.
+    let cli_arg_values = parse_cli_overrides(cli_args)?;
+    apply_cli_overrides(&mut config, &cli_arg_values)?;
+    merge_extra_samples(&mut config, &extra_samples);
 
     // ── Filter to a sample subset (--samples first:N / names / ready) ──
     // `ready` resolves against a scratch expanded clone; the report covers
@@ -2131,6 +2158,8 @@ pub async fn dry_run_command(
         &sensitive_keys,
         &interpreter_map,
         &checkpoint_path,
+        rerun,
+        resume_failed,
     );
 
     // ── Checkpoint re-entry replay (issue #78 P3) ────────────────────────
@@ -2195,6 +2224,8 @@ pub async fn dry_run_command(
                 &sensitive_keys,
                 &interpreter_map,
                 &checkpoint_path,
+                rerun,
+                resume_failed,
             );
         }
     }
@@ -2301,6 +2332,12 @@ pub async fn dry_run_command(
                 }
                 crate::commands::run_preview::RuleStatus::CascadedUpstream { from } => {
                     format!("{}", format!("[rerun: upstream of {from}]").bold().yellow())
+                }
+                crate::commands::run_preview::RuleStatus::Forced => {
+                    format!("{}", "[run: forced (--rerun)]".bold())
+                }
+                crate::commands::run_preview::RuleStatus::SkippedFresh => {
+                    format!("{}", "[skip: outputs up-to-date]".dimmed())
                 }
             })
             .unwrap_or_default();
@@ -2495,6 +2532,8 @@ pub async fn dry_run_command(
                         crate::commands::run_preview::RuleStatus::CascadedUpstream { from } => {
                             ("run-cascaded-upstream", Some(from.clone()))
                         }
+                        crate::commands::run_preview::RuleStatus::Forced => ("run-forced", None),
+                        crate::commands::run_preview::RuleStatus::SkippedFresh => ("skip-fresh", None),
                     };
                     serde_json::json!({
                         "name": r.name,

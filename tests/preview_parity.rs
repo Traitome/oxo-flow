@@ -100,7 +100,7 @@ fn preview_plan(dir: &Path, dry_args: &[&str]) -> (HashSet<String>, HashSet<Stri
             Some(status) if status.starts_with("run-") => {
                 will_run.insert(name);
             }
-            Some("skip") | Some("skip-when-condition") => {
+            Some("skip") | Some("skip-when-condition") | Some("skip-fresh") => {
                 will_skip.insert(name);
             }
             other => panic!("unknown plan status {other:?} for {name}: {entry}"),
@@ -661,5 +661,195 @@ shell = "echo combine >> exec_log.txt; cat out/S1.txt out/S2.txt > out/all.txt"
             "combine".to_string(),
         ]),
         "S2's rules and the queue-level combine re-execute; S1 stays protected"
+    );
+}
+
+/// 11. `--rerun`: the preview classifies every up-to-date rule as forced
+///     (run-forced); `run --rerun` executes exactly that set.
+#[test]
+fn parity_rerun_forces_completed_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(dir.path(), "wf.oxoflow", &fresh_workflow());
+    fs::write(dir.path().join("in.txt"), "v1\n").unwrap();
+    baseline_run(dir.path(), &wf, &[]);
+
+    let (_, _) = assert_parity(
+        dir.path(),
+        &["wf.oxoflow", "--rerun"],
+        &["wf.oxoflow", "--rerun"],
+        "rerun",
+    );
+    // With --rerun the completed rules must ALL re-execute (the gate rule
+    // stays out — its `when` is false even under force).
+    let forced = preview_plan(dir.path(), &["wf.oxoflow", "--rerun"]).0;
+    assert_eq!(
+        forced,
+        HashSet::from(["step1".to_string(), "step2".to_string()])
+    );
+}
+
+/// 12. `--arg` / trailing KEY=VALUE overrides: identical accepted forms
+///     and identical invalidation on both sides. Each form runs in its own
+///     directory so one form's execution cannot leak state into the other's
+///     prediction.
+#[test]
+fn parity_arg_override_and_positional_forms_match_run() {
+    // The positional (trailing KEY=VALUE) form forces command flags to
+    // come BEFORE the override (issue #71), so that form drives its run
+    // manually; the --arg form goes through the standard runner.
+    let check_form = |override_args: &[&str], positional: bool| -> HashSet<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let wf = write_workflow(dir.path(), "wf.oxoflow", &fresh_workflow());
+        fs::write(dir.path().join("in.txt"), "v1\n").unwrap();
+        baseline_run(dir.path(), &wf, &[]);
+
+        // Flipping enable_gate makes the `when` gate true: the gate rule runs.
+        let preview_args: Vec<&str> = [&["wf.oxoflow"], override_args].concat();
+        let (pred, _) = preview_plan(dir.path(), &preview_args);
+        let _ = fs::remove_file(dir.path().join(EXEC_LOG));
+        if positional {
+            let out = oxo_flow()
+                .args([&["run", "-j", "2", "wf.oxoflow"], override_args].concat())
+                .current_dir(dir.path())
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "positional run failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        } else {
+            let mut args = vec!["run"];
+            args.extend_from_slice(override_args);
+            args.extend_from_slice(&["-j", "2", "wf.oxoflow"]);
+            let out = oxo_flow().args(&args).current_dir(dir.path()).output().unwrap();
+            assert!(
+                out.status.success(),
+                "arg-form run failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        let actual = executed(dir.path());
+        assert_eq!(pred, actual, "override parity violation");
+        assert!(pred.contains("gate"), "gate must run with the override");
+        pred
+    };
+    let a = check_form(&["--arg", "enable_gate=1"], false);
+    let b = check_form(&["enable_gate=1"], true);
+    assert_eq!(a, b, "--arg and KEY=VALUE must agree");
+}
+
+/// 13. `--sample`: preview and run merge CLI samples identically.
+///
+/// The wildcard instance is named `analyze_cli-specified_S2` (group +
+/// underscore naming) while the fixture shell logs `analyze-{sample}` →
+/// `analyze-S2`; both sides are normalized to the sample part before
+/// comparing — the parity contract is about WHICH instances run, not the
+/// underscore/hyphen spelling.
+#[test]
+fn parity_sample_flag_expands_the_same_instances() {
+    let normalize = |names: &HashSet<String>| -> HashSet<String> {
+        names
+            .iter()
+            .map(|n| {
+                n.strip_prefix("analyze")
+                    .and_then(|rest| rest.trim_start_matches(['-', '_']).rsplit('_').next())
+                    .unwrap_or(n.as_str())
+                    .to_string()
+            })
+            .collect()
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let wf_toml = r#"[workflow]
+name = "parity-samples"
+version = "1.0"
+
+[[rules]]
+name = "prep"
+output = ["catalog.txt"]
+shell = "echo prep >> exec_log.txt; echo done > catalog.txt"
+
+[[rules]]
+name = "analyze"
+input = ["catalog.txt"]
+output = ["out/{sample}.txt"]
+shell = "echo analyze-{sample} >> exec_log.txt; touch out/{sample}.txt"
+"#;
+    let wf = write_workflow(dir.path(), "wf.oxoflow", wf_toml);
+    baseline_run(dir.path(), &wf, &["--sample", "S1"]);
+
+    let (pred, _) = preview_plan(dir.path(), &["wf.oxoflow", "--sample", "S2"]);
+    let _ = fs::remove_file(dir.path().join(EXEC_LOG));
+    let out = oxo_flow()
+        .args(["run", "-j", "2", "wf.oxoflow", "--sample", "S2"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "sample run failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let actual = executed(dir.path());
+    assert_eq!(
+        normalize(&pred),
+        normalize(&actual),
+        "sample-flag parity violation (pred {pred:?} vs run {actual:?})"
+    );
+    assert!(
+        normalize(&pred).contains("S2"),
+        "expected the new sample's instance: {pred:?}"
+    );
+}
+
+/// 14. `--resume-failed`: the preview re-runs failed rules and keeps
+///     completed ones skipped, exactly like the run.
+///
+/// NOTE: the failing rule fails again on re-run, so the run exits non-zero
+/// BY DESIGN — the parity check tolerates that and compares the executed
+/// set from the log instead.
+#[test]
+fn parity_resume_failed_reruns_only_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf_toml = r#"[workflow]
+name = "parity-resume-failed"
+version = "1.0"
+
+[[rules]]
+name = "ok_rule"
+output = ["ok.txt"]
+shell = "echo ok_rule >> exec_log.txt; echo ok > ok.txt"
+
+[[rules]]
+name = "bad_rule"
+output = ["bad.txt"]
+shell = "echo bad_rule >> exec_log.txt; exit 3"
+"#;
+    let wf = write_workflow(dir.path(), "wf.oxoflow", wf_toml);
+    // First run: ok_rule completes, bad_rule fails.
+    let out = oxo_flow()
+        .args(["run", "wf.oxoflow", "-j", "2"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "the failing run must fail");
+    let _ = fs::remove_file(dir.path().join(EXEC_LOG));
+
+    // Predict, then run TOLERATING the expected failure of bad_rule.
+    let (pred, _) = preview_plan(dir.path(), &["wf.oxoflow", "--resume-failed"]);
+    let _ = fs::remove_file(dir.path().join(EXEC_LOG));
+    let out = oxo_flow()
+        .args(["run", "wf.oxoflow", "--resume-failed", "-j", "2"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "bad_rule must fail again");
+    let actual = executed(dir.path());
+    assert_eq!(pred, actual, "resume-failed parity violation");
+    assert_eq!(
+        pred,
+        HashSet::from(["bad_rule".to_string()]),
+        "only the failed rule re-runs: {pred:?}"
     );
 }

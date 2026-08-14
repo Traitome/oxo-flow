@@ -12,7 +12,7 @@
 use anyhow::{Context, Result};
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
-use oxo_flow_core::executor::checkpoint::CheckpointState;
+use oxo_flow_core::executor::checkpoint::{expand_config_in_path, CheckpointState};
 use oxo_flow_core::rule::Rule;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -38,6 +38,14 @@ pub enum RuleStatus {
     /// Was completed, but a dependent's inputs are missing — it re-executes
     /// first to regenerate them (cascade-up after tombstoned temporaries).
     CascadedUpstream { from: String },
+    /// `--rerun` forced re-execution: every up-to-date check is bypassed
+    /// (the preview mirrors `run --rerun`'s execution set).
+    Forced,
+    /// No checkpoint entry, but the executor's freshness gate would skip
+    /// it anyway (outputs exist and are newer than inputs — e.g. leftovers
+    /// from a run whose checkpoint was never written after a crash or a
+    /// failed exit).
+    SkippedFresh,
 }
 
 /// One rule in the predicted plan.
@@ -65,6 +73,49 @@ pub struct RunPreview {
     pub protected_outside: usize,
     /// Cascade chains (seed → … → queue-level rule) for the display.
     pub cascade_chains: Vec<Vec<String>>,
+}
+
+
+/// The executor's freshness gate for a rule with no checkpoint entry:
+/// all outputs exist and (when inputs exist) every output is newer than
+/// every input. `run` skips such rules as "outputs up-to-date" even
+/// without a completion record; the preview mirrors it.
+fn rule_outputs_exist_fresh(
+    rule: &oxo_flow_core::rule::Rule,
+    workdir: &Path,
+    wildcard_values: &HashMap<String, String>,
+) -> bool {
+    !rule.output.is_empty()
+        && rule
+            .output
+            .iter()
+            .all(|o| {
+                let expanded = expand_config_in_path(o, wildcard_values);
+                expanded.contains('{') || workdir.join(expanded).exists()
+            })
+        && (rule.input.is_empty()
+            || rule.input.iter().all(|i| {
+                let expanded = expand_config_in_path(i, wildcard_values);
+                if expanded.contains('{') {
+                    return true;
+                }
+                let input_mtime = std::fs::metadata(workdir.join(&expanded))
+                    .and_then(|m| m.modified())
+                    .ok();
+                let Some(input_mtime) = input_mtime else {
+                    return false;
+                };
+                rule.output.iter().all(|o| {
+                    let expanded_o = expand_config_in_path(o, wildcard_values);
+                    if expanded_o.contains('{') {
+                        return true;
+                    }
+                    std::fs::metadata(workdir.join(&expanded_o))
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .is_some_and(|om| om >= input_mtime)
+                })
+            }))
 }
 
 /// Storage resolver for manifest snapshots and remote staging: local by
@@ -105,9 +156,55 @@ pub fn preview_run_plan(
     sensitive_keys: &HashSet<String>,
     interpreter_map: &HashMap<String, String>,
     checkpoint_path: &Path,
+    rerun: bool,
+    resume_failed: bool,
 ) -> RunPreview {
     let completed_original: HashSet<String> = ck.completed_rules.clone();
     let mut clone = ck.clone();
+    // `--resume-failed` re-executes failed rules: `run` clears the failed
+    // set from its in-memory checkpoint before scheduling; the preview
+    // mirrors that on its clone (failed rules classify as NeverCompleted).
+    if resume_failed {
+        clone.failed_rules.clear();
+    }
+
+    // `--rerun` bypasses every up-to-date check on the run side (the whole
+    // invalidation block is skipped); the preview mirrors that: no
+    // invalidation machinery, every rule in the execution set is forced —
+    // except `when`-false rules, which dominate even forced re-runs.
+    if rerun {
+        let mut plan = Vec::with_capacity(order.len());
+        let mut will_skip = 0usize;
+        for name in order {
+            let status = if config
+                .get_rule(name)
+                .is_some_and(|rule| when_condition_false(rule, config, wildcard_values))
+            {
+                will_skip += 1;
+                RuleStatus::SkippedByWhen
+            } else {
+                RuleStatus::Forced
+            };
+            plan.push(PreviewRule {
+                name: name.clone(),
+                status,
+            });
+        }
+        return RunPreview {
+            checkpoint_path: checkpoint_path.to_path_buf(),
+            checkpoint_modified: std::fs::metadata(checkpoint_path)
+                .and_then(|m| m.modified())
+                .ok(),
+            completed_total: completed_original.len(),
+            plan,
+            will_skip,
+            protected_outside: completed_original
+                .iter()
+                .filter(|name| !order.contains(name))
+                .count(),
+            cascade_chains: Vec::new(),
+        };
+    }
 
     // 1. Config-impact invalidation (issue #62) — on the clone only.
     let config_report = oxo_flow_core::config_impact::detect_config_changes(
@@ -193,7 +290,22 @@ pub fn preview_run_plan(
             // other consideration — even forced re-runs.
             RuleStatus::SkippedByWhen
         } else if !completed_original.contains(name) {
-            RuleStatus::NeverCompleted
+            // A rule absent from the checkpoint can still be config-
+            // invalidated — `run` puts it in force_rules, which bypasses
+            // the executor freshness gate, so config invalidation wins here.
+            if config_invalidated.contains(name) {
+                RuleStatus::ConfigInvalidated
+            } else if config
+                .get_rule(name)
+                .is_some_and(|rule| rule_outputs_exist_fresh(rule, workdir, wildcard_values))
+            {
+                // `run` applies the executor freshness gate to rules with
+                // no checkpoint entry: up-to-date outputs skip even without
+                // a completion record (issue #77 parity — crash leftovers).
+                RuleStatus::SkippedFresh
+            } else {
+                RuleStatus::NeverCompleted
+            }
         } else if config_invalidated.contains(name) {
             RuleStatus::ConfigInvalidated
         } else if manifest_invalidated.contains(name) {
@@ -223,7 +335,10 @@ pub fn preview_run_plan(
         } else {
             RuleStatus::Skipped
         };
-        if matches!(status, RuleStatus::Skipped | RuleStatus::SkippedByWhen) {
+        if matches!(
+            status,
+            RuleStatus::Skipped | RuleStatus::SkippedByWhen | RuleStatus::SkippedFresh
+        ) {
             will_skip += 1;
         }
         plan.push(PreviewRule {
@@ -709,6 +824,8 @@ shell = "cat {input[0]} > {output[0]} && echo {config.ref}"
             &sensitive(),
             &config.workflow.interpreter_map,
             &dir.join(".oxo-flow/checkpoint.json"),
+            false,
+            false,
         )
     }
 
@@ -922,9 +1039,37 @@ version = "1.0"
     }
 
     #[test]
-    fn empty_checkpoint_means_everything_runs() {
+    fn empty_checkpoint_with_fresh_outputs_skips_everything() {
+        // The fixture pre-creates every declared output. With no checkpoint,
+        // `run` skips them all through the executor freshness gate — the
+        // preview mirrors that (SkippedFresh), it does not predict a rerun.
         let dir = tempfile::tempdir().unwrap();
         let (config, dag, order, wildcard_values) = fixture(dir.path());
+        let ck = CheckpointState::new();
+        let preview = run_preview(&ck, &config, &dag, &order, dir.path(), &wildcard_values);
+        assert_eq!(preview.plan.len(), 5);
+        assert!(
+            preview
+                .plan
+                .iter()
+                .all(|r| r.status == RuleStatus::SkippedFresh)
+        );
+        assert_eq!(preview.will_skip, 5);
+        assert_eq!(preview.protected_outside, 0);
+        assert!(preview.cascade_chains.is_empty());
+    }
+
+    #[test]
+    fn empty_checkpoint_without_outputs_runs_everything() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, dag, order, wildcard_values) = fixture(dir.path());
+        // Remove every declared output: nothing is fresh any more.
+        for rule in &config.rules {
+            for output in rule.output.iter() {
+                let p = dir.join(output);
+                let _ = std::fs::remove_file(&p);
+            }
+        }
         let ck = CheckpointState::new();
         let preview = run_preview(&ck, &config, &dag, &order, dir.path(), &wildcard_values);
         assert_eq!(preview.plan.len(), 5);
@@ -935,8 +1080,6 @@ version = "1.0"
                 .all(|r| r.status == RuleStatus::NeverCompleted)
         );
         assert_eq!(preview.will_skip, 0);
-        assert_eq!(preview.protected_outside, 0);
-        assert!(preview.cascade_chains.is_empty());
     }
 
     #[test]
