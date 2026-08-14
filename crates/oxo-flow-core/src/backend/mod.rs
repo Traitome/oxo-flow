@@ -13,6 +13,53 @@ use crate::rule::Rule;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "cluster")]
+pub mod cluster;
+
+/// Scheduler-agnostic job state, mapped from each backend's native codes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendJobStatus {
+    /// Queued, waiting to start.
+    Pending,
+    /// Currently executing.
+    Running,
+    /// Finished successfully.
+    Completed,
+    /// Finished with an error.
+    Failed,
+    /// Cancelled by the driver or a user.
+    Cancelled,
+    /// Status could not be determined.
+    Unknown,
+}
+
+/// Maps a static plan onto a scheduler API.
+///
+/// Implementations must not re-derive execution order or invalidation: they
+/// receive fully resolved [`ScheduledRule`]s and translate them into
+/// submissions. Script-based schedulers (SLURM/PBS/SGE/LSF) get one submit
+/// call per rendered script; the driver composes fragments (waves).
+#[async_trait::async_trait]
+pub trait ExecutorBackend: Send + Sync {
+    /// Human-readable backend name for logging / diagnostics.
+    fn name(&self) -> &'static str;
+
+    /// Render a scheduler submit script for one scheduled rule.
+    fn render_script(&self, rule: &ScheduledRule) -> Result<String>;
+
+    /// Submit one rendered script; returns the scheduler-assigned job id.
+    async fn submit(&self, script_path: &Path) -> Result<String>;
+
+    /// Poll statuses for the given job ids; missing ids are simply absent.
+    async fn poll(&self, job_ids: &[String]) -> Result<HashMap<String, BackendJobStatus>>;
+
+    /// Cancel a submitted job.
+    async fn cancel(&self, job_id: &str) -> Result<()>;
+
+    /// Fetch job logs / accounting output (raw text).
+    async fn logs(&self, job_id: &str) -> Result<String>;
+}
+
 /// One executable unit of the static plan: a fully resolved rule instance.
 #[derive(Debug, Clone)]
 pub struct ScheduledRule {
