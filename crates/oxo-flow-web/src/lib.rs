@@ -9,6 +9,7 @@
 
 pub mod ai_provider;
 pub mod audit;
+pub mod config;
 pub mod db;
 pub mod domains;
 pub mod executor;

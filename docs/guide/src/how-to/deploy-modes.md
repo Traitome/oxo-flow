@@ -152,6 +152,45 @@ Serve: Starting oxo-flow web server in personal mode on 127.0.0.1:8080
 
 Log lines carry timestamps in a terminal, and the mode, host, and port follow `--mode`/`--host`/`-p`.
 
+## Platform Configuration
+
+Server-tier settings, AI defaults, and SSH cluster definitions can live in
+a **platform config file** — the lowest-precedence layer (CLI flag > env
+var > config file > built-in default). The file is looked up at
+`OXO_FLOW_CONFIG`, then `oxo-flow.web.toml` in the working directory, then
+`~/.config/oxo-flow/web.toml`.
+
+```toml
+[server]
+mode = "team"            # personal | team | hpc
+host = "0.0.0.0"
+port = 8080
+base_path = "/oxoflow"   # sub-path mounts behind a reverse proxy
+
+[ai]
+provider = "deepseek"    # anthropic | openai | deepseek | ollama | disabled
+api_url = "https://api.deepseek.com"
+model = "deepseek-v4-pro"
+api_key_env = "DEEPSEEK_API_KEY"   # secrets stay in env vars, never inline
+
+[[clusters]]
+id = "lab-slurm"                  # stable key (import is idempotent)
+name = "Lab SLURM cluster"
+ssh_host = "login.lab.example.edu"
+ssh_port = 22
+ssh_user = "bioinf"
+ssh_key = "~/.ssh/id_ed25519"
+scheduler = "slurm"               # auto | slurm | pbs | lsf | sge
+remote_dir = "~/oxo-flow-jobs"
+```
+
+The same choices are editable at runtime on the **Clusters & Servers**
+page: add an SSH endpoint and press **Probe** — the server performs a
+real SSH round-trip (BatchMode, 8 s timeout), reports the remote hostname
+and detects the scheduler (`slurm`/`pbs`/`lsf`/`sge`) with its version.
+Unknown fields in the config file are rejected loudly, not silently
+ignored.
+
 ## Run Control Truth (all modes)
 
 Run control is backed by real process signaling, and crash recovery tells

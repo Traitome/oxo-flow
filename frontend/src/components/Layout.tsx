@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet } from 'react-router-dom';
-import { LayoutDashboard, GitBranch, PlayCircle, BarChart3, Library, Settings, BookOpen, FlaskConical, Menu, X, MessageCircle, Users, ShieldCheck } from 'lucide-react';
+import { LayoutDashboard, GitBranch, PlayCircle, BarChart3, Library, Settings, BookOpen, FlaskConical, Menu, X, MessageCircle, Users, ShieldCheck, Server } from 'lucide-react';
 import Toast from './Toast';
 import ResultNotification from './ResultNotification';
 import { usePipelineSession } from '../context/PipelineSession';
@@ -15,6 +15,7 @@ const nav = [
   { to: '/chat', icon: MessageCircle, label: 'AI Chat' },
   { to: '/monitor', icon: BarChart3, label: 'Monitor' },
   { to: '/docs', icon: BookOpen, label: 'API Docs' },
+  { to: '/clusters', icon: Server, label: 'Clusters' },
   { to: '/users', icon: Users, label: 'Users' },
   { to: '/audit', icon: ShieldCheck, label: 'Audit' },
   { to: '/settings', icon: Settings, label: 'Settings' },

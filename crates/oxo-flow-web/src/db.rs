@@ -170,6 +170,19 @@ pub async fn init_db(database_url: &str) -> Result<()> {
         );
 
         CREATE INDEX IF NOT EXISTS idx_hpc_jobs_run_id ON hpc_jobs(run_id);
+
+        CREATE TABLE IF NOT EXISTS clusters (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            ssh_host TEXT NOT NULL,
+            ssh_port INTEGER NOT NULL DEFAULT 22,
+            ssh_user TEXT,
+            ssh_key TEXT,
+            scheduler TEXT,
+            remote_dir TEXT,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at DATETIME NOT NULL
+        );
         "#,
     )
     .execute(&pool)

@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod auth;
 pub mod chat;
+pub mod clusters;
 pub mod collaboration;
 pub mod dag;
 pub mod execution;

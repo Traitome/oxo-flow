@@ -136,6 +136,39 @@ export interface ReferenceResult { found: string[]; missing: string[]; download_
 // ── Audit ──
 export interface AuditLogResponse { entries: Array<{ timestamp: string; user: string; action: string; resource: string; result?: string }>; days: number; }
 
+// ── Cluster connections (SSH endpoints) ──
+export interface ClusterInfo {
+  id: string;
+  name: string;
+  ssh_host: string;
+  ssh_port: number;
+  ssh_user?: string | null;
+  ssh_key?: string | null;
+  scheduler?: string | null;
+  remote_dir?: string | null;
+  enabled: boolean;
+  created_at: string;
+}
+export interface ClusterUpsert {
+  id: string;
+  name: string;
+  ssh_host: string;
+  ssh_port?: number;
+  ssh_user?: string;
+  ssh_key?: string;
+  scheduler?: string;
+  remote_dir?: string;
+  enabled?: boolean;
+}
+export interface ClusterProbeResult {
+  ok: boolean;
+  hostname?: string | null;
+  scheduler?: string | null;
+  version?: string | null;
+  error?: string | null;
+  duration_ms: number;
+}
+
 // ── Search ──
 export interface SearchResponse { query: string; total: number; results: Array<{ id: string; name: string; source: string; category: string; description: string; rules_count: number }>; }
 

@@ -12,6 +12,7 @@ use axum::{
     routing::{delete, get, post, put},
 };
 
+use crate::domains::clusters;
 use crate::domains::*;
 use crate::infra::license::LicenseHeaderLayer;
 
@@ -365,6 +366,21 @@ pub fn build_router(mode: &str) -> Router {
             get(ai::handlers::get_ai_config_effective),
         );
 
+    // ---- Cluster connections (SSH endpoints) ----
+    let cluster_routes = Router::new()
+        .route(
+            "/api/clusters",
+            get(clusters::handlers::list_clusters).post(clusters::handlers::upsert_cluster),
+        )
+        .route(
+            "/api/clusters/{id}",
+            axum::routing::delete(clusters::handlers::delete_cluster),
+        )
+        .route(
+            "/api/clusters/{id}/probe",
+            post(clusters::handlers::probe_cluster),
+        );
+
     // ---- Collaboration routes ----
     let collaboration_routes = Router::new()
         .route(
@@ -421,6 +437,7 @@ pub fn build_router(mode: &str) -> Router {
         .merge(auth_routes)
         .merge(license_routes)
         .merge(chat_routes)
+        .merge(cluster_routes)
         .merge(dag_edit_routes)
         .merge(ai_routes)
         .merge(collaboration_routes)

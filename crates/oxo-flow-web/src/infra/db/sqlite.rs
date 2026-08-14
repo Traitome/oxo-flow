@@ -330,6 +330,19 @@ impl StorageBackend for SqliteBackend {
             CREATE INDEX IF NOT EXISTS idx_shares_pipeline_id ON shares(pipeline_id);
             CREATE INDEX IF NOT EXISTS idx_shares_token ON shares(token);
             CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
+
+            CREATE TABLE IF NOT EXISTS clusters (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                ssh_host TEXT NOT NULL,
+                ssh_port INTEGER NOT NULL DEFAULT 22,
+                ssh_user TEXT,
+                ssh_key TEXT,
+                scheduler TEXT,
+                remote_dir TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp DESC);
             "#,
         )

@@ -80,6 +80,19 @@ impl StorageBackend for PostgresBackend {
                 created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS clusters (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                ssh_host TEXT NOT NULL,
+                ssh_port INTEGER NOT NULL DEFAULT 22,
+                ssh_user TEXT,
+                ssh_key TEXT,
+                scheduler TEXT,
+                remote_dir TEXT,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS pipelines (
                 id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

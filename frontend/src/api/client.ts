@@ -1,5 +1,6 @@
 import type {
   HealthResponse, SystemInfo, RuntimeMetrics, LoginResponse, UserInfo,
+  ClusterInfo, ClusterUpsert, ClusterProbeResult,
   ValidateResponse, ParseResponse, Pipeline, DagJson, DagStatus,
   RunItem, RunStatus, Diagnostics, RetryPlan, RunResponse,
   AiConfig, AiTranslateResponse, AiExplainResponse, AiInterpretResponse, AiOptimizeResponse,
@@ -42,6 +43,10 @@ export const api = {
   system: () => get<SystemInfo>('/api/system'),
   metrics: () => get<RuntimeMetrics>('/api/metrics'),
   audit: (days = 7) => get<AuditLogResponse>(`/api/audit?days=${days}`),
+  listClusters: () => get<ClusterInfo[]>('/api/clusters'),
+  upsertCluster: (cluster: ClusterUpsert) => post<ClusterInfo>('/api/clusters', cluster),
+  deleteCluster: (id: string) => del<{ deleted: string }>(`/api/clusters/${id}`),
+  probeCluster: (id: string) => post<ClusterProbeResult>(`/api/clusters/${id}/probe`, {}),
   events: () => get<{ events: Array<Record<string, unknown>> }>('/api/events'),
 
   // ── Auth & License ──

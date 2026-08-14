@@ -2,7 +2,7 @@
 //! oxo-flow-web — Standalone web server for the oxo-flow pipeline engine.
 
 use anyhow::Result;
-use clap::{Parser, ValueEnum};
+use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum};
 use std::net::SocketAddr;
 
 /// Server operation mode.
@@ -65,7 +65,32 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let cli = Cli::parse();
+    // Platform config file (oxo-flow.web.toml / OXO_FLOW_CONFIG) supplies
+    // the LOWEST-precedence defaults: CLI flag > env var > config file >
+    // built-in default.
+    let platform_config = oxo_flow_web::config::load();
+    let mut command = Cli::command();
+    if let Some(cfg) = &platform_config {
+        // clap's default_value wants 'static — pass owned OsStr values
+        // (the "string" feature enables From<String>).
+        if let Some(mode) = cfg.server.mode.clone() {
+            let mode = clap::builder::OsStr::from(mode);
+            command = command.mut_arg("mode", |a| a.default_value(mode));
+        }
+        if let Some(host) = cfg.server.host.clone() {
+            let host = clap::builder::OsStr::from(host);
+            command = command.mut_arg("host", |a| a.default_value(host));
+        }
+        if let Some(port) = cfg.server.port {
+            let port = clap::builder::OsStr::from(port.to_string());
+            command = command.mut_arg("port", |a| a.default_value(port));
+        }
+        if let Some(base_path) = cfg.server.base_path.clone() {
+            let base_path = clap::builder::OsStr::from(base_path);
+            command = command.mut_arg("base_path", |a| a.default_value(base_path));
+        }
+    }
+    let cli = Cli::from_arg_matches(&command.get_matches())?;
 
     // Print license banner on startup
     eprintln!("{}", oxo_flow_web::infra::license::license_banner_text());
@@ -162,6 +187,35 @@ async fn main() -> Result<()> {
     // Restore the DB-persisted tier (settings UI) when env did not configure
     // a provider — otherwise a saved key would be lost on restart.
     oxo_flow_web::domains::ai::handlers::restore_ai_config_from_db().await;
+    // AI file tier (lowest): applies when neither env nor the DB user
+    // settings configured a provider. Secrets stay in env vars referenced
+    // by api_key_env — never inline in the file.
+    if let Some(cfg) = &platform_config
+        && oxo_flow_web::ai_provider::AiProviderRegistry::global()
+            .get_config()
+            .provider
+            == "disabled"
+        && let Some(provider) = cfg.ai.provider.as_deref()
+    {
+        let api_key = cfg
+            .ai
+            .api_key_env
+            .as_deref()
+            .and_then(|key_env| std::env::var(key_env).ok());
+        if let Err(e) = oxo_flow_web::ai_provider::AiProviderRegistry::global().reconfigure(
+            provider,
+            api_key,
+            cfg.ai.api_url.clone(),
+            cfg.ai.model.clone(),
+        ) {
+            tracing::warn!("AI config file tier rejected: {e}");
+        }
+    }
+    // Cluster definitions from the config file are imported (idempotent —
+    // existing DB rows win; the UI is the runtime source of truth).
+    if let Some(cfg) = &platform_config {
+        oxo_flow_web::domains::clusters::handlers::import_from_config(&cfg.clusters).await;
+    }
     tracing::info!(
         "AI provider: {}",
         oxo_flow_web::ai_provider::AiProviderRegistry::global()

@@ -88,6 +88,20 @@ pub struct AuditLogRow {
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ClusterRow {
+    pub id: String,
+    pub name: String,
+    pub ssh_host: String,
+    pub ssh_port: i64,
+    pub ssh_user: Option<String>,
+    pub ssh_key: Option<String>,
+    pub scheduler: Option<String>,
+    pub remote_dir: Option<String>,
+    pub enabled: bool,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct ChatSessionRow {
     pub id: String,
     pub user_id: String,
