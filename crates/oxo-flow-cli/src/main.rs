@@ -754,6 +754,37 @@ async fn main() -> Result<()> {
         && !std::env::args_os().any(|arg| arg == "--no-color");
     let matches = {
         let mut command = Cli::command();
+        // Platform config file (oxo-flow.web.toml / OXO_FLOW_CONFIG)
+        // supplies the lowest-precedence defaults for `serve` — the same
+        // tier the standalone web binary honors (flag > env > file >
+        // built-in). The desktop app ships the CLI, so it must resolve
+        // the file too.
+        if let Some(cfg) = oxo_flow_web::config::load() {
+            if let Some(mode) = cfg.server.mode {
+                let mode = clap::builder::OsStr::from(mode);
+                command = command.mut_subcommand("serve", |c| {
+                    c.mut_arg("mode", |a| a.default_value(mode))
+                });
+            }
+            if let Some(host) = cfg.server.host {
+                let host = clap::builder::OsStr::from(host);
+                command = command.mut_subcommand("serve", |c| {
+                    c.mut_arg("host", |a| a.default_value(host))
+                });
+            }
+            if let Some(port) = cfg.server.port {
+                let port = clap::builder::OsStr::from(port.to_string());
+                command = command.mut_subcommand("serve", |c| {
+                    c.mut_arg("port", |a| a.default_value(port))
+                });
+            }
+            if let Some(base_path) = cfg.server.base_path {
+                let base_path = clap::builder::OsStr::from(base_path);
+                command = command.mut_subcommand("serve", |c| {
+                    c.mut_arg("base_path", |a| a.default_value(base_path))
+                });
+            }
+        }
         command = command.help_template(if use_color {
             banner::HELP_TEMPLATE
         } else {

@@ -689,6 +689,13 @@ pub async fn start_server_with_mode(
     crate::db::recover_orphaned_runs().await?;
     crate::infra::db::sqlite::init_pool("sqlite://oxo-flow.db").await;
 
+    // Cluster definitions from the platform config file are imported here
+    // (the shared entry for BOTH the `oxo-flow serve` subcommand and the
+    // standalone web binary) — idempotent, existing DB rows win.
+    if let Some(cfg) = crate::config::load() {
+        crate::domains::clusters::handlers::import_from_config(&cfg.clusters).await;
+    }
+
     // Initialize structured logging
     let log_dir = std::path::PathBuf::from("logs");
     if let Err(e) = crate::domains::observability::logging::init_logging(&log_dir) {

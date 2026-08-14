@@ -216,3 +216,32 @@ the truth:
 
 > These are indicative figures, not benchmark results — measure on your own
 > hardware before capacity planning.
+
+## Deployment Smoke Tests
+
+`scripts/deploy-smoke.sh` is the repeatable acceptance suite for the
+deployment shapes above — every scenario runs in an isolated temp dir,
+asserts against the live server, and cleans up after itself:
+
+| Scenario | What it verifies |
+|---|---|
+| 1. Personal mode | API + health + SPA on a source build |
+| 2. Standalone web binary | the release-style binary serves independently |
+| 3. Sub-path mount | API under `--base-path`, root excluded, SPA `<base>` injection, assets |
+| 4. Platform config file | port/base_path defaults + `[[clusters]]` seeding |
+| 5. Team mode | 401 without a session; env-credential login → session → authenticated access |
+| 6. HPC mode | scheduler endpoint responds with structured status |
+| 7. Desktop bundle | the `.app` serves the SPA self-contained (`OXO_APP=…`) |
+
+```bash
+# Against the local debug build
+scripts/deploy-smoke.sh
+
+# Against a release build / packaged app
+OXO_BIN=target/release/oxo-flow \
+OXO_APP=target/release/bundle/osx/oxo-flow.app \
+scripts/deploy-smoke.sh
+```
+
+Run it on every machine you deploy to — it exits non-zero on any failed
+assertion, so it doubles as a CI gate for packaging.

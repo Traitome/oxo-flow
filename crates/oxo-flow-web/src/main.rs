@@ -211,11 +211,7 @@ async fn main() -> Result<()> {
             tracing::warn!("AI config file tier rejected: {e}");
         }
     }
-    // Cluster definitions from the config file are imported (idempotent —
-    // existing DB rows win; the UI is the runtime source of truth).
-    if let Some(cfg) = &platform_config {
-        oxo_flow_web::domains::clusters::handlers::import_from_config(&cfg.clusters).await;
-    }
+    // Cluster import now lives in start_server_with_mode (shared entry).
     tracing::info!(
         "AI provider: {}",
         oxo_flow_web::ai_provider::AiProviderRegistry::global()
