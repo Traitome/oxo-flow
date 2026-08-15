@@ -40,10 +40,20 @@ oxo-flow cluster <ACTION> [OPTIONS]
 | `--backend` | `-b` | *(required)* | Cluster backend (`slurm`, `pbs`, `sge`, `lsf`) |
 | `--queue` | `-q` | — | Partition / queue name |
 | `--account` | `-a` | — | Account / project name |
+| `--walltime` | — | — | Wall-time limit for every job (`24h`, `2d`, or `24:00:00`) |
+| `--extra-arg` | — | — | Extra scheduler argument, passed through verbatim (repeatable) |
 | `--output` | `-o` | `cluster_scripts` | Directory for generated scripts |
 | `--target` | `-t` | — | Target rule(s) to execute |
 | `--with-dependencies` | — | — | Generate dependency-aware submit script with job chains |
 | `--dry-run` | — | — | Preview scripts without generating files |
+
+One script is written per **rule instance**: wildcards expand first, so a
+scatter rule over three samples yields three scripts whose names match the
+instances `dry-run` plans.
+
+A rule's own `time_limit` beats `--walltime`. `--extra-arg` values are
+emitted as scheduler directives verbatim and are not validated — a typo
+reaches the scheduler as written.
 
 ---
 
@@ -87,6 +97,13 @@ oxo-flow cluster submit pipeline.oxoflow -b slurm -q work -a lab-account
 oxo-flow cluster submit pipeline.oxoflow -b slurm -q compute
 ```
 
+### Submit with a wall-time limit and site-specific flags
+
+```bash
+oxo-flow cluster submit pipeline.oxoflow -b slurm -q compute \
+  --walltime 24h --extra-arg --exclusive --extra-arg --constraint=haswell
+```
+
 ### Submit with job dependencies
 
 ```bash
@@ -97,6 +114,12 @@ oxo-flow cluster submit pipeline.oxoflow -b slurm -q compute --with-dependencies
 # Submit the generated wrapper script
 bash cluster_scripts/submit.sh
 ```
+
+The wrapper submits through an `oxo_submit` helper that captures the bare
+scheduler job id — `sbatch --parsable` on SLURM, sentence parsing on SGE and
+LSF — before chaining it into the next job's dependency flag. Dependencies
+are wired per instance, so sample 2's `stats` waits on sample 2's `align`
+rather than on every sample's.
 
 ### Submit specific target rules
 
