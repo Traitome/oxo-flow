@@ -591,3 +591,8 @@ body{font-family:var(--font-sans);font-size:.9375rem;line-height:1.6;color:var(-
 @media (prefers-reduced-motion: reduce){
   .run-tl-node.running .run-tl-symbol{animation:none}
 }
+/* Running badge breathes (shared with the timeline cursor) */
+.status-badge.running::before{animation:tl-breathe 2s ease-in-out infinite}
+@media (prefers-reduced-motion: reduce){
+  .status-badge.running::before{animation:none}
+}

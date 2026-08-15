@@ -64,7 +64,7 @@ export default function Share() {
       {state.phase === 'loading' && <div className="empty-state">Loading shared pipeline…</div>}
 
       {state.phase === 'error' && (
-        <div className="empty-state" style={{ color: '#DC2626' }}>{state.message}</div>
+        <div className="empty-state" style={{ color: 'var(--color-error)' }}>{state.message}</div>
       )}
 
       {state.phase === 'ready' && (
