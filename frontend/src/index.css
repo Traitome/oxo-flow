@@ -16,6 +16,11 @@
   --font-mono:"Cascadia Code","SF Mono","Fira Code","JetBrains Mono",Menlo,Consolas,"Liberation Mono",monospace;
   --radius-sm:6px; --radius-md:8px; --radius-lg:12px;
   --header-h:56px; --sidebar-w:240px; --footer-h:32px;
+  /* Environment badge colors (rule-node dots) as semantic variables so
+     the dark themes can re-tone them. */
+  --env-system:#6B7280; --env-conda:#3B82F6; --env-mamba:#10B981;
+  --env-docker:#8B5CF6; --env-singularity:#EC4899; --env-venv:#F59E0B;
+  --env-modules:#14B8A6;
 }
 /* ── Dark theme (issue #82 P2-1): terminal-vernacular palette.
    data-theme="dark" wins over the system preference; no attribute means
