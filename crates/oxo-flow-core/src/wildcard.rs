@@ -369,6 +369,46 @@ pub fn has_wildcards(pattern: &str) -> bool {
     WILDCARD_RE.is_match(pattern)
 }
 
+/// Sanitize a wildcard value for use in an expanded rule instance name.
+///
+/// Non-alphanumeric characters become `_`, so `1.5` → `1_5` and
+/// `K=21` → `K_21`. Instance names must be shell-safe and unambiguous
+/// (`[[values]]` fan-out, e.g. `assemble_assembler_spades`).
+#[must_use = "sanitizing returns a new String"]
+pub fn sanitize_instance_value(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
+}
+
+/// Returns `true` if the pattern references the `{values.name}` namespace.
+///
+/// The engine's placeholder regex only matches `\w+` names, so the
+/// namespaced form must be detected and substituted textually — see
+/// [`expand_values_namespace`].
+#[must_use]
+pub fn contains_values_namespace(pattern: &str) -> bool {
+    pattern.contains("{values.")
+}
+
+/// Expand `{values.name}` namespace placeholders with the given bindings.
+///
+/// `{values.assembler}` is the namespaced sibling of the bare `{assembler}`
+/// form; both expand to the same value. Unbound names are left untouched —
+/// the caller validates them separately.
+#[must_use = "expanding returns a new String"]
+pub fn expand_values_namespace(pattern: &str, bindings: &WildcardValues) -> String {
+    if !pattern.contains("{values.") {
+        return pattern.to_string();
+    }
+    let mut out = pattern.to_string();
+    for (name, value) in bindings {
+        out = out.replace(&format!("{{values.{name}}}"), value);
+    }
+    out
+}
+
 /// Generates the Cartesian product of all wildcard value lists.
 ///
 /// Given `{"sample": ["A", "B"], "read": ["1", "2"]}`, produces:
@@ -614,6 +654,57 @@ mod tests {
 
         let result = expand_pattern("{sample}_R{read}.fastq.gz", &values).unwrap();
         assert_eq!(result, "TUMOR_R1.fastq.gz");
+    }
+
+    #[test]
+    fn sanitize_instance_value_alphanumeric_unchanged() {
+        assert_eq!(sanitize_instance_value("spades"), "spades");
+        assert_eq!(sanitize_instance_value("21"), "21");
+        assert_eq!(sanitize_instance_value("NA12878"), "NA12878");
+    }
+
+    #[test]
+    fn sanitize_instance_value_replaces_special_chars() {
+        assert_eq!(sanitize_instance_value("1.5"), "1_5");
+        assert_eq!(sanitize_instance_value("K=21"), "K_21");
+        assert_eq!(sanitize_instance_value("beta-1"), "beta_1");
+    }
+
+    #[test]
+    fn contains_values_namespace_detects_only_namespaced_form() {
+        assert!(contains_values_namespace(
+            "results/{values.assembler}/x.txt"
+        ));
+        assert!(!contains_values_namespace("results/{assembler}/x.txt"));
+        assert!(!contains_values_namespace("plain.txt"));
+    }
+
+    #[test]
+    fn expand_values_namespace_substitutes_bound_names() {
+        let mut bindings = WildcardValues::new();
+        bindings.insert("assembler".to_string(), "spades".to_string());
+        bindings.insert("k".to_string(), "21".to_string());
+        assert_eq!(
+            expand_values_namespace("results/{values.assembler}/k{values.k}.txt", &bindings),
+            "results/spades/k21.txt"
+        );
+        // Without any namespaced reference the input is returned as-is.
+        assert_eq!(expand_values_namespace("plain.txt", &bindings), "plain.txt");
+        // Bare `{assembler}` is not touched — expand_pattern handles it.
+        assert_eq!(
+            expand_values_namespace("results/{assembler}/x.txt", &bindings),
+            "results/{assembler}/x.txt"
+        );
+    }
+
+    #[test]
+    fn expand_values_namespace_leaves_unbound_names() {
+        let mut bindings = WildcardValues::new();
+        bindings.insert("assembler".to_string(), "spades".to_string());
+        assert_eq!(
+            expand_values_namespace("results/{values.k}/x.txt", &bindings),
+            "results/{values.k}/x.txt"
+        );
     }
 
     #[test]

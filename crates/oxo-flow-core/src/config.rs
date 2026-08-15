@@ -10,9 +10,19 @@
 pub use crate::clinical::*;
 use crate::error::{OxoFlowError, Result};
 use crate::rule::{EnvironmentSpec, FilePatterns, Rule};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+
+/// Matches the namespaced `{values.name}` wildcard form.
+///
+/// The engine's placeholder regex (`\w+` only) cannot match dotted names, so
+/// this namespace is detected and substituted textually — see
+/// [`crate::wildcard::expand_values_namespace`].
+static VALUES_NS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\{values\.(\w+)\}").expect("valid values-namespace regex"));
 
 fn is_defaults_empty(d: &Defaults) -> bool {
     d.threads.is_none() && d.memory.is_none() && d.environment.is_none()
@@ -426,20 +436,48 @@ pub struct ConfigDef {
 /// output exists before execution, and auto-builds it using the declared build
 /// command if missing. Built references are tracked in the checkpoint state so
 /// they are not rebuilt on resume.
+///
+/// `build` accepts either a handwritten shell command or the name of a
+/// built-in builder template from [`crate::references`]:
+///
+/// ```toml
+/// [[references]]
+/// name = "genome"
+/// source = "refs/genome.fa"
+/// output = "refs/genome.fa.fai"
+/// build = "samtools_faidx"   # expands to a canonical `samtools faidx` command
+/// threads = 2
+/// ```
+///
+/// A `build` value that is a single bare identifier (no spaces, slashes, or
+/// shell syntax) is treated as a template name; unknown names are rejected
+/// during validation. Handwritten shell commands pass through unchanged.
+///
+/// Naming standard: name the primary reference `genome` (or `transcriptome`),
+/// and derived indexes `genome_faidx`, `genome_bwa_index`, `genome_star_index`,
+/// … Each reference's `name` becomes a keyed config value — `config.<name>`
+/// is injected as the reference's `output` path — so rules reference the
+/// artifact via `{config.genome}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReferenceDef {
-    /// Unique name for this reference (used for checkpoint tracking).
+    /// Unique name for this reference — used for checkpoint tracking, and
+    /// injected into `[config]` as `config.<name>` = `output` so rules can
+    /// reference the artifact by name.
     pub name: String,
 
-    /// Path to the source file (e.g., genome.fa) — used for freshness checks.
+    /// Path to the source file (e.g., genome.fa) — used for freshness checks,
+    /// and as `{input}` when `build` names a builder template.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
 
-    /// Path to the output artifact (index file or directory).
+    /// Path to the output artifact (index file or directory). Must be a path
+    /// the build command actually creates — the engine skips the build when
+    /// this path exists and rebuilds when it is missing.
     pub output: String,
 
-    /// Shell command to build this reference from source.
+    /// Shell command to build this reference from source, or the name of a
+    /// built-in builder template (see [`crate::references`]).
     pub build: String,
 
     /// CPU threads for the build command.
@@ -858,6 +896,98 @@ impl ExperimentControlPair {
 /// name    = "case"
 /// samples = ["S003", "S004"]
 /// ```
+/// A named list of values for arbitrary parameter wildcards (`[[values]]`).
+///
+/// Rules referencing `{name}` or `{values.name}` (where `name` matches a
+/// table) fan out once per value — a Cartesian expansion for assembler /
+/// bin-parameter style parameterization that previously forced hand-written
+/// per-value rules. Multiple tables combine orthogonally with each other
+/// and with `[[pairs]]` / `[[sample_groups]]`.
+///
+/// # Example `.oxoflow` usage
+///
+/// ```toml
+/// [[values]]
+/// name   = "assembler"
+/// values = ["spades", "megahit"]
+///
+/// [[values]]
+/// name   = "k"
+/// values = [21, 33]
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ValueGroup {
+    /// Wildcard name, e.g. `assembler` — usable as `{assembler}` in rule
+    /// inputs, outputs, shells, and `expand_inputs` patterns, or as
+    /// `{values.assembler}` in the namespaced form.
+    pub name: String,
+
+    /// The values to fan out, e.g. `["spades", "megahit"]`.
+    #[serde(default)]
+    pub values: Vec<String>,
+}
+
+/// Instance-name suffix for a `[[values]]` combo: one `_name_value` segment
+/// per referenced table in declaration order, e.g. `_assembler_spades_k_21`.
+/// Values are sanitized for shell-safe, unambiguous instance names.
+fn value_instance_suffix(
+    combo: &crate::wildcard::WildcardValues,
+    tables: &[&ValueGroup],
+) -> String {
+    let mut suffix = String::new();
+    for table in tables {
+        if let Some(value) = combo.get(&table.name) {
+            suffix.push('_');
+            suffix.push_str(&table.name);
+            suffix.push('_');
+            suffix.push_str(&crate::wildcard::sanitize_instance_value(value));
+        }
+    }
+    suffix
+}
+
+/// Expand every file pattern (List / Map / Dir) with a wildcard combo,
+/// preserving the collection structure. `{values.name}` placeholders are
+/// resolved alongside bare `{name}` ones.
+fn expand_rule_patterns(
+    patterns: &FilePatterns,
+    combo: &crate::wildcard::WildcardValues,
+) -> FilePatterns {
+    let expand_one = |p: &String| -> String {
+        if crate::wildcard::has_wildcards(p) || crate::wildcard::contains_values_namespace(p) {
+            crate::wildcard::expand_values_namespace(
+                &crate::wildcard::expand_pattern(p, combo).unwrap_or_else(|_| p.clone()),
+                combo,
+            )
+        } else {
+            p.clone()
+        }
+    };
+    match patterns {
+        FilePatterns::List(v) => FilePatterns::List(v.iter().map(expand_one).collect()),
+        FilePatterns::Map(m) => {
+            FilePatterns::Map(m.iter().map(|(k, v)| (k.clone(), expand_one(v))).collect())
+        }
+        FilePatterns::Dir { path, pattern } => FilePatterns::Dir {
+            path: expand_one(path),
+            pattern: pattern.clone(),
+        },
+    }
+}
+
+/// Expand a shell template with a wildcard combo, resolving both the bare
+/// `{name}` and namespaced `{values.name}` placeholder forms.
+fn expand_rule_shell(shell: &str, combo: &crate::wildcard::WildcardValues) -> String {
+    if crate::wildcard::has_wildcards(shell) || crate::wildcard::contains_values_namespace(shell) {
+        crate::wildcard::expand_values_namespace(
+            &crate::wildcard::expand_pattern(shell, combo).unwrap_or_else(|_| shell.to_string()),
+            combo,
+        )
+    } else {
+        shell.to_string()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SampleGroup {
     /// Group name (available as `{group}`).
@@ -1150,6 +1280,26 @@ pub struct WorkflowConfig {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sample_groups: Vec<SampleGroup>,
 
+    /// Named value lists for arbitrary parameter wildcards (`[[values]]`).
+    ///
+    /// Rules containing `{assembler}` or `{values.assembler}` (for a table
+    /// named `assembler`) are expanded once per value combination by
+    /// [`WorkflowConfig::expand_wildcards`], orthogonally with pairs and
+    /// sample groups.
+    #[serde(default, rename = "values")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub values: Vec<ValueGroup>,
+
+    /// Engine-internal: the `[[values]]` bindings each expanded rule came
+    /// from.
+    ///
+    /// Populated by [`WorkflowConfig::expand_wildcards`] (value fan-out)
+    /// and consumed when resolving `expand_inputs` patterns per instance,
+    /// so `{assembler}` binds to that instance's own value only. Never
+    /// serialized — user TOML cannot set it.
+    #[serde(skip)]
+    pub expansion_values: HashMap<String, crate::wildcard::WildcardValues>,
+
     /// Engine-internal: the sample names each expanded rule came from.
     ///
     /// Populated by [`WorkflowConfig::expand_wildcards`]: pair expansion
@@ -1250,6 +1400,7 @@ impl WorkflowConfig {
     pub fn parse(content: &str) -> Result<Self> {
         let mut config: WorkflowConfig = toml::from_str(content)?;
         config.extract_declarative_config()?;
+        config = config.with_reference_builder_templates()?;
         config.validate()?;
         Ok(config)
     }
@@ -1468,6 +1619,10 @@ impl WorkflowConfig {
         // Derive standard reference paths from reference_dir (e.g., reference_fasta = reference_dir + "/genome.fa")
         config = config.with_derived_references();
 
+        // Expand [[references]] builder templates (build = "bwa_index" → canonical command)
+        // and inject keyed config values (config.<name> = output) for each reference.
+        config = config.with_reference_builder_templates()?;
+
         config.validate()?;
         Ok(config)
     }
@@ -1613,6 +1768,10 @@ impl WorkflowConfig {
         }
 
         self.validate_execution_groups()?;
+
+        // Validate [[references]] entries: builder template names must be
+        // known, template builds must declare an output, names must be unique.
+        crate::references::validate_reference_defs(&self.references)?;
 
         // Warn about rules exceeding system capacity (but don't block)
         let system_threads = num_cpus::get() as u32;
@@ -1803,6 +1962,36 @@ impl WorkflowConfig {
             self.references = defaults;
         }
         self
+    }
+
+    /// Expand `[[references]]` builder templates and inject keyed config values.
+    ///
+    /// Every reference's `build` may name a built-in builder template
+    /// (e.g. `build = "bwa_index"`) instead of a handwritten shell command;
+    /// this step replaces the template name with its canonical command (see
+    /// [`crate::references`] for the registry and the naming standard).
+    /// Handwritten shell commands pass through unchanged, and unknown template
+    /// names are rejected by [`Self::validate`].
+    ///
+    /// Each reference also becomes a keyed config value: `config.<name>` is
+    /// set to the reference's `output` path (with `{config.x}` placeholders
+    /// pre-expanded) unless the key is already declared, so rules reference
+    /// the artifact as `{config.genome}`.
+    #[must_use = "template expansion returns a Result that must be checked"]
+    pub fn with_reference_builder_templates(mut self) -> Result<Self> {
+        // Keyed references: config.<name> = output (unless already declared).
+        for def in &self.references {
+            if !self.config.contains_key(&def.name) && !def.output.trim().is_empty() {
+                let value = expand_config_vars_in_path(&def.output, &self.config);
+                self.config
+                    .insert(def.name.clone(), toml::Value::String(value));
+            }
+        }
+        // Builder templates: replace template names with canonical commands.
+        for def in &mut self.references {
+            def.build = crate::references::expand_build_command(def)?;
+        }
+        Ok(self)
     }
 
     /// Resolve include directives by loading and merging rules from included files.
@@ -2055,6 +2244,59 @@ impl WorkflowConfig {
         // Rebuild expansion provenance from scratch — this method may run on a
         // config that was expanded before.
         self.expansion_samples.clear();
+        self.expansion_values.clear();
+
+        // Validate [[values]] tables: non-empty names/values, unique names,
+        // and no collisions with built-in wildcards (a rule referencing
+        // `{sample}` must not be ambiguous between group and value fan-out).
+        let mut seen_value_names: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        const RESERVED_VALUE_NAMES: &[&str] = &[
+            "sample",
+            "group",
+            "pair_id",
+            "experiment",
+            "control",
+            "tumor",
+            "normal",
+            "experiment_type",
+            "tumor_type",
+        ];
+        for table in &self.values {
+            if table.name.is_empty() {
+                return Err(OxoFlowError::Validation {
+                    message: "[[values]] table must have a non-empty name".to_string(),
+                    rule: None,
+                    suggestion: None,
+                });
+            }
+            if table.values.is_empty() {
+                return Err(OxoFlowError::Validation {
+                    message: format!("[[values]] table '{}' has no values", table.name),
+                    rule: None,
+                    suggestion: Some("add at least one value, or remove the table".to_string()),
+                });
+            }
+            if RESERVED_VALUE_NAMES.contains(&table.name.as_str()) {
+                return Err(OxoFlowError::Validation {
+                    message: format!(
+                        "[[values]] name '{}' collides with a built-in wildcard",
+                        table.name
+                    ),
+                    rule: None,
+                    suggestion: Some(
+                        "rename the table (e.g. use a tool-specific parameter name)".to_string(),
+                    ),
+                });
+            }
+            if !seen_value_names.insert(table.name.clone()) {
+                return Err(OxoFlowError::Validation {
+                    message: format!("duplicate [[values]] table '{}'", table.name),
+                    rule: None,
+                    suggestion: Some("merge the tables or rename one of them".to_string()),
+                });
+            }
+        }
 
         // Pre-compile constraints for performance
         let mut compiled_constraints = HashMap::new();
@@ -2117,148 +2359,253 @@ impl WorkflowConfig {
                         .any(|w| t.contains(&format!("{{{w}}}")))
                 });
 
+            // `[[values]]` fan-out: tables whose names appear in the rule —
+            // in inputs/outputs/shells and in `expand_inputs` patterns —
+            // become an additional Cartesian dimension, orthogonal to pairs
+            // and groups. `{values.name}` is the namespaced sibling of the
+            // bare `{name}` form.
+            let expand_texts: Vec<&str> = all_text
+                .iter()
+                .copied()
+                .chain(rule.expand_inputs.iter().map(|e| e.pattern.as_str()))
+                .collect();
+            let mut active_value_tables: Vec<&ValueGroup> = Vec::new();
+            for table in &self.values {
+                let referenced = expand_texts.iter().any(|t| {
+                    t.contains(&format!("{{{}}}", table.name))
+                        || t.contains(&format!("{{values.{}}}", table.name))
+                });
+                if referenced {
+                    active_value_tables.push(table);
+                }
+            }
+            let uses_value_wildcard = !active_value_tables.is_empty();
+
+            // Unbound `{values.name}` namespace references have no fan-out
+            // source: warn (never error — same stance as unbound `{sample}`)
+            // so the author notices before runtime. Bare `{name}` is
+            // indistinguishable from engine placeholders (`{input}`,
+            // `{threads}`) and stays silent.
+            let mut warned_value_ns: Vec<String> = Vec::new();
+            for text in &expand_texts {
+                for cap in VALUES_NS_RE.captures_iter(text) {
+                    let name = cap[1].to_string();
+                    let has_table = self.values.iter().any(|v| v.name == name);
+                    if !has_table && !warned_value_ns.contains(&name) {
+                        tracing::warn!(
+                            rule = %rule.name,
+                            "rule references '{{values.{name}}}' but no [[values]] table named '{name}' exists; the placeholder will be left unexpanded"
+                        );
+                        warned_value_ns.push(name);
+                    }
+                }
+            }
+
+            // Cartesian product of the active tables, deterministic: the
+            // last referenced table varies fastest, mirroring declaration
+            // order. Rules using no value table get a single empty combo —
+            // the identity element, so the pair/group branches below run
+            // exactly as before.
+            let mut value_combos: Vec<crate::wildcard::WildcardValues> =
+                vec![crate::wildcard::WildcardValues::new()];
+            for table in &active_value_tables {
+                let mut next = Vec::with_capacity(value_combos.len() * table.values.len());
+                for combo in &value_combos {
+                    for value in &table.values {
+                        let mut c = combo.clone();
+                        c.insert(table.name.clone(), value.clone());
+                        next.push(c);
+                    }
+                }
+                value_combos = next;
+            }
+
             if uses_pair_wildcard {
                 let orig_name = rule.name.clone();
                 let mut expanded_names = Vec::new();
-                // Expand for each pair
-                for combo in &pair_combos {
-                    // Filter by constraints (non-matching combos are skipped, per docs)
-                    if validate_wildcard_constraints_compiled(combo, &compiled_constraints).is_err()
-                    {
-                        continue;
-                    }
+                // Expand for each value-combo × pair combination (orthogonal
+                // fan-out — [[values]] adds a dimension on top of pairs).
+                for value_combo in &value_combos {
+                    for pair_combo in &pair_combos {
+                        // Merge the binding sources so `{assembler}` and
+                        // `{experiment}` both resolve during expansion.
+                        let mut combo = pair_combo.clone();
+                        combo.extend(value_combo.clone());
 
-                    let suffix = combo
-                        .get("pair_id")
-                        .cloned()
-                        .unwrap_or_else(|| combo.values().cloned().collect::<Vec<_>>().join("_"));
-                    let new_name = format!("{}_{}", rule.name, suffix);
-                    expanded_names.push(new_name.clone());
-
-                    if !seen_names.insert(new_name.clone()) {
-                        return Err(OxoFlowError::DuplicateRule { name: new_name });
-                    }
-
-                    let mut expanded = rule.clone();
-                    expanded.name = new_name;
-
-                    // Expand input/output/shell patterns
-                    expanded.input = match rule.input {
-                        FilePatterns::List(ref v) => FilePatterns::List(
-                            v.iter()
-                                .map(|p| {
-                                    if has_wildcards(p) {
-                                        expand_pattern(p, combo).unwrap_or_else(|_| p.to_string())
-                                    } else {
-                                        p.to_string()
-                                    }
-                                })
-                                .collect(),
-                        ),
-                        FilePatterns::Map(ref m) => FilePatterns::Map(
-                            m.iter()
-                                .map(|(k, v)| {
-                                    (
-                                        k.clone(),
-                                        if has_wildcards(v) {
-                                            expand_pattern(v, combo)
-                                                .unwrap_or_else(|_| v.to_string())
-                                        } else {
-                                            v.to_string()
-                                        },
-                                    )
-                                })
-                                .collect(),
-                        ),
-                        FilePatterns::Dir {
-                            ref path,
-                            ref pattern,
-                        } => FilePatterns::Dir {
-                            path: if has_wildcards(path) {
-                                expand_pattern(path, combo).unwrap_or_else(|_| path.clone())
-                            } else {
-                                path.clone()
-                            },
-                            pattern: pattern.clone(),
-                        },
-                    };
-                    expanded.output = match rule.output {
-                        FilePatterns::List(ref v) => FilePatterns::List(
-                            v.iter()
-                                .map(|p| {
-                                    if has_wildcards(p) {
-                                        expand_pattern(p, combo).unwrap_or_else(|_| p.to_string())
-                                    } else {
-                                        p.to_string()
-                                    }
-                                })
-                                .collect(),
-                        ),
-                        FilePatterns::Map(ref m) => FilePatterns::Map(
-                            m.iter()
-                                .map(|(k, v)| {
-                                    (
-                                        k.clone(),
-                                        if has_wildcards(v) {
-                                            expand_pattern(v, combo)
-                                                .unwrap_or_else(|_| v.to_string())
-                                        } else {
-                                            v.to_string()
-                                        },
-                                    )
-                                })
-                                .collect(),
-                        ),
-                        FilePatterns::Dir {
-                            ref path,
-                            ref pattern,
-                        } => FilePatterns::Dir {
-                            path: if has_wildcards(path) {
-                                expand_pattern(path, combo).unwrap_or_else(|_| path.clone())
-                            } else {
-                                path.clone()
-                            },
-                            pattern: pattern.clone(),
-                        },
-                    };
-                    if let Some(ref shell) = rule.shell
-                        && has_wildcards(shell)
-                    {
-                        expanded.shell =
-                            Some(expand_pattern(shell, combo).unwrap_or_else(|_| shell.clone()));
-                    }
-
-                    // Record which sample names this expansion belongs to
-                    // (issue #63 readiness attribution).
-                    let mut involved: Vec<String> = Vec::new();
-                    for key in ["experiment", "control"] {
-                        if let Some(value) = combo.get(key)
-                            && !value.is_empty()
-                            && !involved.contains(value)
+                        // Filter by constraints (non-matching combos are
+                        // skipped, per docs).
+                        if validate_wildcard_constraints_compiled(&combo, &compiled_constraints)
+                            .is_err()
                         {
-                            involved.push(value.clone());
+                            continue;
                         }
-                    }
-                    self.expansion_samples
-                        .insert(expanded.name.clone(), involved);
 
-                    expanded_rules.push(expanded);
+                        let suffix = pair_combo.get("pair_id").cloned().unwrap_or_else(|| {
+                            pair_combo.values().cloned().collect::<Vec<_>>().join("_")
+                        });
+                        let new_name = format!(
+                            "{}{}_{}",
+                            rule.name,
+                            value_instance_suffix(value_combo, &active_value_tables),
+                            suffix
+                        );
+                        expanded_names.push(new_name.clone());
+
+                        if !seen_names.insert(new_name.clone()) {
+                            return Err(OxoFlowError::DuplicateRule { name: new_name });
+                        }
+
+                        let mut expanded = rule.clone();
+                        expanded.name = new_name;
+
+                        // Expand input/output/shell patterns
+                        expanded.input = expand_rule_patterns(&rule.input, &combo);
+                        expanded.output = expand_rule_patterns(&rule.output, &combo);
+                        if let Some(ref shell) = rule.shell {
+                            expanded.shell = Some(expand_rule_shell(shell, &combo));
+                        }
+
+                        // Record which sample names this expansion belongs to
+                        // (issue #63 readiness attribution).
+                        let mut involved: Vec<String> = Vec::new();
+                        for key in ["experiment", "control"] {
+                            if let Some(value) = combo.get(key)
+                                && !value.is_empty()
+                                && !involved.contains(value)
+                            {
+                                involved.push(value.clone());
+                            }
+                        }
+                        self.expansion_samples
+                            .insert(expanded.name.clone(), involved);
+
+                        if !value_combo.is_empty() {
+                            self.expansion_values
+                                .insert(expanded.name.clone(), value_combo.clone());
+                        }
+
+                        expanded_rules.push(expanded);
+                    }
                 }
                 name_map.insert(orig_name, expanded_names);
             } else if uses_group_wildcard {
                 let orig_name = rule.name.clone();
                 let mut expanded_names = Vec::new();
-                // Expand for each (group, sample) combination
-                for combo in &group_combos {
-                    // Filter by constraints (non-matching combos are skipped, per docs)
+                // Expand for each value-combo × (group, sample) combination
+                // (orthogonal fan-out — [[values]] adds a dimension on top
+                // of sample groups).
+                for value_combo in &value_combos {
+                    for combo in &group_combos {
+                        let mut merged = combo.clone();
+                        merged.extend(value_combo.clone());
+
+                        // Filter by constraints (non-matching combos are
+                        // skipped, per docs).
+                        if validate_wildcard_constraints_compiled(&merged, &compiled_constraints)
+                            .is_err()
+                        {
+                            continue;
+                        }
+
+                        let group = combo.get("group").map(String::as_str).unwrap_or("group");
+                        let sample = combo.get("sample").map(String::as_str).unwrap_or("sample");
+                        let new_name = format!(
+                            "{}{}_{}_{}",
+                            rule.name,
+                            value_instance_suffix(value_combo, &active_value_tables),
+                            group,
+                            sample
+                        );
+                        expanded_names.push(new_name.clone());
+
+                        if !seen_names.insert(new_name.clone()) {
+                            return Err(OxoFlowError::DuplicateRule { name: new_name });
+                        }
+
+                        let mut expanded = rule.clone();
+                        expanded.name = new_name;
+
+                        expanded.input = rule
+                            .input
+                            .iter()
+                            .map(|p| {
+                                if has_wildcards(p) || crate::wildcard::contains_values_namespace(p)
+                                {
+                                    crate::wildcard::expand_values_namespace(
+                                        &expand_pattern(p, &merged).unwrap_or_else(|_| p.clone()),
+                                        &merged,
+                                    )
+                                } else {
+                                    p.clone()
+                                }
+                            })
+                            .collect();
+                        expanded.output = rule
+                            .output
+                            .iter()
+                            .map(|p| {
+                                if has_wildcards(p) || crate::wildcard::contains_values_namespace(p)
+                                {
+                                    crate::wildcard::expand_values_namespace(
+                                        &expand_pattern(p, &merged).unwrap_or_else(|_| p.clone()),
+                                        &merged,
+                                    )
+                                } else {
+                                    p.clone()
+                                }
+                            })
+                            .collect();
+                        if let Some(ref shell) = rule.shell {
+                            expanded.shell = if has_wildcards(shell)
+                                || crate::wildcard::contains_values_namespace(shell)
+                            {
+                                Some(crate::wildcard::expand_values_namespace(
+                                    &expand_pattern(shell, &merged)
+                                        .unwrap_or_else(|_| shell.clone()),
+                                    &merged,
+                                ))
+                            } else {
+                                Some(shell.clone())
+                            };
+                        }
+
+                        // Record which sample this expansion belongs to
+                        // (issue #63 readiness attribution).
+                        let involved: Vec<String> = combo
+                            .get("sample")
+                            .cloned()
+                            .into_iter()
+                            .filter(|name| !name.is_empty())
+                            .collect();
+                        self.expansion_samples
+                            .insert(expanded.name.clone(), involved);
+
+                        if !value_combo.is_empty() {
+                            self.expansion_values
+                                .insert(expanded.name.clone(), value_combo.clone());
+                        }
+
+                        expanded_rules.push(expanded);
+                    }
+                }
+                name_map.insert(orig_name, expanded_names);
+            } else if uses_value_wildcard {
+                // [[values]] fan-out without pair/group wildcards.
+                let orig_name = rule.name.clone();
+                let mut expanded_names = Vec::new();
+                for combo in &value_combos {
+                    // Filter by constraints (non-matching combos are skipped,
+                    // per docs).
                     if validate_wildcard_constraints_compiled(combo, &compiled_constraints).is_err()
                     {
                         continue;
                     }
 
-                    let group = combo.get("group").map(String::as_str).unwrap_or("group");
-                    let sample = combo.get("sample").map(String::as_str).unwrap_or("sample");
-                    let new_name = format!("{}_{}_{}", rule.name, group, sample);
+                    let new_name = format!(
+                        "{}{}",
+                        rule.name,
+                        value_instance_suffix(combo, &active_value_tables)
+                    );
                     expanded_names.push(new_name.clone());
 
                     if !seen_names.insert(new_name.clone()) {
@@ -2266,48 +2613,17 @@ impl WorkflowConfig {
                     }
 
                     let mut expanded = rule.clone();
-                    expanded.name = new_name;
+                    expanded.name = new_name.clone();
 
-                    expanded.input = rule
-                        .input
-                        .iter()
-                        .map(|p| {
-                            if has_wildcards(p) {
-                                expand_pattern(p, combo).unwrap_or_else(|_| p.clone())
-                            } else {
-                                p.clone()
-                            }
-                        })
-                        .collect();
-                    expanded.output = rule
-                        .output
-                        .iter()
-                        .map(|p| {
-                            if has_wildcards(p) {
-                                expand_pattern(p, combo).unwrap_or_else(|_| p.clone())
-                            } else {
-                                p.clone()
-                            }
-                        })
-                        .collect();
-                    if let Some(ref shell) = rule.shell
-                        && has_wildcards(shell)
-                    {
-                        expanded.shell =
-                            Some(expand_pattern(shell, combo).unwrap_or_else(|_| shell.clone()));
+                    // Structure-preserving expansion (List / Map / Dir).
+                    expanded.input = expand_rule_patterns(&rule.input, combo);
+                    expanded.output = expand_rule_patterns(&rule.output, combo);
+                    if let Some(ref shell) = rule.shell {
+                        expanded.shell = Some(expand_rule_shell(shell, combo));
                     }
 
-                    // Record which sample this expansion belongs to
-                    // (issue #63 readiness attribution).
-                    let involved: Vec<String> = combo
-                        .get("sample")
-                        .cloned()
-                        .into_iter()
-                        .filter(|name| !name.is_empty())
-                        .collect();
-                    self.expansion_samples
-                        .insert(expanded.name.clone(), involved);
-
+                    self.expansion_values
+                        .insert(new_name.clone(), combo.clone());
                     expanded_rules.push(expanded);
                 }
                 name_map.insert(orig_name, expanded_names);
@@ -2605,7 +2921,25 @@ impl WorkflowConfig {
                     }
                 }
 
-                let expanded = crate::wildcard::cartesian_expand(&exp.pattern, &variables);
+                // Bind this instance's own [[values]] values so `{assembler}`
+                // inside the expand pattern resolves per instance — the
+                // spades instance never sees the megahit value.
+                let bindings = self.expansion_values.get(&rule.name).cloned();
+                if let Some(bindings) = &bindings {
+                    for (name, value) in bindings {
+                        variables
+                            .entry(name.clone())
+                            .or_insert_with(|| vec![value.clone()]);
+                    }
+                }
+
+                let mut expanded = crate::wildcard::cartesian_expand(&exp.pattern, &variables);
+                // Resolve the `{values.name}` namespace form per instance.
+                if let Some(bindings) = &bindings {
+                    for path in &mut expanded {
+                        *path = crate::wildcard::expand_values_namespace(path, bindings);
+                    }
+                }
                 let mut current_input = rule.input.to_vec();
                 current_input.extend(expanded);
                 rule.input = FilePatterns::List(current_input);
@@ -5306,5 +5640,427 @@ shell = "echo {config.database} > {output[0]}"
             profile_mode = "clobber"
         "#;
         assert!(WorkflowConfig::parse(toml).is_err());
+    }
+
+    // ---- [[values]] arbitrary-parameter fan-out (wave 2-2) ------------------
+
+    fn values_workflow(tables: &str, rules: &str) -> String {
+        format!(
+            r#"
+            [workflow]
+            name = "values"
+            version = "1.0.0"
+
+            {tables}
+
+            {rules}
+            "#
+        )
+    }
+
+    #[test]
+    fn values_single_table_fans_out_rule() {
+        let toml = values_workflow(
+            r#"
+            [[values]]
+            name = "assembler"
+            values = ["spades", "megahit"]
+            "#,
+            r#"
+            [[rules]]
+            name = "assemble"
+            input = ["reads/{assembler}/in.fq"]
+            output = ["contigs/{assembler}/out.fa"]
+            shell = "{assembler} -o {output[0]} {input[0]}"
+            "#,
+        );
+        let mut config = WorkflowConfig::parse(&toml).unwrap();
+        config.expand_wildcards().unwrap();
+
+        let names: Vec<&str> = config.rules.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["assemble_assembler_spades", "assemble_assembler_megahit"]
+        );
+        let spades = &config.rules[0];
+        assert_eq!(spades.input.to_vec(), vec!["reads/spades/in.fq"]);
+        assert_eq!(spades.output.to_vec(), vec!["contigs/spades/out.fa"]);
+        // {input[0]}/{output[0]} are executor-time placeholders; only the
+        // {assembler} wildcard is substituted here.
+        assert_eq!(
+            spades.shell.as_deref(),
+            Some("spades -o {output[0]} {input[0]}")
+        );
+    }
+
+    #[test]
+    fn values_multi_table_cartesian_product() {
+        let toml = values_workflow(
+            r#"
+            [[values]]
+            name = "assembler"
+            values = ["spades", "megahit"]
+
+            [[values]]
+            name = "k"
+            values = ["21", "33"]
+            "#,
+            r#"
+            [[rules]]
+            name = "assemble"
+            input = ["reads/{k}.fq"]
+            output = ["contigs/{assembler}/k{k}/out.fa"]
+            shell = "{assembler} -k {k} -o {output[0]} {input[0]}"
+            "#,
+        );
+        let mut config = WorkflowConfig::parse(&toml).unwrap();
+        config.expand_wildcards().unwrap();
+
+        let names: Vec<&str> = config.rules.iter().map(|r| r.name.as_str()).collect();
+        // Last table varies fastest; instance names follow name_value style.
+        assert_eq!(
+            names,
+            vec![
+                "assemble_assembler_spades_k_21",
+                "assemble_assembler_spades_k_33",
+                "assemble_assembler_megahit_k_21",
+                "assemble_assembler_megahit_k_33",
+            ]
+        );
+        assert_eq!(
+            config.rules[1].output.to_vec(),
+            vec!["contigs/spades/k33/out.fa"]
+        );
+        assert_eq!(
+            config.rules[3].shell.as_deref(),
+            Some("megahit -k 33 -o {output[0]} {input[0]}")
+        );
+    }
+
+    #[test]
+    fn values_orthogonal_with_sample_groups() {
+        let toml = values_workflow(
+            r#"
+            [[values]]
+            name = "assembler"
+            values = ["spades", "megahit"]
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1", "S2"]
+            "#,
+            r#"
+            [[rules]]
+            name = "assemble"
+            input = ["raw/{sample}.fq"]
+            output = ["contigs/{sample}/{assembler}/out.fa"]
+            shell = "{assembler} {input[0]} -o {output[0]}"
+            "#,
+        );
+        let mut config = WorkflowConfig::parse(&toml).unwrap();
+        config.expand_wildcards().unwrap();
+
+        let names: Vec<&str> = config.rules.iter().map(|r| r.name.as_str()).collect();
+        // Values dimension is the outer loop: value-slowest, sample-fastest.
+        assert_eq!(
+            names,
+            vec![
+                "assemble_assembler_spades_cohort_S1",
+                "assemble_assembler_spades_cohort_S2",
+                "assemble_assembler_megahit_cohort_S1",
+                "assemble_assembler_megahit_cohort_S2",
+            ]
+        );
+        assert_eq!(
+            config.rules[0].output.to_vec(),
+            vec!["contigs/S1/spades/out.fa"]
+        );
+        assert_eq!(config.rules[3].input.to_vec(), vec!["raw/S2.fq"]);
+    }
+
+    #[test]
+    fn values_namespace_form_expands_like_bare_form() {
+        let toml = values_workflow(
+            r#"
+            [[values]]
+            name = "assembler"
+            values = ["spades"]
+            "#,
+            r#"
+            [[rules]]
+            name = "assemble"
+            input = ["reads/{values.assembler}/in.fq"]
+            output = ["contigs/{values.assembler}/out.fa"]
+            shell = "{values.assembler} -o {output[0]}"
+            "#,
+        );
+        let mut config = WorkflowConfig::parse(&toml).unwrap();
+        config.expand_wildcards().unwrap();
+
+        assert_eq!(config.rules.len(), 1);
+        assert_eq!(config.rules[0].name, "assemble_assembler_spades");
+        assert_eq!(config.rules[0].input.to_vec(), vec!["reads/spades/in.fq"]);
+        assert_eq!(
+            config.rules[0].shell.as_deref(),
+            Some("spades -o {output[0]}")
+        );
+    }
+
+    #[test]
+    fn values_sanitized_instance_names() {
+        let toml = values_workflow(
+            r#"
+            [[values]]
+            name = "k"
+            values = ["21", "1.5"]
+            "#,
+            r#"
+            [[rules]]
+            name = "filter"
+            input = ["reads/{k}.fq"]
+            output = ["filtered/{k}.fq"]
+            shell = "echo {k}"
+            "#,
+        );
+        let mut config = WorkflowConfig::parse(&toml).unwrap();
+        config.expand_wildcards().unwrap();
+
+        let names: Vec<&str> = config.rules.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["filter_k_21", "filter_k_1_5"]);
+        assert_eq!(config.rules[1].input.to_vec(), vec!["reads/1.5.fq"]);
+    }
+
+    #[test]
+    fn values_referenced_from_expand_inputs_binds_per_instance() {
+        // The spades instance only ever sees spades outputs — no cross
+        // fan-out between instances.
+        let toml = values_workflow(
+            r#"
+            [[values]]
+            name = "assembler"
+            values = ["spades", "megahit"]
+            "#,
+            r#"
+            [[rules]]
+            name = "combine"
+            input = []
+            expand_inputs = [
+                { pattern = "contigs/{assembler}/out.fa", variables = { } }
+            ]
+            output = ["contigs/all/{values.assembler}.txt"]
+            shell = "cat {input} > {output[0]}"
+            "#,
+        );
+        let mut config = WorkflowConfig::parse(&toml).unwrap();
+        config.expand_wildcards().unwrap();
+
+        let names: Vec<&str> = config.rules.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["combine_assembler_spades", "combine_assembler_megahit"]
+        );
+        assert_eq!(
+            config.rules[0].input.to_vec(),
+            vec!["contigs/spades/out.fa"]
+        );
+        assert_eq!(
+            config.rules[0].output.to_vec(),
+            vec!["contigs/all/spades.txt"]
+        );
+        assert_eq!(
+            config.rules[1].input.to_vec(),
+            vec!["contigs/megahit/out.fa"]
+        );
+    }
+
+    #[test]
+    fn values_expanded_rules_flow_into_dag() {
+        // dry-run/plan/checkpoint share the post-expansion rule list, so a
+        // producer/consumer pair fanned out by [[values]] must form edges
+        // between the concrete instances.
+        let toml = values_workflow(
+            r#"
+            [[values]]
+            name = "assembler"
+            values = ["spades", "megahit"]
+            "#,
+            r#"
+            [[rules]]
+            name = "assemble"
+            input = ["reads/in.fq"]
+            output = ["contigs/{assembler}/out.fa"]
+            shell = "{assembler} {input[0]} -o {output[0]}"
+
+            [[rules]]
+            name = "quast"
+            input = ["contigs/{assembler}/out.fa"]
+            output = ["quast/{assembler}/report.txt"]
+            shell = "quast {input[0]} -o {output[0]}"
+            "#,
+        );
+        let mut config = WorkflowConfig::parse(&toml).unwrap();
+        config.expand_wildcards().unwrap();
+
+        let dag = crate::dag::WorkflowDag::from_rules(&config.rules).unwrap();
+        assert_eq!(
+            dag.dependencies("quast_assembler_spades").unwrap(),
+            vec!["assemble_assembler_spades"]
+        );
+        assert_eq!(
+            dag.dependencies("quast_assembler_megahit").unwrap(),
+            vec!["assemble_assembler_megahit"]
+        );
+    }
+
+    #[test]
+    fn values_depends_on_resolves_to_expanded_instances() {
+        let toml = values_workflow(
+            r#"
+            [[values]]
+            name = "assembler"
+            values = ["spades", "megahit"]
+            "#,
+            r#"
+            [[rules]]
+            name = "assemble"
+            input = ["reads/in.fq"]
+            output = ["contigs/{assembler}/out.fa"]
+            shell = "{assembler} {input[0]} -o {output[0]}"
+
+            [[rules]]
+            name = "report"
+            input = []
+            output = ["report.txt"]
+            depends_on = ["assemble"]
+            shell = "touch report.txt"
+            "#,
+        );
+        let mut config = WorkflowConfig::parse(&toml).unwrap();
+        config.expand_wildcards().unwrap();
+
+        let report = config
+            .rules
+            .iter()
+            .find(|r| r.name == "report")
+            .expect("report rule survives expansion");
+        let mut deps = report.depends_on.clone();
+        deps.sort();
+        assert_eq!(
+            deps,
+            vec![
+                "assemble_assembler_megahit".to_string(),
+                "assemble_assembler_spades".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn values_unused_tables_leave_rules_unchanged() {
+        let toml = values_workflow(
+            r#"
+            [[values]]
+            name = "assembler"
+            values = ["spades", "megahit"]
+            "#,
+            r#"
+            [[rules]]
+            name = "plain"
+            input = ["reads/in.fq"]
+            output = ["out.txt"]
+            shell = "cat {input[0]} > {output[0]}"
+            "#,
+        );
+        let mut config = WorkflowConfig::parse(&toml).unwrap();
+        config.expand_wildcards().unwrap();
+        assert_eq!(config.rules.len(), 1);
+        assert_eq!(config.rules[0].name, "plain");
+    }
+
+    #[test]
+    fn values_duplicate_table_names_rejected() {
+        let toml = values_workflow(
+            r#"
+            [[values]]
+            name = "assembler"
+            values = ["spades"]
+
+            [[values]]
+            name = "assembler"
+            values = ["megahit"]
+            "#,
+            r#"
+            [[rules]]
+            name = "plain"
+            shell = "echo hi"
+            "#,
+        );
+        let mut config = WorkflowConfig::parse(&toml).unwrap();
+        let err = config.expand_wildcards().unwrap_err();
+        assert!(err.to_string().contains("duplicate [[values]] table"));
+    }
+
+    #[test]
+    fn values_colliding_with_builtin_wildcard_rejected() {
+        let toml = values_workflow(
+            r#"
+            [[values]]
+            name = "sample"
+            values = ["A", "B"]
+            "#,
+            r#"
+            [[rules]]
+            name = "plain"
+            shell = "echo hi"
+            "#,
+        );
+        let mut config = WorkflowConfig::parse(&toml).unwrap();
+        let err = config.expand_wildcards().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("collides with a built-in wildcard")
+        );
+    }
+
+    #[test]
+    fn values_empty_table_rejected() {
+        let toml = values_workflow(
+            r#"
+            [[values]]
+            name = "assembler"
+            values = []
+            "#,
+            r#"
+            [[rules]]
+            name = "plain"
+            shell = "echo hi"
+            "#,
+        );
+        let mut config = WorkflowConfig::parse(&toml).unwrap();
+        let err = config.expand_wildcards().unwrap_err();
+        assert!(err.to_string().contains("has no values"));
+    }
+
+    #[test]
+    fn unbound_values_namespace_keeps_rule_unchanged() {
+        // `{values.assembler}` without a matching [[values]] table: rule is
+        // kept as-is (a warning is emitted; never an error).
+        let toml = values_workflow(
+            "",
+            r#"
+            [[rules]]
+            name = "plain"
+            input = ["reads/{values.assembler}/in.fq"]
+            output = ["out.txt"]
+            shell = "echo {values.assembler}"
+            "#,
+        );
+        let mut config = WorkflowConfig::parse(&toml).unwrap();
+        config.expand_wildcards().unwrap();
+        assert_eq!(config.rules.len(), 1);
+        assert_eq!(config.rules[0].name, "plain");
+        assert_eq!(
+            config.rules[0].input.to_vec(),
+            vec!["reads/{values.assembler}/in.fq"]
+        );
     }
 }
