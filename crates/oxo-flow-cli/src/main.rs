@@ -1254,7 +1254,7 @@ async fn main() -> Result<()> {
             strict,
             list_sections,
         } => {
-            handle_report(
+            handle_report(crate::commands::output::ReportArgs {
                 workflow,
                 format,
                 output,
@@ -1265,7 +1265,7 @@ async fn main() -> Result<()> {
                 no_timestamps,
                 strict,
                 list_sections,
-            )
+            })
             .await?
         }
         Commands::Serve {

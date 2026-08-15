@@ -47,18 +47,34 @@ pub fn handle_graph(
     Ok(())
 }
 
-pub async fn handle_report(
-    workflow: PathBuf,
-    format: Option<String>,
-    output: Option<PathBuf>,
-    checkpoint_path: Option<PathBuf>,
-    ai: bool,
-    workdir: Option<PathBuf>,
-    ci: bool,
-    no_timestamps: bool,
-    strict: bool,
-    list_sections: bool,
-) -> Result<()> {
+/// Grouped arguments for the report command — keeps the handler
+/// signature small under `-D warnings` (clippy::too_many_arguments).
+pub struct ReportArgs {
+    pub workflow: PathBuf,
+    pub format: Option<String>,
+    pub output: Option<PathBuf>,
+    pub checkpoint_path: Option<PathBuf>,
+    pub ai: bool,
+    pub workdir: Option<PathBuf>,
+    pub ci: bool,
+    pub no_timestamps: bool,
+    pub strict: bool,
+    pub list_sections: bool,
+}
+
+pub async fn handle_report(args: ReportArgs) -> Result<()> {
+    let ReportArgs {
+        workflow,
+        format,
+        output,
+        checkpoint_path,
+        ai,
+        workdir,
+        ci,
+        no_timestamps,
+        strict,
+        list_sections,
+    } = args;
     use oxo_flow_core::{
         executor::CheckpointState,
         report::{ReportBuilder, ReportContent, ReportSection},
