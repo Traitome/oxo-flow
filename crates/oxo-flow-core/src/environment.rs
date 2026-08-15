@@ -182,6 +182,29 @@ fn escape_for_sh_single_quote(s: &str) -> String {
     s.replace('\'', "'\\''")
 }
 
+/// Absolute host path for container bind mounts: docker's `-v`/`-w` and
+/// singularity's `--bind` reject relative sources ("the working directory
+/// '.' is invalid"). Resolves relative paths against the process CWD;
+/// falls back to the path as given when the CWD is unavailable.
+fn absolute_host_path(path: &std::path::Path) -> String {
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    // Lexically drop CurDir components so `cwd/.` renders as `cwd` (docker
+    // accepts either, but a clean mount string reads better in the plan).
+    let mut clean = std::path::PathBuf::new();
+    for component in joined.components() {
+        if !matches!(component, std::path::Component::CurDir) {
+            clean.push(component.as_os_str());
+        }
+    }
+    clean.display().to_string()
+}
+
 /// Mamba / micromamba environment backend.
 ///
 /// Auto-detects the installed binary, preferring `mamba` (fast solver)
@@ -347,7 +370,10 @@ impl EnvironmentBackend for DockerBackend {
         resources: Option<&crate::rule::Resources>,
         workdir: &std::path::Path,
     ) -> Result<String> {
-        let workdir = workdir.display().to_string();
+        // Docker requires absolute paths for -v/-w: a relative workdir
+        // ("." when running from the workflow dir) is rejected by the
+        // daemon ("the working directory '.' is invalid").
+        let workdir = absolute_host_path(workdir);
         let escaped_cmd = escape_for_sh_single_quote(command);
 
         let mut mem_arg = String::new();
@@ -427,7 +453,8 @@ impl EnvironmentBackend for SingularityBackend {
         _resources: Option<&crate::rule::Resources>,
         workdir: &std::path::Path,
     ) -> Result<String> {
-        let workdir = workdir.display().to_string();
+        // Same as docker: --bind sources must be absolute host paths.
+        let workdir = absolute_host_path(workdir);
         let escaped_cmd = escape_for_sh_single_quote(command);
 
         Ok(format!(
@@ -1019,6 +1046,39 @@ impl EnvironmentResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Container workdir absolutization ───────────────────────────
+
+    #[test]
+    fn container_wrappers_absolutize_relative_workdir() {
+        // docker -v/-w and singularity --bind reject relative paths;
+        // wrap_command must resolve them against the process CWD.
+        let cwd = std::env::current_dir().unwrap();
+        let expected = cwd.display().to_string();
+        let docker = DockerBackend
+            .wrap_command("echo hi", "ubuntu:24.04", None, std::path::Path::new("."))
+            .unwrap();
+        assert!(
+            docker.contains(&format!("-v {expected}:{expected}")),
+            "{docker}"
+        );
+        let sing = SingularityBackend::new()
+            .wrap_command("echo hi", "ubuntu:24.04", None, std::path::Path::new("."))
+            .unwrap();
+        assert!(
+            sing.contains(&format!("--bind {expected}:{expected}")),
+            "{sing}"
+        );
+    }
+
+    #[test]
+    fn container_wrappers_keep_absolute_workdir_unchanged() {
+        let abs = std::env::temp_dir().join("oxo-abs-test");
+        let docker = DockerBackend
+            .wrap_command("echo hi", "ubuntu:24.04", None, &abs)
+            .unwrap();
+        assert!(docker.contains(&format!("-v {}:{}", abs.display(), abs.display())));
+    }
 
     // ── SystemBackend ──────────────────────────────────────────────
 
