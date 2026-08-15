@@ -409,9 +409,9 @@ jobs:
           printf '  <key>CFBundleExecutable</key><string>oxo-flow</string>\n' >> "$PLIST"
           printf '  <key>LSMinimumSystemVersion</key><string>11.0</string>\n' >> "$PLIST"
           printf '</dict></plist>\n' >> "$PLIST"
-          (cd dist && zip -qry "oxo-flow-${RELEASE_TAG}-${{ matrix.target }}-app.zip" "../${APP}")
+          (cd dist && zip -qry "oxo-flow-${RELEASE_TAG}-desktop-${{ matrix.target }}-app.zip" "../${APP}")
           hdiutil create -volname "oxo-flow" -srcfolder "${APP}" -ov -format UDZO \
-            "dist/oxo-flow-${RELEASE_TAG}-${{ matrix.target }}.dmg"
+            "dist/oxo-flow-${RELEASE_TAG}-desktop-${{ matrix.target }}.dmg"
 
       - name: Upload artifact
         if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
@@ -486,7 +486,7 @@ jobs:
           printf ' AI-assisted generation, cluster execution. The desktop build\n' >> deb-root/DEBIAN/control
           printf ' starts the local web interface (oxo-flow serve --open).\n' >> deb-root/DEBIAN/control
           mkdir -p artifacts/dist
-          dpkg-deb --build deb-root "artifacts/dist/oxo-flow-${RELEASE_TAG}-amd64.deb"
+          dpkg-deb --build deb-root "artifacts/dist/oxo-flow-${RELEASE_TAG}-desktop-amd64.deb"
 
       - name: Package Red Hat bundle (.rpm)
         shell: bash
@@ -523,7 +523,7 @@ jobs:
             -bb rpm-build/SPECS/oxo-flow.spec
           mkdir -p artifacts/dist
           cp rpm-build/RPMS/x86_64/oxo-flow-${VERSION}-1.x86_64.rpm \
-            "artifacts/dist/oxo-flow-${RELEASE_TAG}-x86_64.rpm"
+            "artifacts/dist/oxo-flow-${RELEASE_TAG}-desktop-x86_64.rpm"
 
       - name: Package universal Linux bundle (.AppImage)
         shell: bash
@@ -555,7 +555,7 @@ jobs:
             "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
           chmod +x appimagetool
           mkdir -p artifacts/dist
-          ./appimagetool "${APPDIR}" "artifacts/dist/oxo-flow-${RELEASE_TAG}-x86_64.AppImage"
+          ./appimagetool "${APPDIR}" "artifacts/dist/oxo-flow-${RELEASE_TAG}-desktop-x86_64.AppImage"
 
       - name: Generate SHA256 checksums
         shell: bash

@@ -89,11 +89,11 @@ tarballs (built by CI, not by hand):
 
 | Asset | Platform |
 |---|---|
-| `oxo-flow-<ver>-x86_64-apple-darwin.dmg` / `-app.zip` | macOS Intel (Rosetta on Apple Silicon) |
-| `oxo-flow-<ver>-aarch64-apple-darwin.dmg` / `-app.zip` | macOS Apple Silicon |
-| `oxo-flow-<ver>-amd64.deb` | Debian / Ubuntu |
-| `oxo-flow-<ver>-x86_64.rpm` | RHEL / Fedora / CentOS |
-| `oxo-flow-<ver>-x86_64.AppImage` | any Linux distribution |
+| `oxo-flow-<ver>-desktop-x86_64-apple-darwin.dmg` / `-desktop-…-app.zip` | macOS Intel (Rosetta on Apple Silicon) |
+| `oxo-flow-<ver>-desktop-aarch64-apple-darwin.dmg` / `-desktop-…-app.zip` | macOS Apple Silicon |
+| `oxo-flow-<ver>-desktop-amd64.deb` | Debian / Ubuntu |
+| `oxo-flow-<ver>-desktop-x86_64.rpm` | RHEL / Fedora / CentOS |
+| `oxo-flow-<ver>-desktop-x86_64.AppImage` | any Linux distribution |
 | `oxo-flow-<ver>-<target>.tar.gz` | CLI binary, 8 targets (macOS ×2, Linux glibc/musl ×3 architectures) — for clusters, containers, and scripted installs |
 | `oxo-flow-web-<ver>-<target>.tar.gz` | Standalone web-server binary (no CLI subcommands) — for deployment hosts that only serve the UI |
 | `SHA256SUMS.txt` | Checksums for every asset above |
@@ -113,9 +113,9 @@ Pick the target that matches the machine: `gnu` for glibc distributions,
 
 ```bash
 # Linux one-liners
-sudo dpkg -i oxo-flow-*.deb          # Debian/Ubuntu
-sudo rpm -i oxo-flow-*.rpm           # RHEL/Fedora
-chmod +x oxo-flow-*.AppImage && ./oxo-flow-*.AppImage   # any distro
+sudo dpkg -i oxo-flow-*desktop*.deb          # Debian/Ubuntu
+sudo rpm -i oxo-flow-*desktop*.rpm           # RHEL/Fedora
+chmod +x oxo-flow-*desktop*.AppImage && ./oxo-flow-*desktop*.AppImage   # any distro
 ```
 
 The AppImage runs `oxo-flow serve --open` on launch; the deb/rpm install
