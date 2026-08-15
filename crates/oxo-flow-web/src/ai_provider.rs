@@ -13,6 +13,9 @@ pub use oxo_flow_ai::provider::{
     create_provider_from_env, save_ai_config,
 };
 
+/// A saved per-user AI row: (provider kind, api_url, model, api_key).
+type UserAiRow = (String, Option<String>, Option<String>, Option<String>);
+
 /// Per-user provider cache (issue #82 follow-up): non-admin users' saved
 /// AI keys resolve to THEIR provider, never reconfiguring the shared
 /// runtime. Entries are invalidated whenever a config write lands.
