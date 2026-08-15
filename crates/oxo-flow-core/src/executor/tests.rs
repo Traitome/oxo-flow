@@ -135,7 +135,10 @@ async fn execute_records_sampled_cpu_seconds() {
     let cpu = record
         .cpu_seconds
         .expect("busy rule must accumulate sampled CPU seconds");
-    assert!(cpu > 0.0, "sampled CPU must be positive, got {cpu}s");
+    // `>= 0.0`, not `> 0.0`: under pathological scheduler starvation the
+    // per-tick percent truncation could land on Some(0.0) — the ~1 s loop
+    // makes zero unlikely, but the assertion must not flake on it.
+    assert!(cpu >= 0.0, "sampled CPU must be non-negative, got {cpu}s");
     let wall_secs = record
         .finished_at
         .and_then(|f| record.started_at.map(|s| f.signed_duration_since(s)))

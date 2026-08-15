@@ -115,15 +115,28 @@ impl RssSampler {
                                 // alive: a dead-but-retained entry or a
                                 // failed lookup must not inflate the total
                                 // (that pid's tick is skipped instead).
+                                // CPU accumulates only while the process is
+                                // alive. With `remove_dead_processes=true`
+                                // dead pids are already dropped from the
+                                // table, so this exists() gate is a cheap
+                                // defensive check for lookup races rather
+                                // than a real failure path — it must never
+                                // inflate the total.
                                 if let Some(proc) = system.process(sysinfo::Pid::from_u32(*pid))
                                     && proc.exists()
                                 {
-                                    tp.seen.store(true, Ordering::Relaxed);
                                     let micros = (proc.cpu_usage() as f64 / 100.0
                                         * SAMPLE_INTERVAL_SECS
                                         * 1_000_000.0)
                                         as u64;
-                                    tp.cpu_micros.fetch_add(micros, Ordering::Relaxed);
+                                    // The delta lands *before* the SeqCst
+                                    // seen-store publishes it, so a reader
+                                    // that observes seen=true in
+                                    // `cpu_seconds()` must also observe this
+                                    // tick's cpu_micros update (no one-tick
+                                    // under-count).
+                                    tp.cpu_micros.fetch_add(micros, Ordering::SeqCst);
+                                    tp.seen.store(true, Ordering::SeqCst);
                                 }
                                 tp.peak
                                     .fetch_max(subtree_rss_bytes(&system, *pid), Ordering::Relaxed);
@@ -199,10 +212,14 @@ impl RssHandle {
     /// `None` when the sampler never observed the process alive during a
     /// tick (e.g. it exited before the first refresh).
     pub fn cpu_seconds(&self) -> Option<f64> {
+        // SeqCst pairs with the seen-store in the sampler: once `seen` is
+        // observable, this tick's cpu_micros delta is observable too (a
+        // Relaxed read could see the flag from tick N with micros from
+        // tick N-1 — a one-tick under-count).
         self.tracked_process
             .seen
-            .load(Ordering::Relaxed)
-            .then(|| self.tracked_process.cpu_micros.load(Ordering::Relaxed) as f64 / 1_000_000.0)
+            .load(Ordering::SeqCst)
+            .then(|| self.tracked_process.cpu_micros.load(Ordering::SeqCst) as f64 / 1_000_000.0)
     }
 }
 
