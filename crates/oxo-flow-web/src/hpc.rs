@@ -89,9 +89,7 @@ pub fn detect_scheduler() -> SchedulerType {
     // Check PBS/Torque — the probe must honor the exit status: SGE's qstat
     // also runs on `--version` but fails it, which would otherwise be
     // misdetected as PBS (and shadow the real SGE check below).
-    if command_succeeds("qstat", &["--version"])
-        || command_succeeds("pbsnodes", &["--version"])
-    {
+    if command_succeeds("qstat", &["--version"]) || command_succeeds("pbsnodes", &["--version"]) {
         return SchedulerType::Pbs;
     }
     // Check LSF
