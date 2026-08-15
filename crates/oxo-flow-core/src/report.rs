@@ -1846,7 +1846,9 @@ impl ReportSectionGenerator for UniversalGenerator {
         });
 
         // Honest status vocabulary (issue #83 P0-8): a report without a
-        // checkpoint is "not run", not "all tasks completed".
+        // checkpoint is "not run", not "all tasks completed". `completed`
+        // counts rule INSTANCES (a scattered rule contributes one entry per
+        // sample), so it must never be divided by the rule count.
         let (status_value, status, status_desc) = match ctx.checkpoint {
             None => (
                 format!("{total} tasks, 0 executed"),
@@ -1854,19 +1856,23 @@ impl ReportSectionGenerator for UniversalGenerator {
                 "No execution data — run the workflow first".to_string(),
             ),
             Some(_) if failed > 0 => (
-                format!("{completed}/{total} succeeded"),
+                format!("{failed} failed, {completed} succeeded"),
                 QcStatusLevel::Warn,
                 format!("{failed} task(s) failed"),
             ),
+            // No failures and the completed set covers the plan exactly
+            // (one instance per rule — the common single-sample case).
             Some(_) if completed == total => (
                 format!("{completed}/{total} succeeded"),
                 QcStatusLevel::Pass,
                 "All tasks completed".to_string(),
             ),
+            // Scattered rules complete as multiple instances; the checkpoint
+            // records no pending set, so claim completion without a ratio.
             Some(_) => (
-                format!("{completed}/{total} succeeded"),
+                format!("{completed} tasks succeeded"),
                 QcStatusLevel::Info,
-                "Partially complete (skipped or pending rules)".to_string(),
+                "No failures recorded".to_string(),
             ),
         };
 
@@ -4059,5 +4065,123 @@ shell = "echo hi"
         assert!(html.contains("<main id=\"main\">"));
         assert!(html.contains("scope=\"col\""));
         assert!(html.contains("@media print"));
+    }
+}
+
+#[cfg(test)]
+mod dashboard_status_tests {
+    use super::*;
+    use crate::executor::checkpoint::CheckpointState;
+
+    fn workflow_config(extra: &str) -> WorkflowConfig {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wf.oxoflow");
+        std::fs::write(
+            &path,
+            format!("[workflow]\nname = \"test\"\nversion = \"0.1\"\n{extra}"),
+        )
+        .unwrap();
+        WorkflowConfig::from_file(&path).unwrap()
+    }
+
+    fn checkpoint_with(completed: &[&str], failed: &[&str]) -> CheckpointState {
+        let mut ck = CheckpointState::new();
+        for r in completed {
+            ck.mark_completed(
+                r,
+                crate::executor::checkpoint::BenchmarkRecord {
+                    rule: (*r).to_string(),
+                    wall_time_secs: 1.0,
+                    max_memory_mb: None,
+                    memory_limit_mb: None,
+                    cpu_seconds: None,
+                    retries: 0,
+                },
+            );
+        }
+        for r in failed {
+            ck.mark_failed(r);
+        }
+        ck
+    }
+
+    fn dashboard_html(config: &WorkflowConfig, ck: Option<&CheckpointState>) -> String {
+        let ctx = ReportContext {
+            config,
+            checkpoint: ck,
+            domain: WorkflowDomain::Generic,
+            workflow_path: None,
+            checkpoint_path: None,
+        };
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        let dashboard = sections.iter().find(|s| s.id == "dashboard").unwrap();
+        let mut html = String::new();
+        render_section_html(&mut html, dashboard, 2);
+        html
+    }
+
+    #[test]
+    fn dashboard_never_divides_instances_by_rule_count() {
+        // Arrange — a scattered 1-rule workflow completing 3 instances:
+        // 3 completed vs 1 rule must not read "3/1 succeeded".
+        let config = workflow_config(
+            r#"[[rules]]
+name = "qc"
+shell = "echo qc"
+"#,
+        );
+        let ck = checkpoint_with(&["qc_batch_S1", "qc_batch_S2", "qc_batch_S3"], &[]);
+
+        // Act
+        let html = dashboard_html(&config, Some(&ck));
+
+        // Assert — absolute count, no impossible ratio, no false partiality.
+        assert!(html.contains("3 tasks succeeded"), "got: {html}");
+        assert!(!html.contains("3/1"), "got: {html}");
+        assert!(!html.contains("Partially complete"), "got: {html}");
+    }
+
+    #[test]
+    fn dashboard_passes_when_completed_set_matches_rule_count() {
+        // Arrange — single-instance rules: completed == total.
+        let config = workflow_config(
+            r#"[[rules]]
+name = "a"
+shell = "echo a"
+[[rules]]
+name = "b"
+shell = "echo b"
+"#,
+        );
+        let ck = checkpoint_with(&["a", "b"], &[]);
+
+        // Act
+        let html = dashboard_html(&config, Some(&ck));
+
+        // Assert
+        assert!(html.contains("2/2 succeeded"), "got: {html}");
+        assert!(html.contains("All tasks completed"), "got: {html}");
+    }
+
+    #[test]
+    fn dashboard_warns_with_absolute_counts_on_failure() {
+        // Arrange
+        let config = workflow_config(
+            r#"[[rules]]
+name = "a"
+shell = "echo a"
+[[rules]]
+name = "b"
+shell = "false"
+"#,
+        );
+        let ck = checkpoint_with(&["a"], &["b"]);
+
+        // Act
+        let html = dashboard_html(&config, Some(&ck));
+
+        // Assert — "1 failed, 1 succeeded", never a ratio against 2 rules.
+        assert!(html.contains("1 failed, 1 succeeded"), "got: {html}");
+        assert!(html.contains("1 task(s) failed"), "got: {html}");
     }
 }
