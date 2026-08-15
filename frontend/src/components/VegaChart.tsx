@@ -9,12 +9,28 @@ interface VegaChartProps {
   title?: string;
 }
 
+/// Theme-aware Vega colors: charts must follow the app's light/dark theme,
+/// never hardcoded light-only hex (readability in dark mode).
+function chartTheme(): { label: string; title: string; grid: string } {
+  if (typeof document !== 'undefined' && document.documentElement.dataset.theme === 'dark') {
+    return { label: '#94A3B8', title: '#E2E8F0', grid: '#263449' };
+  }
+  if (
+    typeof window !== 'undefined' &&
+    window.matchMedia('(prefers-color-scheme: dark)').matches
+  ) {
+    return { label: '#94A3B8', title: '#E2E8F0', grid: '#263449' };
+  }
+  return { label: '#475569', title: '#0F172A', grid: '#E2E8F0' };
+}
+
 export default function VegaChart({ spec, data, title }: VegaChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!containerRef.current || !spec) return;
 
+    const theme = chartTheme();
     const fullSpec = {
       ...spec,
       data: data ? { values: data } : spec.data || { values: [] },
@@ -28,13 +44,15 @@ export default function VegaChart({ spec, data, title }: VegaChartProps) {
         axis: {
           labelFontSize: 11,
           titleFontSize: 12,
-          labelColor: '#475569',
-          titleColor: '#0F172A',
-          gridColor: '#E2E8F0',
+          labelColor: theme.label,
+          titleColor: theme.title,
+          gridColor: theme.grid,
         },
         legend: {
           labelFontSize: 11,
           titleFontSize: 12,
+          labelColor: theme.label,
+          titleColor: theme.title,
         },
         view: {
           stroke: 'transparent',

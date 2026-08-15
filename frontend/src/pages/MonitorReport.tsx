@@ -286,7 +286,7 @@ export default function MonitorReport() {
             <button className="btn-sm" onClick={handlePause} title="Pause"><Pause size={14} /></button>
             <button className="btn-sm" onClick={handleResume} title="Resume"><Play size={14} /></button>
             <button className="btn-sm" onClick={handleRetry} title="Retry"><RotateCcw size={14} /></button>
-            <button className="btn-sm" style={{ color: '#DC2626', borderColor: '#DC2626' }}
+            <button className="btn-sm" style={{ color: 'var(--color-error)', borderColor: 'var(--color-error)' }}
               onClick={handleCancel} title="Cancel run"><Ban size={14} /></button>
             <button className="btn-sm" title="Resume from checkpoint (re-runs unfinished rules)"
               onClick={async () => {
@@ -317,15 +317,18 @@ export default function MonitorReport() {
           <div style={{ marginBottom: '1rem' }}>
             {monitorStatus.alerts.map((alert, i) => {
               const levelColors: Record<string, string> = {
-                info: '#2563EB', warn: '#D97706', alert: '#EA580C', critical: '#DC2626',
+                info: 'var(--color-info)',
+                warn: 'var(--color-warning)',
+                alert: 'var(--color-warning)',
+                critical: 'var(--color-error)',
               };
               const levelNames: Record<string, string> = {
                 info: '🟢 Info', warn: '🟡 Warning', alert: '🟠 Alert', critical: '🔴 Critical',
               };
               return (
                 <div key={i} style={{
-                  border: `1px solid ${levelColors[alert.level] || '#94A3B8'}`,
-                  background: `${levelColors[alert.level] || '#94A3B8'}08`,
+                  border: `1px solid ${levelColors[alert.level] || 'var(--color-text-tertiary)'}`,
+                  background: `${levelColors[alert.level] || 'var(--color-text-tertiary)'}08`,
                   borderRadius: 'var(--radius-md)', padding: '12px', marginBottom: '8px',
                 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', cursor: 'pointer' }}
@@ -346,7 +349,7 @@ export default function MonitorReport() {
                       {/* issue #82 P1-4: these were dead buttons — retry is
                           now a real run, manual edit opens the snapshot in
                           the editor. */}
-                      <button className="btn-sm" style={{ background: '#059669', color: '#fff' }}
+                      <button className="btn-sm" style={{ background: 'var(--color-success)', color: '#fff' }}
                         onClick={() => void handleRetry()}>🔧 Fix & Retry</button>
                       <button className="btn-sm" onClick={async () => {
                         if (!selId) return;
@@ -370,11 +373,11 @@ export default function MonitorReport() {
             <BarChart3 size={14} /> Resource Forecast
           </h4>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.5rem' }}>
-            <StatCard value={monitorStatus.resource_forecast.cpu_trend} label="CPU Trend" color="#2563EB" />
-            <StatCard value={monitorStatus.resource_forecast.memory_trend} label="Memory Trend" color="#D97706" />
-            <StatCard value={monitorStatus.resource_forecast.disk_trend} label="Disk Trend" color="#DC2626" />
-            <StatCard value={`${(monitorStatus.resource_forecast.oom_risk * 100).toFixed(0)}%`} label="OOM Risk" color={monitorStatus.resource_forecast.oom_risk > 0.5 ? '#DC2626' : '#059669'} />
-            <StatCard value={`${(monitorStatus.resource_forecast.timeout_risk * 100).toFixed(0)}%`} label="Timeout Risk" color={monitorStatus.resource_forecast.timeout_risk > 0.5 ? '#EA580C' : '#059669'} />
+            <StatCard value={monitorStatus.resource_forecast.cpu_trend} label="CPU Trend" color="var(--color-info)" />
+            <StatCard value={monitorStatus.resource_forecast.memory_trend} label="Memory Trend" color="var(--color-warning)" />
+            <StatCard value={monitorStatus.resource_forecast.disk_trend} label="Disk Trend" color="var(--color-error)" />
+            <StatCard value={`${(monitorStatus.resource_forecast.oom_risk * 100).toFixed(0)}%`} label="OOM Risk" color={monitorStatus.resource_forecast.oom_risk > 0.5  ? 'var(--color-error)' : 'var(--color-success)'} />
+            <StatCard value={`${(monitorStatus.resource_forecast.timeout_risk * 100).toFixed(0)}%`} label="Timeout Risk" color={monitorStatus.resource_forecast.timeout_risk > 0.5 ? 'var(--color-warning)' : 'var(--color-success)'} />
           </div>
         </div>
 
@@ -409,10 +412,10 @@ export default function MonitorReport() {
       <div>
         {/* QC Stats */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.5rem', marginBottom: '1rem' }}>
-          <StatCard value={`${reportData.qc_summary?.total_files || 0}`} label="Output Files" color="#059669" />
+          <StatCard value={`${reportData.qc_summary?.total_files || 0}`} label="Output Files" color="var(--color-success)" />
           <StatCard value={String(reportData.qc_summary?.total_size_mb || '0')} label="Total Size (MB)" />
           <StatCard value={`${reportData.qc_summary?.directories || 0}`} label="Directories" />
-          <StatCard value={reportData.key_findings.length > 0 ? `${reportData.key_findings.length}` : '0'} label="Findings" color={reportData.key_findings.length > 0 ? '#D97706' : '#059669'} />
+          <StatCard value={reportData.key_findings.length > 0 ? `${reportData.key_findings.length}` : '0'} label="Findings" color={reportData.key_findings.length > 0 ? 'var(--color-warning)' : 'var(--color-success)'} />
         </div>
 
         {/* AI Narrative */}
@@ -453,7 +456,7 @@ export default function MonitorReport() {
         {/* Caveats */}
         {reportData.caveats.length > 0 && (
           <div className="dash-card" style={{ marginBottom: '1rem', background: 'var(--color-warning-bg)', border: '1px solid var(--color-warning)' }}>
-            <h4 style={{ fontSize: '0.85rem', marginBottom: '6px', color: '#D97706' }}>⚠️ Caveats</h4>
+            <h4 style={{ fontSize: '0.85rem', marginBottom: '6px', color: 'var(--color-warning)' }}>⚠️ Caveats</h4>
             <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.82rem' }}>
               {reportData.caveats.map((c, i) => (
                 <li key={i} style={{ marginBottom: '2px' }}>{c}</li>
@@ -587,9 +590,9 @@ export default function MonitorReport() {
       <div>
         <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem', fontSize: '0.82rem', flexWrap: 'wrap' }}>
           <span>Total: <strong>{dagStatus.metrics.total_nodes}</strong></span>
-          <span style={{ color: '#059669' }}>✅ Done: <strong>{dagStatus.metrics.completed_nodes}</strong></span>
-          <span style={{ color: '#3B82F6' }}>🔄 Running: <strong>{dagStatus.metrics.running_nodes}</strong></span>
-          <span style={{ color: '#DC2626' }}>❌ Failed: <strong>{dagStatus.metrics.failed_nodes}</strong></span>
+          <span style={{ color: 'var(--color-success)' }}>✅ Done: <strong>{dagStatus.metrics.completed_nodes}</strong></span>
+          <span style={{ color: 'var(--color-info)' }}>🔄 Running: <strong>{dagStatus.metrics.running_nodes}</strong></span>
+          <span style={{ color: 'var(--color-error)' }}>❌ Failed: <strong>{dagStatus.metrics.failed_nodes}</strong></span>
           <span>⏳ Pending: <strong>{dagStatus.metrics.pending_nodes}</strong></span>
           {dagStatus.metrics.eta_ms != null && dagStatus.metrics.eta_ms > 0 && (
             <span style={{ color: 'var(--color-text-secondary)' }}>ETA: {(dagStatus.metrics.eta_ms / 60000).toFixed(0)}min</span>

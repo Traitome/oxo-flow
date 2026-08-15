@@ -37,7 +37,10 @@ export default function TomlEditor({ value, onChange, readOnly, highlightLine }:
           '&': { height: '100%', fontSize: '13px', fontFamily: '"Cascadia Code", "SF Mono", "Fira Code", monospace' },
           '.cm-scroller': { overflow: 'auto' },
           '.cm-content': { padding: '12px' },
-          '.cm-gutters': { borderRight: '1px solid #E2E8F0', backgroundColor: '#F8FAFC' },
+          '.cm-gutters': {
+            borderRight: '1px solid var(--color-border)',
+            backgroundColor: 'var(--color-bg-secondary)',
+          },
         }),
         EditorView.lineWrapping,
         readOnly ? EditorState.readOnly.of(true) : [],

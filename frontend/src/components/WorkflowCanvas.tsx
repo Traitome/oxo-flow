@@ -194,8 +194,8 @@ export default function WorkflowCanvas({
         target: e.to,
         style:
           e.kind === 'file'
-            ? { strokeDasharray: '5 4', stroke: '#94a3b8' }
-            : { stroke: '#475569' },
+            ? { strokeDasharray: '5 4', stroke: 'var(--color-text-tertiary)' }
+            : { stroke: 'var(--color-text-secondary)' },
       })),
     );
   }, [dag, editable, scopeKey, statusById, onEditRule, setNodes, setEdges]);
@@ -272,7 +272,7 @@ export default function WorkflowCanvas({
         nodesConnectable={editable}
         deleteKeyCode={null}
       >
-        <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="#cbd5e1" />
+        <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="var(--color-border)" />
         <Controls showInteractive={false} />
         {/* The minimap overlays the canvas — useful for monitoring a large
             DAG, intrusive while editing. */}

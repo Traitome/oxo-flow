@@ -135,7 +135,7 @@ export default function Dashboard() {
       <div className="stat-grid" style={{ marginTop: '1rem', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
         <div className="stat-card"><div className="stat-value">{health?.version || '-'}</div><div className="stat-label">Version</div></div>
         <div className="stat-card"><div className="stat-value">{runs.length}</div><div className="stat-label">Total Runs</div></div>
-        <div className="stat-card"><div className="stat-value" style={{ color: activeRuns > 0 ? '#D97706' : '#059669' }}>{activeRuns}</div><div className="stat-label">Active</div></div>
+        <div className="stat-card"><div className="stat-value" style={{ color: activeRuns > 0 ? 'var(--color-warning)' : 'var(--color-success)' }}>{activeRuns}</div><div className="stat-label">Active</div></div>
         <div className="stat-card"><div className="stat-value">{sys ? `${sys.os}/${sys.arch}` : '-'}</div><div className="stat-label">Platform</div></div>
         {health?.resources && (
           <div className="stat-card">
