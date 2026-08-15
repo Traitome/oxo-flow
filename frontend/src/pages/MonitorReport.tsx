@@ -4,6 +4,7 @@ import { api, createEventSource } from '../api/client';
 import type { RunItem, MonitorStatus, ReportData, DagStatus, Diagnostics, DryRunPreview, RunInstance } from '../api/types';
 import { Play, Pause, RotateCcw, BarChart3, Loader2, Bot, Ban, Trash2, StepForward } from 'lucide-react';
 import WorkflowCanvas from '../components/WorkflowCanvas';
+import RunTimeline from '../components/RunTimeline';
 import { usePipelineSession } from '../context/PipelineSession';
 
 type TabType = 'monitor' | 'report' | 'diagnostics' | 'dag' | 'logs' | 'instances';
@@ -364,6 +365,16 @@ export default function MonitorReport() {
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {/* Run timeline — the terminal-native signature element */}
+        {dagStatus && dagStatus.nodes.length > 0 && (
+          <div style={{ marginBottom: '1rem' }}>
+            <h4 style={{ fontSize: '0.85rem', marginBottom: '8px', color: 'var(--color-text)' }}>
+              Rule timeline
+            </h4>
+            <RunTimeline dag={dagStatus} />
           </div>
         )}
 

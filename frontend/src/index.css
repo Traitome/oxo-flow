@@ -573,3 +573,21 @@ body{font-family:var(--font-sans);font-size:.9375rem;line-height:1.6;color:var(-
   border: 1px solid var(--color-info);
   vertical-align: 2px;
 }
+
+/* ── RunTimeline (terminal-native signature) ── */
+.run-timeline{font-family:var(--font-mono);font-size:.8rem;line-height:1.9;background:var(--color-bg-secondary);border:1px solid var(--color-border);border-radius:var(--radius-sm);padding:10px 14px}
+.run-tl-node{display:flex;align-items:baseline;gap:10px;position:relative}
+.run-tl-symbol{width:1.2em;text-align:center;flex-shrink:0;color:var(--color-text-tertiary)}
+.run-tl-symbol.completed,.run-tl-symbol.success{color:var(--color-success)}
+.run-tl-symbol.failed{color:var(--color-error)}
+.run-tl-symbol.running{color:var(--color-warning)}
+.run-tl-cmd{color:var(--color-text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.run-tl-prompt{color:var(--color-accent);font-weight:700}
+.run-tl-rule{color:var(--color-text);font-weight:600}
+.run-tl-meta{margin-left:auto;color:var(--color-text-tertiary);white-space:nowrap}
+/* Phosphor breathing cursor on the running node */
+.run-tl-node.running .run-tl-symbol{animation:tl-breathe 2s ease-in-out infinite}
+@keyframes tl-breathe{0%,100%{opacity:1}50%{opacity:.35}}
+@media (prefers-reduced-motion: reduce){
+  .run-tl-node.running .run-tl-symbol{animation:none}
+}
