@@ -234,6 +234,9 @@ impl StorageBackend for PostgresBackend {
     }
 
     async fn create_user(&self, username: &str, role: &str) -> Result<models::UserRow, String> {
+        // Same rule as the SQLite backend: the username becomes a workspace
+        // path component.
+        crate::workspace::validate_username(username).map_err(|e| e.to_string())?;
         let id = Uuid::new_v4().to_string();
         let now = Self::now();
         let row = models::UserRow {

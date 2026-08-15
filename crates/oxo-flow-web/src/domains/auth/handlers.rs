@@ -348,6 +348,10 @@ pub async fn create_user(
     Json(req): Json<CreateUserRequest>,
 ) -> ApiResult<UserResponse> {
     let _admin = require_admin(&headers).await?;
+    // The username becomes the workspace path component — same rule as
+    // login auto-provisioning.
+    crate::workspace::validate_username(&req.username)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, "INVALID_USERNAME", format!("{e}")))?;
     let pool = get_pool()?;
 
     let role = req.role.as_deref().unwrap_or("user");
