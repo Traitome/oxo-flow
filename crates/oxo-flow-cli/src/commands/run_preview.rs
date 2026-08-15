@@ -684,20 +684,17 @@ pub(crate) fn merge_profile(
     // pre-existing run --profile bug the shared extraction surfaced).
     let profile_toml: toml::Value = toml::from_str(&profile_content)
         .with_context(|| format!("failed to parse profile {}", path.display()))?;
-    if let Some(config_table) = profile_toml.get("config").and_then(toml::Value::as_table) {
-        for (key, value) in config_table {
-            config
-                .config
-                .entry(key.clone())
-                .or_insert_with(|| value.clone());
-        }
-        eprintln!(
-            "{} Merged {} config values from profile '{}'",
-            "Profile:".bold().cyan(),
-            config_table.len(),
-            profile_name
-        );
-    }
+    // The core merge honors `[workflow] profile_mode = "fill" | "override"`
+    // (default fill = the legacy or_insert behavior; override replaces
+    // workflow values — the "cluster profile switches threads/memory" case).
+    config
+        .merge_profile(&profile_toml)
+        .map_err(|e| anyhow::anyhow!("profile '{}' merge failed: {e}", profile_name))?;
+    eprintln!(
+        "{} Applied config values from profile '{}'",
+        "Profile:".bold().cyan(),
+        profile_name
+    );
     Ok(())
 }
 
