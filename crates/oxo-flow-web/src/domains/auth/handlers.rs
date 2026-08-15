@@ -147,6 +147,15 @@ async fn require_admin(
     Ok(username)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/auth/login",
+    tag = "auth",
+    responses(
+        (status = 200, description = "Success", body = LoginResponse),
+        (status = 401, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/auth/login
 pub async fn login(Json(req): Json<LoginRequest>) -> ApiResult<LoginResponse> {
     // Env-var credentials first (admin/user/viewer passwords); on failure,
@@ -225,6 +234,15 @@ pub async fn login(Json(req): Json<LoginRequest>) -> ApiResult<LoginResponse> {
     Ok(Json(result))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/auth/me",
+    tag = "auth",
+    responses(
+        (status = 200, description = "Success", body = AuthMeResponse),
+        (status = 401, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/auth/me
 pub async fn auth_me(headers: axum::http::HeaderMap) -> ApiResult<AuthMeResponse> {
     let token = extract_token(&headers).unwrap_or_default();
@@ -264,6 +282,15 @@ pub async fn auth_me(headers: axum::http::HeaderMap) -> ApiResult<AuthMeResponse
     }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/users",
+    tag = "auth",
+    responses(
+        (status = 200, description = "Success", body = Vec<UserResponse>),
+        (status = 403, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/users — admin only
 pub async fn list_users(headers: axum::http::HeaderMap) -> ApiResult<Vec<UserResponse>> {
     let _admin = require_admin(&headers).await?;
@@ -296,6 +323,15 @@ pub async fn list_users(headers: axum::http::HeaderMap) -> ApiResult<Vec<UserRes
     Ok(Json(users))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/users",
+    tag = "auth",
+    responses(
+        (status = 200, description = "Success", body = UserResponse),
+        (status = 403, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/users — admin only
 pub async fn create_user(
     headers: axum::http::HeaderMap,
@@ -358,6 +394,15 @@ pub async fn create_user(
     }))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/users/{id}",
+    tag = "auth",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 403, description = "Error", body = ApiError),
+    )
+)]
 /// DELETE /api/users/{id} — admin only
 pub async fn delete_user(
     headers: axum::http::HeaderMap,
@@ -403,6 +448,15 @@ pub async fn delete_user(
     Ok(Json(serde_json::json!({"deleted": id})))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/license",
+    tag = "license",
+    responses(
+        (status = 200, description = "Success", body = LicenseResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/license
 pub async fn license_status() -> ApiResult<LicenseResponse> {
     Ok(Json(service::license_status()))
@@ -412,6 +466,15 @@ pub async fn license_status() -> ApiResult<LicenseResponse> {
 // OAuth2 handlers
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(
+    post,
+    path = "/api/auth/oauth/authorize",
+    tag = "auth",
+    responses(
+        (status = 200, description = "Success", body = OAuthAuthorizeResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/auth/oauth/authorize
 ///
 /// Initiates an OAuth2 authorization flow. Returns the provider's
@@ -430,6 +493,15 @@ pub async fn oauth_authorize(
         .map_err(|e| err(StatusCode::BAD_REQUEST, "OAUTH_ERROR", e))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/auth/oauth/callback",
+    tag = "auth",
+    responses(
+        (status = 200, description = "Success", body = OAuthCallbackResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/auth/oauth/callback
 ///
 /// Handles the OAuth2 callback after the user authorizes the application.
@@ -497,6 +569,15 @@ pub async fn oauth_callback(
     Ok(Json(result))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/license/upload",
+    tag = "license",
+    responses(
+        (status = 200, description = "Success", body = LicenseResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/license/upload
 pub async fn upload_license(Json(req): Json<serde_json::Value>) -> ApiResult<LicenseResponse> {
     // Log the upload attempt
@@ -539,6 +620,15 @@ fn hash_api_key(key: &str) -> String {
         .collect()
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/auth/keys",
+    tag = "auth",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 401, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/auth/keys — create a key; the plaintext is returned ONCE.
 pub async fn create_api_key(
     authenticated: Option<axum::Extension<crate::domains::auth::current_user::CurrentUser>>,
@@ -589,6 +679,15 @@ pub async fn create_api_key(
     })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/auth/keys",
+    tag = "auth",
+    responses(
+        (status = 200, description = "Success", body = Vec<serde_json::Value>),
+        (status = 401, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/auth/keys — the acting user's keys (hashes only, never
 /// plaintext).
 pub async fn list_api_keys(
@@ -622,6 +721,15 @@ pub async fn list_api_keys(
     ))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/auth/keys/{id}",
+    tag = "auth",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// DELETE /api/auth/keys/{id} — revoke one of the acting user's keys.
 pub async fn revoke_api_key(
     authenticated: Option<axum::Extension<crate::domains::auth::current_user::CurrentUser>>,

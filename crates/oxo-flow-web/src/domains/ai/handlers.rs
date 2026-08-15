@@ -38,6 +38,15 @@ fn require_ai_admin(user: &CurrentUser) -> Result<(), (StatusCode, Json<ApiError
     Ok(())
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/ai/translate",
+    tag = "ai",
+    responses(
+        (status = 200, description = "Success", body = TranslateResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/ai/translate — standard JSON response.
 pub async fn translate(
     authenticated: Option<Extension<CurrentUser>>,
@@ -66,6 +75,15 @@ pub async fn translate(
         .map_err(|e| err(StatusCode::BAD_REQUEST, "AI_TRANSLATE_ERROR", e))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/ai/translate/stream",
+    tag = "ai",
+    responses(
+        (status = 200, description = "Success", content_type = "text/event-stream"),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/ai/translate?stream=true — SSE streaming response.
 ///
 /// Streams progress events: intent → data → match → generate → validate → done.
@@ -139,6 +157,15 @@ pub async fn translate_sse(
     )
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/ai/explain",
+    tag = "ai",
+    responses(
+        (status = 200, description = "Success", body = ExplainResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/ai/explain
 ///
 /// Looks up the run from the database to get real diagnostics data.
@@ -208,6 +235,15 @@ pub async fn explain(
     .map_err(|e| err(StatusCode::BAD_REQUEST, "AI_EXPLAIN_ERROR", e))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/ai/interpret",
+    tag = "ai",
+    responses(
+        (status = 200, description = "Success", body = InterpretResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/ai/interpret
 ///
 /// Looks up run results from DB and workdir for real data.
@@ -261,6 +297,15 @@ pub async fn interpret(
     .map_err(|e| err(StatusCode::BAD_REQUEST, "AI_INTERPRET_ERROR", e))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/ai/optimize",
+    tag = "ai",
+    responses(
+        (status = 200, description = "Success", body = OptimizeResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/ai/optimize
 ///
 /// Accepts TOML directly or loads from DB by pipeline_id.
@@ -292,6 +337,15 @@ pub async fn optimize(
         .map_err(|e| err(StatusCode::BAD_REQUEST, "AI_OPTIMIZE_ERROR", e))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/ai/config",
+    tag = "ai",
+    responses(
+        (status = 200, description = "Success", body = AiConfigResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/ai/config
 pub async fn get_ai_config() -> ApiResult<AiConfigResponse> {
     let config = crate::ai_provider::AiProviderRegistry::global().get_config();
@@ -303,6 +357,15 @@ pub async fn get_ai_config() -> ApiResult<AiConfigResponse> {
     }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/ai/config",
+    tag = "ai",
+    responses(
+        (status = 200, description = "Success", body = AiConfigResponse),
+        (status = 403, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/ai/config
 pub async fn update_ai_config(
     authenticated: Option<Extension<CurrentUser>>,
@@ -329,6 +392,15 @@ pub async fn update_ai_config(
     }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/ai/test",
+    tag = "ai",
+    responses(
+        (status = 200, description = "Success", body = AiTestResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/ai/test
 pub async fn test_ai_config(
     authenticated: Option<Extension<CurrentUser>>,
@@ -410,6 +482,15 @@ pub async fn restore_ai_config_from_db() {
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/ai/config/effective",
+    tag = "ai",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/ai/config/effective
 pub async fn get_ai_config_effective(
     authenticated: Option<Extension<CurrentUser>>,
@@ -462,6 +543,15 @@ pub async fn get_ai_config_effective(
     })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/ai/config/server",
+    tag = "ai",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/ai/config/server
 pub async fn get_server_ai_config() -> ApiResult<serde_json::Value> {
     let pool = crate::infra::db::sqlite::try_pool().ok();
@@ -492,6 +582,15 @@ pub async fn get_server_ai_config() -> ApiResult<serde_json::Value> {
     })))
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/ai/config/server",
+    tag = "ai",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 403, description = "Error", body = ApiError),
+    )
+)]
 /// PUT /api/ai/config/server
 pub async fn update_server_ai_config(
     authenticated: Option<Extension<CurrentUser>>,
@@ -544,6 +643,15 @@ pub async fn update_server_ai_config(
     ))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/ai/config/user",
+    tag = "ai",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/ai/config/user
 pub async fn get_user_ai_config() -> ApiResult<serde_json::Value> {
     let config = crate::ai_provider::AiProviderRegistry::global().get_config();
@@ -558,6 +666,15 @@ pub async fn get_user_ai_config() -> ApiResult<serde_json::Value> {
     })))
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/ai/config/user",
+    tag = "ai",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// PUT /api/ai/config/user
 pub async fn update_user_ai_config(
     authenticated: Option<Extension<CurrentUser>>,
@@ -646,13 +763,22 @@ pub async fn update_user_ai_config(
 // ---------------------------------------------------------------------------
 
 /// Query parameters for the knowledge search endpoints.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
 pub struct KnowledgeQuery {
     #[serde(default)]
     pub q: String,
     pub limit: Option<usize>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/knowledge/tools",
+    tag = "ai",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/knowledge/tools — search the embedded Bioconda tool database.
 pub async fn knowledge_tools(
     axum::extract::Query(params): axum::extract::Query<KnowledgeQuery>,
@@ -670,6 +796,15 @@ pub async fn knowledge_tools(
     })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/knowledge/skills",
+    tag = "ai",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/knowledge/skills — search the embedded bioSkills database.
 pub async fn knowledge_skills(
     axum::extract::Query(params): axum::extract::Query<KnowledgeQuery>,

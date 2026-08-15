@@ -15,6 +15,7 @@ pub mod domains;
 pub mod executor;
 pub mod hpc;
 pub mod infra;
+pub mod openapi;
 pub mod process_control;
 pub mod rate_limit;
 pub mod server;

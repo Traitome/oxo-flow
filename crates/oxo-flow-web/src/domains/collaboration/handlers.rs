@@ -15,6 +15,15 @@ fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/pipelines/{id}/fork",
+    tag = "collaboration",
+    responses(
+        (status = 200, description = "Success", body = ForkResponse),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/pipelines/{id}/fork
 pub async fn fork_pipeline(
     authenticated: Option<Extension<CurrentUser>>,
@@ -116,6 +125,15 @@ pub async fn fork_pipeline(
     Ok(Json(ForkResponse { forked_id, name }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/pipelines/{id}/share",
+    tag = "collaboration",
+    responses(
+        (status = 200, description = "Success", body = ShareResponse),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/pipelines/{id}/share
 pub async fn share_pipeline(
     authenticated: Option<Extension<CurrentUser>>,
@@ -204,6 +222,15 @@ pub async fn share_pipeline(
     }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/pipelines/import",
+    tag = "collaboration",
+    responses(
+        (status = 200, description = "Success", body = ImportResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/pipelines/import
 pub async fn import_pipeline(
     authenticated: Option<Extension<CurrentUser>>,
@@ -314,6 +341,15 @@ pub async fn import_pipeline(
     }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/share/{token}",
+    tag = "collaboration",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/share/{token} — public read-only landing payload for a share
 /// link (issue #82 P0-6): pipeline identity + DAG summary + the TOML +
 /// the most recent run's outcome. The share row IS the authorization —

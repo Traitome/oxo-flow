@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::process::Command;
 
 /// Detected HPC scheduler type.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum SchedulerType {
     Slurm,
     Pbs,
@@ -30,7 +30,7 @@ impl std::fmt::Display for SchedulerType {
 }
 
 /// Queue status information.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct QueueStatus {
     pub queue_name: String,
     pub total_jobs: usize,
@@ -41,7 +41,7 @@ pub struct QueueStatus {
 }
 
 /// Node status information.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct NodeStatus {
     pub name: String,
     pub state: String,
@@ -53,7 +53,7 @@ pub struct NodeStatus {
 }
 
 /// Job information from the HPC scheduler.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct JobInfo {
     pub job_id: String,
     pub name: String,
@@ -67,7 +67,7 @@ pub struct JobInfo {
 }
 
 /// HPC system summary.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct HpcStatus {
     pub scheduler: String,
     pub scheduler_type: SchedulerType,

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct HealthResponse {
     pub status: String,
     pub version: String,
@@ -11,7 +11,7 @@ pub struct HealthResponse {
     pub license: LicenseInfo,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ComponentHealth {
     pub database: ComponentStatus,
     pub filesystem: ComponentStatus,
@@ -19,20 +19,20 @@ pub struct ComponentHealth {
     pub ai_provider: Option<ComponentStatus>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ComponentStatus {
     pub status: String,
     pub latency_ms: Option<f64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ResourceInfo {
     pub cpu_pct: f64,
     pub memory_used_pct: f64,
     pub disk_used_pct: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LicenseInfo {
     pub license_type: String,
     pub valid: bool,
@@ -41,7 +41,7 @@ pub struct LicenseInfo {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SystemInfoResponse {
     pub version: String,
     pub rust_version: String,
@@ -51,7 +51,7 @@ pub struct SystemInfoResponse {
     pub uptime_secs: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RuntimeMetricsResponse {
     pub uptime_secs: u64,
     pub version: String,
@@ -64,7 +64,7 @@ pub struct RuntimeMetricsResponse {
     pub host: HostResources,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct HostResources {
     pub cpu_usage_percent: f64,
     pub total_memory_mb: u64,
@@ -78,13 +78,13 @@ pub struct AuditLogQuery {
     pub days: Option<u8>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AuditLogResponse {
     pub entries: Vec<AuditEntry>,
     pub days: u8,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AuditEntry {
     pub timestamp: String,
     pub user: String,
@@ -93,20 +93,20 @@ pub struct AuditEntry {
     pub result: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DataAnalysisRequest {
     pub paths: Vec<String>,
     pub max_depth: Option<usize>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DataAnalysisResponse {
     pub files: Vec<FileInfo>,
     pub summary: DataSummary,
     pub suggested_workflow: Option<WorkflowSuggestion>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct FileInfo {
     pub path: String,
     pub size: u64,
@@ -116,7 +116,7 @@ pub struct FileInfo {
     pub sample_name: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DataSummary {
     pub total_size: u64,
     pub formats_detected: Vec<String>,
@@ -124,20 +124,20 @@ pub struct DataSummary {
     pub strand_specific: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct WorkflowSuggestion {
     pub template: String,
     pub confidence: f64,
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ReferenceRequest {
     pub genome: String,
     pub components: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ReferenceResponse {
     pub found: Vec<String>,
     pub missing: Vec<String>,

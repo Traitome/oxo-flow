@@ -86,6 +86,15 @@ async fn persist_assistant_message(
         .await;
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/chat/send",
+    tag = "chat",
+    responses(
+        (status = 200, description = "Success", content_type = "text/event-stream"),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/chat/send — SSE streaming chat endpoint.
 ///
 /// Runs the REAL agent loop (oxo-flow-ai Orchestrator with the web tool
@@ -194,6 +203,15 @@ pub async fn chat_send(
     )
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/chat/send/json",
+    tag = "chat",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/chat/send/json — non-streaming JSON response.
 pub async fn chat_send_json(
     authenticated: Option<Extension<CurrentUser>>,
@@ -239,6 +257,15 @@ pub async fn chat_send_json(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/chat/sessions",
+    tag = "chat",
+    responses(
+        (status = 200, description = "Success", body = Vec<ChatSession>),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/chat/sessions — list the acting user's chat sessions
 /// (issue #81: server-side persistence + per-user scoping).
 pub async fn list_sessions(

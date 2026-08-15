@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Source of the edit operation for audit and conflict resolution.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EditSource {
     DagEditor,
@@ -16,7 +16,7 @@ pub enum EditSource {
 }
 
 /// Types of edit operations on a pipeline DAG.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EditOperation {
     AddRule,

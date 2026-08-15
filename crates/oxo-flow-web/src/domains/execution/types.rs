@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatus {
     Queued,
@@ -24,7 +24,7 @@ impl std::fmt::Display for RunStatus {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RunPhase {
     Parsing,
@@ -46,7 +46,7 @@ impl std::fmt::Display for RunPhase {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeStatus {
     Pending,
@@ -68,13 +68,13 @@ impl std::fmt::Display for NodeStatus {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateRunRequest {
     pub pipeline_id: String,
     pub config: Option<RunConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RunConfig {
     pub max_jobs: Option<usize>,
     pub dry_run: Option<bool>,
@@ -82,13 +82,13 @@ pub struct RunConfig {
     pub resource_budget: Option<ResourceBudget>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ResourceBudget {
     pub max_memory: Option<String>,
     pub max_threads: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateRunResponse {
     pub run_id: String,
     pub status: String,
@@ -96,21 +96,21 @@ pub struct CreateRunResponse {
     pub execution_plan: ExecutionPlan,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct EstimatedResources {
     pub max_memory_mb: u64,
     pub max_threads: u32,
     pub estimated_duration_secs: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ExecutionPlan {
     pub total_rules: usize,
     pub parallel_groups: Vec<Vec<String>>,
     pub execution_order: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RunStatusResponse {
     pub status: RunStatus,
     pub phase: String,
@@ -119,7 +119,7 @@ pub struct RunStatusResponse {
     pub resources: ResourceSnapshot,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct NodeStatusItem {
     pub rule: String,
     pub status: NodeStatus,
@@ -129,7 +129,7 @@ pub struct NodeStatusItem {
     pub progress_pct: Option<u8>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct TimelineEvent {
     pub timestamp: String,
     pub event: String,
@@ -137,7 +137,7 @@ pub struct TimelineEvent {
     pub message: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ResourceSnapshot {
     pub cpu_pct: f64,
     pub memory_mb: u64,
@@ -155,7 +155,7 @@ impl Default for ResourceSnapshot {
 }
 
 // DAG status types
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DagStatusResponse {
     pub nodes: Vec<DagNode>,
     pub edges: Vec<DagEdge>,
@@ -164,7 +164,7 @@ pub struct DagStatusResponse {
     pub metrics: DagMetrics,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DagNode {
     pub id: String,
     pub label: String,
@@ -174,13 +174,17 @@ pub struct DagNode {
     pub exit_code: Option<i32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DagEdge {
     pub source: String,
     pub target: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// Run-tracking DAG metrics. Schema name is distinct from the workflow
+// domain's `DagMetrics` (different field sets; both land in the OpenAPI
+// components and would otherwise collide).
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[schema(as = RunDagMetrics)]
 pub struct DagMetrics {
     pub total_nodes: usize,
     pub completed_nodes: usize,
@@ -191,14 +195,14 @@ pub struct DagMetrics {
 }
 
 // Diagnostics types
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiagnosticsResponse {
     pub failed_nodes: Vec<FailedNode>,
     pub warnings: Vec<DiagnosticWarning>,
     pub resource_bottlenecks: Vec<ResourceBottleneck>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct FailedNode {
     pub rule: String,
     pub error_pattern: Option<String>,
@@ -210,7 +214,7 @@ pub struct FailedNode {
 }
 
 /// Actionable fix that can be applied to resolve a diagnostic finding.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct FixAction {
     pub description: String,
     pub config_change: Option<ConfigChange>,
@@ -218,21 +222,21 @@ pub struct FixAction {
 }
 
 /// A specific configuration change suggested by the diagnostics engine.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ConfigChange {
     pub path: String,
     pub old_value: String,
     pub new_value: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiagnosticWarning {
     pub rule: String,
     pub pattern: String,
     pub suggestion: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ResourceBottleneck {
     pub rule: String,
     pub metric: String,
@@ -240,7 +244,7 @@ pub struct ResourceBottleneck {
     pub limit: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RetryResponse {
     pub new_run_id: String,
     pub will_rerun: Vec<String>,

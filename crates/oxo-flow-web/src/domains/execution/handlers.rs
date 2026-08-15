@@ -89,6 +89,15 @@ pub(crate) async fn load_owned_run(
     Ok(run)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/runs",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Success", body = CreateRunResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/runs
 pub async fn create_run(
     authenticated: Option<Extension<CurrentUser>>,
@@ -352,7 +361,7 @@ pub async fn create_run(
 /// row of the previous page), `status` filter, `q` search (workflow name
 /// or run id prefix). Response envelope: `{items, next_cursor, total}` —
 /// `next_cursor: null` means the last page.
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::IntoParams)]
 pub struct ListRunsQuery {
     pub limit: Option<usize>,
     pub cursor: Option<String>,
@@ -360,6 +369,15 @@ pub struct ListRunsQuery {
     pub q: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/runs",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 pub async fn list_runs(
     authenticated: Option<Extension<CurrentUser>>,
     Query(params): Query<ListRunsQuery>,
@@ -482,6 +500,15 @@ pub async fn list_runs(
     })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/runs/{id}",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/runs/{id}
 pub async fn get_run(
     authenticated: Option<Extension<CurrentUser>>,
@@ -512,6 +539,15 @@ pub async fn get_run(
     })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/runs/{id}/status",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Success", body = RunStatusResponse),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/runs/{id}/status
 pub async fn get_run_status(
     authenticated: Option<Extension<CurrentUser>>,
@@ -580,6 +616,15 @@ pub async fn get_run_status(
     }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/runs/{id}/dag-status",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Success", body = DagStatusResponse),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/runs/{id}/dag-status
 pub async fn get_dag_status(
     authenticated: Option<Extension<CurrentUser>>,
@@ -689,6 +734,15 @@ pub async fn get_dag_status(
     }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/runs/{id}/instances",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Success", body = Vec<serde_json::Value>),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/runs/{id}/instances — the sample×rule instance table
 /// (issue #82 P1-1): which concrete sample under which rule failed, ran,
 /// or is still pending. The checkpoint stores EXPANDED instance names
@@ -760,6 +814,15 @@ pub async fn get_run_instances(
     Ok(Json(instances))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/runs/{id}/diagnostics",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Success", body = DiagnosticsResponse),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/runs/{id}/diagnostics
 pub async fn get_diagnostics(
     authenticated: Option<Extension<CurrentUser>>,
@@ -796,6 +859,15 @@ pub async fn get_diagnostics(
     Ok(Json(diagnostics))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/runs/{id}/logs",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Success", body = String),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/runs/{id}/logs
 pub async fn get_run_logs(
     authenticated: Option<Extension<CurrentUser>>,
@@ -821,6 +893,15 @@ pub async fn get_run_logs(
     Ok(Json(log_content))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/runs/{id}/results",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Success", body = Vec<serde_json::Value>),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/runs/{id}/results
 pub async fn get_run_results(
     authenticated: Option<Extension<CurrentUser>>,
@@ -860,6 +941,15 @@ pub async fn get_run_results(
     Ok(Json(results))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/runs/{id}/retry",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Success", body = RetryResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/runs/{id}/retry
 pub async fn retry_run(
     authenticated: Option<Extension<CurrentUser>>,
@@ -971,6 +1061,15 @@ pub async fn retry_run(
     Ok(Json(plan))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/runs/{id}/cancel",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/runs/{id}/cancel
 pub async fn cancel_run(
     authenticated: Option<Extension<CurrentUser>>,
@@ -1074,6 +1173,15 @@ pub async fn cancel_run(
     })))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/runs/{id}/pause",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/runs/{id}/pause
 pub async fn pause_run(
     authenticated: Option<Extension<CurrentUser>>,
@@ -1135,6 +1243,15 @@ pub async fn pause_run(
     })))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/runs/{id}/resume",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/runs/{id}/resume
 pub async fn resume_run(
     authenticated: Option<Extension<CurrentUser>>,
@@ -1191,6 +1308,15 @@ pub async fn resume_run(
     })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/runs/{id}/preview",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/runs/{id}/preview — the instance-level dry-run plan
 /// (checkpoint_preview + execution_order), persisted by the executor when
 /// a dry-run completes (issue #79 P2: the web preview previously showed
@@ -1228,6 +1354,15 @@ pub async fn get_run_preview(
     Ok(Json(value))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/runs/{id}/ai-status",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/runs/{id}/ai-status
 pub async fn get_ai_status(
     authenticated: Option<Extension<CurrentUser>>,
@@ -1321,6 +1456,15 @@ fn build_report_for_run(run: &models::RunRow) -> crate::domains::ai::agents::typ
     report_agent::generate_report(&pipeline_name, &files, &log_summary, &[])
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/runs/{id}/report",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 pub async fn get_run_report(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
@@ -1341,6 +1485,15 @@ pub async fn get_run_report(
     Ok(Json(serde_json::json!(report)))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/runs/{id}/report/ask",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Success", body = String),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/runs/{id}/report/ask
 pub async fn ask_report_question(
     authenticated: Option<Extension<CurrentUser>>,
@@ -1368,6 +1521,15 @@ pub async fn ask_report_question(
     Ok(Json(answer))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/runs/{id}/report/visualize",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/runs/{id}/report/visualize
 pub async fn visualize_report(
     authenticated: Option<Extension<CurrentUser>>,
@@ -1444,6 +1606,15 @@ pub async fn visualize_report(
 // high-frequency commands with no web equivalent.
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(
+    post,
+    path = "/api/runs/{id}/clean",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/runs/{id}/clean — run the CLI's `clean` against the run's
 /// workdir (chunk files + stale state). Quick, synchronous, output echoed.
 pub async fn clean_run(
@@ -1494,6 +1665,15 @@ pub async fn clean_run(
     })))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/runs/{id}/resume-checkpoint",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/runs/{id}/resume-checkpoint — resume an unfinished run from
 /// its checkpoint via the CLI's `resume` command, recorded as a NEW run
 /// (the same pattern as retry).

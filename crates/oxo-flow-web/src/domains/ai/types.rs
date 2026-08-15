@@ -1,17 +1,17 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct TranslateRequest {
     pub intent: String,
     pub context: Option<TranslateContext>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct TranslateContext {
     pub data_analysis_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct TranslateResponse {
     pub pipeline_id: String,
     pub toml_content: String,
@@ -20,12 +20,12 @@ pub struct TranslateResponse {
     pub confidence: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct TranslateExplanation {
     pub steps: Vec<TranslationStep>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct TranslationStep {
     pub rule: String,
     pub purpose: String,
@@ -34,27 +34,27 @@ pub struct TranslationStep {
     pub why_chosen: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Alternative {
     pub description: String,
     pub diff_summary: String,
     pub tradeoffs: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ExplainRequest {
     pub run_id: String,
     pub language: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ExplainResponse {
     pub summary: String,
     pub root_cause: Option<RootCause>,
     pub fix_suggestion: Option<FixSuggestion>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RootCause {
     pub rule: String,
     pub error_type: String,
@@ -62,20 +62,20 @@ pub struct RootCause {
     pub confidence: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct FixSuggestion {
     pub action: String,
     pub automated: bool,
     pub estimated_impact: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct InterpretRequest {
     pub run_id: String,
     pub result_type: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct InterpretResponse {
     pub narrative: String,
     pub highlights: Vec<Finding>,
@@ -83,14 +83,14 @@ pub struct InterpretResponse {
     pub suggested_next: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Finding {
     pub finding: String,
     pub significance: String,
     pub supporting_evidence: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct OptimizeRequest {
     pub pipeline_id: String,
     pub goal: String,
@@ -99,20 +99,20 @@ pub struct OptimizeRequest {
     pub constraints: Option<OptimizeConstraints>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct OptimizeConstraints {
     pub max_memory: Option<String>,
     pub max_threads: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct OptimizeResponse {
     pub optimized_toml: String,
     pub changes: Vec<OptimizationChange>,
     pub estimated: OptimizationEstimate,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct OptimizationChange {
     pub rule: String,
     pub before: String,
@@ -121,13 +121,13 @@ pub struct OptimizationChange {
     pub expected_impact: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct OptimizationEstimate {
     pub time_saved: String,
     pub memory_reduction: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AiConfigRequest {
     pub provider: Option<String>,
     pub api_key: Option<String>,
@@ -135,7 +135,7 @@ pub struct AiConfigRequest {
     pub model: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AiConfigResponse {
     pub provider: String,
     pub model: Option<String>,
@@ -143,7 +143,7 @@ pub struct AiConfigResponse {
     pub is_configured: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AiTestResponse {
     pub success: bool,
     pub message: String,

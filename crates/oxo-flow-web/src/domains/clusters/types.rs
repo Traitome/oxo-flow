@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// One remote cluster/server connection (SSH endpoint + scheduler).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ClusterInfo {
     pub id: String,
     pub name: String,
@@ -19,7 +19,7 @@ pub struct ClusterInfo {
 }
 
 /// Create/update payload for the clusters API.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct ClusterUpsertRequest {
     pub id: String,
     pub name: String,
@@ -42,7 +42,7 @@ fn default_true() -> bool {
 }
 
 /// Result of an SSH probe against a cluster endpoint.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ClusterProbeResult {
     pub ok: bool,
     pub hostname: Option<String>,

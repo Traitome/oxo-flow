@@ -1,14 +1,14 @@
 use serde::{Deserialize, Serialize};
 
 /// Request to parse a TOML workflow into a structured pipeline representation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ParseRequest {
     pub toml_content: String,
     pub format_version: Option<String>,
 }
 
 /// Result of parsing a workflow: pipeline identity, rules, DAG, and statistics.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ParseResponse {
     pub pipeline_id: String,
     pub name: String,
@@ -19,7 +19,7 @@ pub struct ParseResponse {
 }
 
 /// Summary of a single rule in a pipeline (name, I/O, environment, threads).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RuleSummary {
     pub name: String,
     pub shell: Option<String>,
@@ -30,7 +30,7 @@ pub struct RuleSummary {
 }
 
 /// A node in the DAG visualization (id, label, color-coded status).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DagJsonNode {
     pub id: String,
     pub label: String,
@@ -43,7 +43,7 @@ pub struct DagJsonNode {
 }
 
 /// A directed edge between two DAG nodes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DagJsonEdge {
     pub from: String,
     pub to: String,
@@ -53,7 +53,7 @@ pub struct DagJsonEdge {
 }
 
 /// Full DAG representation: nodes, edges, parallel groups, critical path, metrics.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DagJsonResponse {
     pub nodes: Vec<DagJsonNode>,
     pub edges: Vec<DagJsonEdge>,
@@ -63,7 +63,7 @@ pub struct DagJsonResponse {
 }
 
 /// Aggregate DAG metrics: node/edge counts, depth, width, and parallelism.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DagMetrics {
     pub node_count: usize,
     pub edge_count: usize,
@@ -74,7 +74,7 @@ pub struct DagMetrics {
 }
 
 /// Aggregate workflow statistics (rules, dependencies, environments, wildcards).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct WorkflowStatsResponse {
     pub rule_count: usize,
     pub shell_rules: usize,
@@ -97,7 +97,7 @@ pub struct ValidateRequest {
 
 /// Validation result (empty errors = valid pipeline). The extra fields
 /// mirror the CLI's `validate --json` envelope (issue #81 parity).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ValidateResponse {
     pub valid: bool,
     pub errors: Vec<ValidationError>,
@@ -116,7 +116,7 @@ pub struct ValidateResponse {
 }
 
 /// A single validation error with error code, message, and optional fix suggestion.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ValidationError {
     pub code: String,
     pub message: String,
@@ -129,7 +129,7 @@ pub struct ValidationError {
 }
 
 /// Result of pipeline preparation: expanded rules, wildcard combinations, env commands.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PrepareResponse {
     pub pipeline_id: String,
     pub expanded_rules_count: usize,
@@ -140,7 +140,7 @@ pub struct PrepareResponse {
 /// Request to diff two pipelines: inline TOML, or saved-pipeline ids the
 /// server resolves (issue #82 P1-10: the client sent ids while the
 /// handler required inline TOML — the two shapes never agreed).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiffRequest {
     #[serde(default)]
     pub toml_a: Option<String>,
@@ -153,7 +153,7 @@ pub struct DiffRequest {
 }
 
 /// A single structural difference between two pipeline versions.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiffEntry {
     pub path: String,
     pub category: String,
@@ -162,20 +162,20 @@ pub struct DiffEntry {
 }
 
 /// Result of diffing two pipelines: a list of structural differences.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiffResponse {
     pub diffs: Vec<DiffEntry>,
 }
 
 /// Request to search pipelines by query and optional scope.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SearchRequest {
     pub query: String,
     pub scope: Option<String>,
 }
 
 /// A single search result with relevance score and match reason.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SearchResult {
     pub id: String,
     pub name: String,
@@ -188,7 +188,7 @@ pub struct SearchResult {
 }
 
 /// Search results with query echo and total count.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SearchResponse {
     pub query: String,
     pub total: usize,
@@ -198,7 +198,7 @@ pub struct SearchResponse {
 /// Request to export a pipeline as Dockerfile or Singularity definition.
 ///
 /// Either `toml_content` or `pipeline_id` must be provided.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ExportRequest {
     #[serde(default)]
     pub toml_content: String,
@@ -207,20 +207,20 @@ pub struct ExportRequest {
 }
 
 /// Exported container definition (format + content string).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ExportResponse {
     pub format: String,
     pub content: String,
 }
 
 /// Canonical TOML formatting result.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct FormatResponse {
     pub formatted: String,
 }
 
 /// A saved pipeline with full metadata, ownership, visibility, and TOML content.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Pipeline {
     pub id: String,
     pub user_id: String,
@@ -235,7 +235,7 @@ pub struct Pipeline {
 }
 
 /// A pipeline template with metadata, tags, usage count, and optional TOML content.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Template {
     pub id: String,
     pub name: String,
@@ -253,16 +253,17 @@ pub struct Template {
 // ---- Plugin validation types ----
 
 /// Request to validate a plugin manifest and optionally verify its signature.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ValidatePluginRequest {
     /// Plugin manifest as a JSON object.
+    #[schema(value_type = Object)]
     pub manifest: oxo_flow_core::plugin::PluginManifest,
     /// Optional trusted keys for signature verification (key_id -> hex-encoded key).
     pub trusted_keys: Option<std::collections::HashMap<String, String>>,
 }
 
 /// Plugin validation result: validity, parsed metadata, signature status, and errors.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ValidatePluginResponse {
     /// Whether the manifest is valid.
     pub valid: bool,

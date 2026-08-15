@@ -41,6 +41,15 @@ fn require_cluster_admin(user: &CurrentUser) -> Result<(), (StatusCode, Json<Api
     Ok(())
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/clusters",
+    tag = "clusters",
+    responses(
+        (status = 200, description = "Success", body = Vec<ClusterInfo>),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/clusters — list configured cluster connections.
 pub async fn list_clusters() -> ApiResult<Vec<ClusterInfo>> {
     let pool = get_pool()?;
@@ -58,6 +67,15 @@ pub async fn list_clusters() -> ApiResult<Vec<ClusterInfo>> {
     Ok(Json(rows.into_iter().map(cluster_from_row).collect()))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/clusters",
+    tag = "clusters",
+    responses(
+        (status = 200, description = "Success", body = ClusterInfo),
+        (status = 403, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/clusters — create or update a cluster connection (upsert by id).
 pub async fn upsert_cluster(
     authenticated: Option<Extension<CurrentUser>>,
@@ -111,6 +129,15 @@ pub async fn upsert_cluster(
     Ok(Json(cluster_from_row(row)))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/clusters/{id}",
+    tag = "clusters",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 403, description = "Error", body = ApiError),
+    )
+)]
 /// DELETE /api/clusters/{id}
 pub async fn delete_cluster(
     authenticated: Option<Extension<CurrentUser>>,
@@ -142,6 +169,15 @@ pub async fn delete_cluster(
     Ok(Json(serde_json::json!({"deleted": id})))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/clusters/{id}/probe",
+    tag = "clusters",
+    responses(
+        (status = 200, description = "Success", body = ClusterProbeResult),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/clusters/{id}/probe — SSH connectivity + scheduler detection.
 pub async fn probe_cluster(Path(id): Path<String>) -> ApiResult<ClusterProbeResult> {
     let pool = get_pool()?;

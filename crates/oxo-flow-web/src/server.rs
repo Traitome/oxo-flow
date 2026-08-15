@@ -100,6 +100,26 @@ async fn api_not_found() -> impl IntoResponse {
     crate::ApiError::not_found("API endpoint not found", None)
 }
 
+/// `GET /api/openapi.json` — the code-generated OpenAPI 3.1 specification
+/// (issue #82 P1-13: derived from `#[utoipa::path]` annotations on every
+/// route handler, no hand-maintained static file).
+#[utoipa::path(
+    get,
+    path = "/api/openapi.json",
+    tag = "observability",
+    responses(
+        (status = 200, description = "Generated OpenAPI 3.1 specification", content_type = "application/json"),
+        (status = 500, description = "Error", body = crate::domains::workflow::handlers::ApiError),
+    )
+)]
+pub async fn openapi_json() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [("content-type", "application/json")],
+        crate::openapi::spec_json(),
+    )
+}
+
 /// Resolve the frontend directory at runtime, first hit wins:
 ///
 /// 1. `OXO_FLOW_FRONTEND_DIR` / `FRONTEND_DIR` env (Docker/deployment)
@@ -441,16 +461,7 @@ pub fn build_router(mode: &str) -> Router {
     let obs_routes = Router::new()
         .route("/api/health", get(observability::handlers::health))
         .route("/api/system", get(observability::handlers::system_info))
-        .route(
-            "/api/openapi.json",
-            get(|| async {
-                (
-                    StatusCode::OK,
-                    [("content-type", "application/json")],
-                    include_str!("../static/openapi.json"),
-                )
-            }),
-        )
+        .route("/api/openapi.json", get(openapi_json))
         .route(
             "/api/metrics",
             get(observability::handlers::runtime_metrics),

@@ -510,13 +510,22 @@ async fn zip_into_channel(
     Ok(())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 pub struct FileQuery {
     pub path: String,
     #[serde(default)]
     pub preview: Option<bool>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/runs/{id}/files",
+    tag = "files",
+    responses(
+        (status = 200, description = "Success", content_type = "application/octet-stream"),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/runs/{id}/files — download / preview / zip a run's products.
 pub async fn get_run_file(
     authenticated: Option<Extension<CurrentUser>>,
@@ -610,6 +619,16 @@ pub async fn get_run_file(
     serve_file(&target, q.preview.unwrap_or(false), range).await
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/files",
+    tag = "files",
+    request_body(content = serde_json::Value, content_type = "multipart/form-data"),
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/files — multipart upload into the acting user's inputs
 /// workspace (`workspace/users/{user}/inputs/...`).
 pub async fn upload_files(
@@ -728,6 +747,15 @@ pub async fn upload_files(
     Json(serde_json::json!({"files": saved})).into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/files",
+    tag = "files",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/files — list the acting user's uploaded inputs (recursive,
 /// capped at 1000 entries).
 pub async fn list_uploaded_files(authenticated: Option<Extension<CurrentUser>>) -> Response {

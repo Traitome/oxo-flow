@@ -61,7 +61,7 @@ async fn record_revision(
 // Error helpers
 // ---------------------------------------------------------------------------
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, utoipa::ToSchema)]
 pub struct ApiError {
     pub code: String,
     pub message: String,
@@ -103,6 +103,15 @@ pub fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiErro
 // Pipeline lifecycle
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(
+    post,
+    path = "/api/pipelines/parse",
+    tag = "workflow",
+    responses(
+        (status = 200, description = "Success", body = ParseResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/pipelines/parse
 pub async fn parse_pipeline(Json(req): Json<ParseRequest>) -> ApiResult<ParseResponse> {
     service::parse_pipeline(&req.toml_content, req.format_version.as_deref())
@@ -110,6 +119,15 @@ pub async fn parse_pipeline(Json(req): Json<ParseRequest>) -> ApiResult<ParseRes
         .map_err(|e| err(StatusCode::BAD_REQUEST, "PARSE_ERROR", e))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/pipelines/validate",
+    tag = "workflow",
+    responses(
+        (status = 200, description = "Success", body = ValidateResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/pipelines/validate
 ///
 /// Accepts TOML content directly so the endpoint is self-contained.
@@ -135,6 +153,15 @@ pub async fn validate_pipeline(Json(req): Json<serde_json::Value>) -> ApiResult<
         .map_err(|e| err(StatusCode::BAD_REQUEST, "VALIDATE_ERROR", e))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/pipelines/prepare",
+    tag = "workflow",
+    responses(
+        (status = 200, description = "Success", body = PrepareResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/pipelines/prepare
 pub async fn prepare_pipeline(Json(req): Json<serde_json::Value>) -> ApiResult<PrepareResponse> {
     let toml = req
@@ -160,6 +187,15 @@ pub async fn prepare_pipeline(Json(req): Json<serde_json::Value>) -> ApiResult<P
         .map_err(|e| err(StatusCode::BAD_REQUEST, "PREPARE_ERROR", e))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/pipelines/dag",
+    tag = "workflow",
+    responses(
+        (status = 200, description = "Success", body = DagJsonResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/pipelines/dag
 pub async fn build_dag(Json(req): Json<serde_json::Value>) -> ApiResult<DagJsonResponse> {
     let toml = req
@@ -177,6 +213,15 @@ pub async fn build_dag(Json(req): Json<serde_json::Value>) -> ApiResult<DagJsonR
         .map_err(|e| err(StatusCode::BAD_REQUEST, "DAG_ERROR", e))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/pipelines/format",
+    tag = "workflow",
+    responses(
+        (status = 200, description = "Success", body = FormatResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/pipelines/format
 pub async fn format_pipeline(Json(req): Json<ParseRequest>) -> ApiResult<FormatResponse> {
     service::format_workflow(&req.toml_content)
@@ -184,6 +229,15 @@ pub async fn format_pipeline(Json(req): Json<ParseRequest>) -> ApiResult<FormatR
         .map_err(|e| err(StatusCode::BAD_REQUEST, "FORMAT_ERROR", e))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/pipelines/lint",
+    tag = "workflow",
+    responses(
+        (status = 200, description = "Success", body = ValidateResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/pipelines/lint
 pub async fn lint_pipeline(Json(req): Json<ParseRequest>) -> ApiResult<ValidateResponse> {
     service::lint_workflow(&req.toml_content)
@@ -191,6 +245,15 @@ pub async fn lint_pipeline(Json(req): Json<ParseRequest>) -> ApiResult<ValidateR
         .map_err(|e| err(StatusCode::BAD_REQUEST, "LINT_ERROR", e))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/pipelines/stats",
+    tag = "workflow",
+    responses(
+        (status = 200, description = "Success", body = WorkflowStatsResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/pipelines/stats
 pub async fn pipeline_stats(Json(req): Json<ParseRequest>) -> ApiResult<WorkflowStatsResponse> {
     service::workflow_stats(&req.toml_content)
@@ -198,6 +261,15 @@ pub async fn pipeline_stats(Json(req): Json<ParseRequest>) -> ApiResult<Workflow
         .map_err(|e| err(StatusCode::BAD_REQUEST, "STATS_ERROR", e))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/pipelines/diff",
+    tag = "workflow",
+    responses(
+        (status = 200, description = "Success", body = DiffResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/pipelines/diff
 ///
 /// Accepts inline TOML (`toml_a`/`toml_b`) or saved-pipeline ids
@@ -251,6 +323,15 @@ pub async fn diff_pipelines(
         .map_err(|e| err(StatusCode::BAD_REQUEST, "DIFF_ERROR", e))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/pipelines/export",
+    tag = "workflow",
+    responses(
+        (status = 200, description = "Success", body = ExportResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/pipelines/export
 ///
 /// Prefers inline `toml_content`; falls back to loading the saved pipeline
@@ -294,6 +375,15 @@ pub async fn export_pipeline(Json(req): Json<ExportRequest>) -> ApiResult<Export
         .map_err(|e| err(StatusCode::BAD_REQUEST, "EXPORT_ERROR", e))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/pipelines/search",
+    tag = "workflow",
+    responses(
+        (status = 200, description = "Success", body = SearchResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/pipelines/search
 pub async fn search_pipelines(Json(req): Json<SearchRequest>) -> ApiResult<SearchResponse> {
     let pool = get_pool()?;
@@ -375,6 +465,15 @@ pub async fn search_pipelines(Json(req): Json<SearchRequest>) -> ApiResult<Searc
 // CRUD
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(
+    post,
+    path = "/api/pipelines",
+    tag = "workflow",
+    responses(
+        (status = 200, description = "Success", body = Pipeline),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/pipelines — create a new pipeline from TOML
 pub async fn save_pipeline(
     authenticated: Option<axum::Extension<CurrentUser>>,
@@ -455,6 +554,15 @@ pub async fn save_pipeline(
     }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/pipelines",
+    tag = "workflow",
+    responses(
+        (status = 200, description = "Success", body = Vec<Pipeline>),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/pipelines
 pub async fn list_pipelines(
     authenticated: Option<Extension<CurrentUser>>,
@@ -505,6 +613,15 @@ pub async fn list_pipelines(
     Ok(Json(list))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/pipelines/{id}",
+    tag = "workflow",
+    responses(
+        (status = 200, description = "Success", body = Pipeline),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/pipelines/{id}
 pub async fn get_pipeline(
     authenticated: Option<Extension<CurrentUser>>,
@@ -559,6 +676,15 @@ pub async fn get_pipeline(
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/pipelines/{id}",
+    tag = "workflow",
+    responses(
+        (status = 200, description = "Success", body = Pipeline),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// PUT /api/pipelines/{id}
 pub async fn update_pipeline(
     authenticated: Option<Extension<CurrentUser>>,
@@ -671,6 +797,15 @@ pub async fn update_pipeline(
     }))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/pipelines/{id}",
+    tag = "workflow",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// DELETE /api/pipelines/{id}
 pub async fn delete_pipeline(
     authenticated: Option<Extension<CurrentUser>>,
@@ -730,6 +865,15 @@ pub async fn delete_pipeline(
 // Templates
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(
+    get,
+    path = "/api/templates",
+    tag = "templates",
+    responses(
+        (status = 200, description = "Success", body = Vec<Template>),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/templates
 pub async fn list_templates() -> ApiResult<Vec<Template>> {
     let pool = get_pool()?;
@@ -767,6 +911,15 @@ pub async fn list_templates() -> ApiResult<Vec<Template>> {
     Ok(Json(list))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/templates/{id}",
+    tag = "templates",
+    responses(
+        (status = 200, description = "Success", body = Template),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/templates/{id}
 ///
 /// Accepts the template UUID OR its name (`?template=` supports both —
@@ -811,6 +964,15 @@ pub async fn get_template(Path(id): Path<String>) -> ApiResult<Template> {
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/templates",
+    tag = "templates",
+    responses(
+        (status = 200, description = "Success", body = Template),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/templates
 pub async fn save_template(
     authenticated: Option<Extension<CurrentUser>>,
@@ -930,6 +1092,15 @@ pub async fn save_template(
     }))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/templates/{id}",
+    tag = "templates",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// DELETE /api/templates/{id}
 pub async fn delete_template(
     authenticated: Option<Extension<CurrentUser>>,
@@ -995,6 +1166,15 @@ pub async fn delete_template(
 // Data discovery
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(
+    post,
+    path = "/api/data/analyze",
+    tag = "data",
+    responses(
+        (status = 200, description = "Success", body = DataAnalysisResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/data/analyze
 pub async fn analyze_data(Json(req): Json<DataAnalysisRequest>) -> ApiResult<DataAnalysisResponse> {
     super::data::analyze_files(&req.paths, req.max_depth)
@@ -1002,6 +1182,15 @@ pub async fn analyze_data(Json(req): Json<DataAnalysisRequest>) -> ApiResult<Dat
         .map_err(|e| err(StatusCode::BAD_REQUEST, "DATA_ERROR", e))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/data/reference",
+    tag = "data",
+    responses(
+        (status = 200, description = "Success", body = ReferenceResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/data/reference
 pub async fn discover_reference(Json(req): Json<ReferenceRequest>) -> ApiResult<ReferenceResponse> {
     super::data::discover_reference(&req.genome, &req.components)
@@ -1013,6 +1202,15 @@ pub async fn discover_reference(Json(req): Json<ReferenceRequest>) -> ApiResult<
 // Plugin validation
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(
+    post,
+    path = "/api/plugins/validate",
+    tag = "workflow",
+    responses(
+        (status = 200, description = "Success", body = ValidatePluginResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/plugins/validate
 pub async fn validate_plugin(
     Json(req): Json<ValidatePluginRequest>,
@@ -1026,6 +1224,15 @@ pub async fn validate_plugin(
 // Data Perception API (v0.8 AI Companion)
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(
+    post,
+    path = "/api/data/perceive",
+    tag = "data",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/data/perceive
 pub async fn perceive_data(Json(req): Json<serde_json::Value>) -> ApiResult<serde_json::Value> {
     use crate::domains::ai::agents::data_agent;
@@ -1056,6 +1263,15 @@ pub async fn perceive_data(Json(req): Json<serde_json::Value>) -> ApiResult<serd
     Ok(Json(serde_json::json!(report)))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/data/reference/status",
+    tag = "data",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/data/reference/status
 pub async fn reference_status() -> ApiResult<serde_json::Value> {
     let common_refs: Vec<(&str, Vec<&str>)> = vec![
@@ -1124,6 +1340,15 @@ pub async fn reference_status() -> ApiResult<serde_json::Value> {
     })))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/data/samplesheet/parse",
+    tag = "data",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/data/samplesheet/parse
 pub async fn parse_samplesheet(Json(req): Json<serde_json::Value>) -> ApiResult<serde_json::Value> {
     let content = req.get("content").and_then(|v| v.as_str()).unwrap_or("");
@@ -1172,6 +1397,15 @@ pub async fn parse_samplesheet(Json(req): Json<serde_json::Value>) -> ApiResult<
 // Pipeline version history (issue #82 P1-14)
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(
+    get,
+    path = "/api/pipelines/{id}/revisions",
+    tag = "workflow",
+    responses(
+        (status = 200, description = "Success", body = Vec<serde_json::Value>),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/pipelines/{id}/revisions — snapshot list, newest first.
 pub async fn list_revisions(
     authenticated: Option<Extension<CurrentUser>>,
@@ -1236,6 +1470,15 @@ pub async fn list_revisions(
     Ok(Json(revisions))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/pipelines/{id}/revisions/{rev}",
+    tag = "workflow",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/pipelines/{id}/revisions/{rev} — one snapshot's full TOML.
 pub async fn get_revision(
     authenticated: Option<Extension<CurrentUser>>,
@@ -1302,6 +1545,15 @@ pub async fn get_revision(
     })))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/pipelines/{id}/rollback",
+    tag = "workflow",
+    responses(
+        (status = 200, description = "Success", body = Pipeline),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/pipelines/{id}/rollback — restore a revision as the current
 /// pipeline (creating a new revision, so nothing is lost).
 pub async fn rollback_pipeline(

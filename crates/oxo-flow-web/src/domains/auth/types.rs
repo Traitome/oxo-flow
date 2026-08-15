@@ -8,27 +8,27 @@ pub struct Session {
     pub expires_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LoginRequest {
     pub username: String,
     pub password: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LoginResponse {
     pub token: String,
     pub username: String,
     pub role: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AuthMeResponse {
     pub authenticated: bool,
     pub username: Option<String>,
     pub role: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct UserResponse {
     pub id: String,
     pub username: String,
@@ -40,14 +40,14 @@ pub struct UserResponse {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateUserRequest {
     pub username: String,
     pub role: Option<String>,
     pub password: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LicenseResponse {
     pub valid: bool,
     pub license_type: Option<String>,
@@ -60,7 +60,7 @@ pub struct LicenseResponse {
 // ---- OAuth2 types ----
 
 /// Request to initiate an OAuth2 login flow.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct OAuthAuthorizeRequest {
     /// Which provider to use: "orcid" or "github".
     pub provider: String,
@@ -69,7 +69,7 @@ pub struct OAuthAuthorizeRequest {
 }
 
 /// Response for OAuth2 authorization initiation (contains the provider's auth URL).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct OAuthAuthorizeResponse {
     /// The authorization URL to redirect the user to.
     pub authorize_url: String,
@@ -78,7 +78,7 @@ pub struct OAuthAuthorizeResponse {
 }
 
 /// Request to handle an OAuth2 callback after user authorization.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct OAuthCallbackRequest {
     /// The authorization code from the provider.
     pub code: String,
@@ -89,7 +89,7 @@ pub struct OAuthCallbackRequest {
 }
 
 /// Response after successful OAuth2 callback.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct OAuthCallbackResponse {
     /// Session token for subsequent API calls.
     pub token: String,

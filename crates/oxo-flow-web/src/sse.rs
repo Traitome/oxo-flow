@@ -98,6 +98,16 @@ async fn validate_event_token(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/events",
+    tag = "observability",
+    params(("token" = Option<String>, Query, description = "Session token (team/hpc modes — EventSource cannot set Authorization headers)")),
+    responses(
+        (status = 200, description = "Success", content_type = "text/event-stream"),
+        (status = 401, description = "Error", body = crate::domains::workflow::handlers::ApiError),
+    )
+)]
 /// `GET /api/events` — SSE endpoint for real-time execution events.
 ///
 /// Team/hpc modes require `?token=<session token>` (EventSource cannot set

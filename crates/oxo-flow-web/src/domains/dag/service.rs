@@ -14,14 +14,14 @@ use std::sync::Mutex;
 
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DagEditCommand {
     pub source: String,
     pub operation: String,
     pub payload: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DagEditResponse {
     pub success: bool,
     pub toml_content: String,

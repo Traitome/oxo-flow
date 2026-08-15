@@ -5,13 +5,22 @@ use axum::{Json, extract::Path, http::StatusCode};
 
 type AR<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::ToSchema)]
 pub struct EditPayload {
     pub toml_content: String,
     #[serde(flatten)]
     pub cmd: super::service::DagEditCommand,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/pipeline/{id}/command",
+    tag = "dag",
+    responses(
+        (status = 200, description = "Success", body = super::service::DagEditResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/pipeline/{id}/command
 pub async fn edit_command(
     Path(id): Path<String>,
@@ -22,11 +31,20 @@ pub async fn edit_command(
         .map_err(|e| err(StatusCode::BAD_REQUEST, "DAG_EDIT_ERROR", e))
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::ToSchema)]
 pub struct CurrentToml {
     pub toml_content: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/pipeline/{id}/undo",
+    tag = "dag",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/pipeline/{id}/undo
 pub async fn undo_command(
     Path(id): Path<String>,
@@ -43,6 +61,15 @@ pub async fn undo_command(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/pipeline/{id}/redo",
+    tag = "dag",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// POST /api/pipeline/{id}/redo
 pub async fn redo_command(
     Path(id): Path<String>,

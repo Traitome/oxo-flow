@@ -34,6 +34,15 @@ fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)>
     })
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/health",
+    tag = "observability",
+    responses(
+        (status = 200, description = "Success", body = HealthResponse),
+        (status = 500, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/health
 pub async fn health() -> ApiResult<HealthResponse> {
     let db_healthy = if let Ok(pool) = get_pool() {
@@ -52,11 +61,29 @@ pub async fn health() -> ApiResult<HealthResponse> {
     Ok(Json(health))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/system",
+    tag = "observability",
+    responses(
+        (status = 200, description = "Success", body = SystemInfoResponse),
+        (status = 500, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/system
 pub async fn system_info() -> ApiResult<SystemInfoResponse> {
     Ok(Json(service::system_info()))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/metrics",
+    tag = "observability",
+    responses(
+        (status = 200, description = "Success", body = RuntimeMetricsResponse),
+        (status = 500, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/metrics
 pub async fn runtime_metrics() -> ApiResult<RuntimeMetricsResponse> {
     // Collect real system metrics via sysinfo
@@ -148,6 +175,15 @@ pub async fn sse_events() -> impl axum::response::IntoResponse {
     )
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/quota",
+    tag = "observability",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/quota — resource quota status for team mode.
 pub async fn quota_status() -> ApiResult<serde_json::Value> {
     let tracker = crate::infra::quota::global_quota_tracker();
@@ -163,6 +199,16 @@ pub async fn quota_status() -> ApiResult<serde_json::Value> {
     })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/audit",
+    tag = "observability",
+    params(("days" = Option<u8>, Query, description = "Number of days of audit history to return (default 30)")),
+    responses(
+        (status = 200, description = "Success", body = AuditLogResponse),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/audit
 pub async fn get_audit_logs(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
@@ -195,6 +241,14 @@ pub async fn get_audit_logs(
     Ok(Json(AuditLogResponse { entries, days }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/hpc",
+    tag = "hpc",
+    responses(
+        (status = 200, description = "Success", body = crate::hpc::HpcStatus),
+    )
+)]
 /// GET /api/hpc — scheduler status (hpc mode only).
 pub async fn hpc_status() -> axum::Json<crate::hpc::HpcStatus> {
     axum::Json(crate::hpc::get_hpc_status())
@@ -204,6 +258,15 @@ pub async fn hpc_status() -> axum::Json<crate::hpc::HpcStatus> {
 // Webhook configuration (issue #82 P1-12)
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(
+    get,
+    path = "/api/webhook",
+    tag = "observability",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 400, description = "Error", body = ApiError),
+    )
+)]
 /// GET /api/webhook — current settings (the secret is never echoed back).
 pub async fn get_webhook_config(
     authenticated: Option<axum::Extension<crate::domains::auth::current_user::CurrentUser>>,
@@ -236,6 +299,15 @@ pub async fn get_webhook_config(
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/webhook",
+    tag = "observability",
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 403, description = "Error", body = ApiError),
+    )
+)]
 /// PUT /api/webhook — configure the endpoint (admin-only outside personal
 /// mode; the webhook fires for every user's runs, it is shared
 /// infrastructure).

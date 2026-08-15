@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Request to send a message in a chat session.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ChatRequest {
     /// Optional session ID for continuing an existing conversation.
     pub session_id: Option<String>,
@@ -15,7 +15,7 @@ pub struct ChatRequest {
 }
 
 /// Context provided with a chat message to help AI understand the user's setup.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ChatContext {
     /// Paths to data files/directories for Data Agent to scan.
     pub data_paths: Option<Vec<String>>,
@@ -26,7 +26,7 @@ pub struct ChatContext {
 }
 
 /// A chat session summary.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ChatSession {
     pub id: String,
     pub title: String,
