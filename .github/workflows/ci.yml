@@ -460,17 +460,28 @@ jobs:
         with:
           path: artifacts
 
-      - name: Stage stable "latest" CLI tarball
+      - name: Stage stable "latest" CLI tarballs
         shell: bash
         run: |
           set -euxo pipefail
-          # Byte-identical copy of the CLI tarball under a version-less name.
-          # Consumers (oxo-flow-community CI, install docs) reference it via
+          # Byte-identical copies of the CLI tarballs under version-less
+          # names. Consumers (oxo-flow-community CI, install docs) reference
+          # them via
           # https://github.com/Traitome/oxo-flow/releases/latest/download/oxo-flow-latest-x86_64-unknown-linux-gnu.tar.gz
-          # so they track the latest release without per-release edits.
+          # (and the aarch64-apple-darwin sibling) so they track the latest
+          # release without per-release edits.
           mkdir -p artifacts/dist
-          cp "artifacts/binaries-x86_64-unknown-linux-gnu/oxo-flow-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz" \
-            "artifacts/dist/oxo-flow-latest-x86_64-unknown-linux-gnu.tar.gz"
+          # Build legs are continue-on-error ("partial artifact sets are
+          # acceptable") — a missing tarball must not fail the whole release.
+          for spec in "x86_64-unknown-linux-gnu" "aarch64-apple-darwin"; do
+            src="artifacts/binaries-${spec}/oxo-flow-${RELEASE_TAG}-${spec}.tar.gz"
+            dst="artifacts/dist/oxo-flow-latest-${spec}.tar.gz"
+            if [ -f "$src" ]; then
+              cp "$src" "$dst"
+            else
+              echo "::warning::${src} missing — skipping latest staging for ${spec}"
+            fi
+          done
 
       - name: Package Debian desktop bundle (.deb)
         shell: bash

@@ -94,13 +94,13 @@ Download the latest release for your platform from [GitHub Releases](https://git
 
 ```bash
 # Linux (x86_64)
-curl -LO https://github.com/Traitome/oxo-flow/releases/latest/download/oxo-flow-x86_64-unknown-linux-gnu.tar.gz
-tar xzf oxo-flow-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/Traitome/oxo-flow/releases/latest/download/oxo-flow-latest-x86_64-unknown-linux-gnu.tar.gz
+tar xzf oxo-flow-latest-x86_64-unknown-linux-gnu.tar.gz
 sudo mv oxo-flow /usr/local/bin/
 
 # macOS (Apple Silicon)
-curl -LO https://github.com/Traitome/oxo-flow/releases/latest/download/oxo-flow-aarch64-apple-darwin.tar.gz
-tar xzf oxo-flow-aarch64-apple-darwin.tar.gz
+curl -LO https://github.com/Traitome/oxo-flow/releases/latest/download/oxo-flow-latest-aarch64-apple-darwin.tar.gz
+tar xzf oxo-flow-latest-aarch64-apple-darwin.tar.gz
 sudo mv oxo-flow /usr/local/bin/
 ```
 

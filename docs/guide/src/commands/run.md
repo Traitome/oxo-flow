@@ -17,7 +17,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | Argument | Description |
 |---|---|
 | `[WORKFLOW]` | Path to the `.oxoflow` workflow file. **Optional** — if not specified, auto-discovery searches for: (1) `main.oxoflow` in current directory, (2) alphabetically first `*.oxoflow` file in current directory. |
-| `[KEY=VALUE]...` | Direct config overrides: `KEY=VALUE`, `--KEY=VALUE`, or `--KEY VALUE` |
+| `[KEY=VALUE]...` | Direct config overrides: `KEY=VALUE` and `--KEY=VALUE` work for any key; the `--KEY VALUE` space form requires the key to be **declared** in `[config]` (`key = { default = …, help = … }`) — an undeclared `--KEY VALUE` is a hard error (an unknown flag would otherwise be indistinguishable from a mistyped option; a typo'd `--key=val` after the workflow still sets a config var, so prefer the `=` forms for undeclared keys) |
 
 ---
 

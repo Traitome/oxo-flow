@@ -24,7 +24,7 @@ are up to date is predicted as skipped, exactly as `run` would skip it.
 | Argument | Description |
 |---|---|
 | `[WORKFLOW]` | Path to the `.oxoflow` workflow file. **Optional** — if not specified, auto-discovery searches for: (1) `main.oxoflow` in current directory, (2) alphabetically first `*.oxoflow` file in current directory. |
-| `[KEY=VALUE]...` | Direct config overrides as trailing positionals — the same three forms `run` accepts (`KEY=VALUE`, `--KEY=VALUE`, `--KEY VALUE`). Command flags must come **before** the overrides (see [run](run.md)). |
+| `[KEY=VALUE]...` | Direct config overrides as trailing positionals — the same forms `run` accepts (`KEY=VALUE`, `--KEY=VALUE`, and the declared-key-only `--KEY VALUE`; see [run](run.md)). Command flags must come **before** the overrides. |
 
 ---
 
@@ -196,14 +196,16 @@ Status values: `run-never-completed`, `run-input-changed`,
 `run-cascaded-upstream`, `skip`, `skip-when-condition`.
 
 `--json` also emits the **execution-plan surface** at the top level
-(`schema_version: 2`) — the structured mirror of the human stderr plan,
+(`schema_version: 1`) — the structured mirror of the human stderr plan,
 for CI scripts and tooling that today grep the colored text:
 
 ```json
 "plan": [
   {"name": "trim_cohort_NA12891", "status": "run", "reason": "input changed",
    "cascaded_from": null, "threads": 4, "memory": "16G",
-   "environment": "conda:trim", "command": "trimmomatic PE …", "inputs": […], "outputs": […]}
+   "environment": "conda", "command": "trimmomatic PE …",
+   "inputs": […], "outputs": […],
+   "inputs_expanded": […], "outputs_expanded": […]}
 ],
 "summary": {"would_execute": 12, "will_skip": 0, "total_rules": 12},
 "sample_groups": [{"name": "cohort", "samples": […]}],
@@ -212,7 +214,10 @@ for CI scripts and tooling that today grep the colored text:
 
 `status` ∈ `run | skip | rerun` matches the stderr bracket prefix;
 `reason` carries the status text. The human stderr output is unchanged
-by `--json`.
+by `--json`. `inputs`/`outputs` carry the declared patterns as written;
+`inputs_expanded`/`outputs_expanded` are the exact per-instance paths
+the engine will touch (with `{config.x}` resolved) — the same expansion
+the human listing shows.
 
 ## Examples
 

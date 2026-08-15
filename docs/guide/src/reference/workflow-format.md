@@ -189,11 +189,20 @@ Values are TOML strings, integers, booleans, or arrays. String interpolation
 in rules uses `{config.key}` syntax; array values render as space-joined
 lists in the shell.
 
-Two keys are **engine-injected** (overridable only through their declaring
-tables): `config.samples_list` (all sample names, comma-joined) and
-`config.pairs_list` (all pair ids, comma-joined) — use them in
-`expand_inputs` to gather across samples or pairs without maintaining a
-parallel list by hand.
+Several keys are **engine-injected**:
+- `config.samples_list` (all sample names, comma-joined) and
+  `config.pairs_list` (all pair ids, comma-joined) — use them in
+  `expand_inputs` to gather across samples or pairs without maintaining a
+  parallel list by hand. A user-declared `config.samples_list` is
+  union-merged with the discovered samples, and the two lists are also
+  rewritten by `--samples` filtering.
+- `config.samples_<group>` (one per `[[sample_groups]]` entry).
+- `config.<reference name>` (each `[[references]]` entry's `output`) and,
+  with `reference_dir`, the ten derived paths (`reference_fasta`,
+  `gene_annotation`, `bwa_index`, `bwamem2_index`, `bowtie2_index`,
+  `star_index`, `hisat2_index`, `minimap2_index`, `gatk_dict`,
+  `samtools_faidx`). Explicit `[config]` entries with the same names are
+  never overwritten.
 
 ### Declarative Form (inline table)
 
@@ -755,6 +764,10 @@ Memory estimation formula: `estimated_mb = input_size_mb × memory_scale`
 
 ## Script Execution
 
+`shell` commands run through `bash` (falling back to `sh` when bash is
+unavailable), so bashisms — brace expansion, `[[ ]]` conditionals, process
+substitution, `$(( ))` arithmetic — work in rule shells.
+
 ### Script Field
 
 Execute a script file instead of (or in addition to) a shell command:
@@ -1169,7 +1182,10 @@ shell = "{assembler} -o {output} {input}"
   `assemble_assembler_spades_batch_S1`.
 - Value groups must have unique names and must not collide with the
   reserved wildcards (`sample`, `pair_id`, `experiment`, `control`,
-  `group`).
+  `group`, `tumor`, `normal`, `experiment_type`, `tumor_type`) or the
+  executor placeholders (`input`, `output`, `log`, `threads`, `memory`) —
+  a table named `input` would replace the placeholder in every rule's
+  shell.
 
 ---
 
