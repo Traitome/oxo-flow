@@ -54,7 +54,7 @@ oxo-flow status --timing --json
 ## Output
 
 ```
-oxo-flow 0.11.0 — Bioinformatics Pipeline Engine
+oxo-flow 0.12.0 — Bioinformatics Pipeline Engine
 Status: Status for checkpoint: .oxo-flow/checkpoint.json
   Completed: 3
   Failed:    1
