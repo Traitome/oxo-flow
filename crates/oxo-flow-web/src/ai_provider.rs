@@ -76,11 +76,19 @@ pub async fn provider_for(user_id: &str) -> AiProvider {
         }
     }
 
-    let provider = resolved.unwrap_or_else(|| AiProviderRegistry::global().get_provider());
-    if let Ok(mut map) = PER_USER_PROVIDERS.lock() {
-        map.insert(user_id.to_string(), provider.clone());
+    // Only per-user ROW hits are cached: the shared-runtime fallback is
+    // read live on every call — the global provider can be swapped at
+    // runtime (e.g. the scripted test backend reinstalling itself
+    // between scenarios), and a cached fallback would serve the STALE
+    // provider (chat_agent_integration caught exactly that: "script
+    // exhausted" from a cached first install).
+    if let Some(provider) = resolved {
+        if let Ok(mut map) = PER_USER_PROVIDERS.lock() {
+            map.insert(user_id.to_string(), provider.clone());
+        }
+        return provider;
     }
-    provider
+    AiProviderRegistry::global().get_provider()
 }
 
 /// Compatibility wrapper — delegates to `oxo_flow_ai::AiRegistry`.
