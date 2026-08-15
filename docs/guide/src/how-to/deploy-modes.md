@@ -250,6 +250,78 @@ the truth:
   shell wrote (`.exit-code`), so a completed run is never rewritten to
   `failed` by a restart.
 
+## Production Deployment
+
+Two pieces complete a production serve: a supervised service and — when
+users reach the server over a network — a reverse proxy in front of it.
+
+### systemd service
+
+```ini
+# /etc/systemd/system/oxo-flow.service
+[Unit]
+Description=oxo-flow web server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=oxo
+Group=oxo
+WorkingDirectory=/opt/oxo-flow
+EnvironmentFile=-/etc/oxo-flow/server.env
+ExecStart=/usr/local/bin/oxo-flow serve
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Keep secrets in the EnvironmentFile (`chmod 600`), never inline in the
+unit:
+
+```bash
+# /etc/oxo-flow/server.env
+OXO_FLOW_MODE=team
+OXO_FLOW_HOST=127.0.0.1
+OXO_FLOW_ADMIN_PASSWORD=…
+DEEPSEEK_API_KEY=…
+```
+
+A stop (`systemctl stop oxo-flow`) delivers SIGTERM; the server drains
+connections and exits. Runs in flight are not force-killed — cancel them
+from the UI before a planned stop, or let the crash-restart probe
+re-attach them on the next start (see [Run Control Truth](#run-control-truth-all-modes)).
+
+### nginx reverse proxy
+
+```nginx
+server {
+    listen 80;
+    server_name flows.lab.example.edu;
+
+    location /oxo-flow/ {
+        proxy_pass http://127.0.0.1:8080;   # no trailing slash: keep the mount prefix
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # Server-Sent Events (/api/events) require unbuffered streaming.
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+    }
+}
+```
+
+Start the app with the matching mount point:
+
+```bash
+oxo-flow serve --mode team --base-path /oxo-flow
+```
+
 ## Performance
 
 | Mode | Startup | Memory (idle) | Memory (100 pipelines) |
