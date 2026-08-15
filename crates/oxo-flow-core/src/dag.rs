@@ -6,11 +6,12 @@
 //! export for visualization.
 
 use crate::error::{OxoFlowError, Result};
-use crate::rule::Rule;
+use crate::rule::{FilePatterns, Rule};
 use petgraph::algo::toposort;
 use petgraph::dot::{Config, Dot};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::NodeRef;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -74,21 +75,116 @@ impl WorkflowDag {
             }
         }
 
-        // Step 2: Add edges based on input/output matching
+        // Step 2: Add edges based on input/output matching.
+        //
+        // Beyond exact template-level string matching, real workflows (wave-2
+        // community ports) contain inputs that only resolve to producer
+        // outputs after expansion:
+        // - `expand_inputs` materializes concrete paths at build time, but
+        //   producer outputs may still be template-level
+        //   (`variants/NA12878.g.vcf.gz` vs `variants/{sample}.g.vcf.gz`);
+        // - glob inputs (`mapped/*.bam`) never exact-match concrete outputs;
+        // - directory inputs (`data`, `data/`) depend on every producer
+        //   writing anywhere under the directory.
+        //
+        // All inference below is string-based (the DAG has no workdir) and
+        // strictly best-effort: anything that cannot be resolved keeps the
+        // legacy behavior (no edge), never an error.
+        let producer_outputs: Vec<(String, NodeIndex)> = output_to_node
+            .iter()
+            .map(|(output, &node)| (output.clone(), node))
+            .collect();
+        // Pre-compile one matcher per template-level output (e.g.
+        // `variants/{sample}.g.vcf.gz` → `^variants/(?P<sample>\S+)\.g\.vcf\.gz$`).
+        // Outputs referencing `{config.x}` cannot compile a valid regex group
+        // name — those are skipped (None) and simply never match.
+        let template_matchers: Vec<(String, Option<Regex>)> = producer_outputs
+            .iter()
+            .map(|(output, _)| {
+                let matcher = if output.contains('{') {
+                    crate::wildcard::pattern_to_regex(output).ok()
+                } else {
+                    None
+                };
+                (output.clone(), matcher)
+            })
+            .collect();
+
         for rule in rules {
             let consumer_node = name_to_node[&rule.name];
-            for input in &rule.input {
+
+            // Declared directory inputs (`FilePatterns::Dir`) — the input
+            // iterator yields the directory path; prefix-match it against
+            // every producer output, optionally restricted by the filter glob.
+            let declared_dir: Option<(String, Option<String>)> = match &rule.input {
+                FilePatterns::Dir { path, pattern } => Some((path.clone(), pattern.clone())),
+                _ => None,
+            };
+
+            for input in rule.input.iter() {
+                // 1. Exact template-level match (legacy behavior, kept first).
                 if let Some(&producer_node) = output_to_node.get(input) {
-                    // producer → consumer (producer must run before consumer)
-                    graph.add_edge(producer_node, consumer_node, ());
+                    add_edge_dedup(&mut graph, producer_node, consumer_node);
+                }
+
+                if let Some((dir_path, filter)) = &declared_dir {
+                    // 2. Declared directory: any output under the directory is
+                    //    a dependency. Multiple producers → all edges
+                    //    (conservative correctness).
+                    let base = dir_path.trim_end_matches('/');
+                    let prefix = format!("{base}/");
+                    let filter_re = filter.as_deref().and_then(glob_pattern_to_regex);
+                    for (output, producer_node) in &producer_outputs {
+                        if let Some(suffix) = output.strip_prefix(&prefix)
+                            && filter_re.as_ref().is_none_or(|re| re.is_match(suffix))
+                        {
+                            add_edge_dedup(&mut graph, *producer_node, consumer_node);
+                        }
+                    }
+                } else if has_glob_chars(input) {
+                    // 3. Glob input (`mapped/*.bam`): compile the glob and
+                    //    match it against producer outputs. A glob that
+                    //    cannot be compiled (unbalanced bracket, …) keeps the
+                    //    legacy behavior — no edges, no error.
+                    if let Some(glob_re) = glob_pattern_to_regex(input) {
+                        for (output, producer_node) in &producer_outputs {
+                            if glob_re.is_match(output) {
+                                add_edge_dedup(&mut graph, *producer_node, consumer_node);
+                            }
+                        }
+                    }
+                } else if !input.contains('{') {
+                    // 4. Concrete path (no engine wildcards): the expand_inputs
+                    //    / hardcoded-input case. Try template-level producer
+                    //    outputs first (`variants/{sample}.g.vcf.gz` covers
+                    //    `variants/NA12878.g.vcf.gz`), then the directory
+                    //    heuristic for extension-less inputs.
+                    for (output, matcher) in &template_matchers {
+                        if let Some(re) = matcher
+                            && re.is_match(input)
+                            && let Some(producer_node) = output_to_node.get(output)
+                        {
+                            add_edge_dedup(&mut graph, *producer_node, consumer_node);
+                        }
+                    }
+                    if looks_like_directory(input) {
+                        let base = input.trim_end_matches('/');
+                        let prefix = format!("{base}/");
+                        for (output, producer_node) in &producer_outputs {
+                            if output.starts_with(&prefix) {
+                                add_edge_dedup(&mut graph, *producer_node, consumer_node);
+                            }
+                        }
+                    }
                 }
                 // If no producer found, the input is assumed to be a source file
             }
 
-            // Step 2b: Add edges for explicit depends_on
+            // Step 2b: Add edges for explicit depends_on (deduplicated
+            // against edges already inferred from input/output matching).
             for dep_name in &rule.depends_on {
                 if let Some(&dep_node) = name_to_node.get(dep_name) {
-                    graph.add_edge(dep_node, consumer_node, ());
+                    add_edge_dedup(&mut graph, dep_node, consumer_node);
                 }
                 // Unknown depends_on targets are validated separately
             }
@@ -443,6 +539,111 @@ impl WorkflowDag {
         }
 
         Ok(groups)
+    }
+}
+
+/// Add a producer → consumer edge unless one already exists.
+///
+/// Input matching can reach the same producer through several paths (exact
+/// match, glob, directory prefix, template pattern, `depends_on`) — parallel
+/// edges would corrupt edge counts and metrics.
+fn add_edge_dedup(graph: &mut DiGraph<DagNode, ()>, from: NodeIndex, to: NodeIndex) {
+    if graph.find_edge(from, to).is_none() {
+        graph.add_edge(from, to, ());
+    }
+}
+
+/// Literal glob characters — distinct from `{engine}` wildcards
+/// (`crate::wildcard::has_wildcards` only matches braces).
+fn has_glob_chars(pattern: &str) -> bool {
+    pattern.contains('*') || pattern.contains('?') || pattern.contains('[')
+}
+
+/// Convert a filesystem glob (`mapped/*.bam`, `reads/S?.fq`) into a regex.
+///
+/// `*` and `?` never cross `/` (glob semantics). Character classes `[...]`
+/// pass through with the glob `!` negation translated to regex `^`. Returns
+/// `None` for patterns that cannot compile — callers then keep the legacy
+/// behavior (no edge).
+fn glob_pattern_to_regex(pattern: &str) -> Option<Regex> {
+    let mut re = String::with_capacity(pattern.len() + 8);
+    re.push('^');
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '*' => {
+                re.push_str("[^/]*");
+                i += 1;
+            }
+            '?' => {
+                re.push_str("[^/]");
+                i += 1;
+            }
+            '[' => {
+                i += 1;
+                if i < chars.len() && chars[i] == '!' {
+                    re.push('^');
+                    i += 1;
+                }
+                let mut closed = false;
+                while i < chars.len() && chars[i] != ']' {
+                    re.push(chars[i]);
+                    i += 1;
+                }
+                if i < chars.len() {
+                    closed = true;
+                    i += 1;
+                }
+                re.push(']');
+                if !closed {
+                    return None; // unbalanced bracket — unresolvable
+                }
+            }
+            c => {
+                re.push_str(&regex::escape(&c.to_string()));
+                i += 1;
+            }
+        }
+    }
+    re.push('$');
+    Regex::new(&re).ok()
+}
+
+/// File extensions that mark a concrete input path as a file, not a
+/// directory. Anything else — no extension at all, or an unknown one — is
+/// treated as a directory candidate so that directory inputs form edges to
+/// every producer writing under them. Missing an edge causes a race; an
+/// extra conservative edge only serializes execution slightly.
+const KNOWN_FILE_EXTENSIONS: &[&str] = &[
+    "fa", "fasta", "fq", "fastq", "txt", "tsv", "csv", "json", "yaml", "yml", "toml", "bam", "sam",
+    "cram", "vcf", "bcf", "bed", "gff", "gff3", "gtf", "gbff", "dict", "bai", "fai", "tbi", "csi",
+    "png", "pdf", "html", "htm", "log", "md", "rst", "zip", "tar", "gz", "bz2", "xz", "zst",
+];
+
+/// Heuristic: does this concrete input path refer to a directory?
+///
+/// A declared [`FilePatterns::Dir`] input is always a directory; plain
+/// strings fall back to this check: an explicit trailing slash, or a last
+/// path component without a known file extension.
+fn looks_like_directory(path: &str) -> bool {
+    if path.ends_with('/') {
+        return true;
+    }
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() {
+        return false;
+    }
+    let basename = trimmed.rsplit('/').next().unwrap_or(trimmed);
+    if basename == "." || basename == ".." {
+        return false;
+    }
+    match basename.rfind('.') {
+        None => true, // no extension at all → directory candidate
+        Some(pos) => {
+            let ext = &basename[pos + 1..];
+            !KNOWN_FILE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
+        }
     }
 }
 
@@ -1390,5 +1591,143 @@ mod tests {
         assert!(tree.contains("2."));
         assert!(tree.contains("a"));
         assert!(tree.contains("b"));
+    }
+
+    // ---- Post-expansion edge inference (wave 2-1) --------------------------
+    //
+    // Producer outputs may be template-level (`variants/{sample}.g.vcf.gz`)
+    // while consumer inputs are concrete — expand_inputs expands lists at
+    // workflow-build time, before per-instance wildcard expansion — so exact
+    // string matching alone misses the dependency. Glob and directory inputs
+    // never matched at all. The rules below pin the inference semantics.
+
+    #[test]
+    fn expand_inputs_concrete_input_matches_template_output() {
+        // Producer output stays template-level (no sample_groups declared;
+        // expand_inputs is driven by a config list), consumer input is the
+        // concrete path expand_inputs materialized.
+        let producer = make_rule("call_gvcf", vec![], vec!["variants/{sample}.g.vcf.gz"]);
+        let consumer = make_rule(
+            "combine_gvcfs",
+            vec!["variants/NA12878.g.vcf.gz"],
+            vec!["variants/cohort.g.vcf.gz"],
+        );
+        let dag = WorkflowDag::from_rules(&[producer, consumer]).unwrap();
+        assert_eq!(
+            dag.dependencies("combine_gvcfs").unwrap(),
+            vec!["call_gvcf"]
+        );
+    }
+
+    #[test]
+    fn glob_input_links_all_matching_producers() {
+        let p1 = make_rule("align_s1", vec![], vec!["mapped/S1.bam"]);
+        let p2 = make_rule("align_s2", vec![], vec!["mapped/S2.bam"]);
+        let consumer = make_rule("merge", vec!["mapped/*.bam"], vec!["merged.bam"]);
+        let dag = WorkflowDag::from_rules(&[p1, p2, consumer]).unwrap();
+        let mut deps = dag.dependencies("merge").unwrap();
+        deps.sort();
+        assert_eq!(deps, vec!["align_s1", "align_s2"]);
+    }
+
+    #[test]
+    fn glob_input_question_mark_matches_single_char() {
+        let p = make_rule("produce", vec![], vec!["reads/S1_R1.fastq.gz"]);
+        let c = make_rule("consume", vec!["reads/S?_R1.fastq.gz"], vec!["out.txt"]);
+        let dag = WorkflowDag::from_rules(&[p, c]).unwrap();
+        assert_eq!(dag.dependencies("consume").unwrap(), vec!["produce"]);
+    }
+
+    #[test]
+    fn directory_input_links_all_producers_under_dir() {
+        let p1 = make_rule("prep_a", vec![], vec!["data/a.txt"]);
+        let p2 = make_rule("prep_b", vec![], vec!["data/sub/b.txt"]);
+        let consumer = make_rule("analyze", vec!["data"], vec!["out.txt"]);
+        let dag = WorkflowDag::from_rules(&[p1, p2, consumer]).unwrap();
+        let mut deps = dag.dependencies("analyze").unwrap();
+        deps.sort();
+        assert_eq!(deps, vec!["prep_a", "prep_b"]);
+    }
+
+    #[test]
+    fn directory_input_trailing_slash_is_directory() {
+        let p = make_rule("produce", vec![], vec!["out/x.txt"]);
+        let c = make_rule("consume", vec!["out/"], vec!["final.txt"]);
+        let dag = WorkflowDag::from_rules(&[p, c]).unwrap();
+        assert_eq!(dag.dependencies("consume").unwrap(), vec!["produce"]);
+    }
+
+    #[test]
+    fn declared_dir_input_with_filter_links_only_matching_outputs() {
+        use crate::rule::FilePatterns;
+        let p1 = make_rule("prep_txt", vec![], vec!["data/a.txt"]);
+        let p2 = make_rule("prep_bam", vec![], vec!["data/a.bam"]);
+        let mut consumer = make_rule("analyze", vec![], vec!["out.txt"]);
+        consumer.input = FilePatterns::Dir {
+            path: "data".to_string(),
+            pattern: Some("*.txt".to_string()),
+        };
+        let dag = WorkflowDag::from_rules(&[p1, p2, consumer]).unwrap();
+        assert_eq!(dag.dependencies("analyze").unwrap(), vec!["prep_txt"]);
+    }
+
+    #[test]
+    fn template_level_edges_unaffected_by_new_inference() {
+        let step1 = make_rule("step1", vec!["input.txt"], vec!["mid.txt"]);
+        let step2 = make_rule("step2", vec!["mid.txt"], vec!["output.txt"]);
+        let dag = WorkflowDag::from_rules(&[step1, step2]).unwrap();
+        assert_eq!(dag.edge_count(), 1);
+        assert_eq!(dag.dependencies("step2").unwrap(), vec!["step1"]);
+    }
+
+    #[test]
+    fn depends_on_duplicate_of_file_edge_is_deduplicated() {
+        // step2 consumes mid.txt (file edge) AND declares depends_on = ["step1"]:
+        // exactly one edge must exist.
+        let step1 = make_rule("step1", vec!["input.txt"], vec!["mid.txt"]);
+        let mut step2 = make_rule("step2", vec!["mid.txt"], vec!["output.txt"]);
+        step2.depends_on = vec!["step1".to_string()];
+        let dag = WorkflowDag::from_rules(&[step1, step2]).unwrap();
+        assert_eq!(dag.edge_count(), 1);
+        assert_eq!(dag.dependencies("step2").unwrap(), vec!["step1"]);
+    }
+
+    #[test]
+    fn unresolvable_glob_keeps_old_behavior_no_edge() {
+        // Unbalanced bracket — the glob cannot compile. Legacy behavior:
+        // no edge, no error.
+        let p = make_rule("prod", vec![], vec!["data/a.txt"]);
+        let c = make_rule("cons", vec!["data/[.txt"], vec!["out.txt"]);
+        let dag = WorkflowDag::from_rules(&[p, c]).unwrap();
+        assert!(dag.dependencies("cons").unwrap().is_empty());
+    }
+
+    #[test]
+    fn file_like_input_gets_no_directory_edges() {
+        // Known extension → file semantics → exact edge only, no prefix edges.
+        let p1 = make_rule("prod_a", vec![], vec!["refs/genome.fa"]);
+        let p2 = make_rule("prod_b", vec![], vec!["refs/genes.gtf"]);
+        let c = make_rule("cons", vec!["refs/genome.fa"], vec!["out.txt"]);
+        let dag = WorkflowDag::from_rules(&[p1, p2, c]).unwrap();
+        assert_eq!(dag.dependencies("cons").unwrap(), vec!["prod_a"]);
+    }
+
+    #[test]
+    fn concrete_input_matches_template_output_across_dir() {
+        // Template wildcard covers an intermediate directory too.
+        let p = make_rule("prep", vec![], vec!["libraries/{lib}/reads.fq"]);
+        let c = make_rule("quant", vec!["libraries/L1/reads.fq"], vec!["quant.txt"]);
+        let dag = WorkflowDag::from_rules(&[p, c]).unwrap();
+        assert_eq!(dag.dependencies("quant").unwrap(), vec!["prep"]);
+    }
+
+    #[test]
+    fn non_matching_concrete_input_creates_no_edges() {
+        // Concrete input that neither exact-matches nor fits any template
+        // output, and looks like a file (known extension): no edges.
+        let p = make_rule("prod", vec![], vec!["results/final.bam"]);
+        let c = make_rule("cons", vec!["results/other.txt"], vec!["out.txt"]);
+        let dag = WorkflowDag::from_rules(&[p, c]).unwrap();
+        assert!(dag.dependencies("cons").unwrap().is_empty());
     }
 }
