@@ -118,7 +118,7 @@ async fn validate_token(
 /// same trust model instead of being permanently unusable (issue #79 P1-06:
 /// create-user returned 401 forever in personal mode). Team/HPC modes keep
 /// full session + role enforcement.
-async fn require_admin(
+pub(crate) async fn require_admin(
     headers: &axum::http::HeaderMap,
 ) -> Result<String, (StatusCode, Json<ApiError>)> {
     if crate::server::running_mode() == "personal" {
@@ -158,6 +158,16 @@ async fn require_admin(
 )]
 /// POST /api/auth/login
 pub async fn login(Json(req): Json<LoginRequest>) -> ApiResult<LoginResponse> {
+    // The username is persisted as the users row id and becomes a workspace
+    // path component — reject unsafe usernames before any lookup or
+    // auto-provisioning (issue: traversal usernames escaped the user tree).
+    crate::workspace::validate_username(&req.username).map_err(|e| {
+        err(
+            StatusCode::UNAUTHORIZED,
+            "INVALID_USERNAME",
+            format!("{e} — login rejected"),
+        )
+    })?;
     // Env-var credentials first (admin/user/viewer passwords); on failure,
     // fall back to DB-created accounts (bcrypt hash in users.password_hash,
     // issue #79 P1-06 — users created via the API must be able to sign in).

@@ -368,7 +368,13 @@ fn collect_zip_entries(dir: &FsPath) -> Result<Vec<ZipEntry>, String> {
         for item in rd {
             let item = item.map_err(|e| e.to_string())?;
             let path = item.path();
-            let meta = item.metadata().map_err(|e| e.to_string())?;
+            // symlink_metadata deliberately does not follow symlinks: a
+            // pipeline rule can create links that point anywhere, and the
+            // download zip must never read outside the run workdir.
+            let meta = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+            if meta.file_type().is_symlink() {
+                continue;
+            }
             if meta.is_dir() {
                 stack.push(path);
                 continue;
@@ -676,7 +682,17 @@ pub async fn upload_files(
             .into_response();
         }
 
-        let mut dest = crate::workspace::inputs_directory(&user.id);
+        let mut dest = match crate::workspace::inputs_directory(&user.id) {
+            Ok(d) => d,
+            Err(e) => {
+                return err(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_USER",
+                    format!("Invalid user directory: {e}"),
+                )
+                .into_response();
+            }
+        };
         if !subdir.is_empty() {
             dest = dest.join(&subdir);
         }
@@ -760,7 +776,14 @@ pub async fn upload_files(
 /// capped at 1000 entries).
 pub async fn list_uploaded_files(authenticated: Option<Extension<CurrentUser>>) -> Response {
     let user = resolve(authenticated.as_ref());
-    let root = crate::workspace::inputs_directory(&user.id);
+    let Ok(root) = crate::workspace::inputs_directory(&user.id) else {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "INVALID_USER",
+            "Invalid user directory".into(),
+        )
+        .into_response();
+    };
     let mut out: Vec<serde_json::Value> = Vec::new();
     let mut stack = vec![root.clone()];
     while let Some(dir) = stack.pop() {
@@ -786,4 +809,34 @@ pub async fn list_uploaded_files(authenticated: Option<Extension<CurrentUser>>) 
     }
     out.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
     Json(out).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn zip_collection_skips_symlinks_to_outside_the_workdir() {
+        // Arrange — a run workdir containing a regular file and a symlink
+        // pointing outside the tree.
+        let workdir = tempfile::tempdir().unwrap();
+        std::fs::write(workdir.path().join("results.tsv"), "a\tb\n").unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "secret\n").unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("secret.txt"),
+            workdir.path().join("leak.txt"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(outside.path(), workdir.path().join("leak-dir")).unwrap();
+
+        // Act
+        let entries = collect_zip_entries(FsPath::new(workdir.path())).unwrap();
+
+        // Assert — only the real file is archived; the symlink (to a file)
+        // and the symlink (to a directory) are both skipped.
+        let rels: Vec<String> = entries.into_iter().map(|e| e.rel).collect();
+        assert_eq!(rels, vec!["results.tsv".to_string()]);
+    }
 }

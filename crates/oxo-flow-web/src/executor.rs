@@ -221,9 +221,16 @@ pub fn spawn_background_run(
 ) {
     // The CLI invocation is derived from RunFlags + the workflow file the
     // caller wrote into the workdir.
-    let run_dir = workdir
-        .clone()
-        .unwrap_or_else(|| get_run_directory(&username, &run_id));
+    let run_dir = match workdir.clone() {
+        Some(w) => w,
+        None => match get_run_directory(&username, &run_id) {
+            Ok(d) => d,
+            Err(e) => {
+                error!("Invalid run directory for {run_id}: {e}");
+                return;
+            }
+        },
+    };
     let args = build_cli_args(&run_dir.join("workflow.oxoflow"), &run_dir, &flags);
     spawn_background_run_with_args(run_id, username, auth_type, os_user, workdir, args);
 }
@@ -268,7 +275,17 @@ pub fn spawn_background_run_with_args(
             Some(&username),
         );
 
-        let run_dir = workdir.unwrap_or_else(|| get_run_directory(&username, &run_id));
+        let run_dir = match workdir {
+            Some(w) => w,
+            None => match get_run_directory(&username, &run_id) {
+                Ok(d) => d,
+                Err(e) => {
+                    error!("Invalid run directory for {run_id}: {e}");
+                    mark_run_failed(&run_id).await;
+                    return;
+                }
+            },
+        };
 
         // Validate OS username to prevent injection in sudo mode
         let os_user_regex = Regex::new(r"^[a-z_][a-z0-9_-]*[$]?$")

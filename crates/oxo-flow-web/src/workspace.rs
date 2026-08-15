@@ -18,6 +18,24 @@ fn validate_path_component(name: &str, field: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validate a user-chosen username: it becomes a workspace path component,
+/// so the charset is restricted to what is safe on every filesystem and in
+/// logs, sessions, and URL segments.
+pub fn validate_username(username: &str) -> Result<()> {
+    validate_path_component(username, "username")?;
+    let valid = !username.is_empty()
+        && username.len() <= 64
+        && username
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    if !valid {
+        anyhow::bail!(
+            "Invalid username: only letters, digits, '.', '_' and '-' are allowed (max 64 chars)"
+        );
+    }
+    Ok(())
+}
+
 /// Setup the directory structure for a specific run.
 ///
 /// Ensures `workspace/users/<username>/runs/<run_id>` exists.
@@ -49,21 +67,28 @@ pub fn initialize_sandbox(username: &str, run_id: &str, toml_content: &str) -> R
 }
 
 /// Retrieve the run directory path.
-pub fn get_run_directory(username: &str, run_id: &str) -> PathBuf {
-    Path::new(BASE_WORKSPACE)
+///
+/// The components are user-controlled (session username, client-provided
+/// ids), so they are validated before joining — a traversal username must
+/// fail loudly instead of escaping the workspace/users tree.
+pub fn get_run_directory(username: &str, run_id: &str) -> Result<PathBuf> {
+    validate_path_component(username, "username")?;
+    validate_path_component(run_id, "run_id")?;
+    Ok(Path::new(BASE_WORKSPACE)
         .join("users")
         .join(username)
         .join("runs")
-        .join(run_id)
+        .join(run_id))
 }
 
 /// Directory holding a user's uploaded inputs (issue #82 P0-2): the
 /// `workspace/users/{user}/inputs/` root served by `POST /api/files`.
-pub fn inputs_directory(username: &str) -> PathBuf {
-    Path::new(BASE_WORKSPACE)
+pub fn inputs_directory(username: &str) -> Result<PathBuf> {
+    validate_path_component(username, "username")?;
+    Ok(Path::new(BASE_WORKSPACE)
         .join("users")
         .join(username)
-        .join("inputs")
+        .join("inputs"))
 }
 
 /// Retrieve the persistent working directory of a saved pipeline (issue #69).
@@ -72,12 +97,14 @@ pub fn inputs_directory(username: &str) -> PathBuf {
 /// runs — so `.oxo-flow/checkpoint.json` survives between web re-runs and the
 /// CLI's config-change impact analysis + input manifests deliver precise
 /// rebuilds (affected rules re-run, the rest are reused).
-pub fn get_pipeline_directory(username: &str, pipeline_id: &str) -> PathBuf {
-    Path::new(BASE_WORKSPACE)
+pub fn get_pipeline_directory(username: &str, pipeline_id: &str) -> Result<PathBuf> {
+    validate_path_component(username, "username")?;
+    validate_path_component(pipeline_id, "pipeline_id")?;
+    Ok(Path::new(BASE_WORKSPACE)
         .join("users")
         .join(username)
         .join("pipelines")
-        .join(pipeline_id)
+        .join(pipeline_id))
 }
 
 /// Create the pipeline working directory if it does not exist yet.
@@ -85,7 +112,7 @@ pub fn setup_pipeline_directory(username: &str, pipeline_id: &str) -> Result<Pat
     validate_path_component(username, "username")?;
     validate_path_component(pipeline_id, "pipeline_id")?;
 
-    let dir = get_pipeline_directory(username, pipeline_id);
+    let dir = get_pipeline_directory(username, pipeline_id)?;
     fs::create_dir_all(&dir)
         .with_context(|| format!("Failed to create pipeline directory: {:?}", dir))?;
     Ok(dir)
@@ -99,7 +126,7 @@ mod tests {
     fn get_pipeline_directory_returns_persistent_path() {
         // Issue #69: pipeline runs share one directory across runs so the
         // checkpoint (and with it precise invalidation) survives.
-        let path = get_pipeline_directory("alice", "pl-123");
+        let path = get_pipeline_directory("alice", "pl-123").unwrap();
         assert!(path.ends_with("workspace/users/alice/pipelines/pl-123"));
     }
 
@@ -132,7 +159,35 @@ mod tests {
 
     #[test]
     fn get_run_directory_returns_correct_path() {
-        let path = get_run_directory("alice", "run-abc");
+        let path = get_run_directory("alice", "run-abc").unwrap();
         assert!(path.ends_with("workspace/users/alice/runs/run-abc"));
+    }
+
+    #[test]
+    fn get_run_directory_rejects_traversal_usernames() {
+        // Arrange — usernames are the user-controlled component; each must
+        // fail loudly instead of escaping the workspace/users tree.
+        for name in ["..", "../alice", "/tmp", "a/b", "~root"] {
+            // Act / Assert
+            assert!(
+                get_run_directory(name, "run-abc").is_err(),
+                "username {name:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn inputs_directory_rejects_traversal_and_absolute_usernames() {
+        // Arrange / Act / Assert
+        assert!(inputs_directory("..").is_err());
+        assert!(inputs_directory("/etc").is_err());
+        assert!(inputs_directory("alice").is_ok());
+    }
+
+    #[test]
+    fn get_pipeline_directory_rejects_traversal_ids() {
+        // Arrange / Act / Assert
+        assert!(get_pipeline_directory("alice", "../p1").is_err());
+        assert!(get_pipeline_directory("alice", "p1").is_ok());
     }
 }

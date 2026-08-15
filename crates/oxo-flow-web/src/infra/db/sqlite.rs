@@ -507,6 +507,9 @@ impl StorageBackend for SqliteBackend {
     // -----------------------------------------------------------------------
 
     async fn create_user(&self, username: &str, role: &str) -> Result<models::UserRow, String> {
+        // The username becomes a workspace path component — reject anything
+        // that could escape the per-user tree before it reaches the DB.
+        crate::workspace::validate_username(username).map_err(|e| e.to_string())?;
         let id = Uuid::new_v4().to_string();
         let now = Self::now();
         let row = models::UserRow {
