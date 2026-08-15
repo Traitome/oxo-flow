@@ -1,6 +1,6 @@
 # Collaboration
 
-oxo-flow v0.10.x introduces collaboration primitives for sharing and versioning
+oxo-flow provides collaboration primitives for sharing and versioning
 pipelines across users and teams.
 
 ## Overview

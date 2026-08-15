@@ -1,6 +1,6 @@
 # Deployment Modes
 
-oxo-flow v0.10.x supports three deployment modes from a single binary.
+oxo-flow supports three deployment modes from a single binary.
 Choose the mode that fits your team size and infrastructure.
 
 ## Quick Reference
