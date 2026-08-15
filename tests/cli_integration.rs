@@ -3559,6 +3559,37 @@ fn cli_cluster_submit_sge_backend() {
 }
 
 #[test]
+fn cli_cluster_submit_lsf_dependencies_use_double_quotes() {
+    // The LSF -w dependency string must live inside DOUBLE quotes in the
+    // generated submit.sh — single quotes would keep ${JOB_IDS[..]}
+    // literal and the chain would silently never chain (live-caught on
+    // tx-ubuntu's mock bsub).
+    let tmp = tempfile::tempdir().unwrap();
+    let output_dir = tmp.path().join("lsf_scripts");
+
+    oxo_flow_cmd()
+        .args([
+            "cluster",
+            "submit",
+            "examples/gallery/02_file_pipeline.oxoflow",
+            "-b",
+            "lsf",
+            "-o",
+            output_dir.to_str().unwrap(),
+            "--with-dependencies",
+        ])
+        .assert()
+        .success();
+
+    let submit = fs::read_to_string(output_dir.join("submit.sh")).unwrap();
+    assert!(
+        submit.contains("oxo_submit -w \"ended(${JOB_IDS["),
+        "LSF dependency line must use double quotes:\n{submit}"
+    );
+    assert!(!submit.contains("-w 'ended("), "{submit}");
+}
+
+#[test]
 fn cli_cluster_submit_with_queue_and_account() {
     let tmp = tempfile::tempdir().unwrap();
     let output_dir = tmp.path().join("cluster_queue_scripts");

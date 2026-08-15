@@ -122,14 +122,18 @@ fn generate_submit_wrapper(
                     ));
                 }
                 ClusterBackend::Lsf => {
-                    // LSF uses -w 'ended(jobid)'
+                    // LSF uses -w 'ended(jobid)'. DOUBLE quotes in the
+                    // generated script: single quotes would keep the
+                    // ${JOB_IDS[..]} reference literal and the dependency
+                    // chain would silently never chain (caught live on
+                    // tx-ubuntu's mock bsub).
                     let dep_str = dep_job_refs
                         .iter()
                         .map(|d| format!("ended({})", d))
                         .collect::<Vec<_>>()
                         .join(" && ");
                     script.push_str(&format!(
-                        "JOB_IDS[{}]=$(oxo_submit -w '{}' {})\n",
+                        "JOB_IDS[{}]=$(oxo_submit -w \"{}\" {})\n",
                         rule_name,
                         dep_str,
                         script_path.display()
