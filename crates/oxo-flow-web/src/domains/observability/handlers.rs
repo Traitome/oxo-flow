@@ -199,3 +199,125 @@ pub async fn get_audit_logs(
 pub async fn hpc_status() -> axum::Json<crate::hpc::HpcStatus> {
     axum::Json(crate::hpc::get_hpc_status())
 }
+
+// ---------------------------------------------------------------------------
+// Webhook configuration (issue #82 P1-12)
+// ---------------------------------------------------------------------------
+
+/// GET /api/webhook — current settings (the secret is never echoed back).
+pub async fn get_webhook_config(
+    authenticated: Option<axum::Extension<crate::domains::auth::current_user::CurrentUser>>,
+) -> ApiResult<serde_json::Value> {
+    let _user = crate::domains::auth::current_user::resolve(authenticated.as_ref());
+    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+    let row = sqlx::query_as::<_, (String, Option<String>, i64, String)>(
+        "SELECT url, secret, enabled, events FROM webhook_config WHERE id = 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    match row {
+        Some((url, secret, enabled, events)) => Ok(Json(serde_json::json!({
+            "enabled": enabled != 0,
+            "url": url,
+            "secret_set": secret.is_some(),
+            "events": serde_json::from_str::<serde_json::Value>(&events).unwrap_or(serde_json::json!([])),
+        }))),
+        None => Ok(Json(serde_json::json!({
+            "enabled": false, "url": "", "secret_set": false, "events": [],
+        }))),
+    }
+}
+
+/// PUT /api/webhook — configure the endpoint (admin-only outside personal
+/// mode; the webhook fires for every user's runs, it is shared
+/// infrastructure).
+pub async fn put_webhook_config(
+    authenticated: Option<axum::Extension<crate::domains::auth::current_user::CurrentUser>>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<serde_json::Value> {
+    let user = crate::domains::auth::current_user::resolve(authenticated.as_ref());
+    if crate::server::running_mode() != "personal" && !user.is_admin() {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "ACCESS_DENIED",
+            "Admin role required to configure webhooks".into(),
+        ));
+    }
+    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+
+    let enabled = req
+        .get("enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let url = req
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if enabled && !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "INVALID_URL",
+            "url must start with http:// or https://".into(),
+        ));
+    }
+    // An empty secret field means "keep the existing one"; the caller
+    // cannot read it back, only replace it.
+    let secret: Option<String> = req
+        .get("secret")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let events: Vec<String> = req
+        .get("events")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_else(|| vec!["workflow_completed".into(), "workflow_failed".into()]);
+    let events_json = serde_json::to_string(&events).unwrap_or_else(|_| "[]".into());
+    let now = chrono::Utc::now().to_rfc3339();
+
+    sqlx::query(
+        "INSERT INTO webhook_config (id, url, secret, enabled, events, updated_at) VALUES (1, ?, ?, ?, ?, ?) \
+         ON CONFLICT(id) DO UPDATE SET url = excluded.url, \
+         secret = COALESCE(excluded.secret, webhook_config.secret), \
+         enabled = excluded.enabled, events = excluded.events, updated_at = excluded.updated_at",
+    )
+    .bind(&url)
+    .bind(secret)
+    .bind(enabled as i64)
+    .bind(&events_json)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("DB error saving webhook config: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
+
+    Ok(Json(
+        serde_json::json!({"status": "saved", "enabled": enabled, "events": events}),
+    ))
+}

@@ -5,6 +5,30 @@
 
 use super::types::{ClusterInfo, ClusterProbeResult};
 
+/// SSH option prefix shared by the probe and the remote-execution path:
+/// BatchMode (no interactive prompts), bounded connect timeout, argv-only
+/// arguments (no shell quoting surface).
+pub fn ssh_base_args(port: u16) -> Vec<String> {
+    vec![
+        "-o".into(),
+        "BatchMode=yes".into(),
+        "-o".into(),
+        "ConnectTimeout=8".into(),
+        "-o".into(),
+        "StrictHostKeyChecking=accept-new".into(),
+        "-p".into(),
+        port.to_string(),
+    ]
+}
+
+/// The `user@host` target string for an SSH invocation.
+pub fn ssh_target(cluster: &ClusterInfo) -> String {
+    match cluster.ssh_user.as_deref() {
+        Some(user) => format!("{user}@{}", cluster.ssh_host),
+        None => cluster.ssh_host.clone(),
+    }
+}
+
 /// Validate a cluster definition before it touches storage or SSH.
 pub fn validate(cluster: &super::types::ClusterUpsertRequest) -> Result<(), String> {
     if cluster.id.trim().is_empty() {

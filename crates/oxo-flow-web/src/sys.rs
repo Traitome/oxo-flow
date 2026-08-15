@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
-use sysinfo::System;
+use sysinfo::{ProcessesToUpdate, System};
 
 static SYS: LazyLock<Mutex<System>> = LazyLock::new(|| Mutex::new(System::new_all()));
 
@@ -35,6 +36,48 @@ pub fn get_host_resources() -> HostResources {
         total_swap_mb,
         used_swap_mb,
     }
+}
+
+/// Aggregate memory/cpu/process-count of a process tree rooted at
+/// `root_pid` (issue #82 P1-2: per-run resource sampling). Walks
+/// parent→child links in one sysinfo refresh.
+///
+/// Returns `(memory_mb, cpu_pct, process_count)`.
+pub fn process_tree_usage(root_pid: u32) -> Option<(f64, f64, usize)> {
+    let mut sys = SYS.lock().ok()?;
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+
+    // parent map: pid -> parent pid
+    let parents: HashMap<sysinfo::Pid, sysinfo::Pid> = sys
+        .processes()
+        .iter()
+        .filter_map(|(pid, p)| p.parent().map(|parent| (*pid, parent)))
+        .collect();
+
+    let mut memory_bytes: u64 = 0;
+    let mut cpu: f32 = 0.0;
+    let mut count = 0;
+    let mut seen: HashSet<sysinfo::Pid> = HashSet::new();
+    let mut frontier: Vec<sysinfo::Pid> = vec![sysinfo::Pid::from_u32(root_pid)];
+    while let Some(pid) = frontier.pop() {
+        if !seen.insert(pid) {
+            continue;
+        }
+        for (child, parent) in &parents {
+            if *parent == pid {
+                frontier.push(*child);
+            }
+        }
+        if let Some(proc) = sys.process(pid) {
+            memory_bytes += proc.memory();
+            cpu += proc.cpu_usage();
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return None;
+    }
+    Some((memory_bytes as f64 / 1024.0 / 1024.0, cpu as f64, count))
 }
 
 #[cfg(test)]

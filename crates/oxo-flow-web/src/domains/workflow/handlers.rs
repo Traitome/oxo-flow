@@ -3,12 +3,59 @@
 //! Thin adapters: parse HTTP request → call service → serialize response.
 //! Zero business logic here — all logic lives in `service.rs`.
 
-use axum::{Json, extract::Path, http::StatusCode};
+use axum::{Extension, Json, extract::Path, http::StatusCode};
 
 use super::service;
 use super::types::*;
+use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::observability::types::*;
 use crate::infra::db::models;
+
+/// Pipeline read permission (issue #82 P0-4): admins and the owner always
+/// pass; `workspace`-visibility pipelines are readable by any
+/// authenticated user; everything else is private.
+fn can_read_pipeline(user: &CurrentUser, row: &models::PipelineRow) -> bool {
+    user.is_admin() || row.user_id == user.id || row.visibility == "workspace"
+}
+
+/// Pipeline write permission: owner or admin only.
+fn can_write_pipeline(user: &CurrentUser, row: &models::PipelineRow) -> bool {
+    user.is_admin() || row.user_id == user.id
+}
+
+/// Snapshot a pipeline into `pipeline_revisions` (issue #82 P1-14). Keeps
+/// the last 50 revisions per pipeline; older snapshots are pruned.
+async fn record_revision(
+    pool: &sqlx::SqlitePool,
+    pipeline_id: &str,
+    user_id: &str,
+    version: &str,
+    toml_content: &str,
+) {
+    let now = chrono::Utc::now().to_rfc3339();
+    let _ = sqlx::query(
+        "INSERT INTO pipeline_revisions (id, pipeline_id, user_id, version, toml_content, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(pipeline_id)
+    .bind(user_id)
+    .bind(version)
+    .bind(toml_content)
+    .bind(&now)
+    .execute(pool)
+    .await;
+    // Keep the history bounded: drop everything beyond the newest 50.
+    let _ = sqlx::query(
+        "DELETE FROM pipeline_revisions WHERE pipeline_id = ? AND id NOT IN \
+         (SELECT id FROM pipeline_revisions WHERE pipeline_id = ? \
+          ORDER BY created_at DESC, rowid DESC LIMIT 50)",
+    )
+    .bind(pipeline_id)
+    .bind(pipeline_id)
+    .execute(pool)
+    .await;
+}
 
 // ---------------------------------------------------------------------------
 // Error helpers
@@ -42,7 +89,7 @@ fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
-fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)> {
+pub fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)> {
     crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -77,7 +124,13 @@ pub async fn validate_pipeline(Json(req): Json<serde_json::Value>) -> ApiResult<
                 "toml_content is required".into(),
             )
         })?;
-    service::validate_pipeline(toml)
+    // Missing-input existence checks resolve against the caller's base_dir
+    // (issue #81 parity: the CLI checks against the workflow's directory).
+    let base_dir = req
+        .get("base_dir")
+        .and_then(|v| v.as_str())
+        .map(std::path::PathBuf::from);
+    service::validate_pipeline(toml, base_dir.as_deref())
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "VALIDATE_ERROR", e))
 }
@@ -146,8 +199,54 @@ pub async fn pipeline_stats(Json(req): Json<ParseRequest>) -> ApiResult<Workflow
 }
 
 /// POST /api/pipelines/diff
-pub async fn diff_pipelines(Json(req): Json<DiffRequest>) -> ApiResult<DiffResponse> {
-    service::diff_workflows(&req.toml_a, &req.toml_b)
+///
+/// Accepts inline TOML (`toml_a`/`toml_b`) or saved-pipeline ids
+/// (`pipeline_a_id`/`pipeline_b_id`), resolving ids server-side — the
+/// contract the client always assumed (issue #82 P1-10).
+pub async fn diff_pipelines(
+    authenticated: Option<Extension<CurrentUser>>,
+    Json(req): Json<DiffRequest>,
+) -> ApiResult<DiffResponse> {
+    let resolve_side = async |inline: &Option<String>,
+                              id: &Option<String>|
+           -> Result<String, (StatusCode, Json<ApiError>)> {
+        if let Some(toml) = inline
+            && !toml.trim().is_empty()
+        {
+            return Ok(toml.clone());
+        }
+        if let Some(pid) = id {
+            let pool = get_pool()?;
+            let row: Option<(String,)> =
+                sqlx::query_as("SELECT toml_content FROM pipelines WHERE id = ?")
+                    .bind(pid)
+                    .fetch_optional(pool)
+                    .await
+                    .map_err(|e| {
+                        err(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "DB_ERROR",
+                            format!("DB error loading pipeline {pid}: {e}"),
+                        )
+                    })?;
+            return row.map(|r| r.0).ok_or_else(|| {
+                err(
+                    StatusCode::NOT_FOUND,
+                    "NOT_FOUND",
+                    format!("Pipeline {pid} not found"),
+                )
+            });
+        }
+        Err(err(
+            StatusCode::BAD_REQUEST,
+            "MISSING",
+            "Provide toml_a/toml_b or pipeline_a_id/pipeline_b_id".into(),
+        ))
+    };
+    let toml_a = resolve_side(&req.toml_a, &req.pipeline_a_id).await?;
+    let toml_b = resolve_side(&req.toml_b, &req.pipeline_b_id).await?;
+    let _ = authenticated; // resolution is ownership-agnostic; content is caller-supplied
+    service::diff_workflows(&toml_a, &toml_b)
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "DIFF_ERROR", e))
 }
@@ -278,7 +377,7 @@ pub async fn search_pipelines(Json(req): Json<SearchRequest>) -> ApiResult<Searc
 
 /// POST /api/pipelines — create a new pipeline from TOML
 pub async fn save_pipeline(
-    authenticated: Option<axum::Extension<Option<String>>>,
+    authenticated: Option<axum::Extension<CurrentUser>>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<Pipeline> {
     let pool = get_pool()?;
@@ -304,23 +403,18 @@ pub async fn save_pipeline(
         .get("visibility")
         .and_then(|v| v.as_str())
         .unwrap_or("private");
+    if !matches!(visibility, "private" | "workspace" | "link") {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "INVALID_VISIBILITY",
+            format!("visibility must be private, workspace, or link — got '{visibility}'"),
+        ));
+    }
     // Attribute the pipeline to the acting user (team/hpc mode) or the
-    // 'default' pseudo-user (personal mode). The auth middleware inserts the
-    // session's user_id, which may be a username — resolve it against the
-    // users table for the FK, falling back to 'default'.
-    let user_id = match authenticated.and_then(|ext| ext.0) {
-        Some(uid) => {
-            let row: Option<(String,)> =
-                sqlx::query_as("SELECT id FROM users WHERE id = ? OR username = ?")
-                    .bind(&uid)
-                    .bind(&uid)
-                    .fetch_optional(pool)
-                    .await
-                    .unwrap_or(None);
-            row.map(|r| r.0).unwrap_or_else(|| "default".into())
-        }
-        None => "default".into(),
-    };
+    // 'default' pseudo-user (personal mode). The auth middleware resolves
+    // the session into a canonical users.id; client-supplied user ids are
+    // never trusted (issue #82 P0-4).
+    let user_id = crate::domains::auth::current_user::resolve(authenticated.as_ref()).id;
 
     let rules_count = oxo_flow_core::WorkflowConfig::parse(toml_content)
         .map(|wf| wf.rules.len() as i64)
@@ -344,6 +438,9 @@ pub async fn save_pipeline(
         )
     })?;
 
+    // The initial save is revision 1 of the pipeline's history.
+    record_revision(pool, &id, &user_id, version, toml_content).await;
+
     Ok(Json(Pipeline {
         id,
         user_id: user_id.clone(),
@@ -359,21 +456,35 @@ pub async fn save_pipeline(
 }
 
 /// GET /api/pipelines
-pub async fn list_pipelines() -> ApiResult<Vec<Pipeline>> {
+pub async fn list_pipelines(
+    authenticated: Option<Extension<CurrentUser>>,
+) -> ApiResult<Vec<Pipeline>> {
+    let user = resolve(authenticated.as_ref());
     let pool = get_pool()?;
 
-    let rows: Vec<models::PipelineRow> =
+    // Ownership scoping (issue #82 P0-4): non-admins see their own
+    // pipelines plus workspace-visible ones; admins see everything.
+    let rows: Vec<models::PipelineRow> = if user.is_admin() {
         sqlx::query_as("SELECT * FROM pipelines ORDER BY updated_at DESC LIMIT 100")
             .fetch_all(pool)
             .await
-            .map_err(|e| {
-                tracing::error!("DB error listing pipelines: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
+    } else {
+        sqlx::query_as(
+            "SELECT * FROM pipelines WHERE user_id = ? OR visibility = 'workspace' \
+             ORDER BY updated_at DESC LIMIT 100",
+        )
+        .bind(&user.id)
+        .fetch_all(pool)
+        .await
+    }
+    .map_err(|e| {
+        tracing::error!("DB error listing pipelines: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
 
     let list: Vec<Pipeline> = rows
         .into_iter()
@@ -395,7 +506,11 @@ pub async fn list_pipelines() -> ApiResult<Vec<Pipeline>> {
 }
 
 /// GET /api/pipelines/{id}
-pub async fn get_pipeline(Path(id): Path<String>) -> ApiResult<Pipeline> {
+pub async fn get_pipeline(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<Pipeline> {
+    let user = resolve(authenticated.as_ref());
     let pool = get_pool()?;
 
     let row: Option<models::PipelineRow> = sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
@@ -410,6 +525,18 @@ pub async fn get_pipeline(Path(id): Path<String>) -> ApiResult<Pipeline> {
                 "Internal database error".into(),
             )
         })?;
+
+    // Enforce read permission; foreign private pipelines 404 (existence
+    // must not leak — issue #82 P0-4).
+    if let Some(r) = &row
+        && !can_read_pipeline(&user, r)
+    {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Pipeline {id} not found"),
+        ));
+    }
 
     match row {
         Some(r) => Ok(Json(Pipeline {
@@ -434,9 +561,11 @@ pub async fn get_pipeline(Path(id): Path<String>) -> ApiResult<Pipeline> {
 
 /// PUT /api/pipelines/{id}
 pub async fn update_pipeline(
+    authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<Pipeline> {
+    let user = resolve(authenticated.as_ref());
     let pool = get_pool()?;
 
     let existing: Option<models::PipelineRow> =
@@ -461,6 +590,16 @@ pub async fn update_pipeline(
         )
     })?;
 
+    // Write permission: owner or admin. Foreign pipelines 404 so ownership
+    // itself stays private (issue #82 P0-4).
+    if !can_write_pipeline(&user, &existing) {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Pipeline {id} not found"),
+        ));
+    }
+
     let name = req
         .get("name")
         .and_then(|v| v.as_str())
@@ -476,12 +615,28 @@ pub async fn update_pipeline(
         .and_then(|v| v.as_str())
         .unwrap_or(&existing.visibility)
         .to_string();
+    if !matches!(visibility.as_str(), "private" | "workspace" | "link") {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "INVALID_VISIBILITY",
+            format!("visibility must be private, workspace, or link — got '{visibility}'"),
+        ));
+    }
 
     let rules_count = oxo_flow_core::WorkflowConfig::parse(&toml_content)
         .map(|wf| wf.rules.len() as i64)
         .unwrap_or(existing.rules_count);
 
     let now = now_iso();
+    // Snapshot the pre-update content so rollback can restore it.
+    record_revision(
+        pool,
+        &id,
+        &user.id,
+        &existing.version,
+        &existing.toml_content,
+    )
+    .await;
     sqlx::query(
         "UPDATE pipelines SET name = ?, toml_content = ?, visibility = ?, rules_count = ?, updated_at = ? WHERE id = ?",
     )
@@ -517,7 +672,11 @@ pub async fn update_pipeline(
 }
 
 /// DELETE /api/pipelines/{id}
-pub async fn delete_pipeline(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
+pub async fn delete_pipeline(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<serde_json::Value> {
+    let user = resolve(authenticated.as_ref());
     let pool = get_pool()?;
 
     let existing: Option<models::PipelineRow> =
@@ -534,7 +693,16 @@ pub async fn delete_pipeline(Path(id): Path<String>) -> ApiResult<serde_json::Va
                 )
             })?;
 
-    if existing.is_none() {
+    let existing = existing.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Pipeline {id} not found"),
+        )
+    })?;
+
+    // Write permission: owner or admin (issue #82 P0-4).
+    if !can_write_pipeline(&user, &existing) {
         return Err(err(
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
@@ -600,21 +768,26 @@ pub async fn list_templates() -> ApiResult<Vec<Template>> {
 }
 
 /// GET /api/templates/{id}
+///
+/// Accepts the template UUID OR its name (`?template=` supports both —
+/// issue #81: the editor only understood UUIDs before).
 pub async fn get_template(Path(id): Path<String>) -> ApiResult<Template> {
     let pool = get_pool()?;
 
-    let row: Option<models::TemplateRow> = sqlx::query_as("SELECT * FROM templates WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching template {id}: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
+    let row: Option<models::TemplateRow> =
+        sqlx::query_as("SELECT * FROM templates WHERE id = ? OR name = ? LIMIT 1")
+            .bind(&id)
+            .bind(&id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error fetching template {id}: {e}");
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    "Internal database error".into(),
+                )
+            })?;
 
     match row {
         Some(r) => Ok(Json(Template {
@@ -639,7 +812,11 @@ pub async fn get_template(Path(id): Path<String>) -> ApiResult<Template> {
 }
 
 /// POST /api/templates
-pub async fn save_template(Json(req): Json<serde_json::Value>) -> ApiResult<Template> {
+pub async fn save_template(
+    authenticated: Option<Extension<CurrentUser>>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<Template> {
+    let user = resolve(authenticated.as_ref());
     let pool = get_pool()?;
 
     let name = req
@@ -678,6 +855,15 @@ pub async fn save_template(Json(req): Json<serde_json::Value>) -> ApiResult<Temp
         .get("is_system")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    // System templates are shared resources — only admins may create or
+    // promote them (issue #81 template-DELETE-auth companion fix).
+    if is_system && !user.is_admin() {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "ACCESS_DENIED",
+            "Admin role required to create system templates".into(),
+        ));
+    }
 
     let now = now_iso();
     let id = if template_id.is_empty() {
@@ -685,6 +871,23 @@ pub async fn save_template(Json(req): Json<serde_json::Value>) -> ApiResult<Temp
     } else {
         template_id.to_string()
     };
+
+    // Updating an existing system template is an admin operation too.
+    if !template_id.is_empty() && !user.is_admin() {
+        let existing_is_system: Option<i64> =
+            sqlx::query_scalar("SELECT is_system FROM templates WHERE id = ?")
+                .bind(&id)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
+        if existing_is_system == Some(1) {
+            return Err(err(
+                StatusCode::FORBIDDEN,
+                "ACCESS_DENIED",
+                "Only admins may modify system templates".into(),
+            ));
+        }
+    }
 
     let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
 
@@ -698,7 +901,7 @@ pub async fn save_template(Json(req): Json<serde_json::Value>) -> ApiResult<Temp
     .bind(&tags_json)
     .bind(toml_content)
     .bind(if is_system { 1_i64 } else { 0_i64 })
-    .bind(None::<String>)
+    .bind(Some(&user.id))
     .bind(&now)
     .bind(&now)
     .execute(pool)
@@ -720,7 +923,7 @@ pub async fn save_template(Json(req): Json<serde_json::Value>) -> ApiResult<Temp
         tags,
         toml_content: Some(toml_content.to_string()),
         is_system,
-        created_by: None,
+        created_by: Some(user.id),
         usage_count: 0_u64,
         created_at: now.clone(),
         updated_at: now,
@@ -728,7 +931,11 @@ pub async fn save_template(Json(req): Json<serde_json::Value>) -> ApiResult<Temp
 }
 
 /// DELETE /api/templates/{id}
-pub async fn delete_template(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
+pub async fn delete_template(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<serde_json::Value> {
+    let user = resolve(authenticated.as_ref());
     let pool = get_pool()?;
 
     let existing: Option<models::TemplateRow> =
@@ -745,11 +952,26 @@ pub async fn delete_template(Path(id): Path<String>) -> ApiResult<serde_json::Va
                 )
             })?;
 
-    if existing.is_none() {
-        return Err(err(
+    let existing = existing.ok_or_else(|| {
+        err(
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
             format!("Template {id} not found"),
+        )
+    })?;
+
+    // System templates are admin-only; user templates belong to their
+    // creator (issue #81: template DELETE had no authorization at all).
+    let may_delete = if existing.is_system != 0 {
+        user.is_admin()
+    } else {
+        user.is_admin() || existing.created_by.as_deref() == Some(user.id.as_str())
+    };
+    if !may_delete {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "ACCESS_DENIED",
+            "Only the template owner or an admin may delete this template".into(),
         ));
     }
 
@@ -944,4 +1166,252 @@ pub async fn parse_samplesheet(Json(req): Json<serde_json::Value>) -> ApiResult<
             lines[0].split(',').map(|s| s.trim().to_string()).collect::<Vec<_>>()
         }
     })))
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline version history (issue #82 P1-14)
+// ---------------------------------------------------------------------------
+
+/// GET /api/pipelines/{id}/revisions — snapshot list, newest first.
+pub async fn list_revisions(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<Vec<serde_json::Value>> {
+    let user = resolve(authenticated.as_ref());
+    let pool = get_pool()?;
+
+    let pipeline: Option<models::PipelineRow> =
+        sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| {
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    format!("DB error fetching pipeline {id}: {e}"),
+                )
+            })?;
+    let pipeline = pipeline.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Pipeline {id} not found"),
+        )
+    })?;
+    if !can_read_pipeline(&user, &pipeline) {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Pipeline {id} not found"),
+        ));
+    }
+
+    let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+        "SELECT id, version, user_id, created_at FROM pipeline_revisions \
+         WHERE pipeline_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 50",
+    )
+    .bind(&id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            format!("DB error listing revisions: {e}"),
+        )
+    })?;
+
+    let revisions: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|(rid, version, user_id, created_at)| {
+            serde_json::json!({
+                "id": rid,
+                "version": version,
+                "actor": user_id,
+                "created_at": created_at,
+            })
+        })
+        .collect();
+    Ok(Json(revisions))
+}
+
+/// GET /api/pipelines/{id}/revisions/{rev} — one snapshot's full TOML.
+pub async fn get_revision(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path((id, rev)): Path<(String, String)>,
+) -> ApiResult<serde_json::Value> {
+    let user = resolve(authenticated.as_ref());
+    let pool = get_pool()?;
+
+    let pipeline: Option<models::PipelineRow> =
+        sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| {
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    format!("DB error fetching pipeline {id}: {e}"),
+                )
+            })?;
+    let pipeline = pipeline.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Pipeline {id} not found"),
+        )
+    })?;
+    if !can_read_pipeline(&user, &pipeline) {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Pipeline {id} not found"),
+        ));
+    }
+
+    let row: Option<(String, String, String, String)> = sqlx::query_as(
+        "SELECT id, version, user_id, toml_content FROM pipeline_revisions \
+         WHERE id = ? AND pipeline_id = ?",
+    )
+    .bind(&rev)
+    .bind(&id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            format!("DB error fetching revision: {e}"),
+        )
+    })?;
+    let (rid, version, actor, toml_content) = row.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Revision {rev} not found"),
+        )
+    })?;
+    Ok(Json(serde_json::json!({
+        "id": rid,
+        "pipeline_id": id,
+        "version": version,
+        "actor": actor,
+        "toml_content": toml_content,
+    })))
+}
+
+/// POST /api/pipelines/{id}/rollback — restore a revision as the current
+/// pipeline (creating a new revision, so nothing is lost).
+pub async fn rollback_pipeline(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<Pipeline> {
+    let user = resolve(authenticated.as_ref());
+    let pool = get_pool()?;
+
+    let pipeline: Option<models::PipelineRow> =
+        sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| {
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DB_ERROR",
+                    format!("DB error fetching pipeline {id}: {e}"),
+                )
+            })?;
+    let pipeline = pipeline.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Pipeline {id} not found"),
+        )
+    })?;
+    if !can_write_pipeline(&user, &pipeline) {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Pipeline {id} not found"),
+        ));
+    }
+
+    let revision_id = req
+        .get("revision_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            err(
+                StatusCode::BAD_REQUEST,
+                "MISSING",
+                "revision_id required".into(),
+            )
+        })?;
+    let rev: Option<(String,)> = sqlx::query_as(
+        "SELECT toml_content FROM pipeline_revisions WHERE id = ? AND pipeline_id = ?",
+    )
+    .bind(revision_id)
+    .bind(&id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            format!("DB error fetching revision: {e}"),
+        )
+    })?;
+    let toml_content = rev.map(|r| r.0).ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            "Revision not found".into(),
+        )
+    })?;
+
+    // Restore = snapshot current + write the old content back.
+    record_revision(
+        pool,
+        &id,
+        &user.id,
+        &pipeline.version,
+        &pipeline.toml_content,
+    )
+    .await;
+    let rules_count = oxo_flow_core::WorkflowConfig::parse(&toml_content)
+        .map(|wf| wf.rules.len() as i64)
+        .unwrap_or(pipeline.rules_count);
+    let now = now_iso();
+    sqlx::query(
+        "UPDATE pipelines SET toml_content = ?, rules_count = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(&toml_content)
+    .bind(rules_count)
+    .bind(&now)
+    .bind(&id)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("DB error rolling back pipeline {id}: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
+
+    Ok(Json(Pipeline {
+        id,
+        user_id: pipeline.user_id,
+        name: pipeline.name,
+        version: pipeline.version,
+        toml_content,
+        rules_count: rules_count as usize,
+        forked_from: pipeline.forked_from,
+        visibility: pipeline.visibility,
+        created_at: pipeline.created_at,
+        updated_at: now,
+    }))
 }

@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { api } from '../api/client';
-import type { RunItem, MonitorStatus, ReportData, DagStatus, Diagnostics, DryRunPreview } from '../api/types';
-import { Play, Pause, RotateCcw, BarChart3, Loader2, Bot } from 'lucide-react';
+import { api, createEventSource } from '../api/client';
+import type { RunItem, MonitorStatus, ReportData, DagStatus, Diagnostics, DryRunPreview, RunInstance } from '../api/types';
+import { Play, Pause, RotateCcw, BarChart3, Loader2, Bot, Ban, Trash2, StepForward } from 'lucide-react';
 import WorkflowCanvas from '../components/WorkflowCanvas';
 import { usePipelineSession } from '../context/PipelineSession';
 
-type TabType = 'monitor' | 'report' | 'diagnostics' | 'dag';
+type TabType = 'monitor' | 'report' | 'diagnostics' | 'dag' | 'logs' | 'instances';
 
 function StatCard({ value, label, color }: { value: string; label: string; color?: string }) {
   return (
@@ -27,6 +27,12 @@ export default function MonitorReport() {
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
   const [preview, setPreview] = useState<DryRunPreview | null>(null);
   const [tab, setTab] = useState<TabType>('monitor');
+  const [logs, setLogs] = useState<string | null>(null);
+  const [logQuery, setLogQuery] = useState('');
+  const [logRule, setLogRule] = useState('');
+  const [instances, setInstances] = useState<RunInstance[] | null>(null);
+  const [onlyFailed, setOnlyFailed] = useState(false);
+  const [explainState, setExplainState] = useState<Record<string, { loading?: boolean; text?: string }>>({});
   const [, setLoading] = useState(true);
   // Pagination: the full list is ≤100 rows (API LIMIT); render a page of
   // 20 so the Run Detail card below is not buried under 5700px of history
@@ -71,13 +77,13 @@ export default function MonitorReport() {
   };
 
   useEffect(() => {
-    api.listRuns().then(r => { setRuns(r); setLoading(false); }).catch(() => setLoading(false));
+    api.listRuns().then((r) => { setRuns(r.items); setLoading(false); }).catch(() => setLoading(false));
   }, []);
 
   // Update monitor status in real-time via SSE
   useEffect(() => {
     if (!selId) return;
-    const es = new EventSource('/api/events');
+    const es = createEventSource();
     const interval = setInterval(async () => {
       try {
         const status = await api.aiStatus(selId);
@@ -88,10 +94,14 @@ export default function MonitorReport() {
     es.onmessage = (evt) => {
       try {
         const event = JSON.parse(evt.data);
-        if (event.data?.run_id === selId) {
+        // Events are scoped to their owning user (issue #82 P0-5); the
+        // server already filters the stream, this is a belt-and-suspenders
+        // guard for anonymous/personal-mode streams.
+        const mine = !event.user || event.user === localStorage.getItem('oxo_user_id');
+        if (mine && event.data?.run_id === selId) {
           if (event.type === 'run_completed' || event.type === 'run_failed') {
             clearInterval(interval);
-            api.listRuns().then(setRuns);
+            api.listRuns().then((r) => setRuns(r.items));
           }
         }
       } catch { /* ignore */ }
@@ -127,6 +137,17 @@ export default function MonitorReport() {
     } catch { /* ignore */ }
   };
 
+  const handleCancel = async () => {
+    if (!selId) return;
+    if (!window.confirm('Cancel this run? Its processes will be terminated.')) return;
+    try {
+      await api.cancelRun(selId);
+      api.listRuns().then((r) => setRuns(r.items));
+      const s = await api.aiStatus(selId);
+      setMonitorStatus(s);
+    } catch { /* ignore */ }
+  };
+
   const handleAsk = async () => {
     if (!qaInput.trim() || !selId) return;
     try {
@@ -136,6 +157,111 @@ export default function MonitorReport() {
       setQaAnswer('Sorry, I could not answer that question. Please try rephrasing.');
     }
   };
+
+  // ── Logs ── (issue #82 P0-7: the raw execution.log with search,
+  // per-rule filtering, failure highlighting, and download)
+  useEffect(() => {
+    if (tab === 'logs' && selId && logs === null) {
+      api.getRunLogs(selId).then(setLogs).catch(() => setLogs(''));
+    }
+  }, [tab, selId, logs]);
+
+  const ruleNames = (dagStatus?.nodes ?? []).map(n => n.label);
+  const logSections = (logs ?? '').split(/(?=Running: )/);
+  const filteredSections = logSections.filter(sec => {
+    const head = sec.split('\n')[0];
+    const matchesRule = !logRule || head.includes(logRule);
+    const matchesQuery = !logQuery || sec.toLowerCase().includes(logQuery.toLowerCase());
+    return matchesRule && matchesQuery;
+  });
+
+  const downloadLogs = () => {
+    const blob = new Blob([logs ?? ''], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `execution-${(selId ?? 'run').slice(0, 8)}.log`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const renderLogs = () => (
+    <div>
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+        <input className="search-input" placeholder="Search logs…" value={logQuery}
+          onChange={e => setLogQuery(e.target.value)} style={{ flex: 1, minWidth: 180 }} />
+        <select value={logRule} onChange={e => setLogRule(e.target.value)}
+          className="search-input" style={{ minWidth: 140 }} aria-label="Filter by rule">
+          <option value="">All rules</option>
+          {ruleNames.map(r => <option key={r} value={r}>{r}</option>)}
+        </select>
+        <button className="btn-sm" onClick={downloadLogs} title="Download full log">⬇ Download</button>
+        <button className="btn-sm" onClick={() => setLogs(null)} title="Reload">↻</button>
+      </div>
+      {logs === null ? (
+        <div className="empty-state">Loading logs…</div>
+      ) : logs === '' || filteredSections.length === 0 ? (
+        <div className="empty-state">No matching log output.</div>
+      ) : (
+        <pre className="log-view">
+          {filteredSections.map((sec, i) => {
+            const failed = /✗|failed|Error:/.test(sec);
+            return (
+              <div key={i} className={failed ? 'log-line-failed' : undefined}>{sec.trimEnd()}</div>
+            );
+          })}
+        </pre>
+      )}
+    </div>
+  );
+
+  // ── Instances ── (issue #82 P1-1: the sample×rule table answering
+  // "which sample under which rule failed")
+  useEffect(() => {
+    if (tab === 'instances' && selId && instances === null) {
+      api.getRunInstances(selId).then(setInstances).catch(() => setInstances([]));
+    }
+  }, [tab, selId, instances]);
+
+  const renderInstances = () => {
+    const rows = (instances ?? []).filter(r => !onlyFailed || r.status === 'failed');
+    return (
+      <div>
+        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', alignItems: 'center' }}>
+          <label style={{ fontSize: '0.82rem', display: 'flex', gap: '6px', alignItems: 'center' }}>
+            <input type="checkbox" checked={onlyFailed} onChange={e => setOnlyFailed(e.target.checked)} />
+            Show failed only
+          </label>
+          <span style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>
+            {instances === null ? 'Loading…' : `${rows.length} instance${rows.length === 1 ? '' : 's'}`}
+          </span>
+        </div>
+        {instances === null ? (
+          <div className="empty-state">Loading instances…</div>
+        ) : rows.length === 0 ? (
+          <div className="empty-state">No instance records — the checkpoint has no per-sample data yet.</div>
+        ) : (
+          <table className="run-table">
+            <thead>
+              <tr><th>Instance</th><th>Rule</th><th>Sample</th><th>Status</th><th>Duration</th><th>Exit</th></tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.instance}>
+                  <td className="mono">{r.instance}</td>
+                  <td className="mono">{r.rule}</td>
+                  <td>{r.sample ?? '-'}</td>
+                  <td><span className={`status-badge ${r.status}`}>{r.status}</span></td>
+                  <td>{r.duration_ms != null ? `${(r.duration_ms / 1000).toFixed(1)}s` : '-'}</td>
+                  <td>{r.exit_code ?? '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    );
+  };
+
+
 
   // ── Monitor Dashboard ──
   const renderMonitor = () => {
@@ -160,6 +286,29 @@ export default function MonitorReport() {
             <button className="btn-sm" onClick={handlePause} title="Pause"><Pause size={14} /></button>
             <button className="btn-sm" onClick={handleResume} title="Resume"><Play size={14} /></button>
             <button className="btn-sm" onClick={handleRetry} title="Retry"><RotateCcw size={14} /></button>
+            <button className="btn-sm" style={{ color: '#DC2626', borderColor: '#DC2626' }}
+              onClick={handleCancel} title="Cancel run"><Ban size={14} /></button>
+            <button className="btn-sm" title="Resume from checkpoint (re-runs unfinished rules)"
+              onClick={async () => {
+                if (!selId) return;
+                if (!window.confirm('Resume this run from its checkpoint? Unfinished rules continue in place.')) return;
+                try {
+                  const res = await api.resumeCheckpoint(selId);
+                  setSelId(res.run_id);
+                } catch { /* ignore */ }
+              }}>
+              <StepForward size={14} />
+            </button>
+            <button className="btn-sm" title="Clean run workdir (chunks + stale state)"
+              onClick={async () => {
+                if (!selId) return;
+                if (!window.confirm('Clean this run\'s workdir? Chunk files and stale state are removed (checkpoint stays).')) return;
+                try {
+                  await api.cleanRun(selId);
+                } catch { /* ignore */ }
+              }}>
+              <Trash2 size={14} />
+            </button>
           </div>
         </div>
 
@@ -194,8 +343,19 @@ export default function MonitorReport() {
                   </div>
                   {alert.auto_fixable && (
                     <div style={{ marginTop: '8px', display: 'flex', gap: '6px' }}>
-                      <button className="btn-sm" style={{ background: '#059669', color: '#fff' }}>🔧 Fix & Retry</button>
-                      <button className="btn-sm">📝 Manual Edit</button>
+                      {/* issue #82 P1-4: these were dead buttons — retry is
+                          now a real run, manual edit opens the snapshot in
+                          the editor. */}
+                      <button className="btn-sm" style={{ background: '#059669', color: '#fff' }}
+                        onClick={() => void handleRetry()}>🔧 Fix & Retry</button>
+                      <button className="btn-sm" onClick={async () => {
+                        if (!selId) return;
+                        try {
+                          const run = await api.getRun(selId);
+                          session.setPipelineToml(run.pipeline_snapshot ?? '');
+                          navigate('/editor');
+                        } catch { /* ignore */ }
+                      }}>📝 Manual Edit</button>
                     </div>
                   )}
                 </div>
@@ -371,17 +531,46 @@ export default function MonitorReport() {
     if (!hasIssues) return <div className="empty-state">✅ No issues detected — pipeline looks healthy</div>;
     return (
       <div>
-        {diagnostics.failed_nodes.map((fn, i) => (
-          <div key={i} className="dash-card" style={{ background: 'var(--color-error-bg)', border: '1px solid var(--color-error)', marginBottom: '8px' }}>
-            <div style={{ fontWeight: 600, color: 'var(--color-error)' }}>❌ {fn.rule}</div>
-            <div style={{ fontSize: '0.85rem' }}>{fn.likely_cause}</div>
-            {fn.suggestions.length > 0 && (
-              <ul style={{ margin: '4px 0', paddingLeft: '1.2rem', fontSize: '0.82rem' }}>
-                {fn.suggestions.map((s, j) => <li key={j}>{s}</li>)}
-              </ul>
-            )}
-          </div>
-        ))}
+        {diagnostics.failed_nodes.map((fn, i) => {
+          const exp = explainState[fn.rule];
+          return (
+            <div key={i} className="dash-card" style={{ background: 'var(--color-error-bg)', border: '1px solid var(--color-error)', marginBottom: '8px' }}>
+              <div style={{ fontWeight: 600, color: 'var(--color-error)' }}>❌ {fn.rule}</div>
+              <div style={{ fontSize: '0.85rem' }}>{fn.likely_cause}</div>
+              {fn.suggestions.length > 0 && (
+                <ul style={{ margin: '4px 0', paddingLeft: '1.2rem', fontSize: '0.82rem' }}>
+                  {fn.suggestions.map((s, j) => <li key={j}>{s}</li>)}
+                </ul>
+              )}
+              {/* AI explanation grounded in the deterministic diagnosis
+                  (issue #82 P1-10: the explain endpoint existed but the
+                  UI never called it). */}
+              <button className="btn-sm" style={{ marginTop: '6px' }}
+                disabled={exp?.loading}
+                onClick={async () => {
+                  setExplainState((prev) => ({ ...prev, [fn.rule]: { loading: true } }));
+                  try {
+                    // Run-scoped explain (issue #82 P1-10): deterministic
+                    // grounding + LLM prose, optionally in Chinese.
+                    const result = selId ? await api.aiExplain(selId, 'zh') : null;
+                    const text = result
+                      ? `${result.summary}${result.fix_suggestion ? `\n→ ${result.fix_suggestion.action}` : ''}`
+                      : 'AI explanation unavailable — the deterministic diagnosis above is authoritative.';
+                    setExplainState((prev) => ({ ...prev, [fn.rule]: { text } }));
+                  } catch {
+                    setExplainState((prev) => ({ ...prev, [fn.rule]: { text: 'AI explanation unavailable — the deterministic diagnosis above is authoritative.' } }));
+                  }
+                }}>
+                {exp?.loading ? 'Explaining…' : '🤖 AI 解释'}
+              </button>
+              {exp?.text && (
+                <div style={{ marginTop: '6px', fontSize: '0.82rem', background: 'var(--color-bg-tertiary)', padding: '8px', borderRadius: 'var(--radius-sm)' }}>
+                  {exp.text}
+                </div>
+              )}
+            </div>
+          );
+        })}
         {diagnostics.warnings.map((w, i) => (
           <div key={i} className="dash-card" style={{ background: 'var(--color-warning-bg)', border: '1px solid var(--color-warning)', marginBottom: '6px', fontSize: '0.85rem' }}>
             ⚠️ <strong>{w.rule}</strong>: {w.pattern} — {w.suggestion}
@@ -439,7 +628,7 @@ export default function MonitorReport() {
       <div className="section">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
           <h2 className="section-title" style={{ marginBottom: 0 }}>Run History</h2>
-          <button className="btn-sm" onClick={() => api.listRuns().then(setRuns)}>Refresh</button>
+          <button className="btn-sm" onClick={() => api.listRuns().then((r) => setRuns(r.items))}>Refresh</button>
         </div>
         <table className="run-table">
           <thead><tr><th>ID</th><th>Status</th><th>Phase</th><th>Created</th><th>Monitor</th></tr></thead>
@@ -521,10 +710,10 @@ export default function MonitorReport() {
               </div>
             </div>
             <div style={{ display: 'flex', gap: '4px' }}>
-              {(['monitor', 'report', 'diagnostics', 'dag'] as const).map((t) => (
+              {(['monitor', 'report', 'diagnostics', 'dag', 'logs', 'instances'] as const).map((t) => (
                 <button key={t} onClick={() => { setTab(t); setQaAnswer(null); }}
                   className={tab === t ? 'btn-run' : 'btn-sm'}>
-                  {t === 'monitor' ? '📡 Monitor' : t === 'report' ? '📊 Report' : t === 'diagnostics' ? '🔍 Diagnostics' : '🔷 DAG'}
+                  {t === 'monitor' ? '📡 Monitor' : t === 'report' ? '📊 Report' : t === 'diagnostics' ? '🔍 Diagnostics' : t === 'dag' ? '🔷 DAG' : t === 'logs' ? '📜 Logs' : '🧬 Instances'}
                 </button>
               ))}
             </div>
@@ -534,6 +723,8 @@ export default function MonitorReport() {
           {tab === 'report' && renderReport()}
           {tab === 'diagnostics' && renderDiagnostics()}
           {tab === 'dag' && renderDag()}
+          {tab === 'logs' && renderLogs()}
+          {tab === 'instances' && renderInstances()}
         </div>
       )}
     </div>

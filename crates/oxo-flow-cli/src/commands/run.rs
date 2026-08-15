@@ -1372,6 +1372,7 @@ pub async fn run_command(
                                     retries: record.retries,
                                 };
                             let mut ck = checkpoint.lock().await;
+                            ck.record_run(&record);
                             ck.mark_completed(&rule_name, benchmark);
                             if let Some(ref manifest) = input_manifest {
                                 ck.record_input_manifest(&rule_name, manifest.clone());
@@ -1413,6 +1414,7 @@ pub async fn run_command(
                                 frs.insert(rule_name.clone());
                             }
                             let mut ck = checkpoint.lock().await;
+                            ck.record_run(&record);
                             ck.mark_failed(&rule_name);
                             if let Err(e) = ck.save_to_file(&checkpoint_path) {
                                 tracing::warn!("Failed to save checkpoint: {e}");
@@ -1464,14 +1466,9 @@ pub async fn run_command(
                             let mut frs = failed_rules_set.lock().await;
                             frs.insert(rule_name.clone());
                         }
-                        let mut ck = checkpoint.lock().await;
-                        ck.mark_failed(&rule_name);
-                        if let Err(e) = ck.save_to_file(&checkpoint_path) {
-                            tracing::warn!("Failed to save checkpoint: {e}");
-                        }
-                        if !keep_going {
-                            eprintln!("  {} rule '{}' failed: {}", "✗".red(), rule_name, e);
-                        }
+                        // Build the failure record first so the checkpoint
+                        // captures the same diagnostics the report will show
+                        // (issue #83 WS2).
                         let record = oxo_flow_core::executor::JobRecord {
                             rule: rule_name.clone(),
                             status: oxo_flow_core::executor::JobStatus::Failed,
@@ -1486,6 +1483,15 @@ pub async fn run_command(
                             skip_reason: None,
                             max_rss_mb: None,
                         };
+                        let mut ck = checkpoint.lock().await;
+                        ck.record_run(&record);
+                        ck.mark_failed(&rule_name);
+                        if let Err(e) = ck.save_to_file(&checkpoint_path) {
+                            tracing::warn!("Failed to save checkpoint: {e}");
+                        }
+                        if !keep_going {
+                            eprintln!("  {} rule '{}' failed: {}", "✗".red(), rule_name, e);
+                        }
                         if keep_going {
                             let mut f = failures.lock().await;
                             f.push((rule_name.clone(), e.to_string()));
@@ -1540,23 +1546,9 @@ pub async fn run_command(
         {
             tracing::error!(rule = %completed_rule, error = %e, "checkpoint re-entry failed");
             // Fail the checkpoint rule and propagate like any failure.
-            {
-                let mut frs = failed_rules_set.lock().await;
-                frs.insert(completed_rule.clone());
-            }
-            {
-                let mut ck = checkpoint.lock().await;
-                ck.mark_failed(&completed_rule);
-                if let Err(save_err) = ck.save_to_file(&checkpoint_path) {
-                    tracing::warn!("Failed to save checkpoint: {save_err}");
-                }
-            }
-            {
-                let mut f = failures.lock().await;
-                f.push((completed_rule.clone(), format!("re-entry manifest: {e}")));
-            }
-            fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            sched.mark_completed(oxo_flow_core::executor::JobRecord {
+            // Build the record first so the checkpoint captures the same
+            // diagnostics the report will show (issue #83 WS2).
+            let record = oxo_flow_core::executor::JobRecord {
                 rule: completed_rule.clone(),
                 status: oxo_flow_core::executor::JobStatus::Failed,
                 started_at: None,
@@ -1569,7 +1561,25 @@ pub async fn run_command(
                 timeout: None,
                 skip_reason: Some(format!("re-entry manifest: {e}")),
                 max_rss_mb: None,
-            });
+            };
+            {
+                let mut frs = failed_rules_set.lock().await;
+                frs.insert(completed_rule.clone());
+            }
+            {
+                let mut ck = checkpoint.lock().await;
+                ck.record_run(&record);
+                ck.mark_failed(&completed_rule);
+                if let Err(save_err) = ck.save_to_file(&checkpoint_path) {
+                    tracing::warn!("Failed to save checkpoint: {save_err}");
+                }
+            }
+            {
+                let mut f = failures.lock().await;
+                f.push((completed_rule.clone(), format!("re-entry manifest: {e}")));
+            }
+            fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            sched.mark_completed(record);
         }
 
         // Abort on first failure when not in keep_going mode.

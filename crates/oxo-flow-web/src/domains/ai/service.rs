@@ -182,7 +182,7 @@ pub async fn translate_intent(
     let mut correction_round = 0;
 
     loop {
-        let validation = workflow_svc::validate_pipeline(&toml_content)?;
+        let validation = workflow_svc::validate_pipeline(&toml_content, None)?;
         if validation.valid {
             break;
         }
@@ -419,7 +419,7 @@ pub async fn optimize_pipeline(
     let toml = extract_toml(&raw_response).unwrap_or(raw_response.clone());
 
     // Validate the optimized TOML
-    let _validation = workflow_svc::validate_pipeline(&toml)?;
+    let _validation = workflow_svc::validate_pipeline(&toml, None)?;
 
     // Parse changes from the AI response
     let changes = parse_optimization_changes(&raw_response);

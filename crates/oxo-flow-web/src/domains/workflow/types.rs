@@ -22,6 +22,7 @@ pub struct ParseResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuleSummary {
     pub name: String,
+    pub shell: Option<String>,
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
     pub environment: Option<String>,
@@ -94,11 +95,24 @@ pub struct ValidateRequest {
     pub pipeline_id: Option<String>,
 }
 
-/// Validation result (empty errors = valid pipeline).
+/// Validation result (empty errors = valid pipeline). The extra fields
+/// mirror the CLI's `validate --json` envelope (issue #81 parity).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidateResponse {
     pub valid: bool,
     pub errors: Vec<ValidationError>,
+    #[serde(default)]
+    pub rules: usize,
+    #[serde(default)]
+    pub dependencies: usize,
+    /// Non-wildcard inputs that no rule produces and that do not exist
+    /// relative to the request's base_dir (default: server cwd).
+    #[serde(default)]
+    pub missing_inputs: Vec<String>,
+    /// Lint-level findings, kept separate from errors (the CLI keeps
+    /// `lint` its own command — issue #81).
+    #[serde(default)]
+    pub warnings: Vec<ValidationError>,
 }
 
 /// A single validation error with error code, message, and optional fix suggestion.
@@ -108,6 +122,10 @@ pub struct ValidationError {
     pub message: String,
     pub rule: Option<String>,
     pub suggestion: Option<String>,
+    /// 1-based source line when the error is a TOML syntax problem
+    /// (issue #82 P2-8: editor highlights the failing line).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
 }
 
 /// Result of pipeline preparation: expanded rules, wildcard combinations, env commands.
@@ -119,12 +137,18 @@ pub struct PrepareResponse {
     pub environment_setup_cmds: Vec<String>,
 }
 
-/// Request to diff two pipelines by their TOML content.
+/// Request to diff two pipelines: inline TOML, or saved-pipeline ids the
+/// server resolves (issue #82 P1-10: the client sent ids while the
+/// handler required inline TOML — the two shapes never agreed).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiffRequest {
-    pub toml_a: String,
-    pub toml_b: String,
+    #[serde(default)]
+    pub toml_a: Option<String>,
+    #[serde(default)]
+    pub toml_b: Option<String>,
+    #[serde(default)]
     pub pipeline_a_id: Option<String>,
+    #[serde(default)]
     pub pipeline_b_id: Option<String>,
 }
 
@@ -277,6 +301,7 @@ mod tests {
             version: "1.0".into(),
             rules: vec![RuleSummary {
                 name: "rule1".into(),
+                shell: None,
                 inputs: vec!["in.txt".into()],
                 outputs: vec!["out.txt".into()],
                 environment: Some("conda".into()),
@@ -333,7 +358,12 @@ mod tests {
                 message: "missing input".into(),
                 rule: Some("rule1".into()),
                 suggestion: Some("add input".into()),
+                line: Some(3),
             }],
+            rules: 1,
+            dependencies: 0,
+            missing_inputs: vec!["in.txt".into()],
+            warnings: vec![],
         };
         let json = serde_json::to_string(&resp).unwrap();
         let back: ValidateResponse = serde_json::from_str(&json).unwrap();

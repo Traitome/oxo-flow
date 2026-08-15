@@ -244,6 +244,8 @@ async fn main() -> Result<()> {
     };
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    let bound = listener.local_addr()?.port();
+    oxo_flow_web::server::set_bound_port(bound);
     tracing::info!("Listening on http://{addr}");
     axum::serve(listener, app)
         .with_graceful_shutdown(oxo_flow_web::shutdown_signal())

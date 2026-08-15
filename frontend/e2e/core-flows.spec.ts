@@ -6,7 +6,7 @@ test.describe('oxo-flow v0.9 Core User Flows', () => {
 
   test('Dashboard loads with key elements', async ({ page }) => {
     await page.goto('/');
-    await expect(page.locator('h1')).toContainText('Command Center');
+    await expect(page.locator('h1')).toContainText('What do you want to do?');
     // Sidebar navigation should be visible (use .first() to avoid strict mode on duplicates)
     await expect(page.locator('text=Dashboard').first()).toBeVisible();
     await expect(page.locator('text=Pipeline Editor').first()).toBeVisible();
@@ -25,7 +25,7 @@ test.describe('oxo-flow v0.9 Core User Flows', () => {
     await expect(page.locator('h1')).toContainText('Settings');
     // Navigate back to Dashboard
     await page.click('a[href="/"]');
-    await expect(page.locator('h1')).toContainText('Command Center');
+    await expect(page.locator('h1')).toContainText('What do you want to do?');
   });
 
   test('Mobile menu toggle works', async ({ page }) => {
@@ -40,6 +40,7 @@ test.describe('oxo-flow v0.9 Core User Flows', () => {
   // ── Pipeline Editor ──
 
   test('Pipeline Editor loads with TOML editor and DAG view', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('oxo_editor_mode', 'canvas'));
     await page.goto('/editor');
     await expect(page.locator('h1')).toContainText('Pipeline Editor');
     // CodeMirror TOML editor should be present
@@ -53,6 +54,7 @@ test.describe('oxo-flow v0.9 Core User Flows', () => {
   });
 
   test('Pipeline validation badge appears', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('oxo_editor_mode', 'canvas'));
     await page.goto('/editor');
     // Wait for debounced validation
     await page.waitForTimeout(2000);
@@ -61,6 +63,7 @@ test.describe('oxo-flow v0.9 Core User Flows', () => {
   });
 
   test('DAG view renders graph nodes', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('oxo_editor_mode', 'canvas'));
     await page.goto('/editor');
     // React Flow canvas should be visible with the default workflow's nodes
     const node = page.locator('.rf-rule-node', { hasText: 'fastqc' });
@@ -70,6 +73,7 @@ test.describe('oxo-flow v0.9 Core User Flows', () => {
   });
 
   test('Save button saves pipeline', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('oxo_editor_mode', 'canvas'));
     await page.goto('/editor');
     await page.waitForTimeout(2000);
     const saveBtn = page.locator('button:has-text("Save")');
@@ -81,11 +85,16 @@ test.describe('oxo-flow v0.9 Core User Flows', () => {
     await expect(resultBar).toBeVisible({ timeout: 5000 });
   });
 
-  // ── Dashboard Chat ──
+  // ── AI Chat ──
 
-  test('Dashboard chat input is visible and functional', async ({ page }) => {
+  test('Dashboard AI entry card navigates to the chat', async ({ page }) => {
     await page.goto('/');
-    // Chat input should be present
+    // The task-oriented home offers an AI card; the chat input lives on
+    // the dedicated /chat page (issue #82 P1-7).
+    const aiCard = page.locator('.entry-card').filter({ hasText: 'Generate with AI' });
+    await expect(aiCard.first()).toBeVisible({ timeout: 5000 });
+    await aiCard.first().click();
+    await expect(page).toHaveURL(/\/chat/);
     const chatInput = page.locator('.intent-input, textarea[placeholder*="Describe"]');
     await expect(chatInput.first()).toBeVisible({ timeout: 5000 });
   });

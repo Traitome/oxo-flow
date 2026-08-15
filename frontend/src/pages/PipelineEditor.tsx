@@ -9,6 +9,7 @@ import WorkflowCanvas from '../components/WorkflowCanvas';
 import RuleInspector from '../components/RuleInspector';
 import RunDialog from '../components/RunDialog';
 import TomlEditor from '../components/TomlEditor';
+import GuidedRuleBuilder from '../components/GuidedRuleBuilder';
 import { usePipelineSession } from '../context/PipelineSession';
 
 const DEFAULT_TOML = `[workflow]
@@ -36,13 +37,13 @@ interface InspectorState {
   rule: Record<string, unknown> | null;
 }
 
-type LeftTab = 'assistant' | 'palette';
+type LeftTab = 'assistant' | 'palette' | 'history';
 
 export default function PipelineEditor() {
   const session = usePipelineSession();
   const [toml, setToml] = useState(() => session.state.pipelineToml || DEFAULT_TOML);
   const [dagJson, setDagJson] = useState<DagJson | null>(() => session.state.dagData);
-  const [validation, setValidation] = useState<{ valid: boolean; errors: Array<{ code: string; message: string; rule: string | null; suggestion: string | null }> } | null>(null);
+  const [validation, setValidation] = useState<{ valid: boolean; errors: Array<{ code: string; message: string; rule: string | null; suggestion: string | null; line?: number | null }> } | null>(null);
   const [showErrors, setShowErrors] = useState(false);
   // Monotonic edit sequence: debounced validation and canvas edits resolve
   // out of order — only the latest request may apply its result (issue #79
@@ -53,6 +54,17 @@ export default function PipelineEditor() {
   const [leftTab, setLeftTab] = useState<LeftTab>('palette');
   const [inspector, setInspector] = useState<InspectorState | null>(null);
   const [showRunDialog, setShowRunDialog] = useState(false);
+  // Guided vs Power modes (issue #82 P1-5): form-based rule cards by
+  // default; the canvas + TOML view for power users. The choice persists.
+  const [highlightLine, setHighlightLine] = useState<number | null>(null);
+  const [viewMode, setViewMode] = useState<'guided' | 'canvas'>(() =>
+    localStorage.getItem('oxo_editor_mode') === 'canvas' ? 'canvas' : 'guided',
+  );
+  const switchViewMode = (mode: 'guided' | 'canvas') => {
+    localStorage.setItem('oxo_editor_mode', mode);
+    setViewMode(mode);
+  };
+  const [revisions, setRevisions] = useState<Array<{ id: string; version: string; actor: string; created_at: string }> | null>(null);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
@@ -129,7 +141,7 @@ export default function PipelineEditor() {
     return () => clearTimeout(timer);
   }, [toml, updateDag]);
 
-  const handleRun = async (dryRun = false, options: { maxJobs: number; keepGoing: boolean; samples: string[]; targets: string[] } = { maxJobs: 4, keepGoing: false, samples: [], targets: [] }) => {
+  const handleRun = async (dryRun = false, options: { maxJobs: number; keepGoing: boolean; samples: string[]; targets: string[]; clusterId?: string } = { maxJobs: 4, keepGoing: false, samples: [], targets: [] }) => {
     setRunning(true);
     try {
       // Issue #79 P1-12: runs launched from an opened saved pipeline must
@@ -144,6 +156,7 @@ export default function PipelineEditor() {
         samples: options.samples,
         targets: options.targets,
         pipeline_id: pipelineId,
+        cluster_id: options.clusterId,
       });
       session.setRunResult({
         runId: res.run_id,
@@ -227,6 +240,69 @@ export default function PipelineEditor() {
     }
   };
 
+  // ── Version history (issue #82 P1-14): snapshots of every save/update,
+  // loadable into the editor and restorable via rollback. ──
+  const savedPipelineId = searchParams.get('pipeline');
+  useEffect(() => {
+    if (leftTab === 'history' && savedPipelineId) {
+      api
+        .listRevisions(savedPipelineId)
+        .then(setRevisions)
+        .catch(() => setRevisions([]));
+    }
+  }, [leftTab, savedPipelineId]);
+
+  const renderHistory = () => {
+    if (!savedPipelineId) {
+      return (
+        <div className="empty-state" style={{ padding: '1rem 0' }}>
+          Save the pipeline to enable version history — every save and
+          update snapshots the previous version, and you can load or roll
+          back to any of them here.
+        </div>
+      );
+    }
+    if (revisions === null) return <div className="empty-state">Loading history…</div>;
+    if (revisions.length === 0) {
+      return <div className="empty-state">No revisions recorded yet.</div>;
+    }
+    return (
+      <div>
+        <div style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)', marginBottom: '8px' }}>
+          {revisions.length} snapshot{revisions.length === 1 ? '' : 's'} (newest first)
+        </div>
+        {revisions.map((r) => (
+          <div key={r.id} className="dash-card" style={{ marginBottom: '8px', padding: '8px' }}>
+            <div style={{ fontSize: '0.82rem', fontWeight: 600 }}>
+              v{r.version} <span className="mono" style={{ fontWeight: 400, fontSize: '0.72rem' }}>{r.id.slice(0, 8)}</span>
+            </div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--color-text-tertiary)' }}>
+              {new Date(r.created_at).toLocaleString()} · {r.actor}
+            </div>
+            <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
+              <button className="btn-sm" onClick={async () => {
+                try {
+                  const snap = await api.getRevision(savedPipelineId, r.id);
+                  setToml(snap.toml_content);
+                  session.setRunResult({ message: `Loaded snapshot ${r.id.slice(0, 8)} into the editor — Save to keep it`, type: 'success' });
+                } catch { /* ignore */ }
+              }}>Load</button>
+              <button className="btn-sm" onClick={async () => {
+                if (!window.confirm(`Roll this pipeline back to the snapshot from ${new Date(r.created_at).toLocaleString()}? A new revision will record the current version first.`)) return;
+                try {
+                  await api.rollbackPipeline(savedPipelineId, r.id);
+                  setToml((await api.getPipeline(savedPipelineId)).toml_content);
+                  api.listRevisions(savedPipelineId).then(setRevisions);
+                  session.setRunResult({ message: 'Rolled back — the current version was preserved as a revision', type: 'success' });
+                } catch { /* ignore */ }
+              }}>Rollback</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   const handleSave = async () => {
     // Issue #79 P1-09: Save reported success even for TOML with 23 errors
     // or cycles. Invalid content is refused with the error list instead.
@@ -258,9 +334,33 @@ export default function PipelineEditor() {
 
   return (
     <div className="page">
-      <h1 className="page-title">Pipeline Editor</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+        <h1 className="page-title" style={{ margin: 0 }}>Pipeline Editor</h1>
+        <div style={{ display: 'flex', gap: '4px' }}>
+          <button
+            className={viewMode === 'guided' ? 'btn-run' : 'btn-sm'}
+            onClick={() => switchViewMode('guided')}
+            title="Form-based rule cards — no TOML needed"
+          >
+            🧭 Guided
+          </button>
+          <button
+            className={viewMode === 'canvas' ? 'btn-run' : 'btn-sm'}
+            onClick={() => switchViewMode('canvas')}
+            title="Canvas graph + raw TOML"
+          >
+            ⚡ Canvas + TOML
+          </button>
+        </div>
+      </div>
 
-      <div className="editor-layout">
+      {viewMode === 'guided' && (
+        <div style={{ marginTop: '1rem' }}>
+          <GuidedRuleBuilder toml={toml} onChange={(v) => setToml(v)} />
+        </div>
+      )}
+
+      <div className="editor-layout" style={{ display: viewMode === 'guided' ? 'none' : undefined }}>
         <div className="left-rail">
           <div className="left-rail-tabs" role="tablist">
             <button
@@ -279,10 +379,25 @@ export default function PipelineEditor() {
             >
               <Wand2 size={14} /> Assistant
             </button>
+            <button
+              role="tab"
+              aria-selected={leftTab === 'history'}
+              className={`left-rail-tab ${leftTab === 'history' ? 'active' : ''}`}
+              onClick={() => {
+                setLeftTab('history');
+                setRevisions(null);
+              }}
+            >
+              🕘 History
+            </button>
           </div>
           <div className="left-rail-body">
             {leftTab === 'palette' ? (
               <ToolPalette onAddTool={handleAddTool} />
+            ) : leftTab === 'history' ? (
+              <div style={{ padding: '0 12px' }}>
+                {renderHistory()}
+              </div>
             ) : (
               <ChatUI
                 context="editor"
@@ -358,6 +473,13 @@ export default function PipelineEditor() {
               {validation.errors.map((e, i) => (
                 <div key={i} className="validation-error-row">
                   <span className="validation-error-code">{e.code}</span>
+                  {e.line != null && (
+                    <button className="btn-sm" style={{ fontSize: '0.7rem' }}
+                      title="Jump to this line in the editor"
+                      onClick={() => setHighlightLine(e.line!)}>
+                      line {e.line}
+                    </button>
+                  )}
                   <div className="validation-error-body">
                     <div>
                       {e.rule ? <strong>{e.rule}: </strong> : null}
@@ -369,7 +491,7 @@ export default function PipelineEditor() {
               ))}
             </div>
           )}
-          <TomlEditor value={toml} onChange={(v) => setToml(v)} />
+          <TomlEditor value={toml} onChange={(v) => setToml(v)} highlightLine={highlightLine} />
         </div>
       </div>
 

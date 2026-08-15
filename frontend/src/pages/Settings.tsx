@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
 import type { AiConfig, HealthResponse } from '../api/types';
 import { FlaskConical, Cpu, HardDrive, Database, Shield } from 'lucide-react';
@@ -35,6 +35,17 @@ export default function Settings() {
   const [testResult, setTestResult] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [refs, setRefs] = useState<{ installed: Array<Record<string, unknown>>; missing: string[] } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [adv, setAdv] = useState({ search_enabled: true, monitor_enabled: true, auto_retry_enabled: false, max_correction_rounds: 3 });
+  const [webhook, setWebhook] = useState<{ enabled: boolean; url: string; secret_set: boolean; events: string[] }>({ enabled: false, url: '', secret_set: false, events: [] });
+  const [webhookSecret, setWebhookSecret] = useState('');
+  const [apiKeys, setApiKeys] = useState<Array<{ id: string; name: string; created_at: string; last_used_at: string | null }>>([]);
+  const [newKeyName, setNewKeyName] = useState('');
+
+  const loadApiKeys = async () => {
+    try { setApiKeys(await api.listApiKeys()); } catch { setApiKeys([]); }
+  };
+  const licenseInputRef = useRef<HTMLInputElement>(null);
 
 
   useEffect(() => {
@@ -42,6 +53,17 @@ export default function Settings() {
     api.aiConfig().then((c) => { setAiConfig(c); setProvider(c.provider); if (c.api_url) setApiUrl(c.api_url); if (c.model) setModel(c.model); }).catch(() => {});
     fetch('/api/quota').then(r => r.json()).then(setQuota).catch(() => {});
     api.referenceStatus().then(setRefs).catch(() => {});
+    api.aiConfigUser().then((c) => {
+      const u = c.user_config as Partial<typeof adv> | undefined;
+      if (u) setAdv({
+        search_enabled: u.search_enabled ?? true,
+        monitor_enabled: u.monitor_enabled ?? true,
+        auto_retry_enabled: u.auto_retry_enabled ?? false,
+        max_correction_rounds: u.max_correction_rounds ?? 3,
+      });
+    }).catch(() => {});
+    api.webhookConfig().then(setWebhook).catch(() => {});
+    api.listApiKeys().then(setApiKeys).catch(() => setApiKeys([]));
 
   }, []);
 
@@ -76,6 +98,7 @@ export default function Settings() {
   return (
     <div className="page">
       <h1 className="page-title">Settings</h1>
+      {notice && <div className="result-bar success" style={{ cursor: 'pointer' }} onClick={() => setNotice(null)}>{notice}</div>}
       <p className="page-subtitle">Configure AI, references, environments, and system preferences</p>
 
       {/* ── AI Provider ── */}
@@ -114,20 +137,33 @@ export default function Settings() {
             <div style={{ marginTop: '4px' }}>Status: <span className={`status-badge ${aiConfig?.is_configured ? 'success' : 'cancelled'}`}>{aiConfig?.is_configured ? 'Configured' : 'Not Configured'}</span></div>
             <div style={{ marginTop: '1rem', background: 'var(--color-bg-tertiary)', padding: '8px 12px', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem' }}>
               <div style={{ fontWeight: 600, marginBottom: '4px' }}>Advanced Options</div>
+              {/* issue #82 P1-4: these controls were display-only; now they
+                  read and persist the per-user AI config. */}
               <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.8rem' }}>
-                <input type="checkbox" defaultChecked /> Internet search
+                <input type="checkbox" checked={adv.search_enabled} onChange={(e) => setAdv({ ...adv, search_enabled: e.target.checked })} /> Internet search
               </label>
               <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.8rem' }}>
-                <input type="checkbox" defaultChecked /> AI monitoring
+                <input type="checkbox" checked={adv.monitor_enabled} onChange={(e) => setAdv({ ...adv, monitor_enabled: e.target.checked })} /> AI monitoring
               </label>
               <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.8rem' }}>
-                <input type="checkbox" /> Auto retry without asking
+                <input type="checkbox" checked={adv.auto_retry_enabled} onChange={(e) => setAdv({ ...adv, auto_retry_enabled: e.target.checked })} /> Auto retry without asking
               </label>
               <div style={{ marginTop: '6px' }}>
                 <SettingLabel text="Max correction rounds" />
-                <select defaultValue="3" style={{ padding: '2px 6px', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem' }}>
+                <select value={adv.max_correction_rounds} onChange={(e) => setAdv({ ...adv, max_correction_rounds: Number(e.target.value) })}
+                  style={{ padding: '2px 6px', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem' }}>
                   {[1,2,3,4,5].map(n => <option key={n} value={n}>{n}</option>)}
                 </select>
+              </div>
+              <div style={{ marginTop: '8px' }}>
+                <button className="btn-sm" onClick={() => api.aiUpdateConfigUser({
+                  search_enabled: adv.search_enabled,
+                  monitor_enabled: adv.monitor_enabled,
+                  auto_retry_enabled: adv.auto_retry_enabled,
+                  max_correction_rounds: adv.max_correction_rounds,
+                }).then(() => setNotice('Advanced AI options saved')).catch(() => setNotice('Could not save advanced options'))}>
+                  Save advanced options
+                </button>
               </div>
             </div>
           </div>
@@ -159,14 +195,21 @@ export default function Settings() {
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <span className="status-badge warning">Missing</span>
-                  <button className="btn-sm" style={{ fontSize: '0.7rem' }}>Download</button>
+                  <button className="btn-sm" style={{ fontSize: '0.7rem' }}
+                    onClick={() => { api.discoverReference(missingName, []).then(() => api.referenceStatus().then(setRefs)).catch(() => setNotice(`Could not start download for ${missingName}`)); }}>
+                    Download
+                  </button>
                 </div>
               </div>
             ))}
             {!refs && <div style={{ color: 'var(--color-text-secondary)' }}>Loading references...</div>}
           </div>
           <div style={{ marginTop: '0.75rem' }}>
-            <button className="btn-sm">+ Add Reference Genome</button>
+            <button className="btn-sm" onClick={() => {
+              const name = window.prompt('Reference genome name (e.g. GRCh38)?');
+              if (!name) return;
+              api.discoverReference(name.trim(), []).then(() => api.referenceStatus().then(setRefs)).catch(() => setNotice(`Could not add reference ${name}`));
+            }}>+ Add Reference Genome</button>
           </div>
         </div>
       </Section>
@@ -209,6 +252,80 @@ export default function Settings() {
         </div>
       </Section>
 
+      {/* ── API Keys (issue #82 P1-13) ── */}
+      <Section title="API Keys" icon={<Shield size={16} color="var(--color-primary)" />}>
+        <div style={{ fontSize: '0.85rem' }}>
+          <p style={{ color: 'var(--color-text-secondary)', marginBottom: '0.5rem' }}>
+            Machine credentials for scripts and CI — send them in the{' '}
+            <code>X-API-Key</code> header. The key is shown only once at creation.
+          </p>
+          {apiKeys.length === 0 ? (
+            <div style={{ color: 'var(--color-text-tertiary)' }}>No keys yet.</div>
+          ) : (
+            <table className="run-table">
+              <thead><tr><th>Name</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+              <tbody>
+                {apiKeys.map((k) => (
+                  <tr key={k.id}>
+                    <td>{k.name}</td>
+                    <td>{new Date(k.created_at).toLocaleString()}</td>
+                    <td>{k.last_used_at ? new Date(k.last_used_at).toLocaleString() : 'never'}</td>
+                    <td>
+                      <button className="btn-sm btn-error" onClick={() => {
+                        if (!window.confirm(`Revoke key "${k.name}"? Requests using it will fail immediately.`)) return;
+                        api.revokeApiKey(k.id).then(() => loadApiKeys()).catch(() => setNotice('Could not revoke key'));
+                      }}>Revoke</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <div style={{ marginTop: '0.75rem', display: 'flex', gap: '8px' }}>
+            <input className="search-input" placeholder="Key name (e.g. ci-bot)" value={newKeyName}
+              onChange={(e) => setNewKeyName(e.target.value)} style={{ flex: 1, maxWidth: 240 }} />
+            <button className="btn-sm" onClick={async () => {
+              const name = newKeyName.trim() || 'unnamed';
+              try {
+                const created = await api.createApiKey(name);
+                setNewKeyName('');
+                setNotice(`API key created — copy it NOW (shown only once): ${created.key}`);
+                await loadApiKeys();
+              } catch { setNotice('Could not create API key'); }
+            }}>+ Create key</button>
+          </div>
+        </div>
+      </Section>
+
+      {/* ── Webhooks (issue #82 P1-12) ── */}
+      <Section title="Run Notifications (Webhook)" icon={<Shield size={16} color="var(--color-primary)" />}>
+        <div style={{ fontSize: '0.85rem' }}>
+          <p style={{ color: 'var(--color-text-secondary)', marginBottom: '0.5rem' }}>
+            Runs POST an HMAC-SHA256-signed payload to this endpoint when they finish
+            (verified via the <code>X-OxoFlow-Signature</code> header).
+          </p>
+          <SettingLabel text="Webhook URL" />
+          <SettingInput placeholder="https://example.com/oxo-webhook" value={webhook.url}
+            onChange={(e) => setWebhook({ ...webhook, url: e.target.value })} />
+          <div style={{ marginTop: '0.5rem' }}>
+            <SettingLabel text={webhook.secret_set ? 'Signing secret (set — leave blank to keep)' : 'Signing secret'} />
+            <SettingInput type="password" placeholder={webhook.secret_set ? '••••••••' : 'secret'} value={webhookSecret}
+              onChange={(e) => setWebhookSecret(e.target.value)} />
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '0.5rem', fontSize: '0.82rem' }}>
+            <input type="checkbox" checked={webhook.enabled} onChange={(e) => setWebhook({ ...webhook, enabled: e.target.checked })} />
+            Enable notifications
+          </label>
+          <div style={{ marginTop: '0.75rem', display: 'flex', gap: '8px' }}>
+            <button className="btn-sm" onClick={() => {
+              api.webhookUpdate({ enabled: webhook.enabled, url: webhook.url, secret: webhookSecret || undefined })
+                .then(() => { setWebhookSecret(''); api.webhookConfig().then(setWebhook); setNotice('Webhook settings saved'); })
+                .catch(() => setNotice('Could not save webhook settings (team mode: admin only)'));
+            }}>Save webhook</button>
+          </div>
+        </div>
+      </Section>
+
       {/* ── License ── */}
       <Section title="License" icon={<Shield size={16} color="var(--color-primary)" />}>
         <div style={{ fontSize: '0.85rem' }}>
@@ -216,8 +333,17 @@ export default function Settings() {
           <div>Status: <span className="status-badge success">Valid</span></div>
           <div style={{ marginTop: '4px' }}>Contact: <strong>{health?.license?.contact || 'w_shixiang@163.com'}</strong></div>
           <div style={{ marginTop: '4px', color: 'var(--color-text-secondary)' }}>{health?.license?.message || 'Free for academic use. Commercial use requires authorization.'}</div>
-          <div style={{ marginTop: '0.75rem' }}>
-            <button className="btn-sm">Upload Commercial License</button>
+          <div style={{ marginTop: '0.75rem', display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <button className="btn-sm" onClick={() => licenseInputRef.current?.click()}>Upload Commercial License</button>
+            <input ref={licenseInputRef} type="file" accept=".key,.lic,.txt"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                file.text().then((text) => api.uploadLicense(text))
+                  .then(() => setNotice('License submitted'))
+                  .catch(() => setNotice('License upload failed'));
+              }} />
           </div>
         </div>
       </Section>

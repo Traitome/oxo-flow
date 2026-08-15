@@ -147,10 +147,12 @@ pub async fn audit_middleware(
 
     let method = request.method().clone();
     let path = request.uri().path().to_string();
+    // The auth middleware (S2, issue #82 P0-4) injects a CurrentUser;
+    // personal mode falls back to the 'default' pseudo-user.
     let user = request
         .extensions()
-        .get::<Option<String>>()
-        .and_then(|u| u.clone())
+        .get::<crate::domains::auth::current_user::CurrentUser>()
+        .map(|u| u.id.clone())
         .unwrap_or_else(|| "default".to_string());
 
     let response = next.run(request).await;
@@ -174,6 +176,13 @@ pub async fn audit_middleware(
     if let Err(e) = crate::db::insert_audit_row(&user, &action, &path, result, &metadata).await {
         tracing::error!("audit insert failed for {action}: {e}");
     }
+    // Structured event stream for machine consumers (issue #81).
+    crate::domains::observability::logging::log_event(
+        "audit",
+        serde_json::json!({
+            "user": user, "action": action, "resource": path, "result": result,
+        }),
+    );
 
     response
 }

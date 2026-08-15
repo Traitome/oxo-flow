@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Download, Pencil, Trash2 } from 'lucide-react';
+import { Download, Pencil, Share2, Trash2 } from 'lucide-react';
 import { api } from '../api/client';
 import type { Pipeline, Template } from '../api/types';
 
@@ -38,7 +38,20 @@ export default function Pipelines() {
     }
   };
 
-  const handleExport = async (id: string, format: 'dockerfile' | 'singularity') => {
+  const handleShare = async (id: string) => {
+    try {
+      const res = await api.sharePipeline(id, 'link', 30);
+      // The API returns an oxo+https:// URL; surface a clickable https://
+      // link (the oxo+ scheme is the import format).
+      const httpsUrl = res.share_url.replace('oxo+', '');
+      await navigator.clipboard.writeText(httpsUrl);
+      setNotice(`Share link copied to clipboard (30 days): ${httpsUrl}`);
+    } catch {
+      setNotice('Could not create share link.');
+    }
+  };
+
+const handleExport = async (id: string, format: 'dockerfile' | 'singularity') => {
     try {
       const res = await api.exportPipeline(id, format);
       const blob = new Blob([res.content], { type: 'text/plain' });
@@ -147,6 +160,9 @@ export default function Pipelines() {
                         </button>
                         <button className="btn-sm" onClick={() => handleExport(p.id, 'singularity')} title="Export Singularity definition">
                           <Download size={13} /> Singularity
+                        </button>
+                        <button className="btn-sm" onClick={() => handleShare(p.id)} title="Share link">
+                          <Share2 size={13} />
                         </button>
                         <button className="btn-sm btn-error" onClick={() => handleDelete(p.id, p.name)} title="Delete">
                           <Trash2 size={13} />

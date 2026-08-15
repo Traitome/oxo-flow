@@ -25,8 +25,8 @@ not a prerequisite for the product experience.
 
 ## Prerequisites
 
-1. Build the frontend first — the SPA assets are build artifacts and are
-   NOT committed:
+1. Build the frontend first — a prebuilt SPA ships in
+   `crates/oxo-flow-web/static/`, but rebuild it to bundle the latest UI:
 
    ```bash
    cd frontend && npm install && npm run build && cd ..

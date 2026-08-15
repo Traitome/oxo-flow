@@ -196,7 +196,7 @@ async fn web_pipeline_rerun_rebuilds_only_config_affected_rules() {
     assert_eq!(
         std::fs::read_to_string(
             dir.path()
-                .join("workspace/users/local_user/pipelines")
+                .join("workspace/users/default/pipelines")
                 .join(&pipeline_id)
                 .join("down.txt")
         )
@@ -267,7 +267,7 @@ async fn web_pipeline_rerun_rebuilds_only_config_affected_rules() {
     assert_eq!(
         std::fs::read_to_string(
             dir.path()
-                .join("workspace/users/local_user/pipelines")
+                .join("workspace/users/default/pipelines")
                 .join(&pipeline_id)
                 .join("down.txt")
         )
@@ -415,7 +415,7 @@ async fn web_dry_run_flag_previews_without_executing() {
     // Nothing was executed anywhere in the sandbox.
     assert!(
         !dir.path()
-            .join("workspace/users/local_user/runs")
+            .join("workspace/users/default/runs")
             .join(&run_id)
             .join("produced.txt")
             .exists(),
@@ -1108,4 +1108,1362 @@ async fn web_dry_run_serves_instance_level_preview() {
         !names.contains(&"gather_cohort_S2"),
         "unselected sample must not appear: {names:?}"
     );
+}
+
+// ===========================================================================
+// Team-mode multi-tenancy isolation matrix (issue #82 P0-4 / P0-5)
+// ===========================================================================
+
+/// Team-mode server: auth middleware on, seeded env credentials.
+struct TeamServer {
+    server: TestServer,
+    admin_token: String,
+}
+
+async fn login_as(client: &reqwest::Client, base: &str, username: &str, password: &str) -> String {
+    let body: serde_json::Value = client
+        .post(format!("{base}/api/auth/login"))
+        .json(&serde_json::json!({"username": username, "password": password}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    body["token"]
+        .as_str()
+        .expect("login must return a token")
+        .to_string()
+}
+
+impl TeamServer {
+    async fn start(dir: &std::path::Path) -> Self {
+        let port = free_port();
+        let child = StdCommand::new(workspace_bin("oxo-flow-web"))
+            .current_dir(dir)
+            .env("OXO_FLOW_BIN", workspace_bin("oxo-flow"))
+            .env("OXO_FLOW_HOST", "127.0.0.1")
+            .env("OXO_FLOW_PORT", port.to_string())
+            .env("OXO_FLOW_MODE", "team")
+            .env("OXO_FLOW_ADMIN_PASSWORD", "admin-secret")
+            .env("OXO_FLOW_USER_PASSWORD", "user-secret")
+            .env("OXO_FLOW_VIEWER_PASSWORD", "viewer-secret")
+            .env(
+                "OXO_FLOW_FRONTEND_DIR",
+                dir.join("missing-frontend").to_str().unwrap(),
+            )
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("team web server must start");
+
+        let base = format!("http://127.0.0.1:{port}");
+        let client = reqwest::Client::new();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if Instant::now() > deadline {
+                panic!("team web server did not become ready at {base}");
+            }
+            // /api/health stays public in every mode (load-balancer probe).
+            if client
+                .get(format!("{base}/api/health"))
+                .send()
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        let admin_token = login_as(&client, &base, "admin", "admin-secret").await;
+        Self {
+            server: TestServer { child, base },
+            admin_token,
+        }
+    }
+
+    async fn login(&self, client: &reqwest::Client, username: &str, password: &str) -> String {
+        login_as(client, &self.server.base, username, password).await
+    }
+}
+
+const ISO_WORKFLOW: &str = "[workflow]\nname = \"iso\"\nversion = \"1.0.0\"\n\n\
+     [[rules]]\nname = \"hello\"\noutput = [\"hello.txt\"]\n\
+     shell = \"echo hi > hello.txt\"\n";
+
+/// P0-4: runs are private per user — foreign runs 404 on read AND control;
+/// admins retain full visibility.
+#[tokio::test]
+async fn team_mode_run_ownership_isolation() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TeamServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.server.base.clone();
+
+    let alice = server.login(&client, "alice", "user-secret").await;
+    let bob = server.login(&client, "bob", "user-secret").await;
+
+    // Alice creates a run — the row must be attributed to alice's users.id.
+    let created: serde_json::Value = client
+        .post(format!("{base}/api/runs"))
+        .bearer_auth(&alice)
+        .json(&serde_json::json!({"toml_content": ISO_WORKFLOW}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let run_id = created["run_id"].as_str().unwrap().to_string();
+
+    // Owner sees the run.
+    let owner_view = client
+        .get(format!("{base}/api/runs/{run_id}"))
+        .bearer_auth(&alice)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(owner_view.status(), 200);
+
+    // Foreign user gets 404 on read and on every control endpoint.
+    for (method, path) in [
+        ("get", format!("/api/runs/{run_id}")),
+        ("get", format!("/api/runs/{run_id}/status")),
+        ("get", format!("/api/runs/{run_id}/logs")),
+        ("get", format!("/api/runs/{run_id}/results")),
+        ("get", format!("/api/runs/{run_id}/diagnostics")),
+        ("post", format!("/api/runs/{run_id}/cancel")),
+        ("post", format!("/api/runs/{run_id}/pause")),
+        ("post", format!("/api/runs/{run_id}/resume")),
+    ] {
+        let resp = match method {
+            "get" => client.get(format!("{base}{path}")).bearer_auth(&bob),
+            _ => client
+                .post(format!("{base}{path}"))
+                .bearer_auth(&bob)
+                .json(&serde_json::json!({})),
+        }
+        .send()
+        .await
+        .unwrap();
+        assert_eq!(
+            resp.status(),
+            404,
+            "bob must get 404 (not 403 — existence must not leak) on {method} {path}"
+        );
+    }
+
+    // Bob's run list excludes alice's run.
+    let bob_list: serde_json::Value = client
+        .get(format!("{base}/api/runs"))
+        .bearer_auth(&bob)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let bob_ids: Vec<&str> = bob_list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["id"].as_str())
+        .collect();
+    assert!(
+        !bob_ids.contains(&run_id.as_str()),
+        "bob's run list must not contain alice's run"
+    );
+
+    // Admin sees and can control the run.
+    let admin_view = client
+        .get(format!("{base}/api/runs/{run_id}"))
+        .bearer_auth(&server.admin_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(admin_view.status(), 200);
+    let admin_cancel = client
+        .post(format!("{base}/api/runs/{run_id}/cancel"))
+        .bearer_auth(&server.admin_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(admin_cancel.status(), 200);
+}
+
+/// P0-4: pipelines are scoped per user; 'workspace' visibility is readable
+/// by everyone but still writable only by its owner.
+#[tokio::test]
+async fn team_mode_pipeline_ownership_and_visibility() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TeamServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.server.base.clone();
+
+    let alice = server.login(&client, "alice", "user-secret").await;
+    let bob = server.login(&client, "bob", "user-secret").await;
+
+    let save_client = client.clone();
+    let save = |token: &str, name: &str, visibility: &str| {
+        let base = base.clone();
+        let client = save_client.clone();
+        let token = token.to_string();
+        let name = name.to_string();
+        let visibility = visibility.to_string();
+        async move {
+            client
+                .post(format!("{base}/api/pipelines"))
+                .bearer_auth(&token)
+                .json(&serde_json::json!({
+                    "name": name, "toml_content": ISO_WORKFLOW, "visibility": visibility,
+                }))
+                .send()
+                .await
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap()
+        }
+    };
+
+    let private = save(&alice, "alice-private", "private").await;
+    let private_id = private["id"].as_str().unwrap().to_string();
+    let shared = save(&alice, "alice-workspace", "workspace").await;
+    let shared_id = shared["id"].as_str().unwrap().to_string();
+
+    // Bob cannot read/write/delete alice's private pipeline.
+    for (method, path) in [
+        ("get", format!("/api/pipelines/{private_id}")),
+        ("put", format!("/api/pipelines/{private_id}")),
+        ("delete", format!("/api/pipelines/{private_id}")),
+    ] {
+        let resp = match method {
+            "get" => client.get(format!("{base}{path}")).bearer_auth(&bob),
+            "put" => client
+                .put(format!("{base}{path}"))
+                .bearer_auth(&bob)
+                .json(&serde_json::json!({"name": "hijacked"})),
+            _ => client.delete(format!("{base}{path}")).bearer_auth(&bob),
+        }
+        .send()
+        .await
+        .unwrap();
+        assert_eq!(
+            resp.status(),
+            404,
+            "bob on alice's private pipeline: {method} {path}"
+        );
+    }
+
+    // Workspace-visible: bob can read but not write.
+    let bob_read = client
+        .get(format!("{base}/api/pipelines/{shared_id}"))
+        .bearer_auth(&bob)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        bob_read.status(),
+        200,
+        "workspace pipeline must be readable"
+    );
+    let bob_write = client
+        .put(format!("{base}/api/pipelines/{shared_id}"))
+        .bearer_auth(&bob)
+        .json(&serde_json::json!({"name": "hijacked"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        bob_write.status(),
+        404,
+        "workspace pipeline is NOT writable by others"
+    );
+
+    // Bob's list contains the workspace pipeline but not the private one.
+    let bob_list: serde_json::Value = client
+        .get(format!("{base}/api/pipelines"))
+        .bearer_auth(&bob)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let ids: Vec<&str> = bob_list
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|p| p["id"].as_str())
+        .collect();
+    assert!(
+        ids.contains(&shared_id.as_str()),
+        "workspace pipeline in bob's list"
+    );
+    assert!(
+        !ids.contains(&private_id.as_str()),
+        "private pipeline hidden from bob"
+    );
+
+    // Fork is attributed to the forking user, not taken from the body.
+    let fork: serde_json::Value = client
+        .post(format!("{base}/api/pipelines/{shared_id}/fork"))
+        .bearer_auth(&bob)
+        .json(&serde_json::json!({"user_id": "admin"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let forked_id = fork["forked_id"].as_str().unwrap().to_string();
+    let admin_view: serde_json::Value = client
+        .get(format!("{base}/api/pipelines/{forked_id}"))
+        .bearer_auth(&server.admin_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let fork_owner = admin_view["user_id"].as_str().unwrap();
+    let bob_users: serde_json::Value = client
+        .get(format!("{base}/api/users"))
+        .bearer_auth(&server.admin_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let bob_row = bob_users
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|u| u["username"] == "bob")
+        .expect("bob's user row exists after login");
+    assert_eq!(
+        fork_owner,
+        bob_row["id"].as_str().unwrap(),
+        "fork must be owned by the acting user (bob), never the body-supplied user_id"
+    );
+}
+
+/// P0-5: anonymous endpoints are closed in team mode; SSE requires ?token=.
+#[tokio::test]
+async fn team_mode_anonymous_endpoints_require_auth() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TeamServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.server.base.clone();
+
+    for path in ["/api/system", "/api/metrics"] {
+        let resp = client.get(format!("{base}{path}")).send().await.unwrap();
+        assert_eq!(resp.status(), 401, "{path} must require auth in team mode");
+    }
+    // /api/hpc exists only in hpc mode — team mode must not expose it at
+    // all (404), never anonymously (401 would also be acceptable).
+    let hpc = client.get(format!("{base}/api/hpc")).send().await.unwrap();
+    assert!(
+        matches!(hpc.status().as_u16(), 401 | 404),
+        "/api/hpc must not be anonymously reachable in team mode"
+    );
+
+    // SSE without a token is rejected.
+    let events_no_token = client
+        .get(format!("{base}/api/events"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        events_no_token.status(),
+        401,
+        "/api/events must require ?token="
+    );
+
+    // SSE with a valid token connects (headers arrive immediately).
+    let alice = server.login(&client, "alice", "user-secret").await;
+    let events_ok = client
+        .get(format!("{base}/api/events?token={alice}"))
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        events_ok.status(),
+        200,
+        "SSE connects with a valid session token"
+    );
+
+    // AI config GET stays public; writes are gated (see next test).
+    let ai_config = client
+        .get(format!("{base}/api/ai/config"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ai_config.status(), 200, "GET /api/ai/config stays public");
+}
+
+/// P0-5 + P1-16: AI provider writes are admin-only; env-password logins
+/// auto-provision a real user row instead of the any-username hole.
+#[tokio::test]
+async fn team_mode_ai_config_admin_only_and_env_login_provisions_user() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TeamServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.server.base.clone();
+
+    let bob = server.login(&client, "bob", "user-secret").await;
+
+    // Non-admin writes to the shared AI provider are forbidden.
+    let bob_config = client
+        .post(format!("{base}/api/ai/config"))
+        .bearer_auth(&bob)
+        .json(&serde_json::json!({"provider": "noop"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        bob_config.status(),
+        403,
+        "AI config write must be admin-only"
+    );
+    let bob_test = client
+        .post(format!("{base}/api/ai/test"))
+        .bearer_auth(&bob)
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        bob_test.status(),
+        403,
+        "AI provider test must be admin-only"
+    );
+    let admin_test = client
+        .post(format!("{base}/api/ai/test"))
+        .bearer_auth(&server.admin_token)
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(admin_test.status(), 200, "admin may test the AI provider");
+
+    // Cluster management is admin-only too (SSH credentials).
+    let bob_cluster = client
+        .post(format!("{base}/api/clusters"))
+        .bearer_auth(&bob)
+        .json(&serde_json::json!({
+            "id": "evil", "name": "evil", "ssh_host": "10.0.0.1", "ssh_port": 22,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        bob_cluster.status(),
+        403,
+        "cluster management must be admin-only"
+    );
+
+    // Env-password login auto-provisions a real users row (id = username).
+    let carol = server.login(&client, "carol", "user-secret").await;
+    let users: serde_json::Value = client
+        .get(format!("{base}/api/users"))
+        .bearer_auth(&server.admin_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let carol_row = users
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|u| u["username"] == "carol")
+        .expect("carol's users row must be auto-provisioned");
+    assert_eq!(carol_row["role"], "user");
+
+    // Carol's run is attributed to her users.id (her username), so audit
+    // trails point at a real identity.
+    let created: serde_json::Value = client
+        .post(format!("{base}/api/runs"))
+        .bearer_auth(&carol)
+        .json(&serde_json::json!({"toml_content": ISO_WORKFLOW}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let run_id = created["run_id"].as_str().unwrap().to_string();
+    let run_view: serde_json::Value = client
+        .get(format!("{base}/api/runs/{run_id}"))
+        .bearer_auth(&server.admin_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        run_view["user_id"].as_str().unwrap(),
+        carol_row["id"].as_str().unwrap(),
+        "run must be owned by carol's canonical user id"
+    );
+}
+
+// ===========================================================================
+// File service layer (issue #82 P0-1 / P0-2): download, preview, zip, upload
+// ===========================================================================
+
+/// P0-1: results are retrievable — file download with correct headers,
+/// traversal protection, text preview, Range support, and directory zip.
+#[tokio::test]
+async fn web_run_files_download_preview_and_zip() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.base.clone();
+
+    // Produce a run with two output files, one nested.
+    let workflow = "[workflow]\nname = \"files\"\nversion = \"1.0.0\"\n\n\
+        [[rules]]\nname = \"emit\"\noutput = [\"hello.txt\", \"sub/data.csv\"]\n\
+        shell = \"mkdir -p sub && echo hi > hello.txt && echo 'a,b\\n1,2' > sub/data.csv\"\n";
+    let created: serde_json::Value = client
+        .post(format!("{base}/api/runs"))
+        .json(&serde_json::json!({"toml_content": workflow}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let run_id = created["run_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        wait_for_terminal(&client, &base, &run_id).await,
+        "completed"
+    );
+
+    // File download: bytes + attachment disposition + etag.
+    let resp = client
+        .get(format!("{base}/api/runs/{run_id}/files?path=hello.txt"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "file download must succeed");
+    assert_eq!(
+        resp.headers()
+            .get("content-disposition")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "attachment; filename=\"hello.txt\""
+    );
+    assert!(resp.headers().contains_key("etag"), "etag header required");
+    assert_eq!(resp.text().await.unwrap(), "hi\n");
+
+    // Range request: bytes=0-1 → 206 with exactly the first two bytes.
+    let range_resp = client
+        .get(format!("{base}/api/runs/{run_id}/files?path=hello.txt"))
+        .header("Range", "bytes=0-1")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(range_resp.status(), 206, "single range must be served");
+    assert_eq!(
+        range_resp
+            .headers()
+            .get("content-range")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "bytes 0-1/3"
+    );
+    assert_eq!(range_resp.text().await.unwrap(), "hi");
+
+    // Nested path resolves relative to the workdir.
+    let nested = client
+        .get(format!("{base}/api/runs/{run_id}/files?path=sub/data.csv"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(nested.status(), 200);
+
+    // Text preview: truncated JSON with mime + content.
+    let preview: serde_json::Value = client
+        .get(format!(
+            "{base}/api/runs/{run_id}/files?path=sub/data.csv&preview=true"
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(preview["mime"], "text/csv");
+    assert!(preview["content"].as_str().unwrap().contains("a,b"));
+
+    // Traversal is rejected outright.
+    let traversal = client
+        .get(format!(
+            "{base}/api/runs/{run_id}/files?path=../../etc/passwd"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        matches!(traversal.status().as_u16(), 400 | 404),
+        "path traversal must be rejected, got {}",
+        traversal.status()
+    );
+
+    // Missing file → 404.
+    let missing = client
+        .get(format!("{base}/api/runs/{run_id}/files?path=nope.txt"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+
+    // Directory download → zip archive containing the nested layout.
+    let zip_resp = client
+        .get(format!("{base}/api/runs/{run_id}/files?path=."))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(zip_resp.status(), 200);
+    assert_eq!(
+        zip_resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "application/zip"
+    );
+    let body = zip_resp.bytes().await.unwrap();
+    assert!(body.len() > 100, "zip must contain entries");
+    // ZIP magic: local file header signature.
+    assert_eq!(&body[0..4], &[0x50, 0x4b, 0x03, 0x04]);
+}
+
+/// P0-2: multipart upload lands in the user's inputs workspace, with
+/// name sanitization and quota enforcement.
+#[tokio::test]
+async fn web_file_upload_saves_to_inputs_workspace() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.base.clone();
+
+    // Multipart upload with a subdirectory hint.
+    let form = reqwest::multipart::Form::new().text("path", "fastq").part(
+        "file",
+        reqwest::multipart::Part::bytes(b"@SEQ\nACGT\n+\n!!!!\n".to_vec())
+            .file_name("sample1.fastq"),
+    );
+    let upload: serde_json::Value = client
+        .post(format!("{base}/api/files"))
+        .multipart(form)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let files = upload["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1, "one file uploaded: {upload}");
+    assert_eq!(files[0]["name"], "sample1.fastq");
+
+    // The file landed under workspace/users/default/inputs/fastq/.
+    let saved = dir
+        .path()
+        .join("workspace/users/default/inputs/fastq/sample1.fastq");
+    assert!(saved.exists(), "upload must land at {saved:?}");
+    assert_eq!(
+        std::fs::read_to_string(&saved).unwrap(),
+        "@SEQ\nACGT\n+\n!!!!\n"
+    );
+
+    // Uploaded inputs are listable for workflow authoring.
+    let listing: serde_json::Value = client
+        .get(format!("{base}/api/files"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let names: Vec<&str> = listing
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|f| f["name"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"sample1.fastq"),
+        "listing contains upload: {listing:?}"
+    );
+}
+
+// ===========================================================================
+// Run-loop closure (issue #82 P0-3 / P1-1 / P1-2)
+// ===========================================================================
+
+/// P0-3: retry is a REAL run — the plan's new_run_id exists in the
+/// database and executes to a terminal state (previously it was a ghost).
+#[tokio::test]
+async fn web_retry_actually_spawns_a_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.base.clone();
+
+    let failing = "[workflow]\nname = \"retry\"\nversion = \"1.0.0\"\n\n\
+        [[rules]]\nname = \"boom\"\noutput = [\"boom.txt\"]\n\
+        shell = \"echo oops > boom.txt && exit 1\"\n";
+    let created: serde_json::Value = client
+        .post(format!("{base}/api/runs"))
+        .json(&serde_json::json!({"toml_content": failing}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let run_id = created["run_id"].as_str().unwrap().to_string();
+    assert_eq!(wait_for_terminal(&client, &base, &run_id).await, "failed");
+
+    let plan: serde_json::Value = client
+        .post(format!("{base}/api/runs/{run_id}/retry"))
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let new_id = plan["new_run_id"].as_str().unwrap().to_string();
+    assert!(
+        plan["will_rerun"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r == "boom"),
+        "the failed rule must be in will_rerun: {plan}"
+    );
+
+    // The retried run really exists and really executes.
+    let retried = client
+        .get(format!("{base}/api/runs/{new_id}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        retried.status(),
+        200,
+        "retry run must exist in the database"
+    );
+    assert_eq!(
+        wait_for_terminal(&client, &base, &new_id).await,
+        "failed",
+        "the retried run must reach a terminal state"
+    );
+}
+
+/// P1-1: the instance table answers "which sample under which rule failed"
+/// with sample×rule granularity.
+#[tokio::test]
+async fn web_run_instances_expose_sample_rule_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.base.clone();
+
+    // Two samples discovered from the data dir, one rule each:
+    // S1 succeeds, S2 fails. The web run executes in its own sandbox
+    // workdir, so the sample_pattern uses an absolute path.
+    let data_dir = dir.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    std::fs::write(data_dir.join("S1.fq"), "@seq\nACGT\n").unwrap();
+    std::fs::write(data_dir.join("S2.fq"), "@seq\nACGT\n").unwrap();
+    let data_str = data_dir.to_string_lossy();
+    let workflow = format!(
+        "[workflow]\nname = \"inst\"\nversion = \"1.0.0\"\n\
+        sample_pattern = \"{data_str}/{{sample}}.fq\"\n\n\
+        [[rules]]\nname = \"qc\"\ninput = [\"{{sample}}.fq\"]\n\
+        output = [\"qc_{{sample}}.txt\"]\n\
+        shell = \"[ \\\"{{sample}}\\\" = S1 ] && echo ok > qc_{{sample}}.txt || exit 1\"\n"
+    );
+    let created: serde_json::Value = client
+        .post(format!("{base}/api/runs"))
+        .json(&serde_json::json!({
+            "toml_content": workflow,
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let run_id = created["run_id"].as_str().unwrap().to_string();
+    assert_eq!(wait_for_terminal(&client, &base, &run_id).await, "failed");
+
+    let instances: serde_json::Value = client
+        .get(format!("{base}/api/runs/{run_id}/instances"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let rows = instances.as_array().unwrap();
+    let s1 = rows
+        .iter()
+        .find(|r| r["sample"] == "S1")
+        .expect("S1 instance present");
+    let s2 = rows
+        .iter()
+        .find(|r| r["sample"] == "S2")
+        .expect("S2 instance present");
+    assert_eq!(s1["status"], "success", "S1 succeeded: {instances}");
+    assert_eq!(s2["status"], "failed", "S2 failed: {instances}");
+    assert_eq!(s1["rule"], "qc", "base rule attribution");
+}
+
+/// P1-2: real telemetry — a run long enough for the sampler to tick leaves
+/// a timeline in /ai-status and metrics in /status (not fabricated
+/// defaults).
+#[tokio::test]
+async fn web_run_status_carries_real_telemetry() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.base.clone();
+
+    let slow = "[workflow]\nname = \"slow\"\nversion = \"1.0.0\"\n\n\
+        [[rules]]\nname = \"nap\"\noutput = [\"nap.txt\"]\n\
+        shell = \"sleep 7 && echo done > nap.txt\"\n";
+    let created: serde_json::Value = client
+        .post(format!("{base}/api/runs"))
+        .json(&serde_json::json!({"toml_content": slow}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let run_id = created["run_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        wait_for_terminal(&client, &base, &run_id).await,
+        "completed"
+    );
+
+    // The sampler ticked at least once during the 7s run.
+    let ai_status: serde_json::Value = client
+        .get(format!("{base}/api/runs/{run_id}/ai-status"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let empty: Vec<serde_json::Value> = vec![];
+    let timeline = ai_status["timeline"].as_array().unwrap_or(&empty);
+    assert!(
+        !timeline.is_empty(),
+        "timeline must carry real samples: {ai_status}"
+    );
+    assert!(
+        timeline.iter().all(|t| t["memory_mb"].is_number()),
+        "every sample records memory: {timeline:?}"
+    );
+}
+
+// ===========================================================================
+// Share closure + version history (issue #82 P0-6 / P1-14)
+// ===========================================================================
+
+/// P0-6: a share link opens as a public read-only landing page carrying
+/// the pipeline's identity, DAG shape, TOML, and provenance; importing it
+/// creates a copy owned by the importer.
+#[tokio::test]
+async fn web_share_landing_is_public_and_importable() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.base.clone();
+
+    let saved: serde_json::Value = client
+        .post(format!("{base}/api/pipelines"))
+        .json(&serde_json::json!({
+            "name": "share-me", "toml_content": ISO_WORKFLOW, "visibility": "private",
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let pipeline_id = saved["id"].as_str().unwrap().to_string();
+
+    let share: serde_json::Value = client
+        .post(format!("{base}/api/pipelines/{pipeline_id}/share"))
+        .json(&serde_json::json!({"visibility": "link"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let token = share["access_token"].as_str().unwrap().to_string();
+    // The share URL carries the ACTUAL bound port, not a hardcoded 3000.
+    let share_url = share["share_url"].as_str().unwrap();
+    let bound_port = base.rsplit(':').next().unwrap();
+    assert!(
+        share_url.contains(&format!(":{bound_port}/")),
+        "share URL must use the bound port: {share_url}"
+    );
+
+    // The landing payload is readable WITHOUT any session (that is the
+    // whole point of a share link).
+    let landing: serde_json::Value = client
+        .get(format!("{base}/api/share/{token}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(landing["pipeline"]["name"], "share-me");
+    assert_eq!(landing["pipeline"]["rules_count"], 1);
+    assert!(
+        landing["dag"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r == "hello"),
+        "DAG summary lists rule names: {landing}"
+    );
+    assert!(landing["toml_content"].as_str().unwrap().contains("hello"));
+
+    // Import creates a copy (named with the imported suffix).
+    let imported: serde_json::Value = client
+        .post(format!("{base}/api/pipelines/import"))
+        .json(&serde_json::json!({"url": share_url}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let imported_id = imported["pipeline_id"].as_str().unwrap().to_string();
+    let copy: serde_json::Value = client
+        .get(format!("{base}/api/pipelines/{imported_id}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(copy["name"].as_str().unwrap().contains("imported"));
+    assert_eq!(copy["toml_content"], ISO_WORKFLOW);
+
+    // Expired links are gone.
+    let expired: serde_json::Value = client
+        .post(format!("{base}/api/pipelines/{pipeline_id}/share"))
+        .json(&serde_json::json!({"visibility": "link", "expires_in_days": 0}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let exp_token = expired["access_token"].as_str().unwrap();
+    let gone = client
+        .get(format!("{base}/api/share/{exp_token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(gone.status(), 410, "expired share must return GONE");
+}
+
+/// P1-14: every save/update snapshots a revision; rollback restores an old
+/// snapshot and keeps history intact (nothing is lost).
+#[tokio::test]
+async fn web_pipeline_revisions_and_rollback() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.base.clone();
+
+    let original = ISO_WORKFLOW.replace("hello", "hello_v1");
+    let mutated = ISO_WORKFLOW.replace("hello", "hello_v2");
+
+    let saved: serde_json::Value = client
+        .post(format!("{base}/api/pipelines"))
+        .json(&serde_json::json!({"name": "hist", "toml_content": original}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let pipeline_id = saved["id"].as_str().unwrap().to_string();
+
+    // One update → two revisions (initial save + pre-update snapshot).
+    let updated: serde_json::Value = client
+        .put(format!("{base}/api/pipelines/{pipeline_id}"))
+        .json(&serde_json::json!({"toml_content": mutated}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        updated["toml_content"]
+            .as_str()
+            .unwrap()
+            .contains("hello_v2")
+    );
+
+    let revisions: serde_json::Value = client
+        .get(format!("{base}/api/pipelines/{pipeline_id}/revisions"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let revs = revisions.as_array().unwrap();
+    assert_eq!(revs.len(), 2, "one revision per save/update: {revisions}");
+
+    // The OLDEST revision holds the original content.
+    let oldest_id = revs
+        .iter()
+        .min_by_key(|r| r["created_at"].as_str().unwrap_or(""))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let snapshot: serde_json::Value = client
+        .get(format!(
+            "{base}/api/pipelines/{pipeline_id}/revisions/{oldest_id}"
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        snapshot["toml_content"]
+            .as_str()
+            .unwrap()
+            .contains("hello_v1"),
+        "oldest snapshot holds the original: {snapshot}"
+    );
+
+    // Rollback restores the original content and records ANOTHER revision.
+    let rolled: serde_json::Value = client
+        .post(format!("{base}/api/pipelines/{pipeline_id}/rollback"))
+        .json(&serde_json::json!({"revision_id": oldest_id}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        rolled["toml_content"]
+            .as_str()
+            .unwrap()
+            .contains("hello_v1")
+    );
+
+    let after: serde_json::Value = client
+        .get(format!("{base}/api/pipelines/{pipeline_id}/revisions"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        after.as_array().unwrap().len(),
+        3,
+        "rollback adds a revision"
+    );
+}
+
+// ===========================================================================
+// Webhook notifications (issue #82 P1-12)
+// ===========================================================================
+
+/// A run reaching a terminal state POSTs an HMAC-signed payload to the
+/// configured webhook endpoint (raw TCP listener captures the request;
+/// the signature format is verified against the core HMAC scheme, whose
+/// RFC 4231 vectors are unit-tested in core).
+#[tokio::test]
+async fn web_webhook_fires_on_run_completion_with_hmac() {
+    use std::sync::{Arc, Mutex};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let captured: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let captured_thread = captured.clone();
+    let handle = std::thread::spawn(move || {
+        // One delivery: accept, read, respond 200 (a successful answer
+        // stops the sender's retry loop).
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        {
+            stream.set_read_timeout(Some(Duration::from_secs(20))).ok();
+            use std::io::Read as _;
+            let mut buf = [0u8; 8192];
+            let mut request = String::new();
+            // Read until headers end, then honor Content-Length.
+            loop {
+                let n = stream.read(&mut buf).unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                request.push_str(&String::from_utf8_lossy(&buf[..n]));
+                if request.contains("\r\n\r\n") {
+                    break;
+                }
+            }
+            let body_start = request.find("\r\n\r\n").map(|i| i + 4).unwrap_or(0);
+            let content_len: usize = request
+                .lines()
+                .find(|l| l.to_lowercase().starts_with("content-length:"))
+                .and_then(|l| l.split(':').nth(1))
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0);
+            let mut body = request[body_start..].to_string();
+            while body.len() < content_len {
+                let n = stream.read(&mut buf).unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                body.push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
+            *captured_thread.lock().unwrap() = request.clone();
+            use std::io::Write as _;
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        }
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.base.clone();
+
+    // Configure the webhook to hit the capture listener.
+    let saved: serde_json::Value = client
+        .put(format!("{base}/api/webhook"))
+        .json(&serde_json::json!({
+            "enabled": true,
+            "url": format!("http://{addr}/hook"),
+            "secret": "s3cret-key",
+            "events": ["workflow_completed", "workflow_failed"],
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(saved["status"], "saved");
+
+    // The GET must never echo the secret.
+    let config: serde_json::Value = client
+        .get(format!("{base}/api/webhook"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(config["secret_set"], true);
+    assert!(
+        config.get("secret").is_none(),
+        "secret must never be echoed"
+    );
+
+    // A completed run fires the webhook.
+    let created: serde_json::Value = client
+        .post(format!("{base}/api/runs"))
+        .json(&serde_json::json!({"toml_content": ISO_WORKFLOW}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let run_id = created["run_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        wait_for_terminal(&client, &base, &run_id).await,
+        "completed"
+    );
+
+    handle.join().unwrap();
+    let request = captured.lock().unwrap().clone();
+    assert!(
+        request.starts_with("POST /hook"),
+        "webhook must POST to the configured path: {request}"
+    );
+    assert!(
+        request.contains("\"event\":\"workflow_completed\"")
+            || request.contains("\"event\":\"WorkflowCompleted\""),
+        "payload carries the terminal event: {request}"
+    );
+    assert!(
+        request.contains("\"workflow_name\":\"iso\""),
+        "payload names the workflow"
+    );
+    // HMAC-SHA256 signature header (scheme prefix + 64 hex chars).
+    let sig = request
+        .lines()
+        .find(|l| l.to_lowercase().starts_with("x-oxoflow-signature:"))
+        .unwrap_or("");
+    let value = sig.split(':').nth(1).unwrap_or("").trim();
+    assert!(
+        value.len() == "hmac-sha256=".len() + 64 && value.starts_with("hmac-sha256="),
+        "signature must use the hmac-sha256 scheme: '{value}'"
+    );
+}
+
+/// P1-13: API keys authenticate machine clients with the same ownership
+/// scoping as sessions; revocation is immediate.
+#[tokio::test]
+async fn team_mode_api_keys_authenticate_and_revoke() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = TeamServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.server.base.clone();
+
+    let alice = server.login(&client, "alice", "user-secret").await;
+
+    // Create a key as alice.
+    let created: serde_json::Value = client
+        .post(format!("{base}/api/auth/keys"))
+        .bearer_auth(&alice)
+        .json(&serde_json::json!({"name": "ci-bot"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let key = created["key"].as_str().unwrap().to_string();
+    let key_id = created["id"].as_str().unwrap().to_string();
+    assert!(key.starts_with("oxo_"), "key format: {key}");
+
+    // The listing never echoes the plaintext.
+    let listed: serde_json::Value = client
+        .get(format!("{base}/api/auth/keys"))
+        .bearer_auth(&alice)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert!(
+        listed.as_array().unwrap()[0].get("key").is_none(),
+        "plaintext never listed"
+    );
+
+    // The key authenticates machine requests.
+    let via_key = client
+        .get(format!("{base}/api/runs"))
+        .header("X-API-Key", &key)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(via_key.status(), 200, "API key must authenticate");
+
+    // Revocation is immediate.
+    let revoked = client
+        .delete(format!("{base}/api/auth/keys/{key_id}"))
+        .bearer_auth(&alice)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(revoked.status(), 200);
+    let after_revoke = client
+        .get(format!("{base}/api/runs"))
+        .header("X-API-Key", &key)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(after_revoke.status(), 401, "revoked keys are rejected");
+}
+
+// ===========================================================================
+// Remote cluster execution (issue #82 deployment modes) — GATED: runs only
+// when OXO_TEST_CLUSTER_SSH=1 and OXO_TEST_CLUSTER_HOST is set (a real SSH
+// host with the oxo-flow CLI on PATH, e.g. tx-ubuntu). CI skips it.
+// ===========================================================================
+
+#[tokio::test]
+async fn web_remote_cluster_run_executes_and_pulls_results() {
+    if std::env::var("OXO_TEST_CLUSTER_SSH").as_deref() != Ok("1") {
+        eprintln!("skipped: set OXO_TEST_CLUSTER_SSH=1 + OXO_TEST_CLUSTER_HOST to run");
+        return;
+    }
+    let host = std::env::var("OXO_TEST_CLUSTER_HOST").expect("OXO_TEST_CLUSTER_HOST required");
+
+    let dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start(dir.path()).await;
+    let client = reqwest::Client::new();
+    let base = server.base.clone();
+
+    // Register the real cluster connection.
+    let reg = client
+        .post(format!("{base}/api/clusters"))
+        .json(&serde_json::json!({
+            "id": "e2e-remote", "name": "e2e remote", "ssh_host": host,
+            "ssh_port": 22,
+            "ssh_user": std::env::var("OXO_TEST_CLUSTER_USER").ok(),
+            "scheduler": "auto",
+            "remote_dir": "/tmp/oxo-remote-e2e",
+            "enabled": true,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reg.status(), 200, "cluster registration must succeed");
+
+    // The run executes remotely and its results are pulled back.
+    let created: serde_json::Value = client
+        .post(format!("{base}/api/runs"))
+        .json(&serde_json::json!({"toml_content": ISO_WORKFLOW, "cluster_id": "e2e-remote"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let run_id = created["run_id"].as_str().unwrap().to_string();
+    let status = wait_for_terminal(&client, &base, &run_id).await;
+    assert_eq!(status, "completed", "remote run must complete");
+
+    // Pulled-back results are downloadable through the normal file layer.
+    let resp = client
+        .get(format!("{base}/api/runs/{run_id}/files?path=hello.txt"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "pulled-back results must be downloadable"
+    );
+    assert_eq!(resp.text().await.unwrap(), "hi\n");
 }

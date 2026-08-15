@@ -1,4 +1,5 @@
 use crate::error::{OxoFlowError, Result};
+use crate::executor::JobRecord;
 use crate::rule::{FilePatterns, Rule};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -111,6 +112,25 @@ pub struct BenchmarkRecord {
     pub retries: u32,
 }
 
+/// Per-rule execution record persisted for reporting (issue #83 WS2):
+/// the exit code and expanded command that actually ran, plus a bounded
+/// stderr excerpt for failure diagnosis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuleRunRecord {
+    /// Process exit code; `None` when the record predates execution or the
+    /// rule was skipped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    /// The expanded command that was executed (wildcards and `{config.x}`
+    /// resolved). Absent in legacy checkpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// Tail of the rule's stderr (see [`STDERR_TAIL_CHARS`]) for failure
+    /// diagnosis. Absent when the rule produced no stderr.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr_tail: Option<String>,
+}
+
 /// Persistent checkpoint state for resumable workflow execution.
 ///
 /// Tracks which rules have completed or failed so that a restarted workflow
@@ -177,6 +197,29 @@ pub struct CheckpointState {
     /// with an empty list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reentries: Vec<crate::reentry::ReentryRecord>,
+
+    /// Per-rule execution records for reporting (issue #83 WS2): exit code,
+    /// expanded command, and stderr excerpt. Legacy checkpoints load with an
+    /// empty map; the report falls back to declared workflow templates for
+    /// rules without a record.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub rule_runs: HashMap<String, RuleRunRecord>,
+}
+
+/// Bound on the stderr excerpt persisted per rule (issue #83 WS2). Full
+/// output stays in the terminal; the checkpoint keeps enough for failure
+/// diagnosis without growing unbounded on noisy tools.
+const STDERR_TAIL_CHARS: usize = 2048;
+
+/// Last [`STDERR_TAIL_CHARS`] characters of a rule's stderr, prefixed with
+/// an ellipsis marker when truncated.
+fn stderr_tail(stderr: Option<&str>) -> Option<String> {
+    let stderr = stderr?;
+    // nth_back is 0-indexed from the end, so N-1 lands exactly N chars back.
+    match stderr.char_indices().nth_back(STDERR_TAIL_CHARS - 1) {
+        Some((start, _)) => Some(format!("…\n{}", &stderr[start..])),
+        None => Some(stderr.to_string()),
+    }
 }
 
 impl CheckpointState {
@@ -194,6 +237,7 @@ impl CheckpointState {
             input_manifests: HashMap::new(),
             tombstones: HashMap::new(),
             reentries: Vec::new(),
+            rule_runs: HashMap::new(),
         }
     }
 
@@ -235,6 +279,21 @@ impl CheckpointState {
     pub fn mark_failed(&mut self, rule: &str) {
         self.failed_rules.insert(rule.to_string());
         self.completed_rules.remove(rule);
+    }
+
+    /// Persist execution detail for reporting (issue #83 WS2): the exit
+    /// code and expanded command that actually ran, plus a bounded stderr
+    /// excerpt. Call at completion/failure time, before the corresponding
+    /// `mark_completed`/`mark_failed`.
+    pub fn record_run(&mut self, record: &JobRecord) {
+        self.rule_runs.insert(
+            record.rule.clone(),
+            RuleRunRecord {
+                exit_code: record.exit_code,
+                command: record.command.clone(),
+                stderr_tail: stderr_tail(record.stderr.as_deref()),
+            },
+        );
     }
 
     /// Returns `true` if the rule finished successfully.

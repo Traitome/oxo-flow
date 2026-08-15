@@ -6,7 +6,8 @@
 use crate::domains::ai::agents::monitor_agent::{self, NodeExecutionStatus, ResourceUsage};
 use crate::domains::ai::agents::report_agent;
 use crate::domains::ai::agents::types::ReportFile;
-use axum::{Json, extract::Path, http::StatusCode};
+use crate::domains::auth::current_user::{self, CurrentUser};
+use axum::{Extension, Json, extract::Path, extract::Query, http::StatusCode};
 
 use super::checkpoint_status;
 use super::service;
@@ -32,8 +33,68 @@ fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+/// Parse a memory declaration ("4GB", "512MB", "8G", bare number = MB)
+/// into megabytes (issue #82 P1-9 quota pre-flight).
+fn parse_memory_mb(value: &str) -> u64 {
+    let v = value.trim().to_lowercase();
+    let (num, mult) = if let Some(n) = v.strip_suffix("gb").or_else(|| v.strip_suffix('g')) {
+        (n.trim(), 1024u64)
+    } else if let Some(n) = v.strip_suffix("mb").or_else(|| v.strip_suffix('m')) {
+        (n.trim(), 1u64)
+    } else {
+        (v.as_str(), 1u64)
+    };
+    num.parse::<f64>()
+        .map(|n| (n * mult as f64) as u64)
+        .unwrap_or(0)
+}
+
+/// Fetch a run row and enforce ownership (issue #82 P0-4): admins may
+/// address any run, everyone else only their own. Foreign and unknown runs
+/// both 404 — the resource set itself is private, so existence must not
+/// leak through a 403.
+pub(crate) async fn load_owned_run(
+    pool: &sqlx::SqlitePool,
+    user: &CurrentUser,
+    id: &str,
+) -> Result<models::RunRow, (StatusCode, Json<ApiError>)> {
+    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error fetching run {id}: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            )
+        })?;
+
+    let run = run.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Run {id} not found"),
+        )
+    })?;
+
+    if !user.is_admin() && run.user_id != user.id {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            format!("Run {id} not found"),
+        ));
+    }
+    Ok(run)
+}
+
 /// POST /api/runs
-pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateRunResponse> {
+pub async fn create_run(
+    authenticated: Option<Extension<CurrentUser>>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<CreateRunResponse> {
+    let user = current_user::resolve(authenticated.as_ref());
     let toml = req
         .get("toml_content")
         .and_then(|v| v.as_str())
@@ -51,6 +112,15 @@ pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateR
         keep_going: req.get("keep_going").and_then(|v| v.as_bool()),
         resource_budget: None,
     };
+
+    // Optional remote execution: a configured SSH cluster connection makes
+    // the run execute on that host (staged over tar-over-ssh, results
+    // pulled back — domains/clusters/remote.rs).
+    let cluster_id: Option<String> = req
+        .get("cluster_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
 
     // Optional saved-pipeline linkage (issue #69): runs targeting a saved
     // pipeline execute in the pipeline's persistent workdir, so the CLI's
@@ -70,6 +140,34 @@ pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateR
             StatusCode::BAD_REQUEST,
             "INVALID_PIPELINE_ID",
             format!("pipeline_id must be a UUID, got: {pid}"),
+        ));
+    }
+
+    // Quota enforcement (issue #82 P1-9): the tracker was fully
+    // implemented but never consulted — every run must pre-flight its
+    // resource reservation.
+    let quota_usage = oxo_flow_core::config::WorkflowConfig::parse(toml)
+        .map(|wf| {
+            let threads: u32 = wf.rules.iter().map(|r| r.effective_threads().max(1)).sum();
+            let memory_mb: u64 = wf
+                .rules
+                .iter()
+                .filter_map(|r| r.memory.clone())
+                .map(|m| parse_memory_mb(&m))
+                .sum();
+            (threads.max(1), memory_mb)
+        })
+        .unwrap_or((1, 0));
+    let quota =
+        crate::infra::quota::global_quota_tracker().check(&user.id, quota_usage.0, quota_usage.1);
+    if !quota.allowed {
+        return Err(err(
+            StatusCode::TOO_MANY_REQUESTS,
+            "QUOTA_EXCEEDED",
+            format!(
+                "Quota exceeded: {} — see /api/quota for limits",
+                quota.violations.join("; ")
+            ),
         ));
     }
 
@@ -106,16 +204,16 @@ pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateR
                         format!("Pipeline {pid} not found"),
                     ));
                 }
-                crate::workspace::setup_pipeline_directory("local_user", pid)
+                crate::workspace::setup_pipeline_directory(&user.id, pid)
                     .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e.to_string()))?
             }
-            None => crate::workspace::setup_run_directory("local_user", &resp.run_id)
+            None => crate::workspace::setup_run_directory(&user.id, &resp.run_id)
                 .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e.to_string()))?,
         };
 
         let run = models::RunRow {
             id: resp.run_id.clone(),
-            user_id: "default".to_string(),
+            user_id: user.id.clone(),
             pipeline_id: pipeline_id.clone(),
             pipeline_snapshot: toml.to_string(),
             status: "queued".to_string(),
@@ -157,13 +255,58 @@ pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateR
             tracing::info!("Saved workflow to {:?}", workflow_path);
         }
 
+        // Reserve the run's resources in the quota tracker; the executor
+        // releases them on the terminal state.
+        crate::infra::quota::global_quota_tracker().record_start(
+            &user.id,
+            quota_usage.0,
+            quota_usage.1,
+        );
+        crate::infra::quota::reserve(&resp.run_id, &user.id, quota_usage.0, quota_usage.1);
+
+        // Remote execution: the local workdir is the staging area; the
+        // remote host runs the CLI and its results are pulled back.
+        if let Some(cid) = cluster_id.as_deref() {
+            let cluster_row: Option<models::ClusterRow> =
+                sqlx::query_as("SELECT * FROM clusters WHERE id = ? AND enabled = 1")
+                    .bind(cid)
+                    .fetch_optional(pool)
+                    .await
+                    .map_err(|e| {
+                        err(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "DB_ERROR",
+                            format!("DB error loading cluster {cid}: {e}"),
+                        )
+                    })?;
+            let cluster_row = cluster_row.ok_or_else(|| {
+                err(
+                    StatusCode::NOT_FOUND,
+                    "CLUSTER_NOT_FOUND",
+                    format!("Cluster {cid} not found or disabled"),
+                )
+            })?;
+            crate::domains::clusters::remote::spawn_remote_run(
+                resp.run_id.clone(),
+                user.id.clone(),
+                cluster_row,
+                run_dir,
+                req.get("max_jobs")
+                    .and_then(|v| v.as_u64())
+                    .map(|j| j as usize),
+            );
+            return Ok(Json(resp));
+        }
+
         crate::executor::spawn_background_run(
             resp.run_id.clone(),
-            "local_user".to_string(),
+            user.id.clone(),
             "none".to_string(),
             "local".to_string(),
             Some(run_dir),
             crate::executor::RunFlags {
+                resume_failed: false,
+                rerun: false,
                 dry_run: req
                     .get("dry_run")
                     .and_then(|v| v.as_bool())
@@ -203,8 +346,25 @@ pub async fn create_run(Json(req): Json<serde_json::Value>) -> ApiResult<CreateR
     Ok(Json(resp))
 }
 
-/// GET /api/runs
-pub async fn list_runs() -> ApiResult<Vec<serde_json::Value>> {
+/// GET /api/runs — cursor-paginated run list (issue #82 P1-3/P1-13).
+///
+/// Query: `limit` (default 100, max 500), `cursor` (created_at of the last
+/// row of the previous page), `status` filter, `q` search (workflow name
+/// or run id prefix). Response envelope: `{items, next_cursor, total}` —
+/// `next_cursor: null` means the last page.
+#[derive(serde::Deserialize)]
+pub struct ListRunsQuery {
+    pub limit: Option<usize>,
+    pub cursor: Option<String>,
+    pub status: Option<String>,
+    pub q: Option<String>,
+}
+
+pub async fn list_runs(
+    authenticated: Option<Extension<CurrentUser>>,
+    Query(params): Query<ListRunsQuery>,
+) -> ApiResult<serde_json::Value> {
+    let user = current_user::resolve(authenticated.as_ref());
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -212,27 +372,97 @@ pub async fn list_runs() -> ApiResult<Vec<serde_json::Value>> {
             "Database not available".into(),
         )
     })?;
+    let limit = params.limit.unwrap_or(100).clamp(1, 500) as i64;
 
-    let rows: Vec<models::RunRow> =
-        sqlx::query_as("SELECT * FROM runs ORDER BY created_at DESC LIMIT 100")
-            .fetch_all(pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("DB error listing runs: {e}");
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DB_ERROR",
-                    "Internal database error".into(),
-                )
-            })?;
+    // Ownership scoping (issue #82 P0-4): non-admins see their own runs
+    // only; admins see the whole fleet. Filters compose on top.
+    let mut where_clauses: Vec<String> = Vec::new();
+    let mut binds: Vec<String> = Vec::new();
+    if !user.is_admin() {
+        where_clauses.push("user_id = ?".to_string());
+        binds.push(user.id.clone());
+    }
+    if let Some(status) = &params.status
+        && matches!(
+            status.as_str(),
+            "queued" | "running" | "paused" | "completed" | "failed" | "cancelled"
+        )
+    {
+        where_clauses.push("status = ?".to_string());
+        binds.push(status.clone());
+    }
+    if let Some(q) = &params.q
+        && !q.trim().is_empty()
+    {
+        where_clauses.push("(workflow_name LIKE ? OR id LIKE ?)".to_string());
+        let pattern = format!("%{}%", q.trim());
+        binds.push(pattern.clone());
+        binds.push(pattern);
+    }
+    if let Some(cursor) = &params.cursor {
+        where_clauses.push("created_at < ?".to_string());
+        binds.push(cursor.clone());
+    }
+    let where_sql = if where_clauses.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", where_clauses.join(" AND "))
+    };
 
-    let list: Vec<serde_json::Value> = rows
-        .into_iter()
+    // Fetch limit+1 to detect a next page without a COUNT(*).
+    let sql = format!(
+        "SELECT * FROM runs{where_sql} ORDER BY created_at DESC LIMIT {}",
+        limit + 1
+    );
+    let mut query = sqlx::query_as::<_, models::RunRow>(&sql);
+    for bind in &binds {
+        query = query.bind(bind);
+    }
+    let rows: Vec<models::RunRow> = query.fetch_all(pool).await.map_err(|e| {
+        tracing::error!("DB error listing runs: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
+
+    let has_more = rows.len() as i64 > limit;
+    let rows = if has_more {
+        &rows[..limit as usize]
+    } else {
+        &rows[..]
+    };
+    let next_cursor = rows.last().map(|r| r.created_at.clone());
+
+    // Total = number of rows matching the filters (no LIMIT). Bounded by
+    // SQLite's rowid; fine for a per-deployment run log.
+    let count_sql = format!("SELECT COUNT(*) FROM runs{where_sql}");
+    let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql);
+    for bind in &binds {
+        count_query = count_query.bind(bind);
+    }
+    let total: i64 = count_query.fetch_one(pool).await.unwrap_or(0);
+
+    let items: Vec<serde_json::Value> = rows
+        .iter()
         .map(|r| {
+            let duration_secs = match (&r.started_at, &r.finished_at) {
+                (Some(s), Some(f)) => {
+                    let start = chrono::DateTime::parse_from_rfc3339(s).ok();
+                    let end = chrono::DateTime::parse_from_rfc3339(f).ok();
+                    match (start, end) {
+                        (Some(a), Some(b)) => Some((b - a).num_seconds().max(0)),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
             serde_json::json!({
                 "id": r.id,
                 "user_id": r.user_id,
                 "pipeline_id": r.pipeline_id,
+                "workflow_name": r.workflow_name,
                 "status": r.status,
                 "phase": r.phase,
                 "pid": r.pid,
@@ -240,15 +470,23 @@ pub async fn list_runs() -> ApiResult<Vec<serde_json::Value>> {
                 "started_at": r.started_at,
                 "finished_at": r.finished_at,
                 "created_at": r.created_at,
+                "duration_secs": duration_secs,
             })
         })
         .collect();
 
-    Ok(Json(list))
+    Ok(Json(serde_json::json!({
+        "items": items,
+        "next_cursor": next_cursor,
+        "total": total,
+    })))
 }
 
 /// GET /api/runs/{id}
-pub async fn get_run(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
+pub async fn get_run(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<serde_json::Value> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -256,44 +494,29 @@ pub async fn get_run(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
             "Database not available".into(),
         )
     })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id}: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    match run {
-        Some(r) => Ok(Json(serde_json::json!({
-            "id": r.id,
-            "user_id": r.user_id,
-            "pipeline_id": r.pipeline_id,
-            "pipeline_snapshot": r.pipeline_snapshot,
-            "status": r.status,
-            "phase": r.phase,
-            "pid": r.pid,
-            "workdir": r.workdir,
-            "started_at": r.started_at,
-            "finished_at": r.finished_at,
-            "created_at": r.created_at,
-        }))),
-        None => Err(err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )),
-    }
+    Ok(Json(serde_json::json!({
+        "id": run.id,
+        "user_id": run.user_id,
+        "pipeline_id": run.pipeline_id,
+        "pipeline_snapshot": run.pipeline_snapshot,
+        "status": run.status,
+        "phase": run.phase,
+        "pid": run.pid,
+        "workdir": run.workdir,
+        "started_at": run.started_at,
+        "finished_at": run.finished_at,
+        "created_at": run.created_at,
+    })))
 }
 
 /// GET /api/runs/{id}/status
-pub async fn get_run_status(Path(id): Path<String>) -> ApiResult<RunStatusResponse> {
+pub async fn get_run_status(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<RunStatusResponse> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -302,26 +525,8 @@ pub async fn get_run_status(Path(id): Path<String>) -> ApiResult<RunStatusRespon
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for status: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
 
     // Node status comes from the engine's checkpoint state (single source of
     // truth), merged with the full rule list so unrun rules show as pending.
@@ -341,17 +546,45 @@ pub async fn get_run_status(Path(id): Path<String>) -> ApiResult<RunStatusRespon
 
     let overall = service::compute_overall_status(&node_items, Some(&run.status));
 
+    // Real telemetry timeline (issue #82 P1-2): the executor's per-run
+    // sampler appends to workdir/metrics.jsonl; an absent file yields an
+    // empty timeline (never fabricated numbers).
+    let workdir = std::path::Path::new(run.workdir.as_deref().unwrap_or(""));
+    let metrics = checkpoint_status::load_metrics(workdir);
+    let last = metrics.last();
+    let resources = ResourceSnapshot {
+        cpu_pct: last.and_then(|m| m["cpu_pct"].as_f64()).unwrap_or(0.0),
+        memory_mb: last.and_then(|m| m["memory_mb"].as_f64()).unwrap_or(0.0) as u64,
+        disk_mb: 0,
+    };
+    let timeline: Vec<TimelineEvent> = metrics
+        .iter()
+        .map(|m| TimelineEvent {
+            timestamp: m["ts"].as_str().unwrap_or("").to_string(),
+            event: "metrics".to_string(),
+            node: None,
+            message: Some(format!(
+                "{:.0} MB RAM · {:.0}% CPU",
+                m["memory_mb"].as_f64().unwrap_or(0.0),
+                m["cpu_pct"].as_f64().unwrap_or(0.0)
+            )),
+        })
+        .collect();
+
     Ok(Json(RunStatusResponse {
         status: overall,
         phase: run.phase,
         nodes: node_items,
-        timeline: vec![],
-        resources: ResourceSnapshot::default(),
+        timeline,
+        resources,
     }))
 }
 
 /// GET /api/runs/{id}/dag-status
-pub async fn get_dag_status(Path(id): Path<String>) -> ApiResult<DagStatusResponse> {
+pub async fn get_dag_status(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<DagStatusResponse> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -360,26 +593,8 @@ pub async fn get_dag_status(Path(id): Path<String>) -> ApiResult<DagStatusRespon
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for DAG status: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
 
     // Parse the pipeline snapshot to build DAG
     let dag = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
@@ -474,8 +689,82 @@ pub async fn get_dag_status(Path(id): Path<String>) -> ApiResult<DagStatusRespon
     }))
 }
 
+/// GET /api/runs/{id}/instances — the sample×rule instance table
+/// (issue #82 P1-1): which concrete sample under which rule failed, ran,
+/// or is still pending. The checkpoint stores EXPANDED instance names
+/// (`qc_S1`); the base rule is recovered by longest-prefix matching
+/// against the DAG, the same attribution `with_all_rules` uses.
+pub async fn get_run_instances(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<Vec<serde_json::Value>> {
+    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
+
+    let workdir = run.workdir.as_deref().unwrap_or("");
+    let items = checkpoint_status::load_node_statuses(
+        std::path::Path::new(workdir),
+        run.status == "running",
+    );
+    let dag = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
+        .ok()
+        .and_then(|wf| oxo_flow_core::dag::WorkflowDag::from_rules(&wf.rules).ok());
+    let rules: Vec<String> = dag
+        .as_ref()
+        .and_then(|d| d.execution_order().ok())
+        .unwrap_or_default();
+
+    let instances: Vec<serde_json::Value> = items
+        .iter()
+        .map(|n| {
+            let base = rules
+                .iter()
+                .filter(|r| n.rule == **r || n.rule.starts_with(&format!("{r}_")))
+                .max_by_key(|r| r.len())
+                .cloned()
+                .unwrap_or_else(|| n.rule.clone());
+            // Instance names embed the sample group:
+            // `qc_auto-discovered_S1` → base `qc`, sample `S1`. The sample
+            // is the LAST underscore-separated segment of the remainder
+            // (group names may contain hyphens but samples are the trailing
+            // identifier; anything before it is the group).
+            let remainder = n.rule.strip_prefix(&format!("{base}_"));
+            let (group, sample) = match remainder {
+                Some(rest) => match rest.rsplit_once('_') {
+                    Some((group_part, sample_part)) => {
+                        (Some(group_part.to_string()), Some(sample_part.to_string()))
+                    }
+                    None => (None, Some(rest.to_string())),
+                },
+                None => (None, None),
+            };
+            serde_json::json!({
+                "instance": n.rule,
+                "rule": base,
+                "sample": sample,
+                "group": group,
+                "status": n.status.to_string(),
+                "duration_ms": n.duration_ms,
+                "exit_code": n.exit_code,
+            })
+        })
+        .collect();
+
+    Ok(Json(instances))
+}
+
 /// GET /api/runs/{id}/diagnostics
-pub async fn get_diagnostics(Path(id): Path<String>) -> ApiResult<DiagnosticsResponse> {
+pub async fn get_diagnostics(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<DiagnosticsResponse> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -484,26 +773,8 @@ pub async fn get_diagnostics(Path(id): Path<String>) -> ApiResult<DiagnosticsRes
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for diagnostics: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
 
     let node_items = checkpoint_status::load_node_statuses(
         std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
@@ -526,7 +797,10 @@ pub async fn get_diagnostics(Path(id): Path<String>) -> ApiResult<DiagnosticsRes
 }
 
 /// GET /api/runs/{id}/logs
-pub async fn get_run_logs(Path(id): Path<String>) -> ApiResult<String> {
+pub async fn get_run_logs(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<String> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -535,26 +809,8 @@ pub async fn get_run_logs(Path(id): Path<String>) -> ApiResult<String> {
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for logs: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
 
     let log_content = run
         .workdir
@@ -566,7 +822,10 @@ pub async fn get_run_logs(Path(id): Path<String>) -> ApiResult<String> {
 }
 
 /// GET /api/runs/{id}/results
-pub async fn get_run_results(Path(id): Path<String>) -> ApiResult<Vec<serde_json::Value>> {
+pub async fn get_run_results(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<Vec<serde_json::Value>> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -575,26 +834,8 @@ pub async fn get_run_results(Path(id): Path<String>) -> ApiResult<Vec<serde_json
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for results: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
 
     // List files in the workdir recursively so nested products (e.g.
     // results/sample1/peaks.bed) are visible (issue #79 P1-08).
@@ -621,6 +862,7 @@ pub async fn get_run_results(Path(id): Path<String>) -> ApiResult<Vec<serde_json
 
 /// POST /api/runs/{id}/retry
 pub async fn retry_run(
+    authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<RetryResponse> {
@@ -632,26 +874,8 @@ pub async fn retry_run(
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for retry: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
 
     let from_rule = req.get("from_rule").and_then(|v| v.as_str());
     let skip_succeeded = req
@@ -675,13 +899,83 @@ pub async fn retry_run(
             )
         })?;
 
-    service::compute_retry_plan(&node_items, &dag, from_rule, skip_succeeded)
-        .map(Json)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "RETRY_ERROR", e))
+    let plan = service::compute_retry_plan(&node_items, &dag, from_rule, skip_succeeded)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "RETRY_ERROR", e))?;
+
+    // The retry is a REAL run (issue #82 P0-3 — previously the plan was
+    // returned with a new_run_id that never existed). Re-executing in the
+    // SAME workdir lets the CLI's checkpoint do the work: failed rules have
+    // no success record and re-run, and the engine's cascade invalidation
+    // marks their downstream dependents dirty too — exactly the computed
+    // plan, verified against the same single source of truth.
+    let new_run_id = plan.new_run_id.clone();
+    let now = now_iso();
+    let new_run = models::RunRow {
+        id: new_run_id.clone(),
+        user_id: user.id.clone(),
+        pipeline_id: run.pipeline_id.clone(),
+        pipeline_snapshot: run.pipeline_snapshot.clone(),
+        workflow_name: run.workflow_name.clone(),
+        status: "queued".to_string(),
+        phase: "parsing".to_string(),
+        pid: None,
+        workdir: run.workdir.clone(),
+        started_at: None,
+        finished_at: None,
+        created_at: now.clone(),
+    };
+    sqlx::query(
+        "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, pid, workdir, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&new_run.id)
+    .bind(&new_run.user_id)
+    .bind(&new_run.pipeline_id)
+    .bind(&new_run.pipeline_snapshot)
+    .bind(&new_run.workflow_name)
+    .bind(&new_run.status)
+    .bind(&new_run.phase)
+    .bind(new_run.pid)
+    .bind(&new_run.workdir)
+    .bind(&new_run.started_at)
+    .bind(&new_run.finished_at)
+    .bind(&new_run.created_at)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("DB error inserting retry run {new_run_id}: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".into(),
+        )
+    })?;
+
+    // Same workdir → checkpoint-driven partial re-execution.
+    crate::executor::spawn_background_run(
+        new_run_id.clone(),
+        user.id.clone(),
+        "none".to_string(),
+        "local".to_string(),
+        run.workdir.clone().map(std::path::PathBuf::from),
+        crate::executor::RunFlags {
+            dry_run: false,
+            keep_going: false,
+            max_jobs: None,
+            samples: vec![],
+            targets: vec![],
+            resume_failed: true,
+            rerun: true,
+        },
+    );
+
+    Ok(Json(plan))
 }
 
 /// POST /api/runs/{id}/cancel
-pub async fn cancel_run(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
+pub async fn cancel_run(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<serde_json::Value> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -690,26 +984,8 @@ pub async fn cancel_run(Path(id): Path<String>) -> ApiResult<serde_json::Value> 
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for cancellation: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
 
     // Terminal states are final — cancelling a finished run would silently
     // rewrite its result.
@@ -765,15 +1041,30 @@ pub async fn cancel_run(Path(id): Path<String>) -> ApiResult<serde_json::Value> 
             tracing::warn!("SIGKILL failed for run {id} pgid {pgid}: {e}");
         }
         crate::process_control::unregister(&id);
+    } else if let Some(cluster_id) = crate::domains::clusters::remote::remote_cluster_of(&id) {
+        // Remote run: signal the remote wrapper script.
+        let cluster_row: Option<models::ClusterRow> =
+            sqlx::query_as("SELECT * FROM clusters WHERE id = ?")
+                .bind(&cluster_id)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
+        if let Some(cluster_row) = cluster_row
+            && let Err(e) = crate::domains::clusters::remote::cancel_remote(&cluster_row, &id).await
+        {
+            tracing::warn!("remote cancel failed for run {id}: {e}");
+        }
+        crate::domains::clusters::remote::unregister_remote(&id);
     } else {
         tracing::warn!(
             "cancel for run {id}: no live process group registered (already finished or server restarted)"
         );
     }
 
-    crate::broadcast_event(
+    crate::broadcast_event_for(
         "run_cancelled",
         &serde_json::json!({"run_id": id, "cancelled_at": now}),
+        Some(&run.user_id),
     );
 
     Ok(Json(serde_json::json!({
@@ -785,6 +1076,7 @@ pub async fn cancel_run(Path(id): Path<String>) -> ApiResult<serde_json::Value> 
 
 /// POST /api/runs/{id}/pause
 pub async fn pause_run(
+    authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<serde_json::Value> {
@@ -796,26 +1088,8 @@ pub async fn pause_run(
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for pause: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let _run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let _run = load_owned_run(pool, &user, &id).await?;
     let reason = req
         .get("reason")
         .and_then(|v| v.as_str())
@@ -847,9 +1121,10 @@ pub async fn pause_run(
             )
         })?;
 
-    crate::broadcast_event(
+    crate::broadcast_event_for(
         "run_paused",
         &serde_json::json!({"run_id": id, "reason": reason}),
+        Some(&_run.user_id),
     );
 
     Ok(Json(serde_json::json!({
@@ -862,6 +1137,7 @@ pub async fn pause_run(
 
 /// POST /api/runs/{id}/resume
 pub async fn resume_run(
+    authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<serde_json::Value> {
@@ -873,26 +1149,8 @@ pub async fn resume_run(
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for resume: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let _run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let _run = load_owned_run(pool, &user, &id).await?;
     let from_rule = req.get("from_rule").and_then(|v| v.as_str());
 
     // Unfreeze the live process group.
@@ -920,9 +1178,10 @@ pub async fn resume_run(
             )
         })?;
 
-    crate::broadcast_event(
+    crate::broadcast_event_for(
         "run_resumed",
         &serde_json::json!({"run_id": id, "from_rule": from_rule}),
+        Some(&_run.user_id),
     );
 
     Ok(Json(serde_json::json!({
@@ -936,7 +1195,10 @@ pub async fn resume_run(
 /// (checkpoint_preview + execution_order), persisted by the executor when
 /// a dry-run completes (issue #79 P2: the web preview previously showed
 /// unexpanded rules and dropped samples/targets).
-pub async fn get_run_preview(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
+pub async fn get_run_preview(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<serde_json::Value> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -944,25 +1206,8 @@ pub async fn get_run_preview(Path(id): Path<String>) -> ApiResult<serde_json::Va
             "Database not available".into(),
         )
     })?;
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for preview: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
     let workdir = run.workdir.as_deref().unwrap_or("");
     let content =
         std::fs::read_to_string(std::path::Path::new(workdir).join("dry-run-preview.json"))
@@ -984,7 +1229,10 @@ pub async fn get_run_preview(Path(id): Path<String>) -> ApiResult<serde_json::Va
 }
 
 /// GET /api/runs/{id}/ai-status
-pub async fn get_ai_status(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
+pub async fn get_ai_status(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<serde_json::Value> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -993,26 +1241,8 @@ pub async fn get_ai_status(Path(id): Path<String>) -> ApiResult<serde_json::Valu
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for AI status: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let _run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let _run = load_owned_run(pool, &user, &id).await?;
 
     let exec_nodes: Vec<NodeExecutionStatus> = checkpoint_status::load_node_statuses(
         std::path::Path::new(_run.workdir.as_deref().unwrap_or("")),
@@ -1028,10 +1258,29 @@ pub async fn get_ai_status(Path(id): Path<String>) -> ApiResult<serde_json::Valu
     })
     .collect();
 
-    let resources = ResourceUsage::default();
+    // Real telemetry (issue #82 P1-2): memory/CPU of the run's process
+    // tree, sampled by the executor; the trend timeline travels in the
+    // response alongside the derived analysis.
+    let workdir = std::path::Path::new(_run.workdir.as_deref().unwrap_or(""));
+    let metrics = checkpoint_status::load_metrics(workdir);
+    let last = metrics.last();
+    let host = crate::sys::get_host_resources();
+    let resources = ResourceUsage {
+        cpu_pct: last.and_then(|m| m["cpu_pct"].as_f64()).unwrap_or(0.0),
+        memory_mb: last.and_then(|m| m["memory_mb"].as_f64()).unwrap_or(0.0),
+        memory_pct: last
+            .and_then(|m| m["memory_mb"].as_f64())
+            .map(|mb| mb * 100.0 / host.total_memory_mb as f64)
+            .unwrap_or(0.0),
+        memory_total_mb: host.total_memory_mb as f64,
+        disk_pct: 0.0,
+        disk_mb: 0.0,
+    };
     let status = monitor_agent::analyze_run_status(&exec_nodes, &resources);
+    let mut payload = serde_json::json!(status);
+    payload["timeline"] = serde_json::json!(metrics);
 
-    Ok(Json(serde_json::json!(status)))
+    Ok(Json(payload))
 }
 
 /// GET /api/runs/{id}/report
@@ -1072,7 +1321,10 @@ fn build_report_for_run(run: &models::RunRow) -> crate::domains::ai::agents::typ
     report_agent::generate_report(&pipeline_name, &files, &log_summary, &[])
 }
 
-pub async fn get_run_report(Path(id): Path<String>) -> ApiResult<serde_json::Value> {
+pub async fn get_run_report(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<serde_json::Value> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1081,26 +1333,8 @@ pub async fn get_run_report(Path(id): Path<String>) -> ApiResult<serde_json::Val
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for report: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
 
     let report = build_report_for_run(&run);
 
@@ -1109,6 +1343,7 @@ pub async fn get_run_report(Path(id): Path<String>) -> ApiResult<serde_json::Val
 
 /// POST /api/runs/{id}/report/ask
 pub async fn ask_report_question(
+    authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<String> {
@@ -1124,25 +1359,8 @@ pub async fn ask_report_question(
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for report question: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
 
     // Answer from the same deterministic report the report page shows.
     let report = build_report_for_run(&run);
@@ -1152,6 +1370,7 @@ pub async fn ask_report_question(
 
 /// POST /api/runs/{id}/report/visualize
 pub async fn visualize_report(
+    authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<serde_json::Value> {
@@ -1167,25 +1386,8 @@ pub async fn visualize_report(
         )
     })?;
 
-    let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching run {id} for report visualization: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DB_ERROR",
-                "Internal database error".into(),
-            )
-        })?;
-    let run = run.ok_or_else(|| {
-        err(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            format!("Run {id} not found"),
-        )
-    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
 
     // Real data sources: the run's file tree, or per-rule timings from the
     // engine's checkpoint. No canned rows.
@@ -1235,4 +1437,162 @@ pub async fn visualize_report(
     });
 
     Ok(Json(plot_json))
+}
+
+// ---------------------------------------------------------------------------
+// CLI command exposure (issue #81): clean and checkpoint-resume were CLI
+// high-frequency commands with no web equivalent.
+// ---------------------------------------------------------------------------
+
+/// POST /api/runs/{id}/clean — run the CLI's `clean` against the run's
+/// workdir (chunk files + stale state). Quick, synchronous, output echoed.
+pub async fn clean_run(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<serde_json::Value> {
+    let user = current_user::resolve(authenticated.as_ref());
+    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+    let run = load_owned_run(pool, &user, &id).await?;
+    let workdir = run.workdir.ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NO_WORKDIR",
+            "Run has no workdir".into(),
+        )
+    })?;
+
+    let bin = crate::executor::find_oxo_flow_binary();
+    let workflow = std::path::Path::new(&workdir).join("workflow.oxoflow");
+    let output = tokio::process::Command::new(bin)
+        .arg("clean")
+        .arg(&workflow)
+        .arg("--workdir")
+        .arg(&workdir)
+        .arg("--force")
+        .output()
+        .await
+        .map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "CLEAN_ERROR",
+                format!("Failed to run clean: {e}"),
+            )
+        })?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    Ok(Json(serde_json::json!({
+        "run_id": id,
+        "exit_code": output.status.code(),
+        "stdout": stdout.lines().last().unwrap_or(""),
+        "stderr": stderr.lines().last().unwrap_or(""),
+    })))
+}
+
+/// POST /api/runs/{id}/resume-checkpoint — resume an unfinished run from
+/// its checkpoint via the CLI's `resume` command, recorded as a NEW run
+/// (the same pattern as retry).
+pub async fn resume_checkpoint(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<serde_json::Value> {
+    let user = current_user::resolve(authenticated.as_ref());
+    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+    let run = load_owned_run(pool, &user, &id).await?;
+    let workdir = run.workdir.clone().ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NO_WORKDIR",
+            "Run has no workdir".into(),
+        )
+    })?;
+
+    let checkpoint = std::path::Path::new(&workdir)
+        .join(".oxo-flow")
+        .join("checkpoint.json");
+    if !checkpoint.exists() {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "NO_CHECKPOINT",
+            format!("No checkpoint at {}", checkpoint.display()),
+        ));
+    }
+    let jobs = req.get("max_jobs").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+
+    // New run row; same workdir so the resume continues in place.
+    let new_run_id = uuid::Uuid::new_v4().to_string();
+    let now = now_iso();
+    let new_run = models::RunRow {
+        id: new_run_id.clone(),
+        user_id: user.id.clone(),
+        pipeline_id: run.pipeline_id.clone(),
+        pipeline_snapshot: run.pipeline_snapshot.clone(),
+        workflow_name: run.workflow_name.clone(),
+        status: "queued".to_string(),
+        phase: "resuming".to_string(),
+        pid: None,
+        workdir: Some(workdir.clone()),
+        started_at: None,
+        finished_at: None,
+        created_at: now.clone(),
+    };
+    sqlx::query(
+        "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, pid, workdir, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&new_run.id)
+    .bind(&new_run.user_id)
+    .bind(&new_run.pipeline_id)
+    .bind(&new_run.pipeline_snapshot)
+    .bind(&new_run.workflow_name)
+    .bind(&new_run.status)
+    .bind(&new_run.phase)
+    .bind(new_run.pid)
+    .bind(&new_run.workdir)
+    .bind(&new_run.started_at)
+    .bind(&new_run.finished_at)
+    .bind(&new_run.created_at)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            format!("DB error inserting resume run: {e}"),
+        )
+    })?;
+
+    let args: Vec<std::ffi::OsString> = vec![
+        "resume".into(),
+        checkpoint.into_os_string(),
+        "--workdir".into(),
+        workdir.clone().into(),
+        "-j".into(),
+        jobs.to_string().into(),
+    ];
+    crate::executor::spawn_background_run_with_args(
+        new_run_id.clone(),
+        user.id.clone(),
+        "none".to_string(),
+        "local".to_string(),
+        Some(std::path::PathBuf::from(workdir)),
+        args,
+    );
+
+    Ok(Json(serde_json::json!({
+        "run_id": new_run_id,
+        "resumed_from": id,
+        "max_jobs": jobs,
+    })))
 }

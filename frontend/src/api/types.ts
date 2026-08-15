@@ -38,10 +38,10 @@ export interface Pipeline {
   id: string; user_id: string; name: string; version: string; toml_content: string;
   rules_count: number; forked_from?: string | null; visibility: string; created_at: string; updated_at: string;
 }
-export interface ValidateResponse { valid: boolean; errors: Array<{ code: string; message: string; rule: string | null; suggestion: string | null }>; }
+export interface ValidateResponse { valid: boolean; errors: Array<{ code: string; message: string; rule: string | null; suggestion: string | null; line?: number | null }>; }
 export interface ParseResponse {
   pipeline_id: string; name: string; version: string;
-  rules: Array<{ name: string; inputs: string[]; outputs: string[]; environment: string; threads: number }>;
+  rules: Array<{ name: string; shell: string | null; inputs: string[]; outputs: string[]; environment: string | null; threads: number | null }>;
   dag: DagJson; stats: Record<string, unknown>;
 }
 export interface DagJsonNode {
@@ -91,7 +91,45 @@ export interface KnowledgeSkillsResponse {
 }
 
 // ── Runs ──
-export interface RunItem { id: string; user_id: string; pipeline_id: string; status: string; phase: string; pid: number | null; workdir: string | null; started_at: string | null; finished_at: string | null; created_at: string; }
+/** Cursor-paginated run list envelope (issue #82 P1-3/P1-13). */
+export interface RunList {
+  items: RunItem[];
+  next_cursor: string | null;
+  total: number;
+}
+
+export interface RunItem {
+  id: string; user_id: string; pipeline_id: string | null;
+  /** Workflow name the run executed (backend enriches the list — issue #82 P1-3). */
+  workflow_name?: string | null;
+  /** The TOML the run executed (get_run only — powers Manual Edit). */
+  pipeline_snapshot?: string;
+  status: string; phase: string; pid: number | null; workdir: string | null;
+  started_at: string | null; finished_at: string | null; created_at: string;
+}
+/** One expanded sample×rule instance from a run's checkpoint
+ *  (issue #82 P1-1): `qc_auto-discovered_S1` → rule `qc`, sample `S1`. */
+export interface RunInstance {
+  instance: string;
+  rule: string;
+  sample?: string;
+  group?: string;
+  status: string;
+  duration_ms?: number;
+  exit_code?: number;
+}
+
+/** Public payload of a share link's landing page (issue #82 P0-6). */
+export interface ShareLanding {
+  pipeline: { name: string; version: string; rules_count: number; visibility: string };
+  dag: string[];
+  toml_content: string;
+  owner?: string | null;
+  created_at: string;
+  expires_at?: string | null;
+  recent_run?: { status: string; finished_at?: string } | null;
+}
+
 export interface RunStatus {
   status: string; phase: string;
   nodes: Array<{ rule: string; status: string; started_at: string | null; duration_ms: number | null; exit_code: number | null }>;

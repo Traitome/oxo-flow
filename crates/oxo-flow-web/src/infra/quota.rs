@@ -158,6 +158,35 @@ static QUOTA_TRACKER: std::sync::LazyLock<QuotaTracker> =
     std::sync::LazyLock::new(|| QuotaTracker::new(QuotaConfig::default()));
 
 /// Get a reference to the global quota tracker.
+/// A reservation: (user_id, threads, memory_mb).
+type Reservation = (String, u32, u64);
+
+/// Per-run resource reservations: create_run records what a run reserved;
+/// the executor releases it when the run reaches a terminal state so the
+/// tracker's counters stay truthful (issue #82 P1-9).
+static RUN_RESERVATIONS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, Reservation>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Remember the resources a new run reserved for its user.
+pub fn reserve(run_id: &str, user_id: &str, threads: u32, memory_mb: u64) {
+    if let Ok(mut map) = RUN_RESERVATIONS.lock() {
+        map.insert(
+            run_id.to_string(),
+            (user_id.to_string(), threads, memory_mb),
+        );
+    }
+}
+
+/// Release a run's reservation and return it (user, threads, memory) for
+/// the tracker's record_complete call.
+pub fn release(run_id: &str) -> Option<Reservation> {
+    RUN_RESERVATIONS
+        .lock()
+        .ok()
+        .and_then(|mut map| map.remove(run_id))
+}
+
 pub fn global_quota_tracker() -> &'static QuotaTracker {
     &QUOTA_TRACKER
 }

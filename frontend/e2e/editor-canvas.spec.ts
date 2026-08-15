@@ -5,6 +5,11 @@ import { test, expect } from '@playwright/test';
 // and see the TOML stay in sync with the engine's canonical formatting.
 
 test.describe('Graphical workflow editor (canvas)', () => {
+  test.beforeEach(async ({ page }) => {
+    // The editor defaults to Guided mode for new users (issue #82 P1-5);
+    // these specs exercise the canvas view.
+    await page.addInitScript(() => localStorage.setItem('oxo_editor_mode', 'canvas'));
+  });
   test('canvas renders nodes and edges for the default workflow', async ({ page }) => {
     await page.goto('/editor');
     const node = page.locator('.rf-rule-node', { hasText: 'fastqc' });

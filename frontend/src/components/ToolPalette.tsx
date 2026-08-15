@@ -77,6 +77,14 @@ export default function ToolPalette({ onAddTool }: ToolPaletteProps) {
         {effectiveQuery !== '' &&
           !loading &&
           !error &&
+          tools.length === 0 && (
+            <div className="tool-palette-hint">
+              No tools match “{effectiveQuery}”. Try a tool name like fastp, bwa, or star.
+            </div>
+          )}
+        {effectiveQuery !== '' &&
+          !loading &&
+          !error &&
           tools.map((tool) => (
             <div className="tool-palette-item" key={tool.name}>
               <div className="tool-palette-item-main">

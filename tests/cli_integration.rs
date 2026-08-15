@@ -733,6 +733,292 @@ fn cli_report_json() {
     assert!(serde_json::from_str::<serde_json::Value>(&content).is_ok());
 }
 
+// ─── report: issue #83 (honesty, determinism, execution truth, XSS) ─────────
+
+/// Write a minimal workflow into a tempdir and return its path.
+fn write_workflow(dir: &std::path::Path, body: &str) -> PathBuf {
+    let path = dir.join("wf.oxoflow");
+    fs::write(
+        &path,
+        format!("[workflow]\nname = \"test\"\nversion = \"0.1\"\n{body}"),
+    )
+    .unwrap();
+    path
+}
+
+#[test]
+fn cli_report_list_sections() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n",
+    );
+
+    oxo_flow_cmd()
+        .args(["report", wf.to_str().unwrap(), "--list-sections"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("universal"))
+        .stdout(predicate::str::contains("failure-diagnosis"))
+        .stdout(predicate::str::contains("task-summary"));
+}
+
+#[test]
+fn cli_report_ci_is_deterministic_and_pinned() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n",
+    );
+    let out1 = dir.path().join("r1.json");
+    let out2 = dir.path().join("r2.json");
+
+    // --ci pins the timestamp to SOURCE_DATE_EPOCH → byte-identical output
+    // across runs (issue #83 P1-4).
+    oxo_flow_cmd()
+        .args(["report", wf.to_str().unwrap(), "-f", "json", "--ci", "-o"])
+        .arg(out1.to_str().unwrap())
+        .env("SOURCE_DATE_EPOCH", "1600000000")
+        .assert()
+        .success();
+    oxo_flow_cmd()
+        .args(["report", wf.to_str().unwrap(), "-f", "json", "--ci", "-o"])
+        .arg(out2.to_str().unwrap())
+        .env("SOURCE_DATE_EPOCH", "1600000000")
+        .assert()
+        .success();
+
+    let a = fs::read_to_string(&out1).unwrap();
+    let b = fs::read_to_string(&out2).unwrap();
+    assert_eq!(a, b);
+    assert!(
+        a.contains("\"schema_version\": 1"),
+        "schema_version missing"
+    );
+    assert!(a.contains("\"command\": \"report\""), "command tag missing");
+    assert!(
+        a.contains("2020-09-13T12:26:40Z"),
+        "SOURCE_DATE_EPOCH not honored"
+    );
+}
+
+#[test]
+fn cli_report_strict_missing_checkpoint_exits_2() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n",
+    );
+
+    // Exit code 2 = data source unavailable (issue #83 P1-17).
+    oxo_flow_cmd()
+        .args(["report", wf.to_str().unwrap(), "--strict"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn cli_report_stdout_dash_and_extension_inference() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n",
+    );
+
+    // "-o -" targets stdout (issue #83 P2-2).
+    let stdout = oxo_flow_cmd()
+        .args(["report", wf.to_str().unwrap(), "-f", "json", "-o", "-"])
+        .output()
+        .unwrap();
+    assert!(stdout.status.success());
+    let parsed: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&stdout.stdout))
+        .expect("stdout must be pure JSON");
+
+    assert_eq!(parsed["command"], "report");
+
+    // Extension inference: -o report.json without -f (issue #83 P2-2).
+    let out = dir.path().join("report.json");
+    oxo_flow_cmd()
+        .args(["report", wf.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .assert()
+        .success();
+    let content = fs::read_to_string(&out).unwrap();
+    assert!(serde_json::from_str::<serde_json::Value>(&content).is_ok());
+}
+
+#[test]
+fn cli_report_md_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n",
+    );
+    let out = dir.path().join("report.md");
+
+    oxo_flow_cmd()
+        .args([
+            "report",
+            wf.to_str().unwrap(),
+            "-f",
+            "md",
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(&out).unwrap();
+    assert!(content.contains("## "), "markdown headings expected");
+    assert!(content.contains("| Task |"), "GFM tables expected");
+}
+
+#[test]
+fn cli_report_xss_escaped() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wf.oxoflow");
+    fs::write(
+        &path,
+        "[workflow]\nname = \"evil<script>alert(1)</script>\"\nversion = \"0.1\"\n\n\
+         [[rules]]\nname = \"x<script>alert(2)</script>\"\nshell = \"echo hi\"\n",
+    )
+    .unwrap();
+    let out = dir.path().join("report.html");
+
+    oxo_flow_cmd()
+        .args([
+            "report",
+            path.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(&out).unwrap();
+    assert!(
+        content.contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
+        "workflow name must be escaped"
+    );
+    assert!(
+        content.contains("&lt;script&gt;alert(2)&lt;/script&gt;"),
+        "rule name must be escaped"
+    );
+    assert!(
+        !content.contains("<script>alert"),
+        "raw script tag must not survive"
+    );
+}
+
+#[test]
+fn cli_report_ai_without_provider_degrades() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n",
+    );
+
+    // No provider configured: warn and produce the standard report instead
+    // of aborting (issue #83 P1-2). HOME is redirected so a user-level
+    // ai_config.json cannot leak into the test.
+    let output = oxo_flow_cmd()
+        .args(["report", wf.to_str().unwrap(), "--ai", "-f", "json"])
+        .env("HOME", dir.path())
+        .env_remove("OXO_FLOW_AI_PROVIDER")
+        .env_remove("DEEPSEEK_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "must degrade, not fail");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&stdout).is_ok(),
+        "stdout must stay pure JSON"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("no AI provider"), "must warn on stderr");
+}
+
+#[test]
+fn cli_report_sections_filter_excludes_task_summary() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wf.oxoflow");
+    fs::write(
+        &path,
+        "[workflow]\nname = \"test\"\nversion = \"0.1\"\n\n\
+         [report]\nsections = [\"universal\", \"environment\"]\n\n\
+         [[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n",
+    )
+    .unwrap();
+    let out = dir.path().join("report.html");
+
+    oxo_flow_cmd()
+        .args([
+            "report",
+            path.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(&out).unwrap();
+    assert!(content.contains("Dashboard"));
+    assert!(
+        !content.contains("Task Summary"),
+        "task-summary must respect the section filter (issue #83 P2-1)"
+    );
+}
+
+#[test]
+fn cli_report_run_then_report_shows_execution_truth() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wf.oxoflow");
+    fs::write(
+        &path,
+        "[workflow]\nname = \"tiny\"\nversion = \"0.1\"\n\n\
+         [[rules]]\nname = \"hello\"\nshell = \"echo done > hello.txt\"\noutput = [\"hello.txt\"]\n",
+    )
+    .unwrap();
+
+    // Execute for real, then report from the resulting checkpoint.
+    oxo_flow_cmd()
+        .args(["run", path.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let out = dir.path().join("report.json");
+    oxo_flow_cmd()
+        .args(["report", path.to_str().unwrap(), "-f", "json", "-o"])
+        .arg(out.to_str().unwrap())
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(&out).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    assert_eq!(parsed["schema_version"], 1);
+    assert_eq!(parsed["command"], "report");
+    assert!(
+        parsed["checkpoint_path"]
+            .as_str()
+            .unwrap()
+            .contains("checkpoint.json"),
+        "report JSON must carry checkpoint provenance"
+    );
+    // Execution truth (issue #83 P0-6): the executed command, the output
+    // checksum, and success status come from the checkpoint — not config
+    // echo.
+    assert!(
+        content.contains("echo done > hello.txt"),
+        "expanded command missing"
+    );
+    assert!(content.contains("sha256:"), "output checksum missing");
+    assert!(content.contains("\"success\""), "execution status missing");
+    assert!(
+        !content.contains("declared template"),
+        "executed rule must not show the fallback label"
+    );
+}
+
 // ─── env subcommand ─────────────────────────────────────────────────────────
 
 #[test]

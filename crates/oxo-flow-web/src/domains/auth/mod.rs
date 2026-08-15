@@ -4,6 +4,7 @@
 //! session token management, and role-based access control (admin, user, viewer).
 //! Invite-code authentication is available for air-gapped deployments.
 
+pub mod current_user;
 pub mod handlers;
 pub mod oauth;
 pub mod service;

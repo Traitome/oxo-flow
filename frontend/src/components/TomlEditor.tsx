@@ -1,14 +1,18 @@
 import { useRef, useEffect } from 'react';
 import { EditorView, basicSetup } from 'codemirror';
 import { EditorState } from '@codemirror/state';
+import { StreamLanguage } from '@codemirror/language';
+import { toml } from '@codemirror/legacy-modes/mode/toml';
 
 interface TomlEditorProps {
   value: string;
   onChange?: (value: string) => void;
   readOnly?: boolean;
+  /** 1-based line to scroll to and select (validation errors, P2-8). */
+  highlightLine?: number | null;
 }
 
-export default function TomlEditor({ value, onChange, readOnly }: TomlEditorProps) {
+export default function TomlEditor({ value, onChange, readOnly, highlightLine }: TomlEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
 
@@ -25,6 +29,9 @@ export default function TomlEditor({ value, onChange, readOnly }: TomlEditorProp
       doc: value,
       extensions: [
         basicSetup,
+        // TOML syntax highlighting (issue #82 P2-2): previously the core
+        // editor rendered as one flat color.
+        StreamLanguage.define(toml),
         updateListener,
         EditorView.theme({
           '&': { height: '100%', fontSize: '13px', fontFamily: '"Cascadia Code", "SF Mono", "Fira Code", monospace' },
@@ -47,6 +54,19 @@ export default function TomlEditor({ value, onChange, readOnly }: TomlEditorProp
       viewRef.current = null;
     };
   }, []);
+
+  // Jump to the failing line when a validation error is clicked (issue
+  // #82 P2-8: errors previously carried no way to locate the problem).
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || highlightLine == null) return;
+    const line = view.state.doc.line(Math.min(highlightLine, view.state.doc.lines));
+    view.dispatch({
+      selection: { anchor: line.from },
+      effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
+    });
+    view.focus();
+  }, [highlightLine]);
 
   // Update content when value changes externally
   useEffect(() => {

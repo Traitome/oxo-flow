@@ -213,6 +213,18 @@ pub fn build_router(mode: &str) -> Router {
         .route(
             "/api/pipelines/{id}",
             delete(workflow::handlers::delete_pipeline),
+        )
+        .route(
+            "/api/pipelines/{id}/revisions",
+            get(workflow::handlers::list_revisions),
+        )
+        .route(
+            "/api/pipelines/{id}/revisions/{rev}",
+            get(workflow::handlers::get_revision),
+        )
+        .route(
+            "/api/pipelines/{id}/rollback",
+            post(workflow::handlers::rollback_pipeline),
         );
 
     // ---- Run routes ----
@@ -231,6 +243,15 @@ pub fn build_router(mode: &str) -> Router {
         .route(
             "/api/runs/{id}/diagnostics",
             get(execution::handlers::get_diagnostics),
+        )
+        .route(
+            "/api/runs/{id}/instances",
+            get(execution::handlers::get_run_instances),
+        )
+        .route("/api/runs/{id}/clean", post(execution::handlers::clean_run))
+        .route(
+            "/api/runs/{id}/resume-checkpoint",
+            post(execution::handlers::resume_checkpoint),
         )
         .route(
             "/api/runs/{id}/logs",
@@ -269,7 +290,13 @@ pub fn build_router(mode: &str) -> Router {
         .route(
             "/api/runs/{id}/report/visualize",
             post(execution::handlers::visualize_report),
-        );
+        )
+        .route("/api/runs/{id}/files", get(execution::files::get_run_file));
+
+    // ---- File service routes (issue #82 P0-1/P0-2) ----
+    let file_routes = Router::new()
+        .route("/api/files", post(execution::files::upload_files))
+        .route("/api/files", get(execution::files::list_uploaded_files));
 
     // ---- Data routes ----
     let data_routes = Router::new()
@@ -315,6 +342,12 @@ pub fn build_router(mode: &str) -> Router {
         .route(
             "/api/auth/oauth/callback",
             post(auth::handlers::oauth_callback),
+        )
+        .route("/api/auth/keys", get(auth::handlers::list_api_keys))
+        .route("/api/auth/keys", post(auth::handlers::create_api_key))
+        .route(
+            "/api/auth/keys/{id}",
+            delete(auth::handlers::revoke_api_key),
         );
 
     // ---- License routes ----
@@ -398,6 +431,10 @@ pub fn build_router(mode: &str) -> Router {
         .route(
             "/api/pipelines/import",
             post(collaboration::handlers::import_pipeline),
+        )
+        .route(
+            "/api/share/{token}",
+            get(collaboration::handlers::get_share_landing),
         );
 
     // ---- Observability routes ----
@@ -420,7 +457,15 @@ pub fn build_router(mode: &str) -> Router {
         )
         .route("/api/events", get(crate::sse::sse_events))
         .route("/api/audit", get(observability::handlers::get_audit_logs))
-        .route("/api/quota", get(observability::handlers::quota_status));
+        .route("/api/quota", get(observability::handlers::quota_status))
+        .route(
+            "/api/webhook",
+            get(observability::handlers::get_webhook_config),
+        )
+        .route(
+            "/api/webhook",
+            put(observability::handlers::put_webhook_config),
+        );
 
     // ---- HPC routes ----
     let hpc_routes = Router::new().route("/api/hpc", get(observability::handlers::hpc_status));
@@ -441,6 +486,7 @@ pub fn build_router(mode: &str) -> Router {
         .merge(auth_routes)
         .merge(license_routes)
         .merge(chat_routes)
+        .merge(file_routes)
         .merge(cluster_routes)
         .merge(dag_edit_routes)
         .merge(ai_routes)
@@ -559,6 +605,19 @@ pub fn set_base_path(path: &str) {
     let _ = BASE_PATH.set(path.to_string());
 }
 
+/// Port the server actually bound (issue #82 P0-6): share URLs must point
+/// at the real listener, not a hardcoded default.
+static BOUND_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+
+pub fn set_bound_port(port: u16) {
+    let _ = BOUND_PORT.set(port);
+}
+
+/// The bound port, if the server has started binding yet.
+pub fn bound_port() -> Option<u16> {
+    BOUND_PORT.get().copied()
+}
+
 /// Add standard security headers to every response.
 async fn security_headers(
     request: axum::extract::Request,
@@ -608,25 +667,53 @@ async fn require_auth(
 ) -> axum::response::Response {
     let path = request.uri().path();
 
-    // Allow public endpoints without auth
-    if path == "/api/auth/login"
+    // Allow public endpoints without auth. The list is deliberately narrow
+    // (issue #82 P0-5): system/metrics/hpc metrics and AI-config writes are
+    // NOT public in team/hpc modes — anonymous callers must not see cluster
+    // internals or reconfigure the shared AI provider.
+    let method = request.method().clone();
+    let is_public = path == "/api/auth/login"
         || path == "/api/auth/me"
         || path.starts_with("/api/auth/oauth")
         || path == "/api/health"
         || path == "/api/openapi.json"
         || path == "/api/license"
-        || path == "/api/system"
-        || path == "/api/metrics"
-        || path == "/api/ai/config"
-        || path == "/api/ai/test"
-        || path == "/api/hpc"
+        // EventSource cannot set an Authorization header; sse_events
+        // validates ?token= against the sessions table itself.
         || path == "/api/events"
+        // Share landing pages are the product of a share link — the share
+        // token IS the authorization (issue #82 P0-6).
+        || path.starts_with("/api/share/")
+        // AI config GET is public (feature discoverability); writes are
+        // gated (admin-only) inside the handler.
+        || (path == "/api/ai/config" && method == axum::http::Method::GET)
         || path == "/"
         || path.starts_with("/assets/")
         || path == "/favicon.svg"
-        || path == "/icons.svg"
-    {
+        || path == "/icons.svg";
+    if is_public {
         return next.run(request).await;
+    }
+
+    // API keys are first-class machine credentials (issue #82 P1-13):
+    // X-API-Key resolves to the same CurrentUser the session path
+    // produces, so ownership scoping applies identically.
+    if let Some(api_key) = headers.get("x-api-key").and_then(|v| v.to_str().ok())
+        && !api_key.is_empty()
+    {
+        if let Some(user) = auth::handlers::resolve_api_key(api_key).await {
+            request.extensions_mut().insert(user);
+            return next.run(request).await;
+        }
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            axum::Json(serde_json::json!({
+                "code": "INVALID_API_KEY",
+                "message": "Invalid or revoked API key",
+            })),
+        )
+            .into_response();
     }
 
     // Extract Bearer token
@@ -673,11 +760,53 @@ async fn require_auth(
     };
 
     if let Some(session) = session {
-        // Handlers resolve the acting user from this extension
-        // (save_pipeline ownership, per-user AI config).
+        // Resolve the canonical user id + role and hand them to handlers via
+        // request extensions (issue #82 P0-4: every ownership check consumes
+        // this; nothing trusts client-supplied user ids).
+        //
+        // sessions.user_id holds the login name — for API-created users that
+        // is a username, not the UUID users.id. The users table disambiguates;
+        // legacy env-password logins without a users row keep the username as
+        // their identity (role: 'admin' for the admin bootstrap password,
+        // 'user' otherwise).
+        let (user_id, role) = match crate::infra::db::sqlite::try_pool() {
+            Ok(pool) => {
+                let row: Option<(String, String)> =
+                    sqlx::query_as("SELECT id, role FROM users WHERE id = ? OR username = ?")
+                        .bind(&session.user_id)
+                        .bind(&session.user_id)
+                        .fetch_optional(pool)
+                        .await
+                        .unwrap_or(None);
+                match row {
+                    Some((id, role)) => (id, role),
+                    None => (
+                        session.user_id.clone(),
+                        if session.user_id == "admin" {
+                            "admin".to_string()
+                        } else {
+                            "user".to_string()
+                        },
+                    ),
+                }
+            }
+            // DB unavailable — reject everything (fail-secure).
+            Err(_) => {
+                tracing::error!("require_auth: DB pool not available, rejecting request");
+                return (
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    axum::Json(serde_json::json!({
+                        "code": "AUTH_REQUIRED",
+                        "message": "Authentication required in team/hpc mode",
+                    })),
+                )
+                    .into_response();
+            }
+        };
         request
             .extensions_mut()
-            .insert::<Option<String>>(Some(session.user_id));
+            .insert(crate::domains::auth::current_user::CurrentUser { id: user_id, role });
         return next.run(request).await;
     }
 

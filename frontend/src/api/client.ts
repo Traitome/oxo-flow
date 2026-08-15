@@ -2,11 +2,11 @@ import type {
   HealthResponse, SystemInfo, RuntimeMetrics, LoginResponse, UserInfo,
   ClusterInfo, ClusterUpsert, ClusterProbeResult, DryRunPreview,
   ValidateResponse, ParseResponse, Pipeline, DagJson, DagStatus,
-  RunItem, RunStatus, Diagnostics, RetryPlan, RunResponse,
+  RunItem, RunList, RunStatus, Diagnostics, RetryPlan, RunResponse,
   AiConfig, AiTranslateResponse, AiExplainResponse, AiInterpretResponse, AiOptimizeResponse,
-  Template, ForkResponse, ShareResponse, ImportResponse,
+  Template, ForkResponse, ShareResponse, ImportResponse, ShareLanding,
   DataAnalysis, ReferenceResult, AuditLogResponse, SearchResponse,
-  DagEditResponse, DataPerceptionReport, MonitorStatus,
+  DagEditResponse, DataPerceptionReport, MonitorStatus, RunInstance,
   ReportData, AiConfigFull, ServerAiConfig, UserAiConfig, AiConfigUpdate,
   KnowledgeToolsResponse, KnowledgeSkillsResponse,
 } from './types';
@@ -48,7 +48,6 @@ export const api = {
   deleteCluster: (id: string) => del<{ deleted: string }>(`/api/clusters/${id}`),
   probeCluster: (id: string) => post<ClusterProbeResult>(`/api/clusters/${id}/probe`, {}),
   getRunPreview: (id: string) => get<DryRunPreview>(`/api/runs/${id}/preview`),
-  events: () => get<{ events: Array<Record<string, unknown>> }>('/api/events'),
 
   // ── Auth & License ──
   login: (username: string, password: string) => post<LoginResponse>('/api/auth/login', { username, password }),
@@ -65,7 +64,8 @@ export const api = {
   buildDag: (toml_content: string) => post<DagJson>('/api/pipelines/dag', { toml_content }),
   format: (toml_content: string) => post<{ formatted: string }>('/api/pipelines/format', { toml_content }),
   lint: (toml_content: string) => post<ValidateResponse>('/api/pipelines/lint', { toml_content }),
-  diff: (a: string, b: string) => post<{ diffs: Array<Record<string, unknown>> }>('/api/pipelines/diff', { pipeline_a_id: a, pipeline_b_id: b }),
+  // Sends inline TOML (the server also accepts ids — issue #82 P1-10).
+  diff: (a: string, b: string) => post<{ diffs: Array<Record<string, unknown>> }>('/api/pipelines/diff', { toml_a: a, toml_b: b }),
   exportPipeline: (id: string, format?: string) => post<{ content: string }>('/api/pipelines/export', { pipeline_id: id, format }),
   search: (query: string) => post<SearchResponse>('/api/pipelines/search', { query }),
 
@@ -98,19 +98,30 @@ export const api = {
   // ── Execution ──
   createRun: (
     toml_content: string,
-    options: { max_jobs?: number; dry_run?: boolean; keep_going?: boolean; samples?: string[]; targets?: string[]; pipeline_id?: string } = {},
-  ) => post<RunResponse>('/api/runs', { toml_content, max_jobs: options.max_jobs ?? 4, dry_run: options.dry_run ?? false, keep_going: options.keep_going ?? false, samples: options.samples ?? [], targets: options.targets ?? [], pipeline_id: options.pipeline_id ?? null }),
-  listRuns: () => get<RunItem[]>('/api/runs'),
+    options: { max_jobs?: number; dry_run?: boolean; keep_going?: boolean; samples?: string[]; targets?: string[]; pipeline_id?: string; cluster_id?: string } = {},
+  ) => post<RunResponse>('/api/runs', { toml_content, max_jobs: options.max_jobs ?? 4, dry_run: options.dry_run ?? false, keep_going: options.keep_going ?? false, samples: options.samples ?? [], targets: options.targets ?? [], pipeline_id: options.pipeline_id ?? null, cluster_id: options.cluster_id ?? null }),
+  listRuns: (params: { limit?: number; cursor?: string; status?: string; q?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.cursor) qs.set('cursor', params.cursor);
+    if (params.status) qs.set('status', params.status);
+    if (params.q) qs.set('q', params.q);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return get<RunList>(`/api/runs${suffix}`);
+  },
   getRun: (id: string) => get<RunItem>(`/api/runs/${id}`),
   getRunStatus: (id: string) => get<RunStatus>(`/api/runs/${id}/status`),
   getDagStatus: (id: string) => get<DagStatus>(`/api/runs/${id}/dag-status`),
   getDiagnostics: (id: string) => get<Diagnostics>(`/api/runs/${id}/diagnostics`),
   getRunLogs: (id: string) => get<string>(`/api/runs/${id}/logs`),
+  getRunInstances: (id: string) => get<RunInstance[]>(`/api/runs/${id}/instances`),
   getRunResults: (id: string) => get<Array<{ name: string; path: string; size_bytes: number; is_dir: boolean }>>(`/api/runs/${id}/results`),
   retryRun: (id: string, skipSucceeded = true) => post<RetryPlan>(`/api/runs/${id}/retry`, { skip_succeeded: skipSucceeded }),
   cancelRun: (id: string) => post<{ run_id: string; status: string }>(`/api/runs/${id}/cancel`, {}),
   pauseRun: (id: string, reason = 'user_request') => post<{ run_id: string; status: string }>(`/api/runs/${id}/pause`, { reason }),
   resumeRun: (id: string, from_rule?: string) => post<{ run_id: string; status: string }>(`/api/runs/${id}/resume`, { from_rule }),
+  cleanRun: (id: string) => post<{ run_id: string; exit_code: number | null; stdout: string; stderr: string }>(`/api/runs/${id}/clean`, {}),
+  resumeCheckpoint: (id: string, maxJobs = 1) => post<{ run_id: string; resumed_from: string; max_jobs: number }>(`/api/runs/${id}/resume-checkpoint`, { max_jobs: maxJobs }),
   aiStatus: (id: string) => get<MonitorStatus>(`/api/runs/${id}/ai-status`),
 
   // ── Report ──
@@ -144,14 +155,36 @@ export const api = {
   deleteTemplate: (id: string) => del<{ deleted: string }>(`/api/templates/${id}`),
 
   // ── Collaboration ──
-  forkPipeline: (id: string, userId = 'default') => post<ForkResponse>(`/api/pipelines/${id}/fork`, { user_id: userId }),
+  // Ownership comes from the session server-side (issue #82 P0-4); the
+  // client never sends user ids.
+  forkPipeline: (id: string) => post<ForkResponse>(`/api/pipelines/${id}/fork`, {}),
   sharePipeline: (id: string, visibility: string, expiresInDays?: number) =>
     post<ShareResponse>(`/api/pipelines/${id}/share`, { visibility, expires_in_days: expiresInDays }),
   importPipeline: (url: string) => post<ImportResponse>('/api/pipelines/import', { url }),
+  shareLanding: (token: string) => get<ShareLanding>(`/api/share/${token}`),
+  listRevisions: (id: string) => get<Array<{ id: string; version: string; actor: string; created_at: string }>>(`/api/pipelines/${id}/revisions`),
+  getRevision: (id: string, rev: string) => get<{ id: string; version: string; actor: string; toml_content: string }>(`/api/pipelines/${id}/revisions/${rev}`),
+  rollbackPipeline: (id: string, revision_id: string) => post<Pipeline>(`/api/pipelines/${id}/rollback`, { revision_id }),
+
+  // ── Webhooks (issue #82 P1-12) ──
+  webhookConfig: () => get<{ enabled: boolean; url: string; secret_set: boolean; events: string[] }>('/api/webhook'),
+  webhookUpdate: (config: { enabled: boolean; url: string; secret?: string; events?: string[] }) =>
+    put<{ status: string }>('/api/webhook', config),
+
+  // ── API keys (issue #82 P1-13) ──
+  listApiKeys: () => get<Array<{ id: string; name: string; created_at: string; last_used_at: string | null }>>('/api/auth/keys'),
+  createApiKey: (name: string) => post<{ id: string; name: string; key: string }>('/api/auth/keys', { name }),
+  revokeApiKey: (id: string) => del<{ revoked: string }>(`/api/auth/keys/${id}`),
 };
 
 export function createEventSource(): EventSource {
-  return new EventSource('/api/events');
+  // EventSource cannot set an Authorization header, so the session token
+  // travels as ?token= (validated by the SSE endpoint in team/hpc modes —
+  // issue #82 P0-5). Personal mode has no token and connects anonymously.
+  const base = (window as { __OXO_BASE__?: string }).__OXO_BASE__ ?? '';
+  const token = localStorage.getItem('oxo_token');
+  const query = token ? `?token=${encodeURIComponent(token)}` : '';
+  return new EventSource(`${base}/api/events${query}`);
 }
 export { ApiError };
 

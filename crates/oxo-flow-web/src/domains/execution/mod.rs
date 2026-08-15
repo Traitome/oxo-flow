@@ -6,6 +6,7 @@
 
 pub mod checkpoint_status;
 pub mod diagnostics;
+pub mod files;
 pub mod handlers;
 pub mod sandbox;
 // Re-export for the security integration tests.

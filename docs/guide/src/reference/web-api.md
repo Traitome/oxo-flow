@@ -8,7 +8,7 @@ oxo-flow includes a built-in REST API server for building, validating, running, 
 
 - **Envelope**: success responses are bare JSON objects/arrays; errors are `{ code, message, detail?, suggestion? }`
 - **Errors**: `{ code: "E001", message, detail?, suggestion? }`
-- **Lists**: list endpoints return bare JSON arrays (e.g. `GET /api/pipelines` returns at most 100 items); no pagination envelope is currently implemented
+- **Lists**: `GET /api/runs` returns a cursor-paginated envelope `{ items, next_cursor, total }` (limit ≤ 500, `status`/`q` filters); other list endpoints return bare arrays (≤ 100 items)
 - **Versioning**: `/api/` prefix for all endpoints
 - **Self-discoverable**: OpenAPI 3.1 spec at `GET /api/openapi.json`
 
@@ -57,13 +57,13 @@ Returns status, version, mode, uptime, component health (database, filesystem, s
 ```
 GET /api/system
 ```
-Returns OS, architecture, PID, uptime, and version.
+Returns OS, architecture, PID, uptime, and version. **Team/hpc modes require authentication** (the endpoint left the anonymous whitelist in the v0.11 hardening).
 
 ### Runtime Metrics
 ```
 GET /api/metrics
 ```
-Returns real-time resource metrics: CPU%, memory (used/total/swap), active workflows, total requests, CPU count.
+Returns real-time resource metrics: CPU%, memory (used/total/swap), active workflows, total requests, CPU count. **Team/hpc modes require authentication.**
 
 ### Audit Logs
 ```
@@ -76,7 +76,15 @@ Returns structured audit entries: `{ entries: [{ timestamp, user, action, resour
 GET /api/events
 Accept: text/event-stream
 ```
-SSE stream for real-time workflow execution events (`run_started`, `run_completed`, `run_failed`, `run_cancelled`, `run_paused`, `run_resumed`). Includes a 5-second heartbeat (`heartbeat` events).
+SSE stream for real-time workflow execution events: terminal events
+(`run_completed`, `run_failed`, `run_cancelled`) plus per-rule events
+(`rule_started`, `rule_completed`, `rule_failed`, `rule_skipped` — parsed
+live from the engine's execution log). Includes a 5-second heartbeat.
+
+**Team/hpc modes require `?token=<session token>`** (EventSource cannot set
+an Authorization header), and the stream is filtered to the subscriber's own
+runs — admins see everything. Events carry a `user` field (the owning user
+id, or `null` for system-wide events).
 
 `run_completed` carries a `summary` field: the CLI's invalidation summary
 extracted from the execution log — config changes, edited rule definitions,
@@ -275,7 +283,11 @@ Content-Type: application/json
 
 {"from_rule": "fastqc", "skip_succeeded": true}
 ```
-Only re-runs failed nodes and their downstream dependents. Returns `{ new_run_id, will_rerun: [...], will_skip: [...] }`.
+The retry **really executes**: the returned `new_run_id` is a real run in
+the database (same workdir, same owner), spawned with `--resume-failed
+--rerun` so the failed rules re-execute despite their existing outputs and
+the checkpoint's cascade invalidation re-runs their downstream dependents.
+Returns `{ new_run_id, will_rerun: [...], will_skip: [...] }`.
 
 ### Cancel
 ```
@@ -301,6 +313,39 @@ Returns full execution log.
 GET /api/runs/{id}/results
 ```
 Returns output file tree with sizes and types.
+
+### Files — download / preview / zip
+```
+GET /api/runs/{id}/files?path=<relative-path>
+GET /api/runs/{id}/files?path=<relative-path>&preview=true
+```
+The read-only result-delivery layer:
+
+- **file** → bytes with `ETag`, `Content-Disposition: attachment`, and
+  single-range support (`Range: bytes=a-b` → 206; malformed/multi-range
+  requests degrade to the full body per RFC 9110)
+- **directory** → a streaming STORE-mode zip (no temporary archive)
+- `preview=true` → truncated JSON for text-ish formats (100 KB cap) or
+  inline image bytes; other types return `415 NO_PREVIEW`
+- paths are sandboxed to the run's workdir (traversal rejected); sensitive
+  filenames (.env, keys, credentials) are never served
+
+### Instances
+```
+GET /api/runs/{id}/instances
+```
+The sample×rule instance table: every expanded instance the checkpoint
+knows about (`qc_auto-discovered_S1` → rule `qc`, group `auto-discovered`,
+sample `S1`) with status, duration, and exit code — answers "which sample
+under which rule failed".
+
+### Upload & list user inputs
+```
+POST /api/files        # multipart: field "path" (optional subdir) + file parts
+GET  /api/files        # list the acting user's uploaded inputs
+```
+Uploads land in `workspace/users/<user>/inputs/` (chunked to disk, 8 GiB
+per-file cap).
 
 ---
 
@@ -359,9 +404,9 @@ POST /api/ai/translate/stream   # Same, streamed over SSE (progress → done eve
 POST /api/ai/explain            # Explain run failure + suggest fix
 POST /api/ai/interpret          # Interpret results with caveats
 POST /api/ai/optimize           # Optimize pipeline parameters
-GET  /api/ai/config             # Get AI provider configuration
-POST /api/ai/config             # Update AI provider configuration
-POST /api/ai/test               # Test the configured AI provider
+GET  /api/ai/config             # Get AI provider configuration (public)
+POST /api/ai/config             # Update the shared provider (admin-only outside personal mode)
+POST /api/ai/test               # Test the provider (admin-only outside personal mode)
 ```
 
 See [AI Translation Layer](ai-translation.md) for details.
@@ -371,13 +416,77 @@ See [AI Translation Layer](ai-translation.md) for details.
 ## Collaboration (Phase 3)
 
 ```
-POST /api/pipelines/{id}/fork    # Fork into workspace
-POST /api/pipelines/{id}/share   # Share (link or workspace)
+POST /api/pipelines/{id}/fork    # Fork into workspace (owner = session user)
+POST /api/pipelines/{id}/share   # Share (link or workspace; URL uses the bound port)
 POST /api/pipelines/import       # Import from oxo+https:// URL
-POST /api/pipelines/diff         # Compare two pipelines
+GET  /api/share/{token}          # PUBLIC landing payload (no session required)
 ```
+`GET /api/share/{token}` powers the share landing page: pipeline identity,
+DAG rule order, TOML, owner, expiry, and the most recent terminal run —
+the token itself is the authorization. Expired links return `410`.
 
 See [Collaboration](../how-to/collaboration.md) for details.
+
+### Version History
+```
+GET  /api/pipelines/{id}/revisions        # Snapshot list (newest first, ≤ 50)
+GET  /api/pipelines/{id}/revisions/{rev}  # One snapshot's full TOML
+POST /api/pipelines/{id}/rollback         # {"revision_id": ...} — restore
+```
+Every save/update snapshots the previous content; rollback preserves the
+current version as a new revision (nothing is lost).
+
+## Run Administration
+
+```
+POST /api/runs/{id}/clean              # CLI clean on the run's workdir
+POST /api/runs/{id}/resume-checkpoint  # CLI resume from .oxo-flow/checkpoint.json
+```
+`resume-checkpoint` continues an unfinished run in place as a NEW run row
+(`{"max_jobs": 2}` optional). Both are ownership-checked like every other
+run endpoint.
+
+## Webhooks
+
+```
+GET /api/webhook   # { enabled, url, secret_set, events } — secret never echoed
+PUT /api/webhook   # {"enabled": true, "url": "https://...", "secret": "...", "events": [...]}
+```
+Runs POST an HMAC-SHA256-signed payload (`X-OxoFlow-Signature:
+hmac-sha256=<hex>`) to the configured URL on terminal states. Admin-only
+outside personal mode — the endpoint is shared infrastructure.
+
+## API Keys
+
+```
+POST   /api/auth/keys       # {"name": "ci-bot"} → { id, name, key } (shown once)
+GET    /api/auth/keys       # The acting user's keys (hashes only)
+DELETE /api/auth/keys/{id}  # Revoke immediately
+```
+Machine credentials: send `X-API-Key: oxo_...` instead of a Bearer session.
+Keys resolve to the same ownership context (a key's requests see exactly
+what its owner sees), are stored as SHA-256 hashes, and revocation is
+immediate.
+
+## Quota
+
+Runs pre-flight the quota tracker with the workflow's declared threads and
+memory; over-limit requests get `429 QUOTA_EXCEEDED` with the violation
+list. Usage is visible at `GET /api/quota`.
+
+## Cluster Connections & Remote Execution
+
+```
+GET    /api/clusters                  # configured SSH connections
+POST   /api/clusters                  # upsert (admin-only outside personal mode)
+DELETE /api/clusters/{id}
+POST   /api/clusters/{id}/probe       # SSH connectivity + scheduler detection
+```
+`POST /api/runs` accepts `cluster_id`: the run then stages its workdir to
+the remote host (tar over stdio — no rsync), executes under a per-run
+nohup wrapper, and pulls the results back on completion so every
+downstream endpoint (logs, files, report) works unchanged. See
+[Run on a cluster](../how-to/run-on-cluster.md).
 
 ---
 

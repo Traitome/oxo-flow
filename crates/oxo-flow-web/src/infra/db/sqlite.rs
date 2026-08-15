@@ -313,6 +313,42 @@ impl StorageBackend for SqliteBackend {
                 meta TEXT,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS chat_sessions (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL DEFAULT 'default',
+                title TEXT NOT NULL DEFAULT 'New Chat',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                key_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                last_used_at TEXT,
+                revoked INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS webhook_config (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                url TEXT NOT NULL DEFAULT '',
+                secret TEXT,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                events TEXT NOT NULL DEFAULT '[]',
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS pipeline_revisions (
+                id TEXT PRIMARY KEY,
+                pipeline_id TEXT NOT NULL,
+                user_id TEXT NOT NULL DEFAULT 'default',
+                version TEXT NOT NULL DEFAULT '0.1.0',
+                toml_content TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
             "#,
         )
         .execute(&self.pool)
@@ -328,6 +364,8 @@ impl StorageBackend for SqliteBackend {
             CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
             CREATE INDEX IF NOT EXISTS idx_templates_category ON templates(category);
             CREATE INDEX IF NOT EXISTS idx_shares_pipeline_id ON shares(pipeline_id);
+            CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_id ON chat_sessions(user_id);
+            CREATE INDEX IF NOT EXISTS idx_pipeline_revisions_pipeline ON pipeline_revisions(pipeline_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_shares_token ON shares(token);
             CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
 

@@ -325,9 +325,9 @@ memory = "16G"
 conda = "envs/vep.yaml"
 
 [report]
-template = "germline_report"
-format = ["html", "json"]
-sections = ["summary", "qc_metrics", "coverage", "variants", "annotations", "provenance"]
+sections = ["universal", "execution-status", "failure-diagnosis", "workflow-info", "commands", "file-manifest", "environment", "provenance", "task-summary"]
+# template/format are reserved for future template support — setting them
+# makes `report` warn (see docs/guide/src/commands/report.md)
 ```
 
 ### Sample Expansion

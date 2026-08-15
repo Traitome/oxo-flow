@@ -6,7 +6,7 @@ use tokio::process::Command;
 use tracing::{error, info, warn};
 
 use crate::workspace::get_run_directory;
-use crate::{broadcast_event, db};
+use crate::{broadcast_event_for, db};
 
 /// Locate the `oxo-flow` CLI binary.
 ///
@@ -16,7 +16,7 @@ use crate::{broadcast_event, db};
 ///   3. Next to the current executable (same target dir)
 ///   4. One level above the current executable (cargo test places test binaries in `deps/`)
 ///   5. Fall back to `"oxo-flow"` (PATH lookup)
-fn find_oxo_flow_binary() -> PathBuf {
+pub(crate) fn find_oxo_flow_binary() -> PathBuf {
     if let Ok(path) = std::env::var("OXO_FLOW_BIN") {
         return PathBuf::from(path);
     }
@@ -138,6 +138,14 @@ pub struct RunFlags {
     pub samples: Vec<String>,
     /// Explicit target rules (`-t <name>` each). Empty = engine default.
     pub targets: Vec<String>,
+    /// Re-run only rules that failed in the previous run (`--resume-failed`).
+    /// Used by the web retry path (issue #82 P0-3): plain `run` would skip
+    /// failed rules as already-attempted and the retry would be a no-op.
+    pub resume_failed: bool,
+    /// Force execution ignoring up-to-date checks (`--rerun`). Paired with
+    /// resume_failed, this makes the retry actually execute the failed set
+    /// (their outputs exist, so freshness alone would skip them again).
+    pub rerun: bool,
 }
 
 /// Build the CLI argument vector for a run (pure — unit-tested).
@@ -175,6 +183,12 @@ pub fn build_cli_args(
         if flags.keep_going {
             args.push("--keep-going".into());
         }
+        if flags.resume_failed {
+            args.push("--resume-failed".into());
+        }
+        if flags.rerun {
+            args.push("--rerun".into());
+        }
         if let Some(jobs) = flags.max_jobs {
             args.push("-j".into());
             args.push(jobs.to_string().into());
@@ -205,6 +219,25 @@ pub fn spawn_background_run(
     workdir: Option<PathBuf>,
     flags: RunFlags,
 ) {
+    // The CLI invocation is derived from RunFlags + the workflow file the
+    // caller wrote into the workdir.
+    let run_dir = workdir
+        .clone()
+        .unwrap_or_else(|| get_run_directory(&username, &run_id));
+    let args = build_cli_args(&run_dir.join("workflow.oxoflow"), &run_dir, &flags);
+    spawn_background_run_with_args(run_id, username, auth_type, os_user, workdir, args);
+}
+
+/// Spawn a background CLI run with an explicit argument vector (used by
+/// the checkpoint-resume path, issue #81 web exposure).
+pub fn spawn_background_run_with_args(
+    run_id: String,
+    username: String,
+    auth_type: String,
+    os_user: String,
+    workdir: Option<PathBuf>,
+    cli_args: Vec<std::ffi::OsString>,
+) {
     tokio::spawn(async move {
         info!("Starting background run {} for user {}", run_id, username);
 
@@ -222,8 +255,9 @@ pub fn spawn_background_run(
             return;
         }
 
-        // Broadcast run start event
-        broadcast_event(
+        // Broadcast run start event, scoped to the run owner (issue #82
+        // P0-5: SSE subscribers only receive their own runs' events).
+        broadcast_event_for(
             "run_started",
             &serde_json::json!({
                 "run_id": run_id,
@@ -231,10 +265,10 @@ pub fn spawn_background_run(
                 "status": "running",
                 "started_at": now.to_rfc3339(),
             }),
+            Some(&username),
         );
 
         let run_dir = workdir.unwrap_or_else(|| get_run_directory(&username, &run_id));
-        let workflow_file = run_dir.join("workflow.oxoflow");
 
         // Validate OS username to prevent injection in sudo mode
         let os_user_regex = Regex::new(r"^[a-z_][a-z0-9_-]*[$]?$")
@@ -247,11 +281,10 @@ pub fn spawn_background_run(
 
         let oxo_bin = find_oxo_flow_binary();
 
-        // Issue #69 follow-up: honor the run request's execution flags.
-        // `dry_run` spawns the preview subcommand (nothing executes);
-        // max_jobs and keep_going map to -j / -k. Only explicitly requested
-        // jobs are passed — the CLI default stays in charge otherwise.
-        let oxo_args = build_cli_args(&workflow_file, &run_dir, &flags);
+        // The caller supplies the exact CLI arguments: normal runs build
+        // them from RunFlags + the workflow file; checkpoint resumes pass
+        // `resume <checkpoint>` directly (issue #81 web exposure).
+        let oxo_args = cli_args;
 
         // Inner command: the CLI itself, optionally through sudo.
         let mut payload: Vec<std::ffi::OsString> = Vec::new();
@@ -319,6 +352,14 @@ pub fn spawn_background_run(
                 if let Some(pid) = child.id() {
                     crate::process_control::register(&run_id, pid as i32);
                 }
+
+                // Real resource telemetry (issue #82 P1-2): sample the
+                // CLI's process tree every 5s into workdir/metrics.jsonl so
+                // the monitor cards show measured memory/CPU, not defaults.
+                if let Some(pid) = child.id() {
+                    spawn_resource_sampler(run_id.clone(), pid, run_dir.clone());
+                }
+                spawn_log_tailer(run_id.clone(), run_dir.clone());
 
                 // Wait for process completion
                 match child.wait().await {
@@ -404,7 +445,13 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
     let summary = std::fs::read_to_string(log_path)
         .ok()
         .and_then(|log| extract_invalidation_summary(&log));
-    broadcast_event(
+    // Scope the terminal event to the run owner (issue #82 P0-5).
+    let user_id: Option<String> = sqlx::query_scalar("SELECT user_id FROM runs WHERE id = ?")
+        .bind(run_id)
+        .fetch_optional(db::pool())
+        .await
+        .unwrap_or(None);
+    broadcast_event_for(
         event,
         &serde_json::json!({
             "run_id": run_id,
@@ -412,7 +459,16 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
             "finished_at": end.to_rfc3339(),
             "summary": summary,
         }),
+        user_id.as_deref(),
     );
+
+    // Release the run's quota reservation (issue #82 P1-9).
+    if let Some((user_id, threads, memory_mb)) = crate::infra::quota::release(run_id) {
+        crate::infra::quota::global_quota_tracker().record_complete(&user_id, threads, memory_mb);
+    }
+
+    // Configured webhooks fire on terminal states (issue #82 P1-12).
+    crate::domains::observability::webhook::notify_terminal(run_id, final_state).await;
 }
 
 /// Monitor a run that was re-attached after a server restart (crash
@@ -424,6 +480,12 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
 /// fallback for a process killed without a record). Finalization goes
 /// through [`finalize_run`] so semantics match the live wait path exactly.
 pub fn resume_monitoring(run_id: String, pid: i32, workdir: PathBuf) {
+    // Crash-recovery re-attach also samples resources and tails the log
+    // (issue #82 P1-2 / P1-18).
+    if pid > 0 {
+        spawn_resource_sampler(run_id.clone(), pid as u32, workdir.clone());
+    }
+    spawn_log_tailer(run_id.clone(), workdir.clone());
     tokio::spawn(async move {
         let exit_file = workdir.join(".exit-code");
         let log_path = workdir.join("execution.log");
@@ -443,6 +505,135 @@ pub fn resume_monitoring(run_id: String, pid: i32, workdir: PathBuf) {
     });
 }
 
+/// Tail `workdir/execution.log` and broadcast per-rule SSE events
+/// (issue #82 P1-18: previously only terminal events existed and the
+/// frontend polled to fill the gap). Parses the CLI's stable log lines:
+/// `Running: <rule>` / `✓ <rule>` / `✗ rule '<rule>' failed` /
+/// `⊝ <rule>` (skipped).
+fn spawn_log_tailer(run_id: String, workdir: PathBuf) {
+    tokio::spawn(async move {
+        let log_path = workdir.join("execution.log");
+        let mut offset: u64 = 0;
+        let user_id: Option<String> = sqlx::query_scalar("SELECT user_id FROM runs WHERE id = ?")
+            .bind(&run_id)
+            .fetch_optional(db::pool())
+            .await
+            .unwrap_or(None);
+        let mut ticker = tokio::time::interval(std::time::Duration::from_millis(1500));
+        ticker.tick().await; // fire immediately
+        loop {
+            ticker.tick().await;
+            let active: Option<String> = sqlx::query_scalar("SELECT status FROM runs WHERE id = ?")
+                .bind(&run_id)
+                .fetch_optional(db::pool())
+                .await
+                .unwrap_or(None);
+            match active.as_deref() {
+                Some("running") | Some("paused") | Some("queued") => {}
+                _ => break,
+            }
+            let Ok(meta) = std::fs::metadata(&log_path) else {
+                continue;
+            };
+            let len = meta.len();
+            if len < offset {
+                offset = 0; // log rotated/truncated
+            }
+            if len == offset {
+                continue;
+            }
+            let Ok(mut file) = std::fs::File::open(&log_path) else {
+                continue;
+            };
+            use std::io::{Read, Seek, SeekFrom};
+            if file.seek(SeekFrom::Start(offset)).is_err() {
+                continue;
+            }
+            let mut buf = String::new();
+            if file.read_to_string(&mut buf).is_err() {
+                continue;
+            }
+            offset = len;
+            for line in buf.lines() {
+                let event = if let Some(rest) = line.strip_prefix("Running: ") {
+                    Some(("rule_started", rest.trim().to_string()))
+                } else if let Some(rest) = line.strip_prefix('✓') {
+                    Some(("rule_completed", rest.trim().to_string()))
+                } else if line.starts_with('⊝') {
+                    Some((
+                        "rule_skipped",
+                        line.trim_start_matches('⊝').trim().to_string(),
+                    ))
+                } else {
+                    line.strip_prefix("✗ rule '")
+                        .and_then(|l| l.split_once("'"))
+                        .map(|(rule, _)| ("rule_failed", rule.to_string()))
+                };
+                if let Some((event_type, rule)) = event
+                    && !rule.is_empty()
+                {
+                    broadcast_event_for(
+                        event_type,
+                        &serde_json::json!({"run_id": run_id, "rule": rule}),
+                        user_id.as_deref(),
+                    );
+                }
+            }
+        }
+    });
+}
+
+/// Sample the run's process-tree memory/CPU every 5 seconds into
+/// `workdir/metrics.jsonl` (issue #82 P1-2: real telemetry behind the
+/// monitor trend cards, replacing the fabricated defaults). Stops when the
+/// run reaches a terminal DB state.
+fn spawn_resource_sampler(run_id: String, cli_pid: u32, workdir: PathBuf) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
+        ticker.tick().await; // fire immediately, then every 5s
+        loop {
+            ticker.tick().await;
+            let active: Option<String> = sqlx::query_scalar("SELECT status FROM runs WHERE id = ?")
+                .bind(&run_id)
+                .fetch_optional(db::pool())
+                .await
+                .unwrap_or(None);
+            match active.as_deref() {
+                Some("running") | Some("paused") | Some("queued") => {}
+                _ => break,
+            }
+            if let Some((memory_mb, cpu_pct, processes)) = crate::sys::process_tree_usage(cli_pid) {
+                let line = format!(
+                    r#"{{"ts":"{}","memory_mb":{:.1},"cpu_pct":{:.1},"processes":{}}}"#,
+                    Utc::now().to_rfc3339(),
+                    memory_mb,
+                    cpu_pct,
+                    processes
+                );
+                append_metrics(&workdir, &line).await;
+            }
+        }
+    });
+}
+
+/// Append one sample to `workdir/metrics.jsonl`, keeping at most the last
+/// 2000 lines (≈2.7 h at 5 s ticks) so long runs cannot grow the file
+/// unboundedly.
+async fn append_metrics(workdir: &std::path::Path, line: &str) {
+    const MAX_METRICS_LINES: usize = 2000;
+    let path = workdir.join("metrics.jsonl");
+    let mut content = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+    content.push_str(line);
+    content.push('\n');
+    let lines: Vec<&str> = content.lines().collect();
+    let keep = if lines.len() > MAX_METRICS_LINES {
+        &lines[lines.len() - MAX_METRICS_LINES..]
+    } else {
+        &lines[..]
+    };
+    let _ = tokio::fs::write(&path, format!("{}\n", keep.join("\n"))).await;
+}
+
 /// Mark a run as failed with the current timestamp.
 async fn mark_run_failed(run_id: &str) {
     let end = Utc::now();
@@ -457,15 +648,26 @@ async fn mark_run_failed(run_id: &str) {
         error!("Failed to mark run {run_id} as failed: {e}");
     }
 
-    // Broadcast run failure event
-    broadcast_event(
+    // Broadcast run failure event, scoped to the run owner (issue #82 P0-5).
+    let user_id: Option<String> = sqlx::query_scalar("SELECT user_id FROM runs WHERE id = ?")
+        .bind(run_id)
+        .fetch_optional(db::pool())
+        .await
+        .unwrap_or(None);
+    broadcast_event_for(
         "run_failed",
         &serde_json::json!({
             "run_id": run_id,
             "status": "failed",
             "finished_at": end.to_rfc3339(),
         }),
+        user_id.as_deref(),
     );
+
+    if let Some((user_id, threads, memory_mb)) = crate::infra::quota::release(run_id) {
+        crate::infra::quota::global_quota_tracker().record_complete(&user_id, threads, memory_mb);
+    }
+    crate::domains::observability::webhook::notify_terminal(run_id, "failed").await;
 }
 
 #[cfg(test)]
@@ -512,6 +714,8 @@ mod tests {
     fn build_cli_args_includes_samples_and_targets() {
         let flags = RunFlags {
             dry_run: false,
+            resume_failed: false,
+            rerun: false,
             keep_going: true,
             max_jobs: Some(4),
             samples: vec!["S1".into(), "S2".into()],
@@ -540,6 +744,8 @@ mod tests {
         // but omits execution-only flags (-j / --keep-going).
         let dry = RunFlags {
             dry_run: true,
+            resume_failed: false,
+            rerun: false,
             ..flags
         };
         let args = build_cli_args(std::path::Path::new("w"), std::path::Path::new("d"), &dry);

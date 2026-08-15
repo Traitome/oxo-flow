@@ -112,6 +112,27 @@ A simple three-state visibility model:
 
 No nested RBAC. No group hierarchies. Simple and transparent.
 
+## Share Landing Pages
+
+A share link (`oxo+https://host:port/share/<token>`) opens a public
+read-only landing page — pipeline name/version, DAG shape, the full TOML,
+the owner, expiry, and the most recent terminal run as provenance. **No
+session is required to view it** (the token is the authorization). The
+*Import into my workspace* action copies the pipeline to the acting user's
+account (login required — the API enforces it).
+
+Visibility is now enforced server-side: `private` pipelines are
+owner/admin-only, `workspace` pipelines are readable (not writable) by
+every authenticated user, `link` pipelines are reachable only through
+their share token.
+
+## Version History
+
+Every save/update snapshots the previous pipeline content (up to 50
+revisions). In the editor's History tab you can load any snapshot into
+the editor or roll back — rollback preserves the current version as a new
+revision, so nothing is ever lost.
+
 ## Audit Trail
 
 Forking a pipeline is recorded in the audit log:

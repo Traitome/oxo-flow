@@ -205,7 +205,7 @@ pub fn execute_edit(
     let new_toml = oxo_flow_core::format::format_workflow(&config);
 
     // Validate
-    let validation = crate::domains::workflow::service::validate_pipeline(&new_toml)?;
+    let validation = crate::domains::workflow::service::validate_pipeline(&new_toml, None)?;
     let errors: Vec<String> = validation
         .errors
         .iter()

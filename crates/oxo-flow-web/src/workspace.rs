@@ -57,6 +57,15 @@ pub fn get_run_directory(username: &str, run_id: &str) -> PathBuf {
         .join(run_id)
 }
 
+/// Directory holding a user's uploaded inputs (issue #82 P0-2): the
+/// `workspace/users/{user}/inputs/` root served by `POST /api/files`.
+pub fn inputs_directory(username: &str) -> PathBuf {
+    Path::new(BASE_WORKSPACE)
+        .join("users")
+        .join(username)
+        .join("inputs")
+}
+
 /// Retrieve the persistent working directory of a saved pipeline (issue #69).
 ///
 /// Runs targeting a saved pipeline execute here — the same directory across

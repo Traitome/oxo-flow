@@ -13,6 +13,7 @@ const MonitorReport = lazy(() => import('./pages/MonitorReport'));
 const Users = lazy(() => import('./pages/Users'));
 const Audit = lazy(() => import('./pages/Audit'));
 const Clusters = lazy(() => import('./pages/Clusters'));
+const Share = lazy(() => import('./pages/Share'));
 
 function PageFallback() {
   return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '50vh' }}>
@@ -34,6 +35,8 @@ export default function App() {
   return (
     <BrowserRouter basename={appBasename}>
       <Routes>
+        {/* Public share landing (issue #82 P0-6): no session, no app chrome */}
+        <Route path="/share/:token" element={<Suspense fallback={<PageFallback />}><Share /></Suspense>} />
         <Route element={<Layout />}>
           <Route path="/" element={<Suspense fallback={<PageFallback />}><Dashboard /></Suspense>} />
           <Route path="/editor" element={<Suspense fallback={<PageFallback />}><PipelineEditor /></Suspense>} />
@@ -42,7 +45,9 @@ export default function App() {
           <Route path="/templates" element={<Navigate to="/pipelines" replace />} />
           <Route path="/runs" element={<Suspense fallback={<PageFallback />}><MonitorReport /></Suspense>} />
           <Route path="/runs/:id" element={<Suspense fallback={<PageFallback />}><MonitorReport /></Suspense>} />
-          <Route path="/monitor" element={<Suspense fallback={<PageFallback />}><MonitorReport /></Suspense>} />
+          {/* /monitor merged into /runs (issue #82 P1-15) — redirect for old links */}
+          <Route path="/monitor" element={<Navigate to="/runs" replace />} />
+          <Route path="/monitor/:id" element={<Navigate to="/runs" replace />} />
           <Route path="/chat" element={<Suspense fallback={<PageFallback />}><ChatUI /></Suspense>} />
           <Route path="/settings" element={<Suspense fallback={<PageFallback />}><Settings /></Suspense>} />
           <Route path="/docs" element={<Suspense fallback={<PageFallback />}><ApiDocs /></Suspense>} />

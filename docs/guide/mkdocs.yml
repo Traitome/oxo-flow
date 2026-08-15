@@ -99,6 +99,9 @@ extra:
     - icon: fontawesome/brands/github
       link: https://github.com/Traitome/oxo-flow
       name: oxo-flow on GitHub
+    - icon: fontawesome/solid/people-group
+      link: https://oxo-flow-community.github.io/
+      name: oxo-flow-community catalog
 
 plugins:
   - search:
@@ -106,6 +109,7 @@ plugins:
 
 nav:
   - Home: index.md
+  - Community: https://oxo-flow-community.github.io/
   - Tutorials:
       - Installation: tutorials/installation.md
       - Quick Start: tutorials/quickstart.md

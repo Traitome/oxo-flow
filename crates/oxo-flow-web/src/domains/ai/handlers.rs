@@ -4,9 +4,10 @@
 //! Zero business logic here — all logic lives in `service.rs`.
 
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::{Json, http::StatusCode};
+use axum::{Extension, Json, http::StatusCode};
 
 use crate::domains::ai::types::*;
+use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::execution::types::DiagnosticsResponse;
 use crate::domains::workflow::handlers::{ApiError, err};
 use crate::infra::db::models;
@@ -21,6 +22,20 @@ fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)>
             "Database not available".into(),
         )
     })
+}
+
+/// Shared-provider writes are admin-only outside personal mode (issue #82
+/// P0-5): reconfiguring the runtime AI provider affects every user's AI
+/// calls and their cost.
+fn require_ai_admin(user: &CurrentUser) -> Result<(), (StatusCode, Json<ApiError>)> {
+    if crate::server::running_mode() != "personal" && !user.is_admin() {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "ACCESS_DENIED",
+            "Admin role required to change the server AI provider".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// POST /api/ai/translate — standard JSON response.
@@ -271,7 +286,12 @@ pub async fn get_ai_config() -> ApiResult<AiConfigResponse> {
 }
 
 /// POST /api/ai/config
-pub async fn update_ai_config(Json(req): Json<AiConfigRequest>) -> ApiResult<AiConfigResponse> {
+pub async fn update_ai_config(
+    authenticated: Option<Extension<CurrentUser>>,
+    Json(req): Json<AiConfigRequest>,
+) -> ApiResult<AiConfigResponse> {
+    let user = resolve(authenticated.as_ref());
+    require_ai_admin(&user)?;
     crate::ai_provider::AiProviderRegistry::global()
         .reconfigure(
             req.provider.as_deref().unwrap_or("noop"),
@@ -290,7 +310,14 @@ pub async fn update_ai_config(Json(req): Json<AiConfigRequest>) -> ApiResult<AiC
 }
 
 /// POST /api/ai/test
-pub async fn test_ai_config(Json(_req): Json<AiConfigRequest>) -> ApiResult<AiTestResponse> {
+pub async fn test_ai_config(
+    authenticated: Option<Extension<CurrentUser>>,
+    Json(_req): Json<AiConfigRequest>,
+) -> ApiResult<AiTestResponse> {
+    let user = resolve(authenticated.as_ref());
+    // Testing hits the real provider (costs money; also a DoS vector) —
+    // admin-only outside personal mode.
+    require_ai_admin(&user)?;
     let provider = crate::ai_provider::AiProviderRegistry::global().get_provider();
     match provider
         .chat("You are a helpful assistant.", "Reply with exactly: OK")
@@ -364,22 +391,26 @@ pub async fn restore_ai_config_from_db() {
 }
 
 /// GET /api/ai/config/effective
-pub async fn get_ai_config_effective() -> ApiResult<serde_json::Value> {
+pub async fn get_ai_config_effective(
+    authenticated: Option<Extension<CurrentUser>>,
+) -> ApiResult<serde_json::Value> {
     use crate::ai_provider::AiProviderRegistry;
 
+    let user = resolve(authenticated.as_ref());
     let registry = AiProviderRegistry::global();
     let config = registry.get_config();
     let env_provider = std::env::var("OXO_FLOW_AI_PROVIDER").ok();
     let env_model = std::env::var("OXO_FLOW_AI_MODEL").ok();
     let env_url = std::env::var("OXO_FLOW_AI_API_URL").ok();
 
-    // The user tier is the 'default' user's saved row (personal mode) — the
-    // settings UI reads/writes it via PUT /api/ai/config/user.
+    // The user tier is the acting user's saved row ('default' in personal
+    // mode) — the settings UI reads/writes it via PUT /api/ai/config/user.
     let user_row: Option<(String, Option<String>, Option<String>)> =
         match crate::infra::db::sqlite::try_pool() {
             Ok(pool) => sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
-                "SELECT provider, model, api_url FROM ai_provider_config WHERE user_id = 'default' ORDER BY updated_at DESC LIMIT 1",
+                "SELECT provider, model, api_url FROM ai_provider_config WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1",
             )
+            .bind(&user.id)
             .fetch_optional(pool)
             .await
             .unwrap_or(None),
@@ -443,8 +474,11 @@ pub async fn get_server_ai_config() -> ApiResult<serde_json::Value> {
 
 /// PUT /api/ai/config/server
 pub async fn update_server_ai_config(
+    authenticated: Option<Extension<CurrentUser>>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<serde_json::Value> {
+    let user = resolve(authenticated.as_ref());
+    require_ai_admin(&user)?;
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -505,8 +539,10 @@ pub async fn get_user_ai_config() -> ApiResult<serde_json::Value> {
 
 /// PUT /api/ai/config/user
 pub async fn update_user_ai_config(
+    authenticated: Option<Extension<CurrentUser>>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<serde_json::Value> {
+    let user = resolve(authenticated.as_ref());
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -539,10 +575,13 @@ pub async fn update_user_ai_config(
         .and_then(|v| v.as_i64())
         .unwrap_or(3);
 
+    // The row belongs to the acting user, never a hardcoded 'default'
+    // (issue #82 P0-4).
     sqlx::query(
-        "INSERT INTO ai_provider_config (id, user_id, provider, api_url, model, api_key, search_enabled, monitor_enabled, auto_retry_enabled, max_correction_rounds, created_at, updated_at) VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET provider=excluded.provider, api_url=excluded.api_url, model=excluded.model, api_key=excluded.api_key, search_enabled=excluded.search_enabled, monitor_enabled=excluded.monitor_enabled, auto_retry_enabled=excluded.auto_retry_enabled, max_correction_rounds=excluded.max_correction_rounds, updated_at=excluded.updated_at"
+        "INSERT INTO ai_provider_config (id, user_id, provider, api_url, model, api_key, search_enabled, monitor_enabled, auto_retry_enabled, max_correction_rounds, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET provider=excluded.provider, api_url=excluded.api_url, model=excluded.model, api_key=excluded.api_key, search_enabled=excluded.search_enabled, monitor_enabled=excluded.monitor_enabled, auto_retry_enabled=excluded.auto_retry_enabled, max_correction_rounds=excluded.max_correction_rounds, updated_at=excluded.updated_at"
     )
     .bind(uuid::Uuid::new_v4().to_string())
+    .bind(&user.id)
     .bind(provider)
     .bind(api_url)
     .bind(model)
@@ -557,16 +596,25 @@ pub async fn update_user_ai_config(
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
 
-    let _ = crate::ai_provider::AiProviderRegistry::global().reconfigure(
-        provider,
-        Some(api_key.into()),
-        Some(api_url.into()),
-        Some(model.into()),
-    );
+    // The runtime serves ONE provider registry per process: in personal
+    // mode (or for admins) applying it immediately is exactly what the
+    // user expects. For non-admin team users the row is stored per-user
+    // but the shared runtime keeps the server-level provider.
+    let applied = crate::server::running_mode() == "personal" || user.is_admin();
+    if applied {
+        let _ = crate::ai_provider::AiProviderRegistry::global().reconfigure(
+            provider,
+            Some(api_key.into()),
+            Some(api_url.into()),
+            Some(model.into()),
+        );
+    }
 
-    Ok(Json(
-        serde_json::json!({"status": "updated", "provider": provider}),
-    ))
+    Ok(Json(serde_json::json!({
+        "status": "updated",
+        "provider": provider,
+        "applied_to_runtime": applied,
+    })))
 }
 
 // ---------------------------------------------------------------------------

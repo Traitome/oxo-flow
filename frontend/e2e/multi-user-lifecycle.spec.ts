@@ -13,8 +13,11 @@ test.describe('Multi-User Lifecycle Simulation', () => {
     await loginResp.json();
 
     // If auth failed, try creating the user anyway (personal mode, no auth needed)
+    // Unique per run: the dev server's SQLite persists across runs, so a
+    // fixed username 409s on the second pass.
+    const username = `bioinfo_scientist_${Date.now().toString(36)}`;
     const createResp = await request.post('/api/users', {
-      data: { username: 'bioinfo_scientist_1', role: 'user', password: 'science123' },
+      data: { username, role: 'user', password: 'science123' },
     });
     // In personal mode this may fail if not admin; that's expected
     expect([200, 201, 401, 403]).toContain(createResp.status());
