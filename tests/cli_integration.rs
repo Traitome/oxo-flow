@@ -1411,7 +1411,9 @@ fn cli_report_failed_moves_diagnosis_first() {
 }
 
 /// [report].template pointing at a Tera file renders the report through it
-/// (issue #83 P0-9).
+/// (issue #83 P0-9). Template variables are Tera-autoescaped exactly like
+/// the built-in template — a hostile workflow name must not render raw
+/// HTML into a shareable report.
 #[test]
 fn cli_report_template_renders_custom_marker() {
     let dir = tempfile::tempdir().unwrap();
@@ -1423,7 +1425,7 @@ fn cli_report_template_renders_custom_marker() {
     let wf = dir.path().join("wf.oxoflow");
     fs::write(
         &wf,
-        "[workflow]\nname = \"tiny\"\nversion = \"0.1\"\n\n\
+        "[workflow]\nname = \"evil<script>alert(1)</script>\"\nversion = \"0.1\"\n\n\
          [report]\ntemplate = \"custom.tera\"\n\n\
          [[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n",
     )
@@ -1442,8 +1444,241 @@ fn cli_report_template_renders_custom_marker() {
         "custom template must render: {content}"
     );
     assert!(
-        content.contains("tiny Report"),
-        "template context must carry the workflow title"
+        content.contains("evil&lt;script&gt;alert(1)"),
+        "template variables must be escaped: {content}"
+    );
+    assert!(
+        !content.contains("<script>alert(1)"),
+        "raw script must not survive template rendering: {content}"
+    );
+}
+
+/// --workdir must steer checkpoint resolution even with an explicit
+/// WORKFLOW (issue #68 semantics, regressed in the WS5 discovery work):
+/// the checkpoint is read from DIR/.oxo-flow/checkpoint.json, not the
+/// workflow's directory.
+#[test]
+fn cli_report_workdir_steers_checkpoint_with_explicit_workflow() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("wf.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"tiny\"\nversion = \"0.1\"\n\n\
+         [[rules]]\nname = \"hello\"\nshell = \"echo done > hello.txt\"\noutput = [\"hello.txt\"]\n",
+    )
+    .unwrap();
+    let workdir = dir.path().join("work");
+    fs::create_dir(&workdir).unwrap();
+
+    // Run with an explicit workdir so the checkpoint lives there.
+    oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "-d", workdir.to_str().unwrap()])
+        .assert()
+        .success();
+    assert!(workdir.join(".oxo-flow/checkpoint.json").exists());
+
+    let out = dir.path().join("report.json");
+    let report = oxo_flow_cmd()
+        .args([
+            "report",
+            wf.to_str().unwrap(),
+            "--workdir",
+            workdir.to_str().unwrap(),
+            "-f",
+            "json",
+            "-o",
+        ])
+        .arg(out.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(report.status.success());
+    let stderr = String::from_utf8_lossy(&report.stderr);
+    assert!(
+        !stderr.contains("No checkpoint"),
+        "--workdir must locate the checkpoint: {stderr}"
+    );
+    let content = fs::read_to_string(&out).unwrap();
+    assert!(
+        content.contains("hello.txt"),
+        "execution truth from the --workdir checkpoint missing: {content}"
+    );
+    assert!(
+        content.contains("\"success\""),
+        "execution status missing: {content}"
+    );
+}
+
+/// [report].template applies to HTML output only (issue #83 P0-9): with
+/// -f json the template is skipped with a stderr note — never rendered, so
+/// even a broken template cannot warn or exit 2 (--strict) for a format
+/// that would not use it.
+#[test]
+fn cli_report_template_skipped_for_json_with_note() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("custom.tera"), "<h1>{{ title }}</h1>").unwrap();
+    let wf = dir.path().join("wf.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"tiny\"\nversion = \"0.1\"\n\n\
+         [report]\ntemplate = \"custom.tera\"\n\n\
+         [[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n",
+    )
+    .unwrap();
+
+    let out = oxo_flow_cmd()
+        .args(["report", wf.to_str().unwrap(), "-f", "json", "-o", "-"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("template applies to HTML output only"),
+        "must note that templates apply to HTML only: {stderr}"
+    );
+    assert!(
+        !stderr.contains("template render failed"),
+        "must not render for json: {stderr}"
+    );
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(&out.stdout)).is_ok(),
+        "stdout must stay pure JSON"
+    );
+
+    // Broken template + -f json + --strict: exit 0 — the template is never
+    // rendered, and the run provides the checkpoint --strict needs.
+    let broken = dir.path().join("broken.oxoflow");
+    fs::write(
+        &broken,
+        "[workflow]\nname = \"tiny\"\nversion = \"0.1\"\n\n\
+         [report]\ntemplate = \"missing.tera\"\n\n\
+         [[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n",
+    )
+    .unwrap();
+    oxo_flow_cmd()
+        .args(["run", broken.to_str().unwrap()])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    let out2 = oxo_flow_cmd()
+        .args([
+            "report",
+            broken.to_str().unwrap(),
+            "-f",
+            "json",
+            "--strict",
+            "-o",
+            "-",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out2.status.success(),
+        "json never renders the template — a broken one must not fail: {}",
+        String::from_utf8_lossy(&out2.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&out2.stderr).contains("template render failed"),
+        "no fallback warning expected for json"
+    );
+}
+
+/// --run DIR with a workflow but no checkpoint degrades to a template-level
+/// report with the standard warning; --run DIR with nothing at all fails
+/// with the friendly discovery error.
+#[test]
+fn cli_report_run_flag_friendly_when_no_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("wf.oxoflow"),
+        "[workflow]\nname = \"tiny\"\nversion = \"0.1\"\n\n\
+         [[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n",
+    )
+    .unwrap();
+
+    let degraded = oxo_flow_cmd()
+        .args(["report", "--run"])
+        .arg(dir.path().to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(
+        degraded.status.success(),
+        "missing checkpoint must degrade, not fail: {}",
+        String::from_utf8_lossy(&degraded.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&degraded.stderr);
+    assert!(
+        stderr.contains("No checkpoint found"),
+        "must warn about the missing checkpoint: {stderr}"
+    );
+    assert!(
+        dir.path().join(".oxo-flow/reports").exists(),
+        "the degraded report must still be written next to the run dir"
+    );
+
+    // --run DIR with no workflow and no checkpoint: friendly error that
+    // points at --plan and an explicit WORKFLOW.
+    let empty = tempfile::tempdir().unwrap();
+    let out = oxo_flow_cmd()
+        .args(["report", "--run"])
+        .arg(empty.path().to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("no workflow found"), "{stderr}");
+    assert!(stderr.contains("--plan"), "{stderr}");
+}
+
+/// Zero-arg discovery without any prior run: the unique .oxoflow in the
+/// current directory is found and the UNRUN dashboard is reported (no
+/// execution data).
+#[test]
+fn cli_report_zero_arg_discovers_unrun_workflow() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("wf.oxoflow"),
+        "[workflow]\nname = \"tiny\"\nversion = \"0.1\"\n\n\
+         [[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n",
+    )
+    .unwrap();
+
+    let out = oxo_flow_cmd()
+        .args(["report"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "zero-arg discovery failed");
+    assert!(
+        out.stdout.is_empty(),
+        "auto-discovered report must not hit stdout"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("No checkpoint found"),
+        "must note the missing checkpoint: {stderr}"
+    );
+    assert!(
+        stderr.contains("Report written to"),
+        "must print the written path: {stderr}"
+    );
+
+    let reports: Vec<PathBuf> = fs::read_dir(dir.path().join(".oxo-flow/reports"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(reports.len(), 1);
+    let content = fs::read_to_string(&reports[0]).unwrap();
+    assert!(
+        content.contains("0 executed"),
+        "UNRUN dashboard must say 0 executed: {content}"
+    );
+    assert!(
+        !content.contains("All tasks completed"),
+        "must not claim completion without a checkpoint: {content}"
     );
 }
 

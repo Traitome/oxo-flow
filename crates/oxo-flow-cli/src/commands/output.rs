@@ -135,23 +135,174 @@ fn load_checkpoint(
     }
 }
 
+/// Result of workflow resolution for `report`.
+struct ResolvedReportWorkflow {
+    workflow: PathBuf,
+    /// Some when the workflow was auto-discovered (zero-arg or --run): the
+    /// directory whose `.oxo-flow/` anchors the checkpoint and the default
+    /// report output.
+    discovery_dir: Option<PathBuf>,
+    /// Checkpoint already loaded during discovery — either the workflow
+    /// came from its workflow_path, or the checkpoint exists but cannot
+    /// pin the workflow. Carried forward so the reporting phase never
+    /// loads (or warns about) it twice.
+    checkpoint: Option<oxo_flow_core::executor::CheckpointState>,
+    /// Path of that pre-loaded checkpoint.
+    checkpoint_path: Option<PathBuf>,
+}
+
+/// Resolve the workflow for `report` (issue #83 WS5): explicit path wins;
+/// otherwise auto-discovery — `--run DIR` > `--workdir` > cwd — via the
+/// discovery-relative checkpoint's workflow_path (falling back to a unique
+/// `*.oxoflow` in the directory). `--plan` skips the checkpoint load.
+fn resolve_report_workflow(
+    workflow: Option<PathBuf>,
+    run_dir: Option<&Path>,
+    workdir: Option<&Path>,
+    checkpoint_path: Option<&Path>,
+    plan: bool,
+) -> Result<ResolvedReportWorkflow> {
+    let cwd = std::env::current_dir().context("cannot determine current directory")?;
+    let discovery_dir: Option<PathBuf> = match (&workflow, run_dir) {
+        (Some(_), _) => None,
+        (None, Some(dir)) => Some(dir.to_path_buf()),
+        (None, None) => Some(match workdir {
+            Some(dir) => dir.to_path_buf(),
+            None => cwd,
+        }),
+    };
+
+    let mut checkpoint: Option<oxo_flow_core::executor::CheckpointState> = None;
+    let mut discovered_checkpoint_path: Option<PathBuf> = None;
+
+    let workflow = match workflow {
+        Some(path) => path,
+        None => {
+            let discovery_dir = discovery_dir
+                .as_ref()
+                .expect("None only for explicit workflows");
+            let disc_cp = checkpoint_path
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| discovery_dir.join(".oxo-flow").join("checkpoint.json"));
+            // --plan ignores execution data: no checkpoint load, straight
+            // to workflow discovery.
+            let loaded = if plan {
+                None
+            } else {
+                oxo_flow_core::executor::CheckpointState::load_from_file(&disc_cp).ok()
+            };
+            match loaded {
+                Some(cp) => {
+                    // Carry the loaded checkpoint forward even when it
+                    // cannot pin the workflow (missing workflow_path) —
+                    // the reporting phase must not reload or double-warn.
+                    discovered_checkpoint_path = Some(disc_cp);
+                    if let Some(wp) = cp.workflow_path.clone()
+                        && Path::new(&wp).is_file()
+                    {
+                        checkpoint = Some(cp);
+                        PathBuf::from(wp)
+                    } else {
+                        checkpoint = Some(cp);
+                        discover_report_workflow_in(discovery_dir)?
+                    }
+                }
+                None => discover_report_workflow_in(discovery_dir)?,
+            }
+        }
+    };
+
+    Ok(ResolvedReportWorkflow {
+        workflow,
+        discovery_dir,
+        checkpoint,
+        checkpoint_path: discovered_checkpoint_path,
+    })
+}
+
 /// Resolve a `[report].template` entry and render the report through it.
 ///
 /// `"report.html"` selects the built-in Tera template; anything else is a
-/// filesystem path (read as UTF-8 text — non-UTF-8 template files are an
-/// error). Any failure propagates for the caller to fall back on.
+/// template file path, resolved relative to the workflow's directory first
+/// (a template next to the workflow works from any cwd), then the process
+/// cwd. Files must be UTF-8 text.
+///
+/// The template is registered under a name with an autoescape-suffixed
+/// extension so Tera escapes `{{ variables }}` exactly like the built-in
+/// template — a hostile workflow name must not render raw HTML into a
+/// shareable report. Any failure propagates for the caller to fall back on.
 fn render_with_custom_template(
     template: &str,
     report: &oxo_flow_core::report::Report,
+    workflow_dir: &Path,
 ) -> Result<String> {
     let mut engine = TemplateEngine::new()?;
     if template == "report.html" {
         Ok(engine.render_report(report)?)
     } else {
-        let content = std::fs::read_to_string(template)
-            .with_context(|| format!("failed to read template {}", template))?;
-        engine.add_template("custom", &content)?;
-        Ok(engine.render_with_template("custom", report)?)
+        let path = Path::new(template);
+        let resolved = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            let next_to_workflow = workflow_dir.join(path);
+            if next_to_workflow.is_file() {
+                next_to_workflow
+            } else {
+                path.to_path_buf()
+            }
+        };
+        let content = std::fs::read_to_string(&resolved)
+            .with_context(|| format!("failed to read template {}", resolved.display()))?;
+        // Tera autoescapes only names ending in .html/.htm/.xml; the
+        // --init-template scaffold is report-template.tera, so fall back
+        // to "custom.html" unless the file name already carries an
+        // autoescape suffix.
+        let name = resolved
+            .file_name()
+            .and_then(|n| n.to_str())
+            .filter(|n| n.ends_with(".html") || n.ends_with(".htm") || n.ends_with(".xml"))
+            .map(str::to_string)
+            .unwrap_or_else(|| "custom.html".to_string());
+        engine.add_template(&name, &content)?;
+        Ok(engine.render_with_template(&name, report)?)
+    }
+}
+
+/// Render `[report].template` for the effective output format (issue #83
+/// P0-9).
+///
+/// Templates apply to HTML output only: with `-f json`/`-f md` (or pdf)
+/// the template is skipped with a stderr note — never rendered, so a
+/// broken template cannot warn or exit 2 (under --strict) for a format
+/// that would not use it. Render failures fall back to the default
+/// renderer, or exit 2 under --strict.
+fn render_template_for_format(
+    config: &WorkflowConfig,
+    format: &str,
+    strict: bool,
+    report: &oxo_flow_core::report::Report,
+    workflow: &Path,
+) -> Option<String> {
+    let template = config.report.as_ref().and_then(|r| r.template.clone())?;
+    if !matches!(format, "html" | "htm") {
+        eprintln!(
+            "  {} template applies to HTML output only",
+            "Note:".yellow()
+        );
+        return None;
+    }
+    match render_with_custom_template(&template, report, oxo_flow_core::parent_dir(workflow)) {
+        Ok(html) => Some(html),
+        Err(e) => {
+            eprintln!(
+                "  {} template render failed — falling back to the default renderer: {e}",
+                "⚠".yellow()
+            );
+            if strict {
+                std::process::exit(2);
+            }
+            None
+        }
     }
 }
 
@@ -173,10 +324,7 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
         init_template,
         list_templates,
     } = args;
-    use oxo_flow_core::{
-        executor::CheckpointState,
-        report::{ReportBuilder, ReportContent, ReportSection},
-    };
+    use oxo_flow_core::report::{ReportBuilder, ReportContent, ReportSection};
 
     print_banner();
 
@@ -195,7 +343,10 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
     // P2-7). Early return — no workflow needed.
     if list_templates {
         println!("report.html  built-in default");
-        eprintln!("  Custom templates load from [report].template paths in the workflow file.");
+        eprintln!(
+            "  Custom templates load from [report].template — \"report.html\" (built-in) or a \
+             template file path resolved relative to the workflow file."
+        );
         return Ok(());
     }
 
@@ -215,48 +366,17 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
     }
 
     // ── Workflow resolution ─────────────────────────────────────────────
-    // Explicit WORKFLOW wins. Otherwise auto-discover (issue #83 WS5):
-    // the discovery directory is --run DIR when given, else --workdir,
-    // else the current directory. The checkpoint there pins the exact
-    // workflow that ran via its workflow_path; without a checkpoint, a
-    // unique *.oxoflow in the directory.
-    let cwd = std::env::current_dir().context("cannot determine current directory")?;
-    let discovery_dir: Option<PathBuf> = match (&workflow, &run_dir) {
-        (Some(_), _) => None,
-        (None, Some(dir)) => Some(dir.clone()),
-        (None, None) => Some(workdir.clone().unwrap_or(cwd)),
-    };
-
-    // A checkpoint loaded during discovery is carried forward so the
-    // reporting phase never loads (or warns about) it twice.
-    let mut checkpoint: Option<oxo_flow_core::executor::CheckpointState> = None;
-    let mut discovered_checkpoint_path: Option<PathBuf> = None;
-
-    let workflow = match workflow {
-        Some(path) => path,
-        None => {
-            let discovery_dir = discovery_dir
-                .as_ref()
-                .expect("None only for explicit workflows");
-            let disc_cp = checkpoint_path
-                .clone()
-                .unwrap_or_else(|| discovery_dir.join(".oxo-flow").join("checkpoint.json"));
-            // --plan ignores execution data: no checkpoint load, straight
-            // to workflow discovery.
-            if plan {
-                discover_report_workflow_in(discovery_dir)?
-            } else if let Ok(cp) = CheckpointState::load_from_file(&disc_cp)
-                && let Some(wp) = cp.workflow_path.clone()
-                && Path::new(&wp).is_file()
-            {
-                checkpoint = Some(cp);
-                discovered_checkpoint_path = Some(disc_cp);
-                PathBuf::from(wp)
-            } else {
-                discover_report_workflow_in(discovery_dir)?
-            }
-        }
-    };
+    // Explicit WORKFLOW wins; otherwise auto-discovery (issue #83 WS5) —
+    // see resolve_report_workflow.
+    let resolved = resolve_report_workflow(
+        workflow,
+        run_dir.as_deref(),
+        workdir.as_deref(),
+        checkpoint_path.as_deref(),
+        plan,
+    )?;
+    let discovery_dir = resolved.discovery_dir;
+    let workflow = resolved.workflow;
     let config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
@@ -291,12 +411,14 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
     };
 
     // Determine checkpoint path: discovery-loaded > explicit --checkpoint >
-    // base-relative (--run DIR / --workdir / auto-discovered directory, else
-    // the workflow's directory) (issues #68, #83 WS5).
-    let checkpoint_path = discovered_checkpoint_path.unwrap_or_else(|| {
+    // base-relative. The base is --workdir when given (even with an
+    // explicit WORKFLOW — issue #68 semantics), else the auto-discovered
+    // directory, else the workflow's directory (issue #83 WS5).
+    let checkpoint_path = resolved.checkpoint_path.unwrap_or_else(|| {
         checkpoint_path.unwrap_or_else(|| {
-            let base = discovery_dir
+            let base = workdir
                 .clone()
+                .or(discovery_dir.clone())
                 .unwrap_or_else(|| oxo_flow_core::parent_dir(&workflow).to_path_buf());
             base.join(".oxo-flow").join("checkpoint.json")
         })
@@ -307,10 +429,10 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
     // warning is printed. Discovery may have already loaded it.
     let checkpoint = if plan {
         None
-    } else if checkpoint.is_none() {
-        load_checkpoint(&checkpoint_path, strict)?
+    } else if resolved.checkpoint.is_some() {
+        resolved.checkpoint
     } else {
-        checkpoint
+        load_checkpoint(&checkpoint_path, strict)?
     };
 
     // AI result interpretation: plain-language summary of outcomes,
@@ -421,51 +543,17 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
     let report = report.build();
 
     // ── Custom template (issue #83 P0-9) ────────────────────────────────
-    // [report].template = "report.html" selects the built-in Tera template;
-    // any other value is a template file path (read as UTF-8). The rendered
-    // string replaces to_html() — JSON/Markdown/PDF are unaffected. Any
-    // error falls back to the default renderer (exit 2 under --strict).
-    let template_html: Option<String> =
-        match config.report.as_ref().and_then(|r| r.template.clone()) {
-            Some(template) => match render_with_custom_template(&template, &report) {
-                Ok(html) => Some(html),
-                Err(e) => {
-                    eprintln!(
-                        "  {} template render failed — falling back to the default renderer: {e}",
-                        "⚠".yellow()
-                    );
-                    if strict {
-                        std::process::exit(2);
-                    }
-                    None
-                }
-            },
-            None => None,
-        };
+    // [report].template applies to HTML output only: for json/md/pdf it is
+    // skipped with a stderr note (never rendered, so a broken template
+    // cannot fail a format that would not use it); for html the rendered
+    // string replaces to_html(), falling back on error (exit 2 under
+    // --strict). See render_template_for_format.
+    let template_html = render_template_for_format(&config, &format, strict, &report, &workflow);
 
     let content = match format.as_str() {
-        "html" | "htm" => match template_html {
-            Some(html) => html,
-            None => report.to_html(),
-        },
-        "json" => {
-            if template_html.is_some() {
-                eprintln!(
-                    "  {} template applies to HTML output only",
-                    "Note:".yellow()
-                );
-            }
-            report.to_json().map_err(|e| anyhow::anyhow!(e))?
-        }
-        "md" | "markdown" => {
-            if template_html.is_some() {
-                eprintln!(
-                    "  {} template applies to HTML output only",
-                    "Note:".yellow()
-                );
-            }
-            report.to_markdown()
-        }
+        "html" | "htm" => template_html.unwrap_or_else(|| report.to_html()),
+        "json" => report.to_json().map_err(|e| anyhow::anyhow!(e))?,
+        "md" | "markdown" => report.to_markdown(),
         "pdf" => {
             let pdf_output = output
                 .clone()
