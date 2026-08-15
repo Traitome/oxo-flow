@@ -460,6 +460,18 @@ jobs:
         with:
           path: artifacts
 
+      - name: Stage stable "latest" CLI tarball
+        shell: bash
+        run: |
+          set -euxo pipefail
+          # Byte-identical copy of the CLI tarball under a version-less name.
+          # Consumers (oxo-flow-community CI, install docs) reference it via
+          # https://github.com/Traitome/oxo-flow/releases/latest/download/oxo-flow-latest-x86_64-unknown-linux-gnu.tar.gz
+          # so they track the latest release without per-release edits.
+          mkdir -p artifacts/dist
+          cp "artifacts/binaries-x86_64-unknown-linux-gnu/oxo-flow-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz" \
+            "artifacts/dist/oxo-flow-latest-x86_64-unknown-linux-gnu.tar.gz"
+
       - name: Package Debian desktop bundle (.deb)
         shell: bash
         run: |
