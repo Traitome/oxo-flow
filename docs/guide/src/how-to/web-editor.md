@@ -22,6 +22,14 @@ The choice persists across sessions. Validation errors now carry line
 numbers; clicking a `line N` chip scrolls the TOML editor to the failing
 line.
 
+## Canvas edits preserve your comments
+
+Canvas, palette, and inspector edits are position-aware: the backend
+patches the workflow TOML in place (via `toml_edit`), so hand-written
+comments, blank lines, and formatting survive every edit — including
+`remove_rule`/`connect`/`disconnect`/`add_rule` operations. Only the
+edited rule's keys change; untouched rules keep their exact bytes.
+
 ## History
 
 The left-rail History tab lists every saved revision (up to 50): load a

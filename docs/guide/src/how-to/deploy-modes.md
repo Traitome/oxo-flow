@@ -211,6 +211,23 @@ Team/HPC modes scope every resource to the acting user:
 - **Shared infrastructure**: the server AI provider, webhook endpoint, and
   SSH cluster connections are admin-managed outside personal mode.
 
+## Per-User AI Credentials
+
+Every user-facing AI call (chat, translate, explain, interpret, optimize)
+resolves the **acting user's own saved provider** (`PUT /api/ai/config/user`)
+before falling back to the shared runtime:
+
+- resolution order per call: the user's row (unless `disabled`) → the
+  server-level provider (env / admin config) → default
+- a non-admin's saved key **never reconfigures the shared runtime** — it
+  is cached per user and invalidated on every config write
+- a per-user row without an api key carries an empty key: their calls
+  fail loudly instead of silently borrowing the server's key (no
+  shared-secret leakage in either direction)
+- server-level writes (`POST /api/ai/config`, `PUT /api/ai/config/server`)
+  stay admin-only outside personal mode and invalidate all per-user
+  fallbacks
+
 ## Testing & Development
 
 `OXO_FLOW_DISABLE_RATE_LIMIT=1` disables the per-IP rate limiter — the
