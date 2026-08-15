@@ -56,6 +56,7 @@ pub mod format;
 pub mod plugin;
 pub mod readiness;
 pub mod reentry;
+pub mod references;
 pub mod result;
 
 #[cfg(feature = "report")]
