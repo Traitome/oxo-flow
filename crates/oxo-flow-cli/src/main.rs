@@ -540,7 +540,7 @@ pub enum Commands {
         no_timestamps: bool,
         #[arg(
             long,
-            help = "Fail (exit 2) when the checkpoint is missing or workflow report configuration is unsupported"
+            help = "Fail (exit 2) when the checkpoint is missing or the report template fails to render"
         )]
         strict: bool,
         #[arg(long, help = "List available report sections and exit")]

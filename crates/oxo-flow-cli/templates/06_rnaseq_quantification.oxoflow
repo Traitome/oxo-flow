@@ -115,6 +115,7 @@ multiqc qc/ counts/ -o results/ --force
 conda = "envs/multiqc.yaml"
 
 [report]
-template = "rnaseq_report"
+# template: reserved — supply a real Tera template file path to use one
+# template = "rnaseq_report"
 format = ["html", "json"]
 sections = ["summary", "qc_metrics", "alignment_stats", "gene_counts"]

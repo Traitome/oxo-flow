@@ -19,7 +19,8 @@ threads = 8
 memory = "16G"
 
 [report]
-template = "report/clinical_template.html"
+# template: reserved — supply a real Tera template file path to use one
+# template = "report/clinical_template.html"
 format = [
     "html",
     "json",

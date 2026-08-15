@@ -314,6 +314,7 @@ memory = "16G"
 conda = "envs/vep.yaml"
 
 [report]
-template = "germline_report"
+# template: reserved — supply a real Tera template file path to use one
+# template = "germline_report"
 format = ["html", "json"]
 sections = ["summary", "qc_metrics", "coverage", "variants", "annotations", "provenance"]

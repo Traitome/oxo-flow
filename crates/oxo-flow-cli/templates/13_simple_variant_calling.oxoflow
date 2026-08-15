@@ -18,7 +18,8 @@ threads = 4
 memory = "8G"
 
 [report]
-template = "variant_report"
+# template: reserved — supply a real Tera template file path to use one
+# template = "variant_report"
 format = [
     "html",
     "json",

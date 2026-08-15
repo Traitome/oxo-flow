@@ -804,15 +804,15 @@ fn sanitize_tsv(value: &str) -> String {
     value.replace(['\t', '\n', '\r'], " ")
 }
 
-/// Write `sample_table.tsv` (sample → group) and `metrics.tsv` (rule →
-/// wall/memory/status) into `dir` for downstream R analysis. Headers first,
-/// deterministic order, one path per line on stderr. With no checkpoint the
-/// files carry headers only and a stderr note explains why.
 /// Print the per-file confirmation line for `--r-data` exports.
 fn announce_r_data_written(path: &Path) {
     eprintln!("  {} R data written to {}", "✓".green(), path.display());
 }
 
+/// Write `sample_table.tsv` (sample → group) and `metrics.tsv` (rule →
+/// wall/memory/status) into `dir` for downstream R analysis. Headers first,
+/// deterministic order, one path per line on stderr. With no checkpoint the
+/// files carry headers only and a stderr note explains why.
 fn write_r_data(
     dir: &Path,
     config: &WorkflowConfig,
