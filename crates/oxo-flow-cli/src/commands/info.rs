@@ -50,9 +50,12 @@ fn derive_meta(workflow: &Path, cfg: &WorkflowConfig) -> Value {
     tools.sort();
     tools.dedup();
 
-    // Max resources across rules; unset threads count as 1 (serde default
-    // semantics — the same value the engine uses at run time).
-    let max_threads = cfg
+    // Max resources across rules, computed on a defaults-applied view —
+    // the same value the engine uses at run time (run/dry-run both call
+    // apply_defaults before scheduling).
+    let mut effective = cfg.clone();
+    effective.apply_defaults();
+    let max_threads = effective
         .rules
         .iter()
         .map(|rule| rule.effective_threads())
@@ -60,7 +63,7 @@ fn derive_meta(workflow: &Path, cfg: &WorkflowConfig) -> Value {
         .unwrap_or(1);
     // Compare parsed sizes, report the winning rule's original string so the
     // format ("16G" vs "16384M") stays truthful.
-    let max_memory = cfg
+    let max_memory = effective
         .rules
         .iter()
         .filter_map(|rule| rule.effective_memory().map(|m| (parse_memory_mb(m), m)))
@@ -76,22 +79,27 @@ fn derive_meta(workflow: &Path, cfg: &WorkflowConfig) -> Value {
             .or_insert(0) += 1;
     }
 
-    // [config] keys, excluding engine-injected churn keys (samples_list,
-    // pairs_list, samples_*) that are never catalog-relevant.
+    // [config] keys, excluding engine-injected keys — the run-time churn
+    // keys (samples_list, pairs_list, samples_*) and the parse-time
+    // injections (reference keyed-config values, reference_dir-derived
+    // paths) are never catalog-relevant.
     let mut config_keys: Vec<String> = cfg
         .config
         .keys()
-        .filter(|key| !is_engine_injected_key(key))
+        .filter(|key| !is_engine_injected_key(key) && !cfg.is_injected_config_key(key))
         .cloned()
         .collect();
     config_keys.sort();
 
-    let sample_groups: Vec<Value> = cfg
+    // Ordering contract: deterministic under file edits, so the catalog
+    // drift gate diffs stable output (same sorting as config_keys).
+    let mut sample_groups: Vec<Value> = cfg
         .sample_groups
         .iter()
         .map(|group| json!({ "name": group.name, "samples": group.samples }))
         .collect();
-    let pairs: Vec<Value> = cfg
+    sample_groups.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    let mut pairs: Vec<Value> = cfg
         .pairs
         .iter()
         .map(|pair| {
@@ -102,11 +110,13 @@ fn derive_meta(workflow: &Path, cfg: &WorkflowConfig) -> Value {
             })
         })
         .collect();
-    let references: Vec<Value> = cfg
+    pairs.sort_by(|a, b| a["pair_id"].as_str().cmp(&b["pair_id"].as_str()));
+    let mut references: Vec<Value> = cfg
         .references
         .iter()
         .map(|reference| json!({ "name": reference.name, "output": reference.output }))
         .collect();
+    references.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
 
     json!({
         "command": "info",
@@ -140,9 +150,22 @@ fn config_params(cfg: &WorkflowConfig) -> Vec<Value> {
     let mut records: Vec<Value> = cfg
         .config
         .iter()
-        .filter(|(key, _)| !is_engine_injected_key(key))
+        .filter(|(key, _)| !is_engine_injected_key(key) && !cfg.is_injected_config_key(key))
         .map(|(key, value)| {
-            let default = to_json_value(value);
+            // Declared parameters (`key = { default, type, … }`) render
+            // from their metadata: the raw toml table would surface the
+            // whole declaration object as an opaque "table" default.
+            let (default, value_type) = match cfg.config_meta.get(key) {
+                Some(def) => (
+                    declared_default(def),
+                    def.type_.as_deref().unwrap_or("string").to_string(),
+                ),
+                None => {
+                    let default = to_json_value(value);
+                    let value_type = value_type_name(&default);
+                    (default, value_type.to_string())
+                }
+            };
             let mut used_by: Vec<&str> = cfg
                 .rules
                 .iter()
@@ -153,13 +176,39 @@ fn config_params(cfg: &WorkflowConfig) -> Vec<Value> {
             json!({
                 "key": key,
                 "default": default,
-                "value_type": value_type_name(&default),
+                "value_type": value_type,
                 "used_by": used_by,
             })
         })
         .collect();
     records.sort_by(|a, b| a["key"].as_str().cmp(&b["key"].as_str()));
     records
+}
+
+/// JSON default for a declarative `[config]` entry, rendered per its
+/// declared `type` (int/float/bool are real JSON numbers/booleans, not
+/// quoted strings — the same coercion the engine applies at run time).
+fn declared_default(def: &oxo_flow_core::config::ConfigDef) -> Value {
+    let Some(default) = def.default.as_deref() else {
+        return Value::Null;
+    };
+    match def.type_.as_deref() {
+        Some("int") => default
+            .parse::<i64>()
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+        Some("float") => default
+            .parse::<f64>()
+            .ok()
+            .and_then(serde_json::Number::from_f64)
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+        Some("bool") => default
+            .parse::<bool>()
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+        _ => Value::String(default.to_string()),
+    }
 }
 
 /// Does the rule reference the config key in its shell, script, I/O patterns
@@ -518,6 +567,82 @@ mod tests {
                 },
             ])
         );
+    }
+
+    #[test]
+    fn derive_meta_excludes_engine_injected_reference_keys() {
+        // config_keys / config report only user-declared parameters: the
+        // reference keyed-config value (config.mini_index) and the
+        // reference_dir-derived paths are engine injections, not catalog
+        // parameters the author wrote.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("refs.oxoflow");
+        std::fs::write(
+            &path,
+            r#"
+            [workflow]
+            name = "t"
+            version = "1.0"
+
+            [config]
+            reference_dir = "refs"
+            min_cov = 30
+
+            [[references]]
+            name = "mini_index"
+            source = "refs/genome.fa"
+            output = "refs/genome.fa.idx"
+            build = "touch refs/genome.fa.idx"
+
+            [[rules]]
+            name = "step1"
+            output = ["out.txt"]
+            shell = "echo {config.min_cov}"
+            "#,
+        )
+        .unwrap();
+        let cfg = WorkflowConfig::from_file(&path).unwrap();
+        let meta = derive_meta(&path, &cfg);
+        let keys = meta["config_keys"].as_array().unwrap();
+        assert_eq!(keys.len(), 2, "{keys:?}");
+        let names: Vec<&str> = keys.iter().filter_map(|k| k.as_str()).collect();
+        assert!(names.contains(&"reference_dir"));
+        assert!(names.contains(&"min_cov"));
+        assert!(
+            !names.contains(&"mini_index") && !names.contains(&"reference_fasta"),
+            "engine-injected reference keys must not appear: {names:?}"
+        );
+    }
+
+    #[test]
+    fn derive_meta_resources_reflect_workflow_defaults() {
+        // resources must report the same value the engine uses at run
+        // time: [defaults] applies before scheduling, so max_threads /
+        // max_memory reflect it (not the serde unset sentinel of 1/null).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("defaults.oxoflow");
+        std::fs::write(
+            &path,
+            r#"
+            [workflow]
+            name = "t"
+            version = "1.0"
+
+            [defaults]
+            threads = 4
+            memory = "8G"
+
+            [[rules]]
+            name = "step1"
+            output = ["out.txt"]
+            shell = "echo hi"
+            "#,
+        )
+        .unwrap();
+        let cfg = WorkflowConfig::from_file(&path).unwrap();
+        let meta = derive_meta(&path, &cfg);
+        assert_eq!(meta["resources"]["max_threads"], 4);
+        assert_eq!(meta["resources"]["max_memory"], "8G");
     }
 
     #[test]

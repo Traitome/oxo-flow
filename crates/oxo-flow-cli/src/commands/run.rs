@@ -575,6 +575,14 @@ pub async fn run_command(
         samples::print_readiness_section(&readiness);
     }
 
+    // Load profile if specified and merge config values — the SAME shared
+    // helper dry-run uses, so preview and execution can never drift apart.
+    // Merged BEFORE apply_defaults so a profile's `[defaults]` table
+    // actually reaches the rules (apply_defaults consumes self.defaults).
+    if let Some(ref profile_name) = profile {
+        crate::commands::run_preview::merge_profile(&mut config, profile_name, &workflow_dir)?;
+    }
+
     config.apply_defaults();
     config
         .expand_wildcards()
@@ -595,11 +603,6 @@ pub async fn run_command(
         order.len()
     );
 
-    // Load profile if specified and merge config values — the SAME shared
-    // helper dry-run uses, so preview and execution can never drift apart.
-    if let Some(ref profile_name) = profile {
-        crate::commands::run_preview::merge_profile(&mut config, profile_name, &workflow_dir)?;
-    }
     for (i, rule_name) in order.iter().enumerate() {
         eprintln!("  {}. {}", i + 1, rule_name);
     }
@@ -2621,10 +2624,11 @@ pub async fn dry_run_command(
             })
         });
 
-        // Stable per-rule plan (schema_version 2): status is the same
-        // bracket word the human listing prints ([run:/[skip:/[rerun:),
-        // reason is the human status text after the colon — so the JSON is
-        // a 1:1 structured mirror of the stderr plan the ecosystem greps.
+        // Stable per-rule plan (schema_version 1 — the first release to
+        // ship this surface): status is the same bracket word the human
+        // listing prints ([run:/[skip:/[rerun:), reason is the human
+        // status text after the colon — so the JSON is a 1:1 structured
+        // mirror of the stderr plan the ecosystem greps.
         let plan_entries: Vec<serde_json::Value> = order
             .iter()
             .filter_map(|name| {
@@ -2680,6 +2684,32 @@ pub async fn dry_run_command(
                         &wildcard_values,
                     )
                 });
+                // Declared patterns stay raw in inputs/outputs (the stable
+                // contract); the expanded variants give consumers the exact
+                // per-instance paths the engine will touch — the same
+                // {config.x} expansion the human stderr listing shows.
+                let inputs_expanded: Vec<String> = rule
+                    .input
+                    .to_vec()
+                    .iter()
+                    .map(|p| {
+                        oxo_flow_core::executor::checkpoint::expand_config_in_path(
+                            p,
+                            &wildcard_values,
+                        )
+                    })
+                    .collect();
+                let outputs_expanded: Vec<String> = rule
+                    .output
+                    .to_vec()
+                    .iter()
+                    .map(|p| {
+                        oxo_flow_core::executor::checkpoint::expand_config_in_path(
+                            p,
+                            &wildcard_values,
+                        )
+                    })
+                    .collect();
                 Some(serde_json::json!({
                     "name": rule.name,
                     "status": status,
@@ -2691,13 +2721,15 @@ pub async fn dry_run_command(
                     "command": expanded_shell,
                     "inputs": serde_json::to_value(&rule.input).unwrap_or(serde_json::Value::Null),
                     "outputs": serde_json::to_value(&rule.output).unwrap_or(serde_json::Value::Null),
+                    "inputs_expanded": inputs_expanded,
+                    "outputs_expanded": outputs_expanded,
                 }))
             })
             .collect();
 
         let output = serde_json::json!({
             "command": "dry-run",
-            "schema_version": 2,
+            "schema_version": 1,
             "workflow": workflow.display().to_string(),
             "total_rules": order.len(),
             "execution_order": order_list,

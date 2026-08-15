@@ -708,6 +708,52 @@ shell = "echo {config.mode} {config.extra} > out.txt"
 }
 
 #[test]
+fn cli_run_profile_defaults_reach_rule_execution() {
+    // Regression: `run` merged the profile AFTER apply_defaults, so a
+    // profile's [defaults] never reached the rules (dry-run was correct).
+    // The rule renders {threads} into its output — the executed value
+    // must match the profile's (quoted, historically tolerated) threads.
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("w.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "t"
+version = "1.0"
+profile_mode = "override"
+
+[defaults]
+threads = 1
+
+[[rules]]
+name = "step1"
+output = ["out.txt"]
+shell = "echo {threads} > out.txt"
+"#,
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("profiles")).unwrap();
+    // Quoted numeric + small enough for the resource pool on any CI box.
+    fs::write(
+        dir.path().join("profiles/cluster.toml"),
+        "[defaults]\nthreads = \"2\"\n",
+    )
+    .unwrap();
+
+    oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--profile", "cluster"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(dir.path().join("out.txt")).unwrap();
+    assert_eq!(
+        content, "2\n",
+        "profile [defaults] threads must reach the rule"
+    );
+}
+
+#[test]
 fn cli_dry_run_previews_checkpoint_status() {
     let dir = tempfile::tempdir().unwrap();
     let wf = dir.path().join("w.oxoflow");
@@ -790,7 +836,7 @@ shell = "cp out1.txt out2.txt"
     assert_eq!(preview["plan"][1]["cascaded_from"], "step1", "{stdout}");
 }
 
-/// dry-run --json emits a stable machine-readable plan (schema_version 2):
+/// dry-run --json emits a stable machine-readable plan (schema_version 1):
 /// per-rule status/reason/threads/memory/environment/expanded command/
 /// inputs/outputs, summary counters, sample groups and pairs — while the
 /// human stderr listing stays byte-identical with or without --json (the
@@ -871,7 +917,7 @@ shell = "cp out1.txt out2.txt"
     let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
 
     assert_eq!(v["command"], "dry-run", "{stdout}");
-    assert_eq!(v["schema_version"], 2, "{stdout}");
+    assert_eq!(v["schema_version"], 1, "{stdout}");
     assert!(v["workflow"].as_str().unwrap().ends_with("plan.oxoflow"));
 
     let plan = v["plan"].as_array().unwrap();
@@ -896,6 +942,8 @@ shell = "cp out1.txt out2.txt"
             "command",
             "inputs",
             "outputs",
+            "inputs_expanded",
+            "outputs_expanded",
         ] {
             assert!(
                 entry.get(key).is_some(),
@@ -921,6 +969,16 @@ shell = "cp out1.txt out2.txt"
     );
     assert_eq!(p0["inputs"][0], "in.txt", "{p0}");
     assert_eq!(p0["outputs"][0], "out1.txt", "{p0}");
+    assert_eq!(
+        p0["inputs_expanded"],
+        serde_json::json!(["in.txt"]),
+        "expanded paths must match the engine's view: {p0}"
+    );
+    assert_eq!(
+        p0["outputs_expanded"],
+        serde_json::json!(["out1.txt"]),
+        "expanded paths must match the engine's view: {p0}"
+    );
 
     let p1 = &plan[1];
     assert_eq!(p1["name"], "step2", "{stdout}");
