@@ -48,6 +48,7 @@ urlencoding = "2.1.3"
 rand = "0.10.1"
 nix = { version = "0.30", features = ["signal"] }
 toml = { workspace = true }
+toml_edit = "0.22"
 
 [features]
 postgres = ["sqlx/postgres"]
