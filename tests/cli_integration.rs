@@ -7029,6 +7029,77 @@ fn cli_report_r_data_tsv() {
     assert!(call.ends_with("\tsuccess"), "call must be success: {call}");
 }
 
+/// `--r-data` on a workflow that never ran writes headers-only TSVs and
+/// warns on stderr instead of failing.
+#[test]
+fn cli_report_r_data_headers_only_without_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n",
+    );
+    let rdir = dir.path().join("rdata");
+    let out = dir.path().join("out.json");
+    oxo_flow_cmd()
+        .args([
+            "report",
+            wf.to_str().unwrap(),
+            "-f",
+            "json",
+            "-o",
+            out.to_str().unwrap(),
+            "--r-data",
+        ])
+        .arg(rdir.to_str().unwrap())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "No checkpoint found — TSV files contain headers only",
+        ));
+
+    assert_eq!(
+        fs::read_to_string(rdir.join("sample_table.tsv")).unwrap(),
+        "sample\tgroup\n"
+    );
+    assert_eq!(
+        fs::read_to_string(rdir.join("metrics.tsv")).unwrap(),
+        "rule\twall_time_secs\tmax_memory_mb\tstatus\n"
+    );
+}
+
+/// A [[pairs]] entry with an experiment_type uses it as the sample_table
+/// group label (non-"-").
+#[test]
+fn cli_report_r_data_pair_experiment_type_group() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[pairs]]\npair_id = \"P1\"\nexperiment = \"E1\"\ncontrol = \"C1\"\nexperiment_type = \"disease\"\n\n\
+         [[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n",
+    );
+    let rdir = dir.path().join("rdata");
+    let out = dir.path().join("out.json");
+    oxo_flow_cmd()
+        .args([
+            "report",
+            wf.to_str().unwrap(),
+            "-f",
+            "json",
+            "-o",
+            out.to_str().unwrap(),
+            "--r-data",
+        ])
+        .arg(rdir.to_str().unwrap())
+        .assert()
+        .success();
+
+    let samples = fs::read_to_string(rdir.join("sample_table.tsv")).unwrap();
+    let sample_lines: Vec<&str> = samples.lines().collect();
+    assert_eq!(sample_lines[0], "sample\tgroup");
+    // Deterministic (group, sample) order: C1 before E1.
+    assert_eq!(sample_lines[1..], ["C1\tdisease", "E1\tdisease"]);
+}
+
 /// `report --diff` prints + / - / ~ lines about checkpoint state changes to
 /// stderr and always exits 0 (a diff is information, not failure).
 #[test]
@@ -7117,6 +7188,35 @@ fn cli_report_diff_missing_checkpoint_exits_1() {
         .code(1);
 }
 
+/// A --diff where THIS report's checkpoint is missing (workflow never ran)
+/// exits 1 with a message naming the missing side.
+#[test]
+fn cli_report_diff_missing_current_checkpoint_exits_1() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n",
+    );
+    let other = dir.path().join("other.json");
+    fs::write(
+        &other,
+        serde_json::json!({
+            "completed_rules": ["hello"],
+            "failed_rules": [],
+            "benchmarks": {},
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    oxo_flow_cmd()
+        .args(["report", wf.to_str().unwrap(), "--diff"])
+        .arg(other.to_str().unwrap())
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("no checkpoint found at"));
+}
+
 /// `report --acct` imports an sacct-style CSV into a Resource Accounting
 /// section with converted values (seconds, MB) (issue #83 P1-13).
 #[test]
@@ -7171,6 +7271,88 @@ fn cli_report_acct_section() {
     assert!(
         section_json.contains("1 rules had no accounting record: qc"),
         "coverage note missing: {section_json}"
+    );
+}
+
+/// `report --acct` handles exports without a JobID column (jobid is
+/// optional) — no panic, correct rows.
+#[test]
+fn cli_report_acct_without_jobid_column() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"align\"\nshell = \"echo a > align.txt\"\noutput = [\"align.txt\"]\n",
+    );
+    let csv = dir.path().join("sacct.csv");
+    fs::write(
+        &csv,
+        "JobName,State,Elapsed,CPUTime,MaxRSS\n\
+         align,COMPLETED,00:02:30,00:02:00,2048K\n",
+    )
+    .unwrap();
+
+    let out = dir.path().join("out.json");
+    oxo_flow_cmd()
+        .args(["report", wf.to_str().unwrap(), "-f", "json", "-o"])
+        .arg(out.to_str().unwrap())
+        .args(["--acct"])
+        .arg(csv.to_str().unwrap())
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(&out).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    let section = parsed["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "resource-accounting")
+        .unwrap_or_else(|| panic!("no resource-accounting section in report"));
+    assert_eq!(
+        section["content"]["rows"],
+        serde_json::json!([["align", "COMPLETED", "150", "120", "2"]])
+    );
+}
+
+/// When a JobName repeats, the batch row (JobID without a `.`/`_` step
+/// separator) wins even if the step row appears first in the file; array-task
+/// IDs like `12345_0` count as step rows.
+#[test]
+fn cli_report_acct_array_task_prefers_batch_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"align\"\nshell = \"echo a > align.txt\"\noutput = [\"align.txt\"]\n",
+    );
+    let csv = dir.path().join("sacct.csv");
+    fs::write(
+        &csv,
+        "JobID,JobName,State,Elapsed,CPUTime,MaxRSS\n\
+         12345_0,align,RUNNING,00:01:00,00:01:00,1M\n\
+         12345,align,COMPLETED,00:02:30,00:02:00,2048K\n",
+    )
+    .unwrap();
+
+    let out = dir.path().join("out.json");
+    oxo_flow_cmd()
+        .args(["report", wf.to_str().unwrap(), "-f", "json", "-o"])
+        .arg(out.to_str().unwrap())
+        .args(["--acct"])
+        .arg(csv.to_str().unwrap())
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(&out).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    let section = parsed["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "resource-accounting")
+        .unwrap_or_else(|| panic!("no resource-accounting section in report"));
+    assert_eq!(
+        section["content"]["rows"],
+        serde_json::json!([["align", "COMPLETED", "150", "120", "2"]])
     );
 }
 

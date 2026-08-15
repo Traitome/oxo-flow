@@ -808,6 +808,11 @@ fn sanitize_tsv(value: &str) -> String {
 /// wall/memory/status) into `dir` for downstream R analysis. Headers first,
 /// deterministic order, one path per line on stderr. With no checkpoint the
 /// files carry headers only and a stderr note explains why.
+/// Print the per-file confirmation line for `--r-data` exports.
+fn announce_r_data_written(path: &Path) {
+    eprintln!("  {} R data written to {}", "✓".green(), path.display());
+}
+
 fn write_r_data(
     dir: &Path,
     config: &WorkflowConfig,
@@ -848,11 +853,7 @@ fn write_r_data(
     }
     let sample_path = dir.join("sample_table.tsv");
     std::fs::write(&sample_path, &sample_table)?;
-    eprintln!(
-        "  {} R data written to {}",
-        "✓".green(),
-        sample_path.display()
-    );
+    announce_r_data_written(&sample_path);
 
     // metrics.tsv — one row per benchmark record, plus failed rules that
     // have no benchmark (wall/memory "-"), sorted by rule.
@@ -899,11 +900,7 @@ fn write_r_data(
     }
     let metrics_path = dir.join("metrics.tsv");
     std::fs::write(&metrics_path, &metrics)?;
-    eprintln!(
-        "  {} R data written to {}",
-        "✓".green(),
-        metrics_path.display()
-    );
+    announce_r_data_written(&metrics_path);
 
     if checkpoint.is_none() {
         eprintln!(
@@ -1126,8 +1123,10 @@ fn parse_hms_to_secs(value: &str) -> Option<f64> {
 /// Parse an sacct MaxRSS value to MB.
 ///
 /// Accepted forms: `"2048K"`, `"512M"`, `"1.5G"`, `"12345c"` (bytes), or a
-/// bare number (bytes). Suffixes are case-insensitive and base-1024; the
-/// result rounds UP so the table never under-reports a peak.
+/// bare number (bytes); `T` (tebibytes) is also accepted as a harmless
+/// extension beyond sacct's documented K/M/G output. Suffixes are
+/// case-insensitive and base-1024; the result rounds UP so the table never
+/// under-reports a peak.
 fn parse_maxrss_to_mb(value: &str) -> Option<u64> {
     let value = value.trim();
     if value.is_empty() {
@@ -1199,7 +1198,9 @@ fn parse_acct_csv(path: &Path) -> Result<Vec<AcctRow>> {
     let mut rows = Vec::new();
     for record in reader.records() {
         let record = record?;
-        let get = |name: &str| record.get(col(name).expect("required column checked"));
+        // jobid is optional — col() is None for it, so the closure must
+        // degrade gracefully; required columns were checked above.
+        let get = |name: &str| col(name).and_then(|i| record.get(i));
         let rule = get("jobname").unwrap_or("").trim().to_string();
         if rule.is_empty() {
             continue;
@@ -1218,7 +1219,7 @@ fn parse_acct_csv(path: &Path) -> Result<Vec<AcctRow>> {
 
 /// Merge sacct rows with the workflow's rules: one row per workflow rule
 /// that has a record, sorted by rule name, preferring the batch row (JobID
-/// without a step suffix) over step rows.
+/// without a step separator — `.` or `_`) over step rows.
 fn merge_acct_rows(rows: Vec<AcctRow>, rule_names: &[String]) -> Vec<AcctRow> {
     let mut by_name: HashMap<String, Vec<AcctRow>> = HashMap::new();
     for row in rows {
@@ -1231,8 +1232,10 @@ fn merge_acct_rows(rows: Vec<AcctRow>, rule_names: &[String]) -> Vec<AcctRow> {
         let Some(mut candidates) = by_name.remove(&name) else {
             continue; // no accounting record for this rule — omitted
         };
-        // Stable sort: batch rows (no dot in JobID) first, file order kept.
-        candidates.sort_by_key(|r| r.jobid.contains('.'));
+        // Stable sort: batch rows (JobID without a step separator — dot or
+        // underscore — in it) first, file order kept; array-task IDs like
+        // `12345_0` sort as step rows, matching sacct's own view.
+        candidates.sort_by_key(|r| r.jobid.contains(['.', '_']));
         merged.push(candidates.into_iter().next().expect("non-empty group"));
     }
     merged
