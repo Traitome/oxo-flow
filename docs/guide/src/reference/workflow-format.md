@@ -1116,7 +1116,7 @@ Built-in placeholders use the same syntax but have reserved meanings:
 | `{output.name}` | The output file named `name` from `named_output` |
 | `{threads}` | Thread count assigned to this rule |
 | `{memory}` | Memory allocation assigned to this rule |
-| `{log}` | Path of the rule's `log` field (`{sample}`/`{config.x}`-expanded; the parent directory is created automatically) |
+| `{log}` | Path of the rule's `log` field (every instance wildcard — `{sample}`, `{pair_id}`, `{assembler}` … — and `{config.x}` are expanded per instance; the parent directory is created automatically) |
 | `{config.*}` | Value from the `[config]` section (plain value, declared default, or CLI override) |
 
 **Array-valued `{config.*}`** — a `[config]` key holding an array renders

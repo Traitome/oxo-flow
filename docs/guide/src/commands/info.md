@@ -59,12 +59,17 @@ oxo-flow info [OPTIONS] <WORKFLOW>
 - **`config`** — every `[config]` parameter with its default value, its
   derived type (`string` / `int` / `float` / `bool` / `array` / `table`), and
   the rules that reference it: `{config.<key>}` in shells, scripts, inputs, or
-  outputs, plus brace-less `config.<key>` in `when` conditions. Keys sorted,
-  rule lists sorted. Engine-injected keys (`samples_list`, `pairs_list`,
-  `samples_*`) are excluded; `config_keys` carries the bare key list.
+  outputs, plus brace-less `config.<key>` in `when` conditions. Declared
+  parameters (`key = { default, type, … }`) render their typed default from
+  the declaration metadata. Keys sorted, rule lists sorted.
+  Engine-injected keys are excluded — the run-time churn keys
+  (`samples_list`, `pairs_list`, `samples_*`), the reference keyed-config
+  values (`config.<reference name>` = its output), and the
+  `reference_dir`-derived paths — `config_keys` carries the bare key list.
 - **`tools`** — conda/mamba environment YAML stems and container image names
   (registry path and tag stripped), deduped and sorted.
-- **`resources`** — max threads/memory across rules, in the winning rule's
+- **`resources`** — max threads/memory across rules on the defaults-applied
+  view (the same value the engine uses at run time), in the winning rule's
   original string format.
 
 ---
