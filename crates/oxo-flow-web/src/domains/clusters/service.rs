@@ -47,6 +47,29 @@ pub fn validate(cluster: &super::types::ClusterUpsertRequest) -> Result<(), Stri
     if cluster.ssh_host.trim().is_empty() {
         return Err("ssh_host must not be empty".into());
     }
+    for (field, value) in [
+        ("ssh_host", cluster.ssh_host.as_str()),
+        ("ssh_user", cluster.ssh_user.as_deref().unwrap_or("")),
+        ("remote_dir", cluster.remote_dir.as_deref().unwrap_or("")),
+    ] {
+        if value.is_empty() {
+            continue;
+        }
+        // These values are interpolated into remote shell commands (escaped
+        // at the call sites) and the ssh target argument — reject anything
+        // that could break out of either context.
+        if value.chars().any(|c| {
+            c.is_control()
+                || matches!(
+                    c,
+                    '\'' | '"' | '`' | '$' | ';' | '&' | '|' | '<' | '>' | '\n'
+                )
+        }) {
+            return Err(format!(
+                "{field} contains characters that are not allowed in shell contexts"
+            ));
+        }
+    }
     if let Some(scheduler) = cluster.scheduler.as_deref()
         && !matches!(scheduler, "auto" | "slurm" | "pbs" | "lsf" | "sge")
     {
@@ -162,11 +185,12 @@ fn scheduler_version(stdout: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::types::ClusterUpsertRequest;
     use super::*;
 
     #[test]
     fn validates_good_definitions() {
-        let req = super::super::types::ClusterUpsertRequest {
+        let req = ClusterUpsertRequest {
             id: "lab-slurm".into(),
             name: "Lab".into(),
             ssh_host: "login.lab.edu".into(),
@@ -181,8 +205,44 @@ mod tests {
     }
 
     #[test]
+    fn rejects_shell_metacharacters_in_ssh_fields() {
+        let base = ClusterUpsertRequest {
+            id: "ok".into(),
+            name: "x".into(),
+            ssh_host: "h".into(),
+            ssh_port: 22,
+            ssh_user: None,
+            ssh_key: None,
+            scheduler: None,
+            remote_dir: None,
+            enabled: true,
+        };
+        let bad_host = super::super::types::ClusterUpsertRequest {
+            ssh_host: "h'; rm -rf ~".into(),
+            ..base.clone()
+        };
+        assert!(validate(&bad_host).is_err());
+        let bad_user = super::super::types::ClusterUpsertRequest {
+            ssh_user: Some("u`id`".into()),
+            ..base.clone()
+        };
+        assert!(validate(&bad_user).is_err());
+        let bad_dir = super::super::types::ClusterUpsertRequest {
+            remote_dir: Some("~/'`$HOME".into()),
+            ..base.clone()
+        };
+        assert!(validate(&bad_dir).is_err());
+        // A plain directory with a space stays legal — the call sites quote it.
+        let spaced_dir = super::super::types::ClusterUpsertRequest {
+            remote_dir: Some("/data/my jobs".into()),
+            ..base
+        };
+        assert!(validate(&spaced_dir).is_ok());
+    }
+
+    #[test]
     fn rejects_bad_ids_and_schedulers() {
-        let base = super::super::types::ClusterUpsertRequest {
+        let base = ClusterUpsertRequest {
             id: "ok".into(),
             name: "x".into(),
             ssh_host: "h".into(),

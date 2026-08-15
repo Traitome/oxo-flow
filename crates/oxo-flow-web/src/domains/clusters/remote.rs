@@ -63,6 +63,15 @@ fn ssh(cluster: &ClusterRow) -> tokio::process::Command {
     cmd
 }
 
+/// Quote a value for a POSIX shell single-quoted context: `'` → `'\''`.
+///
+/// remote_dir and run_id are interpolated into remote shell commands; both
+/// come from admin config / server-generated UUIDs, but escaping here keeps
+/// any legacy or hand-edited value from becoming an injection primitive.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// Run one remote shell command; returns (exit_code, combined output).
 async fn remote_exec(cluster: &ClusterRow, remote_cmd: &str) -> std::io::Result<(i32, String)> {
     let output = ssh(cluster).arg(remote_cmd).output().await?;
@@ -86,8 +95,9 @@ async fn stage_directory(
     tar.stdout(Stdio::piped());
 
     let mut ssh_cmd = ssh(cluster);
+    let remote_dir_q = shell_quote(remote_dir);
     ssh_cmd.arg(format!(
-        "mkdir -p '{remote_dir}' && tar -C '{remote_dir}' -xf -"
+        "mkdir -p {remote_dir_q} && tar -C {remote_dir_q} -xf -"
     ));
     ssh_cmd.stdin(Stdio::piped());
     ssh_cmd.stdout(Stdio::null());
@@ -114,7 +124,7 @@ async fn pull_directory(
     local_dir: &Path,
 ) -> std::io::Result<()> {
     let mut ssh_cmd = ssh(cluster);
-    ssh_cmd.arg(format!("tar -C '{remote_dir}' -cf - ."));
+    ssh_cmd.arg(format!("tar -C {} -cf - .", shell_quote(remote_dir)));
     ssh_cmd.stdout(Stdio::piped());
 
     let mut tar = tokio::process::Command::new("tar");
@@ -140,7 +150,10 @@ async fn pull_directory(
 pub async fn cancel_remote(cluster: &ClusterRow, run_id: &str) -> std::io::Result<()> {
     let (code, out) = remote_exec(
         cluster,
-        &format!("pkill -TERM -f 'run-{run_id}.sh' || true"),
+        &format!(
+            "pkill -TERM -f {} || true",
+            shell_quote(&format!("run-{run_id}.sh"))
+        ),
     )
     .await?;
     tracing::info!("remote cancel for {run_id}: exit {code}, {out}");
@@ -196,7 +209,9 @@ pub fn spawn_remote_run(
         //    nohup. The wrapper name is unique (pkill target).
         let wrapper = format!("run-{run_id}.sh");
         let launch_script = format!(
-            "cd '{remote_dir}' && printf '%s\\n' '#!/bin/sh' 'oxo-flow run workflow.oxoflow --workdir .{jobs} > execution.log 2>&1' 'echo $? > .exit-code' > {wrapper} && nohup sh {wrapper} >/dev/null 2>&1 & echo launched",
+            "cd {remote_dir_q} && printf '%s\\n' '#!/bin/sh' 'oxo-flow run workflow.oxoflow --workdir .{jobs} > execution.log 2>&1' 'echo $? > .exit-code' > {wrapper_q} && nohup sh {wrapper_q} >/dev/null 2>&1 & echo launched",
+            remote_dir_q = shell_quote(&remote_dir),
+            wrapper_q = shell_quote(&wrapper),
             jobs = match max_jobs {
                 Some(j) => format!(" -j {j}"),
                 None => String::new(),
@@ -215,7 +230,10 @@ pub fn spawn_remote_run(
         }
 
         // 3. poll .exit-code every 5s.
-        let poll_cmd = format!("cat '{remote_dir}/.exit-code' 2>/dev/null || echo __RUNNING__");
+        let poll_cmd = format!(
+            "cat {}/.exit-code 2>/dev/null || echo __RUNNING__",
+            shell_quote(&remote_dir)
+        );
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             let cancelled: Option<String> =
