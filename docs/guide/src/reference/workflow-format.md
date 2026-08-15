@@ -11,7 +11,7 @@ The `.oxoflow` format is built on four core principles:
 1.  **Declarative over Imperative** — Define *what* should happen (inputs, outputs, tools), not *how* to orchestrate it. The engine handles the execution logic.
 2.  **Explicit is better than Implicit** — Every dependency and environment should be clearly visible. No hidden global state.
 3.  **Composition over Inheritance** — Reuse logic through modular `include` directives and rule templates rather than complex inheritance hierarchies.
-4.  **Traceability by Default** — The format structure directly supports generating clinical-grade provenance and audit trails.
+4.  **Traceability by Default** — The format structure directly supports generating provenance and audit trails (workflow checksums, per-rule input manifests, output hashes).
 
 ---
 

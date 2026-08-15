@@ -64,7 +64,7 @@ Learn the fundamental building blocks: rules, shell commands, inputs, outputs, a
 Master wildcards for multi-sample processing, scatter-gather parallelism patterns, and per-rule environment isolation with conda, docker, and singularity.
 
 ### Advanced (Workflows 06–10)
-Build production-grade bioinformatics pipelines covering RNA-seq, whole-genome sequencing, multi-omics integration, and single-cell analysis with clinical-grade reporting and complex DAG topologies — plus the unified `transform` operator for scatter-gather parallelism.
+Build production-grade bioinformatics pipelines covering RNA-seq, whole-genome sequencing, multi-omics integration, and single-cell analysis with auditable checkpoint-driven reporting and complex DAG topologies — plus the unified `transform` operator for scatter-gather parallelism.
 
 ### Applied Patterns (Workflows 11–15)
 Reference pipelines for real study designs: condition-gated branches, population cohorts, per-sample germline calling, and paired tumor/control somatic calling (single pair and `[[pairs]]`-scaled).
