@@ -2526,11 +2526,14 @@ impl WorkflowConfig {
                         let mut expanded = rule.clone();
                         expanded.name = new_name;
 
-                        // Expand input/output/shell patterns
+                        // Expand input/output/shell/log patterns
                         expanded.input = expand_rule_patterns(&rule.input, &combo);
                         expanded.output = expand_rule_patterns(&rule.output, &combo);
                         if let Some(ref shell) = rule.shell {
                             expanded.shell = Some(expand_rule_shell(shell, &combo));
+                        }
+                        if let Some(ref log) = rule.log {
+                            expanded.log = Some(expand_rule_shell(log, &combo));
                         }
 
                         // Record which sample names this expansion belongs to
@@ -2636,6 +2639,18 @@ impl WorkflowConfig {
                                 Some(shell.clone())
                             };
                         }
+                        if let Some(ref log) = rule.log {
+                            expanded.log = if has_wildcards(log)
+                                || crate::wildcard::contains_values_namespace(log)
+                            {
+                                Some(crate::wildcard::expand_values_namespace(
+                                    &expand_pattern(log, &merged).unwrap_or_else(|_| log.clone()),
+                                    &merged,
+                                ))
+                            } else {
+                                Some(log.clone())
+                            };
+                        }
 
                         // Record which sample this expansion belongs to
                         // (issue #63 readiness attribution).
@@ -2688,6 +2703,9 @@ impl WorkflowConfig {
                     expanded.output = expand_rule_patterns(&rule.output, combo);
                     if let Some(ref shell) = rule.shell {
                         expanded.shell = Some(expand_rule_shell(shell, combo));
+                    }
+                    if let Some(ref log) = rule.log {
+                        expanded.log = Some(expand_rule_shell(log, combo));
                     }
 
                     self.expansion_values
@@ -2802,6 +2820,10 @@ impl WorkflowConfig {
                     if let Some(ref shell) = scattered_rule.shell {
                         scattered_rule.shell =
                             Some(expand_pattern(shell, &combo).unwrap_or_else(|_| shell.clone()));
+                    }
+                    if let Some(ref log) = scattered_rule.log {
+                        scattered_rule.log =
+                            Some(expand_pattern(log, &combo).unwrap_or_else(|_| log.clone()));
                     }
 
                     // Carry the pre-scatter [[values]] bindings over to the
@@ -5721,6 +5743,47 @@ shell = "echo {config.database} > {output[0]}"
                 .contains(&"asm/spades/x.txt".to_string()),
             "{{assembler}} must resolve per instance, got {:?}",
             rule.input.to_vec()
+        );
+    }
+
+    #[test]
+    fn log_field_expands_wildcards_per_instance() {
+        // log = "logs/{assembler}.log" must expand per [[values]] instance
+        // (and per pair) — every instance writing to the same literal
+        // brace path would corrupt the log contract.
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0.0"
+
+            [[values]]
+            name = "assembler"
+            values = ["spades", "megahit"]
+
+            [[pairs]]
+            pair_id = "P1"
+            experiment = "E1"
+            control = "C1"
+
+            [[rules]]
+            name = "do"
+            output = ["out/{assembler}/{pair_id}.txt"]
+            log = "logs/{assembler}/{pair_id}.log"
+            shell = "echo hi"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.expand_wildcards().unwrap();
+        let logs: std::collections::BTreeSet<String> =
+            config.rules.iter().filter_map(|r| r.log.clone()).collect();
+        assert_eq!(
+            logs,
+            [
+                "logs/megahit/P1.log".to_string(),
+                "logs/spades/P1.log".to_string()
+            ]
+            .into_iter()
+            .collect(),
+            "every instance must own its log path: {logs:?}"
         );
     }
 
