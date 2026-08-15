@@ -251,10 +251,25 @@ impl super::ExecutorBackend for ClusterExecutor {
             ClusterBackend::Pbs => self.poll_pbs_lsf("qstat", job_ids).await,
             ClusterBackend::Lsf => self.poll_pbs_lsf("bjobs", job_ids).await,
             ClusterBackend::Sge => {
-                // qstat -j pairs "job_number:" with "state:" lines.
+                // qstat -j pairs "job_number:" with "state:" lines. For a
+                // finished job the command exits non-zero (it left the
+                // queue) — settle it from accounting instead of aborting
+                // the whole driver on the error.
                 let mut statuses = HashMap::new();
                 for id in job_ids {
-                    let out = self.run_cmd("qstat", &["-j", id]).await?;
+                    let out = match self.run_cmd("qstat", &["-j", id]).await {
+                        Ok(o) => o,
+                        Err(_) => {
+                            let state = self
+                                .terminal_status(id)
+                                .await
+                                .unwrap_or(BackendJobStatus::Unknown);
+                            if state != BackendJobStatus::Unknown {
+                                statuses.insert(id.clone(), state);
+                            }
+                            continue;
+                        }
+                    };
                     let mut number = None;
                     let mut state = BackendJobStatus::Unknown;
                     for line in String::from_utf8_lossy(&out.stdout).lines().map(str::trim) {
@@ -301,6 +316,83 @@ impl super::ExecutorBackend for ClusterExecutor {
         };
         let out = self.run_cmd(program, &args).await?;
         Ok(String::from_utf8_lossy(&out.stdout).to_string())
+    }
+
+    /// Terminal status of a job that has left the live queue, read from the
+    /// scheduler's accounting store (sacct / qstat -x / qacct / bacct).
+    async fn terminal_status(&self, job_id: &str) -> Option<BackendJobStatus> {
+        let text = self.logs(job_id).await.ok()?;
+        parse_accounting(&self.backend, &text)
+    }
+}
+
+/// Parse scheduler accounting output into a terminal status, or `None` when
+/// the record is absent or the job is not terminal.
+fn parse_accounting(backend: &ClusterBackend, text: &str) -> Option<BackendJobStatus> {
+    match backend {
+        ClusterBackend::Slurm => {
+            // sacct rows: "<JobID> <Elapsed> <State> <ExitCode> <MaxRSS>"
+            // (header and separator rows carry no job data). The mock
+            // scheduler emits the same columns pipe-separated — accept both.
+            let line = text.lines().find(|l| {
+                let t = l.trim();
+                !t.is_empty() && !t.starts_with("JobID") && !t.starts_with('-')
+            });
+            let state = line.and_then(|l| {
+                let cols: Vec<&str> = if l.contains('|') {
+                    l.split('|').map(str::trim).collect()
+                } else {
+                    l.split_whitespace().collect()
+                };
+                cols.get(1).copied().map(str::to_string)
+            });
+            if let Some(state) = state {
+                match state.split('.').next().unwrap_or(&state) {
+                    "COMPLETED" => return Some(BackendJobStatus::Completed),
+                    "FAILED" | "TIMEOUT" | "OUT_OF_MEMORY" => {
+                        return Some(BackendJobStatus::Failed);
+                    }
+                    "CANCELLED" => return Some(BackendJobStatus::Cancelled),
+                    _ => return None,
+                }
+            }
+            None
+        }
+        ClusterBackend::Pbs => {
+            // qstat -x -f: "    job_state = C" + "    Exit_status = N"
+            if !text.lines().any(|l| l.trim() == "job_state = C") {
+                return None;
+            }
+            if text.lines().any(|l| l.trim() == "Exit_status = 0") {
+                Some(BackendJobStatus::Completed)
+            } else {
+                Some(BackendJobStatus::Failed)
+            }
+        }
+        ClusterBackend::Sge => {
+            // qacct: "exit_status 0" (success) or a non-zero value (failed).
+            for line in text.lines().map(str::trim) {
+                if let Some(rest) = line.strip_prefix("exit_status") {
+                    let v: i64 = rest.trim().parse().unwrap_or(1);
+                    return Some(if v == 0 {
+                        BackendJobStatus::Completed
+                    } else {
+                        BackendJobStatus::Failed
+                    });
+                }
+            }
+            None
+        }
+        ClusterBackend::Lsf => {
+            // bacct: "Job <id>, ..., Status <DONE|EXIT|RUN>, ..."
+            if text.contains("Status <DONE>") {
+                Some(BackendJobStatus::Completed)
+            } else if text.contains("Status <EXIT>") {
+                Some(BackendJobStatus::Failed)
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -474,5 +566,87 @@ mod tests {
             parse_status_line(&ClusterBackend::Lsf, done),
             Some(("12345".into(), BackendJobStatus::Completed))
         );
+    }
+}
+
+#[cfg(test)]
+mod accounting_tests {
+    use super::*;
+
+    #[test]
+    fn parses_sacct_terminal_lines() {
+        // Arrange — real sacct --format=JobID,State,ExitCode,Elapsed,MaxRSS
+        // (State is the second column in that format order).
+        let text = "JobID    State      ExitCode     Elapsed    MaxRSS\n\
+------------ ---------- -------- ---------- ----------\n\
+12345    COMPLETED      0:0        00:01:22    128.2M\n";
+
+        // Act / Assert
+        assert_eq!(
+            parse_accounting(&ClusterBackend::Slurm, text),
+            Some(BackendJobStatus::Completed)
+        );
+        let failed = text.replace("COMPLETED", "FAILED");
+        assert_eq!(
+            parse_accounting(&ClusterBackend::Slurm, &failed),
+            Some(BackendJobStatus::Failed)
+        );
+        // The mock scheduler pipes the same columns.
+        let piped = "JobID|State|ExitCode|Elapsed|MaxRSS\n12345|COMPLETED|0:0|00:00:05|1234K\n";
+        assert_eq!(
+            parse_accounting(&ClusterBackend::Slurm, piped),
+            Some(BackendJobStatus::Completed)
+        );
+    }
+
+    #[test]
+    fn parses_pbs_qstat_x_terminal_blocks() {
+        // Arrange — qstat -x -f job block
+        let ok =
+            "Job Id: 12345.vm\n    Job_Name = fastqc\n    job_state = C\n    Exit_status = 0\n";
+        assert_eq!(
+            parse_accounting(&ClusterBackend::Pbs, ok),
+            Some(BackendJobStatus::Completed)
+        );
+        let bad = ok.replace("Exit_status = 0", "Exit_status = 1");
+        assert_eq!(
+            parse_accounting(&ClusterBackend::Pbs, &bad),
+            Some(BackendJobStatus::Failed)
+        );
+        // Still running: no terminal state.
+        let running = ok.replace("job_state = C", "job_state = R");
+        assert_eq!(parse_accounting(&ClusterBackend::Pbs, &running), None);
+    }
+
+    #[test]
+    fn parses_qacct_exit_status() {
+        // Arrange — qacct -j output
+        let ok = "qname        all.q\njobnumber    12345\nexit_status  0\nru_wallclock 82\n";
+        assert_eq!(
+            parse_accounting(&ClusterBackend::Sge, ok),
+            Some(BackendJobStatus::Completed)
+        );
+        let bad = ok.replace("exit_status  0", "exit_status  137");
+        assert_eq!(
+            parse_accounting(&ClusterBackend::Sge, &bad),
+            Some(BackendJobStatus::Failed)
+        );
+    }
+
+    #[test]
+    fn parses_bacct_status_lines() {
+        // Arrange — bacct output carries a Status <...> line
+        let done = "Job <12345>, User <bioinf>, Status <DONE>, Queue <normal>, Command <fastqc>\n";
+        assert_eq!(
+            parse_accounting(&ClusterBackend::Lsf, done),
+            Some(BackendJobStatus::Completed)
+        );
+        let exited = done.replace("DONE", "EXIT");
+        assert_eq!(
+            parse_accounting(&ClusterBackend::Lsf, &exited),
+            Some(BackendJobStatus::Failed)
+        );
+        let running = done.replace("Status <DONE>", "Status <RUN>");
+        assert_eq!(parse_accounting(&ClusterBackend::Lsf, &running), None);
     }
 }

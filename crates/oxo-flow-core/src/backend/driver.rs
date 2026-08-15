@@ -245,7 +245,28 @@ impl BackendDriver {
             let mut settled_this_round = 0usize;
             if !inflight.is_empty() {
                 let ids: Vec<String> = inflight.keys().cloned().collect();
-                let statuses = self.backend.poll(&ids).await?;
+                let mut statuses = self.backend.poll(&ids).await?;
+                // Short jobs vanish from the live queue the instant they
+                // finish (squeue/qstat only list active jobs), so a missing
+                // id is NOT "still running" — settle it from the accounting
+                // store once it is old enough (a fresh submission can
+                // legitimately be absent for a moment; the accounting
+                // record itself takes a few seconds to appear).
+                const ACCOUNT_GRACE_SECS: i64 = 5;
+                let now = Utc::now();
+                for (id, f) in &inflight {
+                    if statuses.contains_key(id) {
+                        continue;
+                    }
+                    if (now - f.submitted_at).num_seconds() < ACCOUNT_GRACE_SECS {
+                        continue;
+                    }
+                    if let Some(st) = self.backend.terminal_status(id).await
+                        && st != BackendJobStatus::Unknown
+                    {
+                        statuses.insert(id.clone(), st);
+                    }
+                }
                 let settled: Vec<(String, InFlight, BackendJobStatus)> = inflight
                     .iter()
                     .filter_map(|(id, f)| statuses.get(id).map(|s| (id.clone(), f.clone(), *s)))

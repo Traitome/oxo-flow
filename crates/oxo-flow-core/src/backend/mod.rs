@@ -59,6 +59,14 @@ pub trait ExecutorBackend: Send + Sync {
 
     /// Fetch job logs / accounting output (raw text).
     async fn logs(&self, job_id: &str) -> Result<String>;
+
+    /// Terminal status of a job that has left the live queue, read from the
+    /// scheduler's accounting store. `None` means "no terminal record" —
+    /// the driver keeps the job in flight. Backends without an accounting
+    /// store keep the default and rely on their poller.
+    async fn terminal_status(&self, _job_id: &str) -> Option<BackendJobStatus> {
+        None
+    }
 }
 
 /// One executable unit of the static plan: a fully resolved rule instance.

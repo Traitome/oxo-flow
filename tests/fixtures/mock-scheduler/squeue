@@ -1,5 +1,8 @@
 #!/bin/bash
 # Mock squeue — answers `squeue -j <ids> --noheader -o "%i|%t"`.
+# With MOCK_SQUEUE_HIDE_TERMINAL=1, terminal jobs are omitted — real
+# squeue only lists live jobs, and the driver must settle vanished ids
+# from sacct (issue: short jobs never settled).
 set -eu
 dir="${MOCK_SCHEDULER_DIR:?MOCK_SCHEDULER_DIR not set}"
 ids=""
@@ -15,6 +18,10 @@ done
 for id in $(echo "$ids" | tr ',' ' '); do
   [ -d "$dir/jobs/$id" ] || continue
   state=$(cat "$dir/jobs/$id/state" 2>/dev/null || echo "PENDING")
+  if [ "${MOCK_SQUEUE_HIDE_TERMINAL:-0}" = "1" ] \
+     && { [ "$state" = "COMPLETED" ] || [ "$state" = "FAILED" ]; }; then
+    continue
+  fi
   line="$fmt"
   line=${line//%i/$id}
   line=${line//%t/$state}

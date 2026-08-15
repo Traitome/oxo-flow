@@ -92,6 +92,17 @@ fn run_driver(
     to_run: &HashSet<String>,
     config: DriverConfig,
 ) -> Result<Vec<oxo_flow_core::executor::JobRecord>, String> {
+    run_driver_with_env(workdir, run_dir, scheduler_state, to_run, config, &[])
+}
+
+fn run_driver_with_env(
+    workdir: &Path,
+    run_dir: &Path,
+    scheduler_state: &Path,
+    to_run: &HashSet<String>,
+    config: DriverConfig,
+    extra_env: &[(&str, &str)],
+) -> Result<Vec<oxo_flow_core::executor::JobRecord>, String> {
     let wf = workdir.join("wf.oxoflow");
     let mut wf_config = WorkflowConfig::from_file(&wf).map_err(|e| e.to_string())?;
     wf_config.apply_defaults();
@@ -110,11 +121,13 @@ fn run_driver(
         &values,
     )
     .map_err(|e| e.to_string())?;
-    let executor = Arc::new(
-        ClusterExecutor::new(ClusterBackend::Slurm, cluster_config())
-            .with_scheduler_dir(fixtures_dir())
-            .with_env("MOCK_SCHEDULER_DIR", &scheduler_state.to_string_lossy()),
-    );
+    let mut executor = ClusterExecutor::new(ClusterBackend::Slurm, cluster_config())
+        .with_scheduler_dir(fixtures_dir())
+        .with_env("MOCK_SCHEDULER_DIR", &scheduler_state.to_string_lossy());
+    for (k, v) in extra_env {
+        executor = executor.with_env(k, v);
+    }
+    let executor = Arc::new(executor);
     let driver = BackendDriver::new(executor, config);
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime
@@ -493,4 +506,42 @@ async fn cluster_logs_command_uses_mock_sacct() {
         .output()
         .unwrap();
     assert!(!out.status.success(), "unknown job id should fail");
+}
+
+#[test]
+fn driver_settles_jobs_that_vanish_from_the_live_queue_via_accounting() {
+    // Real SLURM drops finished jobs from squeue immediately; the driver
+    // must settle them from sacct instead of polling forever. The mock
+    // replicates that with MOCK_SQUEUE_HIDE_TERMINAL=1 (terminal states are
+    // omitted from squeue but still readable from sacct).
+    let dir = tempfile::tempdir().unwrap();
+    write_workflow(dir.path());
+    let state = tempfile::tempdir().unwrap();
+    let run_dir = tempfile::tempdir().unwrap();
+    let to_run: HashSet<String> = {
+        let wf = dir.path().join("wf.oxoflow");
+        let mut config = WorkflowConfig::from_file(&wf).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        dag.execution_order().unwrap().into_iter().collect()
+    };
+    let records = run_driver_with_env(
+        dir.path(),
+        run_dir.path(),
+        state.path(),
+        &to_run,
+        DriverConfig {
+            max_submitted: 4,
+            poll_interval: std::time::Duration::from_millis(50),
+            poll_timeout: Some(std::time::Duration::from_secs(30)),
+        },
+        &[("MOCK_SQUEUE_HIDE_TERMINAL", "1")],
+    )
+    .expect("driver must settle vanished jobs from sacct");
+    assert!(
+        records.iter().all(|r| r.status == JobStatus::Success),
+        "{records:?}"
+    );
+    assert_eq!(records.len(), 6, "align+stats × 3 samples");
 }
