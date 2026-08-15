@@ -72,7 +72,8 @@ this order:
 2. **`--workdir DIR`** — or the current directory for zero-arg discovery.
 
 Inside the discovery directory, the checkpoint at
-`.oxo-flow/checkpoint.json` is loaded first:
+`.oxo-flow/checkpoint.json` is loaded first (an explicit `--checkpoint
+PATH` replaces it — that file is loaded instead):
 
 - If it records a `workflow_path` that exists, that workflow file is used.
 - Otherwise (no checkpoint, or one without a usable `workflow_path`), the
@@ -267,7 +268,7 @@ classification system:
 |------|---------------|-----------------|
 | Tier I / Pathogenic | Strong clinical significance | Disease-causing; actionable for patient care |
 | Tier II / Likely Pathogenic | Potential clinical significance | High confidence of disease association |
-| Tier III / VUS | Insufficient significance | Insufficient evidence; re-evaluate periodically |
+| Tier III / VUS | Uncertain significance | Insufficient evidence; re-evaluate periodically |
 | Tier IV / Likely Benign | Probably not disease-causing | Strong evidence against pathogenicity |
 | Benign | No clinical significance | Confirmed benign polymorphism |
 

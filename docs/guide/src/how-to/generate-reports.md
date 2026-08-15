@@ -109,10 +109,12 @@ template = "report.html"        # the built-in template (the default)
 ```
 
 The scaffolded `report-template.tera` (from
-`oxo-flow report --init-template`) is a good starting point; the built-in
-template registers under a `.html`-suffixed name so `{{ variables }}` are
-HTML-escaped exactly like the default. With `-f json`/`-f md`/`-f pdf` the
-template is skipped with a note — it applies to HTML output only.
+`oxo-flow report --init-template`) is a good starting point. The built-in
+template IS `report.html`; custom template files whose names do not end in
+`.html`/`.htm`/`.xml` (like the scaffold) are registered under
+`custom.html` so Tera HTML-escapes `{{ variables }}` exactly like the
+built-in template. With `-f json`/`-f md`/`-f pdf` the template is skipped
+with a note — it applies to HTML output only.
 
 ---
 
