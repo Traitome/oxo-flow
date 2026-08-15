@@ -173,6 +173,12 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
             vec!["group", "sample"]
         };
 
+        // [[values]] tables declare parameter wildcards — these fan rules
+        // out from the table, so they legitimately appear in outputs and
+        // shells WITHOUT any input counterpart (the documented
+        // "for each assembler" pattern).
+        let value_wildcards: Vec<&str> = config.values.iter().map(|v| v.name.as_str()).collect();
+
         for wc in &output_wildcards {
             // Skip validation for scatter variable wildcards
             if scatter_var == Some(wc.as_str()) {
@@ -184,6 +190,10 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
             }
             // Skip validation for sample group wildcards when sample_groups are defined
             if group_wildcards.contains(&wc.as_str()) {
+                continue;
+            }
+            // Skip validation for [[values]]-declared parameter wildcards
+            if value_wildcards.contains(&wc.as_str()) {
                 continue;
             }
             // Skip validation for transform split variables (prefixed with _)
@@ -1741,6 +1751,35 @@ mod tests {
         let result = validate_format(&config);
         assert!(!result.valid);
         assert!(result.errors().iter().any(|d| d.code == "E003"));
+    }
+
+    #[test]
+    fn validate_wildcard_consistency_exempts_values_tables() {
+        // The documented [[values]] fan-out pattern: the parameter
+        // wildcard appears in outputs and shells WITHOUT an input
+        // counterpart — it must not trigger E003.
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[values]]
+            name = "assembler"
+            values = ["spades", "megahit"]
+
+            [[rules]]
+            name = "assemble"
+            input = ["reads/{sample}.fq"]
+            output = ["assemblies/{assembler}/{sample}/contigs.fa"]
+            shell = "{assembler} -o {output} {input}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(
+            result.errors().iter().all(|d| d.code != "E003"),
+            "values-declared wildcards must be E003-exempt: {:?}",
+            result.errors()
+        );
     }
 
     #[test]
