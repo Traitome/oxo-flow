@@ -211,6 +211,13 @@ Team/HPC modes scope every resource to the acting user:
 - **Shared infrastructure**: the server AI provider, webhook endpoint, and
   SSH cluster connections are admin-managed outside personal mode.
 
+## Testing & Development
+
+`OXO_FLOW_DISABLE_RATE_LIMIT=1` disables the per-IP rate limiter — the
+browser e2e suite (and any local automation) legitimately exceeds the
+100 req/min budget and must set it. Never set it on a team/hpc
+production server: the limiter is the brute-force protection.
+
 ## Run Control Truth (all modes)
 
 Run control is backed by real process signaling, and crash recovery tells
