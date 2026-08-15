@@ -482,6 +482,134 @@ fn cli_validate_functional() {
         .failure();
 }
 
+// ─── info (catalog metadata) ────────────────────────────────────────────────
+
+/// `info` derives the machine-checkable catalog metadata (metadata.json
+/// drift gate) from the workflow file: rule_count, tools (conda YAML stems +
+/// container image names), max resources, environment backend distribution,
+/// config keys and IO top-level dirs.
+#[test]
+fn cli_info_derives_catalog_metadata() {
+    let output = oxo_flow_cmd()
+        .args(["info", "examples/gallery/05_conda_environments.oxoflow"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "info failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let meta: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("info must emit JSON to stdout by default");
+    assert_eq!(meta["name"], "environment-showcase");
+    assert_eq!(meta["version"], "1.0.0");
+    assert_eq!(meta["rule_count"], 4);
+    // conda YAML file stems + docker image names (tag stripped), deduped+sortd
+    assert_eq!(
+        meta["tools"],
+        serde_json::json!(["analysis", "bwa-mem2", "qc"])
+    );
+    // max over rules; unset threads count as 1 (default semantics)
+    assert_eq!(meta["resources"]["max_threads"], 8);
+    assert_eq!(meta["resources"]["max_memory"], "16G");
+    assert_eq!(
+        meta["environments"],
+        serde_json::json!({"conda": 2, "docker": 1, "system": 1})
+    );
+    assert_eq!(meta["config_keys"], serde_json::json!([]));
+    assert_eq!(meta["sample_groups"], serde_json::json!([]));
+    assert_eq!(meta["pairs"], serde_json::json!([]));
+    assert_eq!(meta["references"], serde_json::json!([]));
+    assert_eq!(
+        meta["input_dirs"],
+        serde_json::json!(["aligned", "data", "qc"])
+    );
+    assert_eq!(
+        meta["output_dirs"],
+        serde_json::json!(["aligned", "data", "qc", "results"])
+    );
+}
+
+/// Sample groups, declared [config] keys and singularity images (a container
+/// image form) must all be reflected; engine-injected keys never are.
+#[test]
+fn cli_info_reports_groups_config_and_singularity_tools() {
+    let output = oxo_flow_cmd()
+        .args(["info", "examples/gallery/13_simple_variant_calling.oxoflow"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "info failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let meta: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("info must emit JSON");
+    assert_eq!(meta["name"], "simple-variant-calling");
+    assert_eq!(
+        meta["tools"],
+        serde_json::json!(["alignment", "fastp", "gatk", "qc"])
+    );
+    // samples_list / pairs_list / samples_* are engine-injected, not catalog.
+    assert_eq!(
+        meta["config_keys"],
+        serde_json::json!(["known_sites", "reference"])
+    );
+    assert_eq!(meta["sample_groups"][0]["name"], "samples");
+    assert_eq!(
+        meta["sample_groups"][0]["samples"],
+        serde_json::json!(["NA12878", "NA12891", "NA12892"])
+    );
+    assert_eq!(meta["pairs"], serde_json::json!([]));
+    assert_eq!(meta["references"], serde_json::json!([]));
+}
+
+/// `--format text` prints a human-readable summary; unknown formats and
+/// unreadable workflows fail cleanly.
+#[test]
+fn cli_info_text_format_and_errors() {
+    let output = oxo_flow_cmd()
+        .args([
+            "info",
+            "--format",
+            "text",
+            "examples/gallery/05_conda_environments.oxoflow",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "info --format text failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Workflow: environment-showcase v1.0.0"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("Rules: 4"), "{stdout}");
+    assert!(stdout.contains("Tools: analysis, bwa-mem2, qc"), "{stdout}");
+    assert!(
+        stdout.contains("Environments: conda=2, docker=1, system=1"),
+        "{stdout}"
+    );
+
+    oxo_flow_cmd()
+        .args([
+            "info",
+            "--format",
+            "bogus",
+            "examples/gallery/05_conda_environments.oxoflow",
+        ])
+        .assert()
+        .failure();
+
+    oxo_flow_cmd()
+        .args(["info", "nonexistent.oxoflow"])
+        .assert()
+        .failure();
+}
+
 // ─── dry-run subcommand ─────────────────────────────────────────────────────
 
 #[test]
@@ -4225,7 +4353,7 @@ fn cli_run_ref_build_fails_with_clear_error() {
     let wf = dir.path().join("fail_ref.oxoflow");
     std::fs::write(
         &wf,
-        "[workflow]\nname = \"fail-ref\"\nversion = \"1.0.0\"\n\n[config]\nreference_dir = \"ref\"\nsamples = \"s.csv\"\n\n[[references]]\nname = \"custom\"\nsource = \"ref/genome.fa\"\noutput = \"ref/custom.idx\"\nbuild = \"nonexistent_command_xyz\"\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo done > {output[0]}\"\n",
+        "[workflow]\nname = \"fail-ref\"\nversion = \"1.0.0\"\n\n[config]\nreference_dir = \"ref\"\nsamples = \"s.csv\"\n\n[[references]]\nname = \"custom\"\nsource = \"ref/genome.fa\"\noutput = \"ref/custom.idx\"\nbuild = \"nonexistent_command_xyz --fail\"\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo done > {output[0]}\"\n",
     )
     .unwrap();
 

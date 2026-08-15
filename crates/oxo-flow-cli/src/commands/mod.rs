@@ -206,6 +206,7 @@ pub mod bundle;
 pub mod clean;
 pub mod cluster;
 pub mod completions;
+pub mod info;
 pub mod infra;
 pub mod output;
 pub mod project;

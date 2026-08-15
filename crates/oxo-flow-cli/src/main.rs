@@ -11,6 +11,7 @@ use crate::commands::batch::batch_command;
 use crate::commands::clean::clean_command;
 use crate::commands::cluster::cluster_command;
 use crate::commands::completions::handle_completions;
+use crate::commands::info::info_command;
 use crate::commands::infra::{env_command, handle_license};
 use crate::commands::output::{handle_diff, handle_export, handle_graph, handle_report};
 use crate::commands::project::{init_command, template_command};
@@ -306,6 +307,17 @@ pub enum Commands {
         /// Enable AI-powered semantic validation.
         #[arg(long)]
         ai: bool,
+    },
+    /// Derive catalog metadata from a workflow file.
+    Info {
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
+        workflow: PathBuf,
+        #[arg(
+            long,
+            value_name = "FORMAT",
+            help = "Output format: json (default, machine-readable on stdout) or text (human-readable summary)"
+        )]
+        format: Option<String>,
     },
     /// Initialize a new workflow project.
     Init {
@@ -1209,6 +1221,7 @@ async fn main() -> Result<()> {
         } => {
             validate_command(workflow, as_include, cli.json, ai).await?;
         }
+        Commands::Info { workflow, format } => info_command(workflow, format)?,
         Commands::Init { name, dir } => init_command(name, dir)?,
         Commands::Template {
             template,

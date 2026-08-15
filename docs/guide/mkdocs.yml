@@ -163,6 +163,7 @@ nav:
       - format: commands/format.md
       - graph: commands/graph.md
       - init: commands/init.md
+      - info: commands/info.md
       - license: commands/license.md
       - lint: commands/lint.md
       - provenance: commands/provenance.md
