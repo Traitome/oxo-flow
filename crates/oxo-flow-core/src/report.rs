@@ -104,7 +104,7 @@ pub struct QcIndicator {
     pub description: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum QcStatusLevel {
     Pass,
@@ -1667,6 +1667,7 @@ fn render_section_html(html: &mut String, section: &ReportSection, heading_level
 
 use crate::config::WorkflowConfig;
 use crate::executor::CheckpointState;
+use crate::report_metrics::{MetricsScanner, ParsedMetrics};
 
 /// Classifies a workflow into a broad domain for report tailoring.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1767,6 +1768,8 @@ impl SectionRegistry {
         registry.register(Box::new(CommandManifestGenerator));
         registry.register(Box::new(IoManifestGenerator));
         registry.register(Box::new(EnvironmentInfoGenerator));
+        registry.register(Box::new(MetricsGenerator));
+        registry.register(Box::new(SampleMatrixGenerator));
         registry.register(Box::new(ProvenanceGenerator));
         registry.register(Box::new(TaskSummaryGenerator));
         registry
@@ -2396,6 +2399,215 @@ impl ReportSectionGenerator for EnvironmentInfoGenerator {
                     ("Declared Rule Environments".into(), declared),
                 ],
             },
+            subsections: vec![],
+        }]
+    }
+}
+
+/// QC metrics parsed from real tool outputs in the working directory (issue
+/// #83 P1-5): fastp report.json, samtools flagstat, STAR Log.final.out,
+/// featureCounts .summary, bcftools stats, kraken2 .report. One subsection
+/// per (tool × sample); the section is hidden entirely when nothing parses
+/// — a report never fabricates metrics.
+struct MetricsGenerator;
+impl ReportSectionGenerator for MetricsGenerator {
+    fn name(&self) -> &str {
+        "metrics"
+    }
+    fn description(&self) -> &str {
+        "QC metrics parsed from tool outputs (fastp, flagstat, STAR, featureCounts, bcftools, kraken2)"
+    }
+    fn applicable(&self, _ctx: &ReportContext) -> bool {
+        true
+    }
+    fn generate(&self, ctx: &ReportContext) -> Vec<ReportSection> {
+        let Some(workdir) = report_workdir(ctx) else {
+            return Vec::new();
+        };
+        let stats = MetricsScanner::new().scan_with_stats(&workdir);
+        if stats.parsed.is_empty() {
+            return Vec::new();
+        }
+
+        // Group by (tool, sample); BTreeMap keeps the keys sorted, and
+        // within a group the scan order is already deterministic (sorted
+        // directory entries) — the report stays byte-stable (issue #83
+        // P1-4).
+        let mut groups: std::collections::BTreeMap<(String, String), Vec<&ParsedMetrics>> =
+            std::collections::BTreeMap::new();
+        for parsed in &stats.parsed {
+            groups
+                .entry((
+                    parsed.tool.clone(),
+                    parsed.sample.clone().unwrap_or_default(),
+                ))
+                .or_default()
+                .push(parsed);
+        }
+
+        let mut subsections = Vec::new();
+        for ((tool, sample), entries) in groups {
+            let mut rows: Vec<Vec<String>> = Vec::new();
+            for entry in entries {
+                for metric in &entry.metrics {
+                    rows.push(vec![
+                        metric.name.clone(),
+                        format_metric_value(metric.value),
+                        metric_status_word(metric.flag.clone()),
+                    ]);
+                }
+            }
+            // Deterministic row order.
+            rows.sort_by(|a, b| a[0].cmp(&b[0]));
+            let title = if sample.is_empty() {
+                tool.clone()
+            } else {
+                format!("{tool} — {sample}")
+            };
+            subsections.push(ReportSection {
+                title,
+                id: sanitize_id(&format!("metrics-{tool}-{sample}")),
+                content: ReportContent::Table {
+                    headers: vec![
+                        "Metric".to_string(),
+                        "Value".to_string(),
+                        "Status".to_string(),
+                    ],
+                    rows,
+                },
+                subsections: vec![],
+            });
+        }
+
+        // A scanner that hid its gaps would look like full coverage — say
+        // what could not be parsed (issue #83 P1-5 ruling).
+        if stats.skipped > 0 {
+            subsections.push(ReportSection {
+                title: "Scan Notes".to_string(),
+                id: "metrics-scan-notes".to_string(),
+                content: ReportContent::Text {
+                    text: format!(
+                        "{} file(s) matched known tool patterns but failed to parse",
+                        stats.skipped
+                    ),
+                },
+                subsections: vec![],
+            });
+        }
+
+        vec![ReportSection {
+            title: "Metrics".to_string(),
+            id: "metrics".to_string(),
+            content: ReportContent::Text {
+                text: "QC metrics parsed from tool output files in the working directory."
+                    .to_string(),
+            },
+            subsections,
+        }]
+    }
+}
+
+/// Format a metric value for display: whole numbers stay whole, everything
+/// else keeps two decimals.
+fn format_metric_value(value: f64) -> String {
+    if value.fract() == 0.0 && value.abs() < 1e15 {
+        format!("{value:.0}")
+    } else {
+        format!("{value:.2}")
+    }
+}
+
+/// Status cell text for a metric flag: emoji + word, matching the
+/// QcIndicatorGroup marks used elsewhere; `None` = informational, no status.
+fn metric_status_word(flag: Option<QcStatusLevel>) -> String {
+    match flag {
+        Some(QcStatusLevel::Pass) => "\u{2705} Pass".to_string(),
+        Some(QcStatusLevel::Warn) => "\u{26A0}\u{FE0F} Warn".to_string(),
+        Some(QcStatusLevel::Fail) => "\u{274C} Fail".to_string(),
+        Some(QcStatusLevel::Info) => "\u{2139}\u{FE0F} Info".to_string(),
+        None => "\u{2014}".to_string(),
+    }
+}
+
+/// Rule × sample status matrix from the checkpoint's expanded instance
+/// names (issue #83 P1-5). Samples come from sample_groups and pairs;
+/// rows are the base (declared) rule names, sorted failed-first then by
+/// name so failing samples surface at the top of the table.
+struct SampleMatrixGenerator;
+impl ReportSectionGenerator for SampleMatrixGenerator {
+    fn name(&self) -> &str {
+        "sample-matrix"
+    }
+    fn description(&self) -> &str {
+        "Rule × sample status matrix (expanded instances from the checkpoint)"
+    }
+    fn applicable(&self, ctx: &ReportContext) -> bool {
+        ctx.checkpoint.is_some()
+            && (!ctx.config.sample_groups.is_empty() || !ctx.config.pairs.is_empty())
+    }
+    fn generate(&self, ctx: &ReportContext) -> Vec<ReportSection> {
+        let cp = ctx.checkpoint.expect("applicable() gates on checkpoint");
+
+        // Sample universe: sample_groups[].samples + pairs[].a/.b, deduped
+        // and sorted (BTreeSet).
+        let mut samples: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for group in &ctx.config.sample_groups {
+            samples.extend(group.samples.iter().cloned());
+        }
+        for pair in &ctx.config.pairs {
+            samples.insert(pair.experiment.clone());
+            if let Some(control) = &pair.control {
+                samples.insert(control.clone());
+            }
+        }
+
+        // Rows: base rule names from the declared config; cell = instance
+        // state from the checkpoint. Instance names are expanded as
+        // `{rule}_{group}_{sample}`; the auto-discovered group is the
+        // engine's default when no explicit group names a rule's samples.
+        let mut rows: Vec<(bool, String, Vec<String>)> = Vec::new();
+        for rule in &ctx.config.rules {
+            let mut has_failed = false;
+            let mut cells = Vec::with_capacity(samples.len());
+            for sample in &samples {
+                let completed = cp
+                    .completed_rules
+                    .contains(&format!("{}_{}", rule.name, sample))
+                    || cp
+                        .completed_rules
+                        .contains(&format!("{}_auto-discovered_{}", rule.name, sample));
+                let failed = cp
+                    .failed_rules
+                    .contains(&format!("{}_{}", rule.name, sample))
+                    || cp
+                        .failed_rules
+                        .contains(&format!("{}_auto-discovered_{}", rule.name, sample));
+                let cell = if failed {
+                    has_failed = true;
+                    "failed"
+                } else if completed {
+                    "success"
+                } else {
+                    "-"
+                };
+                cells.push(cell.to_string());
+            }
+            rows.push((has_failed, rule.name.clone(), cells));
+        }
+        // Failed-first, then by rule name — deterministic, and failures
+        // surface at the top of the table.
+        rows.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+
+        let headers: Vec<String> = std::iter::once("Rule".to_string()).chain(samples).collect();
+        let rows: Vec<Vec<String>> = rows
+            .into_iter()
+            .map(|(_, name, cells)| std::iter::once(name).chain(cells).collect())
+            .collect();
+
+        vec![ReportSection {
+            title: "Sample Matrix".to_string(),
+            id: "sample-matrix".to_string(),
+            content: ReportContent::Table { headers, rows },
             subsections: vec![],
         }]
     }
@@ -3506,6 +3718,201 @@ shell = "echo hi"
         // Real table rendering, not a dead promise (issue #83 P1-10).
         assert!(!html.contains("interactive"));
         assert!(html.contains("<table>"));
+    }
+
+    // ── Issue #83 P1-5: metrics adapters + sample matrix ─────────────────
+
+    /// A minimal valid fastp report.json for generator fixtures.
+    fn fastp_fixture(total_reads: u64) -> String {
+        format!(
+            r#"{{"summary": {{"before_filtering": {{"total_reads": {total_reads}}}, "after_filtering": {{"q30_rate": 0.92, "gc_content": 0.451}}, "duplication": {{"rate": 0.11}}}}}}"#
+        )
+    }
+
+    #[test]
+    fn metrics_section_parses_tool_outputs() {
+        let workdir = tempfile::tempdir().unwrap();
+        std::fs::write(workdir.path().join("S1.fastp.json"), fastp_fixture(1234)).unwrap();
+        // A second matching file that fails to parse → Scan Notes.
+        std::fs::write(workdir.path().join("S2.fastp.json"), "garbage").unwrap();
+
+        let config = workflow_config("[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n");
+        let mut cp = fixture_checkpoint();
+        cp.workdir = Some(workdir.path().display().to_string());
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        let metrics = sections.iter().find(|s| s.id == "metrics").unwrap();
+
+        assert_eq!(metrics.title, "Metrics");
+        // One subsection per (tool × sample), then Scan Notes.
+        assert_eq!(metrics.subsections[0].title, "fastp — S1");
+        match &metrics.subsections[0].content {
+            ReportContent::Table { headers, rows } => {
+                assert_eq!(headers, &["Metric", "Value", "Status"]);
+                // Rows sorted by metric name.
+                let names: Vec<&str> = rows.iter().map(|r| r[0].as_str()).collect();
+                assert_eq!(
+                    names,
+                    ["duplication_rate", "gc_content", "q30_rate", "total_reads"]
+                );
+                let total = rows.iter().find(|r| r[0] == "total_reads").unwrap();
+                assert_eq!(total[1], "1234");
+                assert_eq!(total[2], "—");
+                let q30 = rows.iter().find(|r| r[0] == "q30_rate").unwrap();
+                assert_eq!(q30[1], "0.92");
+                assert_eq!(q30[2], "✅ Pass");
+                let dup = rows.iter().find(|r| r[0] == "duplication_rate").unwrap();
+                assert_eq!(dup[1], "0.11");
+                assert_eq!(dup[2], "ℹ️ Info");
+            }
+            _ => panic!("expected table subsection"),
+        }
+        // Scan Notes reports the parse failure.
+        let notes = &metrics.subsections[1];
+        assert_eq!(notes.title, "Scan Notes");
+        match &notes.content {
+            ReportContent::Text { text } => {
+                assert!(text.contains("1 file(s) matched known tool patterns"));
+            }
+            _ => panic!("expected text subsection"),
+        }
+
+        // Deterministic output (issue #83 P1-4).
+        let sections_b = SectionRegistry::with_defaults().generate(&ctx, None);
+        let report = |sections: &[ReportSection]| {
+            let mut r = Report::new("T", "w", "0.1");
+            r.generated_at = None;
+            for section in sections {
+                r.add_section(section.clone());
+            }
+            r.to_json().unwrap()
+        };
+        assert_eq!(report(&sections), report(&sections_b));
+    }
+
+    #[test]
+    fn metrics_section_hidden_when_nothing_parses() {
+        // Empty workdir: no metrics, section absent — never a fabricated
+        // empty table.
+        let empty = tempfile::tempdir().unwrap();
+        let config = workflow_config("[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n");
+        let mut cp = fixture_checkpoint();
+        cp.workdir = Some(empty.path().display().to_string());
+        let cp = fixture_checkpoint();
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        assert!(!sections.iter().any(|s| s.id == "metrics"));
+
+        // No workdir resolvable at all → also hidden.
+        let cp = fixture_checkpoint();
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        assert!(!sections.iter().any(|s| s.id == "metrics"));
+    }
+
+    #[test]
+    fn sample_matrix_cells_from_checkpoint() {
+        let config = workflow_config(
+            r#"[[sample_groups]]
+name = "cohort"
+samples = ["S1", "S2"]
+
+[[rules]]
+name = "align"
+shell = "echo hi"
+
+[[rules]]
+name = "call"
+shell = "echo hi"
+"#,
+        );
+        let mut cp = CheckpointState::new();
+        cp.completed_rules.insert("align_S1".to_string());
+        cp.completed_rules.insert("align_S2".to_string());
+        cp.failed_rules.insert("call_S1".to_string());
+
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        let matrix = sections.iter().find(|s| s.id == "sample-matrix").unwrap();
+        match &matrix.content {
+            ReportContent::Table { headers, rows } => {
+                assert_eq!(headers, &["Rule", "S1", "S2"]);
+                // Failed rows first, then by rule name.
+                assert_eq!(rows[0], &["call", "failed", "-"]);
+                assert_eq!(rows[1], &["align", "success", "success"]);
+            }
+            _ => panic!("expected table"),
+        }
+    }
+
+    #[test]
+    fn sample_matrix_matches_auto_discovered_instances() {
+        let config = workflow_config(
+            r#"[[sample_groups]]
+name = "cohort"
+samples = ["S1"]
+
+[[rules]]
+name = "count"
+shell = "echo hi"
+"#,
+        );
+        let mut cp = CheckpointState::new();
+        // The engine expands {sample} rules against the "auto-discovered"
+        // group when the group name is not part of the instance.
+        cp.completed_rules
+            .insert("count_auto-discovered_S1".to_string());
+        cp.failed_rules
+            .insert("count_auto-discovered_S1".to_string());
+
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        let matrix = sections.iter().find(|s| s.id == "sample-matrix").unwrap();
+        match &matrix.content {
+            ReportContent::Table { rows, .. } => {
+                // Both instance spellings match; failed wins when both
+                // sets claim the rule (defensive).
+                assert_eq!(rows[0][1], "failed");
+            }
+            _ => panic!("expected table"),
+        }
+    }
+
+    #[test]
+    fn sample_matrix_gated_on_checkpoint_and_samples() {
+        let config = workflow_config("[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n");
+        // No checkpoint → hidden.
+        let ctx = ctx_for(&config, None, None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        assert!(!sections.iter().any(|s| s.id == "sample-matrix"));
+        // Checkpoint but no sample_groups/pairs → hidden.
+        let cp = fixture_checkpoint();
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        assert!(!sections.iter().any(|s| s.id == "sample-matrix"));
+
+        // Pairs contribute experiment + control samples.
+        let config = workflow_config(
+            r#"[[pairs]]
+pair_id = "CASE_001"
+experiment = "EXP_01"
+control = "CTRL_01"
+
+[[rules]]
+name = "call"
+shell = "echo hi"
+"#,
+        );
+        let cp = fixture_checkpoint();
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        let matrix = sections.iter().find(|s| s.id == "sample-matrix").unwrap();
+        match &matrix.content {
+            ReportContent::Table { headers, .. } => {
+                assert_eq!(headers, &["Rule", "CTRL_01", "EXP_01"]);
+            }
+            _ => panic!("expected table"),
+        }
     }
 
     #[test]

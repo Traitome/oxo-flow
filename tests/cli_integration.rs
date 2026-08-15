@@ -1019,6 +1019,62 @@ fn cli_report_run_then_report_shows_execution_truth() {
     );
 }
 
+/// A real run's report parses tool outputs from the working directory into
+/// the metrics section (issue #83 P1-5): the fake fastp report.json's
+/// total_reads must survive into the report JSON.
+#[test]
+fn cli_report_run_then_report_shows_parsed_metrics() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wf.oxoflow");
+    fs::write(
+        &path,
+        "[workflow]\nname = \"tiny\"\nversion = \"0.1\"\n\n\
+         [[rules]]\nname = \"qc\"\ninput = [\"fastp.json\"]\noutput = [\"S1.fastp.json\"]\nshell = \"cp fastp.json S1.fastp.json\"\n",
+    )
+    .unwrap();
+    // A fake fastp report.json — the metric values must survive into the
+    // report.
+    fs::write(
+        dir.path().join("fastp.json"),
+        r#"{"summary": {"before_filtering": {"total_reads": 123456}, "after_filtering": {"q30_rate": 0.92, "gc_content": 0.45}, "duplication": {"rate": 0.11}}}"#,
+    )
+    .unwrap();
+
+    oxo_flow_cmd()
+        .args(["run", path.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let out = dir.path().join("report.json");
+    oxo_flow_cmd()
+        .args(["report", path.to_str().unwrap(), "-f", "json", "-o"])
+        .arg(out.to_str().unwrap())
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(&out).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    let metrics = parsed["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "metrics")
+        .unwrap_or_else(|| panic!("no metrics section in report JSON"));
+    let section_json = serde_json::to_string(metrics).unwrap();
+    assert!(
+        section_json.contains("total_reads"),
+        "metric name missing: {section_json}"
+    );
+    assert!(
+        section_json.contains("123456"),
+        "metric value missing: {section_json}"
+    );
+    assert!(
+        section_json.contains("fastp"),
+        "tool attribution missing: {section_json}"
+    );
+}
+
 // ─── env subcommand ─────────────────────────────────────────────────────────
 
 #[test]

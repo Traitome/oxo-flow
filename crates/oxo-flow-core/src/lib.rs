@@ -60,6 +60,8 @@ pub mod result;
 
 #[cfg(feature = "report")]
 pub mod report;
+#[cfg(feature = "report")]
+pub mod report_metrics;
 pub mod rule;
 pub mod scheduler;
 pub mod scientific_preflight;
