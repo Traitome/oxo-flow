@@ -2507,13 +2507,19 @@ impl ReportSectionGenerator for MetricsGenerator {
     }
 }
 
+/// Whole-number metric values below this magnitude print without decimals
+/// (beyond it, `{:.0}` would hide float noise at the displayed precision).
+const WHOLE_VALUE_DECIMAL_CAP: f64 = 1e15;
+/// Decimal places for fractional metric values.
+const METRIC_VALUE_DECIMALS: usize = 2;
+
 /// Format a metric value for display: whole numbers stay whole, everything
 /// else keeps two decimals.
 fn format_metric_value(value: f64) -> String {
-    if value.fract() == 0.0 && value.abs() < 1e15 {
+    if value.fract() == 0.0 && value.abs() < WHOLE_VALUE_DECIMAL_CAP {
         format!("{value:.0}")
     } else {
-        format!("{value:.2}")
+        format!("{value:.precision$}", precision = METRIC_VALUE_DECIMALS)
     }
 }
 
@@ -2546,10 +2552,15 @@ impl ReportSectionGenerator for SampleMatrixGenerator {
             && (!ctx.config.sample_groups.is_empty() || !ctx.config.pairs.is_empty())
     }
     fn generate(&self, ctx: &ReportContext) -> Vec<ReportSection> {
-        let cp = ctx.checkpoint.expect("applicable() gates on checkpoint");
+        // The registry's section filter (`report.sections = [...]`) calls
+        // generate() without consulting applicable() — guard here instead
+        // of expecting (issue #83 P1-5 review).
+        let Some(cp) = ctx.checkpoint else {
+            return Vec::new();
+        };
 
-        // Sample universe: sample_groups[].samples + pairs[].a/.b, deduped
-        // and sorted (BTreeSet).
+        // Sample universe: sample_groups[].samples + pairs[].experiment/
+        // control, deduped and sorted (BTreeSet).
         let mut samples: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         for group in &ctx.config.sample_groups {
             samples.extend(group.samples.iter().cloned());
@@ -2561,27 +2572,40 @@ impl ReportSectionGenerator for SampleMatrixGenerator {
             }
         }
 
-        // Rows: base rule names from the declared config; cell = instance
-        // state from the checkpoint. Instance names are expanded as
-        // `{rule}_{group}_{sample}`; the auto-discovered group is the
-        // engine's default when no explicit group names a rule's samples.
+        // Rows: base rule names from the declared config; cell = checkpoint
+        // state of the engine's real instance names. expand_wildcards names
+        // named-group instances `{rule}_{group}_{sample}`, sample_pattern
+        // discovery instances `{rule}_auto-discovered_{sample}`, and pair
+        // instances `{rule}_{pair_id}` — a cell is success/failed if ANY of
+        // the spellings for that sample claim the rule.
         let mut rows: Vec<(bool, String, Vec<String>)> = Vec::new();
         for rule in &ctx.config.rules {
             let mut has_failed = false;
             let mut cells = Vec::with_capacity(samples.len());
             for sample in &samples {
-                let completed = cp
-                    .completed_rules
-                    .contains(&format!("{}_{}", rule.name, sample))
-                    || cp
-                        .completed_rules
-                        .contains(&format!("{}_auto-discovered_{}", rule.name, sample));
-                let failed = cp
-                    .failed_rules
-                    .contains(&format!("{}_{}", rule.name, sample))
-                    || cp
-                        .failed_rules
-                        .contains(&format!("{}_auto-discovered_{}", rule.name, sample));
+                let mut completed = false;
+                let mut failed = false;
+                for group in &ctx.config.sample_groups {
+                    if group.samples.contains(sample) {
+                        let name = format!("{}_{}_{}", rule.name, group.name, sample);
+                        completed |= cp.completed_rules.contains(&name);
+                        failed |= cp.failed_rules.contains(&name);
+                    }
+                }
+                // sample_pattern discovery uses the engine's "auto-discovered"
+                // group name (config.rs sample discovery).
+                let auto = format!("{}_auto-discovered_{}", rule.name, sample);
+                completed |= cp.completed_rules.contains(&auto);
+                failed |= cp.failed_rules.contains(&auto);
+                for pair in &ctx.config.pairs {
+                    if pair.experiment == *sample
+                        || pair.control.as_deref() == Some(sample.as_str())
+                    {
+                        let name = format!("{}_{}", rule.name, pair.pair_id);
+                        completed |= cp.completed_rules.contains(&name);
+                        failed |= cp.failed_rules.contains(&name);
+                    }
+                }
                 let cell = if failed {
                     has_failed = true;
                     "failed"
@@ -3792,18 +3816,19 @@ shell = "echo hi"
 
     #[test]
     fn metrics_section_hidden_when_nothing_parses() {
-        // Empty workdir: no metrics, section absent — never a fabricated
-        // empty table.
-        let empty = tempfile::tempdir().unwrap();
         let config = workflow_config("[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n");
+
+        // (a) Workdir resolvable but contains no tool outputs → hidden,
+        // never a fabricated empty table.
+        let empty = tempfile::tempdir().unwrap();
         let mut cp = fixture_checkpoint();
         cp.workdir = Some(empty.path().display().to_string());
-        let cp = fixture_checkpoint();
         let ctx = ctx_for(&config, Some(&cp), None);
         let sections = SectionRegistry::with_defaults().generate(&ctx, None);
         assert!(!sections.iter().any(|s| s.id == "metrics"));
 
-        // No workdir resolvable at all → also hidden.
+        // (b) No workdir resolvable at all (no checkpoint workdir, no
+        // workflow path) → hidden.
         let cp = fixture_checkpoint();
         let ctx = ctx_for(&config, Some(&cp), None);
         let sections = SectionRegistry::with_defaults().generate(&ctx, None);
@@ -3827,9 +3852,11 @@ shell = "echo hi"
 "#,
         );
         let mut cp = CheckpointState::new();
-        cp.completed_rules.insert("align_S1".to_string());
-        cp.completed_rules.insert("align_S2".to_string());
-        cp.failed_rules.insert("call_S1".to_string());
+        // The engine names named-group instances `{rule}_{group}_{sample}`
+        // (config.rs expand_wildcards) — exactly what a real run records.
+        cp.completed_rules.insert("align_cohort_S1".to_string());
+        cp.completed_rules.insert("align_cohort_S2".to_string());
+        cp.failed_rules.insert("call_cohort_S1".to_string());
 
         let ctx = ctx_for(&config, Some(&cp), None);
         let sections = SectionRegistry::with_defaults().generate(&ctx, None);
@@ -3840,6 +3867,43 @@ shell = "echo hi"
                 // Failed rows first, then by rule name.
                 assert_eq!(rows[0], &["call", "failed", "-"]);
                 assert_eq!(rows[1], &["align", "success", "success"]);
+            }
+            _ => panic!("expected table"),
+        }
+    }
+
+    #[test]
+    fn sample_matrix_pair_cells_map_to_pair_id_instances() {
+        let config = workflow_config(
+            r#"[[pairs]]
+pair_id = "CASE_001"
+experiment = "EXP_01"
+control = "CTRL_01"
+
+[[pairs]]
+pair_id = "CASE_002"
+experiment = "EXP_02"
+control = "CTRL_02"
+
+[[rules]]
+name = "call"
+shell = "echo hi"
+"#,
+        );
+        let mut cp = CheckpointState::new();
+        // The engine names pair instances `{rule}_{pair_id}`.
+        cp.completed_rules.insert("call_CASE_001".to_string());
+        cp.failed_rules.insert("call_CASE_002".to_string());
+
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        let matrix = sections.iter().find(|s| s.id == "sample-matrix").unwrap();
+        match &matrix.content {
+            ReportContent::Table { headers, rows } => {
+                assert_eq!(headers, &["Rule", "CTRL_01", "CTRL_02", "EXP_01", "EXP_02"]);
+                // Both samples of a pair share the pair's instance state:
+                // CASE_001 completed, CASE_002 failed.
+                assert_eq!(rows[0], &["call", "success", "failed", "success", "failed"]);
             }
             _ => panic!("expected table"),
         }
@@ -3891,7 +3955,8 @@ shell = "echo hi"
         let sections = SectionRegistry::with_defaults().generate(&ctx, None);
         assert!(!sections.iter().any(|s| s.id == "sample-matrix"));
 
-        // Pairs contribute experiment + control samples.
+        // Pairs contribute experiment + control samples; a completed pair
+        // instance marks both of its samples success.
         let config = workflow_config(
             r#"[[pairs]]
 pair_id = "CASE_001"
@@ -3903,16 +3968,40 @@ name = "call"
 shell = "echo hi"
 "#,
         );
-        let cp = fixture_checkpoint();
+        let mut cp = fixture_checkpoint();
+        cp.completed_rules.insert("call_CASE_001".to_string());
         let ctx = ctx_for(&config, Some(&cp), None);
         let sections = SectionRegistry::with_defaults().generate(&ctx, None);
         let matrix = sections.iter().find(|s| s.id == "sample-matrix").unwrap();
         match &matrix.content {
-            ReportContent::Table { headers, .. } => {
+            ReportContent::Table { headers, rows } => {
                 assert_eq!(headers, &["Rule", "CTRL_01", "EXP_01"]);
+                assert_eq!(rows[0], &["call", "success", "success"]);
             }
             _ => panic!("expected table"),
         }
+    }
+
+    #[test]
+    fn sample_matrix_filter_path_without_checkpoint_does_not_panic() {
+        // `report.sections = ["sample-matrix"]` bypasses applicable() — the
+        // generator must yield nothing instead of panicking on the missing
+        // checkpoint.
+        let config = workflow_config(
+            r#"[[sample_groups]]
+name = "cohort"
+samples = ["S1"]
+
+[[rules]]
+name = "align"
+shell = "echo hi"
+"#,
+        );
+        let ctx = ctx_for(&config, None, None);
+        let mut filter = std::collections::HashSet::new();
+        filter.insert("sample-matrix".to_string());
+        let filtered = SectionRegistry::with_defaults().generate(&ctx, Some(&filter));
+        assert!(filtered.is_empty());
     }
 
     #[test]

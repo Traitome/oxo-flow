@@ -1075,6 +1075,68 @@ fn cli_report_run_then_report_shows_parsed_metrics() {
     );
 }
 
+/// A real run expands named sample groups into `{rule}_{group}_{sample}`
+/// instances; the report's sample-matrix must reflect those engine-real
+/// names — not an invented `{rule}_{sample}` spelling (issue #83 P1-5
+/// review: the matrix used to render all "-").
+#[test]
+fn cli_report_sample_matrix_matches_named_group_instances() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wf.oxoflow");
+    fs::write(
+        &path,
+        "[workflow]\nname = \"tiny\"\nversion = \"0.1\"\n\n\
+         [[sample_groups]]\nname = \"cohort\"\nsamples = [\"S1\", \"S2\"]\n\n\
+         [[rules]]\nname = \"align\"\noutput = [\"out_{sample}.txt\"]\nshell = \"echo hi > out_{sample}.txt\"\n\n\
+         [[rules]]\nname = \"call\"\ninput = [\"out_{sample}.txt\"]\nshell = \"exit 1\"\n",
+    )
+    .unwrap();
+
+    // `--keep-going` runs every expanded instance to completion (exit 0
+    // even with failed jobs), so the checkpoint records align's success
+    // and call's failure for S1 and S2.
+    oxo_flow_cmd()
+        .args(["run", "-k", path.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let out = dir.path().join("report.json");
+    oxo_flow_cmd()
+        .args(["report", path.to_str().unwrap(), "-f", "json", "-o"])
+        .arg(out.to_str().unwrap())
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(&out).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    let matrix = parsed["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "sample-matrix")
+        .unwrap_or_else(|| panic!("no sample-matrix section in report JSON"));
+    assert_eq!(
+        matrix["content"]["headers"],
+        serde_json::json!(["Rule", "S1", "S2"])
+    );
+    let rows: Vec<Vec<String>> = serde_json::from_value(matrix["content"]["rows"].clone()).unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            vec![
+                "call".to_string(),
+                "failed".to_string(),
+                "failed".to_string()
+            ],
+            vec![
+                "align".to_string(),
+                "success".to_string(),
+                "success".to_string()
+            ],
+        ]
+    );
+}
+
 // ─── env subcommand ─────────────────────────────────────────────────────────
 
 #[test]
