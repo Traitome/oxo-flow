@@ -308,19 +308,14 @@ fn get_pbs_queues() -> Vec<QueueStatus> {
     queues
 }
 
-/// Get PBS/Torque nodes.
-fn get_pbs_nodes() -> Vec<NodeStatus> {
-    let output = match Command::new("pbsnodes").arg("-a").output() {
-        Ok(o) => o,
-        Err(_) => return Vec::new(),
-    };
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
+/// Parse `pbsnodes -a` output: node names start at column 0, their
+/// attributes are indented `key = value` lines.
+fn parse_pbs_nodes(stdout: &str) -> Vec<NodeStatus> {
     let mut nodes = Vec::new();
     let mut current: Option<NodeStatus> = None;
 
-    for line in stdout.lines() {
-        let line = line.trim();
+    for raw in stdout.lines() {
+        let line = raw.trim();
         if line.is_empty() {
             if let Some(node) = current.take() {
                 nodes.push(node);
@@ -328,7 +323,9 @@ fn get_pbs_nodes() -> Vec<NodeStatus> {
             continue;
         }
 
-        if !line.starts_with(' ') {
+        // Indentation must be read from the RAW line — after trim() every
+        // line looks like a node name and attributes leak in as nodes.
+        if !raw.starts_with(' ') {
             // New node entry
             if let Some(node) = current.take() {
                 nodes.push(node);
@@ -370,6 +367,15 @@ fn get_pbs_nodes() -> Vec<NodeStatus> {
     }
 
     nodes
+}
+
+/// Get PBS/Torque nodes.
+fn get_pbs_nodes() -> Vec<NodeStatus> {
+    let output = match Command::new("pbsnodes").arg("-a").output() {
+        Ok(o) => o,
+        Err(_) => return Vec::new(),
+    };
+    parse_pbs_nodes(&String::from_utf8_lossy(&output.stdout))
 }
 
 /// Parse `bhosts` output (LSF) into node status entries.
@@ -1002,5 +1008,28 @@ mod tests {
         assert_eq!(queues[0].pending, 1);
         assert_eq!(queues[1].queue_name, "long.q");
         assert_eq!(queues[1].running, 1);
+    }
+}
+
+#[cfg(test)]
+mod pbs_node_tests {
+    use super::*;
+
+    #[test]
+    fn parses_pbsnodes_attribute_blocks() {
+        // Arrange — real pbsnodes -a layout: name at column 0, indented
+        // key = value attributes, blank line between blocks.
+        let out = "node01\n     state = free\n     np = 16\n     status = rectime=1723700000\n\nnode02\n     state = busy\n     np = 16\n     status = rectime=1723700000\n";
+
+        // Act
+        let nodes = parse_pbs_nodes(out);
+
+        // Assert — exactly two nodes, attributes attached to their block.
+        assert_eq!(nodes.len(), 2, "got: {nodes:?}");
+        assert_eq!(nodes[0].name, "node01");
+        assert_eq!(nodes[0].state, "free");
+        assert_eq!(nodes[0].cpus_total, 16);
+        assert_eq!(nodes[1].name, "node02");
+        assert_eq!(nodes[1].state, "busy");
     }
 }
