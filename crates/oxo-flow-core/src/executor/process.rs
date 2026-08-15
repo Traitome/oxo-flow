@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 use tokio::process::Command;
 use tokio::sync::{Mutex, Semaphore};
@@ -558,14 +559,22 @@ impl LocalExecutor {
         }
     }
 
-    fn resolve_command(&self, command: &str, rule: &Rule) -> String {
+    fn resolve_command(&self, command: &str, rule: &Rule, scratch_dir: Option<&Path>) -> String {
         match self.env_resolver.wrap_command(
             command,
             &rule.environment,
             Some(&rule.resources),
             &self.config.workdir,
         ) {
-            Ok(wrapped) => wrapped,
+            Ok(wrapped) => match scratch_dir {
+                Some(scratch) => fixup_container_wrapper(
+                    &wrapped,
+                    rule.environment.kind(),
+                    &self.config.workdir,
+                    scratch,
+                ),
+                None => wrapped,
+            },
             Err(e) => {
                 tracing::warn!(rule = %rule.name, error = %e, "environment wrapping failed");
                 command.to_string()
@@ -649,6 +658,81 @@ impl LocalExecutor {
             return Some(std::time::Duration::from_secs(secs));
         }
         self.config.timeout
+    }
+
+    /// Build the per-instance scratch directory path for a scratch rule.
+    ///
+    /// The name combines a sanitized rule name with a millisecond timestamp
+    /// and a process-local counter so parallel instances of the same rule
+    /// never collide. The directory itself is created only right before the
+    /// command spawns — pre-flight failures must not leak empty dirs.
+    fn scratch_dir_for(&self, rule_name: &str) -> PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        self.config
+            .workdir
+            .join(".oxo-flow")
+            .join("scratch")
+            .join(format!(
+                "{}-{millis}-{n}",
+                sanitize_dir_component(rule_name)
+            ))
+    }
+
+    /// Move every declared output that was produced inside the scratch
+    /// directory back to its declared location in the main workdir.
+    ///
+    /// Outputs that never appeared in the scratch (e.g. a tool wrote an
+    /// absolute path directly) are left where they are — validation runs
+    /// against the main workdir either way.
+    async fn move_scratch_outputs(
+        &self,
+        rule: &Rule,
+        scratch_dir: &Path,
+        wildcard_values: &HashMap<String, String>,
+    ) -> Result<()> {
+        for output in rule.output.to_vec() {
+            let expanded = super::checkpoint::expand_config_in_path(&output, wildcard_values);
+            // Unresolved wildcards have no single declared location and
+            // validation skips them too — leave them in scratch.
+            if crate::wildcard::has_wildcards(&expanded) {
+                continue;
+            }
+            let src = scratch_dir.join(&expanded);
+            if !src.exists() {
+                continue;
+            }
+            let dest = self.config.workdir.join(&expanded);
+            // Parent directories mirror the pre-execution creation logic.
+            if let Some(parent) = dest.parent()
+                && !parent.as_os_str().is_empty()
+                && !parent.exists()
+            {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| OxoFlowError::Execution {
+                        rule: rule.name.clone(),
+                        message: format!(
+                            "failed to create output directory {}: {e}",
+                            parent.display()
+                        ),
+                    })?;
+            }
+            move_path(&src, &dest)
+                .await
+                .map_err(|e| OxoFlowError::Execution {
+                    rule: rule.name.clone(),
+                    message: format!(
+                        "failed to move scratch output '{expanded}' back to the workdir: {e}"
+                    ),
+                })?;
+            tracing::debug!(rule = %rule.name, output = %expanded, "moved scratch output to workdir");
+        }
+        Ok(())
     }
 
     pub async fn execute_rule(
@@ -764,16 +848,29 @@ impl LocalExecutor {
             }
         };
 
-        let base_cmd =
-            match build_execution_command(&rule, wildcard_values, &self.config.interpreter_map) {
-                Some(cmd) => cmd,
-                None => {
-                    record.status = JobStatus::Skipped;
-                    record.finished_at = Some(Utc::now());
-                    record.skip_reason = Some("no shell or script defined".to_string());
-                    return Ok(record);
-                }
-            };
+        // Scratch rules render inputs (and scripts) as absolute paths into
+        // the main workdir while keeping outputs relative — the shell runs
+        // with its cwd in the scratch dir, so relative outputs land there
+        // and are collected afterwards.
+        let base_cmd = if rule.scratch {
+            build_execution_command_in_scratch(
+                &rule,
+                wildcard_values,
+                &self.config.interpreter_map,
+                &self.config.workdir,
+            )
+        } else {
+            build_execution_command(&rule, wildcard_values, &self.config.interpreter_map)
+        };
+        let base_cmd = match base_cmd {
+            Some(cmd) => cmd,
+            None => {
+                record.status = JobStatus::Skipped;
+                record.finished_at = Some(Utc::now());
+                record.skip_reason = Some("no shell or script defined".to_string());
+                return Ok(record);
+            }
+        };
 
         // Optional rules skip (no error) when their declared inputs are
         // absent — e.g. analysis steps that only apply to some samples
@@ -803,7 +900,14 @@ impl LocalExecutor {
             return Ok(record);
         }
 
-        let resolved_commands = vec![self.resolve_command(&base_cmd, &rule)];
+        // Scratch rules run in an isolated directory. The path is decided
+        // here (environment wrapping needs it for container mounts) but the
+        // directory itself is only created right before the command spawns,
+        // so pre-flight failures never leak empty dirs.
+        let scratch_dir = rule.scratch.then(|| self.scratch_dir_for(&rule.name));
+
+        let resolved_commands =
+            vec![self.resolve_command(&base_cmd, &rule, scratch_dir.as_deref())];
         record.command = resolved_commands.first().cloned();
 
         validate_wildcard_injection(wildcard_values)?;
@@ -888,13 +992,42 @@ impl LocalExecutor {
                 message: format!("semaphore error: {e}"),
             })?;
 
+        // Create the scratch working directory now that execution is
+        // certain; its name was already decided for env wrapping above.
+        if let Some(scratch) = &scratch_dir {
+            tokio::fs::create_dir_all(scratch)
+                .await
+                .map_err(|e| OxoFlowError::Execution {
+                    rule: rule.name.clone(),
+                    message: format!(
+                        "failed to create scratch directory {}: {e}",
+                        scratch.display()
+                    ),
+                })?;
+        }
+        // The rule's shell cwd: scratch for scratch rules, main workdir
+        // otherwise (docker/singularity run with `-w`/inherited cwd in the
+        // scratch after the wrapper fixup above).
+        let rule_cwd: &Path = scratch_dir.as_deref().unwrap_or(&self.config.workdir);
+
         // Hooks run the same placeholder rendering as the main command
         // ({config.x}, {input}, {output}) so hook commands see expanded
         // values instead of literal braces (issue #75).
         if let Some(ref pre_cmd) = rule.pre_exec {
-            let rendered = render_shell_command(pre_cmd, &rule, wildcard_values);
+            // Scratch rules render inputs absolute into the MAIN workdir
+            // (the scratch dir is only the shell's cwd).
+            let rendered = if scratch_dir.is_some() {
+                render_shell_command_in_scratch(
+                    pre_cmd,
+                    &rule,
+                    wildcard_values,
+                    &self.config.workdir,
+                )
+            } else {
+                render_shell_command(pre_cmd, &rule, wildcard_values)
+            };
             validate_shell_safety(&rendered)?;
-            let pre_child = spawn_rule_shell(&rendered, &self.config.workdir, &rule.envvars);
+            let pre_child = spawn_rule_shell(&rendered, rule_cwd, &rule.envvars);
             let pre_result = match pre_child {
                 Ok(child) => child.wait_with_output().await,
                 Err(e) => {
@@ -952,13 +1085,12 @@ impl LocalExecutor {
                 // orphaned. Timeout enforcement kills the rule's subtree instead
                 // (see timeout::kill_process_tree), so per-rule semantics are
                 // unchanged.
-                let child =
-                    spawn_rule_shell(cmd, &self.config.workdir, &rule.envvars).map_err(|e| {
-                        OxoFlowError::Execution {
-                            rule: rule.name.clone(),
-                            message: format!("failed to spawn: {e}"),
-                        }
-                    })?;
+                let child = spawn_rule_shell(cmd, rule_cwd, &rule.envvars).map_err(|e| {
+                    OxoFlowError::Execution {
+                        rule: rule.name.clone(),
+                        message: format!("failed to spawn: {e}"),
+                    }
+                })?;
 
                 let child_id = child.id();
 
@@ -1052,6 +1184,29 @@ impl LocalExecutor {
         self.release_resources(&rule).await;
 
         if all_commands_succeeded {
+            // Scratch rules: collect declared outputs produced inside the
+            // scratch dir back to their main-workdir locations BEFORE the
+            // freshness validation below.
+            if let Some(scratch) = &scratch_dir
+                && let Err(e) = self
+                    .move_scratch_outputs(&rule, scratch, wildcard_values)
+                    .await
+            {
+                record.status = JobStatus::Failed;
+                record.exit_code = Some(-1);
+                push_stderr_note(&mut record, &format!("\n[oxo-flow] {e}"));
+                push_stderr_note(&mut record, &scratch_preserved_note(scratch));
+                cleanup_temp_outputs(&rule, &self.config.workdir).await;
+                if let Some(ref hook_cmd) = rule.on_failure {
+                    run_hook(
+                        &render_shell_command(hook_cmd, &rule, wildcard_values),
+                        &rule,
+                        &self.config.workdir,
+                    )
+                    .await;
+                }
+                return Ok(record);
+            }
             // Verify declared output files actually exist before marking success.
             // Shell commands can exit 0 even when tools fail internally
             // (e.g. "tool_a; rm -f temp" — rm succeeds, masking tool_a failure).
@@ -1062,30 +1217,47 @@ impl LocalExecutor {
                 // copies passed validation (issue #80 item 2). An upload
                 // failure fails the rule — a declared remote output that
                 // did not land is a broken contract.
-                if let Err(e) = self.upload_remote_outputs(&rule.name, &uploads).await {
-                    record.status = JobStatus::Failed;
-                    record.exit_code = Some(-1);
-                    let msg = format!("\n[oxo-flow] remote output upload failed: {e}");
-                    if let Some(ref mut stderr) = record.stderr {
-                        stderr.push_str(&msg);
+                let upload_ok =
+                    if let Err(e) = self.upload_remote_outputs(&rule.name, &uploads).await {
+                        record.status = JobStatus::Failed;
+                        record.exit_code = Some(-1);
+                        push_stderr_note(
+                            &mut record,
+                            &format!("\n[oxo-flow] remote output upload failed: {e}"),
+                        );
+                        if let Some(ref hook_cmd) = rule.on_failure {
+                            run_hook(
+                                &render_shell_command(hook_cmd, &rule, wildcard_values),
+                                &rule,
+                                &self.config.workdir,
+                            )
+                            .await;
+                        }
+                        false
                     } else {
-                        record.stderr = Some(msg);
-                    }
-                    if let Some(ref hook_cmd) = rule.on_failure {
-                        run_hook(
-                            &render_shell_command(hook_cmd, &rule, wildcard_values),
-                            &rule,
-                            &self.config.workdir,
-                        )
-                        .await;
-                    }
-                } else if let Some(ref hook_cmd) = rule.on_success {
-                    run_hook(
-                        &render_shell_command(hook_cmd, &rule, wildcard_values),
-                        &rule,
-                        &self.config.workdir,
-                    )
-                    .await;
+                        if let Some(ref hook_cmd) = rule.on_success {
+                            run_hook(
+                                &render_shell_command(hook_cmd, &rule, wildcard_values),
+                                &rule,
+                                &self.config.workdir,
+                            )
+                            .await;
+                        }
+                        true
+                    };
+                // Scratch is transient: a fully successful rule drops it.
+                // Failures (command, validation, upload) keep it around for
+                // debugging, and the error message names its path.
+                if upload_ok
+                    && let Some(scratch) = &scratch_dir
+                    && let Err(e) = tokio::fs::remove_dir_all(scratch).await
+                {
+                    tracing::warn!(
+                        rule = %rule.name,
+                        error = %e,
+                        scratch = %scratch.display(),
+                        "failed to remove scratch directory after success"
+                    );
                 }
             } else {
                 record.status = JobStatus::Failed;
@@ -1101,10 +1273,9 @@ impl LocalExecutor {
                     missing.len(),
                     missing_list
                 );
-                if let Some(ref mut stderr) = record.stderr {
-                    stderr.push_str(&msg);
-                } else {
-                    record.stderr = Some(msg);
+                push_stderr_note(&mut record, &msg);
+                if let Some(scratch) = &scratch_dir {
+                    push_stderr_note(&mut record, &scratch_preserved_note(scratch));
                 }
                 cleanup_temp_outputs(&rule, &self.config.workdir).await;
                 if let Some(ref hook_cmd) = rule.on_failure {
@@ -1118,6 +1289,9 @@ impl LocalExecutor {
             }
         } else {
             // Keep the status set in the loop (Failed or TimedOut)
+            if let Some(scratch) = &scratch_dir {
+                push_stderr_note(&mut record, &scratch_preserved_note(scratch));
+            }
             cleanup_temp_outputs(&rule, &self.config.workdir).await;
             if let Some(ref hook_cmd) = rule.on_failure {
                 run_hook(
@@ -1186,9 +1360,11 @@ impl LocalExecutor {
             .iter()
             .map(|rule| {
                 let command = rule.shell.clone();
+                // Dry-run is read-only: no scratch dir exists, so the
+                // container wrapper is shown unmodified (a preview).
                 let wrapped = command
                     .as_deref()
-                    .map(|cmd| self.resolve_command(cmd, rule));
+                    .map(|cmd| self.resolve_command(cmd, rule, None));
 
                 // Apply shell safety checks in dry-run mode so dangerous
                 // commands are visible to users before actual execution.
@@ -1235,13 +1411,35 @@ pub fn build_execution_command(
     wildcard_values: &HashMap<String, String>,
     interpreter_map: &HashMap<String, String>,
 ) -> Option<String> {
+    build_execution_command_inner(rule, wildcard_values, interpreter_map, None)
+}
+
+/// Scratch-mode variant: input and script paths render absolute (they live
+/// in the main workdir), outputs stay relative so they land in the scratch
+/// working directory.
+pub(crate) fn build_execution_command_in_scratch(
+    rule: &Rule,
+    wildcard_values: &HashMap<String, String>,
+    interpreter_map: &HashMap<String, String>,
+    workdir: &Path,
+) -> Option<String> {
+    build_execution_command_inner(rule, wildcard_values, interpreter_map, Some(workdir))
+}
+
+fn build_execution_command_inner(
+    rule: &Rule,
+    wildcard_values: &HashMap<String, String>,
+    interpreter_map: &HashMap<String, String>,
+    abs_root: Option<&Path>,
+) -> Option<String> {
     let shell_cmd = rule
         .shell
         .as_ref()
-        .map(|cmd| render_shell_command(cmd, rule, wildcard_values));
+        .map(|cmd| render_shell_command_inner(cmd, rule, wildcard_values, abs_root));
 
     let script_cmd = rule.script.as_ref().map(|script_path| {
-        let expanded_script = render_shell_command(script_path, rule, wildcard_values);
+        let expanded_script =
+            render_shell_command_inner(script_path, rule, wildcard_values, abs_root);
         let base_script = expanded_script
             .split_whitespace()
             .next()
@@ -1267,7 +1465,7 @@ pub fn build_execution_command(
     // Auto-create output directories to eliminate mkdir -p boilerplate in shells
     let mut dirs_to_create: Vec<String> = Vec::new();
     for output in &rule.output {
-        let expanded = render_shell_command(output, rule, wildcard_values);
+        let expanded = render_shell_command_inner(output, rule, wildcard_values, abs_root);
         // Only create dirs for paths with directory separators, skip wildcards
         if expanded.contains('/')
             && !expanded.contains('{')
@@ -1338,6 +1536,142 @@ fn warn_shell_fallback_once() {
     }
 }
 
+/// Directory-name-safe rule names: alphanumerics plus `. _ -` survive,
+/// everything else becomes `_` (rule names admit `:` per `Rule::validate`,
+/// which is not a safe directory character everywhere).
+fn sanitize_dir_component(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Make a container wrapper (docker / singularity) for a scratch rule see
+/// both the main workdir (absolute input paths) and the scratch dir, and
+/// run inside the scratch.
+///
+/// The container backends wrap commands as plain shell strings that
+/// bind-mount only the executor workdir (environment.rs). Scratch rules
+/// need an additional scratch bind and — for docker — the `-w` working
+/// directory switched to the scratch dir. Only the prefix before ` sh -c '`
+/// is touched, so a user command that coincidentally contains the same
+/// tokens is never rewritten. Non-container wrappers pass through
+/// unchanged.
+pub(super) fn fixup_container_wrapper(
+    wrapped: &str,
+    kind: &str,
+    workdir: &Path,
+    scratch: &Path,
+) -> String {
+    let workdir_str = workdir.display().to_string();
+    let scratch_str = scratch.display().to_string();
+    let (prefix, rest) = match wrapped.find(" sh -c '") {
+        Some(i) => (&wrapped[..i], &wrapped[i..]),
+        None => (wrapped, ""),
+    };
+    let fixed = match kind {
+        "docker" => {
+            let main_mount = format!("-v {workdir_str}:{workdir_str}");
+            if !prefix.contains(&main_mount) {
+                tracing::warn!(
+                    wrapper = %prefix,
+                    "docker wrapper lacks the expected workdir mount — scratch dir will not be mounted"
+                );
+                return wrapped.to_string();
+            }
+            prefix
+                .replace(
+                    &main_mount,
+                    &format!("{main_mount} -v {scratch_str}:{scratch_str}"),
+                )
+                .replace(&format!("-w {workdir_str}"), &format!("-w {scratch_str}"))
+        }
+        "singularity" => {
+            let main_bind = format!("--bind {workdir_str}:{workdir_str}");
+            if !prefix.contains(&main_bind) {
+                tracing::warn!(
+                    wrapper = %prefix,
+                    "singularity wrapper lacks the expected workdir bind — scratch dir will not be mounted"
+                );
+                return wrapped.to_string();
+            }
+            prefix.replace(
+                &main_bind,
+                &format!("{main_bind} --bind {scratch_str}:{scratch_str}"),
+            )
+        }
+        _ => return wrapped.to_string(),
+    };
+    format!("{fixed}{rest}")
+}
+
+/// Move a file or directory, falling back to copy+delete when a plain
+/// rename fails (e.g. scratch and workdir live on different filesystems).
+async fn move_path(src: &Path, dest: &Path) -> std::io::Result<()> {
+    match tokio::fs::rename(src, dest).await {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            copy_tree(src, dest)?;
+            remove_tree(src).await
+        }
+    }
+}
+
+/// Recursively copy a file or directory tree (synchronous: output moves
+/// touch bounded local files; `std::fs` avoids an infinitely sized future
+/// that a recursive `async fn` would need to box).
+fn copy_tree(src: &Path, dest: &Path) -> std::io::Result<()> {
+    let meta = std::fs::metadata(src)?;
+    if meta.is_dir() {
+        std::fs::create_dir_all(dest)?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            copy_tree(&entry.path(), &dest.join(entry.file_name()))?;
+        }
+        Ok(())
+    } else {
+        std::fs::copy(src, dest).map(|_| ())
+    }
+}
+
+/// Remove a file or directory tree; a missing path is not an error.
+async fn remove_tree(path: &Path) -> std::io::Result<()> {
+    let meta = match tokio::fs::metadata(path).await {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    if meta.is_dir() {
+        tokio::fs::remove_dir_all(path).await
+    } else {
+        tokio::fs::remove_file(path).await
+    }
+}
+
+/// Append a diagnostic note to a job record's stderr, creating the field
+/// when the rule produced no stderr at all.
+fn push_stderr_note(record: &mut JobRecord, note: &str) {
+    if let Some(ref mut stderr) = record.stderr {
+        stderr.push_str(note);
+    } else {
+        record.stderr = Some(note.to_string());
+    }
+}
+
+/// The note appended to a failing scratch rule's stderr so operators can
+/// find the preserved working directory.
+fn scratch_preserved_note(scratch: &Path) -> String {
+    format!(
+        "\n[oxo-flow] scratch directory preserved for debugging: {}",
+        scratch.display()
+    )
+}
+
 /// Execute a rendered rule hook (on_success / on_failure) in the rule's
 /// environment. Hooks are best-effort: their failure never changes the
 /// rule's own status (pre_exec is the exception and aborts the rule).
@@ -1371,6 +1705,28 @@ pub fn render_shell_command(
     rule: &Rule,
     wildcard_values: &HashMap<String, String>,
 ) -> String {
+    render_shell_command_inner(cmd, rule, wildcard_values, None)
+}
+
+/// Scratch-mode rendering: `{input}` and `{log}` render as absolute paths
+/// under `workdir` (they live outside the scratch directory), while
+/// `{output}` keeps its declared relative form so the shell writes it into
+/// the scratch working directory for later collection.
+pub(crate) fn render_shell_command_in_scratch(
+    cmd: &str,
+    rule: &Rule,
+    wildcard_values: &HashMap<String, String>,
+    workdir: &Path,
+) -> String {
+    render_shell_command_inner(cmd, rule, wildcard_values, Some(workdir))
+}
+
+fn render_shell_command_inner(
+    cmd: &str,
+    rule: &Rule,
+    wildcard_values: &HashMap<String, String>,
+    abs_root: Option<&Path>,
+) -> String {
     let mut expanded = cmd.to_string();
     // `{log}` resolves to the rule's log path with the same wildcard and
     // config expansion as every other path (W004's suggestion was unwired
@@ -1381,12 +1737,13 @@ pub fn render_shell_command(
         let expanded_log = if cmd == log_path || log_path.contains("{log}") {
             log_path.clone()
         } else {
-            render_shell_command(log_path, rule, wildcard_values)
+            render_shell_command_inner(log_path, rule, wildcard_values, abs_root)
         };
-        expanded = expanded.replace("{log}", &expanded_log);
+        let rendered_log = absolute_path(abs_root, &expanded_log);
+        expanded = expanded.replace("{log}", &rendered_log);
         // `{log[0]}` for snakemake ports (log is a scalar here, so the
         // indexed form maps to the same path).
-        expanded = expanded.replace("{log[0]}", &expanded_log);
+        expanded = expanded.replace("{log[0]}", &rendered_log);
     }
     let all_outputs = rule.output.to_vec();
     expanded = expanded.replace("{output}", &all_outputs.join(" "));
@@ -1400,16 +1757,27 @@ pub fn render_shell_command(
             expanded = expanded.replace(&format!("{{output.{name}}}"), out);
         }
     }
-    let all_inputs = rule.input.to_vec();
+    // Inputs expand their `{config.x}` / wildcard placeholders here so the
+    // absolute form can be computed; in non-scratch mode the result is
+    // byte-identical to the historical raw-pattern pass.
+    let all_inputs: Vec<String> = rule
+        .input
+        .iter()
+        .map(|inp| absolute_path(abs_root, &expand_wildcards_in_pattern(inp, wildcard_values)))
+        .collect();
     expanded = expanded.replace("{input}", &all_inputs.join(" "));
     for i in 0..rule.input.len() {
         if let Some(inp) = rule.input.get_index(i) {
-            expanded = expanded.replace(&format!("{{input[{i}]}}"), inp);
+            let rendered =
+                absolute_path(abs_root, &expand_wildcards_in_pattern(inp, wildcard_values));
+            expanded = expanded.replace(&format!("{{input[{i}]}}"), &rendered);
         }
     }
     if let FilePatterns::Map(ref m) = rule.input {
         for (name, inp) in m {
-            expanded = expanded.replace(&format!("{{input.{name}}}"), inp);
+            let rendered =
+                absolute_path(abs_root, &expand_wildcards_in_pattern(inp, wildcard_values));
+            expanded = expanded.replace(&format!("{{input.{name}}}"), &rendered);
         }
     }
     expanded = expanded.replace("{threads}", &rule.effective_threads().to_string());
@@ -1427,6 +1795,26 @@ pub fn render_shell_command(
         expanded = expanded.replace(&format!("{{{key}}}"), &render_wildcard_value(value));
     }
     expanded
+}
+
+/// Expand every `{key}` placeholder in a path pattern with the instance's
+/// wildcard values, using shell-friendly rendering for array config values
+/// (same semantics as the trailing wildcard pass of `render_shell_command`).
+fn expand_wildcards_in_pattern(pattern: &str, wildcard_values: &HashMap<String, String>) -> String {
+    let mut expanded = pattern.to_string();
+    for (key, value) in wildcard_values {
+        expanded = expanded.replace(&format!("{{{key}}}"), &render_wildcard_value(value));
+    }
+    expanded
+}
+
+/// Render a path as absolute under `root` when `root` is given and the path
+/// is relative; otherwise pass it through unchanged.
+fn absolute_path(root: Option<&Path>, path: &str) -> String {
+    match root {
+        Some(root) if !Path::new(path).is_absolute() => root.join(path).display().to_string(),
+        _ => path.to_string(),
+    }
 }
 
 /// Normalize a wildcard value for shell interpolation.

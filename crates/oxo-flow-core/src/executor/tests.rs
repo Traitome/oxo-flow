@@ -3,6 +3,7 @@ use super::process::*;
 use super::security::*;
 use crate::rule::{EnvironmentSpec, FilePatterns, Resources, Rule, RuleBuilder};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 fn make_rule(name: &str, shell: &str) -> Rule {
     Rule {
@@ -1342,4 +1343,283 @@ async fn spawn_rule_shell_falls_back_to_sh_when_bash_missing() {
         "expected the sh fallback to run, stdout was: {stdout}"
     );
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+// ── rule-level scratch working directory ─────────────────────────────────
+
+/// List entries under `<workdir>/.oxo-flow/scratch` (empty when the root
+/// does not exist at all).
+fn scratch_entries(workdir: &Path) -> Vec<PathBuf> {
+    let root = workdir.join(".oxo-flow/scratch");
+    match std::fs::read_dir(&root) {
+        Ok(entries) => entries.filter_map(|e| e.ok().map(|e| e.path())).collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+#[test]
+fn scratch_flag_defaults_false_and_parses_from_toml() {
+    let plain: Rule =
+        toml::from_str("name = \"t\"\nshell = \"true\"\noutput = [\"o.txt\"]").unwrap();
+    assert!(!plain.scratch, "scratch must default to false");
+    let enabled: Rule =
+        toml::from_str("name = \"t\"\nscratch = true\nshell = \"true\"\noutput = [\"o.txt\"]")
+            .unwrap();
+    assert!(enabled.scratch);
+}
+
+#[tokio::test]
+async fn scratch_rule_moves_outputs_back_and_cleans_up() {
+    let workdir = tempfile::tempdir().unwrap();
+    std::fs::write(workdir.path().join("in.txt"), "hello\n").unwrap();
+    let config = ExecutorConfig {
+        workdir: workdir.path().to_path_buf(),
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    let rule = Rule {
+        name: "scratch_demo".to_string(),
+        input: vec!["in.txt".to_string()].into(),
+        output: vec!["out/data.txt".to_string()].into(),
+        shell: Some("cat {input[0]} > {output[0]} && echo more >> {output[0]}".to_string()),
+        scratch: true,
+        ..Default::default()
+    };
+    let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+    assert_eq!(record.status, JobStatus::Success);
+    // The declared output was produced inside the scratch cwd and moved
+    // back to its main-workdir location.
+    let out = workdir.path().join("out/data.txt");
+    assert!(out.exists(), "output must land in the main workdir");
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), "hello\nmore\n");
+    // The relative input only exists in the main workdir — succeeding
+    // proves {input[0]} was rendered as an absolute path into it.
+    assert!(
+        scratch_entries(workdir.path()).is_empty(),
+        "scratch must be removed on success"
+    );
+}
+
+#[tokio::test]
+async fn scratch_rule_preserves_scratch_on_failure() {
+    let workdir = tempfile::tempdir().unwrap();
+    let config = ExecutorConfig {
+        workdir: workdir.path().to_path_buf(),
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    let rule = Rule {
+        name: "scratch_fail".to_string(),
+        output: vec!["data.txt".to_string()].into(),
+        shell: Some("echo partial > data.txt && exit 1".to_string()),
+        scratch: true,
+        ..Default::default()
+    };
+    let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+    assert_eq!(record.status, JobStatus::Failed);
+    let stderr = record.stderr.unwrap_or_default();
+    assert!(
+        stderr.contains(".oxo-flow/scratch"),
+        "failure must point at the preserved scratch dir, stderr: {stderr}"
+    );
+    let entries = scratch_entries(workdir.path());
+    assert_eq!(entries.len(), 1, "scratch must be kept on failure");
+    let partial = entries[0].join("data.txt");
+    assert!(partial.exists(), "partial output must remain in scratch");
+    assert_eq!(std::fs::read_to_string(&partial).unwrap(), "partial\n");
+}
+
+#[tokio::test]
+async fn scratch_rule_missing_outputs_keeps_scratch_with_path_note() {
+    let workdir = tempfile::tempdir().unwrap();
+    let config = ExecutorConfig {
+        workdir: workdir.path().to_path_buf(),
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    let rule = Rule {
+        name: "scratch_noval".to_string(),
+        output: vec!["data.txt".to_string()].into(),
+        shell: Some("true".to_string()),
+        scratch: true,
+        ..Default::default()
+    };
+    let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+    assert_eq!(record.status, JobStatus::Failed);
+    let stderr = record.stderr.unwrap_or_default();
+    assert!(stderr.contains("output validation failed"));
+    assert!(
+        stderr.contains(".oxo-flow/scratch"),
+        "stderr must mention the preserved scratch dir: {stderr}"
+    );
+    assert_eq!(scratch_entries(workdir.path()).len(), 1);
+}
+
+#[tokio::test]
+async fn scratch_rule_log_lands_in_main_workdir() {
+    let workdir = tempfile::tempdir().unwrap();
+    let config = ExecutorConfig {
+        workdir: workdir.path().to_path_buf(),
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    let rule = Rule {
+        name: "scratch_log".to_string(),
+        output: vec!["data.txt".to_string()].into(),
+        shell: Some("echo run > data.txt 2> {log}".to_string()),
+        log: Some("logs/run.log".to_string()),
+        scratch: true,
+        ..Default::default()
+    };
+    let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+    assert_eq!(record.status, JobStatus::Success);
+    // {log} renders absolute so the log survives scratch cleanup.
+    assert!(workdir.path().join("logs/run.log").exists());
+    assert!(workdir.path().join("data.txt").exists());
+    assert!(scratch_entries(workdir.path()).is_empty());
+}
+
+#[tokio::test]
+async fn scratch_rule_skips_when_outputs_fresh_without_scratch() {
+    let workdir = tempfile::tempdir().unwrap();
+    let config = ExecutorConfig {
+        workdir: workdir.path().to_path_buf(),
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    let rule = Rule {
+        name: "scratch_fresh".to_string(),
+        output: vec!["data.txt".to_string()].into(),
+        shell: Some("echo x > data.txt".to_string()),
+        scratch: true,
+        ..Default::default()
+    };
+    let first = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+    assert_eq!(first.status, JobStatus::Success);
+    assert!(workdir.path().join("data.txt").exists());
+    let second = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+    assert_eq!(second.status, JobStatus::Skipped);
+    assert!(
+        scratch_entries(workdir.path()).is_empty(),
+        "a fresh-skip must not create scratch dirs"
+    );
+}
+
+#[tokio::test]
+async fn non_scratch_rule_never_creates_scratch() {
+    let workdir = tempfile::tempdir().unwrap();
+    let config = ExecutorConfig {
+        workdir: workdir.path().to_path_buf(),
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    let rule = Rule {
+        name: "plain_demo".to_string(),
+        output: vec!["data.txt".to_string()].into(),
+        shell: Some("echo x > data.txt".to_string()),
+        scratch: false,
+        ..Default::default()
+    };
+    let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+    assert_eq!(record.status, JobStatus::Success);
+    assert!(workdir.path().join("data.txt").exists());
+    assert!(
+        scratch_entries(workdir.path()).is_empty(),
+        "non-scratch rules must never create scratch dirs"
+    );
+}
+
+#[test]
+fn scratch_render_inputs_absolute_outputs_relative() {
+    let rule = Rule {
+        name: "r".to_string(),
+        input: vec!["reads/{sample}.fq".to_string()].into(),
+        output: vec!["out/{sample}.sam".to_string()].into(),
+        ..Default::default()
+    };
+    let mut values = HashMap::new();
+    values.insert("sample".to_string(), "S1".to_string());
+    let rendered = render_shell_command_in_scratch(
+        "bwa mem {input[0]} > {output[0]}",
+        &rule,
+        &values,
+        Path::new("/data/work"),
+    );
+    assert_eq!(rendered, "bwa mem /data/work/reads/S1.fq > out/S1.sam");
+    // Non-scratch rendering keeps relative input paths.
+    let plain = render_shell_command("bwa mem {input[0]} > {output[0]}", &rule, &values);
+    assert_eq!(plain, "bwa mem reads/S1.fq > out/S1.sam");
+}
+
+#[test]
+fn scratch_docker_wrapper_mounts_scratch_and_switches_cwd() {
+    let workdir = Path::new("/data/work");
+    let scratch = Path::new("/data/work/.oxo-flow/scratch/demo-1-0");
+    let wrapped = "docker run --rm --user $(id -u):$(id -g) -v /data/work:/data/work -w /data/work ubuntu:24.04 sh -c 'bwa mem reads.fq > data.txt'";
+    let fixed = fixup_container_wrapper(wrapped, "docker", workdir, scratch);
+    assert!(
+        fixed.contains(
+            "-v /data/work:/data/work -v /data/work/.oxo-flow/scratch/demo-1-0:/data/work/.oxo-flow/scratch/demo-1-0"
+        ),
+        "fixed: {fixed}"
+    );
+    assert!(
+        fixed.contains("-w /data/work/.oxo-flow/scratch/demo-1-0"),
+        "fixed: {fixed}"
+    );
+    // The user command is never rewritten.
+    assert!(fixed.ends_with("sh -c 'bwa mem reads.fq > data.txt'"));
+}
+
+#[test]
+fn scratch_singularity_wrapper_adds_scratch_bind() {
+    let workdir = Path::new("/data/work");
+    let scratch = Path::new("/data/work/.oxo-flow/scratch/demo-1-0");
+    let wrapped = "singularity exec --bind /data/work:/data/work ubuntu.sif sh -c 'bwa mem reads.fq > data.txt'";
+    let fixed = fixup_container_wrapper(wrapped, "singularity", workdir, scratch);
+    assert!(
+        fixed.contains(
+            "--bind /data/work:/data/work --bind /data/work/.oxo-flow/scratch/demo-1-0:/data/work/.oxo-flow/scratch/demo-1-0"
+        ),
+        "fixed: {fixed}"
+    );
+    assert!(fixed.ends_with("sh -c 'bwa mem reads.fq > data.txt'"));
+}
+
+#[test]
+fn scratch_wrapper_fixup_leaves_host_wrappers_untouched() {
+    let wrapped = "conda run -n bio bash -c 'bwa mem reads.fq > data.txt'";
+    let fixed = fixup_container_wrapper(
+        wrapped,
+        "conda",
+        Path::new("/data/work"),
+        Path::new("/data/work/.oxo-flow/scratch/demo"),
+    );
+    assert_eq!(fixed, wrapped);
+}
+
+#[tokio::test]
+async fn scratch_rule_pre_exec_runs_in_scratch_with_absolute_inputs() {
+    let workdir = tempfile::tempdir().unwrap();
+    std::fs::write(workdir.path().join("in.txt"), "hi\n").unwrap();
+    let config = ExecutorConfig {
+        workdir: workdir.path().to_path_buf(),
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    let rule = Rule {
+        name: "scratch_pre".to_string(),
+        input: vec!["in.txt".to_string()].into(),
+        output: vec!["data.txt".to_string()].into(),
+        shell: Some("cat {input[0]} > {output[0]}".to_string()),
+        // `test -f {input[0]}` only passes when the input renders absolute
+        // (the file lives in the main workdir, the cwd is the scratch).
+        pre_exec: Some("test -f {input[0]}".to_string()),
+        scratch: true,
+        ..Default::default()
+    };
+    let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+    assert_eq!(record.status, JobStatus::Success);
+    assert!(workdir.path().join("data.txt").exists());
+    assert!(scratch_entries(workdir.path()).is_empty());
 }

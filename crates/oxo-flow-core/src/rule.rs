@@ -723,6 +723,21 @@ pub struct Rule {
     #[serde(skip_serializing_if = "is_false")]
     pub temporary: bool,
 
+    /// Run this rule's commands in a dedicated scratch directory.
+    ///
+    /// When true, the rule executes with its working directory set to a
+    /// fresh `.oxo-flow/scratch/<rule>-<suffix>/` directory under the
+    /// workflow directory, so tools that write fixed filenames never
+    /// collide with files produced by other rules or by this rule's other
+    /// instances. `{input}` (and `{log}`) render as absolute paths into
+    /// the main workdir, while declared outputs keep their relative form
+    /// and are moved back to the main workdir after execution. The scratch
+    /// directory is removed on success and preserved on failure for
+    /// debugging (the error message names its path).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "is_false")]
+    pub scratch: bool,
+
     /// Scatter configuration for parallel execution across a variable.
     ///
     /// Fans out this rule into multiple parallel instances, one per element
@@ -1278,6 +1293,13 @@ impl RuleBuilder {
     #[must_use]
     pub fn output(mut self, output: impl Into<FilePatterns>) -> Self {
         self.rule.output = output.into();
+        self
+    }
+
+    /// Run the rule in an isolated scratch working directory.
+    #[must_use]
+    pub fn scratch(mut self, scratch: bool) -> Self {
+        self.rule.scratch = scratch;
         self
     }
 
