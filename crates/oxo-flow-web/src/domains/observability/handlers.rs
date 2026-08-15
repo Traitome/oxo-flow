@@ -184,10 +184,15 @@ pub async fn sse_events() -> impl axum::response::IntoResponse {
         (status = 400, description = "Error", body = ApiError),
     )
 )]
-/// GET /api/quota — resource quota status for team mode.
-pub async fn quota_status() -> ApiResult<serde_json::Value> {
+/// GET /api/quota — resource quota status for team mode: limits plus the
+/// acting user's current usage, so a quota rejection is explainable.
+pub async fn quota_status(
+    authenticated: Option<axum::Extension<crate::domains::auth::current_user::CurrentUser>>,
+) -> ApiResult<serde_json::Value> {
     let tracker = crate::infra::quota::global_quota_tracker();
     let config = tracker.config();
+    let user = crate::domains::auth::current_user::resolve(authenticated.as_ref());
+    let usage = tracker.get_usage(&user.id);
     Ok(Json(serde_json::json!({
         "enabled": true,
         "limits": {
@@ -195,6 +200,12 @@ pub async fn quota_status() -> ApiResult<serde_json::Value> {
             "max_total_threads": config.max_total_threads,
             "max_total_memory_mb": config.max_total_memory_mb,
             "max_runs_per_day": config.max_runs_per_day,
+        },
+        "usage": {
+            "active_runs": usage.active_runs,
+            "used_threads": usage.used_threads,
+            "used_memory_mb": usage.used_memory_mb,
+            "runs_today": usage.runs_today,
         }
     })))
 }
