@@ -39,8 +39,12 @@ fn require_ai_admin(user: &CurrentUser) -> Result<(), (StatusCode, Json<ApiError
 }
 
 /// POST /api/ai/translate — standard JSON response.
-pub async fn translate(Json(req): Json<TranslateRequest>) -> ApiResult<TranslateResponse> {
-    let provider = crate::ai_provider::AiProviderRegistry::global().get_provider();
+pub async fn translate(
+    authenticated: Option<Extension<CurrentUser>>,
+    Json(req): Json<TranslateRequest>,
+) -> ApiResult<TranslateResponse> {
+    let user = resolve(authenticated.as_ref());
+    let provider = crate::ai_provider::provider_for(&user.id).await;
 
     let templates: Vec<String> = if let Ok(pool) = get_pool() {
         sqlx::query_as::<_, models::TemplateRow>(
@@ -68,11 +72,13 @@ pub async fn translate(Json(req): Json<TranslateRequest>) -> ApiResult<Translate
 /// Each event has `type` and `data` fields. The final event contains the full
 /// TranslateResponse as JSON.
 pub async fn translate_sse(
+    authenticated: Option<Extension<CurrentUser>>,
     Json(req): Json<TranslateRequest>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, std::convert::Infallible>>> {
     use std::convert::Infallible;
 
-    let provider = crate::ai_provider::AiProviderRegistry::global().get_provider();
+    let user = resolve(authenticated.as_ref());
+    let provider = crate::ai_provider::provider_for(&user.id).await;
 
     let templates: Vec<String> = if let Ok(pool) = get_pool() {
         sqlx::query_as::<_, models::TemplateRow>(
@@ -136,8 +142,12 @@ pub async fn translate_sse(
 /// POST /api/ai/explain
 ///
 /// Looks up the run from the database to get real diagnostics data.
-pub async fn explain(Json(req): Json<ExplainRequest>) -> ApiResult<ExplainResponse> {
-    let provider = crate::ai_provider::AiProviderRegistry::global().get_provider();
+pub async fn explain(
+    authenticated: Option<Extension<CurrentUser>>,
+    Json(req): Json<ExplainRequest>,
+) -> ApiResult<ExplainResponse> {
+    let user = resolve(authenticated.as_ref());
+    let provider = crate::ai_provider::provider_for(&user.id).await;
 
     // Try to look up run diagnostics from DB
     let (diagnostics, log_output) = if let Ok(pool) = get_pool() {
@@ -201,8 +211,12 @@ pub async fn explain(Json(req): Json<ExplainRequest>) -> ApiResult<ExplainRespon
 /// POST /api/ai/interpret
 ///
 /// Looks up run results from DB and workdir for real data.
-pub async fn interpret(Json(req): Json<InterpretRequest>) -> ApiResult<InterpretResponse> {
-    let provider = crate::ai_provider::AiProviderRegistry::global().get_provider();
+pub async fn interpret(
+    authenticated: Option<Extension<CurrentUser>>,
+    Json(req): Json<InterpretRequest>,
+) -> ApiResult<InterpretResponse> {
+    let user = resolve(authenticated.as_ref());
+    let provider = crate::ai_provider::provider_for(&user.id).await;
 
     // Try to get output summary from run
     let output_summary = if let Ok(pool) = get_pool() {
@@ -250,8 +264,12 @@ pub async fn interpret(Json(req): Json<InterpretRequest>) -> ApiResult<Interpret
 /// POST /api/ai/optimize
 ///
 /// Accepts TOML directly or loads from DB by pipeline_id.
-pub async fn optimize(Json(req): Json<OptimizeRequest>) -> ApiResult<OptimizeResponse> {
-    let provider = crate::ai_provider::AiProviderRegistry::global().get_provider();
+pub async fn optimize(
+    authenticated: Option<Extension<CurrentUser>>,
+    Json(req): Json<OptimizeRequest>,
+) -> ApiResult<OptimizeResponse> {
+    let user = resolve(authenticated.as_ref());
+    let provider = crate::ai_provider::provider_for(&user.id).await;
 
     // Use provided TOML, or load from DB
     let toml_content = if let Some(ref toml) = req.toml_content {
@@ -292,6 +310,8 @@ pub async fn update_ai_config(
 ) -> ApiResult<AiConfigResponse> {
     let user = resolve(authenticated.as_ref());
     require_ai_admin(&user)?;
+    // The shared runtime changed — every cached per-user fallback is stale.
+    crate::ai_provider::invalidate_provider_cache();
     crate::ai_provider::AiProviderRegistry::global()
         .reconfigure(
             req.provider.as_deref().unwrap_or("noop"),
@@ -479,6 +499,7 @@ pub async fn update_server_ai_config(
 ) -> ApiResult<serde_json::Value> {
     let user = resolve(authenticated.as_ref());
     require_ai_admin(&user)?;
+    crate::ai_provider::invalidate_provider_cache();
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -599,8 +620,11 @@ pub async fn update_user_ai_config(
     // The runtime serves ONE provider registry per process: in personal
     // mode (or for admins) applying it immediately is exactly what the
     // user expects. For non-admin team users the row is stored per-user
-    // but the shared runtime keeps the server-level provider.
+    // and resolved by provider_for() on every AI call — their key never
+    // reconfigures the shared runtime (isolation fix, was "applied=false
+    // and silently ignored").
     let applied = crate::server::running_mode() == "personal" || user.is_admin();
+    crate::ai_provider::invalidate_provider_for(&user.id);
     if applied {
         let _ = crate::ai_provider::AiProviderRegistry::global().reconfigure(
             provider,

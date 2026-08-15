@@ -108,7 +108,9 @@ pub async fn chat_send(
     let pool = crate::infra::db::sqlite::try_pool().ok();
     persist_user_message(pool, &user, &session_id, &message).await;
 
-    let run = service::spawn_chat_agent(message, session_id.clone(), context, req.run_id);
+    // Chat runs on the acting user's own AI provider (isolation fix).
+    let provider = crate::ai_provider::provider_for(&user.id).await;
+    let run = service::spawn_chat_agent(message, session_id.clone(), context, req.run_id, provider);
 
     let stream = async_stream::stream! {
         let mut events = run.events;
@@ -219,11 +221,13 @@ pub async fn chat_send_json(
     let pool = crate::infra::db::sqlite::try_pool().ok();
     persist_user_message(pool, &user, &session_id, &req.message).await;
 
+    let provider = crate::ai_provider::provider_for(&user.id).await;
     match service::process_chat(
         &req.message,
         Some(&session_id),
         req.context.as_ref(),
         &templates,
+        &provider,
     )
     .await
     {

@@ -1549,6 +1549,55 @@ async fn team_mode_ai_config_admin_only_and_env_login_provisions_user() {
         .unwrap();
     assert_eq!(admin_test.status(), 200, "admin may test the AI provider");
 
+    // Per-user AI isolation (deferred-item follow-up): a non-admin saving
+    // their own provider row must NOT reconfigure the shared runtime —
+    // their config is stored per-user and resolved per call.
+    let server_before: serde_json::Value = client
+        .get(format!("{base}/api/ai/config"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let bob_user_config = client
+        .put(format!("{base}/api/ai/config/user"))
+        .bearer_auth(&bob)
+        .json(&serde_json::json!({"provider": "noop", "api_key": "bobs-key"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bob_user_config.status(), 200);
+    let bob_user_body: serde_json::Value = bob_user_config.json().await.unwrap();
+    assert_eq!(
+        bob_user_body["applied_to_runtime"], false,
+        "non-admin per-user config must not touch the shared runtime: {bob_user_body}"
+    );
+    // The shared config is byte-identical after bob's write.
+    let server_after: serde_json::Value = client
+        .get(format!("{base}/api/ai/config"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        server_after, server_before,
+        "bob's per-user row must leave the shared provider untouched"
+    );
+    // Bob's effective view reports HIS row.
+    let bob_effective: serde_json::Value = client
+        .get(format!("{base}/api/ai/config/effective"))
+        .bearer_auth(&bob)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(bob_effective["tiers"]["user_provider"], "noop");
+
     // Cluster management is admin-only too (SSH credentials).
     let bob_cluster = client
         .post(format!("{base}/api/clusters"))

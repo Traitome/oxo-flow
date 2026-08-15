@@ -4,12 +4,81 @@
 //! `AiProviderRegistry` API for backward compatibility.
 
 use oxo_flow_ai::config::AutoFixMode;
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 
 // Re-export types unchanged
 pub use oxo_flow_ai::provider::{
     AiProvider, ProviderConfig, ProviderKind, ai_config_path, create_provider,
     create_provider_from_env, save_ai_config,
 };
+
+/// Per-user provider cache (issue #82 follow-up): non-admin users' saved
+/// AI keys resolve to THEIR provider, never reconfiguring the shared
+/// runtime. Entries are invalidated whenever a config write lands.
+static PER_USER_PROVIDERS: LazyLock<Mutex<HashMap<String, AiProvider>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Drop every cached per-user provider (server/env config changed).
+pub fn invalidate_provider_cache() {
+    if let Ok(mut map) = PER_USER_PROVIDERS.lock() {
+        map.clear();
+    }
+}
+
+/// Drop one user's cached provider (their row changed).
+pub fn invalidate_provider_for(user_id: &str) {
+    if let Ok(mut map) = PER_USER_PROVIDERS.lock() {
+        map.remove(user_id);
+    }
+}
+
+/// Resolve the provider a user's AI calls must use:
+/// 1. their own saved row (provider != "disabled")
+/// 2. the shared runtime (server row / env / default)
+///
+/// A saved row WITHOUT an api key yields a provider carrying an empty key
+/// — the call fails loudly instead of silently borrowing the server's
+/// key (isolation means no shared-secret leakage, in both directions).
+pub async fn provider_for(user_id: &str) -> AiProvider {
+    if let Some(cached) = PER_USER_PROVIDERS
+        .lock()
+        .ok()
+        .and_then(|map| map.get(user_id).cloned())
+    {
+        return cached;
+    }
+
+    let mut resolved: Option<AiProvider> = None;
+    if let Ok(pool) = crate::infra::db::sqlite::try_pool() {
+        let row: Option<(String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT provider, api_url, model, api_key FROM ai_provider_config \
+                 WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1",
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+        if let Some((provider_kind, api_url, model, api_key)) = row
+            && provider_kind != "disabled"
+        {
+            let kind: ProviderKind = provider_kind.parse().unwrap_or(ProviderKind::OpenAi);
+            resolved = Some(create_provider(
+                kind,
+                Some(api_key.unwrap_or_default()),
+                api_url,
+                model,
+            ));
+        }
+    }
+
+    let provider = resolved.unwrap_or_else(|| AiProviderRegistry::global().get_provider());
+    if let Ok(mut map) = PER_USER_PROVIDERS.lock() {
+        map.insert(user_id.to_string(), provider.clone());
+    }
+    provider
+}
 
 /// Compatibility wrapper — delegates to `oxo_flow_ai::AiRegistry`.
 ///

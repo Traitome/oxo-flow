@@ -4,16 +4,20 @@
 //! All agents call deterministic core APIs — zero write access to DB/FS/process.
 
 use super::types::*;
-use crate::ai_provider::AiProviderRegistry;
+use crate::ai_provider::AiProvider;
 use crate::domains::workflow::service as workflow_svc;
 
 /// Process a chat message and return SSE events via a channel.
 /// This is the main entry point for the conversational AI pipeline.
+///
+/// `provider` is the ACTING USER's provider (issue #82 follow-up: chat
+/// runs on the caller's own AI credentials, never the shared runtime).
 pub async fn process_chat(
     message: &str,
     _session_id: Option<&str>,
     context: Option<&ChatContext>,
     templates: &[String],
+    provider: &AiProvider,
 ) -> Result<(String, serde_json::Value), String> {
     // Phase 1: Orchestrator — understand intent
     let intent = if let Some(ctx) = context {
@@ -41,8 +45,7 @@ pub async fn process_chat(
         None
     };
 
-    // Phase 3: AI generation via provider
-    let provider = AiProviderRegistry::global().get_provider();
+    // Phase 3: AI generation via the acting user's provider
     let system_prompt = build_system_prompt(&intent, data_report.as_ref(), templates);
     let user_prompt = format!("Generate a .oxoflow pipeline for: {message}");
 
@@ -239,6 +242,7 @@ pub fn spawn_chat_agent(
     _session_id: String,
     context: Option<ChatContext>,
     run_id: Option<String>,
+    provider: AiProvider,
 ) -> ChatAgentRun {
     let (event_tx, event_rx) = tokio::sync::mpsc::channel::<ChatStreamEvent>(64);
     let outcome_tx = event_tx.clone();
@@ -268,6 +272,7 @@ pub fn spawn_chat_agent(
             context.as_ref(),
             run_id.as_deref(),
             Some(&mut sink),
+            &provider,
         )
         .await;
         // Degradation path: the agent burned its round budget after
@@ -336,8 +341,8 @@ pub async fn run_chat_agent(
     context: Option<&ChatContext>,
     run_id: Option<&str>,
     sink: Option<&mut AgentEventSink>,
+    provider: &AiProvider,
 ) -> Result<AgentOutcome, String> {
-    let provider = AiProviderRegistry::global().get_provider();
     let agent = super::agent::ChatAgent::new(infer_intent(message), message.to_string());
     let ctx = oxo_flow_ai::agent::AgentContext {
         intent: infer_intent(message),
@@ -359,7 +364,7 @@ pub async fn run_chat_agent(
         let _ = crate::domains::workflow::data::analyze_files(paths, Some(2));
     }
 
-    let orchestrator = Orchestrator::new(provider, 6);
+    let orchestrator = Orchestrator::new(provider.clone(), 6);
     orchestrator
         .execute_with_sink(&agent, &ctx, sink, None)
         .await
