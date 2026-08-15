@@ -83,31 +83,40 @@ pub struct HpcStatus {
 /// Detect the available HPC scheduler.
 pub fn detect_scheduler() -> SchedulerType {
     // Check SLURM
-    if Command::new("sinfo").arg("--version").output().is_ok() {
+    if command_succeeds("sinfo", &["--version"]) {
         return SchedulerType::Slurm;
     }
-    // Check PBS/Torque
-    if Command::new("qstat").arg("--version").output().is_ok()
-        || Command::new("pbsnodes").arg("--version").output().is_ok()
+    // Check PBS/Torque — the probe must honor the exit status: SGE's qstat
+    // also runs on `--version` but fails it, which would otherwise be
+    // misdetected as PBS (and shadow the real SGE check below).
+    if command_succeeds("qstat", &["--version"])
+        || command_succeeds("pbsnodes", &["--version"])
     {
         return SchedulerType::Pbs;
     }
     // Check LSF
-    if Command::new("bjobs").arg("-V").output().is_ok() {
+    if command_succeeds("bjobs", &["-V"]) {
         return SchedulerType::Lsf;
     }
-    // Check SGE
-    if Command::new("qstat").arg("-help").output().is_ok() {
-        let output = Command::new("qstat")
-            .arg("-help")
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
-            .unwrap_or_default();
-        if output.contains("GE") {
+    // Check SGE — `qstat -help` exits non-zero on SGE, so only the banner
+    // text ("GE 8.6.x", "Sun Grid Engine") is authoritative here.
+    if let Ok(output) = Command::new("qstat").arg("-help").output() {
+        let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+        text.push_str(&String::from_utf8_lossy(&output.stderr));
+        if text.to_lowercase().contains("grid engine") {
             return SchedulerType::Sge;
         }
     }
     SchedulerType::None
+}
+
+/// Whether `program args` spawns and exits with status 0.
+fn command_succeeds(program: &str, args: &[&str]) -> bool {
+    Command::new(program)
+        .args(args)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 /// Get SLURM scheduler version.
@@ -805,6 +814,15 @@ mod tests {
             ),
             "detect_scheduler() returned an unexpected type"
         );
+    }
+
+    #[test]
+    fn command_succeeds_respects_exit_status() {
+        // Arrange — /usr/bin/true and /usr/bin/false exist on every Unix
+        // Act / Assert
+        assert!(command_succeeds("true", &[]));
+        assert!(!command_succeeds("false", &[]));
+        assert!(!command_succeeds("no-such-binary-xyz", &[]));
     }
 
     #[test]
