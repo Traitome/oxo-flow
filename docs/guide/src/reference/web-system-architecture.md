@@ -183,7 +183,7 @@ The `handlers/` directory contains pre-v0.8 handler modules marked `#[deprecated
 │
 └── /pipeline/{id}          # DAG edit API: /command, /undo, /redo
 ```
-(See [Web API](./web-api.md) and [openapi.json](https://github.com/Traitome/oxo-flow/blob/main/docs/schema/openapi.yaml) for the complete API reference.)
+(See [Web API](./web-api.md) for the complete API reference — the OpenAPI 3.1 spec is CODE-GENERATED via utoipa and served live at `GET /api/openapi.json` on any running server.)
 (Old `/workflows/*` endpoints marked `#[deprecated]` exist only as unserved legacy modules — see [Legacy Modules](#legacy-modules-deprecated-since-080).)
 
 ---
