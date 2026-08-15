@@ -340,11 +340,21 @@ fn gallery_07_wgs_germline() {
 
     let order = dag.execution_order().unwrap();
     assert_eq!(order.len(), 12);
-    // Level 0: combine_gvcfs, fastp_qc (alphabetically sorted)
     assert!(order.contains(&"fastp_qc".to_string()));
-    // petgraph toposort tie-breaking (insertion order) puts haplotype_caller
-    // last in this DAG, even though annotate_variants is the deepest rule
-    assert_eq!(order.last().unwrap(), "haplotype_caller");
+    // Semantic property, not petgraph's insertion-order tie-break: every
+    // dependency must appear before its dependent (the expanded-path edge
+    // inference added directory edges, which legitimately re-orders the
+    // topo ties).
+    let pos = |name: &str| order.iter().position(|n| n == name).unwrap();
+    for rule in &config.rules {
+        for dep in dag.dependencies(&rule.name).unwrap() {
+            assert!(
+                pos(&dep) < pos(&rule.name),
+                "{dep} must precede {} in the execution order",
+                rule.name
+            );
+        }
+    }
 }
 
 #[test]
