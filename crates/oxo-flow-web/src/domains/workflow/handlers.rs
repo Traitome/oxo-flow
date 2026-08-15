@@ -279,6 +279,7 @@ pub async fn diff_pipelines(
     authenticated: Option<Extension<CurrentUser>>,
     Json(req): Json<DiffRequest>,
 ) -> ApiResult<DiffResponse> {
+    let user = resolve(authenticated.as_ref());
     let resolve_side = async |inline: &Option<String>,
                               id: &Option<String>|
            -> Result<String, (StatusCode, Json<ApiError>)> {
@@ -289,8 +290,8 @@ pub async fn diff_pipelines(
         }
         if let Some(pid) = id {
             let pool = get_pool()?;
-            let row: Option<(String,)> =
-                sqlx::query_as("SELECT toml_content FROM pipelines WHERE id = ?")
+            let row: Option<models::PipelineRow> =
+                sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
                     .bind(pid)
                     .fetch_optional(pool)
                     .await
@@ -301,13 +302,16 @@ pub async fn diff_pipelines(
                             format!("DB error loading pipeline {pid}: {e}"),
                         )
                     })?;
-            return row.map(|r| r.0).ok_or_else(|| {
-                err(
+            // A diff of another user's private pipeline leaks its TOML —
+            // apply the same read scope as every other pipeline endpoint.
+            let Some(row) = row.filter(|r| can_read_pipeline(&user, r)) else {
+                return Err(err(
                     StatusCode::NOT_FOUND,
                     "NOT_FOUND",
                     format!("Pipeline {pid} not found"),
-                )
-            });
+                ));
+            };
+            return Ok(row.toml_content);
         }
         Err(err(
             StatusCode::BAD_REQUEST,
@@ -317,7 +321,6 @@ pub async fn diff_pipelines(
     };
     let toml_a = resolve_side(&req.toml_a, &req.pipeline_a_id).await?;
     let toml_b = resolve_side(&req.toml_b, &req.pipeline_b_id).await?;
-    let _ = authenticated; // resolution is ownership-agnostic; content is caller-supplied
     service::diff_workflows(&toml_a, &toml_b)
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "DIFF_ERROR", e))
@@ -335,14 +338,18 @@ pub async fn diff_pipelines(
 /// POST /api/pipelines/export
 ///
 /// Prefers inline `toml_content`; falls back to loading the saved pipeline
-/// when only `pipeline_id` is given.
-pub async fn export_pipeline(Json(req): Json<ExportRequest>) -> ApiResult<ExportResponse> {
+/// when only `pipeline_id` is given — scoped by read permission.
+pub async fn export_pipeline(
+    authenticated: Option<Extension<CurrentUser>>,
+    Json(req): Json<ExportRequest>,
+) -> ApiResult<ExportResponse> {
+    let user = resolve(authenticated.as_ref());
     let toml_content = if !req.toml_content.trim().is_empty() {
         req.toml_content
     } else if let Some(id) = req.pipeline_id.as_deref() {
         let pool = get_pool()?;
-        let row: Option<(String,)> =
-            sqlx::query_as("SELECT toml_content FROM pipelines WHERE id = ?")
+        let row: Option<models::PipelineRow> =
+            sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
                 .bind(id)
                 .fetch_optional(pool)
                 .await
@@ -353,8 +360,8 @@ pub async fn export_pipeline(Json(req): Json<ExportRequest>) -> ApiResult<Export
                         format!("Failed to load pipeline '{id}': {e}"),
                     )
                 })?;
-        match row {
-            Some((toml,)) => toml,
+        match row.filter(|r| can_read_pipeline(&user, r)) {
+            Some(row) => row.toml_content,
             None => {
                 return Err(err(
                     StatusCode::NOT_FOUND,
@@ -385,7 +392,11 @@ pub async fn export_pipeline(Json(req): Json<ExportRequest>) -> ApiResult<Export
     )
 )]
 /// POST /api/pipelines/search
-pub async fn search_pipelines(Json(req): Json<SearchRequest>) -> ApiResult<SearchResponse> {
+pub async fn search_pipelines(
+    authenticated: Option<Extension<CurrentUser>>,
+    Json(req): Json<SearchRequest>,
+) -> ApiResult<SearchResponse> {
+    let user = resolve(authenticated.as_ref());
     let pool = get_pool()?;
 
     // Search saved pipelines from DB
@@ -407,6 +418,7 @@ pub async fn search_pipelines(Json(req): Json<SearchRequest>) -> ApiResult<Searc
 
     let pipelines: Vec<Pipeline> = pipeline_rows
         .into_iter()
+        .filter(|r| can_read_pipeline(&user, r))
         .map(|r| Pipeline {
             id: r.id,
             user_id: r.user_id,

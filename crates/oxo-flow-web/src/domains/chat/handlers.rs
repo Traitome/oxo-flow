@@ -27,6 +27,21 @@ fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)>
 }
 
 /// Server-side chat persistence (issue #81): upsert the session row and
+/// Whether the caller may write into this session: it either does not exist
+/// yet (will be created below) or is already owned by the caller. A foreign
+/// session id must neither hijack the row nor attach messages to another
+/// user's history.
+async fn session_writable(pool: &sqlx::SqlitePool, session_id: &str, user_id: &str) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT NOT EXISTS(SELECT 1 FROM chat_sessions WHERE id = ? AND user_id != ?)",
+    )
+    .bind(session_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(true)
+}
+
 /// append the user's message. Best-effort — chat works without a DB.
 async fn persist_user_message(
     pool: Option<&sqlx::SqlitePool>,
@@ -35,12 +50,17 @@ async fn persist_user_message(
     message: &str,
 ) {
     let Some(pool) = pool else { return };
+    if !session_writable(pool, session_id, &user.id).await {
+        tracing::warn!("session {session_id} belongs to another user — message dropped");
+        return;
+    }
     let now = chrono::Utc::now().to_rfc3339();
     let title: String = message.chars().take(60).collect();
     let _ = sqlx::query(
         "INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at) \
          VALUES (?, ?, ?, ?, ?) \
-         ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at",
+         ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at \
+         WHERE chat_sessions.user_id = excluded.user_id",
     )
     .bind(session_id)
     .bind(&user.id)
@@ -64,10 +84,14 @@ async fn persist_user_message(
 /// Append the assistant's final answer to the session.
 async fn persist_assistant_message(
     pool: Option<&sqlx::SqlitePool>,
+    user: &CurrentUser,
     session_id: &str,
     content: &str,
 ) {
     let Some(pool) = pool else { return };
+    if !session_writable(pool, session_id, &user.id).await {
+        return;
+    }
     let now = chrono::Utc::now().to_rfc3339();
     let _ = sqlx::query(
         "INSERT INTO chat_messages (id, session_id, role, content, meta, created_at) \
@@ -119,7 +143,15 @@ pub async fn chat_send(
 
     // Chat runs on the acting user's own AI provider (isolation fix).
     let provider = crate::ai_provider::provider_for(&user.id).await;
-    let run = service::spawn_chat_agent(message, session_id.clone(), context, req.run_id, provider);
+    let run = service::spawn_chat_agent(
+        message,
+        session_id.clone(),
+        context,
+        req.run_id,
+        user.id.clone(),
+        user.is_admin(),
+        provider,
+    );
 
     let stream = async_stream::stream! {
         let mut events = run.events;
@@ -189,7 +221,7 @@ pub async fn chat_send(
                             "rounds": outcome.rounds,
                         }).to_string()));
                     if let Some(content) = outcome.content.as_deref() {
-                        persist_assistant_message(pool, &session_id, content).await;
+                        persist_assistant_message(pool, &user, &session_id, content).await;
                     }
                 }
             }
@@ -250,7 +282,7 @@ pub async fn chat_send_json(
     .await
     {
         Ok((text, data)) => {
-            persist_assistant_message(pool, &session_id, &text).await;
+            persist_assistant_message(pool, &user, &session_id, &text).await;
             Ok(Json(data))
         }
         Err(e) => Err(err(StatusCode::BAD_REQUEST, "CHAT_ERROR", e)),

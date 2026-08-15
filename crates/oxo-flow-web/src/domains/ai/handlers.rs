@@ -69,7 +69,7 @@ pub async fn translate(
         vec![]
     };
 
-    super::service::translate_intent(&provider, &req.intent, None, &templates)
+    super::service::translate_intent(&provider, &user.id, &req.intent, None, &templates)
         .await
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "AI_TRANSLATE_ERROR", e))
@@ -129,7 +129,8 @@ pub async fn translate_sse(
             .event("progress")
             .data(serde_json::json!({"step": "generate", "message": "Generating pipeline via AI..."}).to_string()));
 
-        let result = super::service::translate_intent(&provider, &intent, None, &templates).await;
+        let result =
+            super::service::translate_intent(&provider, &user.id, &intent, None, &templates).await;
 
         // Step 4: validate + done
         match result {

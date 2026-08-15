@@ -14,6 +14,8 @@ use oxo_flow_ai::tools::{Tool, ToolDef};
 /// Read-only run status from the engine's checkpoint + runs table.
 struct RunStatusTool {
     run_id: String,
+    user_id: String,
+    is_admin: bool,
 }
 
 #[async_trait::async_trait]
@@ -47,6 +49,14 @@ impl Tool for RunStatusTool {
                 message: format!("run {} not found", self.run_id),
             });
         };
+        // Ownership gate: a chat tool must not leak another tenant's run
+        // (the REST endpoints scope by owner; this tool path bypassed them).
+        if run.user_id != self.user_id && !self.is_admin {
+            return Err(AiError::ToolError {
+                tool: "get_run_status".into(),
+                message: format!("run {} not found", self.run_id),
+            });
+        }
         let nodes = crate::domains::execution::checkpoint_status::load_node_statuses(
             std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
             run.status == "running",
@@ -73,6 +83,8 @@ impl Tool for RunStatusTool {
 /// Read-only tail of the run's execution log (workdir-scoped).
 struct RunLogsTool {
     run_id: String,
+    user_id: String,
+    is_admin: bool,
 }
 
 #[async_trait::async_trait]
@@ -107,6 +119,13 @@ impl Tool for RunLogsTool {
                 message: format!("run {} not found", self.run_id),
             });
         };
+        // Ownership gate — same scope rule as get_run_status.
+        if run.user_id != self.user_id && !self.is_admin {
+            return Err(AiError::ToolError {
+                tool: "get_run_logs".into(),
+                message: format!("run {} not found", self.run_id),
+            });
+        }
         let log = run
             .workdir
             .as_deref()
@@ -128,8 +147,13 @@ impl Tool for RunLogsTool {
 }
 
 /// Build the registry used by every chat request (cheap — in-memory).
-/// When `run_id` is present, the read-only run-diagnosis tools join in.
-pub fn build_chat_tool_registry(run_id: Option<&str>) -> ToolRegistry {
+/// When `run_id` is present, the read-only run-diagnosis tools join in —
+/// scoped to the acting user so a chat cannot probe another tenant's runs.
+pub fn build_chat_tool_registry(
+    run_id: Option<&str>,
+    user_id: &str,
+    is_admin: bool,
+) -> ToolRegistry {
     let mut registry = ToolRegistry::new();
     registry.register(Box::new(LookupTool::new()));
     registry.register(Box::new(LookupSkillTool::new()));
@@ -138,9 +162,13 @@ pub fn build_chat_tool_registry(run_id: Option<&str>) -> ToolRegistry {
     if let Some(run_id) = run_id {
         registry.register(Box::new(RunStatusTool {
             run_id: run_id.to_string(),
+            user_id: user_id.to_string(),
+            is_admin,
         }));
         registry.register(Box::new(RunLogsTool {
             run_id: run_id.to_string(),
+            user_id: user_id.to_string(),
+            is_admin,
         }));
     }
     registry

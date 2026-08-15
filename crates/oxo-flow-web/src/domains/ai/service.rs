@@ -48,9 +48,12 @@ fn extract_toml(response: &str) -> Option<String> {
     None
 }
 
-/// Compute a cache key from intent and optional data summary.
-fn cache_key(intent: &str, data_summary: Option<&str>) -> String {
-    format!("{}|{}", intent, data_summary.unwrap_or("no-data"))
+/// Compute a cache key from the acting user, intent, and optional data
+/// summary. The user id is part of the key: a cached translation embeds the
+/// requester's own data (paths, sample names), so sharing it across users
+/// would leak one tenant's content to another.
+fn cache_key(user_id: &str, intent: &str, data_summary: Option<&str>) -> String {
+    format!("{user_id}|{intent}|{}", data_summary.unwrap_or("no-data"))
 }
 
 /// Try each available provider in fallback order.
@@ -118,12 +121,13 @@ async fn try_providers(system: &str, user: &str) -> (Result<String, String>, Str
 /// 7. Parse for explanation and return
 pub async fn translate_intent(
     _provider: &AiProvider,
+    user_id: &str,
     intent: &str,
     data_summary: Option<&str>,
     templates: &[String],
 ) -> Result<TranslateResponse, String> {
     // Step 0: Dedup — check cache
-    let key = cache_key(intent, data_summary);
+    let key = cache_key(user_id, intent, data_summary);
     {
         let cache = REQUEST_CACHE.lock().map_err(|_| "Cache lock poisoned")?;
         if let Some((pipeline_id, toml_content)) = cache.get(&key) {
@@ -569,15 +573,27 @@ mod tests {
 
     #[test]
     fn test_cache_key_identity() {
-        let k1 = cache_key("RNA-seq analysis", Some("fastq files"));
-        let k2 = cache_key("RNA-seq analysis", Some("fastq files"));
+        let k1 = cache_key("alice", "RNA-seq analysis", Some("fastq files"));
+        let k2 = cache_key("alice", "RNA-seq analysis", Some("fastq files"));
         assert_eq!(k1, k2);
     }
 
     #[test]
     fn test_cache_key_different() {
-        let k1 = cache_key("RNA-seq", None);
-        let k2 = cache_key("Variant calling", None);
+        let k1 = cache_key("alice", "RNA-seq", None);
+        let k2 = cache_key("alice", "Variant calling", None);
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn test_cache_key_isolates_users_with_identical_intents() {
+        // Arrange — two tenants asking the same thing must never share a
+        // cache entry: the cached TOML embeds the first user's data.
+        // Act
+        let k1 = cache_key("alice", "RNA-seq analysis", Some("fastq files"));
+        let k2 = cache_key("bob", "RNA-seq analysis", Some("fastq files"));
+
+        // Assert
         assert_ne!(k1, k2);
     }
 }

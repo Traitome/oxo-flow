@@ -212,7 +212,11 @@ pub async fn quota_status() -> ApiResult<serde_json::Value> {
 /// GET /api/audit
 pub async fn get_audit_logs(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    headers: axum::http::HeaderMap,
 ) -> ApiResult<AuditLogResponse> {
+    // The audit trail records every user's actions — team/hpc mode exposes
+    // it to admins only (personal mode keeps the localhost trust model).
+    crate::domains::auth::handlers::require_admin(&headers).await?;
     let days: u8 = params.get("days").and_then(|d| d.parse().ok()).unwrap_or(7);
 
     let entries: Vec<AuditEntry> = if let Ok(pool) = get_pool() {

@@ -242,6 +242,8 @@ pub fn spawn_chat_agent(
     _session_id: String,
     context: Option<ChatContext>,
     run_id: Option<String>,
+    user_id: String,
+    is_admin: bool,
     provider: AiProvider,
 ) -> ChatAgentRun {
     let (event_tx, event_rx) = tokio::sync::mpsc::channel::<ChatStreamEvent>(64);
@@ -271,6 +273,8 @@ pub fn spawn_chat_agent(
             &message,
             context.as_ref(),
             run_id.as_deref(),
+            &user_id,
+            is_admin,
             Some(&mut sink),
             &provider,
         )
@@ -340,6 +344,8 @@ pub async fn run_chat_agent(
     message: &str,
     context: Option<&ChatContext>,
     run_id: Option<&str>,
+    user_id: &str,
+    is_admin: bool,
     sink: Option<&mut AgentEventSink>,
     provider: &AiProvider,
 ) -> Result<AgentOutcome, String> {
@@ -351,7 +357,7 @@ pub async fn run_chat_agent(
         workflow_content: None,
         external_sources: vec![],
         max_rounds: 6,
-        tool_registry: super::tools::build_chat_tool_registry(run_id),
+        tool_registry: super::tools::build_chat_tool_registry(run_id, user_id, is_admin),
         tool_approver: None,
         session: oxo_flow_ai::session::AiSession::new("web-chat", "chat", "web", "web-provider"),
     };
