@@ -47,19 +47,30 @@ pub async fn spa_index() -> impl IntoResponse {
                 .unwrap_or_else(|_| fallback.to_string())
         });
 
-    // Sub-path mounts: inject the base so relative asset URLs and the
-    // frontend router resolve under the mount point. Root mounts stay
-    // untouched (byte-identical output).
+    // Always inject a <base> so the SPA's relative asset URLs resolve
+    // from the mount root instead of the CURRENT ROUTE: without it,
+    // /runs/<id> would request /runs/assets/... and get the SPA fallback
+    // (MIME mismatch, blank page). Root mounts get href="/"; sub-path
+    // mounts get the mount prefix.
     let base = base_path();
-    let html = if base.is_empty() || base == "/" {
-        html
+    let effective_base = if base.is_empty() {
+        "/".to_string()
     } else {
-        let tag =
-            format!("<base href=\"{base}/\"><script>window.__OXO_BASE__=\"{base}\";</script>");
-        match html.find("</head>") {
-            Some(head_end) => format!("{}{}{}", &html[..head_end], tag, &html[head_end..]),
-            None => html,
+        format!("{base}/")
+    };
+    let tag = format!(
+        "<base href=\"{effective_base}\"><script>window.__OXO_BASE__=\"{}\";</script>",
+        if base.is_empty() { "" } else { base }
+    );
+    // Insert right after <head>: <base> only affects URLs that FOLLOW it,
+    // and vite emits its <link>/<script> tags immediately — injecting at
+    // </head> would leave them resolving against the current route.
+    let html = match html.find("<head>") {
+        Some(head_start) => {
+            let insert_at = head_start + "<head>".len();
+            format!("{}{}{}", &html[..insert_at], tag, &html[insert_at..])
         }
+        None => html,
     };
 
     (
