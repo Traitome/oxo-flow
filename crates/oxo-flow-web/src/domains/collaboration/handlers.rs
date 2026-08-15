@@ -391,13 +391,12 @@ pub async fn get_share_landing(Path(token): Path<String>) -> ApiResult<serde_jso
     .await
     .unwrap_or(None);
 
-    let owner_username: Option<String> = sqlx::query_scalar(
-        "SELECT username FROM users WHERE id = ?",
-    )
-    .bind(&share.owner_id)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None);
+    let owner_username: Option<String> =
+        sqlx::query_scalar("SELECT username FROM users WHERE id = ?")
+            .bind(&share.owner_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
 
     Ok(Json(serde_json::json!({
         "pipeline": {

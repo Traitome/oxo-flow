@@ -199,7 +199,8 @@ async fn serve_file(path: &FsPath, preview: bool, range: Option<String>) -> Resp
     let meta = match std::fs::metadata(path) {
         Ok(m) => m,
         Err(_) => {
-            return err(StatusCode::NOT_FOUND, "NOT_FOUND", "File not found".into()).into_response();
+            return err(StatusCode::NOT_FOUND, "NOT_FOUND", "File not found".into())
+                .into_response();
         }
     };
     let size = meta.len();

@@ -30,7 +30,7 @@ export default function Dashboard() {
   useEffect(() => {
     api.health().then(setHealth).catch(() => {});
     api.system().then(setSys).catch(() => {});
-    api.listRuns().then(setRuns).catch(() => {});
+    api.listRuns().then((r) => setRuns(r.items)).catch(() => {});
     api.listTemplates().then(setTemplates).catch(() => {});
   }, []);
 
