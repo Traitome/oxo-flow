@@ -54,7 +54,7 @@ pub async fn provider_for(user_id: &str) -> AiProvider {
 
     let mut resolved: Option<AiProvider> = None;
     if let Ok(pool) = crate::infra::db::sqlite::try_pool() {
-        let row: Option<(String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+        let row: Option<UserAiRow> = sqlx::query_as(
             "SELECT provider, api_url, model, api_key FROM ai_provider_config \
                  WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1",
         )
