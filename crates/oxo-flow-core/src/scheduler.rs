@@ -689,6 +689,7 @@ mod tests {
             timeout: None,
             skip_reason: None,
             max_rss_mb: None,
+            cpu_seconds: None,
         });
 
         assert_eq!(state.status("a"), Some(JobStatus::Success));
@@ -856,6 +857,7 @@ mod tests {
             timeout: None,
             skip_reason: None,
             max_rss_mb: None,
+            cpu_seconds: None,
         });
 
         // Both "left" and "right" should be ready
@@ -1093,6 +1095,7 @@ mod reentry_tests {
             timeout: None,
             skip_reason: None,
             max_rss_mb: None,
+            cpu_seconds: None,
         });
         sched.add_rule("b");
         let ready = sched.ready_rules(&dag).unwrap();

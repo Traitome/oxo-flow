@@ -1019,6 +1019,55 @@ fn cli_report_run_then_report_shows_execution_truth() {
     );
 }
 
+/// Sampled CPU metering reaches the report (issue #83 P1-13): after a real
+/// run of a busy rule, the Benchmarks table carries a CPU column with a
+/// measured (non-"-") value.
+#[test]
+fn cli_report_cpu_column_shows_sampled_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wf.oxoflow");
+    fs::write(
+        &path,
+        "[workflow]\nname = \"tiny\"\nversion = \"0.1\"\n\n\
+         [[rules]]\nname = \"busy\"\nshell = \"i=0; while [ $i -lt 800000 ]; do i=$((i+1)); done; echo done > busy.txt\"\noutput = [\"busy.txt\"]\n",
+    )
+    .unwrap();
+
+    oxo_flow_cmd()
+        .args(["run", path.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let out = dir.path().join("report.json");
+    oxo_flow_cmd()
+        .args(["report", path.to_str().unwrap(), "-f", "json", "-o"])
+        .arg(out.to_str().unwrap())
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(&out).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    let bench = parsed["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "benchmarks")
+        .unwrap_or_else(|| panic!("no benchmarks section in report JSON"));
+    let headers = bench["content"]["headers"].as_array().unwrap();
+    assert!(
+        headers.iter().any(|h| h == "CPU"),
+        "Benchmarks table must carry a CPU column: {headers:?}"
+    );
+    let busy_row = bench["content"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r[0] == "busy")
+        .unwrap_or_else(|| panic!("no busy row in Benchmarks"));
+    let cpu_cell = busy_row[3].as_str().unwrap();
+    assert_ne!(cpu_cell, "-", "CPU must be measured, got {cpu_cell}");
+}
+
 /// A real run's report parses tool outputs from the working directory into
 /// the metrics section (issue #83 P1-5): the fake fastp report.json's
 /// total_reads must survive into the report JSON.

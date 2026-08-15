@@ -1951,10 +1951,9 @@ impl ReportSectionGenerator for ExecutionStatusGenerator {
             });
         }
 
-        // CPU seconds are not measured yet (checkpoint field is an explicit
-        // placeholder) — the column stays out of the report until real
-        // accounting exists (issue #83 P0-5): a missing column beats a
-        // misleading one.
+        // Sampled CPU seconds (issue #83 P1-13): measured per sampler tick
+        // for local rules, so the column is honest now — `-` only where no
+        // sampler ever ran (cluster executors, legacy checkpoints).
         let mut bench_names: Vec<&String> = cp.benchmarks.keys().collect();
         bench_names.sort_unstable();
         let mut bench_rows: Vec<Vec<String>> = Vec::new();
@@ -1965,6 +1964,9 @@ impl ReportSectionGenerator for ExecutionStatusGenerator {
                 format!("{:.2}s", b.wall_time_secs),
                 b.max_memory_mb
                     .map(|m| format!("{}MB", m))
+                    .unwrap_or_else(|| "-".into()),
+                b.cpu_seconds
+                    .map(|c| format!("{:.1}s", c))
                     .unwrap_or_else(|| "-".into()),
                 b.retries.to_string(),
             ]);
@@ -1978,6 +1980,7 @@ impl ReportSectionGenerator for ExecutionStatusGenerator {
                         "Rule".into(),
                         "Wall Time".into(),
                         "Memory".into(),
+                        "CPU".into(),
                         "Retries".into(),
                     ],
                     rows: bench_rows,
@@ -2947,6 +2950,7 @@ mod tests {
                 timeout: None,
                 skip_reason: None,
                 max_rss_mb: None,
+                cpu_seconds: None,
             },
         );
 
@@ -3305,6 +3309,7 @@ mod tests {
                 timeout: None,
                 skip_reason: None,
                 max_rss_mb: None,
+                cpu_seconds: None,
             },
         );
         let section = execution_time_chart(&records);
@@ -3344,7 +3349,7 @@ mod tests {
                 wall_time_secs: 12.5,
                 max_memory_mb: Some(120),
                 memory_limit_mb: Some(2048),
-                cpu_seconds: None,
+                cpu_seconds: Some(3.2),
                 retries: 1,
             },
         );
@@ -3539,12 +3544,15 @@ shell = "echo hi"
             }
             _ => panic!("expected table"),
         }
-        // Benchmarks table has no placeholder CPU column (issue #83 P0-5).
+        // Benchmarks table carries the measured CPU column (issue #83
+        // P1-13) with the fixture's sampled value rendered.
         let bench = sections.iter().find(|s| s.id == "benchmarks").unwrap();
         match &bench.content {
-            ReportContent::Table { headers, .. } => {
-                assert!(!headers.contains(&"CPU".to_string()));
+            ReportContent::Table { headers, rows } => {
+                assert!(headers.contains(&"CPU".to_string()));
                 assert!(headers.contains(&"Memory".to_string()));
+                let align_row = rows.iter().find(|r| r[0] == "align").unwrap();
+                assert_eq!(align_row[3], "3.2s");
             }
             _ => panic!("expected table"),
         }

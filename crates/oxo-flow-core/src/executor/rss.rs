@@ -1,16 +1,21 @@
-//! Sampled peak-RSS metering for local rule execution (issue #67 §4).
+//! Sampled peak-RSS and CPU-seconds metering for local rule execution
+//! (issue #67 §4, issue #83 P1-13).
 //!
 //! Rules deliberately run in the *run's* process group (one run = one
 //! group, so supervisors can signal the run as a whole — issue #79), so
 //! per-rule attribution cannot use process groups: one shared background
 //! sampler refreshes the process table at a fixed interval and updates
-//! each tracked child's peak as the summed RSS of its process subtree
-//! (parent-link walk, the same shape `timeout::kill_process_tree` uses).
+//! each tracked child's metrics from its process subtree (parent-link
+//! walk, the same shape `timeout::kill_process_tree` uses):
 //!
-//! The metric is a **sampled peak**, not an exact `getrusage` maximum:
-//! sub-interval spikes can be missed. That is sufficient for bottleneck
-//! detection (sustained pressure), and is documented in the diagnostics
-//! API.
+//! - **Peak RSS**: the summed RSS of the subtree in bytes.
+//! - **CPU time**: `Process::cpu_usage()/100 × SAMPLE_INTERVAL_SECS`
+//!   accumulated per tick (integer microseconds, float-free atomics).
+//!
+//! Both metrics are **sampled**, not exact `getrusage` values: sub-interval
+//! spikes can be missed, and CPU seconds assume every tick spanned exactly
+//! `SAMPLE_INTERVAL_SECS`. That is sufficient for bottleneck detection
+//! (sustained pressure), and is documented in the diagnostics API.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -23,21 +28,37 @@ use tokio::sync::Notify;
 /// Sample interval for peak detection.
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(200);
 
+/// Seconds of wall time between sample ticks — the per-tick basis for
+/// CPU-time accumulation (`cpu_usage()/100 × SAMPLE_INTERVAL_SECS`).
+/// Derived from `SAMPLE_INTERVAL` so the two can never drift apart.
+const SAMPLE_INTERVAL_SECS: f64 = SAMPLE_INTERVAL.as_secs_f64();
+
+/// Per-pid accumulators for one tracked child. Integer counts keep the
+/// shared atomics float-free; `cpu_seconds()` converts on read.
+struct TrackedProcess {
+    /// Sampled peak subtree RSS in bytes.
+    peak: AtomicU64,
+    /// Sampled CPU time in microseconds.
+    cpu_micros: AtomicU64,
+    /// Set once the sampler has seen the process alive during a tick.
+    seen: AtomicBool,
+}
+
 /// Shared background sampler: one per `LocalExecutor` (i.e. one per run
 /// process), so concurrent rules share a single process-table refresh
 /// instead of N independent sysinfo scans.
 pub struct RssSampler {
-    tracked: Arc<Mutex<HashMap<u32, Arc<AtomicU64>>>>,
+    tracked: Arc<Mutex<HashMap<u32, Arc<TrackedProcess>>>>,
     wake: Arc<Notify>,
     stop: Arc<AtomicBool>,
 }
 
 /// A tracked child process. Dropping the handle untracks the pid; the
-/// peak stays readable until the handle itself is dropped.
+/// peak and CPU totals stay readable until the handle itself is dropped.
 pub struct RssHandle {
     pid: u32,
-    peak: Arc<AtomicU64>,
-    tracked: Arc<Mutex<HashMap<u32, Arc<AtomicU64>>>>,
+    tracked_process: Arc<TrackedProcess>,
+    tracked: Arc<Mutex<HashMap<u32, Arc<TrackedProcess>>>>,
 }
 
 impl RssSampler {
@@ -49,7 +70,7 @@ impl RssSampler {
     /// panic. The same dedicated-thread bridge `head_blocking` uses for
     /// storage backends.
     pub fn new() -> Self {
-        let tracked: Arc<Mutex<HashMap<u32, Arc<AtomicU64>>>> =
+        let tracked: Arc<Mutex<HashMap<u32, Arc<TrackedProcess>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let wake = Arc::new(Notify::new());
         let stop = Arc::new(AtomicBool::new(false));
@@ -66,6 +87,13 @@ impl RssSampler {
                         .build()
                         .expect("rss sampler runtime");
                     runtime.block_on(async move {
+                        // One `System` is reused across ticks: sysinfo
+                        // computes `Process::cpu_usage()` only from the
+                        // delta between two refreshes of the *same*
+                        // instance (a fresh instance per tick would always
+                        // report 0). Dead processes are dropped each
+                        // refresh so the table stays bounded over long runs.
+                        let mut system = sysinfo::System::new();
                         loop {
                             tokio::select! {
                                 () = wake.notified() => {}
@@ -74,20 +102,31 @@ impl RssSampler {
                             if stop.load(Ordering::Relaxed) {
                                 return;
                             }
-                            let snapshot: Vec<(u32, Arc<AtomicU64>)> = {
+                            let snapshot: Vec<(u32, Arc<TrackedProcess>)> = {
                                 let guard = tracked.lock().expect("rss sampler lock");
                                 if guard.is_empty() {
                                     continue;
                                 }
-                                guard
-                                    .iter()
-                                    .map(|(pid, peak)| (*pid, peak.clone()))
-                                    .collect()
+                                guard.iter().map(|(pid, tp)| (*pid, tp.clone())).collect()
                             };
-                            let mut system = sysinfo::System::new();
-                            system.refresh_processes(ProcessesToUpdate::All, false);
-                            for (pid, peak) in &snapshot {
-                                peak.fetch_max(subtree_rss_bytes(&system, *pid), Ordering::Relaxed);
+                            system.refresh_processes(ProcessesToUpdate::All, true);
+                            for (pid, tp) in &snapshot {
+                                // CPU accumulates only while the process is
+                                // alive: a dead-but-retained entry or a
+                                // failed lookup must not inflate the total
+                                // (that pid's tick is skipped instead).
+                                if let Some(proc) = system.process(sysinfo::Pid::from_u32(*pid))
+                                    && proc.exists()
+                                {
+                                    tp.seen.store(true, Ordering::Relaxed);
+                                    let micros = (proc.cpu_usage() as f64 / 100.0
+                                        * SAMPLE_INTERVAL_SECS
+                                        * 1_000_000.0)
+                                        as u64;
+                                    tp.cpu_micros.fetch_add(micros, Ordering::Relaxed);
+                                }
+                                tp.peak
+                                    .fetch_max(subtree_rss_bytes(&system, *pid), Ordering::Relaxed);
                             }
                         }
                     });
@@ -106,15 +145,19 @@ impl RssSampler {
 
     /// Track a child process; returns the handle to finish with.
     pub fn track(&self, pid: u32) -> RssHandle {
-        let peak = Arc::new(AtomicU64::new(0));
+        let tracked_process = Arc::new(TrackedProcess {
+            peak: AtomicU64::new(0),
+            cpu_micros: AtomicU64::new(0),
+            seen: AtomicBool::new(false),
+        });
         self.tracked
             .lock()
             .expect("rss sampler lock")
-            .insert(pid, peak.clone());
+            .insert(pid, tracked_process.clone());
         self.wake.notify_one();
         RssHandle {
             pid,
-            peak,
+            tracked_process,
             tracked: self.tracked.clone(),
         }
     }
@@ -136,7 +179,7 @@ impl Drop for RssSampler {
 impl RssHandle {
     /// Finish tracking and return the sampled peak in bytes.
     pub fn finish(self) -> u64 {
-        let peak = self.peak.load(Ordering::Relaxed);
+        let peak = self.peak_bytes();
         if let Ok(mut guard) = self.tracked.lock() {
             guard.remove(&self.pid);
         }
@@ -145,7 +188,21 @@ impl RssHandle {
 
     /// The sampled peak so far (bytes).
     pub fn peak_bytes(&self) -> u64 {
-        self.peak.load(Ordering::Relaxed)
+        self.tracked_process.peak.load(Ordering::Relaxed)
+    }
+
+    /// Sampled CPU time so far, in seconds.
+    ///
+    /// **Sampled**: accumulated per tick as `cpu_usage()/100 ×
+    /// SAMPLE_INTERVAL_SECS`, so sub-interval CPU bursts are missed and
+    /// every tick is assumed to span exactly `SAMPLE_INTERVAL_SECS`.
+    /// `None` when the sampler never observed the process alive during a
+    /// tick (e.g. it exited before the first refresh).
+    pub fn cpu_seconds(&self) -> Option<f64> {
+        self.tracked_process
+            .seen
+            .load(Ordering::Relaxed)
+            .then(|| self.tracked_process.cpu_micros.load(Ordering::Relaxed) as f64 / 1_000_000.0)
     }
 }
 

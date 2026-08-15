@@ -248,6 +248,11 @@ pub struct JobRecord {
     /// (`None` when no child was spawned; issue #67 §4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_rss_mb: Option<u64>,
+    /// Sampled CPU time of the rule's process subtree in seconds
+    /// (`None` when the sampler never observed the child; issue #83
+    /// P1-13).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_seconds: Option<f64>,
 }
 
 /// Configuration for the executor.
@@ -655,7 +660,20 @@ impl LocalExecutor {
             .await
     }
 
-    /// Execute a single rule with typed config values for condition evaluation.
+    /// Fold one handle's sampled CPU seconds into the running total:
+    /// values are summed per attempt, and `None` contributions (the
+    /// sampler never observed the process) leave the total untouched.
+    fn fold_cpu_seconds(total: Option<f64>, handle: &super::rss::RssHandle) -> Option<f64> {
+        match (total, handle.cpu_seconds()) {
+            (Some(a), Some(b)) => Some(a + b),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        }
+    }
+
+    /// Execute a single rule with typed config values for condition
+    /// evaluation.
     ///
     /// `config` should be the original `WorkflowConfig.config` map (preserving
     /// TOML types). When provided, `when` conditions use typed comparisons
@@ -682,6 +700,7 @@ impl LocalExecutor {
             timeout,
             skip_reason: None,
             max_rss_mb: None,
+            cpu_seconds: None,
         };
 
         // Condition evaluation happens before any remote staging so a rule
@@ -886,6 +905,9 @@ impl LocalExecutor {
         let mut last_exit_code: Option<i32> = None;
         // Sampled peak RSS across every attempt (issue #67 §4).
         let mut peak_bytes: u64 = 0;
+        // Sampled CPU seconds across every attempt (issue #83 P1-13);
+        // `None` until the sampler observes the child alive in a tick.
+        let mut cpu_seconds: Option<f64> = None;
 
         for attempt in 0..max_attempts {
             if attempt > 0 {
@@ -935,6 +957,7 @@ impl LocalExecutor {
                             last_exit_code = Some(124);
                             combined_stderr.push_str("command timed out");
                             if let Some(handle) = rss_handle {
+                                cpu_seconds = Self::fold_cpu_seconds(cpu_seconds, &handle);
                                 peak_bytes = peak_bytes.max(handle.finish());
                             }
                             break;
@@ -953,6 +976,7 @@ impl LocalExecutor {
                             all_commands_succeeded = false;
                             record.status = JobStatus::Failed;
                             if let Some(handle) = rss_handle {
+                                cpu_seconds = Self::fold_cpu_seconds(cpu_seconds, &handle);
                                 peak_bytes = peak_bytes.max(handle.finish());
                             }
                             break;
@@ -963,6 +987,7 @@ impl LocalExecutor {
                         record.status = JobStatus::Failed;
                         combined_stderr.push_str(&e.to_string());
                         if let Some(handle) = rss_handle {
+                            cpu_seconds = Self::fold_cpu_seconds(cpu_seconds, &handle);
                             peak_bytes = peak_bytes.max(handle.finish());
                         }
                         break;
@@ -970,6 +995,7 @@ impl LocalExecutor {
                 }
 
                 if let Some(handle) = rss_handle {
+                    cpu_seconds = Self::fold_cpu_seconds(cpu_seconds, &handle);
                     peak_bytes = peak_bytes.max(handle.finish());
                 }
             }
@@ -1001,6 +1027,7 @@ impl LocalExecutor {
         if peak_bytes > 0 {
             record.max_rss_mb = Some(peak_bytes.div_ceil(1024 * 1024));
         }
+        record.cpu_seconds = cpu_seconds;
 
         self.release_resources(&rule).await;
 
@@ -1176,6 +1203,7 @@ impl LocalExecutor {
                     timeout: self.get_timeout(rule),
                     skip_reason: None,
                     max_rss_mb: None,
+                    cpu_seconds: None,
                 }
             })
             .collect()

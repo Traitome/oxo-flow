@@ -144,6 +144,7 @@ impl BackendDriver {
                         timeout: None,
                         skip_reason: Some("blocked by failed upstream dependency".into()),
                         max_rss_mb: None,
+                        cpu_seconds: None,
                     });
                     done.insert(name.clone(), JobStatus::Skipped);
                     emit(
@@ -186,6 +187,7 @@ impl BackendDriver {
                             timeout: None,
                             skip_reason: Some("no shell or script defined".into()),
                             max_rss_mb: None,
+                            cpu_seconds: None,
                         });
                         done.insert(name.clone(), JobStatus::Skipped);
                         emit(
@@ -319,6 +321,7 @@ impl BackendDriver {
                                 timeout: None,
                                 skip_reason: None,
                                 max_rss_mb: None,
+                                cpu_seconds: None,
                             }
                         }
                         BackendJobStatus::Failed => {
@@ -341,6 +344,7 @@ impl BackendDriver {
                                 timeout: None,
                                 skip_reason: None,
                                 max_rss_mb: None,
+                                cpu_seconds: None,
                             }
                         }
                         BackendJobStatus::Cancelled => JobRecord {
@@ -356,6 +360,7 @@ impl BackendDriver {
                             timeout: None,
                             skip_reason: Some("cancelled".into()),
                             max_rss_mb: None,
+                            cpu_seconds: None,
                         },
                         _ => unreachable!("non-terminal states filtered above"),
                     };
@@ -472,6 +477,7 @@ fn return_record_failure(
         timeout: None,
         skip_reason: Some(format!("re-entry manifest: {e}")),
         max_rss_mb: None,
+        cpu_seconds: None,
     });
     done.insert(f.rule.clone(), JobStatus::Failed);
 }

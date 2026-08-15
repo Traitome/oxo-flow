@@ -105,7 +105,10 @@ pub struct BenchmarkRecord {
     /// detection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_limit_mb: Option<u64>,
-    /// Total CPU seconds consumed (placeholder — not yet measured).
+    /// Sampled CPU time of the rule's process subtree in seconds
+    /// (issue #83 P1-13; `None` for cluster executors and legacy
+    /// checkpoints).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_seconds: Option<f64>,
     /// Number of retry attempts before success (0 = first attempt succeeded).
     #[serde(default)]

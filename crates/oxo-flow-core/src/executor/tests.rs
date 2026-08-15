@@ -114,6 +114,47 @@ async fn execute_dry_run() {
     assert_eq!(record.status, JobStatus::Skipped);
 }
 
+/// Sampled CPU metering reaches JobRecord (issue #83 P1-13): a busy shell
+/// loop must accumulate positive CPU seconds (bounded by wall time), and
+/// a rule skipped by its `when` condition stays `None` — it never spawns.
+#[tokio::test]
+async fn execute_records_sampled_cpu_seconds() {
+    let config = ExecutorConfig {
+        max_jobs: 1,
+        dry_run: false,
+        workdir: std::env::temp_dir(),
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    // Busy loop, ~1-2 s of CPU on both bash (macOS) and dash (Linux CI):
+    // long enough to span several sampler ticks so the sampled value is
+    // reliably non-zero.
+    let busy = make_rule("busy", "i=0; while [ $i -lt 800000 ]; do i=$((i+1)); done");
+    let record = executor.execute_rule(&busy, &HashMap::new()).await.unwrap();
+    assert_eq!(record.status, JobStatus::Success);
+    let cpu = record
+        .cpu_seconds
+        .expect("busy rule must accumulate sampled CPU seconds");
+    assert!(cpu > 0.0, "sampled CPU must be positive, got {cpu}s");
+    let wall_secs = record
+        .finished_at
+        .and_then(|f| record.started_at.map(|s| f.signed_duration_since(s)))
+        .expect("executed rule must have timestamps")
+        .num_milliseconds() as f64
+        / 1000.0;
+    // Threads sanity: even multi-core overshoot cannot exceed 32× wall time.
+    assert!(cpu <= wall_secs * 32.0, "CPU {cpu}s vs wall {wall_secs}s");
+
+    let mut skipped = make_rule("skipped", "echo never");
+    skipped.when = Some("false".to_string());
+    let record = executor
+        .execute_rule(&skipped, &HashMap::new())
+        .await
+        .unwrap();
+    assert_eq!(record.status, JobStatus::Skipped);
+    assert_eq!(record.cpu_seconds, None);
+}
+
 #[tokio::test]
 async fn execute_failing_command() {
     let config = ExecutorConfig {
@@ -411,6 +452,7 @@ fn checkpoint_record_run_persists_diagnostics() {
         timeout: None,
         skip_reason: None,
         max_rss_mb: None,
+        cpu_seconds: None,
     };
     state.record_run(&record);
     state.mark_failed("call");
@@ -444,6 +486,7 @@ fn checkpoint_stderr_tail_is_bounded() {
         timeout: None,
         skip_reason: None,
         max_rss_mb: None,
+        cpu_seconds: None,
     };
     state.record_run(&record);
     let tail = state.rule_runs["noisy"].stderr_tail.as_deref().unwrap();
