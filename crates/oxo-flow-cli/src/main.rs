@@ -171,6 +171,9 @@ pub enum Commands {
             help = "Force re-execution of this run's rules (ignore up-to-date checks)"
         )]
         rerun: bool,
+        /// Skip the automatic report snapshot after the run.
+        #[arg(long, help = "Skip the automatic report snapshot after the run")]
+        no_report_snapshot: bool,
     },
     /// Resume an interrupted workflow from a checkpoint.
     Resume {
@@ -210,6 +213,12 @@ pub enum Commands {
             help = "Working directory to resume in (default: the one recorded in the checkpoint)"
         )]
         workdir: Option<PathBuf>,
+        /// Skip the automatic report snapshot after the resumed run.
+        #[arg(
+            long,
+            help = "Skip the automatic report snapshot after the resumed run"
+        )]
+        no_report_snapshot: bool,
     },
     /// Preview execution without running any commands.
     DryRun {
@@ -560,6 +569,24 @@ pub enum Commands {
             help = "List available report templates and exit"
         )]
         list_templates: bool,
+        #[arg(
+            long = "r-data",
+            value_name = "DIR",
+            help = "Write R-friendly TSV files (sample_table.tsv, metrics.tsv) to DIR"
+        )]
+        r_data: Option<PathBuf>,
+        #[arg(
+            long = "diff",
+            value_name = "CHECKPOINT",
+            help = "Model-level diff of this report's checkpoint against another checkpoint (stderr, terminal-highlighted)"
+        )]
+        diff: Option<PathBuf>,
+        #[arg(
+            long = "acct",
+            value_name = "PATH",
+            help = "Import sacct-style CSV accounting (JobID,JobName,State,Elapsed,CPUTime,MaxRSS) into a Resource Accounting section"
+        )]
+        acct: Option<PathBuf>,
     },
     /// Start the web interface server.
     Serve {
@@ -988,6 +1015,7 @@ async fn main() -> Result<()> {
             ai_max_retries,
             samples_filter,
             rerun,
+            no_report_snapshot,
         } => {
             use anyhow::Context as _;
             use colored::Colorize as _;
@@ -1110,6 +1138,7 @@ async fn main() -> Result<()> {
                 ai_max_retries,
                 samples_filter,
                 rerun,
+                no_report_snapshot,
             )
             .await?
         }
@@ -1121,6 +1150,7 @@ async fn main() -> Result<()> {
             keep_going,
             timeout,
             workdir,
+            no_report_snapshot,
         } => {
             resume_command(
                 checkpoint,
@@ -1130,6 +1160,7 @@ async fn main() -> Result<()> {
                 keep_going,
                 timeout,
                 workdir,
+                no_report_snapshot,
             )
             .await?
         }
@@ -1298,6 +1329,9 @@ async fn main() -> Result<()> {
             plan,
             init_template,
             list_templates,
+            r_data,
+            diff,
+            acct,
         } => {
             handle_report(crate::commands::output::ReportArgs {
                 workflow,
@@ -1315,6 +1349,9 @@ async fn main() -> Result<()> {
                 plan,
                 init_template,
                 list_templates,
+                r_data,
+                diff,
+                acct,
             })
             .await?
         }
@@ -1448,6 +1485,7 @@ async fn main() -> Result<()> {
                     None,   // ai_max_retries
                     samples_filter.clone(),
                     false, // rerun (test mode: normal up-to-date checks)
+                    false, // no_report_snapshot (test mode keeps the standard run behavior)
                 )
                 .await?;
             }

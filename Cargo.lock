@@ -2817,6 +2817,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "colored",
+ "csv",
  "filetime",
  "flate2",
  "glob",

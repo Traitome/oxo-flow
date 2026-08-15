@@ -1227,8 +1227,10 @@ fn cli_report_zero_arg_discovers_after_run() {
     );
 
     // The report lands in <checkpoint-dir>/.oxo-flow/reports/report-<stamp>.html.
+    // (The run itself also snapshots a report-<stamp>.json there — issue #83
+    // P1-14 — so count the report command's .html output only.)
     let reports_dir = dir.path().join(".oxo-flow/reports");
-    let reports: Vec<PathBuf> = fs::read_dir(&reports_dir)
+    let mut reports: Vec<PathBuf> = fs::read_dir(&reports_dir)
         .unwrap()
         .map(|e| e.unwrap().path())
         .filter(|p| {
@@ -1236,9 +1238,15 @@ fn cli_report_zero_arg_discovers_after_run() {
                 .unwrap()
                 .to_string_lossy()
                 .starts_with("report-")
+                && p.extension().is_some_and(|e| e == "html")
         })
         .collect();
-    assert_eq!(reports.len(), 1, "expected exactly one timestamped report");
+    reports.sort();
+    assert_eq!(
+        reports.len(),
+        1,
+        "expected exactly one timestamped HTML report"
+    );
     let content = fs::read_to_string(&reports[0]).unwrap();
     assert!(
         content.contains("Dashboard"),
@@ -6818,4 +6826,372 @@ fn cli_cache_dir_aging_cleans_stale_entries() {
         cache.join("fresh.txt").exists(),
         "fresh cache entry must survive"
     );
+}
+
+// ─── Issue #83 WS6: run auto-snapshot + --r-data + report --diff/--acct ─────
+
+/// Snapshot files in `<dir>/.oxo-flow/reports/` named `report-*.json`.
+fn snapshot_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let reports = dir.join(".oxo-flow").join("reports");
+    if !reports.exists() {
+        return Vec::new();
+    }
+    let mut files: Vec<_> = std::fs::read_dir(&reports)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("report-") && n.ends_with(".json"))
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+/// A successful run writes a JSON report snapshot plus an index.json entry
+/// (issue #83 P1-14).
+#[test]
+fn cli_run_snapshot_creates_report_and_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"hello\"\nshell = \"echo hi > hello.txt\"\noutput = [\"hello.txt\"]\n",
+    );
+
+    oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let snapshots = snapshot_files(dir.path());
+    assert_eq!(
+        snapshots.len(),
+        1,
+        "exactly one snapshot expected: {snapshots:?}"
+    );
+
+    let content = fs::read_to_string(&snapshots[0]).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    assert_eq!(parsed["schema_version"], 1);
+    assert_eq!(parsed["command"], "report");
+    assert_eq!(parsed["workflow_name"], "test");
+    assert!(
+        parsed["checkpoint_path"]
+            .as_str()
+            .unwrap()
+            .contains("checkpoint.json"),
+        "snapshot must carry checkpoint provenance"
+    );
+
+    let index: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.path().join(".oxo-flow/reports/index.json")).unwrap(),
+    )
+    .unwrap();
+    let arr = index.as_array().expect("index.json must be a JSON array");
+    assert_eq!(arr.len(), 1, "one index entry expected: {arr:?}");
+    assert!(arr[0]["report"].as_str().unwrap().starts_with("report-"));
+    assert!(arr[0]["workflow"].as_str().unwrap().contains("wf.oxoflow"));
+    assert!(
+        arr[0]["checkpoint"]
+            .as_str()
+            .unwrap()
+            .contains("checkpoint.json")
+    );
+}
+
+/// A run WITH FAILURES that reaches the end-of-run summary (--keep-going;
+/// a fail-fast abort exits before the summary by design) still snapshots
+/// the checkpoint.
+#[test]
+fn cli_run_snapshot_after_failed_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"boom\"\nshell = \"exit 3\"\n\n\
+         [[rules]]\nname = \"after\"\nshell = \"echo ok > after.txt\"\noutput = [\"after.txt\"]\n",
+    );
+
+    // --keep-going runs report failures in the summary and exit 0 (existing
+    // semantics); the snapshot is taken before the summary completes.
+    oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--keep-going"])
+        .assert()
+        .success();
+
+    let snapshots = snapshot_files(dir.path());
+    assert_eq!(
+        snapshots.len(),
+        1,
+        "failed run must still snapshot: {snapshots:?}"
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&snapshots[0]).unwrap()).unwrap();
+    let failed = parsed["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "failure-diagnosis");
+    assert!(
+        failed.is_some(),
+        "snapshot of a failed run must carry failure diagnosis"
+    );
+}
+
+/// `--no-report-snapshot` suppresses the snapshot entirely.
+#[test]
+fn cli_run_no_report_snapshot_suppresses() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n",
+    );
+
+    oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--no-report-snapshot"])
+        .assert()
+        .success();
+
+    assert!(
+        snapshot_files(dir.path()).is_empty(),
+        "no snapshot may be written with --no-report-snapshot"
+    );
+}
+
+/// `report --r-data` writes R-friendly TSVs: a sample table (groups + pairs)
+/// and a per-rule metrics table (issue #83 P1-15).
+#[test]
+fn cli_report_r_data_tsv() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("wf.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"tiny\"\nversion = \"0.1\"\n\n\
+         [[sample_groups]]\nname = \"case\"\nsamples = [\"S1\", \"S2\"]\n\n\
+         [[sample_groups]]\nname = \"control\"\nsamples = [\"C1\"]\n\n\
+         [[pairs]]\npair_id = \"P1\"\nexperiment = \"T1\"\ncontrol = \"N1\"\n\n\
+         [[rules]]\nname = \"align\"\nshell = \"echo a > align.txt\"\noutput = [\"align.txt\"]\n\n\
+         [[rules]]\nname = \"call\"\nshell = \"echo c > call.txt\"\noutput = [\"call.txt\"]\n",
+    )
+    .unwrap();
+
+    oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let rdir = dir.path().join("rdata");
+    let out = dir.path().join("out.json");
+    oxo_flow_cmd()
+        .args([
+            "report",
+            wf.to_str().unwrap(),
+            "-f",
+            "json",
+            "-o",
+            out.to_str().unwrap(),
+            "--r-data",
+        ])
+        .arg(rdir.to_str().unwrap())
+        .assert()
+        .success();
+
+    // sample_table.tsv — deterministic (group, sample) order; pairs without
+    // an experiment_type get group "-".
+    let samples = fs::read_to_string(rdir.join("sample_table.tsv")).unwrap();
+    let sample_lines: Vec<&str> = samples.lines().collect();
+    assert_eq!(sample_lines[0], "sample\tgroup");
+    assert_eq!(
+        sample_lines[1..],
+        ["N1\t-", "T1\t-", "S1\tcase", "S2\tcase", "C1\tcontrol"]
+    );
+
+    // metrics.tsv — headers + one row per executed rule, status success.
+    let metrics = fs::read_to_string(rdir.join("metrics.tsv")).unwrap();
+    let metric_lines: Vec<&str> = metrics.lines().collect();
+    assert_eq!(
+        metric_lines[0],
+        "rule\twall_time_secs\tmax_memory_mb\tstatus"
+    );
+    let align = metric_lines
+        .iter()
+        .find(|l| l.starts_with("align\t"))
+        .expect("align row missing");
+    assert!(
+        align.ends_with("\tsuccess"),
+        "align must be success: {align}"
+    );
+    let call = metric_lines
+        .iter()
+        .find(|l| l.starts_with("call\t"))
+        .expect("call row missing");
+    assert!(call.ends_with("\tsuccess"), "call must be success: {call}");
+}
+
+/// `report --diff` prints + / - / ~ lines about checkpoint state changes to
+/// stderr and always exits 0 (a diff is information, not failure).
+#[test]
+fn cli_report_diff_checkpoints() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"r1\"\nshell = \"echo 1 > r1.txt\"\noutput = [\"r1.txt\"]\n\n\
+         [[rules]]\nname = \"r2\"\nshell = \"echo 2 > r2.txt\"\noutput = [\"r2.txt\"]\n\n\
+         [[rules]]\nname = \"r3\"\nshell = \"echo 3 > r3.txt\"\noutput = [\"r3.txt\"]\n",
+    );
+    // --provenance so the checkpoint carries output checksums.
+    oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--provenance"])
+        .assert()
+        .success();
+
+    // Hand-crafted "previous" checkpoint: r1 completed (with a benchmark),
+    // r2 failed, one legacy checksum.
+    let other = dir.path().join("other.json");
+    fs::write(
+        &other,
+        serde_json::json!({
+            "completed_rules": ["r1"],
+            "failed_rules": ["r2"],
+            "benchmarks": {
+                "r1": {"rule": "r1", "wall_time_secs": 1.5, "max_memory_mb": 64}
+            },
+            "checksums": {"legacy.txt": "sha256:aaaa"},
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let out = dir.path().join("out.json");
+    let result = oxo_flow_cmd()
+        .args(["report", wf.to_str().unwrap(), "-f", "json", "-o"])
+        .arg(out.to_str().unwrap())
+        .args(["--diff"])
+        .arg(other.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "--diff must exit 0: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    // Added/removed completed and failed rules.
+    assert!(stderr.contains("+ completed: r2"), "missing: {stderr}");
+    assert!(stderr.contains("+ completed: r3"), "missing: {stderr}");
+    assert!(stderr.contains("- failed: r2"), "missing: {stderr}");
+    // Status flip: r2 was failed, now completed.
+    assert!(
+        stderr.contains("~ r2: failed → completed"),
+        "missing: {stderr}"
+    );
+    // Benchmark delta (r1 in both): wall time old → new.
+    assert!(
+        stderr.contains("benchmark r1: wall time 1.50s"),
+        "missing: {stderr}"
+    );
+    // Checksum changes: outputs added, legacy file removed.
+    assert!(stderr.contains("+ checksum: r1.txt"), "missing: {stderr}");
+    assert!(stderr.contains("+ checksum: r2.txt"), "missing: {stderr}");
+    assert!(
+        stderr.contains("- checksum: legacy.txt"),
+        "missing: {stderr}"
+    );
+    // The report body still goes to its stdout target.
+    assert!(out.exists(), "report body must still be written");
+}
+
+/// A --diff against a missing checkpoint exits 1 with a message.
+#[test]
+fn cli_report_diff_missing_checkpoint_exits_1() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n",
+    );
+
+    oxo_flow_cmd()
+        .args(["report", wf.to_str().unwrap(), "--diff", "nope.json"])
+        .assert()
+        .code(1);
+}
+
+/// `report --acct` imports an sacct-style CSV into a Resource Accounting
+/// section with converted values (seconds, MB) (issue #83 P1-13).
+#[test]
+fn cli_report_acct_section() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"align\"\nshell = \"echo a > align.txt\"\noutput = [\"align.txt\"]\n\n\
+         [[rules]]\nname = \"call\"\nshell = \"echo c > call.txt\"\noutput = [\"call.txt\"]\n\n\
+         [[rules]]\nname = \"qc\"\nshell = \"echo q > qc.txt\"\noutput = [\"qc.txt\"]\n",
+    );
+    let csv = dir.path().join("sacct.csv");
+    fs::write(
+        &csv,
+        "JobID,JobName,State,Elapsed,CPUTime,MaxRSS\n\
+         12345,align,COMPLETED,00:02:30,00:02:00,2048K\n\
+         12346,call,FAILED,01-00:00:00,12:00:00,1G\n",
+    )
+    .unwrap();
+
+    let out = dir.path().join("out.json");
+    oxo_flow_cmd()
+        .args(["report", wf.to_str().unwrap(), "-f", "json", "-o"])
+        .arg(out.to_str().unwrap())
+        .args(["--acct"])
+        .arg(csv.to_str().unwrap())
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(&out).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    let section = parsed["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "resource-accounting")
+        .unwrap_or_else(|| panic!("no resource-accounting section in report"));
+    assert_eq!(
+        section["content"]["headers"],
+        serde_json::json!(["Rule", "State", "Elapsed", "CPU Time", "Max RSS (MB)"])
+    );
+    assert_eq!(
+        section["content"]["rows"],
+        serde_json::json!([
+            ["align", "COMPLETED", "150", "120", "2"],
+            ["call", "FAILED", "86400", "43200", "1024"],
+        ])
+    );
+    // Import provenance + honest coverage note (qc had no record).
+    let section_json = serde_json::to_string(&section).unwrap();
+    assert!(section_json.contains("Imported from sacct CSV"));
+    assert!(
+        section_json.contains("1 rules had no accounting record: qc"),
+        "coverage note missing: {section_json}"
+    );
+}
+
+/// `report --acct` fails fast with a clear message on a malformed CSV
+/// (missing required column).
+#[test]
+fn cli_report_acct_missing_column_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n",
+    );
+    let csv = dir.path().join("bad.csv");
+    fs::write(&csv, "JobID,JobName,State,MaxRSS\n1,hello,COMPLETED,1K\n").unwrap();
+
+    oxo_flow_cmd()
+        .args(["report", wf.to_str().unwrap(), "--acct"])
+        .arg(csv.to_str().unwrap())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "missing required column(s): elapsed, cputime",
+        ));
 }

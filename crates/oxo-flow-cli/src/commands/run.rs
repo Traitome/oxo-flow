@@ -477,6 +477,7 @@ pub async fn run_command(
     _ai_max_retries: Option<u32>,
     samples_filter: Vec<String>,
     rerun: bool,
+    no_report_snapshot: bool,
 ) -> Result<()> {
     print_banner();
 
@@ -1753,6 +1754,18 @@ pub async fn run_command(
         fail_count
     );
 
+    // Automatic report snapshot (issue #83 P1-14): capture the final
+    // checkpoint as a JSON report plus an index.json entry. One call site
+    // covers every terminal path of the run loop (and resume, which shares
+    // this summary via run_command); dry-run never reaches here. Snapshot
+    // errors are warnings — a reporting hiccup must never fail the run.
+    if !no_report_snapshot
+        && let Err(e) =
+            crate::commands::output::snapshot_report(&workflow, &workdir_actual, &checkpoint)
+    {
+        eprintln!("  {} Report snapshot failed: {e}", "⚠".yellow());
+    }
+
     // With --keep-going, execution continues past failures, so list every failed
     // rule (and why) in one place rather than making the user hunt for them.
     if !failures.is_empty() {
@@ -2980,6 +2993,7 @@ pub async fn handle_status(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn resume_command(
     checkpoint: PathBuf,
     jobs: usize,
@@ -2988,6 +3002,7 @@ pub async fn resume_command(
     keep_going: bool,
     timeout: String,
     workdir: Option<PathBuf>,
+    no_report_snapshot: bool,
 ) -> Result<()> {
     // resume does not produce structured JSON output
     print_banner();
@@ -3093,6 +3108,7 @@ pub async fn resume_command(
         ai_max_retries,
         Vec::new(), // samples_filter (resume restores checkpoint state as-is)
         false,      // rerun (resume skips completed rules by design)
+        no_report_snapshot,
     )
     .await
 }
