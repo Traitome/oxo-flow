@@ -140,7 +140,7 @@ pub enum Commands {
             value_name = "KEY=VALUE",
             trailing_var_arg = true,
             allow_hyphen_values = true,
-            help = "Direct config overrides: KEY=VALUE, --KEY=VALUE, or --KEY VALUE"
+            help = "Direct config overrides: KEY=VALUE or --KEY=VALUE; --KEY VALUE (space form) is accepted for declared [config] keys — unknown --flags are rejected"
         )]
         config_overrides: Vec<String>,
         #[arg(
@@ -268,12 +268,13 @@ pub enum Commands {
         )]
         args: Vec<String>,
         /// Direct config overrides in the same trailing positional form
-        /// `run` accepts: KEY=VALUE, --KEY=VALUE, or --KEY VALUE.
+        /// `run` accepts: KEY=VALUE or --KEY=VALUE; --KEY VALUE (space
+        /// form) for declared [config] keys — unknown --flags are rejected.
         #[arg(
             value_name = "KEY=VALUE",
             trailing_var_arg = true,
             allow_hyphen_values = true,
-            help = "Direct config overrides: KEY=VALUE, --KEY=VALUE, or --KEY VALUE"
+            help = "Direct config overrides: KEY=VALUE or --KEY=VALUE; --KEY VALUE (space form) is accepted for declared [config] keys — unknown --flags are rejected"
         )]
         config_overrides: Vec<String>,
         /// Add a sample to the preview (repeatable, merges with all

@@ -290,10 +290,14 @@ fn cleanup_cache_dir(cache_dir: &std::path::Path, max_age_days: u64) -> usize {
 /// `dry-run` (issue #77 parity):
 ///   KEY=VALUE            direct positional form
 ///   --KEY=VALUE          long-flag form
-///   --KEY VALUE          long-flag form with separate value
+///   --KEY VALUE          long-flag form with separate value (only for
+///                        config keys the workflow DECLARES — an unknown
+///                        `--token` is a typo'd command flag and must not
+///                        be silently swallowed as an override, issue #71)
 ///   --arg KEY=VALUE      legacy `--arg` form (backward compatible)
 fn parse_cli_overrides(
     cli_args: Vec<String>,
+    declared_config_keys: &std::collections::HashSet<String>,
 ) -> anyhow::Result<std::collections::HashMap<String, String>> {
     let mut cli_arg_values: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
@@ -327,11 +331,25 @@ fn parse_cli_overrides(
             let k = arg_str[..eq].trim_start_matches('-').to_string();
             (k, arg_str[eq + 1..].to_string())
         } else if let Some(k) = arg_str.strip_prefix("--") {
-            // `--KEY VALUE` — consume the next argument as the value
-            let v = cli_args_iter.next().with_context(|| {
-                format!("invalid config flag: '{arg_str}' — expected --KEY=VALUE or --KEY VALUE")
-            })?;
-            (k.to_string(), v)
+            if declared_config_keys.contains(k) {
+                // `--KEY VALUE` — consume the next argument as the value
+                let v = cli_args_iter.next().with_context(|| {
+                    format!(
+                        "invalid config flag: '{arg_str}' — expected --KEY=VALUE or --KEY VALUE"
+                    )
+                })?;
+                (k.to_string(), v)
+            } else {
+                // issue #71 follow-up: a `--` token that is neither a
+                // registered flag (caught above) nor a declared config key
+                // is almost certainly a typo'd command flag (e.g.
+                // `--config x`). Never silently swallow it as an override.
+                anyhow::bail!(
+                    "unknown argument '{arg_str}' — did you mean KEY=VALUE overrides?\n  \
+                     Config overrides take KEY=VALUE (e.g. threads=8) or --KEY=VALUE; \
+                     for a config key that itself starts with dashes, use --arg KEY=VALUE"
+                );
+            }
         } else {
             anyhow::bail!(
                 "invalid config value format: '{arg_str}' — expected KEY=VALUE, --KEY=VALUE, or --KEY VALUE"
@@ -529,7 +547,14 @@ pub async fn run_command(
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
     // ── Parse and merge CLI config overrides (shared with dry-run) ─────
-    let cli_arg_values = parse_cli_overrides(cli_args)?;
+    // The workflow's own [config] keys gate the `--KEY VALUE` space form:
+    // unknown `--` tokens are rejected as typos instead of silently
+    // swallowed. config.config covers BOTH plain values (`key = "v"`) and
+    // declarative entries (`key = { default = ... }`) — config_meta alone
+    // only sees the latter.
+    let declared_config_keys: std::collections::HashSet<String> =
+        config.config.keys().cloned().collect();
+    let cli_arg_values = parse_cli_overrides(cli_args, &declared_config_keys)?;
 
     apply_cli_overrides(&mut config, &cli_arg_values)?;
 
@@ -2046,8 +2071,11 @@ pub async fn dry_run_command(
     // ── CLI config overrides + --sample (shared with run, issue #77) ─────
     // Applied in run's exact order: overrides first, then --sample, then
     // the --samples subset filter — so the preview config is structurally
-    // identical to what `run` would execute.
-    let cli_arg_values = parse_cli_overrides(cli_args)?;
+    // identical to what `run` would execute. The workflow's own [config]
+    // keys gate the `--KEY VALUE` space form (same rule as run, issue #71).
+    let declared_config_keys: std::collections::HashSet<String> =
+        config.config.keys().cloned().collect();
+    let cli_arg_values = parse_cli_overrides(cli_args, &declared_config_keys)?;
     apply_cli_overrides(&mut config, &cli_arg_values)?;
     merge_extra_samples(&mut config, &extra_samples);
 
@@ -2593,17 +2621,117 @@ pub async fn dry_run_command(
             })
         });
 
+        // Stable per-rule plan (schema_version 2): status is the same
+        // bracket word the human listing prints ([run:/[skip:/[rerun:),
+        // reason is the human status text after the colon — so the JSON is
+        // a 1:1 structured mirror of the stderr plan the ecosystem greps.
+        let plan_entries: Vec<serde_json::Value> = order
+            .iter()
+            .filter_map(|name| {
+                let rule = config.get_rule(name)?;
+                let (status, reason, cascaded_from) = match preview
+                    .plan
+                    .iter()
+                    .find(|r| r.name == *name)
+                    .map(|r| &r.status)
+                {
+                    Some(crate::commands::run_preview::RuleStatus::NeverCompleted) => {
+                        ("run", "never completed".to_string(), None)
+                    }
+                    Some(crate::commands::run_preview::RuleStatus::ConfigInvalidated) => {
+                        ("run", "config changed".to_string(), None)
+                    }
+                    Some(crate::commands::run_preview::RuleStatus::InputInvalidated) => {
+                        ("run", "input changed".to_string(), None)
+                    }
+                    Some(crate::commands::run_preview::RuleStatus::OutputsMissing) => {
+                        ("run", "outputs missing".to_string(), None)
+                    }
+                    Some(crate::commands::run_preview::RuleStatus::Cascaded { from }) => (
+                        "rerun",
+                        format!("downstream of {from}"),
+                        Some(from.clone()),
+                    ),
+                    Some(crate::commands::run_preview::RuleStatus::Skipped) => {
+                        ("skip", "up to date".to_string(), None)
+                    }
+                    Some(crate::commands::run_preview::RuleStatus::SkippedByWhen) => {
+                        ("skip", "when condition false".to_string(), None)
+                    }
+                    Some(crate::commands::run_preview::RuleStatus::CascadedUpstream { from }) => (
+                        "rerun",
+                        format!("upstream of {from}"),
+                        Some(from.clone()),
+                    ),
+                    Some(crate::commands::run_preview::RuleStatus::Forced) => {
+                        ("run", "forced (--rerun)".to_string(), None)
+                    }
+                    Some(crate::commands::run_preview::RuleStatus::SkippedFresh) => {
+                        ("skip", "outputs up-to-date".to_string(), None)
+                    }
+                    // The preview classifies every rule in the execution
+                    // set, so this branch is unreachable; keep it loud.
+                    None => ("unknown", "unknown".to_string(), None),
+                };
+                let expanded_shell = rule.shell.as_ref().map(|cmd| {
+                    oxo_flow_core::executor::process::render_shell_command(
+                        cmd,
+                        rule,
+                        &wildcard_values,
+                    )
+                });
+                Some(serde_json::json!({
+                    "name": rule.name,
+                    "status": status,
+                    "reason": reason,
+                    "cascaded_from": cascaded_from,
+                    "threads": rule.effective_threads(),
+                    "memory": rule.effective_memory(),
+                    "environment": rule.environment.kind(),
+                    "command": expanded_shell,
+                    "inputs": serde_json::to_value(&rule.input).unwrap_or(serde_json::Value::Null),
+                    "outputs": serde_json::to_value(&rule.output).unwrap_or(serde_json::Value::Null),
+                }))
+            })
+            .collect();
+
         let output = serde_json::json!({
             "command": "dry-run",
+            "schema_version": 2,
             "workflow": workflow.display().to_string(),
             "total_rules": order.len(),
             "execution_order": order_list,
             "rules": rule_list,
+            "plan": plan_entries,
             "summary": {
                 "total_threads": total_threads,
                 "max_threads_per_rule": max_threads,
                 "memory_rules": memory_values.len(),
+                "would_execute": preview.plan.len() - preview.will_skip,
+                "will_skip": preview.will_skip,
+                "total_rules": order.len(),
             },
+            "sample_groups": config
+                .sample_groups
+                .iter()
+                .map(|g| {
+                    serde_json::json!({
+                        "name": g.name,
+                        "samples": g.samples,
+                    })
+                })
+                .collect::<Vec<_>>(),
+            "pairs": config
+                .pairs
+                .iter()
+                .map(|p| {
+                    serde_json::json!({
+                        "pair_id": p.pair_id,
+                        "experiment": p.experiment,
+                        "control": p.control,
+                    })
+                })
+                .collect::<Vec<_>>(),
             "suggested_jobs": suggested_jobs,
             "samples": samples_block,
             "checkpoint_preview": checkpoint_block,
@@ -3111,4 +3239,94 @@ pub async fn resume_command(
         no_report_snapshot,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_cli_overrides;
+    use std::collections::HashSet;
+
+    fn declared(keys: &[&str]) -> HashSet<String> {
+        keys.iter().map(|k| k.to_string()).collect()
+    }
+
+    #[test]
+    fn accepts_equals_forms_for_any_key() {
+        let map = parse_cli_overrides(
+            vec![
+                "threads=8".to_string(),
+                "--mode=protein".to_string(),
+                "--new_key=1".to_string(), // undeclared injection via '=' stays legal
+            ],
+            &declared(&["threads", "mode"]),
+        )
+        .unwrap();
+        assert_eq!(map["threads"], "8");
+        assert_eq!(map["mode"], "protein");
+        assert_eq!(map["new_key"], "1");
+    }
+
+    #[test]
+    fn accepts_space_form_for_declared_keys() {
+        let map = parse_cli_overrides(
+            vec!["--min_quality".to_string(), "45".to_string()],
+            &declared(&["min_quality"]),
+        )
+        .unwrap();
+        assert_eq!(map["min_quality"], "45");
+    }
+
+    #[test]
+    fn rejects_unknown_dash_token() {
+        let err = parse_cli_overrides(
+            vec!["--config".to_string(), "config/x.toml".to_string()],
+            &declared(&["min_quality"]),
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("unknown argument"), "{msg}");
+        assert!(msg.contains("--config"), "{msg}");
+        assert!(msg.contains("KEY=VALUE"), "{msg}");
+    }
+
+    #[test]
+    fn rejects_known_flag_after_positional_with_flag_error() {
+        // issue #71 contract: real flags swallowed by the trailing
+        // positional get the "command flag, not a config override" error.
+        let err = parse_cli_overrides(
+            vec!["threads=8".to_string(), "--json".to_string()],
+            &declared(&["threads"]),
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("command flag"), "{msg}");
+        assert!(msg.contains("--json"), "{msg}");
+    }
+
+    #[test]
+    fn rejects_space_form_for_undeclared_key_even_via_arg() {
+        // `--arg --config x` lands in the same override list.
+        let err = parse_cli_overrides(
+            vec!["--config".to_string(), "x".to_string()],
+            &declared(&[]),
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("unknown argument"));
+    }
+
+    #[test]
+    fn rejects_declared_key_without_value() {
+        let err = parse_cli_overrides(
+            vec!["--min_quality".to_string()],
+            &declared(&["min_quality"]),
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("invalid config flag"), "{err:?}");
+    }
+
+    #[test]
+    fn rejects_bare_non_key_value_positional() {
+        let err = parse_cli_overrides(vec!["naked".to_string()], &declared(&[])).unwrap_err();
+        assert!(format!("{err}").contains("KEY=VALUE"), "{err:?}");
+    }
 }

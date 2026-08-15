@@ -662,6 +662,162 @@ shell = "cp out1.txt out2.txt"
     assert_eq!(preview["plan"][1]["cascaded_from"], "step1", "{stdout}");
 }
 
+/// dry-run --json emits a stable machine-readable plan (schema_version 2):
+/// per-rule status/reason/threads/memory/environment/expanded command/
+/// inputs/outputs, summary counters, sample groups and pairs — while the
+/// human stderr listing stays byte-identical with or without --json (the
+/// ecosystem contract: external CIs grep the stderr plan text).
+#[test]
+fn cli_dry_run_json_plan_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("plan.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "plan"
+version = "1.0.0"
+
+[config]
+msg = "hello-json"
+
+[[sample_groups]]
+name = "cohort"
+samples = ["S1", "S2"]
+
+[[pairs]]
+pair_id = "p1"
+experiment = "S1"
+control = "S2"
+
+[[rules]]
+name = "step1"
+input = ["in.txt"]
+output = ["out1.txt"]
+shell = "echo {config.msg} > out1.txt"
+
+[[rules]]
+name = "step2"
+input = ["out1.txt"]
+output = ["out2.txt"]
+depends_on = ["step1"]
+shell = "cp out1.txt out2.txt"
+"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("in.txt"), "data1").unwrap();
+
+    // Complete once so the plan can classify skip vs run.
+    oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "-j", "2"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    // Invalidate step1: it reruns, step2 cascades downstream.
+    fs::write(dir.path().join("in.txt"), "changed data").unwrap();
+
+    let json_out = oxo_flow_cmd()
+        .args(["dry-run", "--json", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        json_out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&json_out.stderr)
+    );
+    let plain_out = oxo_flow_cmd()
+        .args(["dry-run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(plain_out.status.success());
+
+    // Human stderr listing is byte-identical with or without --json; only
+    // stdout carries the machine payload.
+    assert_eq!(
+        json_out.stderr, plain_out.stderr,
+        "--json must not change the human stderr output"
+    );
+    let stdout = String::from_utf8_lossy(&json_out.stdout);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+
+    assert_eq!(v["command"], "dry-run", "{stdout}");
+    assert_eq!(v["schema_version"], 2, "{stdout}");
+    assert!(v["workflow"].as_str().unwrap().ends_with("plan.oxoflow"));
+
+    let plan = v["plan"].as_array().unwrap();
+    assert_eq!(plan.len(), 2, "{stdout}");
+    assert_eq!(v["summary"]["total_rules"], plan.len(), "{stdout}");
+    assert_eq!(
+        v["summary"]["would_execute"].as_u64().unwrap()
+            + v["summary"]["will_skip"].as_u64().unwrap(),
+        plan.len() as u64,
+        "{stdout}"
+    );
+
+    // Every plan entry carries the full structured record.
+    for entry in plan {
+        for key in [
+            "name",
+            "status",
+            "reason",
+            "threads",
+            "memory",
+            "environment",
+            "command",
+            "inputs",
+            "outputs",
+        ] {
+            assert!(
+                entry.get(key).is_some(),
+                "plan entry missing {key}: {entry}"
+            );
+        }
+        let status = entry["status"].as_str().unwrap();
+        assert!(
+            ["run", "skip", "rerun"].contains(&status),
+            "bad status {status}: {entry}"
+        );
+    }
+
+    // step1: invalidated input reruns; step2: cascaded downstream.
+    let p0 = &plan[0];
+    assert_eq!(p0["name"], "step1", "{stdout}");
+    assert_eq!(p0["status"], "run", "{p0}");
+    assert_eq!(p0["reason"], "input changed", "{p0}");
+    assert_eq!(
+        p0["command"].as_str().unwrap(),
+        "echo hello-json > out1.txt",
+        "command must be expanded with {{config.*}}: {p0}"
+    );
+    assert_eq!(p0["inputs"][0], "in.txt", "{p0}");
+    assert_eq!(p0["outputs"][0], "out1.txt", "{p0}");
+
+    let p1 = &plan[1];
+    assert_eq!(p1["name"], "step2", "{stdout}");
+    assert_eq!(p1["status"], "rerun", "{p1}");
+    assert_eq!(p1["reason"], "downstream of step1", "{p1}");
+    assert_eq!(p1["cascaded_from"], "step1", "{p1}");
+
+    // sample_groups + pairs are reported.
+    let groups = v["sample_groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 1, "{stdout}");
+    assert_eq!(groups[0]["name"], "cohort");
+    assert_eq!(groups[0]["samples"], serde_json::json!(["S1", "S2"]));
+    let pairs = v["pairs"].as_array().unwrap();
+    assert_eq!(pairs.len(), 1, "{stdout}");
+    assert_eq!(pairs[0]["pair_id"], "p1");
+    assert_eq!(pairs[0]["experiment"], "S1");
+    assert_eq!(pairs[0]["control"], "S2");
+
+    // The pre-existing checkpoint_preview contract is preserved.
+    assert_eq!(
+        v["checkpoint_preview"]["summary"]["will_run"], 2,
+        "{stdout}"
+    );
+}
+
 // ─── graph subcommand ───────────────────────────────────────────────────────
 
 #[test]
@@ -3895,6 +4051,109 @@ fn cli_run_config_range_accepts_in_range() {
         .output()
         .unwrap();
     assert!(out.status.success());
+}
+
+// ─── unknown --flags are never silently swallowed (issue #71 follow-up) ──────
+
+/// `run`/`dry-run` funnel unknown `--token` arguments into the trailing
+/// config-override positional (`trailing_var_arg` + `allow_hyphen_values`).
+/// A typo like `--config x` must fail loudly with "unknown argument"
+/// instead of silently setting a config key — while every legitimate
+/// override form (KEY=VALUE, --KEY=VALUE, --arg KEY=VALUE, and the
+/// `--KEY VALUE` space form for workflow-DECLARED config keys) keeps
+/// working.
+#[test]
+fn cli_run_rejects_unknown_dash_argument() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("swallow.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"swallow\"\nversion = \"1.0.0\"\n\n[config]\nmin_quality = { default = \"30\" }\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo ok > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    // Unknown --flag with a space value: rejected loudly in run AND dry-run.
+    for sub in ["run", "dry-run"] {
+        let out = oxo_flow_cmd()
+            .args([
+                sub,
+                wf.to_str().unwrap(),
+                "--config",
+                "config/illumina.toml",
+            ])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(!out.status.success(), "{sub} --config must fail");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("unknown argument"),
+            "{sub} stderr: {stderr}"
+        );
+        assert!(stderr.contains("--config"), "{sub} stderr: {stderr}");
+        assert!(stderr.contains("KEY=VALUE"), "{sub} stderr: {stderr}");
+    }
+
+    // Bare --config without a value fails the same way.
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--config"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "--config alone must fail");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("unknown argument"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // `--KEY VALUE` space form for a workflow-DECLARED key stays valid.
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--min_quality", "45"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "declared-key space form must work: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // `--KEY=VALUE` equals form stays valid.
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--min_quality=42"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "--KEY=VALUE must work: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Plain KEY=VALUE positional stays valid.
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "min_quality=40"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "KEY=VALUE must work: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Legacy --arg KEY=VALUE stays valid.
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--arg", "min_quality=38"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "--arg KEY=VALUE must work: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 // ─── [[references]] auto-build tests ────────────────────────────────────
