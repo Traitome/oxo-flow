@@ -38,6 +38,9 @@
   --color-info:#3BB8D6; --color-info-bg:#0E2A33;
   --shadow-card:0 1px 2px rgba(0,0,0,.4),0 1px 3px rgba(0,0,0,.3);
   --shadow-pop:0 8px 24px rgba(0,0,0,.5);
+  --env-system:#9CA3AF; --env-conda:#60A5FA; --env-mamba:#34D399;
+  --env-docker:#A78BFA; --env-singularity:#F472B6; --env-venv:#FBBF24;
+  --env-modules:#2DD4BF;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]):not([data-theme="dark"]) {
@@ -53,6 +56,9 @@
     --color-info:#3BB8D6; --color-info-bg:#0E2A33;
     --shadow-card:0 1px 2px rgba(0,0,0,.4),0 1px 3px rgba(0,0,0,.3);
     --shadow-pop:0 8px 24px rgba(0,0,0,.5);
+    --env-system:#9CA3AF; --env-conda:#60A5FA; --env-mamba:#34D399;
+    --env-docker:#A78BFA; --env-singularity:#F472B6; --env-venv:#FBBF24;
+    --env-modules:#2DD4BF;
   }
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -318,13 +324,13 @@ body{font-family:var(--font-sans);font-size:.9375rem;line-height:1.6;color:var(-
 .rf-rule-name { font-weight: 600; font-size: 0.85rem; color: var(--color-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rf-rule-meta { display: flex; align-items: center; gap: 5px; margin-top: 3px; font-family: var(--font-sans); font-size: 0.68rem; color: var(--color-text-tertiary); }
 .rf-env-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
-.rf-env-system { background: #6b7280; }
-.rf-env-conda { background: #3b82f6; }
-.rf-env-mamba { background: #10b981; }
-.rf-env-docker { background: #8b5cf6; }
-.rf-env-singularity { background: #ec4899; }
-.rf-env-venv { background: #f59e0b; }
-.rf-env-modules { background: #14b8a6; }
+.rf-env-system { background: var(--env-system); }
+.rf-env-conda { background: var(--env-conda); }
+.rf-env-mamba { background: var(--env-mamba); }
+.rf-env-docker { background: var(--env-docker); }
+.rf-env-singularity { background: var(--env-singularity); }
+.rf-env-venv { background: var(--env-venv); }
+.rf-env-modules { background: var(--env-modules); }
 .rf-rule-status { margin-left: auto; text-transform: uppercase; letter-spacing: 0.03em; font-weight: 600; }
 .rf-rule-shell {
   margin-top: 6px;
