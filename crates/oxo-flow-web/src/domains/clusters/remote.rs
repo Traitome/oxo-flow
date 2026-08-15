@@ -288,10 +288,17 @@ async fn mark_failed(run_id: &str, message: &str) {
         .fetch_optional(db::pool())
         .await
         .unwrap_or(None);
+    // Remote failure is a terminal path that bypasses finalize_run — the
+    // quota reservation must be released here too (issue: cancelled /
+    // staging-failed remote runs leaked active_runs until restart).
+    if let Some((user, threads, memory_mb)) = crate::infra::quota::release(run_id) {
+        crate::infra::quota::global_quota_tracker().record_complete(&user, threads, memory_mb);
+    }
     broadcast_event_for(
         "run_failed",
         &serde_json::json!({"run_id": run_id, "status": "failed", "finished_at": end.to_rfc3339(), "error": message}),
         user_id.as_deref(),
     );
+    crate::domains::observability::webhook::notify_terminal(run_id, "failed").await;
     unregister_remote(run_id);
 }

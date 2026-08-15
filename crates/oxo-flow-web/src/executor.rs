@@ -248,18 +248,31 @@ pub fn spawn_background_run_with_args(
     tokio::spawn(async move {
         info!("Starting background run {} for user {}", run_id, username);
 
-        // Update status to running
+        // Update status to running — only from 'queued'. A cancel (or
+        // pause) can land between create_run and this task; without the
+        // predicate the executor would overwrite 'cancelled' and run the
+        // workflow the user just stopped.
         let now = Utc::now();
-        if let Err(e) = sqlx::query(
-            "UPDATE runs SET status = 'running', phase = 'executing', started_at = ? WHERE id = ?",
+        match sqlx::query(
+            "UPDATE runs SET status = 'running', phase = 'executing', started_at = ? \
+             WHERE id = ? AND status = 'queued'",
         )
         .bind(now)
         .bind(&run_id)
         .execute(db::pool())
         .await
         {
-            error!("Failed to update run {run_id} to running: {e}");
-            return;
+            Ok(r) if r.rows_affected() == 0 => {
+                info!(
+                    "Run {run_id} left 'queued' before spawn — honouring the earlier terminal state"
+                );
+                return;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                error!("Failed to update run {run_id} to running: {e}");
+                return;
+            }
         }
 
         // Broadcast run start event, scoped to the run owner (issue #82
@@ -414,6 +427,13 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
     let success = exit_code == Some(0);
     let final_state = final_status_from_exit(success);
 
+    // Release the run's quota reservation on EVERY terminal path — the
+    // cancelled early-return below must not leak the reservation (issue:
+    // cancelled runs burned active_runs/threads/memory until restart).
+    if let Some((user_id, threads, memory_mb)) = crate::infra::quota::release(run_id) {
+        crate::infra::quota::global_quota_tracker().record_complete(&user_id, threads, memory_mb);
+    }
+
     let cancelled: bool =
         sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE id = ? AND status = 'cancelled'")
             .bind(run_id)
@@ -478,11 +498,6 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
         }),
         user_id.as_deref(),
     );
-
-    // Release the run's quota reservation (issue #82 P1-9).
-    if let Some((user_id, threads, memory_mb)) = crate::infra::quota::release(run_id) {
-        crate::infra::quota::global_quota_tracker().record_complete(&user_id, threads, memory_mb);
-    }
 
     // Configured webhooks fire on terminal states (issue #82 P1-12).
     crate::domains::observability::webhook::notify_terminal(run_id, final_state).await;

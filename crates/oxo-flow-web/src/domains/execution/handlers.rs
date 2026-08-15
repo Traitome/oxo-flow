@@ -1100,6 +1100,11 @@ pub async fn cancel_run(
     // Persist the cancellation BEFORE signaling: the executor's exit path
     // checks for a 'cancelled' row and skips its own terminal write, so the
     // kill fallout can never flip the status back to completed/failed.
+    // The quota reservation is released here — the executor's finalize path
+    // early-returns for cancelled runs and never reaches its own release.
+    if let Some((user_id, threads, memory_mb)) = crate::infra::quota::release(&id) {
+        crate::infra::quota::global_quota_tracker().record_complete(&user_id, threads, memory_mb);
+    }
     let now = now_iso();
     sqlx::query(
         "UPDATE runs SET status = 'cancelled', phase = 'cancelled', finished_at = ? WHERE id = ?",
@@ -1197,7 +1202,16 @@ pub async fn pause_run(
     })?;
 
     let user = current_user::resolve(authenticated.as_ref());
-    let _run = load_owned_run(pool, &user, &id).await?;
+    let run = load_owned_run(pool, &user, &id).await?;
+    // Terminal states are final — pausing a finished run would leave a
+    // 'paused' row nothing ever finalizes again (ghost run).
+    if matches!(run.status.as_str(), "completed" | "failed" | "cancelled") {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "RUN_NOT_ACTIVE",
+            format!("Run {id} is already {} — cannot pause", run.status),
+        ));
+    }
     let reason = req
         .get("reason")
         .and_then(|v| v.as_str())
@@ -1232,7 +1246,7 @@ pub async fn pause_run(
     crate::broadcast_event_for(
         "run_paused",
         &serde_json::json!({"run_id": id, "reason": reason}),
-        Some(&_run.user_id),
+        Some(&run.user_id),
     );
 
     Ok(Json(serde_json::json!({
@@ -1267,7 +1281,19 @@ pub async fn resume_run(
     })?;
 
     let user = current_user::resolve(authenticated.as_ref());
-    let _run = load_owned_run(pool, &user, &id).await?;
+    let run = load_owned_run(pool, &user, &id).await?;
+    // Only a paused run can be resumed; anything else would fabricate a
+    // 'running' row with no process behind it (ghost run).
+    if run.status != "paused" {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "RUN_NOT_PAUSED",
+            format!(
+                "Run {id} is {0} — only paused runs can be resumed",
+                run.status
+            ),
+        ));
+    }
     let from_rule = req.get("from_rule").and_then(|v| v.as_str());
 
     // Unfreeze the live process group.
@@ -1298,7 +1324,7 @@ pub async fn resume_run(
     crate::broadcast_event_for(
         "run_resumed",
         &serde_json::json!({"run_id": id, "from_rule": from_rule}),
-        Some(&_run.user_id),
+        Some(&run.user_id),
     );
 
     Ok(Json(serde_json::json!({

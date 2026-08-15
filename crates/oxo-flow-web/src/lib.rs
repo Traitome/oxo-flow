@@ -729,12 +729,36 @@ pub async fn start_server_with_mode(
     let addr = format!("{host}:{port}");
     tracing::info!("Starting oxo-flow web server in {mode} mode on {addr}");
 
+    // The daily run quota is a rolling window that must reset — without
+    // this runs_today only ever grows and users hit 429 until a restart.
+    spawn_daily_quota_reset();
+
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
     Ok(())
+}
+
+/// Reset the daily run quota once per UTC day (at minute 1, so DST and
+/// scheduler races on the hour mark don't skip or double-fire it).
+fn spawn_daily_quota_reset() {
+    tokio::spawn(async {
+        loop {
+            let now = chrono::Utc::now();
+            let next = (now + chrono::Duration::days(1))
+                .date_naive()
+                .and_hms_opt(0, 1, 0)
+                .expect("00:01:00 is a valid time")
+                .and_utc();
+            let wait = (next - now)
+                .to_std()
+                .unwrap_or(std::time::Duration::from_secs(60));
+            tokio::time::sleep(wait).await;
+            crate::infra::quota::global_quota_tracker().reset_daily();
+        }
+    });
 }
 
 /// Wait for a shutdown signal (Ctrl+C or SIGTERM on Unix).
