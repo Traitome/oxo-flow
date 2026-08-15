@@ -20,7 +20,7 @@
 [![Web Downloads](https://img.shields.io/crates/d/oxo-flow-web.svg?label=web%20downloads)](https://crates.io/crates/oxo-flow-web)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Traitome/oxo-flow)
 
-[Documentation](https://traitome.github.io/oxo-flow/documentation/) · [Workflow Gallery](https://traitome.github.io/oxo-flow/documentation/gallery/) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+[Documentation](https://traitome.github.io/oxo-flow/documentation/) · [Workflow Gallery](https://traitome.github.io/oxo-flow/documentation/gallery/) · [Community](https://oxo-flow-community.github.io/) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
 </div>
 
@@ -29,6 +29,8 @@
 ## What is oxo-flow?
 
 oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It compiles workflows into Directed Acyclic Graphs and orchestrates execution with native concurrency, per-rule environment isolation, and AI-powered assistance — all from a single binary.
+
+> 🧬 **Community:** browse curated, rated, ready-to-run workflows — ports of popular nf-core & Snakemake pipelines, original designs, and community submissions — at [oxo-flow-community](https://oxo-flow-community.github.io/).
 
 - 🤖 **AI Companion** — Natural language pipeline generation, intelligent refinement, failure diagnosis, and results interpretation. Powered by Claude, OpenAI, DeepSeek, or local Ollama.
 - 🔀 **DAG engine** — Automatic dependency resolution, topological ordering, and parallel execution with resource-aware scheduling (CPU, memory, GPU, disk) across local and cluster backends (SLURM, PBS, SGE, LSF)

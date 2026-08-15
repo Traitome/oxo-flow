@@ -27,6 +27,14 @@ Done: 5 succeeded, 0 skipped, 0 failed
 
 ---
 
+!!! tip "Community catalog"
+    Looking for ready-to-run workflows? The community maintains a curated,
+    rated catalog at **[oxo-flow-community](https://oxo-flow-community.github.io/)** —
+    verified ports of popular nf-core & Snakemake pipelines, original workflows,
+    and community submissions.
+
+---
+
 ## What Is oxo-flow?
 
 oxo-flow is a high-performance workflow engine built from the ground up in Rust for bioinformatics and clinical genomics. You define pipelines in a clean TOML format (`.oxoflow` files), and oxo-flow handles dependency resolution, environment activation, parallel execution, and report generation — with compile-time safety guarantees and zero interpreter overhead.

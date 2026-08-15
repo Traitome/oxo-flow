@@ -4,6 +4,8 @@ The Workflow Gallery is a curated collection of complete, validated example work
 
 Use this gallery to learn oxo-flow incrementally — each example builds on concepts from the previous one.
 
+For larger, production workflows — ports of popular nf-core & Snakemake pipelines, original designs, and community submissions — see the **[oxo-flow-community catalog](https://oxo-flow-community.github.io/)**.
+
 ---
 
 ## Learning Path
