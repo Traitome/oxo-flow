@@ -149,9 +149,13 @@ cleanup
 echo "— 6. hpc mode (scheduler endpoint)"
 D="$WORK/hpc"; mkdir -p "$D"; cd "$D"
 P=$(next_port); BASE="http://127.0.0.1:$P"
-start_server "$D/srv.log" --mode hpc -p "$P"
-check "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/hpc")" "200" "hpc endpoint responds"
-HPC=$(curl -s "$BASE/api/hpc")
+OXO_FLOW_ADMIN_PASSWORD="smoke-admin-pw" "$BIN" serve --mode hpc -p "$P" > "$D/srv.log" 2>&1 &
+SRV=$!
+for _ in $(seq 1 40); do curl -s -o /dev/null "$BASE/api/runs" && break; sleep 0.25; done
+# /api/hpc left the anonymous whitelist in the v0.11 hardening — auth first.
+check "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/hpc")" "401" "hpc endpoint requires auth"
+TOKEN=$(curl -s -X POST "$BASE/api/auth/login" -H 'Content-Type: application/json' -d '{"username":"admin","password":"smoke-admin-pw"}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])' 2>/dev/null)
+HPC=$(curl -s "$BASE/api/hpc" -H "Authorization: Bearer $TOKEN")
 case "$HPC" in *'"available"'*) ok "hpc status structured";; *) bad "hpc status structured: $HPC";; esac
 cleanup
 
