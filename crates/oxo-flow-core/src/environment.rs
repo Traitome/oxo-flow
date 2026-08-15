@@ -565,11 +565,15 @@ impl EnvironmentBackend for PixiBackend {
         _resources: Option<&crate::rule::Resources>,
         _workdir: &std::path::Path,
     ) -> Result<String> {
-        Ok(format!("pixi run -e {spec} {command}"))
+        // The workflow contract names the manifest FILE (`pixi =
+        // "envs/pixi.toml"`) — `-e` selects an environment NAME inside a
+        // pixi.toml already discovered from the CWD, which fails when the
+        // manifest lives anywhere else (live-caught on tx-ubuntu).
+        Ok(format!("pixi run --manifest-path {spec} {command}"))
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
-        Ok(format!("pixi install -e {spec}"))
+        Ok(format!("pixi install --manifest-path {spec}"))
     }
 
     fn teardown_command(&self, _spec: &str) -> Result<Option<String>> {
@@ -1269,8 +1273,10 @@ mod tests {
     #[test]
     fn pixi_setup_command() {
         let backend = PixiBackend;
-        let cmd = backend.setup_command("default").unwrap();
-        assert_eq!(cmd, "pixi install -e default");
+        // The workflow spec names the manifest FILE; -e (environment
+        // name) fails whenever the manifest is not in the CWD.
+        let cmd = backend.setup_command("envs/pixi.toml").unwrap();
+        assert_eq!(cmd, "pixi install --manifest-path envs/pixi.toml");
     }
 
     #[test]
@@ -1503,9 +1509,17 @@ mod tests {
     fn pixi_wrap_command() {
         let backend = PixiBackend;
         let result = backend
-            .wrap_command("python main.py", "default", None, std::path::Path::new("."))
+            .wrap_command(
+                "python main.py",
+                "envs/pixi.toml",
+                None,
+                std::path::Path::new("."),
+            )
             .unwrap();
-        assert_eq!(result, "pixi run -e default python main.py");
+        assert_eq!(
+            result,
+            "pixi run --manifest-path envs/pixi.toml python main.py"
+        );
     }
 
     #[test]
