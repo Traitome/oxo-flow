@@ -69,7 +69,7 @@ Returns real-time resource metrics: CPU%, memory (used/total/swap), active workf
 ```
 GET /api/audit?days=7
 ```
-Returns structured audit entries: `{ entries: [{ timestamp, user, action, resource, result }], days }`.
+Returns structured audit entries: `{ entries: [{ timestamp, user, action, resource, result }], days }`. **Team/hpc modes: admin-only** (the trail spans every user's actions; personal mode keeps the localhost trust model).
 
 ### Server-Sent Events
 ```
@@ -449,12 +449,18 @@ run endpoint.
 ## Webhooks
 
 ```
-GET /api/webhook   # { enabled, url, secret_set, events } — secret never echoed
-PUT /api/webhook   # {"enabled": true, "url": "https://...", "secret": "...", "events": [...]}
+GET /api/webhook   # { enabled, url, secret_set, events, signature_scheme } — secret never echoed
+PUT /api/webhook   # {"enabled": true, "url": "https://...", "secret": "...", "events": [...], "signature_scheme": "..."}
 ```
-Runs POST an HMAC-SHA256-signed payload (`X-OxoFlow-Signature:
-hmac-sha256=<hex>`) to the configured URL on terminal states. Admin-only
-outside personal mode — the endpoint is shared infrastructure.
+Runs POST a signed payload to the configured URL on terminal states. The
+signature scheme is configurable:
+
+- `sha256-keyed` (default) — `sha256(secret‖body)`, the pre-v0.12 format.
+  The default keeps existing webhook consumers working across upgrades.
+- `hmac-sha256` — RFC 2104 HMAC (`X-OxoFlow-Signature: hmac-sha256=<hex>`),
+  the recommended opt-in for new deployments.
+
+Admin-only outside personal mode — the endpoint is shared infrastructure.
 
 ## API Keys
 

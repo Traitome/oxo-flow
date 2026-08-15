@@ -76,7 +76,8 @@ the **Users** page (or `POST /api/users`) carry a bcrypt-hashed password in
 the database and sign in through the same `/api/auth/login` endpoint.
 Every state-changing request (create/update/delete/run actions) is recorded
 in the audit trail — **Audit** page or `GET /api/audit` — with the acting
-user and the real outcome.
+user and the real outcome. The trail spans all users, so it is admin-only
+outside personal mode.
 
 **Workspace isolation**:
 ```
