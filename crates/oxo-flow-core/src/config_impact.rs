@@ -18,12 +18,13 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Engine-injected config keys that churn on every run (rewritten by
-/// `--samples`/`--sample` and sample discovery). Excluded from the
-/// change-triggering diff to avoid spurious invalidation storms: they only
-/// affect rule-set membership, which is self-healing, and any real effect on
-/// a rule's baked inputs is caught by the rule fingerprint.
+/// `--samples`/`--sample`, sample discovery, and pair consolidation).
+/// Excluded from the change-triggering diff to avoid spurious invalidation
+/// storms: they only affect rule-set membership, which is self-healing, and
+/// any real effect on a rule's baked inputs is caught by the rule
+/// fingerprint.
 pub fn is_engine_injected_key(key: &str) -> bool {
-    key == "samples_list" || key.starts_with("samples_")
+    key == "samples_list" || key == "pairs_list" || key.starts_with("samples_")
 }
 
 /// Canonical string form of a config value.
@@ -918,6 +919,30 @@ mod tests {
             &rules,
             &diamond_dag(),
             &cfg(&[("samples_list", "S3,S4")]),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        assert!(report.changed_keys.is_empty());
+        assert!(report.invalidated.is_empty());
+
+        // config.pairs_list is engine-injected the same way (rewritten by
+        // pair consolidation / --samples filtering): it must not trigger
+        // invalidation either.
+        let mut cp = checkpoint.clone();
+        let _ = detect_config_changes(
+            &mut cp,
+            &rules,
+            &diamond_dag(),
+            &cfg(&[("pairs_list", "P1,P2")]),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        checkpoint = cp;
+        let report = detect_config_changes(
+            &mut checkpoint,
+            &rules,
+            &diamond_dag(),
+            &cfg(&[("pairs_list", "P2,P3")]),
             &HashSet::new(),
             &HashMap::new(),
         );

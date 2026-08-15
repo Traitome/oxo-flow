@@ -65,6 +65,24 @@ impl From<String> for WildcardPattern {
     }
 }
 
+/// How `profiles/<name>.toml` values merge into the workflow config.
+///
+/// Declared as `[workflow] profile_mode = "fill" | "override"`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProfileMode {
+    /// Profile values only fill in keys the workflow does not set —
+    /// existing workflow values always win. Default, keeps pre-1.x
+    /// behavior.
+    #[default]
+    Fill,
+    /// Profile values replace workflow values. Nested tables deep-merge
+    /// recursively (keys from both sides survive); scalars and arrays
+    /// replace the workflow value wholesale. Enables "cluster vs local"
+    /// profile variants of the same workflow.
+    Override,
+}
+
 /// Top-level workflow metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowMeta {
@@ -198,6 +216,14 @@ pub struct WorkflowMeta {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sample_pattern: Option<String>,
+
+    /// How `profiles/<name>.toml` values merge into this workflow:
+    /// `"fill"` (default) fills in only unset keys, `"override"` lets the
+    /// profile replace workflow values (deep merge for nested tables,
+    /// scalar/array replacement).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_mode: Option<ProfileMode>,
 }
 
 fn default_version() -> String {
@@ -1406,25 +1432,7 @@ impl WorkflowConfig {
                 .get("samples_list")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let mut merged: Vec<String> = if existing.is_empty() {
-                all_samples
-            } else {
-                let existing_set: std::collections::HashSet<&str> =
-                    existing.split(',').filter(|s| !s.is_empty()).collect();
-                let mut result: Vec<String> = existing
-                    .split(',')
-                    .filter(|s| !s.is_empty())
-                    .map(|s| s.to_string())
-                    .collect();
-                for s in &all_samples {
-                    if !existing_set.contains(s.as_str()) {
-                        result.push(s.clone());
-                    }
-                }
-                result
-            };
-            merged.sort();
-            merged.dedup();
+            let merged = merge_comma_list(existing, &all_samples);
             config.config.insert(
                 "samples_list".to_string(),
                 toml::Value::String(merged.join(",")),
@@ -1436,6 +1444,25 @@ impl WorkflowConfig {
                 .config
                 .entry(format!("samples_{}", group.name))
                 .or_insert_with(|| toml::Value::String(group.samples.join(",")));
+        }
+
+        // ── Inject config.pairs_list (symmetric with samples_list) ────────
+        // [[pairs]], pairs_file, and pairs_pattern entries are consolidated
+        // above; their pair_ids are injected as a sorted, comma-joined list
+        // so rules can reference `{config.pairs_list}` instead of keeping a
+        // hand-written `[config] pair_ids = [...]` in sync with [[pairs]].
+        if !config.pairs.is_empty() {
+            let existing = config
+                .config
+                .get("pairs_list")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let pair_ids: Vec<String> = config.pairs.iter().map(|p| p.pair_id.clone()).collect();
+            let merged = merge_comma_list(existing, &pair_ids);
+            config.config.insert(
+                "pairs_list".to_string(),
+                toml::Value::String(merged.join(",")),
+            );
         }
 
         // Derive standard reference paths from reference_dir (e.g., reference_fasta = reference_dir + "/genome.fa")
@@ -1451,8 +1478,8 @@ impl WorkflowConfig {
     /// explicit comma-separated sample names — both forms may be combined
     /// and repeated. Filtering is applied to every sample source
     /// (`[[sample_groups]]`, `sample_pattern` auto-discovery, sample-group
-    /// files), the merged `config.samples_list`, and experiment/control
-    /// `[[pairs]]` whose samples were filtered out.
+    /// files), the merged `config.samples_list` / `config.pairs_list`, and
+    /// experiment/control `[[pairs]]` whose samples were filtered out.
     ///
     /// Returns `(kept, unknown)` — the kept samples in workflow order and
     /// any explicitly named samples that were not found.
@@ -1529,6 +1556,17 @@ impl WorkflowConfig {
             allowed.contains(&p.experiment)
                 && p.control.as_ref().is_none_or(|c| allowed.contains(c))
         });
+        // Keep the injected config.pairs_list in sync with the surviving
+        // pairs (mirrors the samples_list rewrite above).
+        if !self.pairs.is_empty() {
+            let mut pair_ids: Vec<String> = self.pairs.iter().map(|p| p.pair_id.clone()).collect();
+            pair_ids.sort();
+            pair_ids.dedup();
+            self.config.insert(
+                "pairs_list".to_string(),
+                toml::Value::String(pair_ids.join(",")),
+            );
+        }
         if !kept.is_empty() {
             self.config.insert(
                 "samples_list".to_string(),
@@ -1903,6 +1941,76 @@ impl WorkflowConfig {
                 rule.environment = env.clone();
             }
         }
+    }
+
+    /// Merge a `profiles/<NAME>.toml` document into this workflow — the
+    /// semantics `run --profile` / `dry-run --profile` apply.
+    ///
+    /// Merges the profile's `[config]` (every key becomes a `{config.key}`
+    /// variable) and `[defaults]` (feeds `rules.resources` defaults via
+    /// [`WorkflowConfig::apply_defaults`]) sections. The mode comes from
+    /// `[workflow] profile_mode`:
+    ///
+    /// - `"fill"` (default): profile values only FILL IN keys the workflow
+    ///   does not set — existing workflow values always win.
+    /// - `"override"`: profile values REPLACE workflow values. Nested
+    ///   tables deep-merge recursively (keys from both sides survive);
+    ///   scalars and arrays replace the workflow value wholesale.
+    ///
+    /// Callers must pass a profile document parsed with `toml::from_str`
+    /// (a document), not `toml::Value::from_str` — in toml 1.x the latter
+    /// parses a SINGLE inline value and would reject `[config]` tables.
+    pub fn merge_profile(&mut self, profile_toml: &toml::Value) -> Result<()> {
+        let mode = self.workflow.profile_mode.unwrap_or_default();
+        if let Some(config_table) = profile_toml.get("config").and_then(toml::Value::as_table) {
+            for (key, value) in config_table {
+                match mode {
+                    ProfileMode::Fill => {
+                        self.config
+                            .entry(key.clone())
+                            .or_insert_with(|| value.clone());
+                    }
+                    ProfileMode::Override => match self.config.get_mut(key) {
+                        Some(existing) => deep_merge_value(existing, value.clone()),
+                        None => {
+                            self.config.insert(key.clone(), value.clone());
+                        }
+                    },
+                }
+            }
+        }
+        if let Some(defaults_table) = profile_toml.get("defaults").and_then(toml::Value::as_table) {
+            let profile_defaults: Defaults = toml::Value::Table(defaults_table.clone())
+                .try_into()
+                .map_err(|e| OxoFlowError::Config {
+                    message: format!("invalid [defaults] section in profile: {e}"),
+                })?;
+            match mode {
+                ProfileMode::Fill => {
+                    if self.defaults.threads.is_none() {
+                        self.defaults.threads = profile_defaults.threads;
+                    }
+                    if self.defaults.memory.is_none() {
+                        self.defaults.memory = profile_defaults.memory;
+                    }
+                    if self.defaults.environment.is_none() {
+                        self.defaults.environment = profile_defaults.environment;
+                    }
+                }
+                ProfileMode::Override => {
+                    if profile_defaults.threads.is_some() {
+                        self.defaults.threads = profile_defaults.threads;
+                    }
+                    if profile_defaults.memory.is_some() {
+                        self.defaults.memory = profile_defaults.memory;
+                    }
+                    if profile_defaults.environment.is_some() {
+                        self.defaults.environment = profile_defaults.environment;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Expand rules that contain pair or group wildcards into concrete instances.
@@ -2565,8 +2673,9 @@ impl WorkflowConfig {
     /// Accepts both the `config.<key>` form and a bare `<key>` reference.
     ///
     /// String values are split on commas (trimmed, empties dropped) so
-    /// engine-injected comma-joined lists like `config.samples_list` and
-    /// `config.samples_<group>` expand per value. A string without commas
+    /// engine-injected comma-joined lists like `config.samples_list`,
+    /// `config.pairs_list`, and `config.samples_<group>` expand per value.
+    /// A string without commas
     /// still resolves to a single value; use a single-element array
     /// (e.g. `["a,b"]`) to force a comma-containing string to stay whole.
     pub fn resolve_config_list(&self, var: &str) -> Option<Vec<String>> {
@@ -2794,6 +2903,48 @@ pub fn resolve_rule_templates(rules: &mut [crate::rule::Rule]) -> crate::Result<
     }
 
     Ok(())
+}
+
+/// Merge a comma-joined config value with newly consolidated entries.
+///
+/// Existing entries keep their order and never duplicate; the combined
+/// list is then sorted and deduplicated. Shared by the engine-injected
+/// `config.samples_list` and `config.pairs_list` consolidation.
+fn merge_comma_list(existing: &str, new: &[String]) -> Vec<String> {
+    let existing_set: std::collections::HashSet<&str> =
+        existing.split(',').filter(|s| !s.is_empty()).collect();
+    let mut merged: Vec<String> = existing
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect();
+    for s in new {
+        if !existing_set.contains(s.as_str()) {
+            merged.push(s.clone());
+        }
+    }
+    merged.sort();
+    merged.dedup();
+    merged
+}
+
+/// Deep-merge `src` into `dst` in place (profile override semantics):
+/// nested tables recurse — keys from both sides survive, `src` wins on
+/// conflict — while scalars and arrays replace `dst` wholesale.
+fn deep_merge_value(dst: &mut toml::Value, src: toml::Value) {
+    match (dst, src) {
+        (toml::Value::Table(dst_table), toml::Value::Table(src_table)) => {
+            for (key, src_value) in src_table {
+                match dst_table.get_mut(&key) {
+                    Some(dst_value) => deep_merge_value(dst_value, src_value),
+                    None => {
+                        dst_table.insert(key, src_value);
+                    }
+                }
+            }
+        }
+        (dst_value, src_value) => *dst_value = src_value,
+    }
 }
 
 #[cfg(test)]
@@ -4776,5 +4927,384 @@ shell = "echo {config.database} > {output[0]}"
                 "variants/NA12880.g.vcf.gz".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn from_file_injects_pairs_list_from_pairs() {
+        // [[pairs]] is the single source of truth: the engine injects
+        // config.pairs_list (a sorted, comma-joined string) exactly like
+        // config.samples_list, so rules can reference `{config.pairs_list}`
+        // instead of hand-writing `[config] pair_ids = [...]`.
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("pairs.oxoflow");
+        std::fs::write(
+            &workflow_path,
+            r#"
+            [workflow]
+            name = "pairs"
+
+            [[pairs]]
+            pair_id = "CASE_002"
+            experiment = "EXP_02"
+            control = "CTR_02"
+
+            [[pairs]]
+            pair_id = "CASE_001"
+            experiment = "EXP_01"
+            control = "CTR_01"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hi"
+            "#,
+        )
+        .unwrap();
+
+        let config = WorkflowConfig::from_file(&workflow_path).unwrap();
+        // Sorted, comma-joined — the string `{config.pairs_list}` renders.
+        assert_eq!(
+            config
+                .config
+                .get("pairs_list")
+                .and_then(toml::Value::as_str),
+            Some("CASE_001,CASE_002")
+        );
+        // resolve_config_list splits the injected list per value.
+        assert_eq!(
+            config.resolve_config_list("config.pairs_list"),
+            Some(vec!["CASE_001".to_string(), "CASE_002".to_string(),])
+        );
+    }
+
+    #[test]
+    fn from_file_injects_pairs_list_merging_user_value_and_pairs_file() {
+        // Manually declared config.pairs_list entries survive (merged like
+        // samples_list) and pairs_file entries are included too.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("pairs.tsv"),
+            "pair_id\texperiment\tcontrol\nP3\tT3\tN3\nP4\tT4\tN4\n",
+        )
+        .unwrap();
+        let workflow_path = dir.path().join("pairs.oxoflow");
+        std::fs::write(
+            &workflow_path,
+            r#"
+            [workflow]
+            name = "pairs"
+            pairs_file = "pairs.tsv"
+
+            [config]
+            pairs_list = "P1,P2"
+
+            [[pairs]]
+            pair_id = "P2"
+            experiment = "T2"
+            control = "N2"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hi"
+            "#,
+        )
+        .unwrap();
+
+        let config = WorkflowConfig::from_file(&workflow_path).unwrap();
+        assert_eq!(
+            config
+                .config
+                .get("pairs_list")
+                .and_then(toml::Value::as_str),
+            Some("P1,P2,P3,P4")
+        );
+    }
+
+    #[test]
+    fn expand_inputs_resolves_injected_pairs_list_per_pair() {
+        // Mirrors the samples_list test: [[pairs]] is the single source of
+        // truth and expand_inputs consumes the auto-injected
+        // config.pairs_list (a comma-joined string).
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("pairs.oxoflow");
+        std::fs::write(
+            &workflow_path,
+            r#"
+            [workflow]
+            name = "pairs"
+
+            [[pairs]]
+            pair_id = "CASE_001"
+            experiment = "EXP_01"
+            control = "CTR_01"
+
+            [[pairs]]
+            pair_id = "CASE_002"
+            experiment = "EXP_02"
+            control = "CTR_02"
+
+            [[rules]]
+            name = "combine_calls"
+            input = []
+            expand_inputs = [
+                { pattern = "calls/{pair_id}.vcf.gz", variables = { pair_id = "config.pairs_list" } }
+            ]
+            output = ["calls/cohort.vcf.gz"]
+            shell = "bcftools concat {input} -O z -o {output[0]}"
+            "#,
+        )
+        .unwrap();
+
+        let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+
+        let combine = config
+            .rules
+            .iter()
+            .find(|r| r.name == "combine_calls")
+            .expect("combine_calls rule should survive expansion");
+        assert_eq!(
+            combine.input.to_vec(),
+            vec![
+                "calls/CASE_001.vcf.gz".to_string(),
+                "calls/CASE_002.vcf.gz".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn filter_samples_syncs_injected_pairs_list() {
+        // --samples filtering drops pairs whose side samples are excluded;
+        // config.pairs_list must follow (mirrors the samples_list rewrite).
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("pairs.oxoflow");
+        std::fs::write(
+            &workflow_path,
+            r#"
+            [workflow]
+            name = "pairs"
+
+            [[pairs]]
+            pair_id = "P1"
+            experiment = "T1"
+            control = "N1"
+
+            [[pairs]]
+            pair_id = "P2"
+            experiment = "T2"
+            control = "N2"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hi"
+            "#,
+        )
+        .unwrap();
+
+        let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+        let (kept, unknown) = config
+            .filter_samples(&["T1".to_string(), "N1".to_string()])
+            .unwrap();
+        assert!(kept.is_empty());
+        assert!(unknown.is_empty());
+        assert_eq!(config.pairs.len(), 1);
+        assert_eq!(
+            config
+                .config
+                .get("pairs_list")
+                .and_then(toml::Value::as_str),
+            Some("P1")
+        );
+    }
+
+    #[test]
+    fn merge_profile_fill_mode_preserves_workflow_keys() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [config]
+            threads = "8"
+            genome = "hg38"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        let profile: toml::Value = toml::from_str(
+            r#"
+            [config]
+            threads = "32"
+            scheduler = "slurm"
+            "#,
+        )
+        .unwrap();
+        config.merge_profile(&profile).unwrap();
+
+        // fill mode: existing workflow keys win, missing keys are filled in.
+        assert_eq!(config.config["threads"].as_str(), Some("8"));
+        assert_eq!(config.config["scheduler"].as_str(), Some("slurm"));
+        assert_eq!(config.config["genome"].as_str(), Some("hg38"));
+    }
+
+    #[test]
+    fn merge_profile_override_mode_replaces_scalars_and_keeps_workflow_only_keys() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+            profile_mode = "override"
+
+            [config]
+            threads = "8"
+            genome = "hg38"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        let profile: toml::Value = toml::from_str(
+            r#"
+            [config]
+            threads = "32"
+            scheduler = "slurm"
+            "#,
+        )
+        .unwrap();
+        config.merge_profile(&profile).unwrap();
+
+        assert_eq!(config.config["threads"].as_str(), Some("32"));
+        assert_eq!(config.config["scheduler"].as_str(), Some("slurm"));
+        assert_eq!(config.config["genome"].as_str(), Some("hg38"));
+    }
+
+    #[test]
+    fn merge_profile_override_mode_deep_merges_nested_tables() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+            profile_mode = "override"
+
+            [config]
+            tool = { threads = "8", mem = "4G" }
+            genome = "hg38"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        let profile: toml::Value = toml::from_str(
+            r#"
+            [config]
+            tool = { threads = "32" }
+            scheduler = "slurm"
+            "#,
+        )
+        .unwrap();
+        config.merge_profile(&profile).unwrap();
+
+        // Nested table deep-merges: profile's threads wins, workflow's mem
+        // survives, sibling keys untouched.
+        let tool = config.config["tool"].as_table().unwrap();
+        assert_eq!(tool["threads"].as_str(), Some("32"));
+        assert_eq!(tool["mem"].as_str(), Some("4G"));
+        assert_eq!(config.config["genome"].as_str(), Some("hg38"));
+    }
+
+    #[test]
+    fn merge_profile_override_mode_replaces_arrays_wholesale() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+            profile_mode = "override"
+
+            [config]
+            samples = ["S1", "S2"]
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        let profile: toml::Value = toml::from_str(
+            r#"
+            [config]
+            samples = ["S1", "S3"]
+            "#,
+        )
+        .unwrap();
+        config.merge_profile(&profile).unwrap();
+
+        let samples: Vec<&str> = config.config["samples"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(samples, vec!["S1", "S3"]);
+    }
+
+    #[test]
+    fn merge_profile_override_mode_flows_defaults_into_rules_resources() {
+        // profile [defaults] threads=32 overrides workflow [defaults]
+        // threads=8 in override mode and reaches rules.resources via
+        // apply_defaults — the "cluster vs local" profile use case.
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+            profile_mode = "override"
+
+            [defaults]
+            threads = 8
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hi"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        let profile: toml::Value = toml::from_str(
+            r#"
+            [defaults]
+            threads = 32
+            "#,
+        )
+        .unwrap();
+        config.merge_profile(&profile).unwrap();
+        config.apply_defaults();
+
+        assert_eq!(config.rules[0].threads, Some(32));
+    }
+
+    #[test]
+    fn merge_profile_fill_mode_fills_defaults_only_when_unset() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [defaults]
+            threads = 8
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hi"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        let profile: toml::Value = toml::from_str(
+            r#"
+            [defaults]
+            threads = 32
+            memory = "16G"
+            "#,
+        )
+        .unwrap();
+        config.merge_profile(&profile).unwrap();
+        config.apply_defaults();
+
+        // fill mode: workflow's threads wins, profile's memory fills in.
+        assert_eq!(config.rules[0].threads, Some(8));
+        assert_eq!(config.rules[0].memory.as_deref(), Some("16G"));
+    }
+
+    #[test]
+    fn merge_profile_invalid_profile_mode_is_rejected_at_parse() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+            profile_mode = "clobber"
+        "#;
+        assert!(WorkflowConfig::parse(toml).is_err());
     }
 }
