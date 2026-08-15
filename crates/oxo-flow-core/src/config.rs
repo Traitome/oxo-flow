@@ -12,6 +12,7 @@ use crate::error::{OxoFlowError, Result};
 use crate::rule::{EnvironmentSpec, FilePatterns, Rule};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -913,7 +914,7 @@ impl ExperimentControlPair {
 ///
 /// [[values]]
 /// name   = "k"
-/// values = [21, 33]
+/// values = ["21", "33"]
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ValueGroup {
@@ -1166,6 +1167,15 @@ pub struct WorkflowConfig {
     /// Simple `key = "value"` entries do NOT appear here.
     #[serde(default, skip_deserializing, skip_serializing_if = "HashMap::is_empty")]
     pub config_meta: HashMap<String, ConfigDef>,
+
+    /// Config keys injected by the engine rather than written by the user:
+    /// reference keyed-config values (`config.<name>` = output) and
+    /// reference_dir-derived paths. Catalog tooling (CLI `info`, the
+    /// oxo-community drift gate) uses this to report only user-declared
+    /// parameters. Run-time injections (samples_list / pairs_list /
+    /// samples_*) are covered separately by `is_engine_injected_key`.
+    #[serde(skip)]
+    injected_config_keys: BTreeSet<String>,
 
     /// Declared reference artifacts — pre-built indexes and data files.
     ///
@@ -1711,23 +1721,21 @@ impl WorkflowConfig {
             allowed.contains(&p.experiment)
                 && p.control.as_ref().is_none_or(|c| allowed.contains(c))
         });
-        // Keep the injected config.pairs_list in sync with the surviving
-        // pairs (mirrors the samples_list rewrite above).
-        if !self.pairs.is_empty() {
-            let mut pair_ids: Vec<String> = self.pairs.iter().map(|p| p.pair_id.clone()).collect();
-            pair_ids.sort();
-            pair_ids.dedup();
-            self.config.insert(
-                "pairs_list".to_string(),
-                toml::Value::String(pair_ids.join(",")),
-            );
-        }
-        if !kept.is_empty() {
-            self.config.insert(
-                "samples_list".to_string(),
-                toml::Value::String(kept.join(",")),
-            );
-        }
+        // Keep the injected config.pairs_list / samples_list in sync with
+        // the surviving sets — including the empty case, so a filter that
+        // drops EVERY pair/sample cannot leave a stale list behind for
+        // expand_inputs to resolve against rules that no longer exist.
+        let mut pair_ids: Vec<String> = self.pairs.iter().map(|p| p.pair_id.clone()).collect();
+        pair_ids.sort();
+        pair_ids.dedup();
+        self.config.insert(
+            "pairs_list".to_string(),
+            toml::Value::String(pair_ids.join(",")),
+        );
+        self.config.insert(
+            "samples_list".to_string(),
+            toml::Value::String(kept.join(",")),
+        );
         for group in &self.sample_groups {
             self.config.insert(
                 format!("samples_{}", group.name),
@@ -1857,6 +1865,7 @@ impl WorkflowConfig {
             self.config
                 .entry(key.clone())
                 .or_insert_with(|| toml::Value::String(value.clone()));
+            self.injected_config_keys.insert(key.clone());
         }
 
         // If reference_dir is set but no [[references]] block exists, auto-derive
@@ -1980,11 +1989,40 @@ impl WorkflowConfig {
     #[must_use = "template expansion returns a Result that must be checked"]
     pub fn with_reference_builder_templates(mut self) -> Result<Self> {
         // Keyed references: config.<name> = output (unless already declared).
-        for def in &self.references {
-            if !self.config.contains_key(&def.name) && !def.output.trim().is_empty() {
-                let value = expand_config_vars_in_path(&def.output, &self.config);
-                self.config
-                    .insert(def.name.clone(), toml::Value::String(value));
+        // Iterate to a fixpoint so an output embedding another reference's
+        // keyed config (`{config.other}`) resolves regardless of
+        // declaration order; at most one expansion per reference per pass,
+        // bounded by the reference count (an unresolvable `{config.x}` is
+        // left literal and terminates the loop).
+        for _ in 0..=self.references.len() {
+            let mut changed = false;
+            for def in &self.references {
+                if def.output.trim().is_empty() {
+                    continue;
+                }
+                // Fill missing keyed values, and re-expand previously
+                // INJECTED values that still carry an unresolved
+                // `{config.x}` (a reference whose output embeds another
+                // reference's key). User-declared values are never touched.
+                let needs_fill = !self.injected_config_keys.contains(&def.name)
+                    && !self.config.contains_key(&def.name);
+                let needs_reexpand = self.injected_config_keys.contains(&def.name)
+                    && self
+                        .config
+                        .get(&def.name)
+                        .and_then(toml::Value::as_str)
+                        .is_some_and(|v| v.contains("{config."));
+                if needs_fill || needs_reexpand {
+                    let value = expand_config_vars_in_path(&def.output, &self.config);
+                    changed |=
+                        self.config.get(&def.name) != Some(&toml::Value::String(value.clone()));
+                    self.config
+                        .insert(def.name.clone(), toml::Value::String(value));
+                    self.injected_config_keys.insert(def.name.clone());
+                }
+            }
+            if !changed {
+                break;
             }
         }
         // Builder templates: replace template names with canonical commands.
@@ -1992,6 +2030,14 @@ impl WorkflowConfig {
             def.build = crate::references::expand_build_command(def)?;
         }
         Ok(self)
+    }
+
+    /// True when `key` was injected by the engine at parse time (reference
+    /// keyed-config values or reference_dir-derived paths), not written by
+    /// the user. Run-time injections (samples_list / pairs_list /
+    /// samples_*) are covered by `config_impact::is_engine_injected_key`.
+    pub fn is_injected_config_key(&self, key: &str) -> bool {
+        self.injected_config_keys.contains(key)
     }
 
     /// Resolve include directives by loading and merging rules from included files.
@@ -2150,6 +2196,20 @@ impl WorkflowConfig {
     /// (a document), not `toml::Value::from_str` — in toml 1.x the latter
     /// parses a SINGLE inline value and would reject `[config]` tables.
     pub fn merge_profile(&mut self, profile_toml: &toml::Value) -> Result<()> {
+        fn coerce_profile_defaults(table: toml::Table) -> toml::Table {
+            // Profiles historically tolerated quoted numerics in [defaults]
+            // (e.g. `threads = "16"`). Keep that tolerance: coerce string
+            // values for integer fields, let genuinely wrong types fail the
+            // typed conversion below with the same clear error.
+            let mut table = table;
+            if let Some(toml::Value::String(s)) = table.get("threads")
+                && let Ok(n) = s.trim().parse::<u32>()
+            {
+                table.insert("threads".into(), toml::Value::Integer(i64::from(n)));
+            }
+            table
+        }
+
         let mode = self.workflow.profile_mode.unwrap_or_default();
         if let Some(config_table) = profile_toml.get("config").and_then(toml::Value::as_table) {
             for (key, value) in config_table {
@@ -2169,11 +2229,12 @@ impl WorkflowConfig {
             }
         }
         if let Some(defaults_table) = profile_toml.get("defaults").and_then(toml::Value::as_table) {
-            let profile_defaults: Defaults = toml::Value::Table(defaults_table.clone())
-                .try_into()
-                .map_err(|e| OxoFlowError::Config {
-                    message: format!("invalid [defaults] section in profile: {e}"),
-                })?;
+            let profile_defaults: Defaults =
+                toml::Value::Table(coerce_profile_defaults(defaults_table.clone()))
+                    .try_into()
+                    .map_err(|e| OxoFlowError::Config {
+                        message: format!("invalid [defaults] section in profile: {e}"),
+                    })?;
             match mode {
                 ProfileMode::Fill => {
                     if self.defaults.threads.is_none() {
@@ -2261,6 +2322,13 @@ impl WorkflowConfig {
             "normal",
             "experiment_type",
             "tumor_type",
+            // Executor placeholders — a value table named `input` (etc.)
+            // would replace the placeholder in every rule's shell.
+            "input",
+            "output",
+            "log",
+            "threads",
+            "memory",
         ];
         for table in &self.values {
             if table.name.is_empty() {
@@ -2735,6 +2803,19 @@ impl WorkflowConfig {
                         scattered_rule.shell =
                             Some(expand_pattern(shell, &combo).unwrap_or_else(|_| shell.clone()));
                     }
+
+                    // Carry the pre-scatter [[values]] bindings over to the
+                    // scattered name and add the scatter variable, so
+                    // expand_inputs patterns referencing {assembler} (etc.)
+                    // still resolve per instance after the rename.
+                    let mut scatter_bindings = self
+                        .expansion_values
+                        .get(&rule.name)
+                        .cloned()
+                        .unwrap_or_default();
+                    scatter_bindings.insert(scatter.variable.clone(), val.clone());
+                    self.expansion_values
+                        .insert(scattered_rule.name.clone(), scatter_bindings);
 
                     scatter_outputs.extend(scattered_rule.output.to_vec());
                     final_rules.push(scattered_rule);
@@ -5448,6 +5529,198 @@ shell = "echo {config.database} > {output[0]}"
                 .get("pairs_list")
                 .and_then(toml::Value::as_str),
             Some("P1")
+        );
+    }
+
+    #[test]
+    fn filter_samples_clears_injected_lists_when_everything_dropped() {
+        // A filter that drops EVERY pair/sample must clear the injected
+        // pairs_list/samples_list — expand_inputs resolving against the
+        // stale list would target rules that no longer exist.
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("pairs.oxoflow");
+        std::fs::write(
+            &workflow_path,
+            r#"
+            [workflow]
+            name = "pairs"
+
+            [[pairs]]
+            pair_id = "P1"
+            experiment = "T1"
+            control = "N1"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hi"
+            "#,
+        )
+        .unwrap();
+
+        let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+        assert_eq!(
+            config
+                .config
+                .get("pairs_list")
+                .and_then(toml::Value::as_str),
+            Some("P1")
+        );
+        let (kept, _) = config.filter_samples(&["T9".to_string()]).unwrap();
+        assert!(kept.is_empty());
+        assert!(config.pairs.is_empty());
+        assert_eq!(
+            config
+                .config
+                .get("pairs_list")
+                .and_then(toml::Value::as_str),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn merge_profile_tolerates_quoted_threads_in_defaults() {
+        // Profiles historically tolerated quoted numerics in [defaults]
+        // (`threads = "16"`): coercion keeps that tolerance, while a
+        // genuinely wrong type still fails with the same clear error.
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+            profile_mode = "override"
+
+            [defaults]
+            threads = 8
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hi"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        let profile: toml::Value = toml::from_str(
+            r#"
+            [defaults]
+            threads = "16"
+            "#,
+        )
+        .unwrap();
+        config.merge_profile(&profile).unwrap();
+        config.apply_defaults();
+        assert_eq!(config.rules[0].threads, Some(16));
+
+        let bad: toml::Value = toml::from_str(
+            r#"
+            [defaults]
+            threads = "lots"
+            "#,
+        )
+        .unwrap();
+        let err = WorkflowConfig::parse(toml).unwrap().merge_profile(&bad);
+        assert!(err.is_err(), "non-numeric quoted threads must fail");
+    }
+
+    #[test]
+    fn values_name_colliding_with_executor_placeholder_rejected() {
+        // A [[values]] table named like an executor placeholder (`input`,
+        // `output`, `log`, `threads`, `memory`) would replace the
+        // placeholder in every rule's shell — expansion must reject it
+        // (run/dry-run both expand before executing).
+        for name in ["input", "output", "log", "threads", "memory"] {
+            let toml = format!(
+                r#"
+                [workflow]
+                name = "test"
+                version = "1.0.0"
+
+                [[values]]
+                name = "{name}"
+                values = ["a", "b"]
+
+                [[rules]]
+                name = "step1"
+                output = ["out.txt"]
+                shell = "echo hi"
+                "#
+            );
+            let mut config = WorkflowConfig::parse(&toml).unwrap();
+            let err = config.expand_wildcards().unwrap_err();
+            let message = err.to_string();
+            assert!(
+                message.contains("collides with a built-in wildcard"),
+                "{name}: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn reference_keyed_injection_resolves_cross_references_any_order() {
+        // A reference whose output embeds another reference's keyed config
+        // resolves regardless of declaration order (fixpoint expansion).
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0.0"
+
+            [[references]]
+            name = "genome_bwa"
+            source = "refs/genome.fa"
+            output = "{config.genome}.bwt"
+            build = "bwa_index"
+
+            [[references]]
+            name = "genome"
+            source = "refs/genome.fa"
+            output = "refs/genome.fa"
+            build = "cp refs/genome.fa refs/genome.fa.idx"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hi"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        assert_eq!(
+            config
+                .config
+                .get("genome_bwa")
+                .and_then(toml::Value::as_str),
+            Some("refs/genome.fa.bwt"),
+            "cross-reference must expand despite later declaration"
+        );
+    }
+
+    #[test]
+    fn scatter_keeps_values_bindings_for_expand_inputs() {
+        // scatter renames the instance, which used to orphan the per-name
+        // [[values]] bindings — expand_inputs patterns referencing the
+        // value stayed literal. The bindings must ride along.
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0.0"
+
+            [[values]]
+            name = "assembler"
+            values = ["spades"]
+
+            [[rules]]
+            name = "combine"
+            scatter = { variable = "b", values = ["1", "2"] }
+            expand_inputs = [{ pattern = "asm/{assembler}/x.txt", variables = {} }]
+            output = ["out/{assembler}/{b}.txt"]
+            shell = "cat {input} > {output}"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.expand_wildcards().unwrap();
+        let rule = config
+            .rules
+            .iter()
+            .find(|r| r.name.contains("spades") && r.name.ends_with("_1"))
+            .expect("scattered instance must exist");
+        assert!(
+            rule.input
+                .to_vec()
+                .contains(&"asm/spades/x.txt".to_string()),
+            "{{assembler}} must resolve per instance, got {:?}",
+            rule.input.to_vec()
         );
     }
 

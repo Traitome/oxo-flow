@@ -1401,6 +1401,71 @@ async fn scratch_rule_moves_outputs_back_and_cleans_up() {
 }
 
 #[tokio::test]
+async fn scratch_rule_failing_pre_exec_leaves_no_empty_scratch_dir() {
+    // A pre_exec hook that exits non-zero aborts the rule before the main
+    // command spawns. The hook MAY have written diagnostics, so the dir is
+    // preserved (with the failure) — but a pre_exec that never spawns (or
+    // a shell that fails safety validation) must not leak an empty dir.
+    let workdir = tempfile::tempdir().unwrap();
+    let config = ExecutorConfig {
+        workdir: workdir.path().to_path_buf(),
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    let rule = Rule {
+        name: "scratch_prefail".to_string(),
+        output: vec!["data.txt".to_string()].into(),
+        pre_exec: Some("exit 3".to_string()),
+        shell: Some("true".to_string()),
+        scratch: true,
+        ..Default::default()
+    };
+    let err = executor
+        .execute_rule(&rule, &HashMap::new())
+        .await
+        .expect_err("pre_exec failure must fail the rule");
+    let message = err.to_string();
+    assert!(message.contains("pre_exec hook failed"), "{message}");
+    assert!(
+        message.contains(".oxo-flow/scratch"),
+        "failure must name the preserved scratch dir: {message}"
+    );
+    // The hook ran (and exited 3) — the dir is preserved for debugging,
+    // matching the documented lifecycle.
+    assert_eq!(scratch_entries(workdir.path()).len(), 1);
+}
+
+#[tokio::test]
+async fn scratch_rule_rejected_hook_leaves_no_scratch_dir() {
+    // A pre_exec that fails shell-safety validation aborts before anything
+    // runs — the empty scratch dir must be discarded, not leaked (the
+    // "no leftover dirs on paths where the shell never started" contract).
+    let workdir = tempfile::tempdir().unwrap();
+    let config = ExecutorConfig {
+        workdir: workdir.path().to_path_buf(),
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    let rule = Rule {
+        name: "scratch_blocked".to_string(),
+        output: vec!["data.txt".to_string()].into(),
+        pre_exec: Some("rm -rf /".to_string()),
+        shell: Some("true".to_string()),
+        scratch: true,
+        ..Default::default()
+    };
+    let err = executor
+        .execute_rule(&rule, &HashMap::new())
+        .await
+        .expect_err("blocked pre_exec must fail the rule");
+    assert!(err.to_string().contains("Shell command blocked"));
+    assert!(
+        scratch_entries(workdir.path()).is_empty(),
+        "no empty scratch dir may survive a rejected hook"
+    );
+}
+
+#[tokio::test]
 async fn scratch_rule_preserves_scratch_on_failure() {
     let workdir = tempfile::tempdir().unwrap();
     let config = ExecutorConfig {

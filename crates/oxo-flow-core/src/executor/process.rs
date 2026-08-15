@@ -1026,11 +1026,19 @@ impl LocalExecutor {
             } else {
                 render_shell_command(pre_cmd, &rule, wildcard_values)
             };
-            validate_shell_safety(&rendered)?;
+            if let Err(e) = validate_shell_safety(&rendered) {
+                // Nothing ran yet — drop the empty scratch dir rather than
+                // leaking one per attempt (the lifecycle contract: no
+                // leftover dirs on paths where the shell never started).
+                discard_scratch(scratch_dir.as_deref()).await;
+                self.release_resources(&rule).await;
+                return Err(e);
+            }
             let pre_child = spawn_rule_shell(&rendered, rule_cwd, &rule.envvars);
             let pre_result = match pre_child {
                 Ok(child) => child.wait_with_output().await,
                 Err(e) => {
+                    discard_scratch(scratch_dir.as_deref()).await;
                     self.release_resources(&rule).await;
                     return Err(OxoFlowError::Execution {
                         rule: rule.name.clone(),
@@ -1040,13 +1048,21 @@ impl LocalExecutor {
             };
             match pre_result {
                 Ok(output) if !output.status.success() => {
+                    // The hook ran and may have written diagnostic files —
+                    // preserve the scratch dir and name its path (matches
+                    // the "preserved on failure" contract).
+                    let note = scratch_dir
+                        .as_deref()
+                        .map(scratch_preserved_note)
+                        .unwrap_or_default();
                     self.release_resources(&rule).await;
                     return Err(OxoFlowError::Execution {
                         rule: rule.name.clone(),
-                        message: "pre_exec hook failed".to_string(),
+                        message: format!("pre_exec hook failed{note}"),
                     });
                 }
                 Err(e) => {
+                    discard_scratch(scratch_dir.as_deref()).await;
                     self.release_resources(&rule).await;
                     return Err(OxoFlowError::Execution {
                         rule: rule.name.clone(),
@@ -1085,12 +1101,20 @@ impl LocalExecutor {
                 // orphaned. Timeout enforcement kills the rule's subtree instead
                 // (see timeout::kill_process_tree), so per-rule semantics are
                 // unchanged.
-                let child = spawn_rule_shell(cmd, rule_cwd, &rule.envvars).map_err(|e| {
-                    OxoFlowError::Execution {
-                        rule: rule.name.clone(),
-                        message: format!("failed to spawn: {e}"),
+                let child = match spawn_rule_shell(cmd, rule_cwd, &rule.envvars) {
+                    Ok(child) => child,
+                    Err(e) => {
+                        // The shell never started — no diagnostic files can
+                        // exist in the scratch dir; drop it instead of
+                        // leaking one per failed attempt.
+                        discard_scratch(scratch_dir.as_deref()).await;
+                        self.release_resources(&rule).await;
+                        return Err(OxoFlowError::Execution {
+                            rule: rule.name.clone(),
+                            message: format!("failed to spawn: {e}"),
+                        });
                     }
-                })?;
+                };
 
                 let child_id = child.id();
 
@@ -1670,6 +1694,22 @@ fn scratch_preserved_note(scratch: &Path) -> String {
         "\n[oxo-flow] scratch directory preserved for debugging: {}",
         scratch.display()
     )
+}
+
+/// Remove a scratch directory on paths where the rule's shell never
+/// started (spawn/safety failures): nothing diagnostic can exist inside,
+/// so a leftover dir is a pure leak. Best-effort — removal failure only
+/// warns, it never changes the rule's outcome.
+async fn discard_scratch(scratch: Option<&Path>) {
+    if let Some(dir) = scratch
+        && let Err(e) = tokio::fs::remove_dir_all(dir).await
+    {
+        tracing::warn!(
+            scratch = %dir.display(),
+            error = %e,
+            "failed to remove scratch directory after early failure"
+        );
+    }
 }
 
 /// Execute a rendered rule hook (on_success / on_failure) in the rule's
