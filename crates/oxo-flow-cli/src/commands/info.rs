@@ -5,6 +5,7 @@
 //! config keys, sample groups, pairs, references) directly from the workflow
 //! file, so hand-maintained catalog entries can be diffed against it.
 
+use crate::commands::config_comments::extract_config_descriptions;
 use anyhow::{Context, Result};
 use colored::Colorize;
 use oxo_flow_core::config::WorkflowConfig;
@@ -20,10 +21,15 @@ use std::path::{Path, PathBuf};
 /// JSON is the default output (stdout, machine-readable); `--format text`
 /// prints a human-readable summary instead.
 pub fn info_command(workflow: PathBuf, format: Option<String>) -> Result<()> {
+    // Re-read the raw text: the TOML parser discards comments, and `info`
+    // surfaces the `[config]` section comments as parameter descriptions.
+    let text = std::fs::read_to_string(&workflow)
+        .with_context(|| format!("failed to read workflow {}", workflow.display()))?;
+    let descriptions = extract_config_descriptions(&text);
     let cfg = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse workflow {}", workflow.display()))?;
 
-    let meta = derive_meta(&workflow, &cfg);
+    let meta = derive_meta(&workflow, &cfg, &descriptions);
 
     match format.as_deref() {
         Some("text") => print_text(&meta),
@@ -38,7 +44,13 @@ pub fn info_command(workflow: PathBuf, format: Option<String>) -> Result<()> {
 }
 
 /// Derive the machine-checkable catalog metadata from a parsed workflow.
-fn derive_meta(workflow: &Path, cfg: &WorkflowConfig) -> Value {
+/// `descriptions` carries the per-key `[config]` comments (see
+/// `config_comments::extract_config_descriptions`).
+fn derive_meta(
+    workflow: &Path,
+    cfg: &WorkflowConfig,
+    descriptions: &BTreeMap<String, String>,
+) -> Value {
     // Tools: conda/mamba env YAML stems + container image names, deduped
     // and sorted. Versions are NOT part of the catalog tool list — they live
     // in the TOML pins (oxo-community playbook §12).
@@ -134,7 +146,7 @@ fn derive_meta(workflow: &Path, cfg: &WorkflowConfig) -> Value {
         },
         "environments": environments,
         "config_keys": config_keys,
-        "config": config_params(cfg),
+        "config": config_params(cfg, descriptions),
         "sample_groups": sample_groups,
         "pairs": pairs,
         "references": references,
@@ -144,9 +156,10 @@ fn derive_meta(workflow: &Path, cfg: &WorkflowConfig) -> Value {
 }
 
 /// `[config]` parameter records for the catalog parameter table: the default
-/// value, its derived type, and the rules that reference `{config.<key>}` in
-/// their shell/script or input/output patterns.
-fn config_params(cfg: &WorkflowConfig) -> Vec<Value> {
+/// value, its derived type, the rules that reference `{config.<key>}` in
+/// their shell/script or input/output patterns, and — when the workflow
+/// carries one — the `#` comment describing the key.
+fn config_params(cfg: &WorkflowConfig, descriptions: &BTreeMap<String, String>) -> Vec<Value> {
     let mut records: Vec<Value> = cfg
         .config
         .iter()
@@ -173,12 +186,18 @@ fn config_params(cfg: &WorkflowConfig) -> Vec<Value> {
                 .map(|rule| rule.name.as_str())
                 .collect();
             used_by.sort_unstable();
-            json!({
+            let mut record = json!({
                 "key": key,
                 "default": default,
                 "value_type": value_type,
                 "used_by": used_by,
-            })
+            });
+            // Only present when the workflow comments the key — the field is
+            // optional so uncommented keys keep a minimal record.
+            if let Some(description) = descriptions.get(key) {
+                record["description"] = Value::String(description.clone());
+            }
+            record
         })
         .collect();
     records.sort_by(|a, b| a["key"].as_str().cmp(&b["key"].as_str()));
@@ -475,6 +494,18 @@ mod tests {
         WorkflowConfig::from_file(Path::new(path)).unwrap()
     }
 
+    /// Load a gallery fixture and derive its metadata end-to-end, extracting
+    /// comment descriptions from the raw file text like `info_command` does.
+    fn meta(display: &str, fixture: &str) -> Value {
+        let cfg = config(fixture);
+        let text = std::fs::read_to_string(fixture).unwrap();
+        derive_meta(
+            Path::new(display),
+            &cfg,
+            &extract_config_descriptions(&text),
+        )
+    }
+
     #[test]
     fn conda_stem_keeps_only_file_stem() {
         assert_eq!(conda_stem("envs/fastqc.yaml"), "fastqc");
@@ -497,8 +528,10 @@ mod tests {
 
     #[test]
     fn derive_meta_from_gallery_05() {
-        let cfg = config("../../examples/gallery/05_conda_environments.oxoflow");
-        let meta = derive_meta(Path::new("05_conda_environments.oxoflow"), &cfg);
+        let meta = meta(
+            "05_conda_environments.oxoflow",
+            "../../examples/gallery/05_conda_environments.oxoflow",
+        );
 
         assert_eq!(meta["name"], "environment-showcase");
         assert_eq!(meta["version"], "1.0.0");
@@ -523,8 +556,10 @@ mod tests {
 
     #[test]
     fn derive_meta_from_gallery_13() {
-        let cfg = config("../../examples/gallery/13_simple_variant_calling.oxoflow");
-        let meta = derive_meta(Path::new("13_simple_variant_calling.oxoflow"), &cfg);
+        let meta = meta(
+            "13_simple_variant_calling.oxoflow",
+            "../../examples/gallery/13_simple_variant_calling.oxoflow",
+        );
 
         assert_eq!(meta["name"], "simple-variant-calling");
         // singularity images count as container tools ("docker://" stripped).
@@ -542,8 +577,10 @@ mod tests {
 
     #[test]
     fn derive_meta_config_details() {
-        let cfg = config("../../examples/gallery/13_simple_variant_calling.oxoflow");
-        let meta = derive_meta(Path::new("13_simple_variant_calling.oxoflow"), &cfg);
+        let meta = meta(
+            "13_simple_variant_calling.oxoflow",
+            "../../examples/gallery/13_simple_variant_calling.oxoflow",
+        );
 
         assert_eq!(
             meta["config"],
@@ -602,7 +639,7 @@ mod tests {
         )
         .unwrap();
         let cfg = WorkflowConfig::from_file(&path).unwrap();
-        let meta = derive_meta(&path, &cfg);
+        let meta = derive_meta(&path, &cfg, &std::collections::BTreeMap::new());
         let keys = meta["config_keys"].as_array().unwrap();
         assert_eq!(keys.len(), 2, "{keys:?}");
         let names: Vec<&str> = keys.iter().filter_map(|k| k.as_str()).collect();
@@ -640,23 +677,55 @@ mod tests {
         )
         .unwrap();
         let cfg = WorkflowConfig::from_file(&path).unwrap();
-        let meta = derive_meta(&path, &cfg);
+        let meta = derive_meta(&path, &cfg, &std::collections::BTreeMap::new());
         assert_eq!(meta["resources"]["max_threads"], 4);
         assert_eq!(meta["resources"]["max_memory"], "8G");
     }
 
     #[test]
     fn derive_meta_config_empty_when_no_keys() {
-        let cfg = config("../../examples/gallery/05_conda_environments.oxoflow");
-        let meta = derive_meta(Path::new("05_conda_environments.oxoflow"), &cfg);
+        let meta = meta(
+            "05_conda_environments.oxoflow",
+            "../../examples/gallery/05_conda_environments.oxoflow",
+        );
 
         assert_eq!(meta["config"], json!([]));
     }
 
     #[test]
+    fn derive_meta_config_description_from_comments() {
+        let meta = meta(
+            "16_16s_qiime2_amplicon.oxoflow",
+            "../../examples/gallery/16_16s_qiime2_amplicon.oxoflow",
+        );
+
+        // `classifier` carries a 4-line comment block (joined with spaces);
+        // uncommented keys omit the field entirely.
+        let records = meta["config"].as_array().unwrap();
+        let classifier = records
+            .iter()
+            .find(|record| record["key"] == "classifier")
+            .unwrap();
+        assert_eq!(
+            classifier["description"],
+            "Optional: pre-trained classifier for the target 16S region \
+             (e.g. silva-138-99-515-806-nb-classifier.qza). Set via \
+             `oxo-flow run wf.oxoflow classifier=/path/to/classifier.qza`; \
+             without it, skip the classify step or train a classifier first."
+        );
+        let trim_left_f = records
+            .iter()
+            .find(|record| record["key"] == "trim_left_f")
+            .unwrap();
+        assert!(trim_left_f.get("description").is_none());
+    }
+
+    #[test]
     fn derive_meta_config_used_by_when_expressions() {
-        let cfg = config("../../examples/gallery/11_conditional_workflow.oxoflow");
-        let meta = derive_meta(Path::new("11_conditional_workflow.oxoflow"), &cfg);
+        let meta = meta(
+            "11_conditional_workflow.oxoflow",
+            "../../examples/gallery/11_conditional_workflow.oxoflow",
+        );
 
         // `when` conditions use the brace-less `config.<key>` form and must
         // count as usage alongside `{config.<key>}` in shells and I/O paths.
