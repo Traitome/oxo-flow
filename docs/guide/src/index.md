@@ -37,7 +37,7 @@ oxo-flow is a high-performance workflow engine built from the ground up in Rust 
 |---|---|
 | **DAG engine** | Automatic dependency resolution, topological sorting, cycle detection, and parallel execution groups |
 | **Environment management** | First-class support for 8 backends: conda, mamba, pixi, docker, singularity, venv, system, HPC modules — per rule |
-| **Reporting** | Generate structured HTML, JSON, and PDF reports with Tera templates for clinical and research use |
+| **Reporting** | Generate structured HTML, JSON, Markdown, and PDF reports from checkpoint data — execution truth, failure diagnosis, and file checksums |
 | **Web API** | Built-in REST API (axum-based) for building, validating, and monitoring workflows remotely |
 | **Container packaging** | Package entire workflows into Docker or Singularity images for portable, reproducible execution |
 | **Cluster backends** | Submit jobs to SLURM, PBS, SGE, and LSF clusters with resource-aware scheduling |
@@ -49,7 +49,7 @@ oxo-flow is a high-performance workflow engine built from the ground up in Rust 
 
 **Bioinformaticians** who build and maintain analysis pipelines — oxo-flow gives you a faster, type-safe workflow engine with clear error messages, reproducibility guarantees, and no external runtime dependency.
 
-**Clinical laboratories** running accredited genomics workflows — the reporting system produces structured, auditable reports, and container packaging ensures reproducibility across environments.
+**Research laboratories and core facilities** running genomics workflows — the reporting system produces structured, auditable reports (engine version, workflow checksum, checkpoint provenance), and container packaging ensures reproducibility across environments.
 
 **Researchers** who need reproducible science — every workflow execution is deterministic, and environments are locked per rule so results are the same on any machine.
 

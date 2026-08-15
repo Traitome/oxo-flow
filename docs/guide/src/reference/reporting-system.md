@@ -1,6 +1,10 @@
 # Reporting System
 
-oxo-flow includes a modular report generation system designed for both research and clinical use. Reports are structured documents built from composable sections.
+oxo-flow includes a modular report generation system for research use.
+Reports are structured documents built from composable sections; the
+report itself is an audit-trail anchor (engine version, workflow file
+sha256, checkpoint location) but generates no clinical data — the
+clinical-compliance section is a static capability statement only.
 
 ---
 
@@ -108,6 +112,7 @@ The HTML output includes:
 - Table of contents generated from section headings
 - Styled tables and key-value displays
 - Print-friendly CSS
+- Accessible landmarks (skip link, `<main>`, `th scope`), WCAG-AA status colors, and HTML-escaped user content (XSS-safe)
 
 ### JSON
 
@@ -190,14 +195,18 @@ Configure reports in the `.oxoflow` file:
 
 ```toml
 [report]
-template = "clinical"
-format = ["html", "json"]
-sections = ["summary", "variants", "quality"]
+sections = ["universal", "workflow-info", "commands", "failure-diagnosis"]
 ```
+
+`[report].sections` filters which sections are included, by generator
+name. Available names: `universal`, `execution-status`,
+`failure-diagnosis`, `clinical-compliance`, `workflow-info`, `commands`,
+`file-manifest`, `environment`, `provenance`, `task-summary` — enumerable
+at runtime with `oxo-flow report WF --list-sections`.
 
 ### Templates
 
-The core library provides a [Tera](https://tera.netlify.app/)-based template engine pre-loaded with one built-in template, `report.html`; custom templates can be registered via `add_template`. The `[report].template` and `[report].format` fields are parsed from the `.oxoflow` file, and `[report].sections` filters which sections are included. The CLI `report` command currently renders via `Report::to_html()` / `to_json()` / `to_pdf()` and does not apply `[report].template`.
+The core library provides a [Tera](https://tera.netlify.app/)-based template engine pre-loaded with one built-in template, `report.html`; custom templates can be registered via `add_template`. The CLI `report` command renders via `Report::to_html()` / `to_json()` / `to_markdown()` / `to_pdf()` and does not apply `[report].template` yet — `[report].template` and `[report].format` are parsed but setting them makes the command warn (or fail under `--strict`).
 
 ## See Also
 
