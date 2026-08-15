@@ -353,16 +353,15 @@ Configure report generation behavior. Reports are built by a pluggable section s
 
 ```toml
 [report]
-template = "clinical"
-format = ["html", "json"]
+template = "report.html"
 sections = ["universal", "workflow-info", "commands", "clinical-compliance"]
 ```
 
 | Field | Type | Description |
 |---|---|---|
-| `template` | String | Report template name |
-| `format` | Array | Output formats to generate |
-| `sections` | Array | Report sections to include. If empty (or omitted), all applicable generators run. Available built-in IDs: `universal`, `execution-status`, `clinical-compliance`, `workflow-info`, `commands`, `file-manifest`, `environment` |
+| `template` | String | Report template: the built-in name `"report.html"`, or a template file path (workflow directory first, then cwd). Applies to HTML output only; a render failure warns and falls back to the default renderer |
+| `format` | Array | Parsed but **not supported yet** — setting it makes `report` warn (or fail under `--strict`); select the output format with `-f` instead |
+| `sections` | Array | Report sections to include. If empty (or omitted), all applicable generators run. Available built-in IDs: `universal`, `execution-status`, `clinical-compliance`, `workflow-info`, `commands`, `file-manifest`, `environment`, `metrics`, `sample-matrix`, `provenance`, `task-summary` |
 
 ### How Sections Work
 

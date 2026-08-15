@@ -56,6 +56,9 @@ A generated report includes:
 | **Workflow Information** | Name, version, total rules, detected domain, `[config]` variables |
 | **Commands** | The commands that actually ran (expanded); declared templates with an explicit fallback label when no execution record exists |
 | **File Manifest** | Real files: checkpoint-recorded inputs (path, size, mtime) and outputs (sha256 + on-disk size/mtime) |
+| **Metrics** | QC metrics parsed from real tool outputs under the workdir (fastp, flagstat, STAR, featureCounts, bcftools, kraken2), one subsection per tool × sample, with Pass/Warn/Fail flags — hidden when nothing parses |
+| **Sample Matrix** | Rule × sample status grid from the checkpoint's expanded instance names — hidden without a checkpoint or sample definitions |
+| **Resource Accounting** | Cluster accounting imported from an sacct CSV via `--acct` (Rule/State/Elapsed/CPU Time/Max RSS) |
 | **Environment** | Engine version, platform, and the environments the workflow's rules declare |
 | **Provenance** | Engine version, workflow file sha256, checkpoint location |
 | **Task Summary** | Per-rule table of tasks, types, inputs, outputs, environments, and resources |
@@ -76,22 +79,40 @@ Add a `[report]` section to your workflow file to filter report sections:
 sections = ["universal", "workflow-info", "commands", "failure-diagnosis"]
 ```
 
-> **Note — partial support**: of the three fields, only `sections` is
-> currently consumed — it filters which registered sections the report
-> includes, by generator **name** (`universal`, `execution-status`,
-> `failure-diagnosis`, `clinical-compliance`, `workflow-info`, `commands`,
-> `file-manifest`, `environment`, `provenance`, `task-summary`).
-> `template` and `format` are parsed but not yet supported: setting them
-> makes the command warn (or fail under `--strict`) instead of silently
-> ignoring them. Output formats are selected via the CLI `-f` flag.
+> **Note — partial support**: of the three fields, `sections` filters
+> which registered sections the report includes, by generator **name**
+> (`universal`, `execution-status`, `failure-diagnosis`,
+> `clinical-compliance`, `workflow-info`, `commands`, `file-manifest`,
+> `environment`, `metrics`, `sample-matrix`, `provenance`,
+> `task-summary`). `template` is **consumed** (see below); `format` is
+> parsed but still unsupported: setting it makes the command warn (or fail
+> under `--strict`) instead of silently ignoring it — output formats are
+> selected via the CLI `-f` flag.
 
 ### Fields
 
 | Field | Type | Description |
 |---|---|---|
-| `template` | String | Reserved for future template support — setting it warns |
-| `format` | Array | Reserved for future use — setting it warns |
+| `template` | String | Report template: the built-in name `"report.html"`, or a template file path (resolved relative to the workflow file's directory first, then the current directory). Applies to HTML output only; a render failure warns and falls back to the default renderer (exit 2 under `--strict`) |
+| `format` | Array | Parsed but not supported yet — setting it warns (or fails under `--strict`); use `-f` to select the output format |
 | `sections` | Array | Sections to include, by generator name (see above) |
+
+### Custom templates
+
+`[report].template` wires a custom [Tera](https://tera.netlify.app/)
+template into HTML rendering:
+
+```toml
+[report]
+template = "report.html"        # the built-in template (the default)
+# template = "my_report.tera"   # or a file: workflow dir first, then cwd
+```
+
+The scaffolded `report-template.tera` (from
+`oxo-flow report --init-template`) is a good starting point; the built-in
+template registers under a `.html`-suffixed name so `{{ variables }}` are
+HTML-escaped exactly like the default. With `-f json`/`-f md`/`-f pdf` the
+template is skipped with a note — it applies to HTML output only.
 
 ---
 
@@ -181,6 +202,43 @@ processing:
 ```bash
 oxo-flow report pipeline.oxoflow -f pdf-command
 ```
+
+---
+
+## R-friendly Export (`--r-data`)
+
+`--r-data <DIR>` writes two TSV files for downstream R analysis (in
+addition to the report itself):
+
+```bash
+oxo-flow report --run results/experiment1 --r-data analysis/
+# analysis/sample_table.tsv   sample  group
+# analysis/metrics.tsv        rule  wall_time_secs  max_memory_mb  status
+```
+
+`sample_table.tsv` maps every sample to its group (from `[[sample_groups]]`
+and `[[pairs]]`); `metrics.tsv` has one row per rule with wall time, peak
+memory, and status (`success` / `failed` / `-`). Without a checkpoint the
+files carry headers only, with a note explaining why. Values are
+TSV-sanitized (tabs and newlines replaced) so names can never break the
+column layout.
+
+---
+
+## Automatic Snapshots
+
+Every `oxo-flow run` / `oxo-flow resume` automatically writes a JSON
+report snapshot after the run — no reporting step needed:
+
+- `.oxo-flow/reports/report-<UTC timestamp>.json` — the full report data
+  model (a `-N` suffix when two snapshots land in the same second)
+- `.oxo-flow/reports/index.json` — a JSON array of
+  `{generated_at, workflow, checkpoint, report}` entries, sorted by
+  `generated_at`; the last entry is the newest snapshot
+
+Disable the behavior with `--no-report-snapshot` (on `run` or `resume`).
+Snapshot failures are warnings — a reporting hiccup never fails a run.
+`report`'s own auto-discovered output lands in the same directory.
 
 ---
 

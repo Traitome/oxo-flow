@@ -47,6 +47,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--ai-max-retries` | — | — | Maximum AI retries (overrides `[ai]` config) |
 | `--samples` | — | `LIST` | Run only a subset of samples: `first:N` (pilot), explicit names, or `ready` (samples whose entry inputs are complete). Repeatable, comma-separated. Filters `[[sample_groups]]`, `sample_pattern` discovery, and `[[pairs]]`. Mutually exclusive with `--sample` |
 | `--rerun` | — | — | Force re-execution of this run's rules (ignore up-to-date checks). Checkpoint records for rules outside this run are kept |
+| `--no-report-snapshot` | — | — | Skip the automatic report snapshot written after the run (see [Report snapshots](#report-snapshots)); `resume` has the same flag |
 | `--verbose` | `-v` | — | Enable debug-level logging |
 
 ---
@@ -355,6 +356,23 @@ oxo-flow automatically persists execution state to a **checkpoint file** after e
 By default, checkpoints are saved in a hidden `.oxo-flow/` directory located in the same folder as the workflow file.
 
 - **Filename**: `checkpoint.json` (the name is always the same regardless of workflow name)
+
+### Report snapshots
+
+After every run (and resume) — unless `--no-report-snapshot` is given —
+oxo-flow writes a JSON report snapshot of the final checkpoint:
+
+- `.oxo-flow/reports/report-<UTC timestamp>.json` — the full report data
+  model, so a run leaves a machine-readable report behind with no
+  reporting step needed (a `-N` suffix is used when two snapshots land in
+  the same second)
+- `.oxo-flow/reports/index.json` — a JSON array of
+  `{generated_at, workflow, checkpoint, report}` entries, kept sorted by
+  `generated_at`; the last entry is the newest snapshot
+
+Snapshot failures are warnings — a reporting hiccup never fails a run.
+`oxo-flow report` with no `-o` writes auto-discovered reports into the
+same `.oxo-flow/reports/` directory.
 
 ### Config changes and precise invalidation
 

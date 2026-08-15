@@ -10,7 +10,7 @@
 //! - **Environment management**: First-class support for conda, pixi, docker, singularity, venv, and HPC modules
 //! - **Wildcard expansion**: `{sample}` pattern substitution with regex constraints and automatic discovery
 //! - **Resource scheduling**: CPU, memory, GPU-aware job scheduling with resource estimation hints
-//! - **Report generation**: Modular, clinical-grade HTML/JSON reporting
+//! - **Report generation**: Modular HTML/JSON/Markdown reporting from execution truth — failure diagnosis, benchmark metrics, QC metrics parsed from tool outputs, and checkpoint-verified file manifests (no clinical data is generated)
 //! - **Container packaging**: Package workflows into portable Docker/Singularity images
 //! - **Checkpoint & lineage**: Persistent checkpoint state, data provenance, and output integrity verification
 //! - **Multi-omics ready**: Format hints, metadata fields, and reference database tracking for any omics workflow

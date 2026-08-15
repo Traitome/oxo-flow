@@ -206,7 +206,51 @@ at runtime with `oxo-flow report WF --list-sections`.
 
 ### Templates
 
-The core library provides a [Tera](https://tera.netlify.app/)-based template engine pre-loaded with one built-in template, `report.html`; custom templates can be registered via `add_template`. The CLI `report` command renders via `Report::to_html()` / `to_json()` / `to_markdown()` / `to_pdf()` and does not apply `[report].template` yet — `[report].template` and `[report].format` are parsed but setting them makes the command warn (or fail under `--strict`).
+The core library provides a [Tera](https://tera.netlify.app/)-based
+template engine pre-loaded with one built-in template, `report.html`;
+custom templates can be registered via `add_template`. The CLI `report`
+command applies `[report].template` when rendering **HTML output**: the
+value `"report.html"` selects the built-in template, anything else is a
+template file path resolved relative to the workflow file's directory
+first, then the current directory. A render failure warns and falls back
+to the default renderer (exit 2 under `--strict`). `[report].format`
+remains unsupported — setting it makes the command warn (or fail under
+`--strict`); the output format is selected with `-f`.
+
+### Metrics protocol
+
+QC metrics are parsed from **real tool output files** found under the run's
+working directory (the checkpoint-recorded workdir, else the workflow
+file's directory), not fabricated from templates. A recursive scanner
+(1 MiB per-file cap, depth 8, no symlinks, dot-directories skipped,
+deterministic order) classifies filenames by suffix and dispatches to one
+of six adapters in `report_metrics`:
+
+- `fastp` (`*.fastp.json`), `flagstat` (`*.flagstat`,
+  `*.flagstat.txt`), `STAR` (`*Log.final.out`), `featureCounts`
+  (`*.summary`), `bcftools` (`*.bcftools.stats`), `kraken2`
+  (`*.kraken2.report`, `*.kraken.report`)
+
+Every adapter returns metrics in a stable order; each metric carries an
+optional QC flag from fixed thresholds (e.g. fastp `q30_rate` Pass ≥ 0.85 /
+Warn ≥ 0.75, STAR `uniquely_mapped_pct` Pass ≥ 70 / Warn ≥ 60, kraken2
+`unclassified_rate` Pass ≤ 20 / Warn ≤ 40), or `None` for informational
+values. Files that match a pattern but fail to parse are counted in a Scan
+Notes subsection — a scanner that hides its gaps would look like full
+coverage. The `metrics` section and the checkpoint-derived `sample-matrix`
+section (rule × sample success/failure grid from real expanded instance
+names) are both hidden when they have no data.
+
+### Benchmarks honesty
+
+The Benchmarks table's CPU column reports **sampled** CPU seconds: the
+executor's sampler reads each rule process's CPU time (all its threads) at
+200 ms ticks; child processes are not accumulated. `-` means the sampler
+never observed the process (very short rules, cluster executors, legacy
+checkpoints). Peak memory is sampled peak RSS over the same ticks. The
+values are measurements of a live process, not scheduler allocations, so
+they are documented — here and in the `report` command reference — as
+sampled rather than exact.
 
 ## See Also
 

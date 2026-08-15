@@ -326,8 +326,9 @@ conda = "envs/vep.yaml"
 
 [report]
 sections = ["universal", "execution-status", "failure-diagnosis", "workflow-info", "commands", "file-manifest", "environment", "provenance", "task-summary"]
-# template/format are reserved for future template support — setting them
-# makes `report` warn (see docs/guide/src/commands/report.md)
+# [report].template is consumed for HTML output ("report.html" built-in or a
+# template file path); [report].format is still unsupported — `report` warns
+# when it is set (see docs/guide/src/commands/report.md)
 ```
 
 ### Sample Expansion
