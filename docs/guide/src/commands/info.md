@@ -35,7 +35,7 @@ oxo-flow info [OPTIONS] <WORKFLOW>
 ```json
 {
   "name": "simple-variant-calling",
-  "version": "1.0.0",
+  "version": "0.13.0",
   "rule_count": 6,
   "tools": ["alignment", "fastp", "gatk", "qc"],
   "resources": { "max_threads": 16, "max_memory": "32G" },
@@ -83,7 +83,7 @@ oxo-flow info --format text workflow/rnaseq.oxoflow
 ```
 
 ```
-Workflow: rnaseq v1.0.0
+Workflow: rnaseq v0.13.0
 Rules: 44
 Config keys: fasta = refs/genome.fa, reads_dir = test/fixtures/raw, ...
 ```

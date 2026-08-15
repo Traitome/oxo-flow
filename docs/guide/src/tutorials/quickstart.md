@@ -84,7 +84,7 @@ oxo-flow dry-run my-pipeline.oxoflow
 ```
 
 ```
-oxo-flow 0.12.0 — Bioinformatics Pipeline Engine
+oxo-flow 0.13.0 — Bioinformatics Pipeline Engine
 DAG: (dry-run) 2 rules would execute
   1. create_data
      threads=2
@@ -110,7 +110,7 @@ oxo-flow run my-pipeline.oxoflow
 ```
 
 ```
-oxo-flow 0.12.0 — Bioinformatics Pipeline Engine
+oxo-flow 0.13.0 — Bioinformatics Pipeline Engine
 DAG: 2 rules in execution order
   1. create_data
   2. transform
@@ -159,7 +159,7 @@ oxo-flow graph my-pipeline.oxoflow
 ```
 
 ```text
-oxo-flow 0.12.0 — Bioinformatics Pipeline Engine
+oxo-flow 0.13.0 — Bioinformatics Pipeline Engine
 ┌──────────────────────────────────────────────┐
 │  Workflow DAG: 2 rules, 1 dependencies       │
 │  Depth: 2, Width: 1, Critical path: 2 steps  │
