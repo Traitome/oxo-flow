@@ -6,8 +6,8 @@ test.describe('Real-World Bioinformatics Scenarios', () => {
 
   test('first-time user: dashboard → create pipeline → validate → view DAG', async ({ page, request }) => {
     await page.goto('/');
-    // Should see the main dashboard
-    await expect(page.locator('h1')).toContainText('Command Center');
+    // Task-oriented dashboard (issue #82 P1-7)
+    await expect(page.locator('h1')).toContainText('What do you want to do?');
 
     // Navigate to pipeline editor
     await page.goto('/editor');

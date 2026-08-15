@@ -121,7 +121,7 @@ pub async fn rate_limit_middleware(request: Request<axum::body::Body>, next: Nex
             .into_response();
     };
 
-    // Derive client key: X-Forwarded-For > X-Real-IP > fallback
+    // Derive client key: X-Forwarded-For > X-Real-IP > fallback.
     let key = request
         .headers()
         .get("x-forwarded-for")
@@ -136,6 +136,14 @@ pub async fn rate_limit_middleware(request: Request<axum::body::Body>, next: Nex
                 .map(|s| s.to_string())
         })
         .unwrap_or_else(|| "unknown".to_string());
+
+    // Explicit test/dev escape hatch (Playwright webServer sets it): the
+    // browser e2e suite legitimately exceeds the 100 req/min budget from
+    // localhost and was otherwise throttled into 52/63 failures. NOT for
+    // production — brute-force protection is the point of this limiter.
+    if std::env::var("OXO_FLOW_DISABLE_RATE_LIMIT").as_deref() == Ok("1") {
+        return next.run(request).await;
+    }
 
     if let Err(retry_after) = limiter.check_rate_limit(&key) {
         let body = RateLimitResponse {

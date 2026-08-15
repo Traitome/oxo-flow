@@ -12,8 +12,10 @@ test.describe('Browser UI Interaction Tests', () => {
     const statusDot = page.locator('#header-status');
     await expect(statusDot).toBeVisible({ timeout: 5000 });
 
-    // Should show "Command Center" heading
-    await expect(page.locator('h1')).toContainText('Command Center');
+    // Task-oriented heading (issue #82 P1-7: the old "Command Center"
+    // hero was replaced by the three entry cards).
+    await expect(page.locator('h1')).toContainText('What do you want to do?');
+    await expect(page.locator('.entry-card').first()).toBeVisible();
 
     // Footer should show license info
     await expect(page.locator('.app-footer')).toBeVisible();
@@ -22,6 +24,7 @@ test.describe('Browser UI Interaction Tests', () => {
   // ── Editor UI Interactions ──
 
   test('editor shows validation result after TOML input', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('oxo_editor_mode', 'canvas'));
     await page.goto('/editor');
     await page.waitForTimeout(3000);
 

@@ -74,11 +74,13 @@ export default function Layout() {
       .catch(() => { setUserName(null); setUserRole(null); });
   }, []);
 
-  // Role-trimmed navigation (issue #82 P1-15): guests/viewers see the core
-  // flow only; the backend independently enforces 403s on everything else.
+  // Role-trimmed navigation (issue #82 P1-15): authenticated viewers see
+  // the core flow only; guests — including the single-user operator in
+  // personal mode — see the full nav (the backend enforces 403s).
   const visibleNav = nav.filter((item) => {
     if (!item.roles) return true;
-    return userRole !== null && item.roles.includes(userRole);
+    if (userRole === null) return true;
+    return item.roles.includes(userRole);
   });
 
   const [serverStatus, setServerStatus] = useState<ServerStatus>('checking');

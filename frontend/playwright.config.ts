@@ -23,6 +23,7 @@ export default defineConfig({
     {
       command: 'cargo run -p oxo-flow-web -- --port 3000',
       cwd: '../',
+      env: { OXO_FLOW_DISABLE_RATE_LIMIT: '1' },
       port: 3000,
       reuseExistingServer: true,
       timeout: 60000,
