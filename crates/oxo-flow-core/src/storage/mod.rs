@@ -134,22 +134,44 @@ pub struct RemoteStat {
 // ---------------------------------------------------------------------------
 
 /// Deterministic local path for a staged remote **input**.
-pub fn staged_path(workdir: &Path, path: &StoragePath) -> PathBuf {
-    workdir
+///
+/// The key maps into a local tree, so components that could escape it are
+/// rejected outright: a leading slash (Path::join would treat the key as
+/// absolute and drop the staging prefix) and `..` segments.
+pub fn staged_path(workdir: &Path, path: &StoragePath) -> Result<PathBuf> {
+    Ok(workdir
         .join(".oxo-flow/staged/in")
         .join(path.scheme.as_str())
         .join(path.bucket.as_deref().unwrap_or("_"))
-        .join(&path.key)
+        .join(stage_key_components(&path.key)?))
 }
 
 /// Deterministic local path where a rule writes a remote **output** before
-/// the engine uploads it.
-pub fn upload_stage_path(workdir: &Path, path: &StoragePath) -> PathBuf {
-    workdir
+/// the engine uploads it. Same key safety as [`staged_path`].
+pub fn upload_stage_path(workdir: &Path, path: &StoragePath) -> Result<PathBuf> {
+    Ok(workdir
         .join(".oxo-flow/staged/out")
         .join(path.scheme.as_str())
         .join(path.bucket.as_deref().unwrap_or("_"))
-        .join(&path.key)
+        .join(stage_key_components(&path.key)?))
+}
+
+/// Validate a remote key for local staging: no leading slash, no `..`
+/// components (a relative key is a tree path under the staging root).
+fn stage_key_components(key: &str) -> Result<PathBuf> {
+    let mut out = PathBuf::new();
+    for comp in key.trim_start_matches('/').split('/') {
+        if comp.is_empty() || comp == "." {
+            continue;
+        }
+        if comp == ".." {
+            return Err(OxoFlowError::Config {
+                message: format!("remote key '{key}' contains '..' and cannot be staged locally"),
+            });
+        }
+        out.push(comp);
+    }
+    Ok(out)
 }
 
 /// Sidecar cache metadata for a staged download: `{dest}.meta.json`.
@@ -453,5 +475,52 @@ mod tests {
             .await
             .unwrap();
         assert!(stat.is_none());
+    }
+
+    #[test]
+    fn staged_path_maps_keys_inside_the_staging_tree() {
+        // Arrange
+        let workdir = std::path::Path::new("/tmp/wd");
+        let sp = StoragePath::parse("s3://bucket/data/sample1.fastq.gz");
+
+        // Act
+        let dest = staged_path(workdir, &sp).unwrap();
+
+        // Assert — leading-slash-free keys land under .oxo-flow/staged/in.
+        assert_eq!(
+            dest,
+            std::path::Path::new("/tmp/wd/.oxo-flow/staged/in/s3/bucket/data/sample1.fastq.gz")
+        );
+    }
+
+    #[test]
+    fn staged_path_keeps_leading_slash_keys_inside_the_tree() {
+        // Arrange — "s3://b//etc/foo" parses to key "/etc/foo"; a raw join
+        // would treat it as absolute and drop the staging prefix entirely.
+        let workdir = std::path::Path::new("/tmp/wd");
+
+        // Act
+        let dest = staged_path(workdir, &StoragePath::parse("s3://b//etc/foo")).unwrap();
+
+        // Assert — the key is trimmed into the staging subtree.
+        assert_eq!(
+            dest,
+            std::path::Path::new("/tmp/wd/.oxo-flow/staged/in/s3/b/etc/foo")
+        );
+    }
+
+    #[test]
+    fn staged_path_rejects_dotdot_key_components() {
+        // Arrange — a '..' component climbs out of the tree on real fs
+        // operations and cannot be staged safely.
+        let workdir = std::path::Path::new("/tmp/wd");
+        for raw in ["s3://b/a/../../etc", "s3://b/../escape"] {
+            // Act / Assert
+            assert!(
+                staged_path(workdir, &StoragePath::parse(raw)).is_err(),
+                "key {raw:?} must be rejected"
+            );
+            assert!(upload_stage_path(workdir, &StoragePath::parse(raw)).is_err());
+        }
     }
 }

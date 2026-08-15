@@ -150,7 +150,7 @@ pub async fn stage_remote_io(
         if expanded.contains('{') {
             return Err(remote_wildcard_error("output", &pattern));
         }
-        let local = crate::storage::upload_stage_path(workdir, &storage_path);
+        let local = crate::storage::upload_stage_path(workdir, &storage_path)?;
         if let Some(parent) = local.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
@@ -252,7 +252,7 @@ mod tests {
         async fn stage(&self, path: &StoragePath, workdir: &Path) -> Result<std::path::PathBuf> {
             self.stage_calls
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let dest = crate::storage::staged_path(workdir, path);
+            let dest = crate::storage::staged_path(workdir, path)?;
             let (content, etag) = self
                 .objects
                 .lock()

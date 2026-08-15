@@ -265,7 +265,7 @@ impl StorageBackend for S3Storage {
     /// remote key structure under `workdir`.
     async fn stage(&self, path: &StoragePath, workdir: &Path) -> Result<PathBuf> {
         let bucket = require_bucket(path)?;
-        let dest = crate::storage::staged_path(workdir, path);
+        let dest = crate::storage::staged_path(workdir, path)?;
         let stat = self
             .head(path)
             .await?
