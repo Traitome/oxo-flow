@@ -64,11 +64,11 @@ sudo dpkg -i target/release/bundle/deb/oxo-flow_*.deb
 oxo-flow serve --open
 ```
 
-## Windows (.msi)
+## Windows
 
-```bash
-cargo bundle --release --format msi
-```
+There is no Windows bundle yet — the release pipeline does not build one
+(`cargo-bundle`'s `msi` format requires a Windows host). Windows users
+run the Linux binaries under WSL2.
 
 ## Verification
 
@@ -94,6 +94,22 @@ tarballs (built by CI, not by hand):
 | `oxo-flow-<ver>-amd64.deb` | Debian / Ubuntu |
 | `oxo-flow-<ver>-x86_64.rpm` | RHEL / Fedora / CentOS |
 | `oxo-flow-<ver>-x86_64.AppImage` | any Linux distribution |
+| `oxo-flow-<ver>-<target>.tar.gz` | CLI binary, 8 targets (macOS ×2, Linux glibc/musl ×3 architectures) — for clusters, containers, and scripted installs |
+| `oxo-flow-web-<ver>-<target>.tar.gz` | Standalone web-server binary (no CLI subcommands) — for deployment hosts that only serve the UI |
+| `SHA256SUMS.txt` | Checksums for every asset above |
+
+### Install from a tarball
+
+```bash
+curl -LO https://github.com/Traitome/oxo-flow/releases/download/v0.12.0/oxo-flow-v0.12.0-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/Traitome/oxo-flow/releases/download/v0.12.0/SHA256SUMS.txt
+sha256sum -c SHA256SUMS.txt --ignore-missing   # verify before you run it
+tar xzf oxo-flow-v0.12.0-x86_64-unknown-linux-gnu.tar.gz
+sudo install -m 755 oxo-flow /usr/local/bin/oxo-flow
+```
+
+Pick the target that matches the machine: `gnu` for glibc distributions,
+`musl` for Alpine/static links, `armv7` for 32-bit ARM.
 
 ```bash
 # Linux one-liners

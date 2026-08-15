@@ -100,6 +100,19 @@ Pre-built binaries are available from the [GitHub Releases](https://github.com/T
     mv oxo-flow /usr/local/bin/  # Or another folder in your PATH
     ```
 
+**Verify the download** against `SHA256SUMS.txt` (published with every
+release):
+
+```bash
+curl -LO https://github.com/Traitome/oxo-flow/releases/download/v0.12.0/SHA256SUMS.txt
+sha256sum -c SHA256SUMS.txt --ignore-missing
+```
+
+**Other targets**: `gnu` builds need glibc, `musl` builds are
+statically linked (Alpine, containers), and `armv7` covers 32-bit ARM.
+Desktop users may prefer the `.deb` / `.rpm` / `.AppImage` /
+`.dmg` bundles — see [Desktop App Packaging](../how-to/desktop-app.md).
+
 ---
 
 ## Optional Dependencies

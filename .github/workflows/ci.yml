@@ -562,7 +562,7 @@ jobs:
         run: |
           mkdir -p artifacts/checksums
           cd artifacts
-          find . -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.dmg' -o -name '*.deb' \) -print0 \
+          find . -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.dmg' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) -print0 \
             | while IFS= read -r -d '' f; do
                 sha256sum "$f" | awk -v name="$(basename "$f")" '{print $1 "  " name}'
               done \
@@ -587,6 +587,8 @@ jobs:
             artifacts/**/*.zip
             artifacts/**/*.dmg
             artifacts/**/*.deb
+            artifacts/**/*.rpm
+            artifacts/**/*.AppImage
             artifacts/checksums/SHA256SUMS.txt
           draft: false
           prerelease: false
