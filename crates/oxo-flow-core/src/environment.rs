@@ -535,8 +535,9 @@ impl VenvBackend {
         requirements: Option<&str>,
     ) -> Result<String> {
         let reqs = requirements.unwrap_or("requirements.txt");
+        // POSIX `.` (not `source` — a bashism): setup commands run under sh.
         Ok(format!(
-            "python3 -m venv {spec} && source {spec}/bin/activate && pip install -r {reqs}"
+            "python3 -m venv {spec} && . {spec}/bin/activate && pip install -r {reqs}"
         ))
     }
 }
