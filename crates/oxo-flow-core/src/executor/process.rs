@@ -853,6 +853,28 @@ impl LocalExecutor {
             }
         }
 
+        // Create the log file's parent directory with the same expansion
+        // and failure semantics as output directories — `2> {log}` must
+        // not fail because `logs/` does not exist yet.
+        if let Some(log_pattern) = &rule.log {
+            let expanded = super::checkpoint::expand_config_in_path(log_pattern, wildcard_values);
+            let path = self.config.workdir.join(expanded);
+            if let Some(parent) = path.parent()
+                && !parent.as_os_str().is_empty()
+                && !parent.exists()
+            {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| OxoFlowError::Execution {
+                        rule: rule.name.clone(),
+                        message: format!(
+                            "failed to create log directory {}: {e}",
+                            parent.display()
+                        ),
+                    })?;
+            }
+        }
+
         self.ensure_environment_ready(&rule).await?;
         // check_resources waits for availability AND reserves atomically.
         self.check_resources(&rule).await?;
@@ -872,13 +894,17 @@ impl LocalExecutor {
         if let Some(ref pre_cmd) = rule.pre_exec {
             let rendered = render_shell_command(pre_cmd, &rule, wildcard_values);
             validate_shell_safety(&rendered)?;
-            let pre_result = Command::new("sh")
-                .arg("-c")
-                .arg(&rendered)
-                .current_dir(&self.config.workdir)
-                .envs(&rule.envvars)
-                .output()
-                .await;
+            let pre_child = spawn_rule_shell(&rendered, &self.config.workdir, &rule.envvars);
+            let pre_result = match pre_child {
+                Ok(child) => child.wait_with_output().await,
+                Err(e) => {
+                    self.release_resources(&rule).await;
+                    return Err(OxoFlowError::Execution {
+                        rule: rule.name.clone(),
+                        message: format!("failed to spawn pre_exec hook: {e}"),
+                    });
+                }
+            };
             match pre_result {
                 Ok(output) if !output.status.success() => {
                     self.release_resources(&rule).await;
@@ -926,19 +952,13 @@ impl LocalExecutor {
                 // orphaned. Timeout enforcement kills the rule's subtree instead
                 // (see timeout::kill_process_tree), so per-rule semantics are
                 // unchanged.
-                let child = Command::new("sh")
-                    .arg("-c")
-                    .arg(cmd)
-                    .current_dir(&self.config.workdir)
-                    .envs(&rule.envvars)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn();
-
-                let child = child.map_err(|e| OxoFlowError::Execution {
-                    rule: rule.name.clone(),
-                    message: format!("failed to spawn: {e}"),
-                })?;
+                let child =
+                    spawn_rule_shell(cmd, &self.config.workdir, &rule.envvars).map_err(|e| {
+                        OxoFlowError::Execution {
+                            rule: rule.name.clone(),
+                            message: format!("failed to spawn: {e}"),
+                        }
+                    })?;
 
                 let child_id = child.id();
 
@@ -1276,17 +1296,60 @@ pub fn build_execution_command(
     Some(base_cmd)
 }
 
+/// Spawn a rule command under `bash -c`, falling back to `sh -c` on
+/// systems without bash (minimal containers). Upstream workflows rely on
+/// bash features (process substitution `<(…)`, brace expansion) that
+/// POSIX `sh` rejects; the bare execution path (no conda/docker/singularity
+/// wrapping) must run under bash when available.
+///
+/// The fallback is logged once per process so operators can spot it.
+pub(super) fn spawn_rule_shell(
+    cmd: &str,
+    workdir: &std::path::Path,
+    envs: &HashMap<String, String>,
+) -> std::io::Result<tokio::process::Child> {
+    fn shell_command(
+        shell: &str,
+        cmd: &str,
+        workdir: &std::path::Path,
+        envs: &HashMap<String, String>,
+    ) -> tokio::process::Command {
+        let mut c = tokio::process::Command::new(shell);
+        c.arg("-c").arg(cmd).current_dir(workdir).envs(envs);
+        c.stdout(Stdio::piped()).stderr(Stdio::piped());
+        c
+    }
+    match shell_command("bash", cmd, workdir, envs).spawn() {
+        Ok(child) => Ok(child),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            warn_shell_fallback_once();
+            shell_command("sh", cmd, workdir, envs).spawn()
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Emit the bash→sh fallback warning at most once per process.
+fn warn_shell_fallback_once() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    if !WARNED.swap(true, Ordering::Relaxed) {
+        tracing::warn!("bash not found on PATH — falling back to sh -c for shell commands");
+    }
+}
+
 /// Execute a rendered rule hook (on_success / on_failure) in the rule's
 /// environment. Hooks are best-effort: their failure never changes the
 /// rule's own status (pre_exec is the exception and aborts the rule).
 async fn run_hook(cmd: &str, rule: &Rule, workdir: &std::path::Path) {
-    let result = Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
-        .current_dir(workdir)
-        .envs(&rule.envvars)
-        .output()
-        .await;
+    let child = match spawn_rule_shell(cmd, workdir, &rule.envvars) {
+        Ok(child) => child,
+        Err(e) => {
+            tracing::warn!(rule = %rule.name, error = %e, "failed to spawn rule hook");
+            return;
+        }
+    };
+    let result = child.wait_with_output().await;
     match result {
         Ok(output) if !output.status.success() => {
             tracing::warn!(
@@ -1309,6 +1372,22 @@ pub fn render_shell_command(
     wildcard_values: &HashMap<String, String>,
 ) -> String {
     let mut expanded = cmd.to_string();
+    // `{log}` resolves to the rule's log path with the same wildcard and
+    // config expansion as every other path (W004's suggestion was unwired
+    // before: `2> {log}` silently created a literal "{log}" file).
+    if let Some(log_path) = &rule.log {
+        // Recursing on the log path itself (or a log path referencing
+        // `{log}`) would loop forever — keep the literal instead.
+        let expanded_log = if cmd == log_path || log_path.contains("{log}") {
+            log_path.clone()
+        } else {
+            render_shell_command(log_path, rule, wildcard_values)
+        };
+        expanded = expanded.replace("{log}", &expanded_log);
+        // `{log[0]}` for snakemake ports (log is a scalar here, so the
+        // indexed form maps to the same path).
+        expanded = expanded.replace("{log[0]}", &expanded_log);
+    }
     let all_outputs = rule.output.to_vec();
     expanded = expanded.replace("{output}", &all_outputs.join(" "));
     for i in 0..rule.output.len() {
@@ -1345,9 +1424,37 @@ pub fn render_shell_command(
         expanded = expanded.replace(&format!("{{params.{key}}}"), &string_val);
     }
     for (key, value) in wildcard_values {
-        expanded = expanded.replace(&format!("{{{key}}}"), value);
+        expanded = expanded.replace(&format!("{{{key}}}"), &render_wildcard_value(value));
     }
     expanded
+}
+
+/// Normalize a wildcard value for shell interpolation.
+///
+/// Callers (CLI/web) stringify TOML config arrays as `["a", "b"]` literals;
+/// shells need the space-joined form (`a b`), matching the multi-value
+/// semantics of `{input}`. Scalar values pass through unchanged.
+fn render_wildcard_value(value: &str) -> String {
+    // Cheap guard: TOML array literals always start with '['.
+    if value.starts_with('[') {
+        let wrapped = format!("_x = {value}");
+        if let Ok(table) = toml::from_str::<toml::Table>(&wrapped)
+            && let Some(toml::Value::Array(items)) = table.get("_x")
+        {
+            let mut joined = String::new();
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    joined.push(' ');
+                }
+                match item {
+                    toml::Value::String(s) => joined.push_str(s),
+                    other => joined.push_str(&other.to_string()),
+                }
+            }
+            return joined;
+        }
+    }
+    value.to_string()
 }
 
 pub fn evaluate_condition(condition: &str, config_values: &HashMap<String, toml::Value>) -> bool {

@@ -1156,3 +1156,190 @@ async fn force_rules_bypasses_freshness_skip() {
 
     let _ = tokio::fs::remove_dir_all(&workdir).await;
 }
+
+// ── {log} placeholder (W004 was unwired: `2> {log}` created a literal
+//    "{log}" file) ────────────────────────────────────────────────────────
+
+#[test]
+fn render_shell_log_placeholder() {
+    let rule = Rule {
+        name: "test".to_string(),
+        output: vec!["out.txt".to_string()].into(),
+        shell: None,
+        log: Some("logs/run.log".to_string()),
+        ..Default::default()
+    };
+    let result = render_shell_command("echo hi 2> {log}", &rule, &HashMap::new());
+    assert_eq!(result, "echo hi 2> logs/run.log");
+}
+
+#[test]
+fn render_shell_log_indexed() {
+    let rule = Rule {
+        name: "test".to_string(),
+        output: vec!["out.txt".to_string()].into(),
+        log: Some("logs/run.log".to_string()),
+        ..Default::default()
+    };
+    let result = render_shell_command("echo hi 2> {log[0]}", &rule, &HashMap::new());
+    assert_eq!(result, "echo hi 2> logs/run.log");
+}
+
+#[test]
+fn render_shell_log_expands_sample_and_config() {
+    let rule = Rule {
+        name: "test".to_string(),
+        output: vec!["out.txt".to_string()].into(),
+        log: Some("logs/{sample}/{config.results_dir}/run.log".to_string()),
+        ..Default::default()
+    };
+    let mut values = HashMap::new();
+    values.insert("sample".to_string(), "S1".to_string());
+    values.insert("config.results_dir".to_string(), "results".to_string());
+    let result = render_shell_command("echo hi 2> {log}", &rule, &values);
+    assert_eq!(result, "echo hi 2> logs/S1/results/run.log");
+}
+
+#[test]
+fn render_shell_log_absent_keeps_placeholder() {
+    let rule = Rule {
+        name: "test".to_string(),
+        output: vec!["out.txt".to_string()].into(),
+        ..Default::default()
+    };
+    let result = render_shell_command("echo hi 2> {log}", &rule, &HashMap::new());
+    assert_eq!(result, "echo hi 2> {log}");
+}
+
+// ── array config values render space-joined, not as TOML literals ───────
+
+#[test]
+fn render_shell_config_array_joins_with_space() {
+    let rule = Rule {
+        name: "test".to_string(),
+        output: vec!["out.txt".to_string()].into(),
+        ..Default::default()
+    };
+    let mut values = HashMap::new();
+    // The CLI stringifies TOML arrays exactly in this TOML-literal form.
+    values.insert(
+        "config.files".to_string(),
+        "[\"a.fa\", \"b.fa\"]".to_string(),
+    );
+    let result = render_shell_command("cat {config.files} > {output[0]}", &rule, &values);
+    assert_eq!(result, "cat a.fa b.fa > out.txt");
+}
+
+#[test]
+fn render_shell_config_array_non_string_elements() {
+    let rule = Rule {
+        name: "test".to_string(),
+        output: vec!["out.txt".to_string()].into(),
+        ..Default::default()
+    };
+    let mut values = HashMap::new();
+    values.insert("config.ids".to_string(), "[1, 2]".to_string());
+    let result = render_shell_command("echo {config.ids}", &rule, &values);
+    assert_eq!(result, "echo 1 2");
+}
+
+#[test]
+fn render_shell_config_scalar_unchanged() {
+    let rule = Rule {
+        name: "test".to_string(),
+        output: vec!["out.txt".to_string()].into(),
+        ..Default::default()
+    };
+    let mut values = HashMap::new();
+    // Scalars — including strings that happen to look like TOML — pass
+    // through untouched (only array literals join).
+    values.insert("config.reference".to_string(), "/data/ref.fa".to_string());
+    values.insert("config.mode".to_string(), "1".to_string());
+    let result = render_shell_command("bwa mem {config.reference} {config.mode}", &rule, &values);
+    assert_eq!(result, "bwa mem /data/ref.fa 1");
+}
+
+// ── executor creates the log file's parent directory ────────────────────
+
+#[tokio::test]
+async fn execute_creates_log_parent_dir() {
+    let workdir = std::env::temp_dir().join(format!("oxo-logdir-test-{}", std::process::id()));
+    let _ = tokio::fs::remove_dir_all(&workdir).await;
+    let config = ExecutorConfig {
+        max_jobs: 1,
+        dry_run: false,
+        workdir: workdir.clone(),
+        keep_going: false,
+        retry_count: 0,
+        timeout: None,
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    let rule = Rule {
+        name: "log_dir_test".to_string(),
+        input: vec![].into(),
+        output: vec!["out/result.txt".to_string()].into(),
+        shell: Some("echo done > {output[0]} 2> {log}".to_string()),
+        log: Some("logs/sub/run.log".to_string()),
+        ..Default::default()
+    };
+    let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+    assert_eq!(record.status, JobStatus::Success);
+    assert!(
+        workdir.join("logs/sub/run.log").exists(),
+        "log file should have been created"
+    );
+    let _ = tokio::fs::remove_dir_all(&workdir).await;
+}
+
+// ── bash -c executor ────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn execute_bash_only_syntax_process_substitution() {
+    let config = ExecutorConfig {
+        max_jobs: 1,
+        dry_run: false,
+        workdir: std::env::temp_dir(),
+        keep_going: false,
+        retry_count: 0,
+        timeout: None,
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    // Process substitution `<(…)` is bash-only — dash (and bash running as
+    // sh) reject it with a syntax error.
+    let rule = make_rule("bash_psubst", "cat <(echo bash_psubst_ok)");
+    let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+    assert_eq!(record.status, JobStatus::Success);
+    let stdout = record.stdout.unwrap_or_default();
+    assert!(stdout.contains("bash_psubst_ok"), "stdout was: {stdout}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn spawn_rule_shell_falls_back_to_sh_when_bash_missing() {
+    // A PATH containing only a marker `sh` (no bash anywhere) must fall
+    // back to sh; the marker output proves which shell actually ran.
+    let tmp = std::env::temp_dir().join(format!("oxo-nobash-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    std::fs::write(
+        tmp.join("sh"),
+        "#!/bin/sh\necho ran_through_fallback_shell\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(tmp.join("sh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let envs = HashMap::from([("PATH".to_string(), tmp.to_string_lossy().into_owned())]);
+    let child =
+        super::process::spawn_rule_shell("echo fallback_ok", &std::env::temp_dir(), &envs).unwrap();
+    let output = child.wait_with_output().await.unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        stdout.contains("ran_through_fallback_shell"),
+        "expected the sh fallback to run, stdout was: {stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
