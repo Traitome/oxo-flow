@@ -183,6 +183,19 @@ fn submit_wrapper_captures_bare_job_ids() {
         "every rule instance must submit through the helper:\n{wrapper}"
     );
 
+    // The generated wrapper tracks ids in `declare -A`, which needs bash 4+;
+    // macOS ships bash 3.2 at /bin/bash. Skip only the live execution on such
+    // hosts — the static assertions above and the `bash -n` syntax check in
+    // the sibling test still pin the wrapper, and CI's bash 5 runs this path.
+    let probe = StdCommand::new("bash")
+        .args(["-c", "declare -A a"])
+        .output()
+        .unwrap();
+    if !probe.status.success() {
+        eprintln!("skipping live wrapper run: bash on PATH is too old for associative arrays");
+        return;
+    }
+
     // End-to-end through the mock scheduler: the wrapper is valid bash and
     // every rule reports a bare numeric id. NOTE: the mock's `sbatch` prints
     // its sentence to stderr and a bare id to stdout, so this run alone would
