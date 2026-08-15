@@ -236,9 +236,21 @@ oxo-flow run pipeline.oxoflow --profile cluster
 ```
 
 The profile's `[config]` table **fills in keys the workflow does not set
-itself** — values already present in the workflow are never overwritten.
-This lets one workflow carry per-environment fallback defaults (laptop,
-cluster, cloud). If the named profile file does not exist, `run` prints a
+itself** by default — values already present in the workflow are never
+overwritten. This lets one workflow carry per-environment fallback
+defaults (laptop, cluster, cloud). Declare `profile_mode = "override"`
+in the workflow's `[workflow]` section when a profile should instead
+*replace* workflow values (deep-merged: nested tables merge recursively,
+scalars and arrays are replaced) — the classic "cluster profile switches
+threads/memory" case:
+
+```toml
+[workflow]
+name = "rnaseq"
+profile_mode = "override"   # fill | override (default: fill)
+```
+
+If the named profile file does not exist, `run` prints a
 warning and proceeds with the workflow's own config.
 
 Cluster scheduler submission (SLURM, PBS, SGE, LSF) is configured

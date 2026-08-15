@@ -186,7 +186,14 @@ min_quality = "30"
 ```
 
 Values are TOML strings, integers, booleans, or arrays. String interpolation
-in rules uses `{config.key}` syntax.
+in rules uses `{config.key}` syntax; array values render as space-joined
+lists in the shell.
+
+Two keys are **engine-injected** (overridable only through their declaring
+tables): `config.samples_list` (all sample names, comma-joined) and
+`config.pairs_list` (all pair ids, comma-joined) — use them in
+`expand_inputs` to gather across samples or pairs without maintaining a
+parallel list by hand.
 
 ### Declarative Form (inline table)
 
@@ -294,6 +301,35 @@ description = "BWA index for alignment"
 | `threads` | Integer | No | CPU threads for the build command |
 | `memory` | String | No | Memory limit (e.g., `"64G"`) |
 | `description` | String | No | Human-readable description |
+
+### Built-in Builder Templates
+
+Instead of a handwritten `build` shell, name one of the built-in
+templates — the engine expands it into a canonical command (any string
+containing whitespace or shell syntax is treated as a handwritten
+command and passes through unchanged):
+
+| Template | Produces |
+|---|---|
+| `samtools_faidx` | `.fai` index |
+| `picard_dict` | `.dict` sequence dictionary |
+| `bwa_index` | BWA's five index files (`.amb/.ann/.bwt/.pac/.sa`; the prefix is derived from `output`) |
+| `star_index` | STAR genome directory (`output` = `--genomeDir`) |
+| `bismark_index` | Bismark `Bisulfite_Genome` directory (`source` = FASTA directory) |
+
+```toml
+[[references]]
+name = "genome_bwa"
+source = "refs/genome.fa"
+output = "refs/genome.fa.bwt"
+build = "bwa_index"
+threads = 8
+```
+
+Unknown template names, missing outputs, and duplicate reference names
+are rejected at `validate`. Additionally, every reference injects a
+keyed config value — `config.<name>` = its `output` — so rules consume
+the artifact as `{config.genome_bwa}` without repeating paths.
 
 ### Auto-Derivation from `reference_dir`
 
@@ -443,6 +479,7 @@ memory = "32G"
 | `retry_delay` | String | No | Delay between retries (e.g., `"5s"`, `"30s"`, `"2m"`) |
 | `temp_output` | Array | No | Temporary outputs cleaned up after downstream rules complete |
 | `temporary` | Boolean | No | Delete the rule's outputs after a fully successful run once every dependent has completed, recording a tombstone so a future run regenerates them on demand (leaf rules keep their outputs) |
+| `scratch` | Boolean | No | Execute in an isolated per-instance scratch directory: inputs render as absolute paths, declared outputs written there move back to the main workdir and are verified, and the scratch is removed on success (preserved with a path note on failure). Use for tools that write fixed filenames or pollute the workdir |
 | `protected_output` | Array | No | Outputs that must never be overwritten or deleted |
 | `tags` | Array | No | Categorization tags (e.g., `["qc", "alignment"]`) |
 | `shadow` | String | No | Shadow directory mode: `"minimal"`, `"shallow"`, or `"full"` |
@@ -813,6 +850,13 @@ temporary = true                             # Delete aligned/*.bam once all cal
 | `shadow` | String | — | Atomic execution mode: `"minimal"`, `"shallow"`, `"full"` |
 | `checkpoint` | Boolean | `false` | Enable checkpoint re-entry (requires `checkpoint_manifest`; the rule must not use `{sample}`/`{group}`) |
 
+**DAG edge inference** — edges form when a rule's `input` paths match
+another rule's `output` paths, for every input form: template paths,
+`expand_inputs` lists (each expanded concrete path), glob patterns
+(`raw/*.fastq.gz`), and directory inputs (every producer writing under
+that directory). `depends_on` remains available for ordering that files
+cannot express, and duplicate edges are deduplicated.
+
 ```toml
 [[rules]]
 name = "setup"
@@ -1059,7 +1103,12 @@ Built-in placeholders use the same syntax but have reserved meanings:
 | `{output.name}` | The output file named `name` from `named_output` |
 | `{threads}` | Thread count assigned to this rule |
 | `{memory}` | Memory allocation assigned to this rule |
+| `{log}` | Path of the rule's `log` field (`{sample}`/`{config.x}`-expanded; the parent directory is created automatically) |
 | `{config.*}` | Value from the `[config]` section (plain value, declared default, or CLI override) |
+
+**Array-valued `{config.*}`** — a `[config]` key holding an array renders
+as a space-joined list in the shell (`["a", "b"]` → `a b`), matching the
+`{input}` convention; iterate with `for x in {config.tools}`.
 
 **`{input}` vs `{input[N]}`** — both forms are equivalent when the array has a single entry (`{input}` joins all inputs with spaces; `{input[0]}` takes the first). Practical guidance:
 
@@ -1090,6 +1139,37 @@ shell = "bwa mem {input.reads1} {input.reads2} > {output.bam}"
 Any `{name}` pattern not matching a built-in placeholder is treated as a wildcard. oxo-flow expands these based on:
 1. **File discovery**: Scanning for matching files in the `input` path.
 2. **Explicit lists**: Defined in [`[[pairs]]`](#pairs-experiment-control-pairing-wc-01) or [`[[sample_groups]]`](#sample_groups-multi-sample-cohorts-wc-02).
+3. **Parameter lists**: Defined in [`[[values]]`](#values-parameter-fan-out-wc-03).
+
+## `[[values]]` — Parameter Fan-out (WC-03)
+
+`[[values]]` declares parameter lists that fan rules out the same way
+sample groups do — the oxo-flow equivalent of an upstream
+"for each assembler × binner" construct, without hardcoding one rule
+per combination:
+
+```toml
+[[values]]
+name = "assembler"
+values = ["spades", "megahit"]
+
+[[rules]]
+name = "assemble"
+input = ["reads/{sample}.fq"]
+output = ["assemblies/{assembler}/{sample}/contigs.fa"]
+shell = "{assembler} -o {output} {input}"
+```
+
+- Every rule referencing `{assembler}` (bare form) or `{values.assembler}`
+  (namespaced form) expands into one instance per value.
+- Multiple `[[values]]` tables form a cartesian product with each other
+  and with sample groups / pairs (deterministic order: the first table
+  varies slowest).
+- Instance names follow the existing convention:
+  `assemble_assembler_spades_batch_S1`.
+- Value groups must have unique names and must not collide with the
+  reserved wildcards (`sample`, `pair_id`, `experiment`, `control`,
+  `group`).
 
 ---
 

@@ -195,6 +195,25 @@ Status values: `run-never-completed`, `run-input-changed`,
 `run-config-changed`, `run-outputs-missing`, `run-cascaded`,
 `run-cascaded-upstream`, `skip`, `skip-when-condition`.
 
+`--json` also emits the **execution-plan surface** at the top level
+(`schema_version: 2`) — the structured mirror of the human stderr plan,
+for CI scripts and tooling that today grep the colored text:
+
+```json
+"plan": [
+  {"name": "trim_cohort_NA12891", "status": "run", "reason": "input changed",
+   "cascaded_from": null, "threads": 4, "memory": "16G",
+   "environment": "conda:trim", "command": "trimmomatic PE …", "inputs": […], "outputs": […]}
+],
+"summary": {"would_execute": 12, "will_skip": 0, "total_rules": 12},
+"sample_groups": [{"name": "cohort", "samples": […]}],
+"pairs": [{"pair_id": "…", "experiment": "…", "control": "…"}]
+```
+
+`status` ∈ `run | skip | rerun` matches the stderr bracket prefix;
+`reason` carries the status text. The human stderr output is unchanged
+by `--json`.
+
 ## Examples
 
 ### Preview with auto-discovery
