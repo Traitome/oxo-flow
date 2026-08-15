@@ -1186,6 +1186,411 @@ fn cli_report_sample_matrix_matches_named_group_instances() {
     );
 }
 
+// ─── report: WS5 zero-arg discovery, --run/--failed/--plan, templates ──────
+
+/// Zero-arg discovery (issue #83 WS5): after a real run, `report` with no
+/// WORKFLOW finds the checkpoint in the current directory, resolves the
+/// workflow from its workflow_path, and writes the report next to the
+/// checkpoint instead of dumping HTML to stdout.
+#[test]
+fn cli_report_zero_arg_discovers_after_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("wf.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"tiny\"\nversion = \"0.1\"\n\n\
+         [[rules]]\nname = \"hello\"\nshell = \"echo done > hello.txt\"\noutput = [\"hello.txt\"]\n",
+    )
+    .unwrap();
+
+    oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    let out = oxo_flow_cmd()
+        .args(["report"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "zero-arg report failed");
+    assert!(
+        out.stdout.is_empty(),
+        "report body must not go to stdout when auto-discovered: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("Report written to"),
+        "must print the written path: {stderr}"
+    );
+
+    // The report lands in <checkpoint-dir>/.oxo-flow/reports/report-<stamp>.html.
+    let reports_dir = dir.path().join(".oxo-flow/reports");
+    let reports: Vec<PathBuf> = fs::read_dir(&reports_dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("report-")
+        })
+        .collect();
+    assert_eq!(reports.len(), 1, "expected exactly one timestamped report");
+    let content = fs::read_to_string(&reports[0]).unwrap();
+    assert!(
+        content.contains("Dashboard"),
+        "report must contain the dashboard section"
+    );
+    // Execution truth: the report was built from the real checkpoint.
+    assert!(
+        content.contains("hello.txt"),
+        "report must reflect the executed rule output"
+    );
+}
+
+/// --run DIR discovers both the workflow and the checkpoint in a previous
+/// run's workdir, from any current directory.
+#[test]
+fn cli_report_run_flag_discovers_from_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("wf.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"tiny\"\nversion = \"0.1\"\n\n\
+         [[rules]]\nname = \"hello\"\nshell = \"echo done > hello.txt\"\noutput = [\"hello.txt\"]\n",
+    )
+    .unwrap();
+
+    oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    // Run the report from a different working directory.
+    let elsewhere = tempfile::tempdir().unwrap();
+    let out = oxo_flow_cmd()
+        .args(["report", "--run"])
+        .arg(dir.path().to_str().unwrap())
+        .current_dir(elsewhere.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "report --run failed");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("Report written to"),
+        "must print the written path: {stderr}"
+    );
+    assert!(
+        stderr.contains(".oxo-flow/reports/report-"),
+        "report must be written next to the run's checkpoint: {stderr}"
+    );
+    assert!(
+        fs::read_dir(dir.path().join(".oxo-flow/reports"))
+            .unwrap()
+            .next()
+            .is_some(),
+        "a report file must exist in the run directory"
+    );
+}
+
+/// --plan produces the template-only (UNRUN) dashboard: no checkpoint is
+/// loaded, no "no checkpoint" warning is printed, and no execution-data
+/// sections appear.
+#[test]
+fn cli_report_plan_ignores_execution_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("wf.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"tiny\"\nversion = \"0.1\"\n\n\
+         [[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n",
+    )
+    .unwrap();
+
+    let out = oxo_flow_cmd()
+        .args(["report", "--plan", "-f", "json", "-o", "-"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "--plan report failed");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("No checkpoint"),
+        "--plan must not warn about a missing checkpoint: {stderr}"
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    let ids: Vec<&str> = parsed["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap())
+        .collect();
+    assert!(
+        !ids.contains(&"execution-status"),
+        "no checkpoint → no execution-status section: {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"failure-diagnosis"),
+        "no failures → no failure-diagnosis section: {ids:?}"
+    );
+    assert!(
+        ids.contains(&"dashboard"),
+        "the UNRUN dashboard must still be present: {ids:?}"
+    );
+}
+
+/// --failed moves the failure-diagnosis section to the front of the report;
+/// the plain report keeps the registry order (issue #83 P2-5).
+#[test]
+fn cli_report_failed_moves_diagnosis_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("wf.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"tiny\"\nversion = \"0.1\"\n\n\
+         [[rules]]\nname = \"boom\"\nshell = \"exit 1\"\n",
+    )
+    .unwrap();
+
+    // -k runs every rule and exits 0 while recording the failure.
+    oxo_flow_cmd()
+        .args(["run", "-k", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    let section_ids = |args: &[&str]| -> Vec<String> {
+        let out = oxo_flow_cmd()
+            .args(["report", wf.to_str().unwrap(), "-f", "json", "-o", "-"])
+            .args(args)
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let parsed: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout))
+            .expect("stdout must be pure JSON");
+        parsed["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    let plain = section_ids(&[]);
+    assert_ne!(
+        plain.first().map(String::as_str),
+        Some("failure-diagnosis"),
+        "plain report keeps the registry order: {plain:?}"
+    );
+    assert!(
+        plain.contains(&"failure-diagnosis".to_string()),
+        "plain report still carries the diagnosis: {plain:?}"
+    );
+
+    let focused = section_ids(&["--failed"]);
+    assert_eq!(
+        focused.first().map(String::as_str),
+        Some("failure-diagnosis"),
+        "--failed must lead with the diagnosis: {focused:?}"
+    );
+    assert_eq!(
+        focused[1..],
+        plain[..]
+            .iter()
+            .filter(|id| *id != "failure-diagnosis")
+            .cloned()
+            .collect::<Vec<_>>(),
+        "rest of the order stays stable: {focused:?}"
+    );
+}
+
+/// [report].template pointing at a Tera file renders the report through it
+/// (issue #83 P0-9).
+#[test]
+fn cli_report_template_renders_custom_marker() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("custom.tera"),
+        "<html><body><h1>CUSTOM-MARKER-42 {{ title }}</h1></body></html>",
+    )
+    .unwrap();
+    let wf = dir.path().join("wf.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"tiny\"\nversion = \"0.1\"\n\n\
+         [report]\ntemplate = \"custom.tera\"\n\n\
+         [[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n",
+    )
+    .unwrap();
+    let out = dir.path().join("report.html");
+
+    oxo_flow_cmd()
+        .args(["report", wf.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(&out).unwrap();
+    assert!(
+        content.contains("CUSTOM-MARKER-42"),
+        "custom template must render: {content}"
+    );
+    assert!(
+        content.contains("tiny Report"),
+        "template context must carry the workflow title"
+    );
+}
+
+/// A broken [report].template falls back to the default renderer with a
+/// warning (exit 0), or exit 2 under --strict.
+#[test]
+fn cli_report_template_broken_falls_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("wf.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"tiny\"\nversion = \"0.1\"\n\n\
+         [report]\ntemplate = \"missing.tera\"\n\n\
+         [[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n",
+    )
+    .unwrap();
+    let out = dir.path().join("report.html");
+
+    let fallback = oxo_flow_cmd()
+        .args(["report", wf.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        fallback.status.success(),
+        "broken template must degrade, not fail"
+    );
+    let stderr = String::from_utf8_lossy(&fallback.stderr);
+    assert!(
+        stderr.contains("template render failed — falling back to the default renderer"),
+        "must warn on stderr: {stderr}"
+    );
+    let content = fs::read_to_string(&out).unwrap();
+    assert!(
+        content.contains("Dashboard"),
+        "fallback must produce the default renderer's HTML"
+    );
+
+    // --strict: exit 2 = unsupported/absent report configuration.
+    oxo_flow_cmd()
+        .args(["report", wf.to_str().unwrap(), "--strict"])
+        .current_dir(dir.path())
+        .assert()
+        .code(2);
+}
+
+/// --init-template scaffolds the built-in Tera template and refuses to
+/// overwrite an existing file.
+#[test]
+fn cli_report_init_template_writes_and_refuses_overwrite() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let first = oxo_flow_cmd()
+        .args(["report", "--init-template"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(first.status.success(), "init-template failed");
+    let template = dir.path().join("report-template.tera");
+    assert!(template.exists());
+    let content = fs::read_to_string(&template).unwrap();
+    assert!(
+        content.contains("{{ title }}") && content.contains("Generated by oxo-flow"),
+        "scaffold must be the built-in Tera template"
+    );
+
+    let second = oxo_flow_cmd()
+        .args(["report", "--init-template"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        !second.status.success(),
+        "second init-template must refuse to overwrite"
+    );
+    assert_eq!(second.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&second.stderr).contains("refusing to overwrite"),
+        "must explain the refusal"
+    );
+}
+
+/// --list-templates lists the built-in template name and notes where custom
+/// templates come from — with no workflow involved.
+#[test]
+fn cli_report_list_templates() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = oxo_flow_cmd()
+        .args(["report", "--list-templates"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "report.html  built-in default\n"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("[report].template"),
+        "must point at [report].template as the custom-template source"
+    );
+}
+
+/// --list-sections needs no workflow file at all: it must succeed in an
+/// empty directory (issue #83 P2-7).
+#[test]
+fn cli_report_list_sections_without_workflow() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(
+        fs::read_dir(dir.path()).unwrap().next().is_none(),
+        "the tempdir must be empty"
+    );
+    oxo_flow_cmd()
+        .args(["report", "--list-sections"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("universal"))
+        .stdout(predicate::str::contains("failure-diagnosis"))
+        .stdout(predicate::str::contains("task-summary"));
+}
+
+/// Zero-arg discovery with several .oxoflow files in the directory must
+/// refuse rather than silently pick one.
+#[test]
+fn cli_report_ambiguous_directory_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["a.oxoflow", "b.oxoflow"] {
+        fs::write(
+            dir.path().join(name),
+            "[workflow]\nname = \"x\"\nversion = \"0.1\"\n",
+        )
+        .unwrap();
+    }
+    let out = oxo_flow_cmd()
+        .args(["report"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("multiple .oxoflow files found"),
+        "must demand an explicit WORKFLOW"
+    );
+}
+
 // ─── env subcommand ─────────────────────────────────────────────────────────
 
 #[test]

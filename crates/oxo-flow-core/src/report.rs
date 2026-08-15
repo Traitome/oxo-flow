@@ -1131,6 +1131,14 @@ const DEFAULT_REPORT_TEMPLATE: &str = r#"<!DOCTYPE html>
 </body>
 </html>"#;
 
+/// The embedded default Tera report template — the scaffold source for
+/// `oxo-flow report --init-template` (issue #83 WS5): users copy it to
+/// `report-template.tera`, customize it, and wire it up via
+/// `[report].template = "report-template.tera"`.
+pub fn builtin_template() -> &'static str {
+    DEFAULT_REPORT_TEMPLATE
+}
+
 /// Template engine using Tera for report rendering.
 pub struct TemplateEngine {
     tera: tera::Tera,
@@ -2965,6 +2973,28 @@ mod tests {
     }
 
     // --- TemplateEngine tests ---
+
+    #[test]
+    fn builtin_template_exposes_default_scaffold() {
+        // `report --init-template` writes exactly what TemplateEngine loads
+        // as "report.html" (issue #83 P2-7).
+        let template = builtin_template();
+        assert!(template.contains("<!DOCTYPE html>"));
+        assert!(template.contains("{{ title }}"));
+        assert!(template.contains("{% for section in sections %}"));
+
+        // Rendering with a Tera built from the exposed string must equal the
+        // engine's own preloaded output — the scaffold cannot drift.
+        let report = Report::new("T", "wf", "1.0");
+        let expected = TemplateEngine::new()
+            .unwrap()
+            .render_report(&report)
+            .unwrap();
+        let mut tera = tera::Tera::default();
+        tera.add_raw_template("report.html", template).unwrap();
+        let context = tera::Context::from_value(serde_json::to_value(&report).unwrap()).unwrap();
+        assert_eq!(tera.render("report.html", &context).unwrap(), expected);
+    }
 
     #[test]
     fn template_engine_creation() {

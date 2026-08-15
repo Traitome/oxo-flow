@@ -492,8 +492,11 @@ pub enum Commands {
     },
     /// Generate reports from workflow execution.
     Report {
-        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
-        workflow: PathBuf,
+        #[arg(
+            value_name = "WORKFLOW",
+            help = "Path to the .oxoflow workflow file (auto-discovered when omitted)"
+        )]
+        workflow: Option<PathBuf>,
         #[arg(
             short = 'f',
             long,
@@ -533,6 +536,30 @@ pub enum Commands {
         strict: bool,
         #[arg(long, help = "List available report sections and exit")]
         list_sections: bool,
+        #[arg(
+            long = "run",
+            value_name = "DIR",
+            conflicts_with = "workflow",
+            help = "Workdir of a previous run: the workflow and checkpoint are auto-discovered there"
+        )]
+        run_dir: Option<PathBuf>,
+        #[arg(long, help = "Failure-focused report: diagnosis first")]
+        failed: bool,
+        #[arg(
+            long,
+            help = "Template-only report — ignore execution data (no checkpoint required)"
+        )]
+        plan: bool,
+        #[arg(
+            long = "init-template",
+            help = "Write the built-in report template to ./report-template.tera and exit"
+        )]
+        init_template: bool,
+        #[arg(
+            long = "list-templates",
+            help = "List available report templates and exit"
+        )]
+        list_templates: bool,
     },
     /// Start the web interface server.
     Serve {
@@ -1266,6 +1293,11 @@ async fn main() -> Result<()> {
             no_timestamps,
             strict,
             list_sections,
+            run_dir,
+            failed,
+            plan,
+            init_template,
+            list_templates,
         } => {
             handle_report(crate::commands::output::ReportArgs {
                 workflow,
@@ -1278,6 +1310,11 @@ async fn main() -> Result<()> {
                 no_timestamps,
                 strict,
                 list_sections,
+                run_dir,
+                failed,
+                plan,
+                init_template,
+                list_templates,
             })
             .await?
         }
