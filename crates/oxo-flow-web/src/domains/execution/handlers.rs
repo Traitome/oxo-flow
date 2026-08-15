@@ -967,6 +967,20 @@ pub async fn retry_run(
     let user = current_user::resolve(authenticated.as_ref());
     let run = load_owned_run(pool, &user, &id).await?;
 
+    // The retry re-executes in the SAME workdir; an active run would put
+    // two CLIs on one checkpoint concurrently (corrupted state, duplicated
+    // work). Only terminal runs can be retried.
+    if matches!(run.status.as_str(), "running" | "queued" | "paused") {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "RUN_NOT_TERMINAL",
+            format!(
+                "Run {id} is still {} — wait for it to finish (or cancel it) before retrying",
+                run.status
+            ),
+        ));
+    }
+
     let from_rule = req.get("from_rule").and_then(|v| v.as_str());
     let skip_succeeded = req
         .get("skip_succeeded")

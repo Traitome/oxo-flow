@@ -283,22 +283,24 @@ pub async fn get_webhook_config(
             "Database not available".into(),
         )
     })?;
-    let row = sqlx::query_as::<_, (String, Option<String>, i64, String)>(
-        "SELECT url, secret, enabled, events FROM webhook_config WHERE id = 1",
+    let row = sqlx::query_as::<_, (String, Option<String>, i64, String, String)>(
+        "SELECT url, secret, enabled, events, signature_scheme FROM webhook_config WHERE id = 1",
     )
     .fetch_optional(pool)
     .await
     .unwrap_or(None);
 
     match row {
-        Some((url, secret, enabled, events)) => Ok(Json(serde_json::json!({
+        Some((url, secret, enabled, events, scheme)) => Ok(Json(serde_json::json!({
             "enabled": enabled != 0,
             "url": url,
             "secret_set": secret.is_some(),
             "events": serde_json::from_str::<serde_json::Value>(&events).unwrap_or(serde_json::json!([])),
+            "signature_scheme": scheme,
         }))),
         None => Ok(Json(serde_json::json!({
             "enabled": false, "url": "", "secret_set": false, "events": [],
+            "signature_scheme": "sha256-keyed",
         }))),
     }
 }
@@ -369,18 +371,30 @@ pub async fn put_webhook_config(
         })
         .unwrap_or_else(|| vec!["workflow_completed".into(), "workflow_failed".into()]);
     let events_json = serde_json::to_string(&events).unwrap_or_else(|_| "[]".into());
+    // Default 'sha256-keyed' keeps pre-v0.11 webhook consumers verifying
+    // after upgrade; 'hmac-sha256' (RFC 2104) is the explicit opt-in.
+    let signature_scheme = match req
+        .get("signature_scheme")
+        .and_then(|v| v.as_str())
+        .unwrap_or("sha256-keyed")
+    {
+        "hmac-sha256" => "hmac-sha256",
+        _ => "sha256-keyed",
+    };
     let now = chrono::Utc::now().to_rfc3339();
 
     sqlx::query(
-        "INSERT INTO webhook_config (id, url, secret, enabled, events, updated_at) VALUES (1, ?, ?, ?, ?, ?) \
+        "INSERT INTO webhook_config (id, url, secret, enabled, events, signature_scheme, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(id) DO UPDATE SET url = excluded.url, \
          secret = COALESCE(excluded.secret, webhook_config.secret), \
-         enabled = excluded.enabled, events = excluded.events, updated_at = excluded.updated_at",
+         enabled = excluded.enabled, events = excluded.events, \
+         signature_scheme = excluded.signature_scheme, updated_at = excluded.updated_at",
     )
     .bind(&url)
     .bind(secret)
     .bind(enabled as i64)
     .bind(&events_json)
+    .bind(signature_scheme)
     .bind(&now)
     .execute(pool)
     .await

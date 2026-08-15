@@ -2319,6 +2319,7 @@ async fn web_webhook_fires_on_run_completion_with_hmac() {
             "url": format!("http://{addr}/hook"),
             "secret": "s3cret-key",
             "events": ["workflow_completed", "workflow_failed"],
+            "signature_scheme": "hmac-sha256",
         }))
         .send()
         .await

@@ -616,6 +616,18 @@ pub fn set_base_path(path: &str) {
     let _ = BASE_PATH.set(path.to_string());
 }
 
+/// Normalize a user-supplied mount path to the router contract: "" or "/"
+/// for a root mount, "/name" otherwise. axum's nest() panics on paths
+/// without a leading slash, so every caller must route through this.
+pub fn normalize_base_path(input: &str) -> String {
+    let trimmed = input.trim().trim_matches('/');
+    if trimmed.is_empty() {
+        String::new()
+    } else {
+        format!("/{trimmed}")
+    }
+}
+
 /// Port the server actually bound (issue #82 P0-6): share URLs must point
 /// at the real listener, not a hardcoded default.
 static BOUND_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
@@ -831,4 +843,22 @@ async fn require_auth(
         })),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod normalize_tests {
+    use super::*;
+
+    #[test]
+    fn normalize_base_path_contract() {
+        // Root mounts collapse to "" (no nest).
+        assert_eq!(normalize_base_path(""), "");
+        assert_eq!(normalize_base_path("/"), "");
+        // Bare names gain the leading slash axum's nest() requires.
+        assert_eq!(normalize_base_path("oxoflow"), "/oxoflow");
+        assert_eq!(normalize_base_path("/oxo-flow"), "/oxo-flow");
+        // Trailing slashes and spaces never reach the router.
+        assert_eq!(normalize_base_path("/oxo-flow/"), "/oxo-flow");
+        assert_eq!(normalize_base_path("  oxo-flow/  "), "/oxo-flow");
+    }
 }

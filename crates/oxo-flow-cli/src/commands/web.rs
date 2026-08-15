@@ -47,7 +47,10 @@ pub async fn handle_serve(
         });
     }
 
-    oxo_flow_web::start_server_with_mode(&mode, &host, port, &base_path).await?;
+    // Pass the NORMALIZED path — axum's nest() panics on a mount path
+    // without a leading slash (e.g. `--base-path oxoflow`), so the raw
+    // argument must never reach the router.
+    oxo_flow_web::start_server_with_mode(&mode, &host, port, &base).await?;
 
     Ok(())
 }

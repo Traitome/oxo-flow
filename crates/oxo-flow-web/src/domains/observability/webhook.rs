@@ -22,12 +22,26 @@ pub struct WebhookSettings {
     pub url: String,
     pub secret: Option<String>,
     pub events: Vec<String>,
+    /// "sha256-keyed" (legacy v0.10 default) or "hmac-sha256".
+    pub signature_scheme: String,
+}
+
+impl Default for WebhookSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            url: String::new(),
+            secret: None,
+            events: Vec::new(),
+            signature_scheme: "sha256-keyed".into(),
+        }
+    }
 }
 
 pub async fn load_settings() -> Option<WebhookSettings> {
     let pool = crate::infra::db::sqlite::try_pool().ok()?;
-    let row = sqlx::query_as::<_, (String, Option<String>, i64, String)>(
-        "SELECT url, secret, enabled, events FROM webhook_config WHERE id = 1",
+    let row = sqlx::query_as::<_, (String, Option<String>, i64, String, String)>(
+        "SELECT url, secret, enabled, events, signature_scheme FROM webhook_config WHERE id = 1",
     )
     .fetch_optional(pool)
     .await
@@ -39,6 +53,7 @@ pub async fn load_settings() -> Option<WebhookSettings> {
         secret: row.1,
         enabled: row.2 != 0,
         events,
+        signature_scheme: row.4,
     })
 }
 
@@ -139,7 +154,14 @@ pub async fn notify_terminal(run_id: &str, final_state: &str) {
         headers: Default::default(),
         events: vec![event],
         secret: settings.secret,
-        signature_scheme: SignatureScheme::HmacSha256,
+        // The configured scheme decides: legacy consumers keep verifying
+        // 'sha256-keyed' signatures after an upgrade; opting into the
+        // RFC-2104 scheme is an explicit setting change.
+        signature_scheme: if settings.signature_scheme == "hmac-sha256" {
+            SignatureScheme::HmacSha256
+        } else {
+            SignatureScheme::Sha256Keyed
+        },
         timeout_secs: 10,
         max_retries: 1,
     };

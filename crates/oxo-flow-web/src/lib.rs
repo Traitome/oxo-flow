@@ -712,18 +712,21 @@ pub async fn start_server_with_mode(
     // Initialize AI provider
     crate::ai_provider::AiProviderRegistry::global().init_from_env();
 
-    crate::server::set_base_path(base_path);
+    // Normalize defensively: axum's nest() panics on a mount path without a
+    // leading slash, so whatever the caller passed must become "/x" or "".
+    let normalized = crate::server::normalize_base_path(base_path);
+    crate::server::set_base_path(&normalized);
     let app = crate::server::build_router(mode);
-    let app = if base_path.is_empty() || base_path == "/" {
+    let app = if normalized.is_empty() {
         app
     } else {
         // See main.rs: `nest` leaves the trailing-slash mount root unrouted.
         axum::Router::new()
             .route(
-                &format!("{base_path}/"),
+                &format!("{normalized}/"),
                 axum::routing::get(crate::server::spa_index),
             )
-            .nest(base_path, app)
+            .nest(&normalized, app)
     };
 
     let addr = format!("{host}:{port}");

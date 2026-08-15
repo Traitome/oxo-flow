@@ -338,6 +338,7 @@ impl StorageBackend for SqliteBackend {
                 secret TEXT,
                 enabled INTEGER NOT NULL DEFAULT 0,
                 events TEXT NOT NULL DEFAULT '[]',
+                signature_scheme TEXT NOT NULL DEFAULT 'sha256-keyed',
                 updated_at TEXT NOT NULL
             );
 
@@ -437,6 +438,16 @@ impl StorageBackend for SqliteBackend {
             .execute(&self.pool)
             .await
             .ok();
+
+        // Migration: webhook signature scheme. Defaults to the legacy
+        // keyed-sha256 so v0.10 consumers keep verifying after upgrade;
+        // the UI can opt into hmac-sha256 explicitly.
+        sqlx::query(
+            "ALTER TABLE webhook_config ADD COLUMN signature_scheme TEXT NOT NULL DEFAULT 'sha256-keyed'",
+        )
+        .execute(&self.pool)
+        .await
+        .ok();
 
         // Migration (issue #79 P1-06): user password hashes for DB-created
         // accounts. Idempotent — safe to run on every init.

@@ -288,11 +288,15 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
         }
     }
 
-    // E013: checkpoint rule without a re-entry manifest (issue #78 P3)
+    // E013: checkpoint rule without a re-entry manifest (issue #78 P3).
+    // A warning, not an error: `checkpoint = true` predates the manifest
+    // field (v0.11), so erroring here would break every pre-v0.12 workflow
+    // at upgrade. The run itself fails loudly for the missing manifest, so
+    // nothing executes silently.
     for rule in &config.rules {
         if rule.checkpoint && rule.checkpoint_manifest.is_none() {
             diagnostics.push(Diagnostic {
-                severity: Severity::Error,
+                severity: Severity::Warning,
                 message: "checkpoint rule must declare checkpoint_manifest — the TOML file it writes at runtime to declare new re-entry values".to_string(),
                 rule: Some(rule.name.clone()),
                 code: "E013".to_string(),
@@ -1674,7 +1678,10 @@ mod tests {
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
         let result = validate_format(&config);
-        assert!(result.errors().iter().any(|d| d.code == "E013"));
+        // Warning, not error: pre-v0.12 workflows carry checkpoint=true
+        // without a manifest and must keep validating through the upgrade.
+        assert!(result.warnings().iter().any(|d| d.code == "E013"));
+        assert!(!result.errors().iter().any(|d| d.code == "E013"));
     }
 
     #[test]
