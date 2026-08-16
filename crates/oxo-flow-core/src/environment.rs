@@ -1533,7 +1533,9 @@ mod tests {
     fn mamba_verify_command_uses_binary() {
         let backend = MambaBackend::new();
         let cmd = backend.verify_command("envs/qc.yaml").unwrap().unwrap();
-        assert!(cmd.contains("mamba run -n qc"));
+        // The detection chain picks mamba → micromamba → conda; assert on
+        // the backend's actual binary, not a hardcoded name.
+        assert!(cmd.contains(&format!("{} run -n qc", backend.binary)));
         assert!(cmd.contains("CONDA_PREFIX/bin"));
     }
 
