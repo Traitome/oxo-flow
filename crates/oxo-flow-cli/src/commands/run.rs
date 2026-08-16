@@ -1023,15 +1023,35 @@ pub async fn run_command(
             };
 
             if let Some(reason) = rebuild_reason {
+                let synthetic_rule = oxo_flow_core::rule::Rule {
+                    name: format!("ref:{}", ref_def.name),
+                    // `{input}` is the renderer's alias for the reference
+                    // source (documented in config_impact::reference_fingerprint).
+                    input: ref_def
+                        .source
+                        .as_deref()
+                        .map(|s| vec![s.to_string()].into())
+                        .unwrap_or_default(),
+                    output: vec![output_path.clone()].into(),
+                    ..Default::default()
+                };
                 let mut build_cmd = oxo_flow_core::executor::process::render_shell_command(
                     &ref_def.build,
-                    &oxo_flow_core::rule::Rule {
-                        name: format!("ref:{}", ref_def.name),
-                        output: vec![output_path.clone()].into(),
-                        ..Default::default()
-                    },
+                    &synthetic_rule,
                     &wildcard_values,
                 );
+                // `{source}` is the builder-template spelling of the same
+                // thing; render it too (live evidence: tcasia's STAR
+                // genomeGenerate died with 'could not open genomeFastaFile:
+                // {source}' — the placeholder was never substituted).
+                if let Some(source) = ref_def.source.as_deref() {
+                    let expanded =
+                        oxo_flow_core::executor::checkpoint::expand_config_in_path(
+                            source,
+                            &wildcard_values,
+                        );
+                    build_cmd = build_cmd.replace("{source}", &expanded);
+                }
                 // References that need workflow tools (bowtie2-build, STAR
                 // genomeGenerate, …) declare an `environment` — same spec as
                 // `[rules.environment]`. The env is created on first use and
