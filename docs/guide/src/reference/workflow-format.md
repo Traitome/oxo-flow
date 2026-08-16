@@ -532,6 +532,13 @@ environment = { conda = "envs/tools.yaml" }
 
 # # Conda with custom prefix
 # environment = { conda = "envs/qc.yaml", conda_prefix = ".oxo-flow/envs" }
+```
+
+**Container shell:** `docker`/`singularity` rules run under `bash` inside
+the container when the image provides it (falling back to `sh` otherwise).
+nf-core-derived images ship bash, and their scripts rely on bash features
+(`set -o pipefail`, `[[ ]]`) that the container default `sh` (often dash)
+rejects — the re-exec shim keeps these scripts working unmodified.
 
 # # Mamba / micromamba (auto-detects binary, same YAML format as conda)
 # environment = { mamba = "envs/qc.yaml", mamba_prefix = ".oxo-flow/envs" }

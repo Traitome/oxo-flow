@@ -200,6 +200,18 @@ impl CondaBackend {
     }
 }
 
+/// Container-internal shell shim: re-exec the user script under `bash -c`
+/// when the image provides bash, otherwise run it with the container `sh`
+/// (the previous behaviour).
+///
+/// The container default `sh` is often dash/busybox, while nf-core-derived
+/// images ship bash and their scripts rely on bash features (`set -o
+/// pipefail`, `[[ ]]`); eager 2.5.3 (`set: Illegal option -o pipefail`) and
+/// the nanoseq qcat `[[ ]]` failures were both this mismatch. The script is
+/// passed as `$1` so it is never re-escaped into the shim text.
+const CONTAINER_BASH_SHIM: &str = "if command -v bash >/dev/null 2>&1; \
+then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi";
+
 /// Escape a string for safe embedding inside a `sh -c '...'` invocation.
 ///
 /// Replaces every `'` with `'\''` (close quote, escaped literal quote, reopen quote)
@@ -421,7 +433,7 @@ impl EnvironmentBackend for DockerBackend {
         }
 
         Ok(format!(
-            "docker run --rm --user $(id -u):$(id -g){mem_arg} -v {workdir}:{workdir} -w {workdir} {spec} sh -c '{escaped_cmd}'"
+            "docker run --rm --user $(id -u):$(id -g){mem_arg} -v {workdir}:{workdir} -w {workdir} {spec} sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'"
         ))
     }
 
@@ -499,7 +511,7 @@ impl EnvironmentBackend for SingularityBackend {
         let escaped_cmd = escape_for_sh_single_quote(command);
 
         Ok(format!(
-            "{} exec --bind {workdir}:{workdir} {spec} sh -c '{escaped_cmd}'",
+            "{} exec --bind {workdir}:{workdir} {spec} sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'",
             self.binary
         ))
     }
@@ -1186,6 +1198,46 @@ mod tests {
             .wrap_command("echo hi", "ubuntu:24.04", None, &abs)
             .unwrap();
         assert!(docker.contains(&format!("-v {}:{}", abs.display(), abs.display())));
+    }
+
+    // ── Container bash re-exec shim ─────────────────────────────────
+
+    #[test]
+    fn container_wrappers_reexec_under_bash_when_available() {
+        // nf-core-derived containers ship bash; their scripts need it
+        // (`set -o pipefail` is rejected by dash/busybox `sh`).
+        let workdir = std::path::Path::new("/tmp/oxo-shim-test");
+        let docker = DockerBackend
+            .wrap_command("echo hi", "ubuntu:24.04", None, workdir)
+            .unwrap();
+        assert!(
+            docker.contains("sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi' sh 'echo hi'"),
+            "{docker}"
+        );
+        let sing = SingularityBackend::new()
+            .wrap_command("echo hi", "ubuntu:24.04", None, workdir)
+            .unwrap();
+        assert!(
+            sing.contains("sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi' sh 'echo hi'"),
+            "{sing}"
+        );
+    }
+
+    #[test]
+    fn container_shim_keeps_user_script_out_of_shim_text() {
+        // The user script travels as the `$1` argument (single-quote-escaped
+        // for the host shell) — it is never interpolated into the shim, so
+        // scripts containing quotes or shim-like tokens survive intact.
+        let script = "echo 'a b'; grep \" sh -c '\" x";
+        let docker = DockerBackend
+            .wrap_command(script, "ubuntu:24.04", None, std::path::Path::new("/tmp/x"))
+            .unwrap();
+        let shim_marker = format!("sh -c '{CONTAINER_BASH_SHIM}' sh '");
+        assert!(docker.contains(&shim_marker), "{docker}");
+        // everything after the shim marker is the escaped script…
+        let rest = docker.split(&shim_marker).nth(1).unwrap();
+        assert!(rest.contains("grep"), "{docker}");
+        assert!(rest.contains("sh -c"), "{docker}"); // script content preserved verbatim
     }
 
     // ── SystemBackend ──────────────────────────────────────────────

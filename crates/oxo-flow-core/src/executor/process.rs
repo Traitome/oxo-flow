@@ -798,15 +798,7 @@ impl LocalExecutor {
                 && !parent.as_os_str().is_empty()
                 && !parent.exists()
             {
-                tokio::fs::create_dir_all(parent)
-                    .await
-                    .map_err(|e| OxoFlowError::Execution {
-                        rule: rule.name.clone(),
-                        message: format!(
-                            "failed to create output directory {}: {e}",
-                            parent.display()
-                        ),
-                    })?;
+                create_rule_dir(&parent, rule, "output")?;
             }
             move_path(&src, &dest)
                 .await
@@ -1031,15 +1023,7 @@ impl LocalExecutor {
                 && !parent.as_os_str().is_empty()
                 && !parent.exists()
             {
-                tokio::fs::create_dir_all(parent)
-                    .await
-                    .map_err(|e| OxoFlowError::Execution {
-                        rule: rule.name.clone(),
-                        message: format!(
-                            "failed to create output directory {}: {e}",
-                            parent.display()
-                        ),
-                    })?;
+                create_rule_dir(&parent, &rule, "output")?;
             }
         }
 
@@ -1053,15 +1037,7 @@ impl LocalExecutor {
                 && !parent.as_os_str().is_empty()
                 && !parent.exists()
             {
-                tokio::fs::create_dir_all(parent)
-                    .await
-                    .map_err(|e| OxoFlowError::Execution {
-                        rule: rule.name.clone(),
-                        message: format!(
-                            "failed to create log directory {}: {e}",
-                            parent.display()
-                        ),
-                    })?;
+                create_rule_dir(&parent, &rule, "log")?;
             }
         }
 
@@ -1081,15 +1057,7 @@ impl LocalExecutor {
         // Create the scratch working directory now that execution is
         // certain; its name was already decided for env wrapping above.
         if let Some(scratch) = &scratch_dir {
-            tokio::fs::create_dir_all(scratch)
-                .await
-                .map_err(|e| OxoFlowError::Execution {
-                    rule: rule.name.clone(),
-                    message: format!(
-                        "failed to create scratch directory {}: {e}",
-                        scratch.display()
-                    ),
-                })?;
+            create_rule_dir(scratch, &rule, "scratch")?;
         }
         // The rule's shell cwd: scratch for scratch rules, main workdir
         // otherwise (docker/singularity run with `-w`/inherited cwd in the
@@ -1646,6 +1614,19 @@ fn warn_shell_fallback_once() {
     }
 }
 
+/// Create a rule's output/log/scratch parent directory synchronously.
+///
+/// Directory creation is a handful of fast syscalls; routing it through
+/// tokio's blocking pool meant failures surfaced as the opaque
+/// "background task failed" (observed repeatedly in live runs), hiding
+/// the real error (ENOSPC, EACCES, …) from operators.
+fn create_rule_dir(path: &Path, rule: &Rule, what: &str) -> Result<()> {
+    std::fs::create_dir_all(path).map_err(|e| OxoFlowError::Execution {
+        rule: rule.name.clone(),
+        message: format!("failed to create {what} directory {}: {e}", path.display()),
+    })
+}
+
 /// Directory-name-safe rule names: alphanumerics plus `. _ -` survive,
 /// everything else becomes `_` (rule names admit `:` per `Rule::validate`,
 /// which is not a safe directory character everywhere).
@@ -1668,10 +1649,11 @@ fn sanitize_dir_component(name: &str) -> String {
 /// The container backends wrap commands as plain shell strings that
 /// bind-mount only the executor workdir (environment.rs). Scratch rules
 /// need an additional scratch bind and — for docker — the `-w` working
-/// directory switched to the scratch dir. Only the prefix before ` sh -c '`
-/// is touched, so a user command that coincidentally contains the same
-/// tokens is never rewritten. Non-container wrappers pass through
-/// unchanged.
+/// directory switched to the scratch dir. Only the prefix before the
+/// first ` sh -c '` is touched (with the bash re-exec shim that is the
+/// shim's own `sh -c`, which still precedes all mounts), so a user command
+/// that coincidentally contains the same tokens is never rewritten.
+/// Non-container wrappers pass through unchanged.
 pub(super) fn fixup_container_wrapper(
     wrapped: &str,
     kind: &str,
