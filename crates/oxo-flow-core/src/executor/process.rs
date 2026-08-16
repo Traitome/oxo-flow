@@ -519,6 +519,19 @@ impl LocalExecutor {
         if self.env_resolver.cache_is_ready(&key).await {
             return Ok(());
         }
+        // Serialize setup per environment: concurrent rule instances sharing
+        // an env (e.g. S1 + S2 instances of the same rule) used to run two
+        // `conda env create` in parallel — the loser's transaction removes
+        // the winner's just-installed packages (live evidence: rnaseq's
+        // env history shows `+fq` followed by `-fq` 12s later, leaving an
+        // empty env that the cache then marked ready).
+        let setup_lock = self.env_resolver.setup_lock(&key);
+        let _setup_guard = setup_lock.lock().await;
+        // Double-check: another task may have completed the setup while we
+        // waited for the lock.
+        if self.env_resolver.cache_is_ready(&key).await {
+            return Ok(());
+        }
         let setup_cmd = self.env_resolver.setup_command(env_spec)?;
         let output = Command::new("sh")
             .arg("-c")

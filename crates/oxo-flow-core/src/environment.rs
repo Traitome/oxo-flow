@@ -4,7 +4,7 @@
 //! managers (conda, pixi, docker, singularity, venv) and a resolver that
 //! selects the appropriate backend for each rule.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
@@ -850,6 +850,8 @@ pub struct EnvironmentResolver {
     modules: ModulesBackend,
     system: SystemBackend,
     cache: Arc<Mutex<EnvironmentCache>>,
+    /// Per-cache-key setup mutexes (see [`Self::setup_lock`]).
+    setup_locks: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl Default for EnvironmentResolver {
@@ -871,6 +873,7 @@ impl EnvironmentResolver {
             modules: ModulesBackend,
             system: SystemBackend,
             cache: Arc::new(Mutex::new(EnvironmentCache::new())),
+            setup_locks: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -886,6 +889,7 @@ impl EnvironmentResolver {
             modules: ModulesBackend,
             system: SystemBackend,
             cache: Arc::new(Mutex::new(EnvironmentCache::with_cache_dir(cache_dir))),
+            setup_locks: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -1010,6 +1014,16 @@ impl EnvironmentResolver {
             return self.modules.setup_command(&env_spec.modules.join(","));
         }
         self.system.setup_command("")
+    }
+
+    /// Per-environment setup mutex: concurrent rule instances that share an
+    /// env must not run `conda env create` simultaneously — the loser's
+    /// create transaction removes the winner's just-installed packages
+    /// (live evidence: rnaseq S1/S2 race left `-fq` right after `+fq` in
+    /// the env history and an empty env marked ready).
+    pub fn setup_lock(&self, key: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.setup_locks.lock().unwrap();
+        locks.entry(key.to_string()).or_default().clone()
     }
 
     /// Post-setup usability check for the environment (conda/mamba verify
@@ -1763,6 +1777,18 @@ mod tests {
     }
 
     // --- cache file persistence test -----------------------------------------
+
+    #[test]
+    fn setup_lock_is_shared_per_key() {
+        let resolver = EnvironmentResolver::new();
+        let a = resolver.setup_lock("conda:envs/fq.yaml");
+        let b = resolver.setup_lock("conda:envs/fq.yaml");
+        let other = resolver.setup_lock("conda:envs/star.yaml");
+        // Same key → same mutex (concurrent rule instances serialize their
+        // env setup); different keys → independent mutexes.
+        assert!(Arc::ptr_eq(&a, &b));
+        assert!(!Arc::ptr_eq(&a, &other));
+    }
 
     #[test]
     fn environment_cache_dir_initialization() {
