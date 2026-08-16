@@ -104,8 +104,14 @@ impl EnvironmentBackend for CondaBackend {
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
+        // `-n <name>` keeps setup consistent with `wrap_command` (which runs
+        // `conda run -n <name>`): the name comes from the YAML's `name:` field
+        // or the file stem. Without `-n`, conda 25+ fails with "Unable to
+        // determine environment" for YAMLs that declare no name (the common
+        // nf-core style — found live: mixscape's seurat_lda.yaml).
+        let env_name = conda_env_name_from_spec(spec);
         Ok(format!(
-            "conda env create -f {spec} 2>/dev/null || conda env update -f {spec} --prune"
+            "conda env create -n {env_name} -f {spec} 2>/dev/null || conda env update -n {env_name} -f {spec} --prune"
         ))
     }
 
@@ -331,8 +337,11 @@ impl EnvironmentBackend for MambaBackend {
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
+        // Same name-consistency fix as CondaBackend (see there): mamba 2.x
+        // refuses nameless YAMLs without `-n`.
+        let env_name = conda_env_name_from_spec(spec);
         Ok(format!(
-            "{} env create -f {spec} 2>/dev/null || {} env update -f {spec} --prune",
+            "{} env create -n {env_name} -f {spec} 2>/dev/null || {} env update -n {env_name} -f {spec} --prune",
             self.binary, self.binary
         ))
     }
@@ -1127,8 +1136,11 @@ mod tests {
     fn conda_setup_command() {
         let backend = CondaBackend;
         let cmd = backend.setup_command("envs/qc.yaml").unwrap();
-        assert!(cmd.contains("conda env create -f envs/qc.yaml"));
-        assert!(cmd.contains("conda env update -f envs/qc.yaml --prune"));
+        // `-n <stem>` keeps setup consistent with `conda run -n <stem>`
+        // wrapping — nameless YAMLs (nf-core style) no longer fail setup
+        // with "Unable to determine environment" (conda 25+).
+        assert!(cmd.contains("conda env create -n qc -f envs/qc.yaml"));
+        assert!(cmd.contains("conda env update -n qc -f envs/qc.yaml --prune"));
     }
 
     #[test]
@@ -1677,7 +1689,7 @@ mod tests {
         let cmd = backend
             .setup_command_with_opts("envs/qc.yaml", None)
             .unwrap();
-        assert!(cmd.contains("conda env create -f envs/qc.yaml"));
+        assert!(cmd.contains("conda env create -n qc -f envs/qc.yaml"));
         // Should NOT contain -p
         assert!(!cmd.contains(" -p "));
     }
