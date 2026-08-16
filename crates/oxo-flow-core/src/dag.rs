@@ -121,13 +121,18 @@ impl WorkflowDag {
                 _ => None,
             };
 
-            for input in rule.input.iter() {
+            // String-based inference for one input path. All steps are
+            // strictly best-effort: anything unresolvable keeps the legacy
+            // behavior (no edge), never an error.
+            let infer = |input: &str,
+                         graph: &mut DiGraph<DagNode, ()>,
+                         declared_dir: Option<&(String, Option<String>)>| {
                 // 1. Exact template-level match (legacy behavior, kept first).
                 if let Some(&producer_node) = output_to_node.get(input) {
-                    add_edge_dedup(&mut graph, producer_node, consumer_node);
+                    add_edge_dedup(graph, producer_node, consumer_node);
                 }
 
-                if let Some((dir_path, filter)) = &declared_dir {
+                if let Some((dir_path, filter)) = declared_dir {
                     // 2. Declared directory: any output under the directory is
                     //    a dependency. Multiple producers → all edges
                     //    (conservative correctness).
@@ -138,7 +143,7 @@ impl WorkflowDag {
                         if let Some(suffix) = output.strip_prefix(&prefix)
                             && filter_re.as_ref().is_none_or(|re| re.is_match(suffix))
                         {
-                            add_edge_dedup(&mut graph, *producer_node, consumer_node);
+                            add_edge_dedup(graph, *producer_node, consumer_node);
                         }
                     }
                 } else if has_glob_chars(input) {
@@ -149,14 +154,14 @@ impl WorkflowDag {
                     if let Some(glob_re) = glob_pattern_to_regex(input) {
                         for (output, producer_node) in &producer_outputs {
                             if glob_re.is_match(output) {
-                                add_edge_dedup(&mut graph, *producer_node, consumer_node);
+                                add_edge_dedup(graph, *producer_node, consumer_node);
                             }
                         }
                     }
                 } else if !input.contains('{') {
-                    // 4. Concrete path (no engine wildcards): the expand_inputs
-                    //    / hardcoded-input case. Try template-level producer
-                    //    outputs first (`variants/{sample}.g.vcf.gz` covers
+                    // 4. Concrete path (no engine wildcards): try
+                    //    template-level producer outputs first
+                    //    (`variants/{sample}.g.vcf.gz` covers
                     //    `variants/NA12878.g.vcf.gz`), then the directory
                     //    heuristic for extension-less inputs.
                     for (output, matcher) in &template_matchers {
@@ -164,7 +169,7 @@ impl WorkflowDag {
                             && re.is_match(input)
                             && let Some(producer_node) = output_to_node.get(output)
                         {
-                            add_edge_dedup(&mut graph, *producer_node, consumer_node);
+                            add_edge_dedup(graph, *producer_node, consumer_node);
                         }
                     }
                     if looks_like_directory(input) {
@@ -172,12 +177,31 @@ impl WorkflowDag {
                         let prefix = format!("{base}/");
                         for (output, producer_node) in &producer_outputs {
                             if output.starts_with(&prefix) {
-                                add_edge_dedup(&mut graph, *producer_node, consumer_node);
+                                add_edge_dedup(graph, *producer_node, consumer_node);
                             }
                         }
                     }
                 }
                 // If no producer found, the input is assumed to be a source file
+            };
+
+            for input in rule.input.iter() {
+                infer(input, &mut graph, declared_dir.as_ref());
+            }
+
+            // expand_inputs patterns declare dataflow that only materializes
+            // after wildcard expansion — the runtime path injects the
+            // resolved paths into rule.input and the edges above catch them,
+            // but the TEMPLATE-level graph (`graph -f dot`, the catalog's
+            // source) never runs expansion. Without this pass every
+            // expand_inputs dependency is invisible and multiqc-style
+            // aggregators look disconnected from their contributors.
+            // Patterns are matched RAW (wildcards preserved), which lines up
+            // exactly with producer template outputs; patterns that only
+            // match after variable substitution fall through to the
+            // template-matcher in step 4 (best-effort).
+            for exp_input in &rule.expand_inputs {
+                infer(&exp_input.pattern, &mut graph, None);
             }
 
             // Step 2b: Add edges for explicit depends_on (deduplicated
@@ -1617,6 +1641,29 @@ mod tests {
             dag.dependencies("combine_gvcfs").unwrap(),
             vec!["call_gvcf"]
         );
+    }
+
+    #[test]
+    fn expand_inputs_pattern_links_consumer_at_template_level() {
+        // The catalog renders the TEMPLATE-level graph (no expansion), so
+        // dataflow declared only via expand_inputs (multiqc-style
+        // aggregators) must still form edges there. Patterns carry the same
+        // wildcard literals as producer outputs, so raw-string matching
+        // lines them up exactly.
+        let producer = make_rule(
+            "fastqc_raw",
+            vec![],
+            vec!["{config.out_dir}/fastqc/raw/{sample}_raw_1_fastqc.zip"],
+        );
+        let mut consumer = make_rule("multiqc", vec![], vec!["multiqc_report.html"]);
+        consumer.expand_inputs.push(crate::rule::ExpandConfig {
+            pattern: "{config.out_dir}/fastqc/raw/{sample}_raw_1_fastqc.zip".to_string(),
+            variables: [("sample".to_string(), "config.samples_list".to_string())]
+                .into_iter()
+                .collect(),
+        });
+        let dag = WorkflowDag::from_rules(&[producer, consumer]).unwrap();
+        assert_eq!(dag.dependencies("multiqc").unwrap(), vec!["fastqc_raw"]);
     }
 
     #[test]

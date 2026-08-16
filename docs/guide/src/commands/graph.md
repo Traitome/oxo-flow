@@ -71,7 +71,7 @@ oxo-flow graph pipeline.oxoflow -f dot-clustered -o clustered.dot
 
 ### View the expanded runtime DAG
 
-By default, `graph` shows the template DAG — one node per `[[rules]]` block. Use `--expanded` to show the actual runtime DAG after wildcard, sample, and scatter expansion: each generated task becomes its own node (rule names get a `_<group>_<sample>` or `_<pair_id>` suffix).
+By default, `graph` shows the template DAG — one node per `[[rules]]` block, with every declared dataflow edge included (`input` paths and `expand_inputs` patterns alike). Use `--expanded` to show the actual runtime DAG after wildcard, sample, and scatter expansion: each generated task becomes its own node (rule names get a `_<group>_<sample>` or `_<pair_id>` suffix). Catalog pages render the template DAG — it is the stable overview; the expanded view is the full runtime truth.
 
 ```bash
 oxo-flow graph pipeline.oxoflow --expanded

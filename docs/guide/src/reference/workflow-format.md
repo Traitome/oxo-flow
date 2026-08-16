@@ -869,7 +869,10 @@ temporary = true                             # Delete aligned/*.bam once all cal
 
 **DAG edge inference** — edges form when a rule's `input` paths match
 another rule's `output` paths, for every input form: template paths,
-`expand_inputs` lists (each expanded concrete path), glob patterns
+`expand_inputs` patterns (both the expanded concrete paths at run time
+and the raw patterns in the template-level graph — multiqc-style
+aggregators therefore connect to their contributors even in
+`graph -f dot` without `--expanded`), glob patterns
 (`raw/*.fastq.gz`), and directory inputs (every producer writing under
 that directory). `depends_on` remains available for ordering that files
 cannot express, and duplicate edges are deduplicated.
