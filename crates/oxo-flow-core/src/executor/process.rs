@@ -529,8 +529,58 @@ impl LocalExecutor {
 
         match output {
             Ok(o) if o.status.success() => {
-                self.env_resolver.cache_mark_ready(&key).await;
-                Ok(())
+                // Setup reported success — but conda/mamba can exit 0 while
+                // leaving a broken env behind (interrupted transactions on
+                // loaded machines; live evidence: tx-ubuntu, where
+                // `conda env update --prune` left an env with no bin/ and
+                // exit code 0). Verify usability; on failure, tear the env
+                // down and retry setup once before reporting an error.
+                match self.env_resolver.verify_command(env_spec)? {
+                    None => {
+                        self.env_resolver.cache_mark_ready(&key).await;
+                        Ok(())
+                    }
+                    Some(verify) => {
+                        let mut verified = Self::env_verify(self, &verify).await;
+                        if !verified
+                            && let Ok(Some(teardown)) = self.env_resolver.teardown_command(env_spec)
+                        {
+                            tracing::warn!(
+                                rule = %rule.name,
+                                "environment setup exited 0 but verification failed — tearing down and retrying once"
+                            );
+                            let _ = Command::new("sh")
+                                .arg("-c")
+                                .arg(&teardown)
+                                .current_dir(&self.config.workdir)
+                                .output()
+                                .await;
+                            if let Ok(retry) = Command::new("sh")
+                                .arg("-c")
+                                .arg(&setup_cmd)
+                                .current_dir(&self.config.workdir)
+                                .output()
+                                .await
+                                && retry.status.success()
+                            {
+                                verified = Self::env_verify(self, &verify).await;
+                            }
+                        }
+                        if verified {
+                            self.env_resolver.cache_mark_ready(&key).await;
+                            Ok(())
+                        } else {
+                            Err(OxoFlowError::Environment {
+                                kind: env_spec.kind().to_string(),
+                                message:
+                                    "environment setup exited 0 but verification failed — the \
+                                     environment is broken (a previous interrupted creation \
+                                     may have left a partial prefix)"
+                                        .to_string(),
+                            })
+                        }
+                    }
+                }
             }
             Ok(o) => {
                 let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
@@ -557,6 +607,17 @@ impl LocalExecutor {
                 })
             }
         }
+    }
+
+    /// Run an environment verification command (success = usable env).
+    async fn env_verify(&self, verify: &str) -> bool {
+        Command::new("sh")
+            .arg("-c")
+            .arg(verify)
+            .current_dir(&self.config.workdir)
+            .output()
+            .await
+            .is_ok_and(|o| o.status.success())
     }
 
     fn resolve_command(&self, command: &str, rule: &Rule, scratch_dir: Option<&Path>) -> String {

@@ -42,6 +42,16 @@ pub trait EnvironmentBackend: Send + Sync {
     /// or `None` if no cleanup is needed.
     fn teardown_command(&self, spec: &str) -> Result<Option<String>>;
 
+    /// Return a shell command that verifies the environment is actually
+    /// usable after setup, or `None` when setup success is sufficient proof.
+    ///
+    /// Needed because conda/mamba's create/update can exit 0 while leaving
+    /// a broken env behind (interrupted transactions on loaded machines;
+    /// prefixes that exist but are not complete environments — live evidence:
+    /// tx-ubuntu, where `conda env update --prune` left an env with no
+    /// `bin/` and the engine marked it ready on exit code alone).
+    fn verify_command(&self, spec: &str) -> Result<Option<String>>;
+
     /// Return a cache key that uniquely identifies this environment
     /// configuration so it can be reused across rules.
     fn cache_key(&self, spec: &str) -> String;
@@ -118,6 +128,16 @@ impl EnvironmentBackend for CondaBackend {
     fn teardown_command(&self, spec: &str) -> Result<Option<String>> {
         let env_name = conda_env_name_from_spec(spec);
         Ok(Some(format!("conda env remove -n {env_name} -y")))
+    }
+
+    fn verify_command(&self, spec: &str) -> Result<Option<String>> {
+        // `conda run` succeeds even when the env's own bin/ is missing
+        // (tools then resolve from the system PATH), so the check must
+        // target the env prefix itself — CONDA_PREFIX is set by `conda run`.
+        let env_name = conda_env_name_from_spec(spec);
+        Ok(Some(format!(
+            "conda run -n {env_name} bash -c 'test -d \"$CONDA_PREFIX/bin\"'"
+        )))
     }
 
     fn cache_key(&self, spec: &str) -> String {
@@ -351,6 +371,14 @@ impl EnvironmentBackend for MambaBackend {
         Ok(Some(format!("{} env remove -n {env_name} -y", self.binary)))
     }
 
+    fn verify_command(&self, spec: &str) -> Result<Option<String>> {
+        let env_name = conda_env_name_from_spec(spec);
+        Ok(Some(format!(
+            "{} run -n {env_name} bash -c 'test -d \"$CONDA_PREFIX/bin\"'",
+            self.binary
+        )))
+    }
+
     fn cache_key(&self, spec: &str) -> String {
         format!("mamba:{}:{spec}", self.binary)
     }
@@ -402,6 +430,10 @@ impl EnvironmentBackend for DockerBackend {
     }
 
     fn teardown_command(&self, _spec: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn verify_command(&self, _spec: &str) -> Result<Option<String>> {
         Ok(None)
     }
 
@@ -480,6 +512,10 @@ impl EnvironmentBackend for SingularityBackend {
         Ok(None)
     }
 
+    fn verify_command(&self, _spec: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
     fn cache_key(&self, spec: &str) -> String {
         format!("singularity:{spec}")
     }
@@ -526,6 +562,10 @@ impl EnvironmentBackend for VenvBackend {
             });
         }
         Ok(Some(format!("rm -rf {spec}")))
+    }
+
+    fn verify_command(&self, _spec: &str) -> Result<Option<String>> {
+        Ok(None)
     }
 
     fn cache_key(&self, spec: &str) -> String {
@@ -589,6 +629,10 @@ impl EnvironmentBackend for PixiBackend {
         Ok(None)
     }
 
+    fn verify_command(&self, _spec: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
     fn cache_key(&self, spec: &str) -> String {
         format!("pixi:{spec}")
     }
@@ -623,6 +667,10 @@ impl EnvironmentBackend for SystemBackend {
     }
 
     fn teardown_command(&self, _spec: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn verify_command(&self, _spec: &str) -> Result<Option<String>> {
         Ok(None)
     }
 
@@ -682,6 +730,10 @@ fi
     }
 
     fn teardown_command(&self, _spec: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn verify_command(&self, _spec: &str) -> Result<Option<String>> {
         Ok(None)
     }
 
@@ -958,6 +1010,34 @@ impl EnvironmentResolver {
             return self.modules.setup_command(&env_spec.modules.join(","));
         }
         self.system.setup_command("")
+    }
+
+    /// Post-setup usability check for the environment (conda/mamba verify
+    /// the env's `bin/` exists; other backends return `None`).
+    pub fn verify_command(&self, env_spec: &EnvironmentSpec) -> Result<Option<String>> {
+        if let Some(ref mamba) = env_spec.mamba {
+            return self.mamba.verify_command(mamba);
+        }
+        if let Some(ref conda) = env_spec.conda {
+            return self.conda.verify_command(conda);
+        }
+        Ok(None)
+    }
+
+    /// Get the teardown command for an environment specification
+    /// (removes the env so a broken one can be recreated cleanly).
+    pub fn teardown_command(&self, env_spec: &EnvironmentSpec) -> Result<Option<String>> {
+        if let Some(ref mamba) = env_spec.mamba {
+            return self
+                .mamba
+                .teardown_command_with_opts(mamba, env_spec.mamba_prefix.as_deref());
+        }
+        if let Some(ref conda) = env_spec.conda {
+            return self
+                .conda
+                .teardown_command_with_opts(conda, env_spec.conda_prefix.as_deref());
+        }
+        Ok(None)
     }
 
     /// Check which environment backends are available on the system.
@@ -1435,6 +1515,32 @@ mod tests {
         let backend = MambaBackend::new();
         let result = backend.teardown_command("envs/qc.yaml").unwrap();
         assert!(result.unwrap().contains("env remove"));
+    }
+
+    #[test]
+    fn conda_verify_command_checks_env_bin_directory() {
+        let backend = CondaBackend;
+        let cmd = backend.verify_command("envs/qc.yaml").unwrap().unwrap();
+        assert!(cmd.contains("conda run -n qc"));
+        // The check must target the env's own prefix (CONDA_PREFIX), not a
+        // tool lookup — a broken env with no bin/ still lets `true` resolve
+        // from the system PATH.
+        assert!(cmd.contains("test -d"));
+        assert!(cmd.contains("CONDA_PREFIX/bin"));
+    }
+
+    #[test]
+    fn mamba_verify_command_uses_binary() {
+        let backend = MambaBackend::new();
+        let cmd = backend.verify_command("envs/qc.yaml").unwrap().unwrap();
+        assert!(cmd.contains("mamba run -n qc"));
+        assert!(cmd.contains("CONDA_PREFIX/bin"));
+    }
+
+    #[test]
+    fn docker_verify_command_is_none() {
+        let backend = DockerBackend;
+        assert!(backend.verify_command("image:tag").unwrap().is_none());
     }
 
     #[test]
