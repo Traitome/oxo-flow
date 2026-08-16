@@ -964,7 +964,9 @@ async fn web_wildcard_run_status_matches_checkpoint_instances() {
     );
 }
 
-/// P1-07 regression (issue #79): the Samples field was wired to `--sample`
+/// P1-07 regression (issue #79): the Samples field must filter the cohort
+/// (it was once wired to the old `--sample` append flag, which ran the full
+/// cohort — that flag no longer exists; the field maps to `--samples`)
 /// (append) so filling in a name silently ran the FULL cohort plus a phantom
 /// sample. Now it maps to `--samples` filter semantics: a known sample runs
 /// alone; an unknown name warns and fails instead of phantom-executing.

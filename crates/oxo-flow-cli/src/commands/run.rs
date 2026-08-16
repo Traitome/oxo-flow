@@ -420,57 +420,6 @@ fn apply_cli_overrides(
     Ok(())
 }
 
-/// Merge `--sample` CLI flags into sample groups and `samples_list` — the
-/// same merge `run` performs (shared with dry-run, issue #77 parity).
-fn merge_extra_samples(config: &mut WorkflowConfig, extra_samples: &[String]) {
-    if extra_samples.is_empty() {
-        return;
-    }
-    if let Some(group) = config
-        .sample_groups
-        .iter_mut()
-        .find(|g| g.name == "auto-discovered")
-    {
-        for s in extra_samples {
-            if !group.samples.contains(s) {
-                group.samples.push(s.clone());
-            }
-        }
-    } else {
-        config
-            .sample_groups
-            .push(oxo_flow_core::config::SampleGroup {
-                name: "cli-specified".to_string(),
-                samples: extra_samples.to_vec(),
-                metadata: std::collections::HashMap::new(),
-            });
-    }
-    let existing = config
-        .config
-        .get("samples_list")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let mut merged: Vec<String> = existing
-        .split(',')
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .collect();
-    for s in extra_samples {
-        if !merged.contains(s) {
-            merged.push(s.clone());
-        }
-    }
-    config.config.insert(
-        "samples_list".to_string(),
-        toml::Value::String(merged.join(",")),
-    );
-    eprintln!(
-        "  {} Added {} sample(s) via --sample flag",
-        "Samples:".cyan(),
-        extra_samples.len()
-    );
-}
-
 #[allow(clippy::too_many_arguments)]
 pub async fn run_command(
     workflow: Option<PathBuf>,
@@ -490,7 +439,6 @@ pub async fn run_command(
     provenance: bool,
     json: bool,
     cli_args: Vec<String>,
-    extra_samples: Vec<String>,
     ai_recover: bool,
     _ai_max_retries: Option<u32>,
     samples_filter: Vec<String>,
@@ -558,10 +506,7 @@ pub async fn run_command(
 
     apply_cli_overrides(&mut config, &cli_arg_values)?;
 
-    // ── Merge --sample CLI flags into sample groups and samples_list ───
-    merge_extra_samples(&mut config, &extra_samples);
-
-    // ── Filter to a sample subset (--samples first:N / names / ready) ────
+    // ── Filter to a sample subset (--samples @path / first:N / names / ready) ────
     // Runs after CLI overrides so `ready` resolution sees the final config
     // values in `{config.x}` paths (issue #63).
     if !samples_filter.is_empty()
@@ -2057,7 +2002,6 @@ pub async fn dry_run_command(
     profile: Option<String>,
     skip_ref_build: bool,
     cli_args: Vec<String>,
-    extra_samples: Vec<String>,
     rerun: bool,
     resume_failed: bool,
 ) -> Result<()> {
@@ -2071,8 +2015,8 @@ pub async fn dry_run_command(
     let mut config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
-    // ── CLI config overrides + --sample (shared with run, issue #77) ─────
-    // Applied in run's exact order: overrides first, then --sample, then
+    // ── CLI config overrides (shared with run, issue #77) ─────
+    // Applied in run's exact order: overrides first, then
     // the --samples subset filter — so the preview config is structurally
     // identical to what `run` would execute. The workflow's own [config]
     // keys gate the `--KEY VALUE` space form (same rule as run, issue #71).
@@ -2080,7 +2024,6 @@ pub async fn dry_run_command(
         config.config.keys().cloned().collect();
     let cli_arg_values = parse_cli_overrides(cli_args, &declared_config_keys)?;
     apply_cli_overrides(&mut config, &cli_arg_values)?;
-    merge_extra_samples(&mut config, &extra_samples);
 
     // ── Filter to a sample subset (--samples first:N / names / ready) ──
     // `ready` resolves against a scratch expanded clone; the report covers
@@ -3263,7 +3206,6 @@ pub async fn resume_command(
         false,             // provenance (checkpoint already has checksums)
         false,             // json (resume defaults to human-readable)
         Vec::new(),        // cli_args (resume reuses checkpoint state)
-        Vec::new(),        // extra_samples (resume uses existing groups)
         ai_recover,
         ai_max_retries,
         Vec::new(), // samples_filter (resume restores checkpoint state as-is)

@@ -188,3 +188,58 @@ fastq files over days), check readiness with
 [`dry-run`](../commands/dry-run.md#sample-readiness) and run what is
 complete with
 [`--samples ready`](../commands/run.md#incremental-data-arrival-samples-ready).
+
+## Selecting Samples on the Command Line
+
+`--samples` is the single selection entry point. One parameter, four
+orthogonal semantics — **replace**, **append**, and **filter** (by name,
+pilot size, or readiness):
+
+| Spec | Semantics |
+| --- | --- |
+| `--samples @sheet.tsv` | **Replace** — the sheet's groups become the run set, overwriting the workflow's inline / auto-discovered / file-loaded groups |
+| `--samples +@sheet.tsv` | **Append** — same-name groups merge (union, deduplicated); new group names are added. `[[pairs]]` are untouched: appending can only add samples |
+| `--samples S1,S2` | **Filter** on workflows with declared samples (unknown names fail — no phantom samples); **declare** on workflows that ship with no samples at all (the template-workflow invocation pattern) |
+| `--samples first:3` / `--samples ready` | **Filter** — narrow the (possibly replaced, appended, or declared) set to a subset / to samples whose entry inputs are complete (see [Incremental data arrival](#incremental-data-arrival-samples-ready)) |
+
+Sheet specs apply in order and can combine with filters:
+`--samples @real.tsv,first:2` replaces with `real.tsv` then runs the first
+two. A later `@path` resets earlier `+@path` appends (the last replace
+wins).
+
+### Replacing fixture samples with real identifiers
+
+The core invocation-side use case: a workflow ships with fixture names
+(e.g. `S1`/`S2`) and the caller runs real identifiers without editing the
+file:
+
+```bash
+# samplesheet.tsv: one group per row (TSV / CSV / JSON)
+#   name     samples
+#   cohort   SRR6357072,SRR6357076
+
+oxo-flow run cohort.oxoflow --samples @samplesheet.tsv
+```
+
+The sheet's groups **replace** the inline `[[sample_groups]]` (and any
+`sample_pattern` / `sample_groups_file` sources). Samples the workflow never
+declared are **added** as new samples, so `{group}`/`{sample}` expansion
+binds to the override. `[[pairs]]` whose experiment/control are no longer
+selected are dropped, and stale injected `samples_<group>` config keys for
+dropped groups are pruned. A sheet with no data rows (or rows with empty
+samples) fails the run loudly — it never silently falls back to the
+workflow's own samples.
+
+### Appending to a cohort
+
+```bash
+# Adds S3 to the declared cohort (S2 is deduplicated):
+#   name     samples
+#   cohort   S2,S3
+oxo-flow run cohort.oxoflow --samples +@more.tsv
+```
+
+Same-name groups merge with the declared samples (union, deduplicated,
+original order preserved); a new group name adds a whole new group.
+`[[pairs]]` stay as declared — appending never removes a pair's side.
+
