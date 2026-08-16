@@ -144,12 +144,6 @@ pub enum Commands {
             help = "Direct config overrides: KEY=VALUE or --KEY=VALUE; --KEY VALUE (space form) is accepted for declared [config] keys — unknown --flags are rejected"
         )]
         config_overrides: Vec<String>,
-        #[arg(
-            long = "sample",
-            value_name = "SAMPLE",
-            help = "Add a sample to the run (repeatable, merges with all sources)"
-        )]
-        extra_samples: Vec<String>,
         /// Enable AI error recovery on rule failure.
         #[arg(long)]
         ai_recover: bool,
@@ -157,12 +151,11 @@ pub enum Commands {
         #[arg(long = "ai-max-retries", value_name = "N")]
         ai_max_retries: Option<u32>,
         /// Filter to a subset of samples: `first:N` or explicit names
-        /// (repeatable, comma-separated). Mutually exclusive with --sample.
+        /// (repeatable, comma-separated)
         #[arg(
             long = "samples",
             value_name = "LIST",
-            conflicts_with = "extra_samples",
-            help = "Run only these samples: first:N (pilot), explicit names, or ready (complete inputs; repeatable, comma-separated)"
+            help = "Sample selection: '@path' replaces the workflow's samples from a samplesheet, '+@path' appends (same-name groups merge); names, first:N (pilot), or ready (complete inputs) filter to a subset. Repeatable, comma-separated."
         )]
         samples_filter: Vec<String>,
         /// Re-execute every rule selected for this run even if outputs are
@@ -242,7 +235,7 @@ pub enum Commands {
         #[arg(
             long = "samples",
             value_name = "LIST",
-            help = "Preview only these samples: first:N (pilot), explicit names, or ready (complete inputs; repeatable, comma-separated)"
+            help = "Sample selection: '@path' replaces the workflow's samples from a samplesheet, '+@path' appends (same-name groups merge); names, first:N (pilot), or ready (complete inputs) filter to a subset. Repeatable, comma-separated."
         )]
         samples_filter: Vec<String>,
         #[arg(
@@ -279,13 +272,6 @@ pub enum Commands {
         )]
         config_overrides: Vec<String>,
         /// Add a sample to the preview (repeatable, merges with all
-        /// sources) — same semantics as `run --sample`.
-        #[arg(
-            long = "sample",
-            value_name = "SAMPLE",
-            help = "Add a sample to the run (repeatable, merges with all sources)"
-        )]
-        extra_samples: Vec<String>,
         /// Force re-execution of this run's rules (ignore up-to-date
         /// checks) — previews exactly what `run --rerun` would execute.
         #[arg(long)]
@@ -1023,7 +1009,6 @@ async fn main() -> Result<()> {
             yes,
             args,
             config_overrides,
-            extra_samples,
             ai_recover,
             ai_max_retries,
             samples_filter,
@@ -1146,7 +1131,6 @@ async fn main() -> Result<()> {
                 provenance,
                 cli.json,
                 merged_args,
-                extra_samples,
                 ai_recover,
                 ai_max_retries,
                 samples_filter,
@@ -1188,7 +1172,6 @@ async fn main() -> Result<()> {
             skip_ref_build,
             args,
             config_overrides,
-            extra_samples,
             rerun,
             resume_failed,
         } => {
@@ -1208,7 +1191,6 @@ async fn main() -> Result<()> {
                 profile,
                 skip_ref_build,
                 merged_args,
-                extra_samples,
                 rerun,
                 resume_failed,
             )
@@ -1463,7 +1445,6 @@ async fn main() -> Result<()> {
                 profile.clone(),
                 false,
                 vec![],
-                vec![],
                 false,
                 false,
             )
@@ -1494,7 +1475,6 @@ async fn main() -> Result<()> {
                     false,           // provenance
                     cli.json,
                     vec![], // cli_args
-                    vec![], // extra_samples
                     false,  // ai_recover
                     None,   // ai_max_retries
                     samples_filter.clone(),

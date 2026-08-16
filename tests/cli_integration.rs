@@ -114,6 +114,126 @@ fn cli_samples_pilot_then_scale_up() {
     assert!(dir.path().join("out/S3.txt").exists());
 }
 
+/// `--samples @sheet` REPLACES inline fixture samples with the sheet's —
+/// the invocation-side sample swap (workflow ships S1/S2, caller runs
+/// real identifiers without editing the file).
+#[test]
+fn cli_samples_sheet_override_replaces_inline_fixtures() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("cohort.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"cohort\"\nversion = \"1.0.0\"\n\n[[sample_groups]]\nname = \"cohort\"\nsamples = [\"S1\", \"S2\"]\n\n[[rules]]\nname = \"analyze\"\noutput = [\"out/{sample}.txt\"]\nshell = \"echo {sample} > {output}\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("samples.tsv"),
+        "name\tsamples\ncohort\tSRR6357072,SRR6357076\n",
+    )
+    .unwrap();
+
+    let run = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--samples", "@samples.tsv"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "override run failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(dir.path().join("out/SRR6357072.txt").exists());
+    assert!(dir.path().join("out/SRR6357076.txt").exists());
+    assert!(
+        !dir.path().join("out/S1.txt").exists(),
+        "fixture samples must be replaced, not run"
+    );
+}
+
+/// `+@sheet` APPENDS: same-name groups merge, new groups are added.
+#[test]
+fn cli_samples_sheet_append_merges_with_declared() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("cohort.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"cohort\"\nversion = \"1.0.0\"\n\n[[sample_groups]]\nname = \"cohort\"\nsamples = [\"S1\", \"S2\"]\n\n[[rules]]\nname = \"analyze\"\noutput = [\"out/{sample}.txt\"]\nshell = \"echo {sample} > {output}\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("more.tsv"),
+        "name\tsamples\ncohort\tS2,S3\n",
+    )
+    .unwrap();
+
+    let run = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--samples", "+@more.tsv"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "append run failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    // Declared S1/S2 kept (S2 deduped) + appended S3.
+    assert!(dir.path().join("out/S1.txt").exists());
+    assert!(dir.path().join("out/S2.txt").exists());
+    assert!(dir.path().join("out/S3.txt").exists());
+}
+
+/// dry-run previews the overridden set exactly like run (parity contract).
+#[test]
+fn cli_dry_run_sheet_override_parity_with_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("cohort.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"cohort\"\nversion = \"1.0.0\"\n\n[[sample_groups]]\nname = \"cohort\"\nsamples = [\"S1\", \"S2\"]\n\n[[rules]]\nname = \"analyze\"\noutput = [\"out/{sample}.txt\"]\nshell = \"echo {sample} > {output}\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("samples.tsv"),
+        "name\tsamples\ncohort\tA1,A2\n",
+    )
+    .unwrap();
+
+    let dry = oxo_flow_cmd()
+        .args(["dry-run", wf.to_str().unwrap(), "--samples", "@samples.tsv"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(dry.status.success());
+    let stderr = String::from_utf8_lossy(&dry.stderr);
+    assert!(stderr.contains("A1"), "dry-run must preview A1: {stderr}");
+    assert!(stderr.contains("A2"), "dry-run must preview A2: {stderr}");
+    assert!(
+        !stderr.contains("analyze_cohort_S1"),
+        "fixture samples must not appear: {stderr}"
+    );
+}
+
+/// The deleted --sample flag now errors as unknown (simplicity over
+/// deprecation: --samples @/+/filter covers every selection scenario).
+#[test]
+fn cli_sample_flag_removed_reports_unknown() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("w.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"w\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"r\"\noutput = [\"o.txt\"]\nshell = \"echo hi > o.txt\"\n",
+    )
+    .unwrap();
+    oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--sample", "S1"])
+        .current_dir(dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "'--sample' is a command flag, not a config override",
+        ));
+}
+
 /// --rerun forces re-execution even when outputs are up to date, while a
 /// plain second run skips everything via the checkpoint.
 #[test]

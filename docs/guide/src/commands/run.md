@@ -40,12 +40,11 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--profile` | — | — | Execution profile name, loaded from `profiles/<NAME>.toml` or `profiles/<NAME>.oxoflow` (see [Execution profiles](#execution-profiles)) |
 | `--provenance` | — | — | Track output file checksums for later verification |
 | `--arg` | — | — | Legacy form: set a workflow config value (`KEY=VALUE`). Repeatable. See `[config]` in workflow-format |
-| `--sample` | — | — | Add a sample to the run. Repeatable. Merges with sample_pattern/CSV sources |
 | `--bundle` | — | — | Execute from a published bundle (`.tar.zst` or `.tar.gz`). Extracts, verifies checksums, shows resource requirements, and prompts for confirmation |
 | `--yes` | — | — | Skip the confirmation prompt when running a bundle (required in non-interactive sessions: CI, scripts, redirected input, or `--json`) |
 | `--ai-recover` | — | — | Enable AI error recovery on rule failure |
 | `--ai-max-retries` | — | — | Maximum AI retries (overrides `[ai]` config) |
-| `--samples` | — | `LIST` | Run only a subset of samples: `first:N` (pilot), explicit names, or `ready` (samples whose entry inputs are complete). Repeatable, comma-separated. Filters `[[sample_groups]]`, `sample_pattern` discovery, and `[[pairs]]`. Mutually exclusive with `--sample` |
+| `--samples` | — | `LIST` | Sample selection: `@path` **replaces** the workflow's samples from a samplesheet, `+@path` **appends** (same-name groups merge, new groups added); names **filter** (or **declare** when the workflow ships no samples), `first:N` (pilot) and `ready` (samples whose entry inputs are complete) **filter**. Repeatable, comma-separated |
 | `--rerun` | — | — | Force re-execution of this run's rules (ignore up-to-date checks). Checkpoint records for rules outside this run are kept |
 | `--no-report-snapshot` | — | — | Skip the automatic report snapshot written after the run (see [Report snapshots](#report-snapshots)); `resume` has the same flag |
 | `--verbose` | `-v` | — | Enable debug-level logging |

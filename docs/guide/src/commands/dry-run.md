@@ -11,7 +11,7 @@ oxo-flow dry-run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 ```
 
 `dry-run` accepts the same configuration inputs as `run` — `--arg`,
-`--sample`, trailing `KEY=VALUE` overrides, `--profile`, `--rerun`, and
+trailing `KEY=VALUE` overrides, `--profile`, `--rerun`, and
 `--resume-failed` — and predicts the execution set with the exact same
 machinery (issue #77 parity contract). The preview also mirrors the
 executor's freshness gate: a rule with no checkpoint entry whose outputs
@@ -33,12 +33,11 @@ are up to date is predicted as skipped, exactly as `run` would skip it.
 | Option | Short | Description |
 |---|---|---|
 | `--target` | `-t` | Run only specific target rules and their dependencies (repeatable, prefix matching) |
-| `--samples <LIST>` | — | Preview only a subset of samples: `first:N` (pilot), explicit names, or `ready` (samples whose entry inputs are complete; repeatable, comma-separated) |
+| `--samples <LIST>` | — | Sample selection: `@path` **replaces** the workflow's samples from a samplesheet, `+@path` **appends** (same-name groups merge, new groups added); names **filter** (or **declare** when the workflow ships no samples), `first:N` (pilot) and `ready` (samples whose entry inputs are complete) **filter**. Repeatable, comma-separated |
 | `--workdir <DIR>` | `-d` | Resolve relative paths against this directory (default: the workflow file's directory) |
 | `--profile <NAME>` | — | Execution profile loaded from `profiles/<NAME>.toml` — the SAME merge semantics as `run` |
 | `--arg <KEY=VALUE>` | — | Set a workflow config value (overrides `[config]` defaults). Repeatable |
 | `KEY=VALUE`… | — | Direct config overrides as trailing positionals (`KEY=VALUE`, `--KEY=VALUE`, `--KEY VALUE`) — the same forms `run` accepts; command flags must come before them |
-| `--sample <SAMPLE>` | — | Add a sample to the preview (repeatable, merges with all sources) — same semantics as `run --sample` |
 | `--rerun` | — | Preview `run --rerun`: every rule in the execution set is forced (`when`-false rules still skip) |
 | `--resume-failed` | — | Preview `run --resume-failed`: failed rules re-run, completed rules stay skipped |
 | `--skip-ref-build` | — | Skip automatic reference/index building (assume pre-built) — the preview otherwise lists required builds |

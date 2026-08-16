@@ -1,9 +1,11 @@
-//! `--samples` filtering helpers: pilot subsets, explicit names, and the
-//! `ready` spec for incremental data arrival (issue #63).
+//! `--samples` sample-selection helpers: sheet override (`@path`), sheet
+//! append (`+@path`), name declaration on template workflows, pilot
+//! subsets (`first:N`), explicit-name filters, and the `ready` spec for
+//! incremental data arrival (issue #63).
 
 use anyhow::{Context, Result};
 use colored::Colorize;
-use oxo_flow_core::config::WorkflowConfig;
+use oxo_flow_core::config::{SampleGroup, WorkflowConfig};
 use oxo_flow_core::readiness::ReadinessReport;
 
 /// Replace a `ready` spec (issue #63) with the names of samples whose entry
@@ -66,7 +68,102 @@ pub(crate) fn apply_samples_filter(
     bail_on_empty: bool,
     base_dir: &std::path::Path,
 ) -> Result<Option<ReadinessReport>> {
-    let (resolved, report) = resolve_ready_spec(config, specs, base_dir)?;
+    // Split specs, applying sheet operations IN ORDER (a later `@path`
+    // resets earlier `+@path` appends):
+    //   `@path`  — REPLACE: the sheet's groups override the workflow's set
+    //              (samples the workflow never declared become the new set);
+    //   `+@path` — APPEND: same-name groups merge (union, dedup), new
+    //              groups are added — the sheet can only add samples;
+    //   names / `first:N` / `ready` — FILTER the (possibly replaced or
+    //              appended) set to a subset; unknown names fail (issue
+    //              #79's phantom-sample guard). Filters apply AFTER every
+    //              sheet op, regardless of their position in the spec.
+    let mut did_sample_op = false;
+    let mut filter_specs: Vec<String> = Vec::new();
+    for spec in specs {
+        for part in spec.split(',') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            let (action, path) = if let Some(path) = part.strip_prefix("+@") {
+                ("append", path)
+            } else if let Some(path) = part.strip_prefix('@') {
+                ("override", path)
+            } else {
+                filter_specs.push(part.to_string());
+                continue;
+            };
+            let groups = SampleGroup::load_from_file(std::path::Path::new(path))
+                .with_context(|| format!("failed to load samplesheet '{path}'"))?;
+            // A samplesheet with no data rows must fail loudly: silently
+            // falling back to the discovered samples would run the WRONG
+            // set (the whole point of the @ signals is explicitness).
+            if groups.is_empty() {
+                anyhow::bail!(
+                    "--samples {} '{path}' contains no sample rows \
+                     (expected a 'name'/'samples' sheet)",
+                    if action == "append" { "+@" } else { "@" }
+                );
+            }
+            if action == "append" {
+                config.append_sample_groups(groups)?;
+            } else {
+                let kept = config.override_sample_groups(groups)?;
+                // An override that selects nothing is a static authoring
+                // error — never a silent zero-instance run.
+                if kept.is_empty() {
+                    anyhow::bail!(
+                        "--samples @path override produced no samples (all rows are empty)"
+                    );
+                }
+            }
+            did_sample_op = true;
+        }
+    }
+
+    // No subset filter: the sheet operation alone defines the run set.
+    if did_sample_op && filter_specs.is_empty() {
+        let total: usize = config.sample_groups.iter().map(|g| g.samples.len()).sum();
+        eprintln!(
+            "  {} Running {} sample(s) via --samples (sheet selection)",
+            "Samples:".cyan(),
+            total
+        );
+        return Ok(None);
+    }
+
+    // Bare names on a workflow that declares NO samples are a sample
+    // DECLARATION (replace), not a filter — the template-workflow
+    // invocation pattern (`--samples SRR1,SRR2` on a workflow shipped
+    // without fixtures). On a workflow WITH declared samples the same
+    // names keep their filter semantics, so the phantom-sample guard
+    // still fails typos there.
+    let mut bare_names: Vec<String> = Vec::new();
+    let mut pure_filter_specs: Vec<String> = Vec::new();
+    for part in &filter_specs {
+        if part.starts_with("first:") || part == "ready" {
+            pure_filter_specs.push(part.clone());
+        } else {
+            bare_names.push(part.clone());
+        }
+    }
+    if config.sample_groups.is_empty() && !bare_names.is_empty() {
+        config.override_samples(&bare_names)?;
+        if pure_filter_specs.is_empty() {
+            eprintln!(
+                "  {} Running {} sample(s) via --samples (name declaration)",
+                "Samples:".cyan(),
+                bare_names.len()
+            );
+            return Ok(None);
+        }
+        // Template workflow + names + first:N/ready: names declare the
+        // set, the remaining specs filter it.
+        filter_specs = pure_filter_specs;
+    }
+
+    let (resolved, report) = resolve_ready_spec(config, &filter_specs, base_dir)?;
     let pairs_before = config.pairs.len();
     let (kept, unknown) = config.filter_samples(&resolved)?;
     let pairs_dropped = pairs_before - config.pairs.len();
@@ -156,5 +253,153 @@ pub(crate) fn print_readiness_section(report: &ReadinessReport) {
             "⚠".yellow(),
             report.missing_global.join(", ")
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oxo_flow_core::config::WorkflowConfig;
+
+    fn config_with_inline_samples() -> WorkflowConfig {
+        WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1", "S2"]
+
+            [[rules]]
+            name = "align"
+            input = ["raw/{sample}.fq"]
+            output = ["aln/{sample}.bam"]
+            shell = "touch {output}"
+            "#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn samplesheet_override_replaces_inline_samples() {
+        let path = std::env::temp_dir().join("oxo_flow_override_test_samples.tsv");
+        std::fs::write(&path, "name\tsamples\ncohort\tSRR1,SRR2\n").unwrap();
+
+        let mut config = config_with_inline_samples();
+        let spec = format!("@{}", path.display());
+        let result = apply_samples_filter(&mut config, &[spec], true, std::path::Path::new("."));
+        let _ = std::fs::remove_file(&path);
+        assert!(result.is_ok(), "override should succeed: {result:?}");
+        assert_eq!(config.sample_groups.len(), 1);
+        assert_eq!(config.sample_groups[0].name, "cohort");
+        assert_eq!(
+            config.sample_groups[0].samples,
+            vec!["SRR1".to_string(), "SRR2".to_string()]
+        );
+    }
+
+    #[test]
+    fn append_sheet_merges_same_name_group() {
+        let path = std::env::temp_dir().join("oxo_flow_append_test_samples.tsv");
+        std::fs::write(&path, "name\tsamples\ncohort\tS2,S3\n").unwrap();
+
+        let mut config = config_with_inline_samples();
+        let spec = format!("+@{}", path.display());
+        let result = apply_samples_filter(&mut config, &[spec], true, std::path::Path::new("."));
+        let _ = std::fs::remove_file(&path);
+        assert!(result.is_ok(), "append should succeed: {result:?}");
+        // S1 from the workflow, S2 deduped, S3 appended.
+        assert_eq!(
+            config.sample_groups[0].samples,
+            vec!["S1".to_string(), "S2".to_string(), "S3".to_string()]
+        );
+    }
+
+    #[test]
+    fn empty_samplesheet_fails_loudly() {
+        // Header-only sheet: must fail — silently falling back to the
+        // workflow's own samples would run the WRONG set.
+        let path = std::env::temp_dir().join("oxo_flow_empty_samples.tsv");
+        std::fs::write(&path, "name\tsamples\n").unwrap();
+
+        let mut config = config_with_inline_samples();
+        let spec = format!("@{}", path.display());
+        let result = apply_samples_filter(&mut config, &[spec], true, std::path::Path::new("."));
+        let _ = std::fs::remove_file(&path);
+        assert!(result.is_err(), "empty sheet must fail");
+        assert!(format!("{result:?}").contains("no sample rows"));
+    }
+
+    #[test]
+    fn override_with_only_empty_rows_fails_loudly() {
+        // A row with an empty samples cell selects nothing — a static
+        // authoring error, never a silent zero-instance run.
+        let path = std::env::temp_dir().join("oxo_flow_empty_rows_samples.tsv");
+        std::fs::write(&path, "name\tsamples\ncohort\t\n").unwrap();
+
+        let mut config = config_with_inline_samples();
+        let spec = format!("@{}", path.display());
+        let result = apply_samples_filter(&mut config, &[spec], true, std::path::Path::new("."));
+        let _ = std::fs::remove_file(&path);
+        assert!(result.is_err(), "empty rows must fail");
+        assert!(format!("{result:?}").contains("produced no samples"));
+    }
+
+    #[test]
+    fn bare_names_declare_samples_on_template_workflows() {
+        // A workflow without any declared samples: bare names are a sample
+        // DECLARATION (replace) — the template-workflow invocation pattern.
+        let mut config = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "template"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "analyze"
+            output = ["out/{sample}.txt"]
+            shell = "echo {sample} > {output}"
+            "#,
+        )
+        .unwrap();
+        let result = apply_samples_filter(
+            &mut config,
+            &["SRR1,SRR2".to_string()],
+            true,
+            std::path::Path::new("."),
+        );
+        assert!(result.is_ok(), "name declaration: {result:?}");
+        assert_eq!(config.sample_groups.len(), 1);
+        assert_eq!(config.sample_groups[0].name, "samples");
+        assert_eq!(
+            config.sample_groups[0].samples,
+            vec!["SRR1".to_string(), "SRR2".to_string()]
+        );
+    }
+
+    #[test]
+    fn explicit_names_still_filter_and_reject_unknown() {
+        // Known name → subset filter holds.
+        let mut config = config_with_inline_samples();
+        let result = apply_samples_filter(
+            &mut config,
+            &["S1".to_string()],
+            true,
+            std::path::Path::new("."),
+        );
+        assert!(result.is_ok(), "known name filter: {result:?}");
+        assert_eq!(config.sample_groups[0].samples, vec!["S1".to_string()]);
+
+        // Unknown name → the phantom-sample guard fails the selection.
+        let mut config = config_with_inline_samples();
+        let result = apply_samples_filter(
+            &mut config,
+            &["S99".to_string()],
+            true,
+            std::path::Path::new("."),
+        );
+        assert!(result.is_err(), "unknown name must fail: {result:?}");
     }
 }

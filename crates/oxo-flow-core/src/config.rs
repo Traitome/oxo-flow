@@ -1750,6 +1750,147 @@ impl WorkflowConfig {
         Ok((kept, unknown))
     }
 
+    /// Replace the workflow's sample groups outright and keep the injected
+    /// config lists (`samples_list` / `samples_<group>` / `pairs_list`) and
+    /// `[[pairs]]` in sync with the new set.
+    ///
+    /// This is the "override" path: the given groups REPLACE the inline /
+    /// auto-discovered / file-loaded groups instead of filtering them. It is
+    /// how the CLI lets a workflow ship with fixture samples (e.g. `S1`/`S2`)
+    /// and a caller swap in real identifiers without editing the file.
+    ///
+    /// Returns the final deduplicated, order-preserving sample list.
+    pub fn override_sample_groups(&mut self, groups: Vec<SampleGroup>) -> Result<Vec<String>> {
+        let mut final_samples: Vec<String> = Vec::new();
+        for group in &groups {
+            for sample in &group.samples {
+                if !final_samples.iter().any(|s| s == sample) {
+                    final_samples.push(sample.clone());
+                }
+            }
+        }
+
+        // Group names that existed before the override: their injected
+        // `samples_<group>` keys must not survive when the group is gone
+        // (expand_inputs would keep resolving the stale list).
+        let old_group_names: std::collections::HashSet<String> =
+            self.sample_groups.iter().map(|g| g.name.clone()).collect();
+
+        self.sample_groups = groups;
+
+        // Prune stale injected samples_<group> keys for dropped groups.
+        let new_group_names: std::collections::HashSet<String> =
+            self.sample_groups.iter().map(|g| g.name.clone()).collect();
+        for stale in old_group_names.difference(&new_group_names) {
+            self.config.remove(&format!("samples_{stale}"));
+        }
+
+        // Drop pairs whose experiment/control are no longer selected.
+        self.pairs.retain(|p| {
+            final_samples.iter().any(|s| s == &p.experiment)
+                && p.control
+                    .as_ref()
+                    .is_none_or(|c| final_samples.iter().any(|s| s == c))
+        });
+
+        // Keep the injected config lists in sync with the surviving set.
+        self.config.insert(
+            "samples_list".to_string(),
+            toml::Value::String(final_samples.join(",")),
+        );
+        for group in &self.sample_groups {
+            self.config.insert(
+                format!("samples_{}", group.name),
+                toml::Value::String(group.samples.join(",")),
+            );
+        }
+        let mut pair_ids: Vec<String> = self.pairs.iter().map(|p| p.pair_id.clone()).collect();
+        pair_ids.sort();
+        pair_ids.dedup();
+        self.config.insert(
+            "pairs_list".to_string(),
+            toml::Value::String(pair_ids.join(",")),
+        );
+
+        Ok(final_samples)
+    }
+
+    /// Append sample groups on top of the workflow's current set — the
+    /// "add" counterpart of [`Self::override_sample_groups`] (`+@path` on
+    /// the CLI). A sheet group whose name matches an existing group extends
+    /// it (union, dedup, order-preserving); new group names are added
+    /// as-is. `[[pairs]]` are left untouched: appending can only ADD
+    /// samples, never remove a pair's side.
+    ///
+    /// Returns the final deduplicated, order-preserving sample list.
+    pub fn append_sample_groups(&mut self, groups: Vec<SampleGroup>) -> Result<Vec<String>> {
+        for incoming in groups {
+            if let Some(existing) = self
+                .sample_groups
+                .iter_mut()
+                .find(|g| g.name == incoming.name)
+            {
+                for sample in incoming.samples {
+                    if !existing.samples.contains(&sample) {
+                        existing.samples.push(sample);
+                    }
+                }
+            } else {
+                self.sample_groups.push(incoming);
+            }
+        }
+
+        let mut final_samples: Vec<String> = Vec::new();
+        for group in &self.sample_groups {
+            for sample in &group.samples {
+                if !final_samples.iter().any(|s| s == sample) {
+                    final_samples.push(sample.clone());
+                }
+            }
+        }
+        self.config.insert(
+            "samples_list".to_string(),
+            toml::Value::String(final_samples.join(",")),
+        );
+        for group in &self.sample_groups {
+            self.config.insert(
+                format!("samples_{}", group.name),
+                toml::Value::String(group.samples.join(",")),
+            );
+        }
+        Ok(final_samples)
+    }
+
+    /// Override the workflow's samples with a flat list — collapses every
+    /// group into a single group (reusing the first group's name, or
+    /// `"samples"` when the workflow declares no groups) so `{group}` /
+    /// `{sample}` expansion keeps working. See [`Self::override_sample_groups`].
+    ///
+    /// Returns the final deduplicated, order-preserving sample list.
+    pub fn override_samples(&mut self, names: &[String]) -> Result<Vec<String>> {
+        let mut final_samples: Vec<String> = Vec::new();
+        for name in names {
+            let name = name.trim();
+            if !name.is_empty() && !final_samples.iter().any(|s| s == name) {
+                final_samples.push(name.to_string());
+            }
+        }
+
+        // Reuse the first group's name so `{group}` references keep resolving;
+        // fall back to `"samples"` when the workflow declares no groups.
+        let group_name = self
+            .sample_groups
+            .first()
+            .map(|g| g.name.clone())
+            .unwrap_or_else(|| "samples".to_string());
+
+        self.override_sample_groups(vec![SampleGroup {
+            name: group_name,
+            samples: final_samples,
+            metadata: HashMap::new(),
+        }])
+    }
+
     /// Validate the workflow configuration for internal consistency.
     #[must_use = "validation returns a Result that must be checked"]
     pub fn validate(&self) -> Result<()> {
@@ -4934,6 +5075,228 @@ mod tests {
         "#;
         let mut config = WorkflowConfig::parse(toml).unwrap();
         assert!(config.filter_samples(&["first:abc".to_string()]).is_err());
+    }
+
+    #[test]
+    fn override_samples_replaces_inline_samples() {
+        // `--samples` explicit names replace inline [[sample_groups]] fixture
+        // names instead of filtering them — the fix for "inline samples can't
+        // be replaced from the CLI".
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1", "S2"]
+
+            [[rules]]
+            name = "align"
+            input = ["raw/{sample}.fq"]
+            output = ["aln/{sample}.bam"]
+            shell = "touch {output}"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        let kept = config
+            .override_samples(&["SRR6357072".to_string(), "SRR6357076".to_string()])
+            .unwrap();
+
+        // The explicit list becomes the final set (order preserved).
+        assert_eq!(kept, vec!["SRR6357072", "SRR6357076"]);
+        // One group remains, reusing the original group name.
+        assert_eq!(config.sample_groups.len(), 1);
+        assert_eq!(config.sample_groups[0].name, "cohort");
+        assert_eq!(
+            config.sample_groups[0].samples,
+            vec!["SRR6357072".to_string(), "SRR6357076".to_string()]
+        );
+        // Injected config lists track the new set.
+        assert_eq!(
+            config.config.get("samples_list").and_then(|v| v.as_str()),
+            Some("SRR6357072,SRR6357076")
+        );
+        assert_eq!(
+            config.config.get("samples_cohort").and_then(|v| v.as_str()),
+            Some("SRR6357072,SRR6357076")
+        );
+
+        // {sample} expansion now binds to the override, not S1/S2.
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let rule_names: Vec<&str> = config.rules.iter().map(|r| r.name.as_str()).collect();
+        assert!(rule_names.iter().any(|n| n.contains("SRR6357072")));
+        assert!(rule_names.iter().any(|n| n.contains("SRR6357076")));
+        assert!(
+            !rule_names
+                .iter()
+                .any(|n| n.contains("S1") || n.contains("S2"))
+        );
+    }
+
+    #[test]
+    fn override_samples_dedups_and_prunes_pairs() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1", "S2"]
+
+            [[pairs]]
+            pair_id = "P1"
+            experiment = "S1"
+            control = "S2"
+
+            [[pairs]]
+            pair_id = "P2"
+            experiment = "S3"
+            control = "S4"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        let kept = config
+            .override_samples(&[
+                "S3".to_string(),
+                "S3".to_string(), // duplicate dropped
+                "S4".to_string(),
+            ])
+            .unwrap();
+        assert_eq!(kept, vec!["S3", "S4"]);
+        // P1 (S1/S2) is gone; P2 (S3/S4) survives.
+        assert_eq!(config.pairs.len(), 1);
+        assert_eq!(config.pairs[0].pair_id, "P2");
+        assert_eq!(
+            config.config.get("pairs_list").and_then(|v| v.as_str()),
+            Some("P2")
+        );
+    }
+
+    #[test]
+    fn override_samples_prunes_stale_group_keys() {
+        // Override drops the 'case' group — its injected samples_case key
+        // must be pruned too, or expand_inputs keeps resolving the stale
+        // list (a silent phantom-group reference). Loaded via from_file:
+        // the samples_<group> injection happens on file load, not parse.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("prune.oxoflow");
+        std::fs::write(
+            &path,
+            r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1", "S2"]
+
+            [[sample_groups]]
+            name = "case"
+            samples = ["S3"]
+            "#,
+        )
+        .unwrap();
+        let mut config = WorkflowConfig::from_file(&path).unwrap();
+        assert!(config.config.contains_key("samples_case"));
+        config
+            .override_sample_groups(vec![SampleGroup {
+                name: "cohort".to_string(),
+                samples: vec!["A".to_string(), "B".to_string()],
+                metadata: HashMap::new(),
+            }])
+            .unwrap();
+        assert!(
+            !config.config.contains_key("samples_case"),
+            "stale samples_<group> key must be pruned"
+        );
+        assert_eq!(
+            config
+                .config
+                .get("samples_cohort")
+                .and_then(toml::Value::as_str),
+            Some("A,B")
+        );
+    }
+
+    #[test]
+    fn append_sample_groups_merges_and_adds_without_touching_pairs() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1", "S2"]
+
+            [[pairs]]
+            pair_id = "P1"
+            experiment = "S1"
+            control = "S2"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        let kept = config
+            .append_sample_groups(vec![
+                SampleGroup {
+                    name: "cohort".to_string(),
+                    samples: vec!["S2".to_string(), "S3".to_string()], // S2 dup, S3 new
+                    metadata: HashMap::new(),
+                },
+                SampleGroup {
+                    name: "case".to_string(),
+                    samples: vec!["C1".to_string()],
+                    metadata: HashMap::new(),
+                },
+            ])
+            .unwrap();
+        // Union with dedup, original order preserved; new group appended.
+        assert_eq!(kept, vec!["S1", "S2", "S3", "C1"]);
+        assert_eq!(config.sample_groups.len(), 2);
+        assert_eq!(
+            config.sample_groups[0].samples,
+            vec!["S1".to_string(), "S2".to_string(), "S3".to_string()]
+        );
+        assert_eq!(config.sample_groups[1].name, "case");
+        // Pairs untouched: append can only add samples, never drop sides.
+        assert_eq!(config.pairs.len(), 1);
+        assert_eq!(
+            config
+                .config
+                .get("samples_list")
+                .and_then(toml::Value::as_str),
+            Some("S1,S2,S3,C1")
+        );
+        assert_eq!(
+            config
+                .config
+                .get("samples_case")
+                .and_then(toml::Value::as_str),
+            Some("C1")
+        );
+    }
+
+    #[test]
+    fn override_samples_uses_default_group_name_without_groups() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "align"
+            input = ["raw/{sample}.fq"]
+            output = ["aln/{sample}.bam"]
+            shell = "touch {output}"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        let kept = config
+            .override_samples(&["A".to_string(), "B".to_string()])
+            .unwrap();
+        assert_eq!(kept, vec!["A", "B"]);
+        assert_eq!(config.sample_groups.len(), 1);
+        assert_eq!(config.sample_groups[0].name, "samples");
     }
 
     #[test]

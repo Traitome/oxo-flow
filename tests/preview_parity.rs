@@ -743,7 +743,7 @@ fn parity_arg_override_and_positional_forms_match_run() {
     assert_eq!(a, b, "--arg and KEY=VALUE must agree");
 }
 
-/// 13. `--sample`: preview and run merge CLI samples identically.
+/// 13. `--samples @sheet`: preview and run expand the sheet samples identically.
 ///
 /// The wildcard instance is named `analyze_cli-specified_S2` (group +
 /// underscore naming) while the fixture shell logs `analyze-{sample}` →
@@ -751,7 +751,7 @@ fn parity_arg_override_and_positional_forms_match_run() {
 /// comparing — the parity contract is about WHICH instances run, not the
 /// underscore/hyphen spelling.
 #[test]
-fn parity_sample_flag_expands_the_same_instances() {
+fn parity_samples_sheet_override_expands_the_same_instances() {
     let normalize = |names: &HashSet<String>| -> HashSet<String> {
         names
             .iter()
@@ -781,12 +781,16 @@ output = ["out/{sample}.txt"]
 shell = "echo analyze-{sample} >> exec_log.txt; touch out/{sample}.txt"
 "#;
     let wf = write_workflow(dir.path(), "wf.oxoflow", wf_toml);
-    baseline_run(dir.path(), &wf, &["--sample", "S1"]);
+    // Invocation-side sample selection: a workflow with NO declared samples
+    // gains them from a samplesheet (the `--samples @path` override).
+    fs::write(dir.path().join("s1.tsv"), "name\tsamples\ncohort\tS1\n").unwrap();
+    fs::write(dir.path().join("s2.tsv"), "name\tsamples\ncohort\tS2\n").unwrap();
+    baseline_run(dir.path(), &wf, &["--samples", "@s1.tsv"]);
 
-    let (pred, _) = preview_plan(dir.path(), &["wf.oxoflow", "--sample", "S2"]);
+    let (pred, _) = preview_plan(dir.path(), &["wf.oxoflow", "--samples", "@s2.tsv"]);
     let _ = fs::remove_file(dir.path().join(EXEC_LOG));
     let out = oxo_flow()
-        .args(["run", "-j", "2", "wf.oxoflow", "--sample", "S2"])
+        .args(["run", "-j", "2", "wf.oxoflow", "--samples", "@s2.tsv"])
         .current_dir(dir.path())
         .output()
         .unwrap();
@@ -799,11 +803,11 @@ shell = "echo analyze-{sample} >> exec_log.txt; touch out/{sample}.txt"
     assert_eq!(
         normalize(&pred),
         normalize(&actual),
-        "sample-flag parity violation (pred {pred:?} vs run {actual:?})"
+        "samples-sheet parity violation (pred {pred:?} vs run {actual:?})"
     );
     assert!(
         normalize(&pred).contains("S2"),
-        "expected the new sample's instance: {pred:?}"
+        "expected the sheet sample's instance: {pred:?}"
     );
 }
 
