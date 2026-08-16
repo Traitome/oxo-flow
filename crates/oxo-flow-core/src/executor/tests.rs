@@ -344,6 +344,82 @@ fn render_shell_config_values() {
     assert_eq!(result, "bwa mem /data/ref.fa > hello.txt");
 }
 
+#[test]
+fn render_shell_command_nested_config() {
+    // Nested `{config.x}` references must resolve to a fixed point,
+    // independent of HashMap iteration order.
+    let rule = Rule {
+        name: "test".to_string(),
+        output: vec!["out.bam".to_string()].into(),
+        ..Default::default()
+    };
+    let mut values = HashMap::new();
+    values.insert(
+        "config.reference_dir".to_string(),
+        "/data/refs/GRCh38".to_string(),
+    );
+    values.insert(
+        "config.reference_fasta".to_string(),
+        "{config.reference_dir}/genome.fa".to_string(),
+    );
+    let result = render_shell_command(
+        "bwa mem {config.reference_fasta} > {output[0]}",
+        &rule,
+        &values,
+    );
+    assert_eq!(result, "bwa mem /data/refs/GRCh38/genome.fa > out.bam");
+}
+
+#[test]
+fn render_shell_command_three_level_nested_config() {
+    // Three levels of nesting exercise multi-pass convergence.
+    let rule = Rule {
+        name: "test".to_string(),
+        output: vec!["out.txt".to_string()].into(),
+        ..Default::default()
+    };
+    let mut values = HashMap::new();
+    values.insert("config.a".to_string(), "{config.b}".to_string());
+    values.insert("config.b".to_string(), "{config.c}".to_string());
+    values.insert("config.c".to_string(), "/final".to_string());
+    let result = render_shell_command("cp {config.a} {output[0]}", &rule, &values);
+    assert_eq!(result, "cp /final out.txt");
+}
+
+#[test]
+fn expand_config_in_path_nested() {
+    let mut values = HashMap::new();
+    values.insert("config.dir".to_string(), "/data/out".to_string());
+    values.insert(
+        "config.subdir".to_string(),
+        "{config.dir}/sample".to_string(),
+    );
+    let result = expand_config_in_path("{config.subdir}/file.txt", &values);
+    assert_eq!(result, "/data/out/sample/file.txt");
+}
+
+#[test]
+fn expand_to_fixed_point_cyclic_reference_terminates() {
+    // A cyclic reference never converges; the helper must still terminate
+    // (capped iterations) rather than loop forever. The exact best-effort
+    // result depends on map iteration order, so assert only membership.
+    let mut values = HashMap::new();
+    values.insert("config.a".to_string(), "{config.b}".to_string());
+    values.insert("config.b".to_string(), "{config.a}".to_string());
+    let result = super::expand_to_fixed_point("{config.a}", &values, |value| value.to_owned());
+    assert!(result == "{config.a}" || result == "{config.b}");
+}
+
+#[test]
+fn expand_to_fixed_point_self_reference_terminates() {
+    // `a = "{a}"` substitutes to itself; the loop must detect "no change"
+    // and return instead of spinning.
+    let mut values = HashMap::new();
+    values.insert("config.a".to_string(), "{config.a}".to_string());
+    let result = super::expand_to_fixed_point("{config.a}", &values, |value| value.to_owned());
+    assert_eq!(result, "{config.a}");
+}
+
 #[tokio::test]
 async fn execute_output_index_expansion() {
     let tmp = std::env::temp_dir().join("oxo_test_output_index");
