@@ -261,6 +261,8 @@ pub fn reference_fingerprint(def: &ReferenceDef, config: &HashMap<String, toml::
     add("source", def.source.as_deref().unwrap_or(""));
     add("output", &def.output);
     add("build", &def.build);
+    // A rebuild under a different environment is a different artifact.
+    add("environment", &format!("{:?}", def.environment));
 
     // Config values referenced anywhere in source/output/build, sorted by key
     // so HashMap iteration order never leaks into the fingerprint.
@@ -709,6 +711,7 @@ mod tests {
             build: "bwa index -p {config.ref_dir}/idx {input}".to_string(),
             threads: None,
             memory: None,
+            environment: None,
             description: None,
         };
         let mut config = HashMap::new();

@@ -232,6 +232,7 @@ mod tests {
             build: build.into(),
             threads: None,
             memory: None,
+            environment: None,
             description: None,
         }
     }

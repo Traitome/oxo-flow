@@ -922,6 +922,12 @@ pub async fn run_command(
         eprintln!("  {} {}", "Warning:".bold().yellow(), warning);
     }
 
+    // Same cache dir the executor's EnvironmentResolver uses — reference
+    // builds that declare an environment share the env cache with rules.
+    let env_cache_dir = exec_config
+        .cache_dir
+        .clone()
+        .unwrap_or_else(|| workdir_actual.as_ref().join(".oxo-flow").join("env-cache"));
     let executor = Arc::new(LocalExecutor::new(exec_config));
     let success_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let fail_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -1027,7 +1033,7 @@ pub async fn run_command(
             };
 
             if let Some(reason) = rebuild_reason {
-                let build_cmd = oxo_flow_core::executor::process::render_shell_command(
+                let mut build_cmd = oxo_flow_core::executor::process::render_shell_command(
                     &ref_def.build,
                     &oxo_flow_core::rule::Rule {
                         name: format!("ref:{}", ref_def.name),
@@ -1036,6 +1042,48 @@ pub async fn run_command(
                     },
                     &wildcard_values,
                 );
+                // References that need workflow tools (bowtie2-build, STAR
+                // genomeGenerate, …) declare an `environment` — same spec as
+                // `[rules.environment]`. The env is created on first use and
+                // the build command runs inside it; without one, the build
+                // runs in the bare system shell as before.
+                if let Some(ref env) = ref_def.environment
+                    && !env.is_empty()
+                {
+                    let resolver = oxo_flow_core::environment::EnvironmentResolver::with_cache_dir(
+                        &env_cache_dir,
+                    );
+                    let key = resolver.cache_key(env);
+                    if !resolver.cache_is_ready(&key).await {
+                        let setup = resolver.setup_command(env)?;
+                        let out = tokio::process::Command::new("sh")
+                            .arg("-c")
+                            .arg(&setup)
+                            .current_dir(ref_workdir)
+                            .output()
+                            .await;
+                        match out {
+                            Ok(o) if o.status.success() => {
+                                resolver.cache_mark_ready(&key).await;
+                            }
+                            Ok(o) => {
+                                let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
+                                return Err(anyhow::anyhow!(
+                                    "failed to set up the environment for reference '{}': {}",
+                                    ref_def.name,
+                                    stderr.trim()
+                                ));
+                            }
+                            Err(e) => {
+                                return Err(anyhow::anyhow!(
+                                    "failed to run the environment setup for reference '{}': {e}",
+                                    ref_def.name
+                                ));
+                            }
+                        }
+                    }
+                    build_cmd = resolver.wrap_command(&build_cmd, env, None, ref_workdir)?;
+                }
                 eprintln!(
                     "  {} Building {}: {} ({})",
                     "⚙".cyan().bold(),
