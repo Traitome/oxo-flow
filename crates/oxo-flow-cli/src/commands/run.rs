@@ -11,6 +11,21 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+/// Flatten workflow config values into the `{config.key}` placeholder map
+/// used for path expansion (DAG edge matching, run-time rendering, …).
+fn config_placeholder_values(config: &HashMap<String, toml::Value>) -> HashMap<String, String> {
+    config
+        .iter()
+        .map(|(key, value)| {
+            let string_val = match value {
+                toml::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            (format!("config.{key}"), string_val)
+        })
+        .collect()
+}
+
 /// Print the config-change impact summary (issue #62).
 ///
 /// Distinguishes the full invalidation set (checkpoint mutation; includes
@@ -534,7 +549,11 @@ pub async fn run_command(
         .expand_wildcards()
         .context("failed to expand wildcard rules")?;
 
-    let mut dag = WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;
+    let mut dag = WorkflowDag::from_rules_with_config(
+        &config.rules,
+        &config_placeholder_values(&config.config),
+    )
+    .context("failed to build workflow DAG")?;
 
     let mut order = if target.is_empty() {
         dag.execution_order()?
@@ -630,16 +649,9 @@ pub async fn run_command(
         rerun,
     );
 
-    let mut wildcard_values: HashMap<String, String> = HashMap::new();
     // All config values (including CLI --arg overrides) become {config.key} in templates.
-    for (key, value) in &config.config {
-        let string_val = match value {
-            toml::Value::String(s) => s.clone(),
-            other => other.to_string(),
-        };
-        wildcard_values.insert(format!("config.{key}"), string_val);
-    }
-    let wildcard_values: Arc<HashMap<String, String>> = Arc::new(wildcard_values);
+    let wildcard_values: Arc<HashMap<String, String>> =
+        Arc::new(config_placeholder_values(&config.config));
     let workdir_actual = Arc::new(workdir.as_ref().unwrap_or(&workdir_default).clone());
 
     // ── Input manifest comparison (issue #72) ──────────────────────────────
@@ -1227,8 +1239,11 @@ pub async fn run_command(
             let replayed =
                 oxo_flow_core::reentry::replay_valid_reentries(&mut config, &ck.reentries, &valid)?;
             tracing::info!(count = replayed.len(), "replayed checkpoint re-entries");
-            dag = WorkflowDag::from_rules(&config.rules)
-                .context("failed to rebuild workflow DAG after re-entry replay")?;
+            dag = WorkflowDag::from_rules_with_config(
+                &config.rules,
+                &config_placeholder_values(&config.config),
+            )
+            .context("failed to rebuild workflow DAG after re-entry replay")?;
             order = if target.is_empty() {
                 dag.execution_order()?
             } else {
@@ -2189,7 +2204,11 @@ pub async fn dry_run_command(
         .expand_wildcards()
         .context("failed to expand wildcard rules")?;
 
-    let mut dag = WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;
+    let mut dag = WorkflowDag::from_rules_with_config(
+        &config.rules,
+        &config_placeholder_values(&config.config),
+    )
+    .context("failed to build workflow DAG")?;
 
     // Compute the execution set (respects --target), then display it in
     // parallel-group order — the same grouping `run` uses for scheduling.
@@ -2294,8 +2313,11 @@ pub async fn dry_run_command(
                 count = replayed.len(),
                 "dry-run replayed checkpoint re-entries"
             );
-            dag = WorkflowDag::from_rules(&config.rules)
-                .context("failed to rebuild workflow DAG after re-entry replay")?;
+            dag = WorkflowDag::from_rules_with_config(
+                &config.rules,
+                &config_placeholder_values(&config.config),
+            )
+            .context("failed to rebuild workflow DAG after re-entry replay")?;
             let new_order: Vec<String> = if target.is_empty() {
                 let order_set: std::collections::HashSet<String> =
                     dag.execution_order()?.into_iter().collect();
@@ -2906,7 +2928,11 @@ logical errors. Output format per rule:
         }
     }
 
-    let dag = WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;
+    let dag = WorkflowDag::from_rules_with_config(
+        &config.rules,
+        &config_placeholder_values(&config.config),
+    )
+    .context("failed to build workflow DAG")?;
 
     let rules_to_show: Vec<&oxo_flow_core::rule::Rule> = if let Some(ref name) = rule_name {
         match config.rules.iter().find(|r| r.name == *name) {
@@ -3040,8 +3066,11 @@ async fn process_reentry(
         order_set.insert(name.clone());
         order.push(name.clone());
     }
-    *dag = WorkflowDag::from_rules(&config.rules)
-        .context("failed to rebuild workflow DAG after re-entry")?;
+    *dag = WorkflowDag::from_rules_with_config(
+        &config.rules,
+        &config_placeholder_values(&config.config),
+    )
+    .context("failed to rebuild workflow DAG after re-entry")?;
     tracing::info!(
         rule = %rule.name,
         round = round,
