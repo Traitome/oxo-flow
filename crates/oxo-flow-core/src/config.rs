@@ -1393,15 +1393,19 @@ impl<S> WorkflowState<S> {
 
 /// Expand `{config.name}` placeholders in a path using provided config values.
 fn expand_config_vars_in_path(path: &str, config: &HashMap<String, toml::Value>) -> String {
-    let mut result = path.to_string();
-    for (key, value) in config {
-        let string_val = match value {
-            toml::Value::String(s) => s.clone(),
-            other => other.to_string(),
-        };
-        result = result.replace(&format!("{{config.{key}}}"), &string_val);
-    }
-    result
+    // Stringify every value once, then expand to a fixed point so nested
+    // `{config.x}` references resolve regardless of map iteration order.
+    let stringified: HashMap<String, String> = config
+        .iter()
+        .map(|(key, value)| {
+            let string_val = match value {
+                toml::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            (format!("config.{key}"), string_val)
+        })
+        .collect();
+    crate::executor::expand_to_fixed_point(path, &stringified, |value| value.to_owned())
 }
 
 impl WorkflowConfig {

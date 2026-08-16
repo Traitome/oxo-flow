@@ -884,11 +884,7 @@ pub fn should_skip_rule(
 /// Only performs simple key-value substitution (no `{input[N]}` / `{output[N]}` logic).
 /// Used for checking output file existence after expansion of config variables.
 pub fn expand_config_in_path(path: &str, wildcard_values: &HashMap<String, String>) -> String {
-    let mut result = path.to_string();
-    for (key, value) in wildcard_values {
-        result = result.replace(&format!("{{{key}}}"), value);
-    }
-    result
+    super::expand_to_fixed_point(path, wildcard_values, |value| value.to_owned())
 }
 
 /// Validate that declared output files exist after execution.

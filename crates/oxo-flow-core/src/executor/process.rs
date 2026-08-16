@@ -1831,9 +1831,7 @@ fn render_shell_command_inner(
         };
         expanded = expanded.replace(&format!("{{params.{key}}}"), &string_val);
     }
-    for (key, value) in wildcard_values {
-        expanded = expanded.replace(&format!("{{{key}}}"), &render_wildcard_value(value));
-    }
+    expanded = super::expand_to_fixed_point(&expanded, wildcard_values, render_wildcard_value);
     expanded
 }
 
@@ -1841,11 +1839,7 @@ fn render_shell_command_inner(
 /// wildcard values, using shell-friendly rendering for array config values
 /// (same semantics as the trailing wildcard pass of `render_shell_command`).
 fn expand_wildcards_in_pattern(pattern: &str, wildcard_values: &HashMap<String, String>) -> String {
-    let mut expanded = pattern.to_string();
-    for (key, value) in wildcard_values {
-        expanded = expanded.replace(&format!("{{{key}}}"), &render_wildcard_value(value));
-    }
-    expanded
+    super::expand_to_fixed_point(pattern, wildcard_values, render_wildcard_value)
 }
 
 /// Render a path as absolute under `root` when `root` is given and the path
