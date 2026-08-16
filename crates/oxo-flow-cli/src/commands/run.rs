@@ -867,8 +867,6 @@ pub async fn run_command(
         eprintln!("  {} {}", "Warning:".bold().yellow(), warning);
     }
 
-    let exec_max_threads = exec_config.max_threads;
-    let exec_max_memory_mb = exec_config.max_memory_mb;
     let executor = Arc::new(LocalExecutor::new(exec_config));
     let success_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let fail_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -1218,13 +1216,7 @@ pub async fn run_command(
     loop {
         // Check deadlock before each scheduling round.
         if !sched.is_complete() && sched.running_count() == 0 && join_set.is_empty() {
-            sched.check_deadlock(
-                &dag,
-                exec_max_threads.unwrap_or(oxo_flow_core::executor::available_threads()),
-                exec_max_memory_mb
-                    .unwrap_or_else(|| oxo_flow_core::executor::available_memory_gb() * 1024),
-                &config.rules,
-            )?;
+            sched.check_deadlock(&dag)?;
         }
 
         // Submit every rule whose dependencies are now satisfied.

@@ -69,14 +69,10 @@ impl SchedulerState {
     /// Check if the scheduler is in a deadlock state.
     ///
     /// A deadlock occurs if there are pending rules but none are ready to run,
-    /// and no rules are currently running to release resources or satisfy dependencies.
-    pub fn check_deadlock(
-        &self,
-        dag: &WorkflowDag,
-        available_threads: u32,
-        available_memory_mb: u64,
-        rules: &[Rule],
-    ) -> Result<()> {
+    /// and no rules are currently running to release resources or satisfy
+    /// dependencies. (Resource waits cannot deadlock: over-capacity requests
+    /// are clamped by the pool, so any ready rule is always schedulable.)
+    pub fn check_deadlock(&self, dag: &WorkflowDag) -> Result<()> {
         let ready = self.ready_rules(dag)?;
 
         if ready.is_empty() && self.running.is_empty() {
@@ -88,37 +84,6 @@ impl SchedulerState {
                 .collect();
 
             if !pending.is_empty() {
-                // Potential deadlock
-                // Check if any pending rule could EVER run with full system resources
-                for rule_name in &pending {
-                    if let Some(rule) = rules.iter().find(|r| r.name == *rule_name) {
-                        let req_threads = rule.effective_threads();
-                        let req_memory = rule
-                            .effective_memory()
-                            .and_then(parse_memory_mb)
-                            .unwrap_or(0);
-
-                        if req_threads > available_threads {
-                            return Err(crate::OxoFlowError::ResourceExhausted {
-                                rule: rule_name.clone(),
-                                required_threads: req_threads,
-                                available_threads,
-                                required_memory_mb: req_memory,
-                                available_memory_mb,
-                            });
-                        }
-                        if req_memory > available_memory_mb {
-                            return Err(crate::OxoFlowError::ResourceExhausted {
-                                rule: rule_name.clone(),
-                                required_threads: req_threads,
-                                available_threads,
-                                required_memory_mb: req_memory,
-                                available_memory_mb,
-                            });
-                        }
-                    }
-                }
-
                 let rule_list: Vec<String> = pending.iter().take(5).cloned().collect();
                 let suffix = if pending.len() > 5 {
                     format!(" (and {} more)", pending.len() - 5)
@@ -507,6 +472,22 @@ pub fn effective_memory_mb(rule: &Rule, fallback_mb: u64) -> u64 {
     fallback_mb
 }
 
+/// Clamped pool reservation for a rule's threads: requests beyond the pool's
+/// total capacity are clamped — the declared request is the tool's upper
+/// bound (often an upstream HPC label), not a scheduling requirement. An
+/// over-capacity rule reserves the whole pool and therefore runs alone.
+fn reservation_threads(rule: &Rule, capacity: u32) -> u32 {
+    rule.effective_threads().min(capacity)
+}
+
+/// Clamped pool reservation for a rule's memory (MB); unset memory reserves 0.
+fn reservation_memory_mb(rule: &Rule, capacity: u64) -> u64 {
+    rule.effective_memory()
+        .and_then(parse_memory_mb)
+        .unwrap_or(0)
+        .min(capacity)
+}
+
 /// Resource pool tracking available system resources and custom resource groups.
 #[derive(Debug, Clone)]
 pub struct ResourcePool {
@@ -536,14 +517,14 @@ impl ResourcePool {
     }
 
     /// Check if a rule's resource requirements can be satisfied.
-    pub fn can_accommodate(&self, rule: &Rule) -> bool {
-        let required_threads = rule.effective_threads();
-        let required_memory = rule
-            .effective_memory()
-            .and_then(parse_memory_mb)
-            .unwrap_or(0);
-
-        if self.threads < required_threads || self.memory_mb < required_memory {
+    ///
+    /// Requests beyond the pool's total capacity are clamped for the check:
+    /// the declared value is the tool's upper bound, not a hard scheduling
+    /// requirement (an over-capacity rule simply runs alone).
+    pub fn can_accommodate(&self, rule: &Rule, max_threads: u32, max_memory_mb: u64) -> bool {
+        if self.threads < reservation_threads(rule, max_threads)
+            || self.memory_mb < reservation_memory_mb(rule, max_memory_mb)
+        {
             return false;
         }
 
@@ -558,14 +539,14 @@ impl ResourcePool {
         true
     }
 
-    /// Reserve resources for a rule.
-    pub fn reserve(&mut self, rule: &Rule) {
-        self.threads = self.threads.saturating_sub(rule.effective_threads());
-        let mem = rule
-            .effective_memory()
-            .and_then(parse_memory_mb)
-            .unwrap_or(0);
-        self.memory_mb = self.memory_mb.saturating_sub(mem);
+    /// Reserve resources for a rule (clamped to the pool's total capacity).
+    pub fn reserve(&mut self, rule: &Rule, max_threads: u32, max_memory_mb: u64) {
+        self.threads = self
+            .threads
+            .saturating_sub(reservation_threads(rule, max_threads));
+        self.memory_mb = self
+            .memory_mb
+            .saturating_sub(reservation_memory_mb(rule, max_memory_mb));
 
         // Reserve group resources
         for (group_name, &amount) in &rule.resources.groups {
@@ -725,7 +706,35 @@ mod tests {
     fn resource_pool() {
         let rules = make_rules();
         let pool = ResourcePool::new(16, 32768);
-        assert!(pool.can_accommodate(&rules[0]));
+        assert!(pool.can_accommodate(&rules[0], 16, 32768));
+    }
+
+    #[test]
+    fn resource_pool_clamps_requests_beyond_total_capacity() {
+        // A small machine (4 threads, 3.7GB): a rule requesting 96 threads /
+        // 72G must still be schedulable — clamped to the total capacity, it
+        // reserves the whole pool and runs alone.
+        let mut rule = make_rules().into_iter().next().unwrap();
+        rule.resources.threads = 96;
+        rule.resources.memory = Some("72G".to_string());
+
+        let mut pool = ResourcePool::new(4, 3723);
+        assert!(pool.can_accommodate(&rule, 4, 3723));
+        pool.reserve(&rule, 4, 3723);
+        assert_eq!(pool.threads, 0);
+        assert_eq!(pool.memory_mb, 0);
+
+        // A second 1-thread rule cannot fit while the clamped rule holds the
+        // pool — over-capacity rules serialize, they do not oversubscribe.
+        let mut small = make_rules().into_iter().next().unwrap();
+        small.resources.threads = 1;
+        assert!(!pool.can_accommodate(&small, 4, 3723));
+
+        // Release restores the pool exactly.
+        pool.release(&rule, 4, 3723, &HashMap::new());
+        assert_eq!(pool.threads, 4);
+        assert_eq!(pool.memory_mb, 3723);
+        assert!(pool.can_accommodate(&small, 4, 3723));
     }
 
     #[test]

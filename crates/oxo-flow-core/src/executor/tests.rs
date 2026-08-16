@@ -1189,6 +1189,26 @@ async fn check_resources_fails_fast_when_group_is_undeclared() {
 }
 
 #[tokio::test]
+async fn check_resources_clamps_requests_beyond_total_capacity() {
+    // A small machine: 4 threads, 3.7GB. A rule asking for more (96 threads,
+    // 72G — common in ports that copy upstream HPC labels) must still run:
+    // the request is the tool's upper bound, not a scheduling requirement.
+    // The pool math itself is covered by the scheduler's ResourcePool tests.
+    let config = ExecutorConfig {
+        workdir: std::env::temp_dir(),
+        max_threads: Some(4),
+        max_memory_mb: Some(3723),
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    let mut rule = make_rule("star_align", "echo hi");
+    rule.resources.threads = 96;
+    rule.resources.memory = Some("72G".to_string());
+
+    executor.check_resources(&rule).await.unwrap();
+}
+
+#[tokio::test]
 async fn force_rules_bypasses_freshness_skip() {
     let workdir = std::env::temp_dir().join(format!("oxo-force-test-{}", std::process::id()));
     let _ = tokio::fs::remove_dir_all(&workdir).await;

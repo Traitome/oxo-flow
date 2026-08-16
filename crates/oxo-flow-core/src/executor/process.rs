@@ -592,20 +592,32 @@ impl LocalExecutor {
             .and_then(crate::scheduler::parse_memory_mb)
             .unwrap_or(0);
 
-        // Fast-fail: requirement exceeds TOTAL capacity — waiting is futile.
-        if required_threads > self.system_threads || required_memory > self.system_memory_mb {
-            return Err(OxoFlowError::ResourceExhausted {
-                rule: rule.name.clone(),
+        // Requests beyond the machine's total capacity are clamped for pool
+        // accounting: the declared value is the tool's upper bound (often an
+        // upstream HPC label copied verbatim by a port), not a hard scheduling
+        // requirement. An over-capacity rule reserves the whole pool and
+        // therefore runs alone.
+        if required_threads > self.system_threads {
+            tracing::warn!(
+                rule = %rule.name,
                 required_threads,
-                available_threads: self.system_threads,
-                required_memory_mb: required_memory,
-                available_memory_mb: self.system_memory_mb,
-            });
+                available_threads = self.system_threads,
+                "rule requests more threads than the machine provides — clamping the pool reservation (the rule will run alone)"
+            );
+        }
+        if required_memory > self.system_memory_mb {
+            tracing::warn!(
+                rule = %rule.name,
+                required_memory_mb = required_memory,
+                available_memory_mb = self.system_memory_mb,
+                "rule requests more memory than the machine provides — clamping the pool reservation (the rule will run alone)"
+            );
         }
 
         // Fast-fail: a group requirement above the declared capacity (or an
         // undeclared group) can never be satisfied — the wait loop below
-        // would otherwise hang forever.
+        // would otherwise hang forever. Group capacities are explicit user
+        // declarations, so mismatches stay hard errors.
         for (group_name, &required) in &rule.resources.groups {
             let available = self
                 .config
@@ -626,8 +638,8 @@ impl LocalExecutor {
         loop {
             {
                 let mut pool = self.resource_pool.lock().await;
-                if pool.can_accommodate(rule) {
-                    pool.reserve(rule);
+                if pool.can_accommodate(rule, self.system_threads, self.system_memory_mb) {
+                    pool.reserve(rule, self.system_threads, self.system_memory_mb);
                     return Ok(());
                 }
             }
