@@ -115,18 +115,6 @@ pub enum OxoFlowError {
         failed_files: Vec<String>,
     },
 
-    /// Resource exhaustion - rule requires more resources than available.
-    #[error(
-        "resource exhausted: rule '{rule}' requires {required_threads} threads (available: {available_threads}) and {required_memory_mb}MB memory (available: {available_memory_mb}MB)"
-    )]
-    ResourceExhausted {
-        rule: String,
-        required_threads: u32,
-        available_threads: u32,
-        required_memory_mb: u64,
-        available_memory_mb: u64,
-    },
-
     /// Resource group exhaustion - rule requires more of a named group
     /// (e.g. GPUs) than the workflow declares in `[resource_groups]`, or
     /// the group is not declared at all. Waiting can never satisfy this.
@@ -268,29 +256,6 @@ impl OxoFlowError {
                     ))
                 }
             }
-            OxoFlowError::ResourceExhausted {
-                required_threads,
-                available_threads,
-                required_memory_mb,
-                available_memory_mb,
-                ..
-            } => {
-                let mut hints = Vec::new();
-                if *required_threads > *available_threads {
-                    hints.push(format!(
-                        "reduce threads from {} to {} or lower in the rule definition",
-                        required_threads, available_threads
-                    ));
-                }
-                if *required_memory_mb > *available_memory_mb {
-                    hints.push(format!(
-                        "reduce memory from {}MB to {}MB or lower, or use --max-memory to allow more",
-                        required_memory_mb, available_memory_mb
-                    ));
-                }
-                hints.push("use a cluster backend (oxo-flow cluster submit) for larger resource allocations".into());
-                Some(hints.join(". "))
-            }
             OxoFlowError::ResourceGroupExhausted {
                 group,
                 required,
@@ -424,33 +389,17 @@ mod tests {
     }
 
     #[test]
-    fn error_display_resource_exhausted() {
-        let err = OxoFlowError::ResourceExhausted {
-            rule: "heavy".into(),
-            required_threads: 64,
-            available_threads: 8,
-            required_memory_mb: 256000,
-            available_memory_mb: 32000,
-        };
-        let msg = err.to_string();
-        assert!(msg.contains("resource exhausted"));
-        assert!(msg.contains("heavy"));
-        assert!(msg.contains("64"));
-    }
-
-    #[test]
-    fn error_suggestion_resource_exhausted() {
-        let err = OxoFlowError::ResourceExhausted {
-            rule: "big".into(),
-            required_threads: 32,
-            available_threads: 4,
-            required_memory_mb: 128000,
-            available_memory_mb: 16000,
+    fn error_suggestion_resource_group_exhausted() {
+        let err = OxoFlowError::ResourceGroupExhausted {
+            rule: "gpu_job".into(),
+            group: "gpu".into(),
+            required: 2,
+            available: 1,
         };
         let s = err.suggestion();
         assert!(s.is_some());
         let s = s.unwrap();
-        assert!(s.contains("reduce") || s.contains("cluster") || s.contains("memory"));
+        assert!(s.contains("reduce") && s.contains("gpu"));
     }
 
     #[test]
