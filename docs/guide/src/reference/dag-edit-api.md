@@ -211,7 +211,7 @@ keys replace the corresponding section wholesale — send complete sections.
   "source": "dag_editor",
   "operation": "update_workflow",
   "payload": {
-    "patch": {"workflow": {"name": "renamed", "version": "0.13.0", "description": "d"}}
+    "patch": {"workflow": {"name": "renamed", "version": "0.13.1", "description": "d"}}
   }
 }
 ```

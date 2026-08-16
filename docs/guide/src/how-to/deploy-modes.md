@@ -143,7 +143,7 @@ oxo-flow serve
 On startup, oxo-flow prints the version banner, the serve mode and address, and tracing log lines:
 
 ```
-oxo-flow 0.13.0 — Bioinformatics Pipeline Engine
+oxo-flow 0.13.1 — Bioinformatics Pipeline Engine
 Serve: Starting oxo-flow web server in personal mode on 127.0.0.1:8080
  INFO Logging initialized at logs
  INFO AI registry initialized: provider=disabled, model=default, enabled=false
