@@ -490,6 +490,14 @@ pub struct ReferenceDef {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory: Option<String>,
 
+    /// Environment that provides the build tool (e.g. `conda = "envs/bowtie2.yaml"`).
+    /// Without it the build runs in the bare system shell — reference builds
+    /// that need workflow tools (bowtie2-build, STAR genomeGenerate, …)
+    /// must declare one, exactly like `[rules.environment]`.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment: Option<crate::rule::EnvironmentSpec>,
+
     /// Human-readable description.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2030,6 +2038,7 @@ impl WorkflowConfig {
                     build: format!("samtools faidx {base}/genome.fa"),
                     threads: Some(1),
                     memory: Some("2G".into()),
+                    environment: None,
                     description: Some("FASTA index (.fai) — required by IGV, GATK, samtools, and most viewers".into()),
                 },
                 // --- Short-read DNA alignment: BWA (classic, widely used) ---
@@ -2042,6 +2051,7 @@ impl WorkflowConfig {
                     ),
                     threads: Some(8),
                     memory: Some("8G".into()),
+                    environment: None,
                     description: Some("BWA index for short-read DNA alignment (BWA-MEM/BWA-SW)".into()),
                 },
                 // --- Short-read DNA alignment: BWA-MEM2 (1.3-3.1x faster, identical output) ---
@@ -2054,6 +2064,7 @@ impl WorkflowConfig {
                     ),
                     threads: Some(8),
                     memory: Some("16G".into()),
+                    environment: None,
                     description: Some("BWA-MEM2 index — faster BWA replacement, identical alignment output".into()),
                 },
                 // --- Short-read DNA alignment: Bowtie2 ---
@@ -2066,6 +2077,7 @@ impl WorkflowConfig {
                     ),
                     threads: Some(8),
                     memory: Some("8G".into()),
+                    environment: None,
                     description: Some("Bowtie2 index for short-read DNA alignment".into()),
                 },
                 // --- Long-read alignment: Minimap2 (Nanopore, PacBio) ---
@@ -2076,6 +2088,7 @@ impl WorkflowConfig {
                     build: format!("minimap2 -d {base}/genome.fa.mmi {base}/genome.fa"),
                     threads: Some(4),
                     memory: Some("8G".into()),
+                    environment: None,
                     description: Some("Minimap2 index (.mmi) for long-read alignment (Nanopore/PacBio)".into()),
                 },
                 // --- RNA-seq alignment: STAR (splice-aware, gold standard) ---
@@ -2088,6 +2101,7 @@ impl WorkflowConfig {
                     ),
                     threads: Some(16),
                     memory: Some("64G".into()),
+                    environment: None,
                     description: Some("STAR index for splice-aware RNA-seq alignment (~30 GB, 2-6 hours)".into()),
                 },
                 // --- RNA-seq alignment: HISAT2 (hierarchical indexing, smaller memory) ---
@@ -2100,6 +2114,7 @@ impl WorkflowConfig {
                     ),
                     threads: Some(8),
                     memory: Some("8G".into()),
+                    environment: None,
                     description: Some("HISAT2 index for splice-aware RNA-seq alignment (hierarchical, smaller memory)".into()),
                 },
                 // --- Variant calling: Sequence dictionary (.dict) for GATK/Picard ---
@@ -2110,6 +2125,7 @@ impl WorkflowConfig {
                     build: format!("samtools dict {base}/genome.fa -o {base}/genome.dict"),
                     threads: Some(1),
                     memory: Some("4G".into()),
+                    environment: None,
                     description: Some("Sequence dictionary (.dict) for GATK/Picard variant calling".into()),
                 },
             ];
@@ -5534,6 +5550,43 @@ mod tests {
         let aggregate_rule = &config.rules[1];
         // For json_merge, the shell should use jq
         assert!(aggregate_rule.shell.as_ref().unwrap().contains("jq"));
+    }
+
+    #[test]
+    fn reference_def_parses_optional_environment() {
+        let config: WorkflowConfig = toml::from_str(
+            r#"
+[workflow]
+name = "test"
+
+[[references]]
+name = "bowtie2_index"
+output = "refs/bowtie2/genome.fa.1.bt2"
+build = "bowtie2-build refs/genome.fa refs/bowtie2/genome.fa"
+
+[references.environment]
+conda = "envs/bowtie2.yaml"
+"#,
+        )
+        .unwrap();
+
+        let reference = &config.references[0];
+        let env = reference.environment.as_ref().expect("environment parsed");
+        assert_eq!(env.conda.as_deref(), Some("envs/bowtie2.yaml"));
+        // A reference without an environment leaves the field None.
+        let bare: WorkflowConfig = toml::from_str(
+            r#"
+[workflow]
+name = "test"
+
+[[references]]
+name = "faidx"
+output = "refs/genome.fa.fai"
+build = "samtools faidx refs/genome.fa"
+"#,
+        )
+        .unwrap();
+        assert!(bare.references[0].environment.is_none());
     }
 
     #[test]

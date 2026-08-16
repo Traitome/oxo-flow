@@ -297,6 +297,9 @@ build = "mkdir -p {reference_dir}/bwa && bwa index -p {output} {source}"
 threads = 8
 memory = "8G"
 description = "BWA index for alignment"
+
+[references.environment]
+conda = "envs/bwa.yaml"
 ```
 
 ### Fields
@@ -310,6 +313,7 @@ description = "BWA index for alignment"
 | `threads` | Integer | No | CPU threads for the build command |
 | `memory` | String | No | Memory limit (e.g., `"64G"`) |
 | `description` | String | No | Human-readable description |
+| `environment` | Table | No | Environment providing the build tool — same spec as `[rules.environment]` (conda/mamba/docker/…). Without it the build runs in the bare system shell, so builds that need workflow tools (`bowtie2-build`, `STAR --runMode genomeGenerate`, …) **must** declare one. The environment is created on first use and shared with rules through the same cache. |
 
 ### Built-in Builder Templates
 
