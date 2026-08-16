@@ -256,7 +256,12 @@ let ready: Vec<String> = state.ready_rules_prioritized(&dag, &rules)?;
 
 ## Deadlock Detection
 
-The scheduler includes automatic deadlock detection. A deadlock occurs when pending rules exist but none can run — either because their resource requirements exceed the available pool, or because of unresolvable dependency cycles.
+The scheduler includes automatic deadlock detection. A deadlock occurs when pending rules exist but none can run — typically because an upstream rule failed and its dependents stay pending forever, or because of an unresolvable dependency cycle.
+
+Note: resource waits cannot deadlock. Requests beyond the machine's detected
+capacity are clamped (an over-capacity rule reserves the whole pool and runs
+alone — see `run.md`), and explicit `--max-threads`/`--max-memory` budget
+violations fail fast in the pre-flight check, before any rule runs.
 
 ### `check_deadlock()`
 
@@ -264,31 +269,19 @@ After each scheduling cycle, the engine checks:
 
 1. Are there pending rules?
 2. Are any rules currently running?
-3. If no rules are running and pending rules can *never* fit in the available resources → **Resource Deadlock**
+3. If no rules are running but pending rules remain (none can ever become
+   ready — e.g. their dependencies failed) → **Deadlock**
 
 ```rust
-state.check_deadlock(&dag, available_threads, available_memory_mb, &rules)?;
+state.check_deadlock(&dag)?;
 ```
 
 ### Deadlock Scenarios
 
 | Scenario | Error | Resolution |
 |---|---|---|
-| Rule requires 64 threads, `--max-threads=32` | `ResourceExhausted` — lists required vs available | Increase `--max-threads`, reduce rule's thread declaration, or run on larger hardware |
-| Rule requires 256GB, system has 128GB | `ResourceExhausted` — lists required vs available memory | Increase `--max-memory`, reduce memory declaration, or split the rule |
 | Circular dependency | `CycleDetected` — shows the cycle path (caught at DAG build, before scheduling) | Use `oxo-flow graph` to find and break the cycle |
-| Rules stuck with no clear cause | `Config` error — "N rules stuck" with stuck rule names | Check all resource constraints and dependency declarations |
-
-### Stuck Rule Detection
-
-If no single rule exceeds the resource budget but no progress is being made (e.g., multiple rules each require resources that together exceed the pool), the engine reports:
-
-```
-Deadlock detected: 5 rules stuck. Stuck rules: align_NA12878, align_NA12891, ...
-Check resource constraints (threads/memory) and dependencies.
-```
-
-This typically means you need to reduce `-j` parallelism or increase `--max-threads`/`--max-memory`.
+| Rules stuck with no clear cause | `Config` error — "N rules stuck" with stuck rule names | Check dependency declarations and upstream failures (`oxo-flow status`) |
 
 ---
 
@@ -334,8 +327,8 @@ Resolve by giving each rule distinct output paths (e.g., `caller_a/{sample}.vcf`
 | `Cycle detected: A → B → A` | Two or more rules form a circular dependency | Use `oxo-flow graph` to visualize; break the cycle by removing an input/output connection or using `depends_on` to express the intended ordering |
 | `Duplicate rule name` | Two rules share the same `name` field | Rename one rule; use `namespace` with `[[include]]` to avoid conflicts |
 | `Rule not found: 'name'` | `-t` target references a non-existent rule | Check spelling; try prefix matching (`-t al` may match `align`); use `oxo-flow graph` to list all rule names (unknown `depends_on` references are caught by `oxo-flow validate`) |
-| `ResourceExhausted` | Rule's resource requirements exceed available pool | Increase `--max-threads`/`--max-memory`, reduce rule's declared resources, or lower `-j` |
-| `Deadlock detected: N rules stuck` | Pending rules can never fit in available resources | Reduce job parallelism or increase resource limits |
+| `resource budget too small for N rule(s)` | A rule's request exceeds an explicit `--max-threads`/`--max-memory` budget | Increase the budget, lower the rule's declaration, or drop the flag (auto-detected capacity is soft — over-capacity rules are clamped and run alone) |
+| `resource group 'x' exhausted` | A rule's group requirement exceeds the declared `[resource_groups]` capacity | Raise the declared capacity or lower the rule's group requirement |
 
 ---
 

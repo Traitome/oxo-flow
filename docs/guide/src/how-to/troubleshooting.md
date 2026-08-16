@@ -252,14 +252,14 @@ output = ["variants/caller_b/{sample}.vcf"]  # ✅ Unique path
 
 **Symptom**: `Deadlock detected: 3 rules stuck. Stuck rules: align_S001, align_S002, align_S003. Check resource constraints (threads/memory) and dependencies.`
 
-**Solution**: Pending rules have dependencies satisfied but can never fit in the available resource pool. This typically means:
+**Solution**: Pending rules are stuck because none can become ready — typically an
+upstream rule failed and its dependents stay pending forever (resource waits
+cannot deadlock: over-capacity requests are clamped, and explicit budget
+violations fail fast before any rule runs). Check:
 
-1. Each pending rule requires more resources than `--max-threads`/`--max-memory` allows (check the `ResourceExhausted` error that often precedes this)
-2. Multiple rules each fit individually but together exceed the pool when running concurrently
-3. Solution:
-   - Increase `--max-threads` and/or `--max-memory`
-   - Reduce declared resources in the rule definitions
-   - Lower `-j` to reduce concurrent demand
+1. `oxo-flow status` for failed upstream rules (the stuck rules' dependencies)
+2. Dependency declarations (`depends_on`) that may never be satisfiable
+3. Re-run with `--keep-going` to surface all upstream failures at once
 
 ### Resource budget exceeded
 
