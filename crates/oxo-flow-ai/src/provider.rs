@@ -497,13 +497,29 @@ pub struct OpenAiBackend {
     pub api_key: String,
     pub model: String,
     pub api_url: String,
+    /// Provider name carried in error messages — the openai-compatible
+    /// backend also serves DeepSeek, whose errors must not claim "openai".
+    pub label: String,
 }
 
 impl OpenAiBackend {
     pub fn new(api_key: String, model: Option<String>, api_url: Option<String>) -> Self {
+        Self::new_labeled(api_key, model, api_url, "openai")
+    }
+
+    /// Same protocol, different identity: DeepSeek (and other
+    /// openai-compatible endpoints) reuse this backend with their own
+    /// label so error messages name the provider the user configured.
+    pub fn new_labeled(
+        api_key: String,
+        model: Option<String>,
+        api_url: Option<String>,
+        label: &str,
+    ) -> Self {
         Self {
             client: reqwest::Client::new(),
             api_key,
+            label: label.to_string(),
             model: model.unwrap_or_else(|| OPENAI_DEFAULT_MODEL.to_string()),
             api_url: {
                 let url = api_url.unwrap_or_else(|| OPENAI_API_URL.to_string());
@@ -587,31 +603,31 @@ impl OpenAiBackend {
             .send()
             .await
             .map_err(|e| AiError::Provider {
-                provider: "openai".into(),
+                provider: self.label.clone(),
                 message: e.to_string(),
             })?;
 
         let status = resp.status();
         let json: serde_json::Value = resp.json().await.map_err(|e| AiError::Provider {
-            provider: "openai".into(),
+            provider: self.label.clone(),
             message: format!("response parse failed: {e}"),
         })?;
 
         if !status.is_success() {
             let err_msg = json["error"]["message"].as_str().unwrap_or("unknown error");
-            return Err(classify_http_error("openai", status.as_u16(), err_msg));
+            return Err(classify_http_error(&self.label, status.as_u16(), err_msg));
         }
 
-        parse_openai_response(&json)
+        parse_openai_response(&json, &self.label)
     }
 }
 
-fn parse_openai_response(json: &serde_json::Value) -> Result<AiResponse, AiError> {
+fn parse_openai_response(json: &serde_json::Value, label: &str) -> Result<AiResponse, AiError> {
     let choice = json["choices"]
         .as_array()
         .and_then(|a| a.first())
         .ok_or(AiError::Provider {
-            provider: "openai".into(),
+            provider: label.into(),
             message: "no choices in response".into(),
         })?;
 
@@ -899,7 +915,7 @@ impl OpenAiBackend {
             .send()
             .await
             .map_err(|e| AiError::Provider {
-                provider: "openai".into(),
+                provider: self.label.clone(),
                 message: e.to_string(),
             })?;
 
@@ -910,10 +926,11 @@ impl OpenAiBackend {
                 .ok()
                 .and_then(|j| j["error"]["message"].as_str().map(String::from))
                 .unwrap_or(text);
-            return Err(classify_http_error("openai", status.as_u16(), &err_msg));
+            return Err(classify_http_error(&self.label, status.as_u16(), &err_msg));
         }
 
         let stream = resp.bytes_stream();
+        let label = self.label.clone();
         let stream = async_stream::stream! {
             let mut buffer = String::new();
             let mut content = String::new();
@@ -923,7 +940,7 @@ impl OpenAiBackend {
                     Ok(b) => b,
                     Err(e) => {
                         yield Err(AiError::Provider {
-                            provider: "openai".into(),
+                            provider: label.clone(),
                             message: format!("stream read failed: {e}"),
                         });
                         return;
@@ -1016,7 +1033,12 @@ pub fn create_provider(
                 .or_else(|| std::env::var("DEEPSEEK_BASE_URL").ok())
                 .unwrap_or_else(|| DEEPSEEK_API_URL.to_string());
             let model_name = mdl.or_else(|| Some(DEEPSEEK_DEFAULT_MODEL.to_string()));
-            AiProvider::DeepSeek(OpenAiBackend::new(api_key, model_name, Some(api_url)))
+            AiProvider::DeepSeek(OpenAiBackend::new_labeled(
+                api_key,
+                model_name,
+                Some(api_url),
+                "deepseek",
+            ))
         }
         ProviderKind::Ollama => AiProvider::Ollama(OllamaBackend::new(mdl, url)),
     }
@@ -1067,7 +1089,23 @@ pub fn create_provider_from_env() -> AiProvider {
 
 // ── Config persistence ─────────────────────────────────────────────────────
 
+/// Canonical AI config path — `~/.oxo-flow/ai_config.json` (matches the
+/// `AiConfig` loader docs in config.rs and the skills dir convention).
+/// The legacy `~/.config/oxo-flow/ai_config.json` location is still READ
+/// as a migration fallback (see [`legacy_ai_config_path`]) until the
+/// user's next `ai setup` rewrites it.
 pub fn ai_config_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    std::path::PathBuf::from(home)
+        .join(".oxo-flow")
+        .join("ai_config.json")
+}
+
+/// Pre-unification location (v0.12 and earlier): the runtime read
+/// `~/.config/oxo-flow/ai_config.json` while the documented path was
+/// `~/.oxo-flow/ai_config.json` — providers silently ignored files
+/// written to the documented location.
+fn legacy_ai_config_path() -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     std::path::PathBuf::from(home)
         .join(".config")
@@ -1098,10 +1136,23 @@ pub fn save_ai_config(
 }
 
 fn load_ai_config() -> Option<(String, String, String, String)> {
+    // Canonical path first; a legacy-location config is honored only when
+    // no canonical file exists (migration — see ai_config_path docs).
     let path = ai_config_path();
-    if !path.exists() {
-        return None;
-    }
+    let path = if path.exists() {
+        path
+    } else {
+        let legacy = legacy_ai_config_path();
+        if legacy.exists() {
+            tracing::info!(
+                "reading legacy AI config at {} (run 'oxo-flow ai setup' to migrate)",
+                legacy.display()
+            );
+            legacy
+        } else {
+            return None;
+        }
+    };
     let json: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
     Some((
@@ -1203,8 +1254,11 @@ mod tests {
 
     #[test]
     fn config_path_is_in_home() {
+        // Canonical location: ~/.oxo-flow/ai_config.json (matches the
+        // AiConfig docs); the legacy ~/.config location is a read-only
+        // migration fallback.
         let path = ai_config_path();
-        assert!(path.to_string_lossy().contains(".config"));
+        assert!(path.to_string_lossy().contains(".oxo-flow"));
         assert!(path.to_string_lossy().contains("oxo-flow"));
     }
 
@@ -1223,7 +1277,7 @@ mod tests {
                 "completion_tokens": 5
             }
         });
-        let response = parse_openai_response(&json).unwrap();
+        let response = parse_openai_response(&json, "openai").unwrap();
         assert_eq!(response.content.as_deref(), Some("Hello!"));
         assert_eq!(response.finish_reason, "stop");
         assert_eq!(response.usage.prompt_tokens, 10);
@@ -1252,7 +1306,7 @@ mod tests {
                 "completion_tokens": 20
             }
         });
-        let response = parse_openai_response(&json).unwrap();
+        let response = parse_openai_response(&json, "openai").unwrap();
         assert!(response.content.is_none());
         let tc = response.tool_calls.unwrap();
         assert_eq!(tc.len(), 1);
@@ -1282,7 +1336,7 @@ mod tests {
                 "finish_reason": "tool_calls"
             }]
         });
-        let response = parse_openai_response(&json).unwrap();
+        let response = parse_openai_response(&json, "openai").unwrap();
         let calls = response
             .tool_calls
             .expect("repaired call must not be dropped");
@@ -1314,7 +1368,7 @@ mod tests {
                 "finish_reason": "tool_calls"
             }]
         });
-        let response = parse_openai_response(&json).unwrap();
+        let response = parse_openai_response(&json, "openai").unwrap();
         let calls = response.tool_calls.unwrap();
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].arguments, r#"{"tool": "STAR"}"#);
@@ -1338,7 +1392,7 @@ mod tests {
                 "finish_reason": "tool_calls"
             }]
         });
-        let err = parse_openai_response(&json).unwrap_err();
+        let err = parse_openai_response(&json, "openai").unwrap_err();
         assert!(
             matches!(err, AiError::ToolError { .. }),
             "expected ToolError, got {err:?}"
