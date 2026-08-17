@@ -31,18 +31,40 @@ channels:
   - defaults
 show_channel_urls: true
 default_channels:
-  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main
-  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/r
+  - https://mirrors.sustech.edu.cn/anaconda/pkgs/main
+  - https://mirrors.sustech.edu.cn/anaconda/pkgs/r
 custom_channels:
-  conda-forge: https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud
-  bioconda: https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud
+  conda-forge: https://mirrors.sustech.edu.cn/anaconda/cloud
+  bioconda: https://mirrors.sustech.edu.cn/anaconda/cloud
 ```
 
-Alternative mirrors:
+Alternative mirrors (in rough order of stability as observed during the
+2026-08 catalog live-run campaign on a mainland server):
 
-- **USTC**: `https://mirrors.ustc.edu.cn/anaconda`
-- **Aliyun**: `https://mirrors.aliyun.com/anaconda`
+- **SUSTech**: `https://mirrors.sustech.edu.cn/anaconda` — stable direct
+  downloads, no cross-mirror redirects.
+- **USTC**: `https://mirrors.ustc.edu.cn/anaconda` — fast when up, but had
+  repeated flapping windows (HTTP 000 / "Network is unreachable") during the
+  campaign.
+- **Tsinghua Tuna**: `https://mirrors.tuna.tsinghua.edu.cn/anaconda` — the
+  repodata serves, but package blobs can be redirected to NJU
+  (`mirrors.nju.edu.cn`), where SSL handshakes were repeatedly killed
+  mid-transfer. Prefer SUSTech/USTC for package downloads.
+- **Aliyun**: `https://mirrors.aliyun.com/anaconda` (geo-blocked in some
+  regions)
 - **Tencent**: `https://mirrors.cloud.tencent.com/anaconda`
+
+> **Before changing anything**, run `conda config --show-sources`. Miniforge
+> installs ship a bundled `~/miniforge3/.condarc` that takes precedence over
+> `~/.condarc` — writing your mirror config only to `~/.condarc` silently
+> does nothing when that bundled file exists. Update whichever file
+> `--show-sources` lists first, or delete the bundled one.
+
+> **Keep workflow repos mirror-neutral.** Mirror configuration belongs on
+> the machine (`.condarc` / docker daemon), never in workflow files — a
+> workflow that embeds a mirror URL works only inside China and breaks for
+> every other user. Workflow env files should declare channel *names*
+> (`conda-forge`, `bioconda`) and let each user's conda config resolve them.
 
 ---
 
@@ -91,8 +113,23 @@ index-url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
 > discontinued in 2024. Community mirrors change frequently — check a
 > current, community-maintained mirror list before relying on any URL.
 
-The most stable approach is a per-container HTTP proxy in
-`~/.docker/config.json`:
+Two workable options as of 2026-08:
+
+**Registry mirror** — configure `/etc/docker/daemon.json` (system-wide
+`docker pull`, including the pulls oxo-flow's docker backend performs):
+
+```json
+{
+  "registry-mirrors": ["https://docker.1ms.run"]
+}
+```
+
+Then `sudo systemctl restart docker`. The `docker.1ms.run` mirror served
+all `quay.io/biocontainers` + `quay.io/nf-core` pulls during the catalog
+live-run campaign; the Tencent mirror (`mirror.ccs.tencentyun.com`) timed
+out on large blobs and was dropped.
+
+**HTTP proxy** — a per-container proxy in `~/.docker/config.json`:
 
 ```json
 {
@@ -213,10 +250,15 @@ These files can include channel configuration inline:
 # envs/fastp.yaml
 name: fastp-env
 channels:
-  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/bioconda
-  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge
+  - bioconda
+  - conda-forge
 dependencies:
   - fastp=0.23.4
 ```
 
-This ensures reproducibility regardless of the user's global mirror settings.
+> **Do not embed mirror URLs here.** Channel *names* resolve against each
+> user's own `.condarc` — the same workflow file then works identically in
+> China (mirror-configured machines) and elsewhere (default anaconda.org).
+> Inlining a mirror URL (`https://mirrors.…/anaconda/cloud/bioconda`) makes
+> the workflow usable only where that mirror is reachable, which defeats
+> portability — the catalog workflows deliberately ship channel names only.
