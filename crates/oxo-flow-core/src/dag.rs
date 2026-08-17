@@ -616,9 +616,14 @@ impl WorkflowDag {
 ///
 /// Input matching can reach the same producer through several paths (exact
 /// match, glob, directory prefix, template pattern, `depends_on`) — parallel
-/// edges would corrupt edge counts and metrics.
+/// edges would corrupt edge counts and metrics. A rule never depends on
+/// itself: write-back-into-input-directory patterns (e.g. a quast/multiqc
+/// summary that reads a directory and writes its report into it) make the
+/// directory-prefix inference match the rule's own output — self-edges are
+/// dropped rather than reported as cycles (live evidence: mag's
+/// `concat_quast` reads `QC/` and writes `QC/quast_bin_summary.tsv`).
 fn add_edge_dedup(graph: &mut DiGraph<DagNode, ()>, from: NodeIndex, to: NodeIndex) {
-    if graph.find_edge(from, to).is_none() {
+    if from != to && graph.find_edge(from, to).is_none() {
         graph.add_edge(from, to, ());
     }
 }
@@ -1853,6 +1858,25 @@ mod tests {
         )
         .unwrap();
         assert!(dag.dependencies("leiden").unwrap().is_empty());
+    }
+
+    #[test]
+    fn write_back_into_input_dir_does_not_create_a_self_edge() {
+        // A summary rule reads a directory and writes its report INTO it
+        // (mag's concat_quast: input `QC/`, output `QC/quast_bin_summary.tsv`).
+        // The directory-prefix inference must not make the rule depend on
+        // itself — that would surface as a bogus cycle.
+        let rule = make_rule(
+            "concat_quast",
+            vec!["{config.out_dir}/GenomeBinning/QC"],
+            vec!["{config.out_dir}/GenomeBinning/QC/quast_bin_summary.tsv"],
+        );
+        let values = HashMap::from([(
+            "config.out_dir".to_string(),
+            "results".to_string(),
+        )]);
+        let dag = WorkflowDag::from_rules_with_config(&[rule], &values).unwrap();
+        assert!(dag.dependencies("concat_quast").unwrap().is_empty());
     }
 
     #[test]
