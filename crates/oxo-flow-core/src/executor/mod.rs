@@ -9,6 +9,7 @@ use sysinfo::System;
 
 pub mod checkpoint;
 pub mod process;
+pub mod env_create_lock;
 pub mod rss;
 pub mod security;
 pub mod staging;

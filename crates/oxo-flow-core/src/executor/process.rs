@@ -548,6 +548,20 @@ impl LocalExecutor {
         } else {
             setup_cmd
         };
+        // Cross-process serialization: another oxo-flow run on this machine
+        // may be creating a different env right now (conda cache/post-link
+        // contention + stacked memory peaks — live evidence: tx-ubuntu
+        // overload episodes). The blocking flock waits for the other run's
+        // create+verify sequence; held until this function returns.
+        let cross_process_guard = tokio::task::spawn_blocking(
+            super::env_create_lock::EnvCreateLock::acquire,
+        )
+        .await
+        .ok()
+        .flatten();
+        if cross_process_guard.is_none() {
+            tracing::warn!("env-create cross-process lock unavailable — env setup proceeds unlocked");
+        }
         let output = Command::new("sh")
             .arg("-c")
             .arg(&setup_cmd)
