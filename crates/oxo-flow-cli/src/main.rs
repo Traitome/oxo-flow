@@ -168,6 +168,14 @@ pub enum Commands {
         /// Skip the automatic report snapshot after the run.
         #[arg(long, help = "Skip the automatic report snapshot after the run")]
         no_report_snapshot: bool,
+        /// Queue cap for cluster runs; overrides the profile's
+        /// `[cluster] max_submitted` for this invocation.
+        #[arg(
+            long,
+            value_name = "N",
+            help = "Cluster jobs in flight at once (overrides the profile's max_submitted)"
+        )]
+        max_submitted: Option<usize>,
     },
     /// Resume an interrupted workflow from a checkpoint.
     Resume {
@@ -1014,6 +1022,7 @@ async fn main() -> Result<()> {
             samples_filter,
             rerun,
             no_report_snapshot,
+            max_submitted,
         } => {
             use anyhow::Context as _;
             use colored::Colorize as _;
@@ -1136,6 +1145,7 @@ async fn main() -> Result<()> {
                 samples_filter,
                 rerun,
                 no_report_snapshot,
+                max_submitted,
             )
             .await?
         }
@@ -1480,6 +1490,7 @@ async fn main() -> Result<()> {
                     samples_filter.clone(),
                     false, // rerun (test mode: normal up-to-date checks)
                     false, // no_report_snapshot (test mode keeps the standard run behavior)
+                    None,  // max_submitted (cluster queue cap — test keeps the profile's)
                 )
                 .await?;
             }

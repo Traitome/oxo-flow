@@ -355,6 +355,11 @@ pub struct CitationInfo {
 }
 
 /// Cluster execution profile for HPC deployment.
+///
+/// Declared as `[cluster]` in a workflow or in `profiles/<NAME>.toml`. Its
+/// presence is what makes `run --profile <NAME>` submit to a scheduler
+/// instead of executing locally (issue #74); a profile with only `[config]`
+/// keeps the local path.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ClusterProfile {
     /// Backend type (slurm, pbs, sge, lsf).
@@ -369,10 +374,60 @@ pub struct ClusterProfile {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
+    /// Default wall-time limit (`24h`, `2d`, or `24:00:00`). A rule's own
+    /// `time_limit` wins over this.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub walltime: Option<String>,
+    /// Jobs in flight at once (pending + running); submissions top up to
+    /// this cap as slots free.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_submitted: Option<usize>,
+    /// Delay between scheduler polls, as a duration string (`30s`, `2m`).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub poll_interval: Option<String>,
     /// Additional arguments passed to the scheduler.
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extra_args: Vec<String>,
+}
+
+impl ClusterProfile {
+    /// Poll interval in seconds, or `None` when unset/unparseable — the
+    /// caller supplies the driver default rather than guessing here.
+    pub fn poll_interval_secs(&self) -> Option<u64> {
+        self.poll_interval
+            .as_deref()
+            .and_then(crate::rule::parse_duration_secs)
+    }
+
+    /// Fold `other` into `self` for a profile merge. `override_mode`
+    /// mirrors [`ProfileMode`]: fill only sets fields this profile leaves
+    /// empty, override replaces any field `other` actually sets.
+    fn merge_from(&mut self, other: &ClusterProfile, override_mode: bool) {
+        macro_rules! merge_opt {
+            ($($field:ident),+ $(,)?) => {$(
+                if other.$field.is_some() && (override_mode || self.$field.is_none()) {
+                    self.$field = other.$field.clone();
+                }
+            )+};
+        }
+        merge_opt!(
+            backend,
+            partition,
+            account,
+            walltime,
+            max_submitted,
+            poll_interval
+        );
+        // Arrays replace wholesale in override mode, matching how
+        // `deep_merge_value` treats arrays elsewhere in the profile merge.
+        if !other.extra_args.is_empty() && (override_mode || self.extra_args.is_empty()) {
+            self.extra_args = other.extra_args.clone();
+        }
+    }
 }
 
 /// A declared configuration parameter with optional metadata.
@@ -2420,6 +2475,21 @@ impl WorkflowConfig {
                     }
                 }
             }
+        }
+        // `[cluster]` — the block whose presence routes `run --profile` to a
+        // scheduler (issue #74). Same fill/override semantics as the rest of
+        // the merge, so site config lives in one shared profile file.
+        if let Some(cluster_table) = profile_toml.get("cluster") {
+            let profile_cluster: ClusterProfile =
+                cluster_table
+                    .clone()
+                    .try_into()
+                    .map_err(|e| OxoFlowError::Config {
+                        message: format!("invalid [cluster] section in profile: {e}"),
+                    })?;
+            self.cluster
+                .get_or_insert_with(ClusterProfile::default)
+                .merge_from(&profile_cluster, mode == ProfileMode::Override);
         }
         Ok(())
     }
