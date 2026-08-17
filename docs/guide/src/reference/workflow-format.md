@@ -874,8 +874,12 @@ and the raw patterns in the template-level graph — multiqc-style
 aggregators therefore connect to their contributors even in
 `graph -f dot` without `--expanded`), glob patterns
 (`raw/*.fastq.gz`), and directory inputs (every producer writing under
-that directory). `depends_on` remains available for ordering that files
-cannot express, and duplicate edges are deduplicated.
+that directory). Rules that declare the SAME output string (shared
+bins/staging directories — e.g. two assembler variants emitting into one
+`GenomeBinning/<tool>/bins` dir) link ALL of their producers: every
+consumer of the shared path is ordered after every writer.
+`depends_on` remains available for ordering that files cannot express,
+and duplicate edges are deduplicated.
 
 ```toml
 [[rules]]

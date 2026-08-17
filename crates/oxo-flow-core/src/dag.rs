@@ -40,8 +40,11 @@ pub struct WorkflowDag {
     /// Map from rule name to node index.
     name_to_node: HashMap<String, NodeIndex>,
 
-    /// Map from output file pattern to the rule that produces it.
-    output_to_node: HashMap<String, NodeIndex>,
+    /// Map from output file pattern to EVERY rule that produces it — two
+    /// rules may declare the same output string (shared staging/bins
+    /// directories, multi-tool fan-ins). Collapsing to one producer
+    /// silently dropped the other's exact-match edges.
+    output_to_node: HashMap<String, Vec<NodeIndex>>,
 }
 
 impl WorkflowDag {
@@ -53,7 +56,7 @@ impl WorkflowDag {
     pub fn from_rules(rules: &[Rule]) -> Result<Self> {
         let mut graph = DiGraph::new();
         let mut name_to_node = HashMap::new();
-        let mut output_to_node = HashMap::new();
+        let mut output_to_node: HashMap<String, Vec<NodeIndex>> = HashMap::new();
 
         // Step 1: Add all rules as nodes
         for (idx, rule) in rules.iter().enumerate() {
@@ -69,9 +72,10 @@ impl WorkflowDag {
             });
             name_to_node.insert(rule.name.clone(), node);
 
-            // Register outputs
+            // Register outputs — every producer, not just the last (a
+            // shared output string must link ALL of its producers).
             for output in &rule.output {
-                output_to_node.insert(output.clone(), node);
+                output_to_node.entry(output.clone()).or_default().push(node);
             }
         }
 
@@ -92,7 +96,7 @@ impl WorkflowDag {
         // legacy behavior (no edge), never an error.
         let producer_outputs: Vec<(String, NodeIndex)> = output_to_node
             .iter()
-            .map(|(output, &node)| (output.clone(), node))
+            .flat_map(|(output, nodes)| nodes.iter().map(|&n| (output.clone(), n)))
             .collect();
         // Pre-compile one matcher per template-level output (e.g.
         // `variants/{sample}.g.vcf.gz` → `^variants/(?P<sample>\S+)\.g\.vcf\.gz$`).
@@ -128,8 +132,13 @@ impl WorkflowDag {
                          graph: &mut DiGraph<DagNode, ()>,
                          declared_dir: Option<&(String, Option<String>)>| {
                 // 1. Exact template-level match (legacy behavior, kept first).
-                if let Some(&producer_node) = output_to_node.get(input) {
-                    add_edge_dedup(graph, producer_node, consumer_node);
+                //    Every producer declaring the same output string links —
+                //    shared-directory outputs must order ALL writers before
+                //    any consumer of the directory.
+                if let Some(producers) = output_to_node.get(input) {
+                    for &producer_node in producers {
+                        add_edge_dedup(graph, producer_node, consumer_node);
+                    }
                 }
 
                 if let Some((dir_path, filter)) = declared_dir {
@@ -167,9 +176,11 @@ impl WorkflowDag {
                     for (output, matcher) in &template_matchers {
                         if let Some(re) = matcher
                             && re.is_match(input)
-                            && let Some(producer_node) = output_to_node.get(output)
+                            && let Some(producers) = output_to_node.get(output)
                         {
-                            add_edge_dedup(graph, *producer_node, consumer_node);
+                            for &producer_node in producers {
+                                add_edge_dedup(graph, producer_node, consumer_node);
+                            }
                         }
                     }
                     if looks_like_directory(input) {
@@ -498,11 +509,14 @@ impl WorkflowDag {
         self.output_to_node.contains_key(output)
     }
 
-    /// Returns the name of the rule producing an output pattern, if any.
+    /// Returns the name of the first rule producing an output pattern, if
+    /// any. (Shared output strings may have several producers — see
+    /// `producers_of`.)
     #[must_use]
     pub fn producer_of(&self, output: &str) -> Option<&str> {
         self.output_to_node
             .get(output)
+            .and_then(|nodes| nodes.first())
             .map(|&node| self.graph[node].name.as_str())
     }
 
@@ -1640,6 +1654,26 @@ mod tests {
         assert_eq!(
             dag.dependencies("combine_gvcfs").unwrap(),
             vec!["call_gvcf"]
+        );
+    }
+
+    #[test]
+    fn shared_output_string_links_every_producer() {
+        // Two rules declaring the SAME output path (shared bins/staging
+        // directory) must BOTH order the consumer — collapsing to the last
+        // producer silently dropped the other's edge (mag binning module).
+        let p1 = make_rule("metabat2_spades", vec![], vec!["{config.out_dir}/bins"]);
+        let p2 = make_rule("metabat2_megahit", vec![], vec!["{config.out_dir}/bins"]);
+        let consumer = make_rule("seqkit", vec!["{config.out_dir}/bins"], vec!["stats.tsv"]);
+        let dag = WorkflowDag::from_rules(&[p1, p2, consumer]).unwrap();
+        let mut deps = dag.dependencies("seqkit").unwrap();
+        deps.sort();
+        assert_eq!(deps, vec!["metabat2_megahit", "metabat2_spades"]);
+        // has_producer stays true; producer_of returns one of the two.
+        assert!(dag.has_producer("{config.out_dir}/bins"));
+        assert!(
+            dag.producer_of("{config.out_dir}/bins") == Some("metabat2_megahit")
+                || dag.producer_of("{config.out_dir}/bins") == Some("metabat2_spades")
         );
     }
 
