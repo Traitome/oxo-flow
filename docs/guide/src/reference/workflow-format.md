@@ -1134,8 +1134,17 @@ Built-in placeholders use the same syntax but have reserved meanings:
 | `{output.name}` | The output file named `name` from `named_output` |
 | `{threads}` | Thread count assigned to this rule |
 | `{memory}` | Memory allocation assigned to this rule |
+| `{effective_threads}` | Declared threads clamped to the machine's CPUs — the tool-facing concurrency. Use it for flags like `--threads`/`-t` when the declared value is an HPC-scale label (e.g. a rule declaring `threads = 12` renders `4` on a 4-core box). Unset threads render as `1` |
+| `{effective_memory_mb}` | Declared memory clamped to the machine's total memory, as an integer number of MB — the tool-facing heap budget. Use it for JVM flags (`-Xmx{effective_memory_mb}m`, `-Xms…`) so tools size themselves to the box instead of OOM-ing on hardcoded HPC values (`-Xmx29491M` class). Unset memory renders as the machine's full total |
 | `{log}` | Path of the rule's `log` field (every instance wildcard — `{sample}`, `{pair_id}`, `{assembler}` … — and `{config.x}` are expanded per instance; the parent directory is created automatically) |
 | `{config.*}` | Value from the `[config]` section (plain value, declared default, or CLI override) |
+
+**Why the effective pair exists** — `{threads}`/`{memory}` render the
+*declared* values, which keep the pool semantics (an over-capacity rule
+reserves the whole pool and runs alone). The `{effective_*}` pair renders
+what the tool can *actually* get on this machine. Rules that embed
+resource-sized flags should use the effective pair; rules that only pass
+the pool declaration through can keep the plain pair.
 
 **Array-valued `{config.*}`** — a `[config]` key holding an array renders
 as a space-joined list in the shell (`["a", "b"]` → `a b`), matching the

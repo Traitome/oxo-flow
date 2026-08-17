@@ -1051,6 +1051,7 @@ pub async fn run_command(
                     &ref_def.build,
                     &synthetic_rule,
                     &wildcard_values,
+                    oxo_flow_core::scheduler::detect_system_limits(),
                 );
                 // `{source}` is the builder-template spelling of the same
                 // thing; render it too (live evidence: tcasia's STAR
@@ -2503,7 +2504,7 @@ pub async fn dry_run_command(
 
         if let Some(ref cmd) = rule.shell {
             let expanded =
-                oxo_flow_core::executor::process::render_shell_command(cmd, rule, &wildcard_values);
+                oxo_flow_core::executor::process::render_shell_command(cmd, rule, &wildcard_values, oxo_flow_core::scheduler::detect_system_limits());
             eprintln!("     command: {}", expanded);
         }
 
@@ -2752,6 +2753,7 @@ pub async fn dry_run_command(
                         cmd,
                         rule,
                         &wildcard_values,
+                        oxo_flow_core::scheduler::detect_system_limits(),
                     )
                 });
                 // Declared patterns stay raw in inputs/outputs (the stable
@@ -2891,6 +2893,7 @@ pub async fn debug_command(workflow: PathBuf, rule_name: Option<String>, ai: boo
                     shell_cmd,
                     r,
                     &debug_wildcards,
+                    oxo_flow_core::scheduler::detect_system_limits(),
                 );
                 format!(
                     "## {}\nthreads={}, memory={}, env={:?}\n```bash\n{}\n```",
@@ -2981,7 +2984,7 @@ logical errors. Output format per rule:
 
         if let Some(ref cmd) = rule.shell {
             let expanded =
-                oxo_flow_core::executor::process::render_shell_command(cmd, rule, &wildcard_values);
+                oxo_flow_core::executor::process::render_shell_command(cmd, rule, &wildcard_values, oxo_flow_core::scheduler::detect_system_limits());
             eprintln!("  {} {}", "Shell (expanded):".dimmed(), expanded);
         }
 

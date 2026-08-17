@@ -326,7 +326,7 @@ pub struct LocalExecutor {
 /// Detect total system memory in MB using the most reliable method available
 /// on the current platform. On Linux, falls back to parsing `/proc/meminfo`
 /// if the sysinfo crate returns unexpected results.
-fn detect_total_memory_mb() -> u64 {
+pub(crate) fn detect_total_memory_mb() -> u64 {
     // Primary: sysinfo crate (cross-platform)
     if let Ok(mb) = std::panic::catch_unwind(|| {
         use sysinfo::System;
@@ -813,7 +813,7 @@ impl LocalExecutor {
                 && !parent.as_os_str().is_empty()
                 && !parent.exists()
             {
-                create_rule_dir(&parent, rule, "output")?;
+                create_rule_dir(parent, rule, "output")?;
             }
             move_path(&src, &dest)
                 .await
@@ -951,9 +951,15 @@ impl LocalExecutor {
                 wildcard_values,
                 &self.config.interpreter_map,
                 &self.config.workdir,
+                crate::scheduler::ResourceLimits { threads: self.system_threads, memory_mb: self.system_memory_mb },
             )
         } else {
-            build_execution_command(&rule, wildcard_values, &self.config.interpreter_map)
+            build_execution_command(
+                &rule,
+                wildcard_values,
+                &self.config.interpreter_map,
+                crate::scheduler::ResourceLimits { threads: self.system_threads, memory_mb: self.system_memory_mb },
+            )
         };
         let base_cmd = match base_cmd {
             Some(cmd) => cmd,
@@ -1038,7 +1044,7 @@ impl LocalExecutor {
                 && !parent.as_os_str().is_empty()
                 && !parent.exists()
             {
-                create_rule_dir(&parent, &rule, "output")?;
+                create_rule_dir(parent, &rule, "output")?;
             }
         }
 
@@ -1052,7 +1058,7 @@ impl LocalExecutor {
                 && !parent.as_os_str().is_empty()
                 && !parent.exists()
             {
-                create_rule_dir(&parent, &rule, "log")?;
+                create_rule_dir(parent, &rule, "log")?;
             }
         }
 
@@ -1091,9 +1097,10 @@ impl LocalExecutor {
                     &rule,
                     wildcard_values,
                     &self.config.workdir,
+                    crate::scheduler::ResourceLimits { threads: self.system_threads, memory_mb: self.system_memory_mb },
                 )
             } else {
-                render_shell_command(pre_cmd, &rule, wildcard_values)
+                render_shell_command(pre_cmd, &rule, wildcard_values, crate::scheduler::ResourceLimits { threads: self.system_threads, memory_mb: self.system_memory_mb })
             };
             if let Err(e) = validate_shell_safety(&rendered) {
                 // Nothing ran yet — drop the empty scratch dir rather than
@@ -1292,7 +1299,7 @@ impl LocalExecutor {
                 cleanup_temp_outputs(&rule, &self.config.workdir).await;
                 if let Some(ref hook_cmd) = rule.on_failure {
                     run_hook(
-                        &render_shell_command(hook_cmd, &rule, wildcard_values),
+                        &render_shell_command(hook_cmd, &rule, wildcard_values, crate::scheduler::ResourceLimits { threads: self.system_threads, memory_mb: self.system_memory_mb }),
                         &rule,
                         &self.config.workdir,
                     )
@@ -1320,7 +1327,7 @@ impl LocalExecutor {
                         );
                         if let Some(ref hook_cmd) = rule.on_failure {
                             run_hook(
-                                &render_shell_command(hook_cmd, &rule, wildcard_values),
+                                &render_shell_command(hook_cmd, &rule, wildcard_values, crate::scheduler::ResourceLimits { threads: self.system_threads, memory_mb: self.system_memory_mb }),
                                 &rule,
                                 &self.config.workdir,
                             )
@@ -1330,7 +1337,7 @@ impl LocalExecutor {
                     } else {
                         if let Some(ref hook_cmd) = rule.on_success {
                             run_hook(
-                                &render_shell_command(hook_cmd, &rule, wildcard_values),
+                                &render_shell_command(hook_cmd, &rule, wildcard_values, crate::scheduler::ResourceLimits { threads: self.system_threads, memory_mb: self.system_memory_mb }),
                                 &rule,
                                 &self.config.workdir,
                             )
@@ -1373,7 +1380,7 @@ impl LocalExecutor {
                 cleanup_temp_outputs(&rule, &self.config.workdir).await;
                 if let Some(ref hook_cmd) = rule.on_failure {
                     run_hook(
-                        &render_shell_command(hook_cmd, &rule, wildcard_values),
+                        &render_shell_command(hook_cmd, &rule, wildcard_values, crate::scheduler::ResourceLimits { threads: self.system_threads, memory_mb: self.system_memory_mb }),
                         &rule,
                         &self.config.workdir,
                     )
@@ -1388,7 +1395,7 @@ impl LocalExecutor {
             cleanup_temp_outputs(&rule, &self.config.workdir).await;
             if let Some(ref hook_cmd) = rule.on_failure {
                 run_hook(
-                    &render_shell_command(hook_cmd, &rule, wildcard_values),
+                    &render_shell_command(hook_cmd, &rule, wildcard_values, crate::scheduler::ResourceLimits { threads: self.system_threads, memory_mb: self.system_memory_mb }),
                     &rule,
                     &self.config.workdir,
                 )
@@ -1503,8 +1510,9 @@ pub fn build_execution_command(
     rule: &Rule,
     wildcard_values: &HashMap<String, String>,
     interpreter_map: &HashMap<String, String>,
+    limits: crate::scheduler::ResourceLimits,
 ) -> Option<String> {
-    build_execution_command_inner(rule, wildcard_values, interpreter_map, None)
+    build_execution_command_inner(rule, wildcard_values, interpreter_map, None, limits)
 }
 
 /// Scratch-mode variant: input and script paths render absolute (they live
@@ -1515,8 +1523,9 @@ pub(crate) fn build_execution_command_in_scratch(
     wildcard_values: &HashMap<String, String>,
     interpreter_map: &HashMap<String, String>,
     workdir: &Path,
+    limits: crate::scheduler::ResourceLimits,
 ) -> Option<String> {
-    build_execution_command_inner(rule, wildcard_values, interpreter_map, Some(workdir))
+    build_execution_command_inner(rule, wildcard_values, interpreter_map, Some(workdir), limits)
 }
 
 fn build_execution_command_inner(
@@ -1524,15 +1533,16 @@ fn build_execution_command_inner(
     wildcard_values: &HashMap<String, String>,
     interpreter_map: &HashMap<String, String>,
     abs_root: Option<&Path>,
+    limits: crate::scheduler::ResourceLimits,
 ) -> Option<String> {
     let shell_cmd = rule
         .shell
         .as_ref()
-        .map(|cmd| render_shell_command_inner(cmd, rule, wildcard_values, abs_root));
+        .map(|cmd| render_shell_command_inner(cmd, rule, wildcard_values, abs_root, limits));
 
     let script_cmd = rule.script.as_ref().map(|script_path| {
         let expanded_script =
-            render_shell_command_inner(script_path, rule, wildcard_values, abs_root);
+            render_shell_command_inner(script_path, rule, wildcard_values, abs_root, limits);
         let base_script = expanded_script
             .split_whitespace()
             .next()
@@ -1558,7 +1568,7 @@ fn build_execution_command_inner(
     // Auto-create output directories to eliminate mkdir -p boilerplate in shells
     let mut dirs_to_create: Vec<String> = Vec::new();
     for output in &rule.output {
-        let expanded = render_shell_command_inner(output, rule, wildcard_values, abs_root);
+        let expanded = render_shell_command_inner(output, rule, wildcard_values, abs_root, limits);
         // Only create dirs for paths with directory separators, skip wildcards
         if expanded.contains('/')
             && !expanded.contains('{')
@@ -1827,8 +1837,9 @@ pub fn render_shell_command(
     cmd: &str,
     rule: &Rule,
     wildcard_values: &HashMap<String, String>,
+    limits: crate::scheduler::ResourceLimits,
 ) -> String {
-    render_shell_command_inner(cmd, rule, wildcard_values, None)
+    render_shell_command_inner(cmd, rule, wildcard_values, None, limits)
 }
 
 /// Scratch-mode rendering: `{input}` and `{log}` render as absolute paths
@@ -1840,8 +1851,9 @@ pub(crate) fn render_shell_command_in_scratch(
     rule: &Rule,
     wildcard_values: &HashMap<String, String>,
     workdir: &Path,
+    limits: crate::scheduler::ResourceLimits,
 ) -> String {
-    render_shell_command_inner(cmd, rule, wildcard_values, Some(workdir))
+    render_shell_command_inner(cmd, rule, wildcard_values, Some(workdir), limits)
 }
 
 fn render_shell_command_inner(
@@ -1849,6 +1861,7 @@ fn render_shell_command_inner(
     rule: &Rule,
     wildcard_values: &HashMap<String, String>,
     abs_root: Option<&Path>,
+    limits: crate::scheduler::ResourceLimits,
 ) -> String {
     let mut expanded = cmd.to_string();
     // `{log}` resolves to the rule's log path with the same wildcard and
@@ -1860,7 +1873,7 @@ fn render_shell_command_inner(
         let expanded_log = if cmd == log_path || log_path.contains("{log}") {
             log_path.clone()
         } else {
-            render_shell_command_inner(log_path, rule, wildcard_values, abs_root)
+            render_shell_command_inner(log_path, rule, wildcard_values, abs_root, limits)
         };
         let rendered_log = absolute_path(abs_root, &expanded_log);
         expanded = expanded.replace("{log}", &rendered_log);
@@ -1907,6 +1920,12 @@ fn render_shell_command_inner(
     if let Some(mem) = rule.effective_memory() {
         expanded = expanded.replace("{memory}", mem);
     }
+    // Tool-facing effective resources: the declared request clamped to the
+    // machine, so tools can size their own flags (e.g. -Xmx{effective_memory_mb}m)
+    // instead of hardcoding HPC-scale values that OOM small boxes.
+    let (eff_threads, eff_mem_mb) = crate::scheduler::effective_tool_resources(rule, limits);
+    expanded = expanded.replace("{effective_threads}", &eff_threads.to_string());
+    expanded = expanded.replace("{effective_memory_mb}", &eff_mem_mb.to_string());
     for (key, value) in &rule.params {
         let string_val = match value {
             toml::Value::String(s) => s.clone(),

@@ -153,7 +153,12 @@ fn build_rule(
         message: format!("rule '{name}' not found in workflow"),
     })?;
     let Some(cmd) =
-        build_execution_command(rule, wildcard_values, &config.workflow.interpreter_map)
+        build_execution_command(
+            rule,
+            wildcard_values,
+            &config.workflow.interpreter_map,
+            crate::scheduler::detect_system_limits(),
+        )
     else {
         return Ok(None); // no shell/script — not schedulable
     };
