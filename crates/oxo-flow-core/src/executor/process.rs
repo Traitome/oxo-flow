@@ -533,6 +533,21 @@ impl LocalExecutor {
             return Ok(());
         }
         let setup_cmd = self.env_resolver.setup_command(env_spec)?;
+        // Some packages' post-link scripts download data during
+        // `conda env create` (bioconductor-genomeinfodbdata fetches its
+        // annotation tarballs) — before the new env's own ca-certificates
+        // bundle is linked, so their curls die with SSL 77 (live evidence:
+        // clindet + enrichment region_enrichment_analysis envs). Export
+        // the base conda CA bundle for the setup command when available.
+        let kind = env_spec.kind();
+        let setup_cmd = if kind == "conda" || kind == "mamba" {
+            format!(
+                "CB=\"$(dirname \"$(dirname \"$(command -v conda)\")\")/ssl/cacert.pem\"; \
+                 [ -f \"$CB\" ] && export SSL_CERT_FILE=\"$CB\"; {setup_cmd}"
+            )
+        } else {
+            setup_cmd
+        };
         let output = Command::new("sh")
             .arg("-c")
             .arg(&setup_cmd)
