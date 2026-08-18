@@ -78,23 +78,24 @@ mod tests {
 
     #[test]
     fn lock_is_exclusive_across_handles() {
-        let dir = home_dir().expect("HOME must be set in tests");
-        let lock_path = dir.join(".oxo-flow/env-create.lock");
-        let first = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(false)
-            .open(&lock_path)
-            .unwrap();
+        // A temp dir, not the real ~/.oxo-flow: the test must not depend on
+        // (or touch) the developer's home state, and a fresh CI runner has
+        // no ~/.oxo-flow yet (live evidence: CI failure, NotFound on open).
+        let dir = tempfile::tempdir().unwrap();
+        let lock_path = dir.path().join("env-create.lock");
+        let open = || {
+            OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(false)
+                .open(&lock_path)
+                .unwrap()
+        };
+        let first = open();
         first.lock_exclusive().unwrap();
 
         // A second handle cannot take the lock while the first holds it.
-        let second = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(false)
-            .open(&lock_path)
-            .unwrap();
+        let second = open();
         assert!(second.try_lock_exclusive().is_err());
 
         drop(first);
