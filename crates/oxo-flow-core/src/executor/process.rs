@@ -519,6 +519,18 @@ impl LocalExecutor {
         if self.env_resolver.cache_is_ready(&key).await {
             return Ok(());
         }
+        // Cold cache but the env may already exist (checkpoint wipe, a
+        // previous run, an external `conda create`): verify it in place
+        // instead of re-running the setup. The setup's fallback
+        // `conda env update --prune` re-resolves every dependency — live:
+        // tcasia's majiq==2.5 pip resolution failed on a flaky mirror even
+        // though the env was fully installed.
+        if let Ok(Some(verify)) = self.env_resolver.verify_command(env_spec) {
+            if self.env_verify(&verify).await {
+                self.env_resolver.cache_mark_ready(&key).await;
+                return Ok(());
+            }
+        }
         // Serialize setup per environment: concurrent rule instances sharing
         // an env (e.g. S1 + S2 instances of the same rule) used to run two
         // `conda env create` in parallel — the loser's transaction removes
