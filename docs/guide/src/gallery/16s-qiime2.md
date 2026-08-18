@@ -56,6 +56,7 @@ Rarefaction (`{config.sampling_depth}`, default 1000) is required by `core-metri
 ## Running It
 
 ```bash
-# After installing a QIIME2 conda environment:
-oxo-flow run examples/gallery/16_16s_qiime2_amplicon.oxoflow --profile conda
+# The workflow expects `qiime` on PATH — activate your QIIME2 conda env first:
+conda activate qiime2-amplicon-2024.10
+oxo-flow run examples/gallery/16_16s_qiime2_amplicon.oxoflow
 ```
