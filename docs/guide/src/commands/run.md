@@ -252,6 +252,67 @@ profile_mode = "override"   # fill | override (default: fill)
 If the named profile file does not exist, `run` prints a
 warning and proceeds with the workflow's own config.
 
+#### Cluster submission
+
+A profile that also carries a `[cluster]` block makes `run --profile` submit
+to a scheduler instead of executing locally:
+
+```toml
+# profiles/slurm.toml
+[cluster]
+backend       = "slurm"      # slurm | pbs | sge | lsf — required
+partition     = "compute"
+account       = "lab01"
+walltime      = "24h"
+max_submitted = 50           # jobs in flight at once
+poll_interval = "30s"
+
+[config]
+reference = "/data/ref/hg38.fa"
+```
+
+```bash
+oxo-flow run pipeline.oxoflow --profile slurm
+
+# one-off override of the profile's queue cap
+oxo-flow run pipeline.oxoflow --profile slurm --max-submitted 100
+```
+
+Profiles are looked up in the **workflow's own** `profiles/` directory —
+there is no user- or system-level profile location, so a site profile shared
+across a lab is copied into each workflow (or kept in the workflow
+repository) rather than installed once per machine.
+
+Both conditions are required: a `[cluster]` block must be in effect **and**
+a profile must be named. A profile with only `[config]` keeps the local
+path, and a workflow carrying its own `[cluster]` block still runs locally
+until you pass `--profile`, so adding one never changes an existing run.
+
+Rules become jobs after wildcard expansion, so a 100-sample scatter is 100
+jobs, and dependencies are chained per instance. The run submits at most
+`max_submitted` jobs at a time, tracks them to completion, and writes the
+checkpoint exactly as a local run does — `status`, `resume`, and re-run
+invalidation behave identically, and a second `run --profile slurm` with
+nothing changed submits nothing.
+
+Each run leaves a directory you can navigate with ordinary tools:
+
+```console
+.oxo-flow/runs/2026-08-17T14-30-05/   # `latest` symlinks to the newest
+  events.jsonl                        # append-only submit/complete/fail log
+  jobs/<rule>/job.sh                  # the exact script submitted
+  jobs/<rule>/job.id                  # scheduler job id
+  jobs/<rule>/status.json
+```
+
+Outputs, the working directory, and logs are assumed to live on storage
+shared between the submitting host and the compute nodes.
+
+> **Not yet implemented.** The driver polls until every job reaches a
+> terminal state; it does not yet re-attach to jobs still in flight if the
+> driver exits, and Ctrl-C does not yet cancel submitted jobs. Until then,
+> use `oxo-flow cluster cancel <JOB_ID>...` to clean up an interrupted run.
+
 Cluster scheduler submission (SLURM, PBS, SGE, LSF) is configured
 separately — see the [`cluster`](cluster.md) command.
 

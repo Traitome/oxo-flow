@@ -93,9 +93,17 @@ The P1 acceptance tests (`tests/cluster_backend.rs`) assert the core claim:
 - the dry-run preview's will-run set equals the set the driver submits,
 - poll timeouts cancel in-flight jobs.
 
+`run --profile <NAME>` now drives the backend when the profile carries a
+`[cluster]` block (see [Cluster submission](../commands/run.md#cluster-submission)).
+Its submission set is the dry-run preview's will-run set unioned with the
+run's `force_rules` — the same bypass set the local executor receives, since
+`run` has already applied and persisted its invalidation analysis by the time
+the cluster path runs. `tests/cluster_run_profile.rs` pins that combination to
+what the local executor actually executes from identical state.
+
 Real-cluster validation (SLURM scheduler matrix, version quirks) is tracked
-in the cluster testing checklist; wiring `run --profile slurm` on top of the
-driver, job arrays, and re-attach are follow-ups.
+in the cluster testing checklist; job arrays, re-attach to in-flight jobs, and
+`sacct`-based resource feedback are follow-ups.
 
 ## Assumptions
 

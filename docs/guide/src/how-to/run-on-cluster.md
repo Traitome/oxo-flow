@@ -8,6 +8,15 @@ This guide explains how to execute oxo-flow workflows on HPC clusters using SLUR
 
 oxo-flow's cluster module translates each rule into a cluster job submission. Resource requirements declared in the `.oxoflow` file (`threads`, `memory`, `gpu`, `time_limit`) are mapped to the appropriate scheduler directives. The `disk` field is **not** mapped to any scheduler directive — it only produces a local warning during `oxo-flow run`.
 
+There are two ways to reach a scheduler, and they suit different jobs:
+
+| | What it does | Use when |
+|---|---|---|
+| `run --profile <NAME>` | Submits, tracks jobs to completion, and updates the checkpoint | Normal execution — you want the workflow to run |
+| `cluster submit` | Writes job scripts and stops | You want to inspect or hand-edit scripts before submitting |
+
+`run --profile` is the everyday path; it inherits everything `run` does — wildcard expansion, checkpoint/resume, `--samples`, `--rerun`, config-change invalidation. See [Cluster submission](../commands/run.md#cluster-submission) for the `[cluster]` profile block. `cluster submit` remains the escape hatch and is documented below.
+
 **Environment wrapping is applied automatically** — conda, mamba, docker, singularity, pixi, venv, and modules environments are wrapped in the generated scripts. Each rule applies **one** backend (the first declared in the resolver order), so declaring e.g. both `singularity` and `modules` silently drops `modules`.
 
 ---

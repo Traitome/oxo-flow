@@ -444,6 +444,7 @@ pub async fn run_command(
     samples_filter: Vec<String>,
     rerun: bool,
     no_report_snapshot: bool,
+    max_submitted: Option<usize>,
 ) -> Result<()> {
     print_banner();
 
@@ -791,6 +792,39 @@ pub async fn run_command(
             0
         })
     };
+
+    // ── Cluster path (issue #74 phase 2) ───────────────────────────────────
+    // A `[cluster]` block in effect plus a named profile routes execution to
+    // a scheduler instead of the local executor. Both conditions are
+    // required: a workflow carrying `[cluster]` keeps running locally until
+    // the user opts in with `--profile`, so no existing workflow starts
+    // submitting jobs because of this change.
+    if profile.is_some()
+        && let Some(cluster_profile) = config.cluster.clone()
+    {
+        let summary = crate::commands::run_cluster::run_on_cluster(
+            &cluster_profile,
+            crate::commands::run_cluster::ClusterRunArgs {
+                config: &config,
+                dag: &dag,
+                order: &order,
+                checkpoint: &checkpoint,
+                checkpoint_path: &checkpoint_path,
+                workdir: workdir_actual.as_ref(),
+                wildcard_values: wildcard_values.as_ref(),
+                sensitive_keys: &sensitive_keys,
+                force_rules: &force_rules,
+                max_submitted,
+                rerun,
+                resume_failed,
+            },
+        )
+        .await?;
+        if !summary.is_success() {
+            return Err(anyhow::anyhow!("workflow execution failed"));
+        }
+        return Ok(());
+    }
 
     let exec_config = ExecutorConfig {
         max_jobs: jobs,
@@ -3251,6 +3285,7 @@ pub async fn resume_command(
         Vec::new(), // samples_filter (resume restores checkpoint state as-is)
         false,      // rerun (resume skips completed rules by design)
         no_report_snapshot,
+        None, // max_submitted (cluster queue cap — resume keeps the profile's)
     )
     .await
 }

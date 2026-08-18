@@ -216,6 +216,7 @@ pub mod publish;
 pub mod pull;
 pub mod quality;
 pub mod run;
+pub mod run_cluster;
 pub mod run_preview;
 pub mod samples;
 pub mod web;

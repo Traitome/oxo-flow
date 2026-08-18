@@ -48,6 +48,19 @@ pub enum RuleStatus {
     SkippedFresh,
 }
 
+impl RuleStatus {
+    /// Whether this rule will be skipped rather than executed. The single
+    /// definition of the will-run boundary: the preview's `will_skip` count
+    /// and the cluster path's submission set both read it, so a new skip
+    /// variant cannot mean "skip" in one place and "run" in the other.
+    pub fn is_skip(&self) -> bool {
+        matches!(
+            self,
+            RuleStatus::Skipped | RuleStatus::SkippedByWhen | RuleStatus::SkippedFresh
+        )
+    }
+}
+
 /// One rule in the predicted plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreviewRule {
@@ -331,10 +344,7 @@ pub fn preview_run_plan(
         } else {
             RuleStatus::Skipped
         };
-        if matches!(
-            status,
-            RuleStatus::Skipped | RuleStatus::SkippedByWhen | RuleStatus::SkippedFresh
-        ) {
+        if status.is_skip() {
             will_skip += 1;
         }
         plan.push(PreviewRule {
