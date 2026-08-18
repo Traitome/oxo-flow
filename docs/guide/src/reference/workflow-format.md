@@ -1164,6 +1164,17 @@ but the conda environment already exists, oxo-flow verifies it in place
 and marks it ready instead of re-running the setup, whose `conda env
 update` fallback re-resolves every dependency over the network.
 
+**Environment creation is serialized per environment, not per machine**
+— concurrent processes creating the *same* env would corrupt each
+other's transaction, so setup holds an exclusive lock keyed by the env
+cache key (`~/.oxo-flow/locks/env-<sha256>.lock`); *different* envs are
+independent by conda/pixi semantics and never contend. The wait is
+bounded (2h by default, `OXO_ENV_LOCK_TIMEOUT_SECS` to tune): the
+waiter logs every 60s and a timeout fails the rule with the lock path
+in the diagnostic instead of hanging the run. The holder's pid is
+written into the lock file for diagnosis. On shared accounts, one
+user's slow solve only blocks creators of that same environment.
+
 **Array-valued `{config.*}`** — a `[config]` key holding an array renders
 as a space-joined list in the shell (`["a", "b"]` → `a b`), matching the
 `{input}` convention; iterate with `for x in {config.tools}`.
