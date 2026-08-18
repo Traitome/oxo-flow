@@ -1153,6 +1153,11 @@ box runs with `--memory 4G`, not a limit the kernel can never back).
 cgroup-aware tools (picard, STAR, Cell Ranger) therefore see an honest
 limit on every machine size.
 
+**The ceiling counts swap** — the machine total above is RAM + swap
+(swap is backable memory the kernel uses under pressure; ignoring it
+left real capacity unused on small boxes). Pass `--max-memory` to pin
+the ceiling to RAM only when latency matters more than headroom.
+
 **Existing environments are verified before setup** — when the
 environment cache is cold (e.g. after `--rerun` wipes the checkpoint)
 but the conda environment already exists, oxo-flow verifies it in place
