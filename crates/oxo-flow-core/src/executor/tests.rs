@@ -25,6 +25,12 @@ fn make_rule(name: &str, shell: &str) -> Rule {
     }
 }
 
+/// Fixed machine limits for render_shell_command tests.
+const TEST_LIMITS: crate::scheduler::ResourceLimits = crate::scheduler::ResourceLimits {
+    threads: 8,
+    memory_mb: 16384,
+};
+
 #[test]
 fn job_status_display() {
     assert_eq!(JobStatus::Pending.to_string(), "pending");
@@ -282,6 +288,7 @@ fn render_shell_command_named_io() {
         "bwa mem {input.reads} > {output.bam}",
         &rule,
         &HashMap::new(),
+        TEST_LIMITS,
     );
     assert_eq!(result, "bwa mem data.fq > sorted.bam");
 }
@@ -295,7 +302,12 @@ fn render_shell_output_indexed() {
         shell: None,
         ..Default::default()
     };
-    let result = render_shell_command("cat {input[0]} > {output[0]}", &rule, &HashMap::new());
+    let result = render_shell_command(
+        "cat {input[0]} > {output[0]}",
+        &rule,
+        &HashMap::new(),
+        TEST_LIMITS,
+    );
     assert_eq!(result, "cat in.txt > out.txt");
 }
 
@@ -308,7 +320,12 @@ fn render_shell_output_all() {
         shell: None,
         ..Default::default()
     };
-    let result = render_shell_command("cat {input} > {output}", &rule, &HashMap::new());
+    let result = render_shell_command(
+        "cat {input} > {output}",
+        &rule,
+        &HashMap::new(),
+        TEST_LIMITS,
+    );
     assert_eq!(result, "cat a.txt b.txt > out.txt");
 }
 
@@ -327,6 +344,7 @@ fn render_shell_threads() {
         "bwa mem -t {threads} ref.fa > {output[0]}",
         &rule,
         &HashMap::new(),
+        TEST_LIMITS,
     );
     assert_eq!(result, "bwa mem -t 8 ref.fa > out.bam");
 }
@@ -340,7 +358,12 @@ fn render_shell_config_values() {
     };
     let mut values = HashMap::new();
     values.insert("config.reference".to_string(), "/data/ref.fa".to_string());
-    let result = render_shell_command("bwa mem {config.reference} > {output[0]}", &rule, &values);
+    let result = render_shell_command(
+        "bwa mem {config.reference} > {output[0]}",
+        &rule,
+        &values,
+        TEST_LIMITS,
+    );
     assert_eq!(result, "bwa mem /data/ref.fa > hello.txt");
 }
 
@@ -366,6 +389,7 @@ fn render_shell_command_nested_config() {
         "bwa mem {config.reference_fasta} > {output[0]}",
         &rule,
         &values,
+        TEST_LIMITS,
     );
     assert_eq!(result, "bwa mem /data/refs/GRCh38/genome.fa > out.bam");
 }
@@ -382,7 +406,7 @@ fn render_shell_command_three_level_nested_config() {
     values.insert("config.a".to_string(), "{config.b}".to_string());
     values.insert("config.b".to_string(), "{config.c}".to_string());
     values.insert("config.c".to_string(), "/final".to_string());
-    let result = render_shell_command("cp {config.a} {output[0]}", &rule, &values);
+    let result = render_shell_command("cp {config.a} {output[0]}", &rule, &values, TEST_LIMITS);
     assert_eq!(result, "cp /final out.txt");
 }
 
@@ -1266,7 +1290,7 @@ fn render_shell_log_placeholder() {
         log: Some("logs/run.log".to_string()),
         ..Default::default()
     };
-    let result = render_shell_command("echo hi 2> {log}", &rule, &HashMap::new());
+    let result = render_shell_command("echo hi 2> {log}", &rule, &HashMap::new(), TEST_LIMITS);
     assert_eq!(result, "echo hi 2> logs/run.log");
 }
 
@@ -1278,7 +1302,7 @@ fn render_shell_log_indexed() {
         log: Some("logs/run.log".to_string()),
         ..Default::default()
     };
-    let result = render_shell_command("echo hi 2> {log[0]}", &rule, &HashMap::new());
+    let result = render_shell_command("echo hi 2> {log[0]}", &rule, &HashMap::new(), TEST_LIMITS);
     assert_eq!(result, "echo hi 2> logs/run.log");
 }
 
@@ -1293,7 +1317,7 @@ fn render_shell_log_expands_sample_and_config() {
     let mut values = HashMap::new();
     values.insert("sample".to_string(), "S1".to_string());
     values.insert("config.results_dir".to_string(), "results".to_string());
-    let result = render_shell_command("echo hi 2> {log}", &rule, &values);
+    let result = render_shell_command("echo hi 2> {log}", &rule, &values, TEST_LIMITS);
     assert_eq!(result, "echo hi 2> logs/S1/results/run.log");
 }
 
@@ -1304,7 +1328,7 @@ fn render_shell_log_absent_keeps_placeholder() {
         output: vec!["out.txt".to_string()].into(),
         ..Default::default()
     };
-    let result = render_shell_command("echo hi 2> {log}", &rule, &HashMap::new());
+    let result = render_shell_command("echo hi 2> {log}", &rule, &HashMap::new(), TEST_LIMITS);
     assert_eq!(result, "echo hi 2> {log}");
 }
 
@@ -1323,7 +1347,12 @@ fn render_shell_config_array_joins_with_space() {
         "config.files".to_string(),
         "[\"a.fa\", \"b.fa\"]".to_string(),
     );
-    let result = render_shell_command("cat {config.files} > {output[0]}", &rule, &values);
+    let result = render_shell_command(
+        "cat {config.files} > {output[0]}",
+        &rule,
+        &values,
+        TEST_LIMITS,
+    );
     assert_eq!(result, "cat a.fa b.fa > out.txt");
 }
 
@@ -1336,7 +1365,7 @@ fn render_shell_config_array_non_string_elements() {
     };
     let mut values = HashMap::new();
     values.insert("config.ids".to_string(), "[1, 2]".to_string());
-    let result = render_shell_command("echo {config.ids}", &rule, &values);
+    let result = render_shell_command("echo {config.ids}", &rule, &values, TEST_LIMITS);
     assert_eq!(result, "echo 1 2");
 }
 
@@ -1352,7 +1381,12 @@ fn render_shell_config_scalar_unchanged() {
     // through untouched (only array literals join).
     values.insert("config.reference".to_string(), "/data/ref.fa".to_string());
     values.insert("config.mode".to_string(), "1".to_string());
-    let result = render_shell_command("bwa mem {config.reference} {config.mode}", &rule, &values);
+    let result = render_shell_command(
+        "bwa mem {config.reference} {config.mode}",
+        &rule,
+        &values,
+        TEST_LIMITS,
+    );
     assert_eq!(result, "bwa mem /data/ref.fa 1");
 }
 
@@ -1705,10 +1739,16 @@ fn scratch_render_inputs_absolute_outputs_relative() {
         &rule,
         &values,
         Path::new("/data/work"),
+        TEST_LIMITS,
     );
     assert_eq!(rendered, "bwa mem /data/work/reads/S1.fq > out/S1.sam");
     // Non-scratch rendering keeps relative input paths.
-    let plain = render_shell_command("bwa mem {input[0]} > {output[0]}", &rule, &values);
+    let plain = render_shell_command(
+        "bwa mem {input[0]} > {output[0]}",
+        &rule,
+        &values,
+        TEST_LIMITS,
+    );
     assert_eq!(plain, "bwa mem reads/S1.fq > out/S1.sam");
 }
 

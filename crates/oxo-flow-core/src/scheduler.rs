@@ -488,6 +488,50 @@ fn reservation_memory_mb(rule: &Rule, capacity: u64) -> u64 {
         .min(capacity)
 }
 
+/// Machine-level resource limits (threads + total memory), cgroup-aware where
+/// the platform supports it. These are the values shell expansion clamps
+/// tool-facing placeholders (`{effective_threads}` / `{effective_memory_mb}`)
+/// against, and they double as the pool capacity when building the pool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResourceLimits {
+    /// Machine CPU threads.
+    pub threads: u32,
+    /// Machine total memory in MB.
+    pub memory_mb: u64,
+}
+
+/// Tool-facing effective resources for a rule: the declared request clamped
+/// to the machine. Unlike the pool reservation (which treats unset values as
+/// 0 so the rule never blocks scheduling), tool-facing placeholders need a
+/// usable number: unset threads default to 1 and unset memory defaults to the
+/// whole machine — the tool may use everything the box has.
+/// Detect machine-level limits once per process (threads via
+/// `available_parallelism` — cgroup-aware on Linux — and total memory via
+/// sysinfo with a `/proc/meminfo` fallback).
+pub fn detect_system_limits() -> ResourceLimits {
+    static SYSTEM_LIMITS: std::sync::OnceLock<ResourceLimits> = std::sync::OnceLock::new();
+    *SYSTEM_LIMITS.get_or_init(|| {
+        let threads = std::thread::available_parallelism()
+            .map(|n| n.get() as u32)
+            .unwrap_or(1);
+        let memory_mb = crate::executor::process::detect_total_memory_mb()
+            + crate::executor::process::detect_swap_mb();
+        ResourceLimits { threads, memory_mb }
+    })
+}
+
+pub fn effective_tool_resources(rule: &Rule, limits: ResourceLimits) -> (u32, u64) {
+    let threads = match rule.effective_threads() {
+        0 => 1, // unset sentinel (threads <= 1 documented convention)
+        n => n.min(limits.threads.max(1)),
+    };
+    let memory_mb = match rule.effective_memory().and_then(parse_memory_mb) {
+        Some(m) if m > 0 => m.min(limits.memory_mb),
+        _ => limits.memory_mb,
+    };
+    (threads, memory_mb)
+}
+
 /// Resource pool tracking available system resources and custom resource groups.
 #[derive(Debug, Clone)]
 pub struct ResourcePool {
@@ -1059,6 +1103,50 @@ mod tests {
         let mem = effective_memory_mb(&rule, 2048);
         // Explicit memory takes precedence: 32G = 32768MB
         assert_eq!(mem, 32768);
+    }
+
+    #[test]
+    fn effective_tool_resources_clamps_to_machine() {
+        let limits = ResourceLimits {
+            threads: 4,
+            memory_mb: 3723,
+        };
+        let rule = Rule {
+            name: "star".to_string(),
+            threads: Some(12),
+            memory: Some("72G".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(effective_tool_resources(&rule, limits), (4, 3723));
+    }
+
+    #[test]
+    fn effective_tool_resources_under_capacity_passes_through() {
+        let limits = ResourceLimits {
+            threads: 16,
+            memory_mb: 65536,
+        };
+        let rule = Rule {
+            name: "fastqc".to_string(),
+            threads: Some(2),
+            memory: Some("4G".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(effective_tool_resources(&rule, limits), (2, 4096));
+    }
+
+    #[test]
+    fn effective_tool_resources_unset_defaults_are_usable() {
+        let limits = ResourceLimits {
+            threads: 8,
+            memory_mb: 32768,
+        };
+        let rule = Rule {
+            name: "no_resources".to_string(),
+            ..Default::default()
+        };
+        // Unset threads -> 1 (safe default), unset memory -> whole machine.
+        assert_eq!(effective_tool_resources(&rule, limits), (1, 32768));
     }
 }
 

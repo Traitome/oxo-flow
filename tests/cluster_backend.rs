@@ -432,6 +432,10 @@ output = ["finish.txt"]
             rule,
             &values,
             &config.workflow.interpreter_map,
+            oxo_flow_core::scheduler::ResourceLimits {
+                threads: 4,
+                memory_mb: 8192,
+            },
         ) else {
             continue;
         };

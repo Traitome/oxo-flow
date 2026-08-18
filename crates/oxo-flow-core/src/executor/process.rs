@@ -326,7 +326,7 @@ pub struct LocalExecutor {
 /// Detect total system memory in MB using the most reliable method available
 /// on the current platform. On Linux, falls back to parsing `/proc/meminfo`
 /// if the sysinfo crate returns unexpected results.
-fn detect_total_memory_mb() -> u64 {
+pub(crate) fn detect_total_memory_mb() -> u64 {
     // Primary: sysinfo crate (cross-platform)
     if let Ok(mb) = std::panic::catch_unwind(|| {
         use sysinfo::System;
@@ -358,6 +358,39 @@ fn detect_total_memory_mb() -> u64 {
         }
     }
 
+    0
+}
+
+/// Detect total swap in MB (0 when absent). Swap is backable memory the
+/// kernel will use under pressure — the effective resource ceiling is
+/// RAM + swap, so tools sized by `{effective_memory_mb}` and the
+/// container `--memory` clamp use the whole backable budget on
+/// small-memory boxes (live: tx-ubuntu's 3.7G RAM + 6G swap).
+pub(crate) fn detect_swap_mb() -> u64 {
+    if let Ok(mb) = std::panic::catch_unwind(|| {
+        use sysinfo::System;
+        let mut sys = System::new();
+        sys.refresh_memory();
+        sys.total_swap() / 1024 / 1024
+    }) && mb > 0
+    {
+        return mb;
+    }
+    if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
+        for line in content.lines() {
+            if line.starts_with("SwapTotal:")
+                && let Some(kb_str) = line
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|s| s.parse::<u64>().ok())
+            {
+                let mb = kb_str / 1024;
+                if mb > 0 {
+                    return mb;
+                }
+            }
+        }
+    }
     0
 }
 
@@ -399,9 +432,14 @@ impl LocalExecutor {
             num_cpus::get() as u32
         });
 
-        // Cross-platform memory detection with Linux /proc/meminfo fallback
+        // Cross-platform memory detection with Linux /proc/meminfo fallback.
+        // The ceiling is RAM + swap: swap is backable memory the kernel
+        // will use under pressure, and ignoring it leaves real capacity
+        // unused on small boxes (live: 3.7G RAM + 6G swap runs better
+        // sized to ~9.7G). Override with --max-memory when the swap
+        // should not count (e.g. latency-sensitive lanes).
         let max_memory_mb = config.max_memory_mb.unwrap_or_else(|| {
-            let detected = detect_total_memory_mb();
+            let detected = detect_total_memory_mb() + detect_swap_mb();
             if detected > 0 {
                 detected
             } else {
@@ -519,7 +557,62 @@ impl LocalExecutor {
         if self.env_resolver.cache_is_ready(&key).await {
             return Ok(());
         }
+        // Cold cache but the env may already exist (checkpoint wipe, a
+        // previous run, an external `conda create`): verify it in place
+        // instead of re-running the setup. The setup's fallback
+        // `conda env update --prune` re-resolves every dependency — live:
+        // tcasia's majiq==2.5 pip resolution failed on a flaky mirror even
+        // though the env was fully installed.
+        if let Ok(Some(verify)) = self.env_resolver.verify_command(env_spec)
+            && self.env_verify(&verify).await
+        {
+            self.env_resolver.cache_mark_ready(&key).await;
+            return Ok(());
+        }
+        // Serialize setup per environment: concurrent rule instances sharing
+        // an env (e.g. S1 + S2 instances of the same rule) used to run two
+        // `conda env create` in parallel — the loser's transaction removes
+        // the winner's just-installed packages (live evidence: rnaseq's
+        // env history shows `+fq` followed by `-fq` 12s later, leaving an
+        // empty env that the cache then marked ready).
+        let setup_lock = self.env_resolver.setup_lock(&key);
+        let _setup_guard = setup_lock.lock().await;
+        // Double-check: another task may have completed the setup while we
+        // waited for the lock.
+        if self.env_resolver.cache_is_ready(&key).await {
+            return Ok(());
+        }
         let setup_cmd = self.env_resolver.setup_command(env_spec)?;
+        // Some packages' post-link scripts download data during
+        // `conda env create` (bioconductor-genomeinfodbdata fetches its
+        // annotation tarballs) — before the new env's own ca-certificates
+        // bundle is linked, so their curls die with SSL 77 (live evidence:
+        // clindet + enrichment region_enrichment_analysis envs). Export
+        // the base conda CA bundle for the setup command when available.
+        let kind = env_spec.kind();
+        let setup_cmd = if kind == "conda" || kind == "mamba" {
+            format!(
+                "CB=\"$(dirname \"$(dirname \"$(command -v conda)\")\")/ssl/cacert.pem\"; \
+                 [ -f \"$CB\" ] && export SSL_CERT_FILE=\"$CB\"; {setup_cmd}"
+            )
+        } else {
+            setup_cmd
+        };
+        // Cross-process serialization: another oxo-flow run on this machine
+        // may be creating a different env right now (conda cache/post-link
+        // contention + stacked memory peaks — live evidence: tx-ubuntu
+        // overload episodes). The blocking flock waits for the other run's
+        // create+verify sequence; held until this function returns.
+        let cross_process_guard =
+            tokio::task::spawn_blocking(super::env_create_lock::EnvCreateLock::acquire)
+                .await
+                .ok()
+                .flatten();
+        if cross_process_guard.is_none() {
+            tracing::warn!(
+                "env-create cross-process lock unavailable — env setup proceeds unlocked"
+            );
+        }
         let output = Command::new("sh")
             .arg("-c")
             .arg(&setup_cmd)
@@ -529,8 +622,58 @@ impl LocalExecutor {
 
         match output {
             Ok(o) if o.status.success() => {
-                self.env_resolver.cache_mark_ready(&key).await;
-                Ok(())
+                // Setup reported success — but conda/mamba can exit 0 while
+                // leaving a broken env behind (interrupted transactions on
+                // loaded machines; live evidence: tx-ubuntu, where
+                // `conda env update --prune` left an env with no bin/ and
+                // exit code 0). Verify usability; on failure, tear the env
+                // down and retry setup once before reporting an error.
+                match self.env_resolver.verify_command(env_spec)? {
+                    None => {
+                        self.env_resolver.cache_mark_ready(&key).await;
+                        Ok(())
+                    }
+                    Some(verify) => {
+                        let mut verified = Self::env_verify(self, &verify).await;
+                        if !verified
+                            && let Ok(Some(teardown)) = self.env_resolver.teardown_command(env_spec)
+                        {
+                            tracing::warn!(
+                                rule = %rule.name,
+                                "environment setup exited 0 but verification failed — tearing down and retrying once"
+                            );
+                            let _ = Command::new("sh")
+                                .arg("-c")
+                                .arg(&teardown)
+                                .current_dir(&self.config.workdir)
+                                .output()
+                                .await;
+                            if let Ok(retry) = Command::new("sh")
+                                .arg("-c")
+                                .arg(&setup_cmd)
+                                .current_dir(&self.config.workdir)
+                                .output()
+                                .await
+                                && retry.status.success()
+                            {
+                                verified = Self::env_verify(self, &verify).await;
+                            }
+                        }
+                        if verified {
+                            self.env_resolver.cache_mark_ready(&key).await;
+                            Ok(())
+                        } else {
+                            Err(OxoFlowError::Environment {
+                                kind: env_spec.kind().to_string(),
+                                message:
+                                    "environment setup exited 0 but verification failed — the \
+                                     environment is broken (a previous interrupted creation \
+                                     may have left a partial prefix)"
+                                        .to_string(),
+                            })
+                        }
+                    }
+                }
             }
             Ok(o) => {
                 let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
@@ -559,11 +702,37 @@ impl LocalExecutor {
         }
     }
 
+    /// Run an environment verification command (success = usable env).
+    async fn env_verify(&self, verify: &str) -> bool {
+        Command::new("sh")
+            .arg("-c")
+            .arg(verify)
+            .current_dir(&self.config.workdir)
+            .output()
+            .await
+            .is_ok_and(|o| o.status.success())
+    }
+
     fn resolve_command(&self, command: &str, rule: &Rule, scratch_dir: Option<&Path>) -> String {
+        // Container backends use the declared memory as their cgroup limit.
+        // Cap it at the machine total so cgroup-aware tools (cellranger,
+        // picard, STAR) see an honest limit the kernel can actually back
+        // instead of an upstream HPC label copied verbatim by a port —
+        // same policy as the pool clamp in check_resources. Live: eager's
+        // MarkDuplicates container got --memory 4096M on a 3723MB machine.
+        let mut resources = rule.resources.clone();
+        if let Some(declared) = resources
+            .memory
+            .as_deref()
+            .and_then(crate::scheduler::parse_memory_mb)
+            && declared > self.system_memory_mb
+        {
+            resources.memory = Some(format!("{}M", self.system_memory_mb));
+        }
         match self.env_resolver.wrap_command(
             command,
             &rule.environment,
-            Some(&rule.resources),
+            Some(&resources),
             &self.config.workdir,
         ) {
             Ok(wrapped) => match scratch_dir {
@@ -724,15 +893,7 @@ impl LocalExecutor {
                 && !parent.as_os_str().is_empty()
                 && !parent.exists()
             {
-                tokio::fs::create_dir_all(parent)
-                    .await
-                    .map_err(|e| OxoFlowError::Execution {
-                        rule: rule.name.clone(),
-                        message: format!(
-                            "failed to create output directory {}: {e}",
-                            parent.display()
-                        ),
-                    })?;
+                create_rule_dir(parent, rule, "output")?;
             }
             move_path(&src, &dest)
                 .await
@@ -870,9 +1031,21 @@ impl LocalExecutor {
                 wildcard_values,
                 &self.config.interpreter_map,
                 &self.config.workdir,
+                crate::scheduler::ResourceLimits {
+                    threads: self.system_threads,
+                    memory_mb: self.system_memory_mb,
+                },
             )
         } else {
-            build_execution_command(&rule, wildcard_values, &self.config.interpreter_map)
+            build_execution_command(
+                &rule,
+                wildcard_values,
+                &self.config.interpreter_map,
+                crate::scheduler::ResourceLimits {
+                    threads: self.system_threads,
+                    memory_mb: self.system_memory_mb,
+                },
+            )
         };
         let base_cmd = match base_cmd {
             Some(cmd) => cmd,
@@ -957,15 +1130,7 @@ impl LocalExecutor {
                 && !parent.as_os_str().is_empty()
                 && !parent.exists()
             {
-                tokio::fs::create_dir_all(parent)
-                    .await
-                    .map_err(|e| OxoFlowError::Execution {
-                        rule: rule.name.clone(),
-                        message: format!(
-                            "failed to create output directory {}: {e}",
-                            parent.display()
-                        ),
-                    })?;
+                create_rule_dir(parent, &rule, "output")?;
             }
         }
 
@@ -979,15 +1144,7 @@ impl LocalExecutor {
                 && !parent.as_os_str().is_empty()
                 && !parent.exists()
             {
-                tokio::fs::create_dir_all(parent)
-                    .await
-                    .map_err(|e| OxoFlowError::Execution {
-                        rule: rule.name.clone(),
-                        message: format!(
-                            "failed to create log directory {}: {e}",
-                            parent.display()
-                        ),
-                    })?;
+                create_rule_dir(parent, &rule, "log")?;
             }
         }
 
@@ -1007,15 +1164,7 @@ impl LocalExecutor {
         // Create the scratch working directory now that execution is
         // certain; its name was already decided for env wrapping above.
         if let Some(scratch) = &scratch_dir {
-            tokio::fs::create_dir_all(scratch)
-                .await
-                .map_err(|e| OxoFlowError::Execution {
-                    rule: rule.name.clone(),
-                    message: format!(
-                        "failed to create scratch directory {}: {e}",
-                        scratch.display()
-                    ),
-                })?;
+            create_rule_dir(scratch, &rule, "scratch")?;
         }
         // The rule's shell cwd: scratch for scratch rules, main workdir
         // otherwise (docker/singularity run with `-w`/inherited cwd in the
@@ -1034,9 +1183,21 @@ impl LocalExecutor {
                     &rule,
                     wildcard_values,
                     &self.config.workdir,
+                    crate::scheduler::ResourceLimits {
+                        threads: self.system_threads,
+                        memory_mb: self.system_memory_mb,
+                    },
                 )
             } else {
-                render_shell_command(pre_cmd, &rule, wildcard_values)
+                render_shell_command(
+                    pre_cmd,
+                    &rule,
+                    wildcard_values,
+                    crate::scheduler::ResourceLimits {
+                        threads: self.system_threads,
+                        memory_mb: self.system_memory_mb,
+                    },
+                )
             };
             if let Err(e) = validate_shell_safety(&rendered) {
                 // Nothing ran yet — drop the empty scratch dir rather than
@@ -1235,7 +1396,15 @@ impl LocalExecutor {
                 cleanup_temp_outputs(&rule, &self.config.workdir).await;
                 if let Some(ref hook_cmd) = rule.on_failure {
                     run_hook(
-                        &render_shell_command(hook_cmd, &rule, wildcard_values),
+                        &render_shell_command(
+                            hook_cmd,
+                            &rule,
+                            wildcard_values,
+                            crate::scheduler::ResourceLimits {
+                                threads: self.system_threads,
+                                memory_mb: self.system_memory_mb,
+                            },
+                        ),
                         &rule,
                         &self.config.workdir,
                     )
@@ -1263,7 +1432,15 @@ impl LocalExecutor {
                         );
                         if let Some(ref hook_cmd) = rule.on_failure {
                             run_hook(
-                                &render_shell_command(hook_cmd, &rule, wildcard_values),
+                                &render_shell_command(
+                                    hook_cmd,
+                                    &rule,
+                                    wildcard_values,
+                                    crate::scheduler::ResourceLimits {
+                                        threads: self.system_threads,
+                                        memory_mb: self.system_memory_mb,
+                                    },
+                                ),
                                 &rule,
                                 &self.config.workdir,
                             )
@@ -1273,7 +1450,15 @@ impl LocalExecutor {
                     } else {
                         if let Some(ref hook_cmd) = rule.on_success {
                             run_hook(
-                                &render_shell_command(hook_cmd, &rule, wildcard_values),
+                                &render_shell_command(
+                                    hook_cmd,
+                                    &rule,
+                                    wildcard_values,
+                                    crate::scheduler::ResourceLimits {
+                                        threads: self.system_threads,
+                                        memory_mb: self.system_memory_mb,
+                                    },
+                                ),
                                 &rule,
                                 &self.config.workdir,
                             )
@@ -1316,7 +1501,15 @@ impl LocalExecutor {
                 cleanup_temp_outputs(&rule, &self.config.workdir).await;
                 if let Some(ref hook_cmd) = rule.on_failure {
                     run_hook(
-                        &render_shell_command(hook_cmd, &rule, wildcard_values),
+                        &render_shell_command(
+                            hook_cmd,
+                            &rule,
+                            wildcard_values,
+                            crate::scheduler::ResourceLimits {
+                                threads: self.system_threads,
+                                memory_mb: self.system_memory_mb,
+                            },
+                        ),
                         &rule,
                         &self.config.workdir,
                     )
@@ -1331,7 +1524,15 @@ impl LocalExecutor {
             cleanup_temp_outputs(&rule, &self.config.workdir).await;
             if let Some(ref hook_cmd) = rule.on_failure {
                 run_hook(
-                    &render_shell_command(hook_cmd, &rule, wildcard_values),
+                    &render_shell_command(
+                        hook_cmd,
+                        &rule,
+                        wildcard_values,
+                        crate::scheduler::ResourceLimits {
+                            threads: self.system_threads,
+                            memory_mb: self.system_memory_mb,
+                        },
+                    ),
                     &rule,
                     &self.config.workdir,
                 )
@@ -1446,8 +1647,9 @@ pub fn build_execution_command(
     rule: &Rule,
     wildcard_values: &HashMap<String, String>,
     interpreter_map: &HashMap<String, String>,
+    limits: crate::scheduler::ResourceLimits,
 ) -> Option<String> {
-    build_execution_command_inner(rule, wildcard_values, interpreter_map, None)
+    build_execution_command_inner(rule, wildcard_values, interpreter_map, None, limits)
 }
 
 /// Scratch-mode variant: input and script paths render absolute (they live
@@ -1458,8 +1660,15 @@ pub(crate) fn build_execution_command_in_scratch(
     wildcard_values: &HashMap<String, String>,
     interpreter_map: &HashMap<String, String>,
     workdir: &Path,
+    limits: crate::scheduler::ResourceLimits,
 ) -> Option<String> {
-    build_execution_command_inner(rule, wildcard_values, interpreter_map, Some(workdir))
+    build_execution_command_inner(
+        rule,
+        wildcard_values,
+        interpreter_map,
+        Some(workdir),
+        limits,
+    )
 }
 
 fn build_execution_command_inner(
@@ -1467,15 +1676,16 @@ fn build_execution_command_inner(
     wildcard_values: &HashMap<String, String>,
     interpreter_map: &HashMap<String, String>,
     abs_root: Option<&Path>,
+    limits: crate::scheduler::ResourceLimits,
 ) -> Option<String> {
     let shell_cmd = rule
         .shell
         .as_ref()
-        .map(|cmd| render_shell_command_inner(cmd, rule, wildcard_values, abs_root));
+        .map(|cmd| render_shell_command_inner(cmd, rule, wildcard_values, abs_root, limits));
 
     let script_cmd = rule.script.as_ref().map(|script_path| {
         let expanded_script =
-            render_shell_command_inner(script_path, rule, wildcard_values, abs_root);
+            render_shell_command_inner(script_path, rule, wildcard_values, abs_root, limits);
         let base_script = expanded_script
             .split_whitespace()
             .next()
@@ -1501,7 +1711,7 @@ fn build_execution_command_inner(
     // Auto-create output directories to eliminate mkdir -p boilerplate in shells
     let mut dirs_to_create: Vec<String> = Vec::new();
     for output in &rule.output {
-        let expanded = render_shell_command_inner(output, rule, wildcard_values, abs_root);
+        let expanded = render_shell_command_inner(output, rule, wildcard_values, abs_root, limits);
         // Only create dirs for paths with directory separators, skip wildcards
         if expanded.contains('/')
             && !expanded.contains('{')
@@ -1572,6 +1782,19 @@ fn warn_shell_fallback_once() {
     }
 }
 
+/// Create a rule's output/log/scratch parent directory synchronously.
+///
+/// Directory creation is a handful of fast syscalls; routing it through
+/// tokio's blocking pool meant failures surfaced as the opaque
+/// "background task failed" (observed repeatedly in live runs), hiding
+/// the real error (ENOSPC, EACCES, …) from operators.
+fn create_rule_dir(path: &Path, rule: &Rule, what: &str) -> Result<()> {
+    std::fs::create_dir_all(path).map_err(|e| OxoFlowError::Execution {
+        rule: rule.name.clone(),
+        message: format!("failed to create {what} directory {}: {e}", path.display()),
+    })
+}
+
 /// Directory-name-safe rule names: alphanumerics plus `. _ -` survive,
 /// everything else becomes `_` (rule names admit `:` per `Rule::validate`,
 /// which is not a safe directory character everywhere).
@@ -1594,10 +1817,11 @@ fn sanitize_dir_component(name: &str) -> String {
 /// The container backends wrap commands as plain shell strings that
 /// bind-mount only the executor workdir (environment.rs). Scratch rules
 /// need an additional scratch bind and — for docker — the `-w` working
-/// directory switched to the scratch dir. Only the prefix before ` sh -c '`
-/// is touched, so a user command that coincidentally contains the same
-/// tokens is never rewritten. Non-container wrappers pass through
-/// unchanged.
+/// directory switched to the scratch dir. Only the prefix before the
+/// first ` sh -c '` is touched (with the bash re-exec shim that is the
+/// shim's own `sh -c`, which still precedes all mounts), so a user command
+/// that coincidentally contains the same tokens is never rewritten.
+/// Non-container wrappers pass through unchanged.
 pub(super) fn fixup_container_wrapper(
     wrapped: &str,
     kind: &str,
@@ -1756,8 +1980,9 @@ pub fn render_shell_command(
     cmd: &str,
     rule: &Rule,
     wildcard_values: &HashMap<String, String>,
+    limits: crate::scheduler::ResourceLimits,
 ) -> String {
-    render_shell_command_inner(cmd, rule, wildcard_values, None)
+    render_shell_command_inner(cmd, rule, wildcard_values, None, limits)
 }
 
 /// Scratch-mode rendering: `{input}` and `{log}` render as absolute paths
@@ -1769,8 +1994,9 @@ pub(crate) fn render_shell_command_in_scratch(
     rule: &Rule,
     wildcard_values: &HashMap<String, String>,
     workdir: &Path,
+    limits: crate::scheduler::ResourceLimits,
 ) -> String {
-    render_shell_command_inner(cmd, rule, wildcard_values, Some(workdir))
+    render_shell_command_inner(cmd, rule, wildcard_values, Some(workdir), limits)
 }
 
 fn render_shell_command_inner(
@@ -1778,6 +2004,7 @@ fn render_shell_command_inner(
     rule: &Rule,
     wildcard_values: &HashMap<String, String>,
     abs_root: Option<&Path>,
+    limits: crate::scheduler::ResourceLimits,
 ) -> String {
     let mut expanded = cmd.to_string();
     // `{log}` resolves to the rule's log path with the same wildcard and
@@ -1789,7 +2016,7 @@ fn render_shell_command_inner(
         let expanded_log = if cmd == log_path || log_path.contains("{log}") {
             log_path.clone()
         } else {
-            render_shell_command_inner(log_path, rule, wildcard_values, abs_root)
+            render_shell_command_inner(log_path, rule, wildcard_values, abs_root, limits)
         };
         let rendered_log = absolute_path(abs_root, &expanded_log);
         expanded = expanded.replace("{log}", &rendered_log);
@@ -1836,6 +2063,12 @@ fn render_shell_command_inner(
     if let Some(mem) = rule.effective_memory() {
         expanded = expanded.replace("{memory}", mem);
     }
+    // Tool-facing effective resources: the declared request clamped to the
+    // machine, so tools can size their own flags (e.g. -Xmx{effective_memory_mb}m)
+    // instead of hardcoding HPC-scale values that OOM small boxes.
+    let (eff_threads, eff_mem_mb) = crate::scheduler::effective_tool_resources(rule, limits);
+    expanded = expanded.replace("{effective_threads}", &eff_threads.to_string());
+    expanded = expanded.replace("{effective_memory_mb}", &eff_mem_mb.to_string());
     for (key, value) in &rule.params {
         let string_val = match value {
             toml::Value::String(s) => s.clone(),
@@ -2137,4 +2370,49 @@ pub fn hostname() -> String {
     std::env::var("HOSTNAME")
         .or_else(|_| std::env::var("COMPUTERNAME"))
         .unwrap_or_else(|_| "unknown".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rule::{EnvironmentSpec, Resources};
+
+    fn executor_with(max_threads: u32, max_memory_mb: u64) -> LocalExecutor {
+        LocalExecutor::new(ExecutorConfig {
+            max_threads: Some(max_threads),
+            max_memory_mb: Some(max_memory_mb),
+            ..Default::default()
+        })
+    }
+
+    fn docker_rule(memory: &str) -> Rule {
+        Rule {
+            name: "bigmem".to_string(),
+            resources: Resources {
+                memory: Some(memory.to_string()),
+                ..Default::default()
+            },
+            environment: EnvironmentSpec {
+                docker: Some("img:latest".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn resolve_command_clamps_container_memory_to_system_total() {
+        let ex = executor_with(4, 2048);
+        // 72G (an upstream HPC label) on a 2G box — the container cgroup
+        // must reflect the machine, not the declaration.
+        let cmd = ex.resolve_command("echo hi", &docker_rule("72G"), None);
+        assert!(cmd.contains("--memory 2048M"), "cmd: {cmd}");
+    }
+
+    #[test]
+    fn resolve_command_keeps_declared_memory_when_within_system_total() {
+        let ex = executor_with(4, 2048);
+        let cmd = ex.resolve_command("echo hi", &docker_rule("1G"), None);
+        assert!(cmd.contains("--memory 1G"), "cmd: {cmd}");
+    }
 }

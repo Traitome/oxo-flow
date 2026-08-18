@@ -1306,10 +1306,78 @@ fn render_shell_command_substitution() {
     let mut wildcards = HashMap::new();
     wildcards.insert("config.reference".to_string(), "/ref/hg38.fa".to_string());
 
-    let rendered = render_shell_command(rule.shell.as_ref().unwrap(), &rule, &wildcards);
+    let rendered = render_shell_command(
+        rule.shell.as_ref().unwrap(),
+        &rule,
+        &wildcards,
+        oxo_flow_core::scheduler::ResourceLimits {
+            threads: 4,
+            memory_mb: 8192,
+        },
+    );
     assert!(rendered.contains("raw/sample_R1.fastq.gz"));
     assert!(rendered.contains("aligned/sample.bam"));
     assert!(rendered.contains("/ref/hg38.fa"));
+}
+
+/// `{effective_threads}` / `{effective_memory_mb}` clamp the declared
+/// request to the machine so tools can size their own flags (the hardcoded
+/// `-Xmx29491M`-class OOMs on small boxes).
+#[test]
+fn render_shell_command_effective_resource_placeholders() {
+    use oxo_flow_core::executor::process::render_shell_command;
+    use oxo_flow_core::rule::Rule;
+    use std::collections::HashMap;
+
+    let rule = Rule {
+        name: "markdup".to_string(),
+        input: vec![].into(),
+        output: vec!["a.bam".to_string()].into(),
+        shell: Some(
+            "picard -Xmx{effective_memory_mb}m -XX:ActiveProcessorCount={effective_threads} MarkDuplicates"
+                .to_string(),
+        ),
+        ..Default::default()
+    };
+    let wildcards = HashMap::new();
+    let limits = oxo_flow_core::scheduler::ResourceLimits {
+        threads: 4,
+        memory_mb: 3723,
+    };
+
+    let rendered = render_shell_command(rule.shell.as_ref().unwrap(), &rule, &wildcards, limits);
+    // No declared resources: memory falls back to the whole machine,
+    // threads to the 1-unset sentinel.
+    assert!(rendered.contains("-Xmx3723m"));
+    assert!(rendered.contains("ActiveProcessorCount=1"));
+    // An over-declared rule clamps to the machine:
+    let over = Rule {
+        name: "star".to_string(),
+        resources: oxo_flow_core::rule::Resources {
+            threads: 12,
+            memory: Some("72G".to_string()),
+            ..Default::default()
+        },
+        shell: Some(
+            "STAR --runThreadN {effective_threads} --limitBAMsortRAM {effective_memory_mb}"
+                .to_string(),
+        ),
+        ..Default::default()
+    };
+    let rendered_over =
+        render_shell_command(over.shell.as_ref().unwrap(), &over, &wildcards, limits);
+    assert!(rendered_over.contains("--runThreadN 4"));
+    assert!(rendered_over.contains("--limitBAMsortRAM 3723"));
+
+    // Unset resources still produce usable numbers.
+    let unset = Rule {
+        name: "tool".to_string(),
+        shell: Some("run --threads {effective_threads}".to_string()),
+        ..Default::default()
+    };
+    let rendered_unset =
+        render_shell_command(unset.shell.as_ref().unwrap(), &unset, &wildcards, limits);
+    assert!(rendered_unset.contains("--threads 1"));
 }
 
 /// Test sanitize_shell_command detects dangerous patterns.

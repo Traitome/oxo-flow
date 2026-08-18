@@ -4,7 +4,7 @@
 //! managers (conda, pixi, docker, singularity, venv) and a resolver that
 //! selects the appropriate backend for each rule.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
@@ -41,6 +41,16 @@ pub trait EnvironmentBackend: Send + Sync {
     /// Return the shell command to tear down / remove this environment,
     /// or `None` if no cleanup is needed.
     fn teardown_command(&self, spec: &str) -> Result<Option<String>>;
+
+    /// Return a shell command that verifies the environment is actually
+    /// usable after setup, or `None` when setup success is sufficient proof.
+    ///
+    /// Needed because conda/mamba's create/update can exit 0 while leaving
+    /// a broken env behind (interrupted transactions on loaded machines;
+    /// prefixes that exist but are not complete environments — live evidence:
+    /// tx-ubuntu, where `conda env update --prune` left an env with no
+    /// `bin/` and the engine marked it ready on exit code alone).
+    fn verify_command(&self, spec: &str) -> Result<Option<String>>;
 
     /// Return a cache key that uniquely identifies this environment
     /// configuration so it can be reused across rules.
@@ -120,6 +130,16 @@ impl EnvironmentBackend for CondaBackend {
         Ok(Some(format!("conda env remove -n {env_name} -y")))
     }
 
+    fn verify_command(&self, spec: &str) -> Result<Option<String>> {
+        // `conda run` succeeds even when the env's own bin/ is missing
+        // (tools then resolve from the system PATH), so the check must
+        // target the env prefix itself — CONDA_PREFIX is set by `conda run`.
+        let env_name = conda_env_name_from_spec(spec);
+        Ok(Some(format!(
+            "conda run -n {env_name} bash -c 'test -d \"$CONDA_PREFIX/bin\"'"
+        )))
+    }
+
     fn cache_key(&self, spec: &str) -> String {
         format!("conda:{spec}")
     }
@@ -179,6 +199,18 @@ impl CondaBackend {
         }
     }
 }
+
+/// Container-internal shell shim: re-exec the user script under `bash -c`
+/// when the image provides bash, otherwise run it with the container `sh`
+/// (the previous behaviour).
+///
+/// The container default `sh` is often dash/busybox, while nf-core-derived
+/// images ship bash and their scripts rely on bash features (`set -o
+/// pipefail`, `[[ ]]`); eager 2.5.3 (`set: Illegal option -o pipefail`) and
+/// the nanoseq qcat `[[ ]]` failures were both this mismatch. The script is
+/// passed as `$1` so it is never re-escaped into the shim text.
+const CONTAINER_BASH_SHIM: &str = "if command -v bash >/dev/null 2>&1; \
+then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi";
 
 /// Escape a string for safe embedding inside a `sh -c '...'` invocation.
 ///
@@ -351,6 +383,14 @@ impl EnvironmentBackend for MambaBackend {
         Ok(Some(format!("{} env remove -n {env_name} -y", self.binary)))
     }
 
+    fn verify_command(&self, spec: &str) -> Result<Option<String>> {
+        let env_name = conda_env_name_from_spec(spec);
+        Ok(Some(format!(
+            "{} run -n {env_name} bash -c 'test -d \"$CONDA_PREFIX/bin\"'",
+            self.binary
+        )))
+    }
+
     fn cache_key(&self, spec: &str) -> String {
         format!("mamba:{}:{spec}", self.binary)
     }
@@ -393,7 +433,7 @@ impl EnvironmentBackend for DockerBackend {
         }
 
         Ok(format!(
-            "docker run --rm --user $(id -u):$(id -g){mem_arg} -v {workdir}:{workdir} -w {workdir} {spec} sh -c '{escaped_cmd}'"
+            "docker run --rm --user $(id -u):$(id -g){mem_arg} -v {workdir}:{workdir} -w {workdir} {spec} sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'"
         ))
     }
 
@@ -402,6 +442,10 @@ impl EnvironmentBackend for DockerBackend {
     }
 
     fn teardown_command(&self, _spec: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn verify_command(&self, _spec: &str) -> Result<Option<String>> {
         Ok(None)
     }
 
@@ -467,7 +511,7 @@ impl EnvironmentBackend for SingularityBackend {
         let escaped_cmd = escape_for_sh_single_quote(command);
 
         Ok(format!(
-            "{} exec --bind {workdir}:{workdir} {spec} sh -c '{escaped_cmd}'",
+            "{} exec --bind {workdir}:{workdir} {spec} sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'",
             self.binary
         ))
     }
@@ -477,6 +521,10 @@ impl EnvironmentBackend for SingularityBackend {
     }
 
     fn teardown_command(&self, _spec: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn verify_command(&self, _spec: &str) -> Result<Option<String>> {
         Ok(None)
     }
 
@@ -526,6 +574,10 @@ impl EnvironmentBackend for VenvBackend {
             });
         }
         Ok(Some(format!("rm -rf {spec}")))
+    }
+
+    fn verify_command(&self, _spec: &str) -> Result<Option<String>> {
+        Ok(None)
     }
 
     fn cache_key(&self, spec: &str) -> String {
@@ -589,6 +641,10 @@ impl EnvironmentBackend for PixiBackend {
         Ok(None)
     }
 
+    fn verify_command(&self, _spec: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
     fn cache_key(&self, spec: &str) -> String {
         format!("pixi:{spec}")
     }
@@ -623,6 +679,10 @@ impl EnvironmentBackend for SystemBackend {
     }
 
     fn teardown_command(&self, _spec: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn verify_command(&self, _spec: &str) -> Result<Option<String>> {
         Ok(None)
     }
 
@@ -682,6 +742,10 @@ fi
     }
 
     fn teardown_command(&self, _spec: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn verify_command(&self, _spec: &str) -> Result<Option<String>> {
         Ok(None)
     }
 
@@ -798,6 +862,8 @@ pub struct EnvironmentResolver {
     modules: ModulesBackend,
     system: SystemBackend,
     cache: Arc<Mutex<EnvironmentCache>>,
+    /// Per-cache-key setup mutexes (see [`Self::setup_lock`]).
+    setup_locks: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl Default for EnvironmentResolver {
@@ -819,6 +885,7 @@ impl EnvironmentResolver {
             modules: ModulesBackend,
             system: SystemBackend,
             cache: Arc::new(Mutex::new(EnvironmentCache::new())),
+            setup_locks: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -834,6 +901,7 @@ impl EnvironmentResolver {
             modules: ModulesBackend,
             system: SystemBackend,
             cache: Arc::new(Mutex::new(EnvironmentCache::with_cache_dir(cache_dir))),
+            setup_locks: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -958,6 +1026,44 @@ impl EnvironmentResolver {
             return self.modules.setup_command(&env_spec.modules.join(","));
         }
         self.system.setup_command("")
+    }
+
+    /// Per-environment setup mutex: concurrent rule instances that share an
+    /// env must not run `conda env create` simultaneously — the loser's
+    /// create transaction removes the winner's just-installed packages
+    /// (live evidence: rnaseq S1/S2 race left `-fq` right after `+fq` in
+    /// the env history and an empty env marked ready).
+    pub fn setup_lock(&self, key: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.setup_locks.lock().unwrap();
+        locks.entry(key.to_string()).or_default().clone()
+    }
+
+    /// Post-setup usability check for the environment (conda/mamba verify
+    /// the env's `bin/` exists; other backends return `None`).
+    pub fn verify_command(&self, env_spec: &EnvironmentSpec) -> Result<Option<String>> {
+        if let Some(ref mamba) = env_spec.mamba {
+            return self.mamba.verify_command(mamba);
+        }
+        if let Some(ref conda) = env_spec.conda {
+            return self.conda.verify_command(conda);
+        }
+        Ok(None)
+    }
+
+    /// Get the teardown command for an environment specification
+    /// (removes the env so a broken one can be recreated cleanly).
+    pub fn teardown_command(&self, env_spec: &EnvironmentSpec) -> Result<Option<String>> {
+        if let Some(ref mamba) = env_spec.mamba {
+            return self
+                .mamba
+                .teardown_command_with_opts(mamba, env_spec.mamba_prefix.as_deref());
+        }
+        if let Some(ref conda) = env_spec.conda {
+            return self
+                .conda
+                .teardown_command_with_opts(conda, env_spec.conda_prefix.as_deref());
+        }
+        Ok(None)
     }
 
     /// Check which environment backends are available on the system.
@@ -1092,6 +1198,46 @@ mod tests {
             .wrap_command("echo hi", "ubuntu:24.04", None, &abs)
             .unwrap();
         assert!(docker.contains(&format!("-v {}:{}", abs.display(), abs.display())));
+    }
+
+    // ── Container bash re-exec shim ─────────────────────────────────
+
+    #[test]
+    fn container_wrappers_reexec_under_bash_when_available() {
+        // nf-core-derived containers ship bash; their scripts need it
+        // (`set -o pipefail` is rejected by dash/busybox `sh`).
+        let workdir = std::path::Path::new("/tmp/oxo-shim-test");
+        let docker = DockerBackend
+            .wrap_command("echo hi", "ubuntu:24.04", None, workdir)
+            .unwrap();
+        assert!(
+            docker.contains("sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi' sh 'echo hi'"),
+            "{docker}"
+        );
+        let sing = SingularityBackend::new()
+            .wrap_command("echo hi", "ubuntu:24.04", None, workdir)
+            .unwrap();
+        assert!(
+            sing.contains("sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi' sh 'echo hi'"),
+            "{sing}"
+        );
+    }
+
+    #[test]
+    fn container_shim_keeps_user_script_out_of_shim_text() {
+        // The user script travels as the `$1` argument (single-quote-escaped
+        // for the host shell) — it is never interpolated into the shim, so
+        // scripts containing quotes or shim-like tokens survive intact.
+        let script = "echo 'a b'; grep \" sh -c '\" x";
+        let docker = DockerBackend
+            .wrap_command(script, "ubuntu:24.04", None, std::path::Path::new("/tmp/x"))
+            .unwrap();
+        let shim_marker = format!("sh -c '{CONTAINER_BASH_SHIM}' sh '");
+        assert!(docker.contains(&shim_marker), "{docker}");
+        // everything after the shim marker is the escaped script…
+        let rest = docker.split(&shim_marker).nth(1).unwrap();
+        assert!(rest.contains("grep"), "{docker}");
+        assert!(rest.contains("sh -c"), "{docker}"); // script content preserved verbatim
     }
 
     // ── SystemBackend ──────────────────────────────────────────────
@@ -1438,6 +1584,34 @@ mod tests {
     }
 
     #[test]
+    fn conda_verify_command_checks_env_bin_directory() {
+        let backend = CondaBackend;
+        let cmd = backend.verify_command("envs/qc.yaml").unwrap().unwrap();
+        assert!(cmd.contains("conda run -n qc"));
+        // The check must target the env's own prefix (CONDA_PREFIX), not a
+        // tool lookup — a broken env with no bin/ still lets `true` resolve
+        // from the system PATH.
+        assert!(cmd.contains("test -d"));
+        assert!(cmd.contains("CONDA_PREFIX/bin"));
+    }
+
+    #[test]
+    fn mamba_verify_command_uses_binary() {
+        let backend = MambaBackend::new();
+        let cmd = backend.verify_command("envs/qc.yaml").unwrap().unwrap();
+        // The detection chain picks mamba → micromamba → conda; assert on
+        // the backend's actual binary, not a hardcoded name.
+        assert!(cmd.contains(&format!("{} run -n qc", backend.binary)));
+        assert!(cmd.contains("CONDA_PREFIX/bin"));
+    }
+
+    #[test]
+    fn docker_verify_command_is_none() {
+        let backend = DockerBackend;
+        assert!(backend.verify_command("image:tag").unwrap().is_none());
+    }
+
+    #[test]
     fn mamba_cache_key() {
         let backend = MambaBackend::new();
         let key = backend.cache_key("envs/qc.yaml");
@@ -1655,6 +1829,18 @@ mod tests {
     }
 
     // --- cache file persistence test -----------------------------------------
+
+    #[test]
+    fn setup_lock_is_shared_per_key() {
+        let resolver = EnvironmentResolver::new();
+        let a = resolver.setup_lock("conda:envs/fq.yaml");
+        let b = resolver.setup_lock("conda:envs/fq.yaml");
+        let other = resolver.setup_lock("conda:envs/star.yaml");
+        // Same key → same mutex (concurrent rule instances serialize their
+        // env setup); different keys → independent mutexes.
+        assert!(Arc::ptr_eq(&a, &b));
+        assert!(!Arc::ptr_eq(&a, &other));
+    }
 
     #[test]
     fn environment_cache_dir_initialization() {

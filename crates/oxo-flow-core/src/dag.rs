@@ -54,6 +54,27 @@ impl WorkflowDag {
     /// Returns an error if a cycle is detected or if duplicate rule names exist.
     #[must_use = "building a DAG returns a Result that must be used"]
     pub fn from_rules(rules: &[Rule]) -> Result<Self> {
+        Self::from_rules_with_config(rules, &HashMap::new())
+    }
+
+    /// Build a DAG from a list of rules, expanding `{config.x}` placeholders
+    /// in input/output paths against the provided config values before edge
+    /// matching.
+    ///
+    /// Rules frequently express the same logical path through different
+    /// config keys (`{config.umap_n_neighbors}` vs `{config.leiden_n_neighbors}`),
+    /// or the same key at different nesting — without expansion those inputs
+    /// never match any producer and the edge is silently lost (live evidence:
+    /// the unsupervised workflow scheduled every leiden rule before its
+    /// umap_graph producer).
+    #[must_use = "building a DAG returns a Result that must be used"]
+    pub fn from_rules_with_config(
+        rules: &[Rule],
+        config_values: &HashMap<String, String>,
+    ) -> Result<Self> {
+        let expand = |path: &str| {
+            crate::executor::expand_to_fixed_point(path, config_values, |value| value.to_owned())
+        };
         let mut graph = DiGraph::new();
         let mut name_to_node = HashMap::new();
         let mut output_to_node: HashMap<String, Vec<NodeIndex>> = HashMap::new();
@@ -73,9 +94,11 @@ impl WorkflowDag {
             name_to_node.insert(rule.name.clone(), node);
 
             // Register outputs — every producer, not just the last (a
-            // shared output string must link ALL of its producers).
+            // shared output string must link ALL of its producers),
+            // config-expanded so inputs referencing the same path through
+            // a different config key still match.
             for output in &rule.output {
-                output_to_node.entry(output.clone()).or_default().push(node);
+                output_to_node.entry(expand(output)).or_default().push(node);
             }
         }
 
@@ -121,7 +144,7 @@ impl WorkflowDag {
             // iterator yields the directory path; prefix-match it against
             // every producer output, optionally restricted by the filter glob.
             let declared_dir: Option<(String, Option<String>)> = match &rule.input {
-                FilePatterns::Dir { path, pattern } => Some((path.clone(), pattern.clone())),
+                FilePatterns::Dir { path, pattern } => Some((expand(path), pattern.clone())),
                 _ => None,
             };
 
@@ -131,11 +154,15 @@ impl WorkflowDag {
             let infer = |input: &str,
                          graph: &mut DiGraph<DagNode, ()>,
                          declared_dir: Option<&(String, Option<String>)>| {
+                // Config placeholders are expanded before matching so the
+                // same logical path expressed through different config keys
+                // still connects (see from_rules_with_config).
+                let input = expand(input);
                 // 1. Exact template-level match (legacy behavior, kept first).
                 //    Every producer declaring the same output string links —
                 //    shared-directory outputs must order ALL writers before
                 //    any consumer of the directory.
-                if let Some(producers) = output_to_node.get(input) {
+                if let Some(producers) = output_to_node.get(&input) {
                     for &producer_node in producers {
                         add_edge_dedup(graph, producer_node, consumer_node);
                     }
@@ -155,12 +182,12 @@ impl WorkflowDag {
                             add_edge_dedup(graph, *producer_node, consumer_node);
                         }
                     }
-                } else if has_glob_chars(input) {
+                } else if has_glob_chars(&input) {
                     // 3. Glob input (`mapped/*.bam`): compile the glob and
                     //    match it against producer outputs. A glob that
                     //    cannot be compiled (unbalanced bracket, …) keeps the
                     //    legacy behavior — no edges, no error.
-                    if let Some(glob_re) = glob_pattern_to_regex(input) {
+                    if let Some(glob_re) = glob_pattern_to_regex(&input) {
                         for (output, producer_node) in &producer_outputs {
                             if glob_re.is_match(output) {
                                 add_edge_dedup(graph, *producer_node, consumer_node);
@@ -175,7 +202,7 @@ impl WorkflowDag {
                     //    heuristic for extension-less inputs.
                     for (output, matcher) in &template_matchers {
                         if let Some(re) = matcher
-                            && re.is_match(input)
+                            && re.is_match(&input)
                             && let Some(producers) = output_to_node.get(output)
                         {
                             for &producer_node in producers {
@@ -183,7 +210,7 @@ impl WorkflowDag {
                             }
                         }
                     }
-                    if looks_like_directory(input) {
+                    if looks_like_directory(&input) {
                         let base = input.trim_end_matches('/');
                         let prefix = format!("{base}/");
                         for (output, producer_node) in &producer_outputs {
@@ -584,9 +611,14 @@ impl WorkflowDag {
 ///
 /// Input matching can reach the same producer through several paths (exact
 /// match, glob, directory prefix, template pattern, `depends_on`) — parallel
-/// edges would corrupt edge counts and metrics.
+/// edges would corrupt edge counts and metrics. A rule never depends on
+/// itself: write-back-into-input-directory patterns (e.g. a quast/multiqc
+/// summary that reads a directory and writes its report into it) make the
+/// directory-prefix inference match the rule's own output — self-edges are
+/// dropped rather than reported as cycles (live evidence: mag's
+/// `concat_quast` reads `QC/` and writes `QC/quast_bin_summary.tsv`).
 fn add_edge_dedup(graph: &mut DiGraph<DagNode, ()>, from: NodeIndex, to: NodeIndex) {
-    if graph.find_edge(from, to).is_none() {
+    if from != to && graph.find_edge(from, to).is_none() {
         graph.add_edge(from, to, ());
     }
 }
@@ -1781,6 +1813,59 @@ mod tests {
         let c = make_rule("cons", vec!["data/[.txt"], vec!["out.txt"]);
         let dag = WorkflowDag::from_rules(&[p, c]).unwrap();
         assert!(dag.dependencies("cons").unwrap().is_empty());
+    }
+
+    #[test]
+    fn config_placeholder_paths_connect_when_values_align() {
+        // The same logical path expressed through different config keys
+        // (unsupervised: umap_n_neighbors vs leiden_n_neighbors) must form
+        // an edge once both expand to the same string.
+        let prod = make_rule(
+            "umap",
+            vec![],
+            vec!["results/{config.umap_metric}_{config.umap_n_neighbors}_graph.pickle"],
+        );
+        let cons = make_rule(
+            "leiden",
+            vec!["results/{config.leiden_metric}_{config.leiden_n_neighbors}_graph.pickle"],
+            vec!["out.csv"],
+        );
+        let values = HashMap::from([
+            ("config.umap_metric".to_string(), "euclidean".to_string()),
+            ("config.umap_n_neighbors".to_string(), "15".to_string()),
+            ("config.leiden_metric".to_string(), "euclidean".to_string()),
+            ("config.leiden_n_neighbors".to_string(), "15".to_string()),
+        ]);
+        let dag =
+            WorkflowDag::from_rules_with_config(&[prod.clone(), cons.clone()], &values).unwrap();
+        assert_eq!(dag.dependencies("leiden").unwrap(), vec!["umap"]);
+
+        // Different values → no edge.
+        let divergent = HashMap::from([
+            ("config.umap_metric".to_string(), "euclidean".to_string()),
+            ("config.umap_n_neighbors".to_string(), "15".to_string()),
+            ("config.leiden_metric".to_string(), "cosine".to_string()),
+            ("config.leiden_n_neighbors".to_string(), "15".to_string()),
+        ]);
+        let dag =
+            WorkflowDag::from_rules_with_config(&[prod.clone(), cons.clone()], &divergent).unwrap();
+        assert!(dag.dependencies("leiden").unwrap().is_empty());
+    }
+
+    #[test]
+    fn write_back_into_input_dir_does_not_create_a_self_edge() {
+        // A summary rule reads a directory and writes its report INTO it
+        // (mag's concat_quast: input `QC/`, output `QC/quast_bin_summary.tsv`).
+        // The directory-prefix inference must not make the rule depend on
+        // itself — that would surface as a bogus cycle.
+        let rule = make_rule(
+            "concat_quast",
+            vec!["{config.out_dir}/GenomeBinning/QC"],
+            vec!["{config.out_dir}/GenomeBinning/QC/quast_bin_summary.tsv"],
+        );
+        let values = HashMap::from([("config.out_dir".to_string(), "results".to_string())]);
+        let dag = WorkflowDag::from_rules_with_config(&[rule], &values).unwrap();
+        assert!(dag.dependencies("concat_quast").unwrap().is_empty());
     }
 
     #[test]

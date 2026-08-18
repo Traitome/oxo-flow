@@ -267,6 +267,7 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                     rule,
                     &wildcard_values,
                     &config.workflow.interpreter_map,
+                    oxo_flow_core::scheduler::detect_system_limits(),
                 ) {
                     Some(cmd) => cmd,
                     None => {

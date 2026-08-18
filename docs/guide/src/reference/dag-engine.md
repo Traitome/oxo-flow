@@ -44,18 +44,20 @@ pub struct DagNode {
 
 ## Building the DAG
 
-### `WorkflowDag::from_rules()`
+### `WorkflowDag::from_rules()` / `from_rules_with_config()`
 
 Given a list of rules, the DAG is built by:
 
 1. **Adding nodes** — one per rule, keyed by `rule.name`
-2. **Inferring edges** — for each rule B, if any of B's inputs appear in another rule A's outputs, add an edge A → B
+2. **Inferring edges** — for each rule B, if any of B's inputs appear in another rule A's outputs, add an edge A → B. Before matching, `{config.x}` placeholders in input/output paths are expanded against the workflow config (`from_rules_with_config`; the CLI passes the config at every build site), so the same logical path expressed through different config keys (`{config.umap_n_neighbors}` vs `{config.leiden_n_neighbors}`) still connects. `from_rules` keeps the legacy no-config matching.
 3. **Cycle detection** — verify the graph is acyclic
 4. **Validation** — reject duplicate rule names; inputs with no producer are treated as source files
 
 ```rust
 let dag = WorkflowDag::from_rules(&config.rules)?;
 ```
+
+Inference is strictly best-effort string matching: unresolved wildcards/globs that cannot be matched keep the legacy behavior (no edge, never an error) — use explicit `depends_on` when the data flow cannot be expressed by path matching.
 
 If the DAG contains a cycle, an `OxoFlowError::CycleDetected` error is returned with the cycle path (e.g., `A → B → A`).
 

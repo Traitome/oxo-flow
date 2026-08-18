@@ -558,6 +558,10 @@ mod tests {
                 ..Default::default()
             },
             &wildcard_values,
+            crate::scheduler::ResourceLimits {
+                threads: 4,
+                memory_mb: 8192,
+            },
         );
         let mut command = std::process::Command::new("sh");
         command.arg("-c").arg(&cmd).current_dir(workdir);

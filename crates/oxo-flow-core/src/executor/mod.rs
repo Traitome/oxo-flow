@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use sysinfo::System;
 
 pub mod checkpoint;
+pub mod env_create_lock;
 pub mod process;
 pub mod rss;
 pub mod security;
