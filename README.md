@@ -69,22 +69,7 @@ oxo-flow is built on five principles:
 
 ## Workflow Gallery
 
-Learn oxo-flow incrementally with curated, validated example workflows — from a one-rule hello-world to production-grade multi-omics pipelines:
-
-| # | Workflow | Complexity | Domain |
-|---|----------|-----------|--------|
-| 01 | [Hello World](examples/gallery/01_hello_world.oxoflow) | ⭐ | General |
-| 02 | [File Pipeline](examples/gallery/02_file_pipeline.oxoflow) | ⭐⭐ | Data processing |
-| 03 | [Parallel Samples](examples/gallery/03_parallel_samples.oxoflow) | ⭐⭐ | Batch processing |
-| 04 | [Scatter-Gather](examples/gallery/04_scatter_gather.oxoflow) | ⭐⭐⭐ | Parallel computing |
-| 05 | [Environment Management](examples/gallery/05_conda_environments.oxoflow) | ⭐⭐⭐ | DevOps |
-| 06 | [RNA-seq Quantification](examples/gallery/06_rnaseq_quantification.oxoflow) | ⭐⭐⭐⭐ | Transcriptomics |
-| 07 | [WGS Germline Calling](examples/gallery/07_wgs_germline.oxoflow) | ⭐⭐⭐⭐⭐ | Genomics |
-| 08 | [Multi-Omics Integration](examples/gallery/08_multiomics_integration.oxoflow) | ⭐⭐⭐⭐⭐ | Multi-omics |
-| 09 | [Single-Cell RNA-seq](examples/gallery/09_single_cell_rnaseq.oxoflow) | ⭐⭐⭐⭐ | Single-cell |
-| 10 | [Transform Operator](examples/gallery/10_transform_operator.oxoflow) | ⭐⭐⭐ | Parallel computing |
-
-Every workflow passes `oxo-flow validate` and is tested in CI. See the full [Workflow Gallery documentation](https://traitome.github.io/oxo-flow/documentation/gallery/) for detailed explanations, DAG visualizations, and CLI output.
+Learn oxo-flow incrementally with curated, validated example workflows — from a one-rule hello-world to production-grade pipelines. Every workflow passes `oxo-flow validate` and is tested in CI. See the [Workflow Gallery](https://traitome.github.io/oxo-flow/documentation/gallery/) for the full catalog with detailed explanations, DAG visualizations, and CLI output.
 
 ## Quick Start
 

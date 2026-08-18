@@ -10,11 +10,15 @@ cargo build --workspace
 
 ## CI Checks (run before PR)
 
+The canonical gate is `make ci` (fmt + clippy + build + test + audit):
+
 ```bash
-cargo fmt --all -- --check     # Formatting
-cargo clippy --workspace -- -D warnings  # Lint
-cargo build --workspace         # Compile
-cargo test --workspace --lib    # Tests (1,530+)
+make ci
+# Individual steps:
+cargo fmt -- --check                            # Formatting
+cargo clippy --workspace --all-targets -- -D warnings  # Lint
+cargo build --workspace                         # Compile
+cargo test --workspace -- --test-threads=1      # Full workspace suite
 ```
 
 ## Project Structure
@@ -36,7 +40,7 @@ Types: feat, fix, refactor, docs, test, chore, perf, ci
 
 ## Testing
 
-- **Rust**: 1,530+ unit, integration, and doc tests across workspace
+- **Rust**: unit, integration, and doc tests across the whole workspace
 - **Run**: `cargo test --workspace`
 
 ## Code Style

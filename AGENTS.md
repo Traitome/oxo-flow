@@ -11,7 +11,7 @@ This document is the primary source of truth for AI agents working on oxo-flow.
 - `crates/oxo-flow-core`: DAG engine, executor, environment management, config, scheduling, reporting
 - `crates/oxo-flow-ai`: AI companion — provider abstraction, skill system, agent orchestration, MCP
 - `crates/oxo-flow-cli`: CLI binary (`oxo-flow`) — 29 subcommands via clap derive
-- `crates/oxo-flow-web`: Axum web server + React 19 SPA, 50+ REST endpoints across 7 domains
+- `crates/oxo-flow-web`: Axum web server + React 19 SPA, 100+ OpenAPI-documented endpoints across 9 domains
 - `examples/`: Reference `.oxoflow` (TOML-based) pipeline files
 - `tests/`: Integration tests covering CLI and core functionality
 
@@ -76,7 +76,7 @@ cd frontend && npm run build   # Outputs to frontend/dist/
 
 ### Web Module Structure
 
-The web crate uses a domain-driven modular monolith with 8 domains:
+The web crate uses a domain-driven modular monolith with 9 domains:
 
 - `domains/workflow/` — Pipeline parsing, validation, DAG building, formatting
 - `domains/execution/` — Run lifecycle, diagnostics engine (30+ patterns), retry logic
@@ -86,6 +86,7 @@ The web crate uses a domain-driven modular monolith with 8 domains:
 - `domains/observability/` — Health checks, system info, metrics
 - `domains/dag/` — DAG-specific types and operations
 - `domains/chat/` — Real-time chat and SSE streaming
+- `domains/clusters/` — Cluster scheduler submission and monitoring
 
 Each domain follows: `types.rs` (data) → `service.rs` (pure logic) → `handlers.rs` (HTTP adapters).
 
@@ -153,8 +154,11 @@ The AI provider system supports four backends via an enum-based dispatcher:
 
 - **Claude** — Anthropic Messages API (including Anthropic-compatible third-party endpoints)
 - **OpenAI** — OpenAI Chat Completions API (compatible with DeepSeek, Groq, Azure, Together, etc.)
-- **DeepSeek** — Native DeepSeek API (default provider, auto-detected at startup)
+- **DeepSeek** — Native DeepSeek API (`DEEPSEEK_API_KEY`)
 - **Ollama** — Local Ollama API (default: `http://localhost:11434`)
+
+No provider is assumed by default — with `OXO_FLOW_AI_PROVIDER` unset,
+AI features stay disabled (config via env vars or `~/.oxo-flow/ai_config.json`).
 
 Providers are selected at startup via `OXO_FLOW_AI_PROVIDER` env var and initialized once through `AiProviderRegistry::global()`. The `try_ai_generate()` function in `handlers/ai.rs` uses the configured provider, falling back to template matching if AI is disabled or fails.
 
@@ -197,7 +201,7 @@ oxo-flow run workflow.oxoflow --ai-recover --ai-max-retries 3
 |-------|------|
 | `oxo-flow-ai` | L1 Provider (4 backends) + L2 Knowledge + L3 Agent/Tools |
 | `oxo-flow-cli` | L4 Command integration: template, dry-run, validate, lint, debug, run, resume, ai |
-| `oxo-flow-web` | Compatibility shim over oxo-flow-ai |
+| `oxo-flow-web` | Web integration over oxo-flow-ai |
 
 ### Key Design Decisions
 
@@ -210,7 +214,7 @@ oxo-flow run workflow.oxoflow --ai-recover --ai-max-retries 3
 ### Frontend Architecture
 - **Framework**: React 19 + TypeScript, Vite build
 - **Routing**: React Router (client-side SPA routing)
-- **DAG Visualization**: Cytoscape.js with dagre layout
+- **DAG Visualization**: React Flow (`@xyflow/react`)
 - **API Integration**: Fetch-based client with structured error handling
 - **Real-time**: SSE via EventSource for run lifecycle events
 - **Styling**: CSS custom properties, light theme, responsive layout

@@ -80,7 +80,7 @@ project's design decisions, priorities, and architecture.
 ┌──────────────────────────────────────────────────────┐
 │                    oxo-flow CLI                       │
 │  (run | dry-run | validate | graph | report | env |  │
-│   package | serve | init | status | clean | config)  │
+│   export | serve | init | status | clean | config)  │
 ├──────────────────────────────────────────────────────┤
 │                   oxo-flow Web                        │
 │  (REST API + Web UI for visual workflow editing,     │
@@ -95,7 +95,7 @@ project's design decisions, priorities, and architecture.
 │  └─────────┘ └──────────┘ └───────────────┘         │
 │  ┌─────────┐ ┌──────────┐ ┌───────────────┐         │
 │  │Wildcard │ │Scheduler │ │   Reporter    │         │
-│  │ Engine  │ │(resource │ │  (HTML/PDF/   │         │
+│  │ Engine  │ │(resource │ │  (HTML/JSON   │         │
 │  │         │ │ aware)   │ │   JSON)       │         │
 │  └─────────┘ └──────────┘ └───────────────┘         │
 │  ┌─────────┐ ┌──────────┐ ┌───────────────┐         │
@@ -130,31 +130,28 @@ memory = "8G"
 name = "fastp_trim"
 input = ["raw/{sample}_R1.fastq.gz", "raw/{sample}_R2.fastq.gz"]
 output = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz", "qc/{sample}_fastp.json"]
-threads = 8
-memory = "16G"
 environment = { conda = "envs/fastp.yaml" }
 shell = """
 fastp -i {input[0]} -I {input[1]} \
       -o {output[0]} -O {output[1]} \
       --json {output[2]} --thread {threads}
 """
+[rules.resources]
+threads = 8
+memory = "16G"
 
 [[rules]]
 name = "bwa_mem2_align"
 input = ["trimmed/{sample}_R1.fastq.gz", "trimmed/{sample}_R2.fastq.gz"]
 output = ["aligned/{sample}.sorted.bam"]
-threads = 16
-memory = "32G"
 environment = { singularity = "docker://biocontainers/bwa-mem2:2.2.1" }
 shell = """
 bwa-mem2 mem -t {threads} {config.reference} {input[0]} {input[1]} \
   | samtools sort -@ 4 -o {output[0]}
 """
-
-[report]
-template = "clinical_variant_report"
-format = ["html", "pdf"]
-sections = ["summary", "variants", "coverage", "qc_metrics"]
+[rules.resources]
+threads = 16
+memory = "32G"
 ```
 
 ---
@@ -255,7 +252,7 @@ sections = ["summary", "variants", "coverage", "qc_metrics"]
 **Goal**: Modular, clinical-grade report generation.
 
 ### Milestone 4.1: Report Engine
-- [x] Template-based report generation (Tera)
+- [x] Structured report generation from the run checkpoint (Tera templates were archived in the issue #83 redesign)
 - [x] HTML report output with embedded styles
 - [x] JSON structured report output
 - [x] Report builder pattern for composable reports
@@ -383,18 +380,18 @@ framework extensibility, code quality, and documentation.
 - [x] cargo-audit integration verified working (no security vulnerabilities found)
 - [x] Performance optimizations: LazyLock for interpreter map, serde_json for event logging
 - [x] Webhook support for external notifications (Slack, custom endpoints, HMAC signatures)
-- [x] PDF export support for clinical reports (wkhtmltopdf integration, print-optimized HTML)
+- [x] PDF export via wkhtmltopdf — archived in the issue #83 report redesign; reports are HTML/JSON
 - [x] Code coverage reporting in Makefile (cargo-tarpaulin target)
 - [x] Benchmark regression tracking in Makefile (cargo bench target)
 - [ ] Kubernetes operator / CRD for cloud-native deployment (Expert 14.2)
 - [ ] CWL/WDL import/export converters (Expert 30.3)
 - [ ] GA4GH TES/WES API compatibility (Expert 30.4)
 - [ ] Interactive CLI wizard for new workflow creation (Expert 16.7)
-- [ ] Web UI with DAG visualization (d3.js) (Expert 11.5)
+- [x] Web UI with DAG visualization (Phase 10.4)
 - [ ] Property-based testing with proptest (Expert 6.9)
 - [ ] Fuzz testing for parser and wildcard engine (Expert 9.6)
 - [ ] FHIR/HL7 report output format (Expert 30.6)
-- [ ] Multi-tenancy and per-user resource quotas (Expert 18.4, 18.5)
+- [x] Multi-tenancy (Phase 10; per-user resource quotas remain open)
 - [ ] Job arrays for cluster backends (Expert 13.6)
 - [ ] Node feature matching for HPC scheduling (Expert 13.4)
 - [ ] Spot/preemptible instance support (Expert 14.10)
@@ -479,7 +476,6 @@ framework extensibility, code quality, and documentation.
 | Web framework | axum |
 | Logging | tracing |
 | Error handling | thiserror (library) + anyhow (binary) |
-| Template engine | tera |
 | Testing | cargo test + integration tests |
 | CI/CD | GitHub Actions |
 | Documentation | MkDocs + rustdoc |

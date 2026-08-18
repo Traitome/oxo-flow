@@ -39,12 +39,10 @@ WDL, and no importers for those formats are currently available.
   `s3://` and `gs://` URIs via feature flags (`s3-storage`, `gcs-storage`),
   but data is fully downloaded before execution rather than streamed.
   Streaming support is on the roadmap.
-- **OpenAPI specification** — A comprehensive OpenAPI 3.1 specification
-  is available at `GET /api/openapi.json`.
 - **No HIPAA/GDPR de-identification tools** — PHI handling and data
   de-identification must be managed by the user or external tools.
-- **No native PDF export** — PDF generation requires `wkhtmltopdf` to be
-  installed separately. See `oxo-flow report --help`.
+- **No native PDF export** — reports are HTML and JSON; converting to
+  PDF is left to external tools. See `oxo-flow report --help`.
 - **Regulatory certification** — oxo-flow provides audit trails, checksums,
   and provenance tracking, but formal regulatory certification (FDA, CLIA,
   etc.) is the responsibility of the deploying organization.
