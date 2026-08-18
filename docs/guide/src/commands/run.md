@@ -223,6 +223,14 @@ are plain TOML (or `.oxoflow`) files placed in the workflow's own
 <workflow-dir>/profiles/<NAME>.oxoflow
 ```
 
+The name is just a filename — it carries no built-in meaning. What the
+profile *contains* decides its effect: a `[config]`/`[defaults]` block
+supplements config, a `[cluster]` block additionally routes execution to
+a scheduler (see [Cluster submission](#cluster-submission)). Naming a
+profile `conda` or `slurm` is a convention, not a mechanism — compute
+environments are declared per rule via `[rules.environment]` and are
+independent of profiles.
+
 ```toml
 # profiles/cluster.toml
 [config]
