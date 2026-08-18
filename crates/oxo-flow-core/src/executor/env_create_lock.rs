@@ -62,6 +62,15 @@ fn lock_timeout() -> Duration {
         .unwrap_or(DEFAULT_LOCK_TIMEOUT)
 }
 
+/// Lock file path for an environment cache key — stable per key, distinct
+/// across keys. Extracted so tests exercise the production derivation, not
+/// a re-typed copy of it.
+fn lock_path_for(dir: &Path, key: &str) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    let digest = format!("{:x}", Sha256::digest(key.as_bytes()));
+    dir.join(format!("env-{}.lock", &digest[..16]))
+}
+
 impl EnvCreateLock {
     /// Acquire the per-environment exclusive lock for `key`, creating
     /// `~/.oxo-flow/locks` if needed.
@@ -78,9 +87,7 @@ impl EnvCreateLock {
         std::fs::create_dir_all(&dir).ok();
         // One lock file per environment cache key — different envs
         // never contend.
-        use sha2::{Digest, Sha256};
-        let digest = format!("{:x}", Sha256::digest(key.as_bytes()));
-        let path = dir.join(format!("env-{}.lock", &digest[..16]));
+        let path = lock_path_for(&dir, key);
         let file = match OpenOptions::new()
             .create(true)
             .write(true)
@@ -175,13 +182,15 @@ mod tests {
     }
 
     #[test]
-    fn lock_key_derives_from_the_environment_not_the_machine() {
-        // Different env keys must yield different lock paths — the whole
-        // point of the per-env design (a slow solve for one env must not
-        // block another env's creation).
-        use sha2::{Digest, Sha256};
-        let a = format!("{:x}", Sha256::digest(b"key-a"));
-        let b = format!("{:x}", Sha256::digest(b"key-b"));
-        assert_ne!(a, b);
+    fn lock_path_is_stable_per_key_and_distinct_across_keys() {
+        // The whole point of the per-env design: a slow solve for one env
+        // must not block another env's creation — same key always maps to
+        // the same lock file, different keys never do.
+        let dir = Path::new("/tmp/oxo-locks-test");
+        let a1 = lock_path_for(dir, "key-a");
+        let a2 = lock_path_for(dir, "key-a");
+        let b = lock_path_for(dir, "key-b");
+        assert_eq!(a1, a2, "same key must map to the same lock file");
+        assert_ne!(a1, b, "different keys must map to different lock files");
     }
 }
