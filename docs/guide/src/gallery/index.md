@@ -27,6 +27,7 @@ For larger, production workflows — ports of popular nf-core & Snakemake pipeli
 | 13 | [Germline Variant Calling](simple-variant-calling.md) | ⭐⭐⭐⭐ | Per-sample GATK chain: FastQC/fastp → BWA-MEM2 → BQSR → HaplotypeCaller |
 | 14 | [Paired Experiment-Control](paired-experiment-control.md) | ⭐⭐⭐⭐⭐ | Single-pair somatic calling: Mutect2, FilterMutectCalls, VEP, report |
 | 15 | [Paired Experiment-Control (Pairs)](paired-experiment-control-pairs.md) | ⭐⭐⭐⭐⭐ | The `[[pairs]]`-driven scalable version of 14 |
+| 16 | [16S Amplicon (QIIME2)](16s-qiime2.md) | ⭐⭐⭐⭐ | QIIME2 artifact chaining, DADA2 denoising, phylogenetic diversity |
 
 ---
 
