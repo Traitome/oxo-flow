@@ -1058,11 +1058,10 @@ pub async fn run_command(
                 // genomeGenerate died with 'could not open genomeFastaFile:
                 // {source}' — the placeholder was never substituted).
                 if let Some(source) = ref_def.source.as_deref() {
-                    let expanded =
-                        oxo_flow_core::executor::checkpoint::expand_config_in_path(
-                            source,
-                            &wildcard_values,
-                        );
+                    let expanded = oxo_flow_core::executor::checkpoint::expand_config_in_path(
+                        source,
+                        &wildcard_values,
+                    );
                     build_cmd = build_cmd.replace("{source}", &expanded);
                 }
                 // References that need workflow tools (bowtie2-build, STAR
@@ -2503,8 +2502,12 @@ pub async fn dry_run_command(
         }
 
         if let Some(ref cmd) = rule.shell {
-            let expanded =
-                oxo_flow_core::executor::process::render_shell_command(cmd, rule, &wildcard_values, oxo_flow_core::scheduler::detect_system_limits());
+            let expanded = oxo_flow_core::executor::process::render_shell_command(
+                cmd,
+                rule,
+                &wildcard_values,
+                oxo_flow_core::scheduler::detect_system_limits(),
+            );
             eprintln!("     command: {}", expanded);
         }
 
@@ -2983,8 +2986,12 @@ logical errors. Output format per rule:
         }
 
         if let Some(ref cmd) = rule.shell {
-            let expanded =
-                oxo_flow_core::executor::process::render_shell_command(cmd, rule, &wildcard_values, oxo_flow_core::scheduler::detect_system_limits());
+            let expanded = oxo_flow_core::executor::process::render_shell_command(
+                cmd,
+                rule,
+                &wildcard_values,
+                oxo_flow_core::scheduler::detect_system_limits(),
+            );
             eprintln!("  {} {}", "Shell (expanded):".dimmed(), expanded);
         }
 

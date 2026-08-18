@@ -1310,7 +1310,10 @@ fn render_shell_command_substitution() {
         rule.shell.as_ref().unwrap(),
         &rule,
         &wildcards,
-        oxo_flow_core::scheduler::ResourceLimits { threads: 4, memory_mb: 8192 },
+        oxo_flow_core::scheduler::ResourceLimits {
+            threads: 4,
+            memory_mb: 8192,
+        },
     );
     assert!(rendered.contains("raw/sample_R1.fastq.gz"));
     assert!(rendered.contains("aligned/sample.bam"));
@@ -1337,7 +1340,10 @@ fn render_shell_command_effective_resource_placeholders() {
         ..Default::default()
     };
     let wildcards = HashMap::new();
-    let limits = oxo_flow_core::scheduler::ResourceLimits { threads: 4, memory_mb: 3723 };
+    let limits = oxo_flow_core::scheduler::ResourceLimits {
+        threads: 4,
+        memory_mb: 3723,
+    };
 
     let rendered = render_shell_command(rule.shell.as_ref().unwrap(), &rule, &wildcards, limits);
     // No declared resources: memory falls back to the whole machine,
@@ -1352,10 +1358,14 @@ fn render_shell_command_effective_resource_placeholders() {
             memory: Some("72G".to_string()),
             ..Default::default()
         },
-        shell: Some("STAR --runThreadN {effective_threads} --limitBAMsortRAM {effective_memory_mb}".to_string()),
+        shell: Some(
+            "STAR --runThreadN {effective_threads} --limitBAMsortRAM {effective_memory_mb}"
+                .to_string(),
+        ),
         ..Default::default()
     };
-    let rendered_over = render_shell_command(over.shell.as_ref().unwrap(), &over, &wildcards, limits);
+    let rendered_over =
+        render_shell_command(over.shell.as_ref().unwrap(), &over, &wildcards, limits);
     assert!(rendered_over.contains("--runThreadN 4"));
     assert!(rendered_over.contains("--limitBAMsortRAM 3723"));
 
@@ -1365,7 +1375,8 @@ fn render_shell_command_effective_resource_placeholders() {
         shell: Some("run --threads {effective_threads}".to_string()),
         ..Default::default()
     };
-    let rendered_unset = render_shell_command(unset.shell.as_ref().unwrap(), &unset, &wildcards, limits);
+    let rendered_unset =
+        render_shell_command(unset.shell.as_ref().unwrap(), &unset, &wildcards, limits);
     assert!(rendered_unset.contains("--threads 1"));
 }
 

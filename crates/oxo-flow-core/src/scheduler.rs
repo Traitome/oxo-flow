@@ -1107,7 +1107,10 @@ mod tests {
 
     #[test]
     fn effective_tool_resources_clamps_to_machine() {
-        let limits = ResourceLimits { threads: 4, memory_mb: 3723 };
+        let limits = ResourceLimits {
+            threads: 4,
+            memory_mb: 3723,
+        };
         let rule = Rule {
             name: "star".to_string(),
             threads: Some(12),
@@ -1119,7 +1122,10 @@ mod tests {
 
     #[test]
     fn effective_tool_resources_under_capacity_passes_through() {
-        let limits = ResourceLimits { threads: 16, memory_mb: 65536 };
+        let limits = ResourceLimits {
+            threads: 16,
+            memory_mb: 65536,
+        };
         let rule = Rule {
             name: "fastqc".to_string(),
             threads: Some(2),
@@ -1131,7 +1137,10 @@ mod tests {
 
     #[test]
     fn effective_tool_resources_unset_defaults_are_usable() {
-        let limits = ResourceLimits { threads: 8, memory_mb: 32768 };
+        let limits = ResourceLimits {
+            threads: 8,
+            memory_mb: 32768,
+        };
         let rule = Rule {
             name: "no_resources".to_string(),
             ..Default::default()

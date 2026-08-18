@@ -378,16 +378,15 @@ pub(crate) fn detect_swap_mb() -> u64 {
     }
     if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
         for line in content.lines() {
-            if line.starts_with("SwapTotal:") {
-                if let Some(kb_str) = line
+            if line.starts_with("SwapTotal:")
+                && let Some(kb_str) = line
                     .split_whitespace()
                     .nth(1)
                     .and_then(|s| s.parse::<u64>().ok())
-                {
-                    let mb = kb_str / 1024;
-                    if mb > 0 {
-                        return mb;
-                    }
+            {
+                let mb = kb_str / 1024;
+                if mb > 0 {
+                    return mb;
                 }
             }
         }
@@ -564,11 +563,11 @@ impl LocalExecutor {
         // `conda env update --prune` re-resolves every dependency — live:
         // tcasia's majiq==2.5 pip resolution failed on a flaky mirror even
         // though the env was fully installed.
-        if let Ok(Some(verify)) = self.env_resolver.verify_command(env_spec) {
-            if self.env_verify(&verify).await {
-                self.env_resolver.cache_mark_ready(&key).await;
-                return Ok(());
-            }
+        if let Ok(Some(verify)) = self.env_resolver.verify_command(env_spec)
+            && self.env_verify(&verify).await
+        {
+            self.env_resolver.cache_mark_ready(&key).await;
+            return Ok(());
         }
         // Serialize setup per environment: concurrent rule instances sharing
         // an env (e.g. S1 + S2 instances of the same rule) used to run two
@@ -604,14 +603,15 @@ impl LocalExecutor {
         // contention + stacked memory peaks — live evidence: tx-ubuntu
         // overload episodes). The blocking flock waits for the other run's
         // create+verify sequence; held until this function returns.
-        let cross_process_guard = tokio::task::spawn_blocking(
-            super::env_create_lock::EnvCreateLock::acquire,
-        )
-        .await
-        .ok()
-        .flatten();
+        let cross_process_guard =
+            tokio::task::spawn_blocking(super::env_create_lock::EnvCreateLock::acquire)
+                .await
+                .ok()
+                .flatten();
         if cross_process_guard.is_none() {
-            tracing::warn!("env-create cross-process lock unavailable — env setup proceeds unlocked");
+            tracing::warn!(
+                "env-create cross-process lock unavailable — env setup proceeds unlocked"
+            );
         }
         let output = Command::new("sh")
             .arg("-c")
@@ -1031,14 +1031,20 @@ impl LocalExecutor {
                 wildcard_values,
                 &self.config.interpreter_map,
                 &self.config.workdir,
-                crate::scheduler::ResourceLimits { threads: self.system_threads, memory_mb: self.system_memory_mb },
+                crate::scheduler::ResourceLimits {
+                    threads: self.system_threads,
+                    memory_mb: self.system_memory_mb,
+                },
             )
         } else {
             build_execution_command(
                 &rule,
                 wildcard_values,
                 &self.config.interpreter_map,
-                crate::scheduler::ResourceLimits { threads: self.system_threads, memory_mb: self.system_memory_mb },
+                crate::scheduler::ResourceLimits {
+                    threads: self.system_threads,
+                    memory_mb: self.system_memory_mb,
+                },
             )
         };
         let base_cmd = match base_cmd {
@@ -1177,10 +1183,21 @@ impl LocalExecutor {
                     &rule,
                     wildcard_values,
                     &self.config.workdir,
-                    crate::scheduler::ResourceLimits { threads: self.system_threads, memory_mb: self.system_memory_mb },
+                    crate::scheduler::ResourceLimits {
+                        threads: self.system_threads,
+                        memory_mb: self.system_memory_mb,
+                    },
                 )
             } else {
-                render_shell_command(pre_cmd, &rule, wildcard_values, crate::scheduler::ResourceLimits { threads: self.system_threads, memory_mb: self.system_memory_mb })
+                render_shell_command(
+                    pre_cmd,
+                    &rule,
+                    wildcard_values,
+                    crate::scheduler::ResourceLimits {
+                        threads: self.system_threads,
+                        memory_mb: self.system_memory_mb,
+                    },
+                )
             };
             if let Err(e) = validate_shell_safety(&rendered) {
                 // Nothing ran yet — drop the empty scratch dir rather than
@@ -1379,7 +1396,15 @@ impl LocalExecutor {
                 cleanup_temp_outputs(&rule, &self.config.workdir).await;
                 if let Some(ref hook_cmd) = rule.on_failure {
                     run_hook(
-                        &render_shell_command(hook_cmd, &rule, wildcard_values, crate::scheduler::ResourceLimits { threads: self.system_threads, memory_mb: self.system_memory_mb }),
+                        &render_shell_command(
+                            hook_cmd,
+                            &rule,
+                            wildcard_values,
+                            crate::scheduler::ResourceLimits {
+                                threads: self.system_threads,
+                                memory_mb: self.system_memory_mb,
+                            },
+                        ),
                         &rule,
                         &self.config.workdir,
                     )
@@ -1407,7 +1432,15 @@ impl LocalExecutor {
                         );
                         if let Some(ref hook_cmd) = rule.on_failure {
                             run_hook(
-                                &render_shell_command(hook_cmd, &rule, wildcard_values, crate::scheduler::ResourceLimits { threads: self.system_threads, memory_mb: self.system_memory_mb }),
+                                &render_shell_command(
+                                    hook_cmd,
+                                    &rule,
+                                    wildcard_values,
+                                    crate::scheduler::ResourceLimits {
+                                        threads: self.system_threads,
+                                        memory_mb: self.system_memory_mb,
+                                    },
+                                ),
                                 &rule,
                                 &self.config.workdir,
                             )
@@ -1417,7 +1450,15 @@ impl LocalExecutor {
                     } else {
                         if let Some(ref hook_cmd) = rule.on_success {
                             run_hook(
-                                &render_shell_command(hook_cmd, &rule, wildcard_values, crate::scheduler::ResourceLimits { threads: self.system_threads, memory_mb: self.system_memory_mb }),
+                                &render_shell_command(
+                                    hook_cmd,
+                                    &rule,
+                                    wildcard_values,
+                                    crate::scheduler::ResourceLimits {
+                                        threads: self.system_threads,
+                                        memory_mb: self.system_memory_mb,
+                                    },
+                                ),
                                 &rule,
                                 &self.config.workdir,
                             )
@@ -1460,7 +1501,15 @@ impl LocalExecutor {
                 cleanup_temp_outputs(&rule, &self.config.workdir).await;
                 if let Some(ref hook_cmd) = rule.on_failure {
                     run_hook(
-                        &render_shell_command(hook_cmd, &rule, wildcard_values, crate::scheduler::ResourceLimits { threads: self.system_threads, memory_mb: self.system_memory_mb }),
+                        &render_shell_command(
+                            hook_cmd,
+                            &rule,
+                            wildcard_values,
+                            crate::scheduler::ResourceLimits {
+                                threads: self.system_threads,
+                                memory_mb: self.system_memory_mb,
+                            },
+                        ),
                         &rule,
                         &self.config.workdir,
                     )
@@ -1475,7 +1524,15 @@ impl LocalExecutor {
             cleanup_temp_outputs(&rule, &self.config.workdir).await;
             if let Some(ref hook_cmd) = rule.on_failure {
                 run_hook(
-                    &render_shell_command(hook_cmd, &rule, wildcard_values, crate::scheduler::ResourceLimits { threads: self.system_threads, memory_mb: self.system_memory_mb }),
+                    &render_shell_command(
+                        hook_cmd,
+                        &rule,
+                        wildcard_values,
+                        crate::scheduler::ResourceLimits {
+                            threads: self.system_threads,
+                            memory_mb: self.system_memory_mb,
+                        },
+                    ),
                     &rule,
                     &self.config.workdir,
                 )
@@ -1605,7 +1662,13 @@ pub(crate) fn build_execution_command_in_scratch(
     workdir: &Path,
     limits: crate::scheduler::ResourceLimits,
 ) -> Option<String> {
-    build_execution_command_inner(rule, wildcard_values, interpreter_map, Some(workdir), limits)
+    build_execution_command_inner(
+        rule,
+        wildcard_values,
+        interpreter_map,
+        Some(workdir),
+        limits,
+    )
 }
 
 fn build_execution_command_inner(

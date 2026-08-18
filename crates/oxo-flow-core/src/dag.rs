@@ -98,10 +98,7 @@ impl WorkflowDag {
             // config-expanded so inputs referencing the same path through
             // a different config key still match.
             for output in &rule.output {
-                output_to_node
-                    .entry(expand(output))
-                    .or_default()
-                    .push(node);
+                output_to_node.entry(expand(output)).or_default().push(node);
             }
         }
 
@@ -147,9 +144,7 @@ impl WorkflowDag {
             // iterator yields the directory path; prefix-match it against
             // every producer output, optionally restricted by the filter glob.
             let declared_dir: Option<(String, Option<String>)> = match &rule.input {
-                FilePatterns::Dir { path, pattern } => {
-                    Some((expand(path), pattern.clone()))
-                }
+                FilePatterns::Dir { path, pattern } => Some((expand(path), pattern.clone())),
                 _ => None,
             };
 
@@ -1852,11 +1847,8 @@ mod tests {
             ("config.leiden_metric".to_string(), "cosine".to_string()),
             ("config.leiden_n_neighbors".to_string(), "15".to_string()),
         ]);
-        let dag = WorkflowDag::from_rules_with_config(
-            &[prod.clone(), cons.clone()],
-            &divergent,
-        )
-        .unwrap();
+        let dag =
+            WorkflowDag::from_rules_with_config(&[prod.clone(), cons.clone()], &divergent).unwrap();
         assert!(dag.dependencies("leiden").unwrap().is_empty());
     }
 
@@ -1871,10 +1863,7 @@ mod tests {
             vec!["{config.out_dir}/GenomeBinning/QC"],
             vec!["{config.out_dir}/GenomeBinning/QC/quast_bin_summary.tsv"],
         );
-        let values = HashMap::from([(
-            "config.out_dir".to_string(),
-            "results".to_string(),
-        )]);
+        let values = HashMap::from([("config.out_dir".to_string(), "results".to_string())]);
         let dag = WorkflowDag::from_rules_with_config(&[rule], &values).unwrap();
         assert!(dag.dependencies("concat_quast").unwrap().is_empty());
     }

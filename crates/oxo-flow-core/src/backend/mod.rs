@@ -152,14 +152,12 @@ fn build_rule(
     let rule = config.get_rule(name).ok_or_else(|| OxoFlowError::Config {
         message: format!("rule '{name}' not found in workflow"),
     })?;
-    let Some(cmd) =
-        build_execution_command(
-            rule,
-            wildcard_values,
-            &config.workflow.interpreter_map,
-            crate::scheduler::detect_system_limits(),
-        )
-    else {
+    let Some(cmd) = build_execution_command(
+        rule,
+        wildcard_values,
+        &config.workflow.interpreter_map,
+        crate::scheduler::detect_system_limits(),
+    ) else {
         return Ok(None); // no shell/script — not schedulable
     };
     let wrapped = env_resolver
