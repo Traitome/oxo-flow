@@ -4,11 +4,17 @@
 # via aws-smithy-runtime -> hyper-rustls 0.24 -> rustls 0.21 -> rustls-webpki 0.101
 # Our primary TLS stack uses reqwest/rustls 0.23/rustls-webpki 0.103 which is unaffected.
 # These cannot be fixed without upstream aws-sdk-s3 updating its hyper-rustls dependency.
+# RUSTSEC-2026-0258 (h2 unbounded empty DATA frames) - h2 0.3.27 via
+# aws-smithy-http-client 1.3.0 (latest release) under the optional
+# s3-storage feature; the 0.3 line has no patched release and the advisory
+# only fixes 0.4.16+ (our h2 0.4 is already at 0.4.16). Re-evaluate when
+# the AWS SDK migrates off h2 0.3.
 ignore = [
     "RUSTSEC-2023-0071",
     "RUSTSEC-2026-0098",
     "RUSTSEC-2026-0099",
     "RUSTSEC-2026-0104",
+    "RUSTSEC-2026-0258",
 ]
 
 # Report unmaintained crate warnings as informational (not errors)
