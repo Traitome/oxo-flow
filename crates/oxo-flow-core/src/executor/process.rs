@@ -361,6 +361,40 @@ pub(crate) fn detect_total_memory_mb() -> u64 {
     0
 }
 
+/// Detect total swap in MB (0 when absent). Swap is backable memory the
+/// kernel will use under pressure — the effective resource ceiling is
+/// RAM + swap, so tools sized by `{effective_memory_mb}` and the
+/// container `--memory` clamp use the whole backable budget on
+/// small-memory boxes (live: tx-ubuntu's 3.7G RAM + 6G swap).
+pub(crate) fn detect_swap_mb() -> u64 {
+    if let Ok(mb) = std::panic::catch_unwind(|| {
+        use sysinfo::System;
+        let mut sys = System::new();
+        sys.refresh_memory();
+        sys.total_swap() / 1024 / 1024
+    }) && mb > 0
+    {
+        return mb;
+    }
+    if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
+        for line in content.lines() {
+            if line.starts_with("SwapTotal:") {
+                if let Some(kb_str) = line
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|s| s.parse::<u64>().ok())
+                {
+                    let mb = kb_str / 1024;
+                    if mb > 0 {
+                        return mb;
+                    }
+                }
+            }
+        }
+    }
+    0
+}
+
 impl LocalExecutor {
     pub fn new(config: ExecutorConfig) -> Self {
         let semaphore = Arc::new(Semaphore::new(config.max_jobs));
@@ -399,9 +433,14 @@ impl LocalExecutor {
             num_cpus::get() as u32
         });
 
-        // Cross-platform memory detection with Linux /proc/meminfo fallback
+        // Cross-platform memory detection with Linux /proc/meminfo fallback.
+        // The ceiling is RAM + swap: swap is backable memory the kernel
+        // will use under pressure, and ignoring it leaves real capacity
+        // unused on small boxes (live: 3.7G RAM + 6G swap runs better
+        // sized to ~9.7G). Override with --max-memory when the swap
+        // should not count (e.g. latency-sensitive lanes).
         let max_memory_mb = config.max_memory_mb.unwrap_or_else(|| {
-            let detected = detect_total_memory_mb();
+            let detected = detect_total_memory_mb() + detect_swap_mb();
             if detected > 0 {
                 detected
             } else {
