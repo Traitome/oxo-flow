@@ -2375,20 +2375,29 @@ pub fn hostname() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rule::{EnvironmentSpec, Resources};
 
     fn executor_with(max_threads: u32, max_memory_mb: u64) -> LocalExecutor {
-        let mut cfg = ExecutorConfig::default();
-        cfg.max_threads = Some(max_threads);
-        cfg.max_memory_mb = Some(max_memory_mb);
-        LocalExecutor::new(cfg)
+        LocalExecutor::new(ExecutorConfig {
+            max_threads: Some(max_threads),
+            max_memory_mb: Some(max_memory_mb),
+            ..Default::default()
+        })
     }
 
     fn docker_rule(memory: &str) -> Rule {
-        let mut rule = Rule::default();
-        rule.name = "bigmem".to_string();
-        rule.resources.memory = Some(memory.to_string());
-        rule.environment.docker = Some("img:latest".to_string());
-        rule
+        Rule {
+            name: "bigmem".to_string(),
+            resources: Resources {
+                memory: Some(memory.to_string()),
+                ..Default::default()
+            },
+            environment: EnvironmentSpec {
+                docker: Some("img:latest".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
     }
 
     #[test]
