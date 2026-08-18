@@ -731,19 +731,26 @@ impl LocalExecutor {
 
     fn resolve_command(&self, command: &str, rule: &Rule, scratch_dir: Option<&Path>) -> String {
         // Container backends use the declared memory as their cgroup limit.
-        // Cap it at the machine total so cgroup-aware tools (cellranger,
-        // picard, STAR) see an honest limit the kernel can actually back
-        // instead of an upstream HPC label copied verbatim by a port —
-        // same policy as the pool clamp in check_resources. Live: eager's
-        // MarkDuplicates container got --memory 4096M on a 3723MB machine.
+        // Cap it at the PHYSICAL RAM (or the explicit --max-memory override):
+        // a cgroup above physical RAM lets a tool allocate past what the
+        // kernel has and the OOM killer then shoots the container (live:
+        // nanoplot exit 137 under a 9.7G RAM+swap cgroup on a 3.7G box).
+        // Swap counts for the SCHEDULING pool, not for container limits.
+        // cgroup-aware tools (cellranger, picard, STAR) still see an honest
+        // limit. Live: eager's MarkDuplicates got --memory 4096M on a
+        // 3723MB machine.
         let mut resources = rule.resources.clone();
+        let container_ceiling_mb = self
+            .config
+            .max_memory_mb
+            .unwrap_or_else(detect_total_memory_mb);
         if let Some(declared) = resources
             .memory
             .as_deref()
             .and_then(crate::scheduler::parse_memory_mb)
-            && declared > self.system_memory_mb
+            && declared > container_ceiling_mb
         {
-            resources.memory = Some(format!("{}M", self.system_memory_mb));
+            resources.memory = Some(format!("{container_ceiling_mb}M"));
         }
         match self.env_resolver.wrap_command(
             command,
