@@ -112,14 +112,19 @@ impl EnvCreateLock {
                 }
                 Err(e) if e.kind() == ErrorKind::WouldBlock => {
                     if Instant::now() >= deadline {
+                        let holder = std::fs::read_to_string(&path)
+                            .ok()
+                            .and_then(|s| s.trim().parse::<u32>().ok());
+                        let holder_hint = holder
+                            .map(|pid| format!("holder pid: {pid}"))
+                            .unwrap_or_else(|| "holder pid: unknown".to_string());
                         return Err(Error::new(
                             ErrorKind::TimedOut,
                             format!(
-                                "env create lock {} still held after {}s (holder pid file: {}) — a previous env setup appears stuck; \
+                                "env create lock {} still held after {}s ({holder_hint}) — a previous env setup appears stuck; \
                                  kill the holder or raise OXO_ENV_LOCK_TIMEOUT_SECS if the solve is legitimately slow",
                                 path.display(),
                                 lock_timeout().as_secs(),
-                                path.display()
                             ),
                         ));
                     }
