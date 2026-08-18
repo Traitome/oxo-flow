@@ -514,8 +514,13 @@ pub fn detect_system_limits() -> ResourceLimits {
         let threads = std::thread::available_parallelism()
             .map(|n| n.get() as u32)
             .unwrap_or(1);
-        let memory_mb = crate::executor::process::detect_total_memory_mb()
-            + crate::executor::process::detect_swap_mb();
+        // Tool-facing: RAM only. The scheduling ceiling (pool + container
+        // clamps) counts swap separately — but tools that size themselves
+        // from this placeholder (JVM heaps, cellranger --localmem) must
+        // fit in what the kernel can give WITHOUT paging, or cgroup-aware
+        // job managers (live: cellranger count) demand stages the box can
+        // never satisfy.
+        let memory_mb = crate::executor::process::detect_total_memory_mb();
         ResourceLimits { threads, memory_mb }
     })
 }
