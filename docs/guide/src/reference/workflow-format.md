@@ -1146,6 +1146,19 @@ what the tool can *actually* get on this machine. Rules that embed
 resource-sized flags should use the effective pair; rules that only pass
 the pool declaration through can keep the plain pair.
 
+**Container memory follows the same policy** — docker/singularity rules
+get the declared memory as their `--memory` cgroup limit, clamped to the
+machine's total the same way (a rule declaring `memory = "72G"` on a 4G
+box runs with `--memory 4G`, not a limit the kernel can never back).
+cgroup-aware tools (picard, STAR, Cell Ranger) therefore see an honest
+limit on every machine size.
+
+**Existing environments are verified before setup** — when the
+environment cache is cold (e.g. after `--rerun` wipes the checkpoint)
+but the conda environment already exists, oxo-flow verifies it in place
+and marks it ready instead of re-running the setup, whose `conda env
+update` fallback re-resolves every dependency over the network.
+
 **Array-valued `{config.*}`** — a `[config]` key holding an array renders
 as a space-joined list in the shell (`["a", "b"]` → `a b`), matching the
 `{input}` convention; iterate with `for x in {config.tools}`.
