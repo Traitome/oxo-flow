@@ -663,10 +663,25 @@ impl LocalExecutor {
     }
 
     fn resolve_command(&self, command: &str, rule: &Rule, scratch_dir: Option<&Path>) -> String {
+        // Container backends use the declared memory as their cgroup limit.
+        // Cap it at the machine total so cgroup-aware tools (cellranger,
+        // picard, STAR) see an honest limit the kernel can actually back
+        // instead of an upstream HPC label copied verbatim by a port —
+        // same policy as the pool clamp in check_resources. Live: eager's
+        // MarkDuplicates container got --memory 4096M on a 3723MB machine.
+        let mut resources = rule.resources.clone();
+        if let Some(declared) = resources
+            .memory
+            .as_deref()
+            .and_then(crate::scheduler::parse_memory_mb)
+            && declared > self.system_memory_mb
+        {
+            resources.memory = Some(format!("{}M", self.system_memory_mb));
+        }
         match self.env_resolver.wrap_command(
             command,
             &rule.environment,
-            Some(&rule.resources),
+            Some(&resources),
             &self.config.workdir,
         ) {
             Ok(wrapped) => match scratch_dir {
@@ -2241,4 +2256,40 @@ pub fn hostname() -> String {
     std::env::var("HOSTNAME")
         .or_else(|_| std::env::var("COMPUTERNAME"))
         .unwrap_or_else(|_| "unknown".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn executor_with(max_threads: u32, max_memory_mb: u64) -> LocalExecutor {
+        let mut cfg = ExecutorConfig::default();
+        cfg.max_threads = Some(max_threads);
+        cfg.max_memory_mb = Some(max_memory_mb);
+        LocalExecutor::new(cfg)
+    }
+
+    fn docker_rule(memory: &str) -> Rule {
+        let mut rule = Rule::default();
+        rule.name = "bigmem".to_string();
+        rule.resources.memory = Some(memory.to_string());
+        rule.environment.docker = Some("img:latest".to_string());
+        rule
+    }
+
+    #[test]
+    fn resolve_command_clamps_container_memory_to_system_total() {
+        let ex = executor_with(4, 2048);
+        // 72G (an upstream HPC label) on a 2G box — the container cgroup
+        // must reflect the machine, not the declaration.
+        let cmd = ex.resolve_command("echo hi", &docker_rule("72G"), None);
+        assert!(cmd.contains("--memory 2048M"), "cmd: {cmd}");
+    }
+
+    #[test]
+    fn resolve_command_keeps_declared_memory_when_within_system_total() {
+        let ex = executor_with(4, 2048);
+        let cmd = ex.resolve_command("echo hi", &docker_rule("1G"), None);
+        assert!(cmd.contains("--memory 1G"), "cmd: {cmd}");
+    }
 }
