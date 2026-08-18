@@ -598,16 +598,32 @@ impl LocalExecutor {
         } else {
             setup_cmd
         };
-        // Cross-process serialization: another oxo-flow run on this machine
-        // may be creating a different env right now (conda cache/post-link
-        // contention + stacked memory peaks — live evidence: tx-ubuntu
-        // overload episodes). The blocking flock waits for the other run's
-        // create+verify sequence; held until this function returns.
-        let cross_process_guard =
-            tokio::task::spawn_blocking(super::env_create_lock::EnvCreateLock::acquire)
-                .await
-                .ok()
-                .flatten();
+        // Cross-process serialization, PER ENVIRONMENT: another run on this
+        // machine creating the SAME env would corrupt the transaction
+        // (rnaseq +fq/-fq live evidence); DIFFERENT envs are independent by
+        // conda/pixi semantics and must not contend (the old global lock
+        // let a 3.5h bioconductor solve stall every env setup). The wait
+        // is bounded — a stuck holder fails fast with a diagnostic instead
+        // of hanging the queue (OXO_ENV_LOCK_TIMEOUT_SECS to tune).
+        let lock_key = key.clone();
+        let cross_process_guard = tokio::task::spawn_blocking(move || {
+            super::env_create_lock::EnvCreateLock::acquire(&lock_key)
+        })
+        .await;
+        let cross_process_guard = match cross_process_guard {
+            Ok(Ok(guard)) => guard,
+            Ok(Err(e)) => {
+                tracing::error!(error = %e, "env create lock acquisition failed");
+                return Err(OxoFlowError::Environment {
+                    kind: kind.to_string(),
+                    message: format!("env create lock acquisition failed: {e}"),
+                });
+            }
+            Err(join_err) => {
+                tracing::warn!(error = %join_err, "env lock task join failed — env setup proceeds unlocked");
+                None
+            }
+        };
         if cross_process_guard.is_none() {
             tracing::warn!(
                 "env-create cross-process lock unavailable — env setup proceeds unlocked"
