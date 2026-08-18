@@ -176,6 +176,17 @@ fn run_profile_slurm_submits_tracks_and_records() {
     assert_eq!(completed.len(), 4, "checkpoint: {completed:?}");
     assert_eq!(ck["input_manifests"].as_object().unwrap().len(), 4);
 
+    // Report snapshot parity with the local path: the same artifacts a
+    // local run leaves, so reporting pipelines cannot tell the two apart.
+    let reports = dir.path().join(".oxo-flow/reports");
+    let snapshots = std::fs::read_dir(&reports)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().starts_with("report-"))
+        .count();
+    assert_eq!(snapshots, 1, "expected one report snapshot in {reports:?}");
+    assert!(reports.join("index.json").exists());
+
     let second = run(dir.path(), &["--profile", "slurm"]);
     assert!(
         String::from_utf8_lossy(&second.stderr).contains("nothing to submit"),

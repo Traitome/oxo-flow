@@ -2,6 +2,12 @@
 
 Manage cluster job submission and monitoring.
 
+> **Everyday path:** `run --profile <NAME>` submits to a scheduler and
+> tracks jobs to completion when the profile carries a `[cluster]` block —
+> see [Cluster submission](run.md#cluster-submission). The commands below
+> remain the manual escape hatch: inspect scripts before submitting,
+> or cancel/collect jobs after an interrupted run.
+
 ---
 
 ## Usage

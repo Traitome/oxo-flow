@@ -823,6 +823,17 @@ pub async fn run_command(
         if !summary.is_success() {
             return Err(anyhow::anyhow!("workflow execution failed"));
         }
+        // Report snapshot parity with the local path (issue #83 P1-14):
+        // a cluster run leaves the same `.oxo-flow/reports/` artifacts as a
+        // local one. Errors are warnings, exactly like the local call site.
+        if !no_report_snapshot {
+            let ck = checkpoint.lock().await;
+            if let Err(e) =
+                crate::commands::output::snapshot_report(&workflow, &workdir_actual, &ck)
+            {
+                eprintln!("  {} Report snapshot failed: {e}", "⚠".yellow());
+            }
+        }
         return Ok(());
     }
 
