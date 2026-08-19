@@ -438,7 +438,12 @@ impl EnvironmentBackend for DockerBackend {
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
-        Ok(format!("docker pull {spec}"))
+        // Pull only when the image is absent: two rules sharing one
+        // image run their setup concurrently, and simultaneous
+        // `docker pull`s of the same image race in the daemon (live:
+        // fastqc x2 -> "failed to lease content: NotFound"). The
+        // per-key env lock serializes the truly-missing case.
+        Ok(format!("docker image inspect {spec} >/dev/null 2>&1 || docker pull {spec}"))
     }
 
     fn teardown_command(&self, _spec: &str) -> Result<Option<String>> {
@@ -1331,7 +1336,10 @@ mod tests {
     fn docker_setup_command() {
         let backend = DockerBackend;
         let cmd = backend.setup_command("biocontainers/bwa:0.7.17").unwrap();
-        assert_eq!(cmd, "docker pull biocontainers/bwa:0.7.17");
+        assert_eq!(
+            cmd,
+            "docker image inspect biocontainers/bwa:0.7.17 >/dev/null 2>&1 || docker pull biocontainers/bwa:0.7.17"
+        );
     }
 
     #[test]
