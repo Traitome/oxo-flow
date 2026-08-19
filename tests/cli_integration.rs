@@ -6256,6 +6256,165 @@ shell = "cat {input} > {output}"
     );
 }
 
+// ─── #99 B1: sensitive values are masked in captured output ────────────────
+
+/// Values of `[config_meta.*] sensitive = true` keys must never reach the
+/// checkpoint, the report snapshot, or the failure output — they are masked
+/// at the executor capture boundary (issue #99 B1).
+#[test]
+fn cli_sensitive_values_masked_in_checkpoint_and_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("mask.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "mask"
+version = "1.0.0"
+
+[config]
+api_token = { default = "s3cr3t-token-42", sensitive = true }
+
+[[rules]]
+name = "leak"
+output = ["leak.txt"]
+shell = "echo 'token is s3cr3t-token-42' && echo 'token is s3cr3t-token-42' >&2 && echo done > {output}"
+"#,
+    )
+    .unwrap();
+
+    let run = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run.status.success());
+
+    let cp = fs::read_to_string(dir.path().join(".oxo-flow/checkpoint.json")).unwrap();
+    assert!(
+        !cp.contains("s3cr3t-token-42"),
+        "checkpoint must not contain the raw sensitive value"
+    );
+    assert!(
+        cp.contains("***"),
+        "checkpoint must contain the masked marker: {cp}"
+    );
+
+    let snaps = snapshot_files(dir.path());
+    assert!(!snaps.is_empty(), "run must produce a report snapshot");
+    let snap = fs::read_to_string(&snaps[0]).unwrap();
+    assert!(
+        !snap.contains("s3cr3t-token-42"),
+        "report snapshot must not contain the raw sensitive value"
+    );
+}
+
+// ─── #99 B2: rule-level `required = false` (continue-on-error) ─────────────
+
+/// A failed non-required rule must not fail the run: dependents are blocked,
+/// the failure is surfaced in the summary, and the exit code stays 0.
+#[test]
+fn cli_non_required_rule_failure_does_not_fail_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("besteffort.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "besteffort"
+version = "1.0.0"
+
+[[rules]]
+name = "qc"
+output = ["qc.txt"]
+required = false
+shell = "echo 'qc is broken' >&2 && exit 1"
+
+[[rules]]
+name = "analyze"
+input = ["qc.txt"]
+output = ["analyze.txt"]
+shell = "cat {input} > {output}"
+"#,
+    )
+    .unwrap();
+
+    let run = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "non-required failure must not fail the run: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("non-required"),
+        "summary must surface the non-required failure: {stderr}"
+    );
+    assert!(
+        stderr.contains("Blocked rules") && stderr.contains("analyze"),
+        "dependents of a failed rule must be blocked: {stderr}"
+    );
+    assert!(
+        !dir.path().join("analyze.txt").exists(),
+        "blocked dependent must not produce output"
+    );
+
+    // JSON mode: the run status is completed, with the non-required failure
+    // counted separately from required failures.
+    let json_run = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(json_run.status.success());
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&json_run.stdout).expect("valid JSON output");
+    assert_eq!(parsed["status"], "completed");
+    assert_eq!(parsed["results"]["failed"], 0);
+    assert_eq!(
+        parsed["results"]["non_required_failed"], 1,
+        "non-required failures must be counted separately: {parsed}"
+    );
+}
+
+/// Control: a required (default) rule failure keeps failing the run.
+#[test]
+fn cli_required_rule_failure_still_fails_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("strict.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "strict"
+version = "1.0.0"
+
+[[rules]]
+name = "qc"
+output = ["qc.txt"]
+shell = "exit 1"
+
+[[rules]]
+name = "analyze"
+input = ["qc.txt"]
+output = ["analyze.txt"]
+shell = "cat {input} > {output}"
+"#,
+    )
+    .unwrap();
+
+    let run = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        !run.status.success(),
+        "required rule failure must fail the run"
+    );
+}
+
 // ─── #71: run flags after positional overrides get actionable errors ───────
 
 /// clap's trailing config_overrides positional (allow_hyphen_values) cannot

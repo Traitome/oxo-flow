@@ -159,6 +159,16 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
+/// `required` defaults to true: only `required = false` (best-effort) rules
+/// are exempt from failing the run (issue #99 B2).
+fn default_required() -> bool {
+    true
+}
+
 fn is_zero<T>(n: &T) -> bool
 where
     T: Default + PartialEq,
@@ -818,8 +828,13 @@ pub struct Rule {
     pub checkpoint_manifest: Option<String>,
 
     /// Whether this rule is required (pipeline fails if this rule fails).
-    #[serde(default)]
-    #[serde(skip_serializing_if = "is_false")]
+    ///
+    /// Defaults to true: rules fail the pipeline unless explicitly marked
+    /// `required = false`, the best-effort/continue-on-error form (issue
+    /// #99 B2) — its failure is recorded and blocks dependents, but the
+    /// run still succeeds.
+    #[serde(default = "default_required")]
+    #[serde(skip_serializing_if = "is_true")]
     pub required: bool,
 
     /// Explicit rule-level dependencies (rule names that must complete first).

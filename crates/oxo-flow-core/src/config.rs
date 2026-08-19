@@ -1506,7 +1506,10 @@ impl WorkflowConfig {
             let toml::Value::Table(t) = val else {
                 continue;
             };
-            if (t.contains_key("default") || t.contains_key("required") || t.contains_key("help"))
+            if (t.contains_key("default")
+                || t.contains_key("required")
+                || t.contains_key("help")
+                || t.contains_key("sensitive"))
                 && let Ok(def) = toml::Value::Table(t.clone()).try_into::<ConfigDef>()
             {
                 self.config_meta.insert(key.clone(), def);
@@ -5810,6 +5813,35 @@ shell = "echo {config.database} > {output[0]}"
         assert_eq!(
             config.config.get("threshold").and_then(|v| v.as_str()),
             Some("1e-5")
+        );
+    }
+
+    #[test]
+    fn sensitive_only_inline_config_registers_metadata() {
+        // issue #99 B1: the declarative-config promotion trigger was
+        // default/required/help only, so a sensitive-ONLY declaration
+        // silently stayed an unparsed inline table and the value was never
+        // masked. The declaration must register its metadata; the value
+        // itself comes from a CLI override or profile at run time.
+        let config = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [config]
+            api_token = { sensitive = true }
+            "#,
+        )
+        .unwrap();
+        assert!(
+            config.config_meta["api_token"].sensitive,
+            "sensitive flag must register in config_meta"
+        );
+        assert_eq!(
+            config.config.get("api_token").and_then(|v| v.as_str()),
+            Some(""),
+            "no default: the runtime value is empty until overridden"
         );
     }
 
