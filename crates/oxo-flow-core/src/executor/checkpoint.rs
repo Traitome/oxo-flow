@@ -464,6 +464,36 @@ pub fn compute_file_checksum(path: &Path) -> Result<String> {
     Ok(format!("sha256:{:x}", hash))
 }
 
+/// mtime in nanoseconds since the UNIX epoch, for change detection.
+///
+/// Shared by input manifests (issue #72) and reference fingerprints
+/// (issue #97): the two invalidation layers must agree on what counts as
+/// "changed". An unreadable mtime degrades to 0 — never an error — and is
+/// traced for diagnosis.
+pub fn mtime_nanos(md: &std::fs::Metadata) -> i128 {
+    match md
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+    {
+        Some(d) => d.as_nanos() as i128,
+        None => {
+            tracing::debug!("mtime unavailable for change detection, degrading to 0");
+            0
+        }
+    }
+}
+
+/// Content hash for small files, under the shared input-manifest policy:
+/// `Some("sha256:…")` when the file is at most [`MANIFEST_HASH_MAX_BYTES`]
+/// and readable; `None` for larger files (guarded by size+mtime) and for
+/// unreadable files (best-effort degrade, never an error).
+pub fn content_hash_if_small(path: &Path, md: &std::fs::Metadata) -> Option<String> {
+    (md.len() <= MANIFEST_HASH_MAX_BYTES)
+        .then(|| compute_file_checksum(path).ok())
+        .flatten()
+}
+
 /// Snapshot the file set a rule's inputs resolve to (issue #72).
 ///
 /// Returns `Ok(None)` when the rule has no resolvable inputs: the input list
@@ -769,23 +799,14 @@ fn record_manifest_file(
         .unwrap_or(path)
         .to_string_lossy()
         .to_string();
-    let mtime_nanos = md
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_nanos() as i128)
-        .unwrap_or(0);
-    // Content-hash small files (best-effort: an unreadable file degrades to
-    // the size+mtime policy rather than failing the snapshot).
-    let hash = (md.len() <= MANIFEST_HASH_MAX_BYTES)
-        .then(|| compute_file_checksum(path).ok())
-        .flatten();
+    let mtime = mtime_nanos(md);
+    let hash = content_hash_if_small(path, md);
     entries.insert(
         rel.clone(),
         InputManifestEntry {
             path: rel,
             size: md.len(),
-            mtime_nanos,
+            mtime_nanos: mtime,
             hash,
             remote: None,
         },
