@@ -225,7 +225,7 @@ samples   = { required = true, type = "path", must_exist = true }
 | `default` | String | Default value when not provided via CLI |
 | `required` | Bool | If `true`, the value must be provided at runtime (default: `false`) |
 | `help` | String | Human-readable description shown in error messages |
-| `sensitive` | Bool | Mask the value as `****` in logs, `--help`, and errors (default: `false`) |
+| `sensitive` | Bool | Mask the value as `***` in captured rule output, recorded commands, checkpoint/report snapshots, and error summaries — before they reach the web UI or AI recovery (default: `false`). Values shorter than 4 characters are not masked, and structured or derived forms of the value (JSON/base64) pass through — exact-match masking only |
 | `type` | String | Expected value type for validation: `"string"`, `"int"`, `"float"`, `"bool"`, `"path"` |
 | `choices` | Array of String | Allowed values (requires `type = "string"`) |
 | `range` | String | Numeric range `"min..max"` (requires `type = "int"` or `"float"`) |
@@ -980,13 +980,13 @@ target = true   # Included when running without -t
 | Field | Type | Description |
 |-------|------|-------------|
 | `optional` | Boolean | If `true`, missing inputs become warnings instead of errors |
-| `required` | Boolean | If `true`, pipeline fails if this rule fails even without dependents |
+| `required` | Boolean | If `false`, a failure of this rule does not fail the run: the failure is recorded and listed, its dependents are blocked, and the run exits 0 (best-effort / continue-on-error, e.g. QC steps). Defaults to `true` — required failures fail the run (or, with `--keep-going`, keep it running but exit 0 with failures listed) |
 
 ```toml
 [[rules]]
 name = "experimental"
-optional = true    # Skip if input data is absent
-required = true    # But if it runs, failure stops the pipeline
+optional = true     # Skip if input data is absent
+required = false    # Failure is reported but does not fail the run
 ```
 
 ### Logging and Benchmarking
