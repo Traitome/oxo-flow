@@ -160,15 +160,20 @@ fn build_rule(
     ) else {
         return Ok(None); // no shell/script — not schedulable
     };
+    // The prelude goes INSIDE the environment wrapper, matching the local
+    // executor (issue #92): prepending outside would leave the wrapped
+    // command (conda run / docker run bash -c) without fail-fast semantics.
+    let cmd = config.defaults.apply_shell_prelude(&cmd);
     let wrapped = env_resolver
         .wrap_command(&cmd, &rule.environment, Some(&rule.resources), workdir)
         .map_err(|e| OxoFlowError::Config {
             message: format!("environment wrapping failed for '{name}': {e}"),
         })?;
     let dependencies = dag.dependencies(name).unwrap_or_default();
+    let shell_cmd = format!("cd '{}' && {}", workdir.display(), wrapped);
     Ok(Some(ScheduledRule {
         rule: rule.clone(),
-        shell_cmd: format!("cd '{}' && {}", workdir.display(), wrapped),
+        shell_cmd,
         workdir: workdir.to_path_buf(),
         dependencies,
         wildcard_values: wildcard_values.clone(),
@@ -209,6 +214,34 @@ mod tests {
 
     fn values() -> HashMap<String, String> {
         HashMap::from([("config.ref".to_string(), "/data/ref.fa".to_string())])
+    }
+
+    #[test]
+    fn build_prepends_shell_prelude_before_cd_guard() {
+        // issue #92: the cluster plan applies the prelude to the WHOLE
+        // script — before the cd guard — so set -e also aborts on a failed
+        // cd, and the command line stays guarded.
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = demo_config(dir.path());
+        config.defaults.shell_prelude = Some("set -euo pipefail".to_string());
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        let plan = ScheduledPlan::build(
+            &config,
+            &dag,
+            std::path::Path::new("/tmp/wf"),
+            &EnvironmentResolver::new(),
+            &values(),
+        )
+        .unwrap();
+        let r = &plan.rules["preprocess"];
+        assert!(
+            r.shell_cmd
+                .starts_with("cd '/tmp/wf' && set -euo pipefail\n"),
+            "prelude must sit inside the wrapped command, after the cd guard: {}",
+            r.shell_cmd
+        );
     }
 
     #[test]

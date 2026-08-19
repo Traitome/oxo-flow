@@ -258,6 +258,37 @@ pub struct Defaults {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment: Option<EnvironmentSpec>,
+
+    /// Shell prelude prepended to every rule shell command (and hooks),
+    /// on its own line — e.g. `"set -euo pipefail"` for fail-fast shells
+    /// (issue #92). Opt-in: empty by default, so existing workflows keep
+    /// their exact command text.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shell_prelude: Option<String>,
+}
+
+/// Prepend a shell prelude to a command on its own line (issue #92).
+///
+/// Returns the command unchanged when no prelude is configured. The single
+/// point all execution paths route through — local rules, hooks, reference
+/// builds, and the cluster plan — so prelude semantics cannot drift.
+pub fn prepend_shell_prelude(cmd: &str, prelude: Option<&str>) -> String {
+    match prelude {
+        Some(p) if !p.trim().is_empty() => format!("{p}\n{cmd}"),
+        _ => cmd.to_string(),
+    }
+}
+
+impl Defaults {
+    /// Prepend the configured shell prelude to a command on its own line.
+    ///
+    /// Returns the command unchanged when no prelude is configured. Applied
+    /// at command-build time — inside environment wrappers — so the local,
+    /// container, and reference-build paths share one semantics (issue #92).
+    pub fn apply_shell_prelude(&self, cmd: &str) -> String {
+        prepend_shell_prelude(cmd, self.shell_prelude.as_deref())
+    }
 }
 
 /// Report configuration section.
@@ -5842,6 +5873,56 @@ shell = "echo {config.database} > {output[0]}"
             config.config.get("api_token").and_then(|v| v.as_str()),
             Some(""),
             "no default: the runtime value is empty until overridden"
+        );
+    }
+
+    #[test]
+    fn defaults_shell_prelude_parses_and_applies() {
+        // issue #92: a workflow-global shell prelude (e.g. set -euo
+        // pipefail) is opt-in, parsed from [defaults], and prepended to a
+        // command on its own line.
+        let config = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [defaults]
+            shell_prelude = "set -euo pipefail"
+
+            [[rules]]
+            name = "s"
+            output = ["out.txt"]
+            shell = "echo hi > out.txt"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.defaults.shell_prelude.as_deref(),
+            Some("set -euo pipefail")
+        );
+        assert_eq!(
+            config.defaults.apply_shell_prelude("echo hi > out.txt"),
+            "set -euo pipefail\necho hi > out.txt"
+        );
+
+        // No prelude: the command passes through unchanged.
+        let plain = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "s"
+            output = ["out.txt"]
+            shell = "echo hi > out.txt"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            plain.defaults.apply_shell_prelude("echo hi > out.txt"),
+            "echo hi > out.txt"
         );
     }
 

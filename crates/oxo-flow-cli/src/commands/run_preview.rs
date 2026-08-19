@@ -223,6 +223,7 @@ pub fn preview_run_plan(
         &config.config,
         sensitive_keys,
         interpreter_map,
+        config.defaults.shell_prelude.as_deref(),
     );
     let config_invalidated: HashSet<String> = config_report.invalidated.iter().cloned().collect();
 
@@ -1197,6 +1198,7 @@ version = "1.0"
             &config.config,
             &sensitive(),
             &config.workflow.interpreter_map,
+            config.defaults.shell_prelude.as_deref(),
         );
 
         let mut changed_config = config.clone();

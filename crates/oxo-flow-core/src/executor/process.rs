@@ -288,6 +288,10 @@ pub struct ExecutorConfig {
     /// of captured stdout/stderr and the recorded command before they reach
     /// the checkpoint/report (issue #99 B1). Empty = no masking.
     pub sensitive_values: Vec<String>,
+    /// Workflow-global shell prelude prepended to every rule command and
+    /// hook on its own line (issue #92), e.g. `set -euo pipefail`.
+    /// Opt-in: `None` keeps the historical exact command text.
+    pub shell_prelude: Option<String>,
 }
 
 impl Default for ExecutorConfig {
@@ -309,6 +313,7 @@ impl Default for ExecutorConfig {
             interpreter_map: HashMap::new(),
             storage_resolver: StorageResolver::with_local(),
             sensitive_values: Vec::new(),
+            shell_prelude: None,
         }
     }
 }
@@ -1089,6 +1094,12 @@ impl LocalExecutor {
                 return Ok(record);
             }
         };
+        // Workflow-global shell prelude (issue #92): prepended BEFORE the
+        // environment wrapper resolves, so the prelude runs INSIDE the
+        // container/conda wrapper — the local and cluster paths share one
+        // semantics.
+        let base_cmd =
+            crate::config::prepend_shell_prelude(&base_cmd, self.config.shell_prelude.as_deref());
 
         // Optional rules skip (no error) when their declared inputs are
         // absent — e.g. analysis steps that only apply to some samples
@@ -1243,7 +1254,12 @@ impl LocalExecutor {
                 self.release_resources(&rule).await;
                 return Err(e);
             }
-            let pre_child = spawn_rule_shell(&rendered, rule_cwd, &rule.envvars);
+            // pre_exec takes the same prelude as the other hooks (issue #92).
+            let rendered_pre = crate::config::prepend_shell_prelude(
+                &rendered,
+                self.config.shell_prelude.as_deref(),
+            );
+            let pre_child = spawn_rule_shell(&rendered_pre, rule_cwd, &rule.envvars);
             let pre_result = match pre_child {
                 Ok(child) => child.wait_with_output().await,
                 Err(e) => {
@@ -1452,6 +1468,7 @@ impl LocalExecutor {
                         ),
                         &rule,
                         &self.config.workdir,
+                        self.config.shell_prelude.as_deref(),
                     )
                     .await;
                 }
@@ -1488,6 +1505,7 @@ impl LocalExecutor {
                                 ),
                                 &rule,
                                 &self.config.workdir,
+                                self.config.shell_prelude.as_deref(),
                             )
                             .await;
                         }
@@ -1506,6 +1524,7 @@ impl LocalExecutor {
                                 ),
                                 &rule,
                                 &self.config.workdir,
+                                self.config.shell_prelude.as_deref(),
                             )
                             .await;
                         }
@@ -1557,6 +1576,7 @@ impl LocalExecutor {
                         ),
                         &rule,
                         &self.config.workdir,
+                        self.config.shell_prelude.as_deref(),
                     )
                     .await;
                 }
@@ -1580,6 +1600,7 @@ impl LocalExecutor {
                     ),
                     &rule,
                     &self.config.workdir,
+                    self.config.shell_prelude.as_deref(),
                 )
                 .await;
             }
@@ -1805,6 +1826,12 @@ pub(super) fn spawn_rule_shell(
     ) -> tokio::process::Command {
         let mut c = tokio::process::Command::new(shell);
         c.arg("-c").arg(cmd).current_dir(workdir).envs(envs);
+        // stdin is explicitly null (issue #101): tokio's default is INHERIT,
+        // so a TTY-launched `oxo-flow run` would hand the terminal to every
+        // rule — stdin-polling tools can park forever on it. Null stdin is
+        // the batch-tool contract (what cluster submit scripts do with
+        // </dev/null).
+        c.stdin(Stdio::null());
         c.stdout(Stdio::piped()).stderr(Stdio::piped());
         c
     }
@@ -2019,8 +2046,10 @@ async fn discard_scratch(scratch: Option<&Path>) {
 /// Execute a rendered rule hook (on_success / on_failure) in the rule's
 /// environment. Hooks are best-effort: their failure never changes the
 /// rule's own status (pre_exec is the exception and aborts the rule).
-async fn run_hook(cmd: &str, rule: &Rule, workdir: &std::path::Path) {
-    let child = match spawn_rule_shell(cmd, workdir, &rule.envvars) {
+async fn run_hook(cmd: &str, rule: &Rule, workdir: &std::path::Path, shell_prelude: Option<&str>) {
+    // Hooks take the same prelude as rule commands (issue #92).
+    let cmd = crate::config::prepend_shell_prelude(cmd, shell_prelude);
+    let child = match spawn_rule_shell(&cmd, workdir, &rule.envvars) {
         Ok(child) => child,
         Err(e) => {
             tracing::warn!(rule = %rule.name, error = %e, "failed to spawn rule hook");
