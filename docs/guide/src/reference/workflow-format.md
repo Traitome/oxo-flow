@@ -390,6 +390,7 @@ Applied to all rules unless explicitly overridden:
 threads = 4
 memory = "8G"
 environment = { conda = "envs/base.yaml" }
+shell_prelude = "set -euo pipefail"
 ```
 
 | Field | Type | Description |
@@ -397,6 +398,7 @@ environment = { conda = "envs/base.yaml" }
 | `threads` | Integer | Default CPU thread count |
 | `memory` | String | Default memory allocation |
 | `environment` | Table | Default environment specification |
+| `shell_prelude` | String | Shell text prepended to every rule command, hook, reference build, and cluster job script on its own line (issue #92) — e.g. `set -euo pipefail` for fail-fast shells. **Opt-in**: empty by default, so existing workflows keep their exact command text. Applies inside environment wrappers (containers, conda) on every execution path. `pipefail` requires bash (the engine falls back to `sh` only when bash is absent) |
 
 ---
 

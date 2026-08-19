@@ -197,7 +197,11 @@ fn canonical_toml_map(map: &HashMap<String, toml::Value>) -> String {
 /// Includes `pre_exec`/`on_success`/`on_failure` (they are part of the rule
 /// definition and can write outputs or alter state) and the resolved
 /// interpreter for script rules.
-pub fn rule_fingerprint(rule: &Rule, interpreter_map: &HashMap<String, String>) -> String {
+pub fn rule_fingerprint(
+    rule: &Rule,
+    interpreter_map: &HashMap<String, String>,
+    shell_prelude: Option<&str>,
+) -> String {
     let mut hasher = Sha256::new();
     // Field name + value pairs separated by NUL bytes: unambiguous framing,
     // deterministic ordering (maps sorted by key, lists in semantic order).
@@ -209,6 +213,10 @@ pub fn rule_fingerprint(rule: &Rule, interpreter_map: &HashMap<String, String>) 
     };
 
     add("name", &rule.name);
+    // The workflow shell prelude changes every rule's execution semantics
+    // (issue #92): enabling or editing it must invalidate completed rules —
+    // their outputs were produced under different shell strictness.
+    add("shell_prelude", shell_prelude.unwrap_or(""));
     add("shell", rule.shell.as_deref().unwrap_or(""));
     add("script", rule.script.as_deref().unwrap_or(""));
     add("input", &canonical_file_patterns(&rule.input));
@@ -360,6 +368,7 @@ pub fn detect_config_changes(
     current: &HashMap<String, toml::Value>,
     sensitive_keys: &HashSet<String>,
     interpreter_map: &HashMap<String, String>,
+    shell_prelude: Option<&str>,
 ) -> ConfigChangeReport {
     // A checkpoint with neither snapshot nor fingerprints predates config
     // tracking: bootstrap only (no invalidation) — documented one-time window.
@@ -405,7 +414,7 @@ pub fn detect_config_changes(
     let mut current_fingerprints: HashMap<String, String> = HashMap::new();
     let mut fingerprint_mismatches: Vec<String> = Vec::new();
     for rule in rules {
-        let fingerprint = rule_fingerprint(rule, interpreter_map);
+        let fingerprint = rule_fingerprint(rule, interpreter_map, shell_prelude);
         if let Some(stored) = checkpoint.rule_fingerprints.get(&rule.name)
             && *stored != fingerprint
             && checkpoint.is_completed(&rule.name)
@@ -670,7 +679,10 @@ mod tests {
                 .insert(format!("k{i}"), toml::Value::String(format!("v{i}")));
         }
         let map = HashMap::new();
-        assert_eq!(rule_fingerprint(&a, &map), rule_fingerprint(&b, &map));
+        assert_eq!(
+            rule_fingerprint(&a, &map, None),
+            rule_fingerprint(&b, &map, None)
+        );
     }
 
     #[test]
@@ -680,7 +692,10 @@ mod tests {
         let mut b = a.clone();
         b.shell = Some("fastp -q 30".to_string());
         let map = HashMap::new();
-        assert_ne!(rule_fingerprint(&a, &map), rule_fingerprint(&b, &map));
+        assert_ne!(
+            rule_fingerprint(&a, &map, None),
+            rule_fingerprint(&b, &map, None)
+        );
     }
 
     #[test]
@@ -693,7 +708,10 @@ mod tests {
         b.threads = Some(16);
         b.memory = Some("64G".to_string());
         let map = HashMap::new();
-        assert_eq!(rule_fingerprint(&a, &map), rule_fingerprint(&b, &map));
+        assert_eq!(
+            rule_fingerprint(&a, &map, None),
+            rule_fingerprint(&b, &map, None)
+        );
     }
 
     #[test]
@@ -717,7 +735,10 @@ mod tests {
             ".oxo-flow/chunks/2".to_string(),
         ]);
         let map = HashMap::new();
-        assert_ne!(rule_fingerprint(&a, &map), rule_fingerprint(&b, &map));
+        assert_ne!(
+            rule_fingerprint(&a, &map, None),
+            rule_fingerprint(&b, &map, None)
+        );
     }
 
     #[test]
@@ -733,8 +754,14 @@ mod tests {
         d.interpreter = Some("/opt/python3.12/bin/python".to_string());
 
         let map = HashMap::new();
-        assert_ne!(rule_fingerprint(&a, &map), rule_fingerprint(&b, &map));
-        assert_ne!(rule_fingerprint(&c, &map), rule_fingerprint(&d, &map));
+        assert_ne!(
+            rule_fingerprint(&a, &map, None),
+            rule_fingerprint(&b, &map, None)
+        );
+        assert_ne!(
+            rule_fingerprint(&c, &map, None),
+            rule_fingerprint(&d, &map, None)
+        );
     }
 
     // ── Reference fingerprints ───────────────────────────────────────────
@@ -977,6 +1004,7 @@ mod tests {
             &cfg(&[("min_quality", "20")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
         );
         checkpoint = cp;
 
@@ -987,6 +1015,7 @@ mod tests {
             &cfg(&[("min_quality", "30")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
         );
 
         assert_eq!(report.changed_keys, vec!["min_quality"]);
@@ -1031,6 +1060,7 @@ mod tests {
             &cfg(&[("gone_key", "x")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
         );
         checkpoint = cp;
 
@@ -1041,6 +1071,7 @@ mod tests {
             &cfg(&[("new_key", "y")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
         );
         assert_eq!(report.added_keys, vec!["new_key"]);
         assert_eq!(report.removed_keys, vec!["gone_key"]);
@@ -1074,6 +1105,7 @@ mod tests {
             &cfg(&[("min_quality", "20")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
         );
         checkpoint = cp;
 
@@ -1084,6 +1116,7 @@ mod tests {
             &cfg(&[("min_quality", "20")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
         );
         assert!(report.invalidated.is_empty());
         assert!(report.changed_keys.is_empty());
@@ -1115,6 +1148,7 @@ mod tests {
             &cfg(&[("samples_list", "S1,S2")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
         );
         checkpoint = cp;
 
@@ -1125,6 +1159,7 @@ mod tests {
             &cfg(&[("samples_list", "S3,S4")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
         );
         assert!(report.changed_keys.is_empty());
         assert!(report.invalidated.is_empty());
@@ -1140,6 +1175,7 @@ mod tests {
             &cfg(&[("pairs_list", "P1,P2")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
         );
         checkpoint = cp;
         let report = detect_config_changes(
@@ -1149,6 +1185,7 @@ mod tests {
             &cfg(&[("pairs_list", "P2,P3")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
         );
         assert!(report.changed_keys.is_empty());
         assert!(report.invalidated.is_empty());
@@ -1168,6 +1205,7 @@ mod tests {
             &cfg(&[("api_token", "hunter2")]),
             &sensitive,
             &HashMap::new(),
+            None,
         );
         checkpoint = cp;
         let stored = checkpoint.config_snapshot.get("api_token").unwrap();
@@ -1182,6 +1220,7 @@ mod tests {
             &cfg(&[("api_token", "hunter3")]),
             &sensitive,
             &HashMap::new(),
+            None,
         );
         assert_eq!(report.changed_keys, vec!["api_token"]);
     }
@@ -1212,6 +1251,7 @@ mod tests {
             &HashMap::new(),
             &HashSet::new(),
             &HashMap::new(),
+            None,
         );
         checkpoint = cp;
 
@@ -1226,6 +1266,7 @@ mod tests {
             &HashMap::new(),
             &HashSet::new(),
             &HashMap::new(),
+            None,
         );
         assert!(report.fingerprint_mismatches.contains(&"c".to_string()));
         assert!(!checkpoint.is_completed("c"));
@@ -1262,6 +1303,7 @@ mod tests {
             &cfg(&[("min_quality", "30")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
         );
         assert!(report.is_legacy);
         assert!(report.invalidated.is_empty());
@@ -1296,6 +1338,7 @@ mod tests {
             &cfg(&[("min_quality", "20")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
         );
         let report = detect_config_changes(
             &mut checkpoint,
@@ -1304,6 +1347,7 @@ mod tests {
             &cfg(&[("min_quality", "30")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
         );
         assert!(!report.is_legacy);
         assert!(!checkpoint.is_completed("b"));
@@ -1339,6 +1383,7 @@ mod tests {
             &HashMap::new(),
             &HashSet::new(),
             &HashMap::new(),
+            None,
         );
         checkpoint = cp;
         checkpoint.rule_fingerprints.remove("b");
@@ -1350,6 +1395,7 @@ mod tests {
             &HashMap::new(),
             &HashSet::new(),
             &HashMap::new(),
+            None,
         );
         assert!(report.fingerprint_mismatches.is_empty());
         assert!(report.invalidated.is_empty());
@@ -1385,6 +1431,7 @@ mod tests {
             &cfg(&[("k", "1")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
         );
         checkpoint = cp;
 
@@ -1395,6 +1442,7 @@ mod tests {
             &cfg(&[("k", "2")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
         );
         assert_eq!(report.invalidated, vec!["orphan".to_string()]);
         assert!(!checkpoint.is_completed("orphan"));

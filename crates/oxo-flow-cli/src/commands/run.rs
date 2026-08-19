@@ -640,6 +640,7 @@ pub async fn run_command(
             &config.config,
             &sensitive_keys,
             &config.workflow.interpreter_map,
+            config.defaults.shell_prelude.as_deref(),
         );
         let force_rules: std::collections::HashSet<String> =
             report.invalidated.iter().cloned().collect();
@@ -872,6 +873,7 @@ pub async fn run_command(
         dry_run: false,
         workdir: workdir.clone().unwrap_or_else(|| workdir_default.clone()),
         sensitive_values: sensitive_values.clone(),
+        shell_prelude: config.defaults.shell_prelude.clone(),
         keep_going,
         retry_count: retry,
         timeout: if timeout_secs > 0 {
@@ -1088,6 +1090,9 @@ pub async fn run_command(
                     );
                     build_cmd = build_cmd.replace("{source}", &expanded);
                 }
+                // References take the same shell prelude as rules (issue #92),
+                // before the environment wrapper resolves.
+                build_cmd = config.defaults.apply_shell_prelude(&build_cmd);
                 // References that need workflow tools (bowtie2-build, STAR
                 // genomeGenerate, …) declare an `environment` — same spec as
                 // `[rules.environment]`. The env is created on first use and
@@ -1137,11 +1142,21 @@ pub async fn run_command(
                     ref_def.description.as_deref().unwrap_or(&ref_def.output),
                     reason
                 );
-                let status = std::process::Command::new("sh")
-                    .arg("-c")
-                    .arg(&build_cmd)
-                    .current_dir(ref_workdir)
-                    .status();
+                // bash first, sh fallback — mirrors the rule executor
+                // (spawn_rule_shell): `set -o pipefail` in a shell prelude
+                // is invalid under dash, which /bin/sh is on Debian-family
+                // systems (review finding on issue #92).
+                let spawn_ref_build = |shell: &str| {
+                    std::process::Command::new(shell)
+                        .arg("-c")
+                        .arg(&build_cmd)
+                        .current_dir(ref_workdir)
+                        .status()
+                };
+                let status = match spawn_ref_build("bash") {
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => spawn_ref_build("sh"),
+                    other => other,
+                };
                 match status {
                     Ok(s) if s.success() => {
                         // Store the POST-build fingerprint: the decision

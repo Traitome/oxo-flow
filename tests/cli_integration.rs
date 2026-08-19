@@ -6454,6 +6454,164 @@ shell = "echo {config.api_token} > {output}"
     );
 }
 
+// ─── #101: rule subprocesses never block on stdin ─────────────────────────
+
+/// Contract smoke test: rule shells must observe null stdin (issue #101).
+///
+/// Honest caveat: tokio's spawn default is INHERIT, and `spawn_rule_shell`
+/// pins `stdin(Stdio::null())` explicitly — this test guards that contract.
+/// It cannot serve as a RED proof for the line's removal in sandboxed CI:
+/// held-open pipes deliver immediate EOF to `read` there, so both inherit
+/// and null behave identically in this environment. The behavioral
+/// difference (a TTY-launched run handing the terminal to stdin-polling
+/// tools) is the real motivation and is documented at the spawn site.
+#[test]
+fn cli_rule_shell_gets_null_stdin() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("stdin.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "stdin"
+version = "1.0.0"
+
+[[rules]]
+name = "reader"
+output = ["out.txt"]
+shell = 'if read -t 8 x; then echo "got:$x" > out.txt; else echo eof > out.txt; fi'
+"#,
+    )
+    .unwrap();
+
+    // Launch the CLI with a HELD-OPEN stdin pipe: under the historical
+    // inherit behavior the rule's `read -t 8` would sit on the pipe for
+    // the full timeout and write "timeout"; with the executor's null stdin
+    // it sees an immediate EOF and writes "eof". The content assertion
+    // distinguishes the two without timing.
+    // Raw std Command: assert_cmd's wrapper does not expose stdin config.
+    let mut child = std::process::Command::new(workspace_bin("oxo-flow"))
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Keep the pipe's write end open for the whole run.
+    let held_open = child.stdin.take();
+    let run = child.wait_with_output().unwrap();
+    drop(held_open);
+    assert!(
+        run.status.success(),
+        "rule must succeed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("out.txt")).unwrap(),
+        "eof\n",
+        "the rule shell must observe null stdin (immediate EOF), not a held pipe"
+    );
+}
+
+// ─── #92: workflow-global shell prelude (set -euo pipefail) ───────────────
+
+/// Without a prelude, an intermediate failing command does NOT fail the
+/// rule (bash -c keeps going) — the silent-broken-output class the prelude
+/// exists to close.
+#[test]
+fn cli_shell_prelude_makes_intermediate_failure_fail_the_rule() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("strict.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "strict"
+version = "1.0.0"
+
+[defaults]
+shell_prelude = "set -euo pipefail"
+
+[[rules]]
+name = "boom"
+output = ["out.txt"]
+shell = "false; echo done > out.txt"
+"#,
+    )
+    .unwrap();
+
+    let run = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        !run.status.success(),
+        "an intermediate failure must fail the rule under set -e: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // -u: referencing an undefined variable must fail too.
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "strict"
+version = "1.0.0"
+
+[defaults]
+shell_prelude = "set -euo pipefail"
+
+[[rules]]
+name = "boom"
+output = ["out.txt"]
+shell = "echo $UNDEFINED_XYZ; echo ok > out.txt"
+"#,
+    )
+    .unwrap();
+    let run2 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        !run2.status.success(),
+        "an undefined variable must fail the rule under set -u: {}",
+        String::from_utf8_lossy(&run2.stderr)
+    );
+}
+
+/// Control: without a prelude, the same command keeps the historical
+/// behavior (the intermediate failure is masked by the last command's
+/// success) — opt-in semantics, existing workflows unchanged.
+#[test]
+fn cli_shell_without_prelude_keeps_historical_behavior() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("loose.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "loose"
+version = "1.0.0"
+
+[[rules]]
+name = "boom"
+output = ["out.txt"]
+shell = "false; echo done > out.txt"
+"#,
+    )
+    .unwrap();
+
+    let run = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run.status.success());
+    assert_eq!(
+        fs::read_to_string(dir.path().join("out.txt")).unwrap(),
+        "done\n"
+    );
+}
+
 // ─── #71: run flags after positional overrides get actionable errors ───────
 
 /// clap's trailing config_overrides positional (allow_hyphen_values) cannot
