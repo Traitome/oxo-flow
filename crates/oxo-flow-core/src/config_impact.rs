@@ -16,6 +16,7 @@ use crate::executor::checkpoint::CheckpointState;
 use crate::rule::{FilePatterns, Rule};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
 
 /// Engine-injected config keys that churn on every run (rewritten by
 /// `--samples`/`--sample`, sample discovery, and pair consolidation).
@@ -249,7 +250,25 @@ pub fn rule_fingerprint(rule: &Rule, interpreter_map: &HashMap<String, String>) 
 ///
 /// A mismatch (build/source/output edited, or a referenced config key
 /// changed) means the artifact must be rebuilt.
-pub fn reference_fingerprint(def: &ReferenceDef, config: &HashMap<String, toml::Value>) -> String {
+///
+/// `resolved_source` is the source path with `{config.*}` already expanded
+/// (the caller resolves it against the workdir). When it names a readable
+/// local file, the file's size, mtime, and — below
+/// [`crate::executor::checkpoint::MANIFEST_HASH_MAX_BYTES`] — content hash
+/// join the fingerprint (issue #97): the source PATH string alone cannot
+/// detect a same-path replacement, which left artifacts silently stale
+/// (live: a regenerated genome.fa never rebuilt its STAR index). A missing
+/// or unreadable source degrades to the path-string-only fingerprint — the
+/// same policy as the freshness checks, so a first build in a pre-fetch
+/// state never errors out. Note the asymmetry: when the checkpoint already
+/// stores a content-bearing fingerprint, a later missing source mismatches
+/// and the rebuild fails loudly — the safe direction, never silently
+/// serving an artifact whose source state cannot be verified.
+pub fn reference_fingerprint(
+    def: &ReferenceDef,
+    config: &HashMap<String, toml::Value>,
+    resolved_source: Option<&Path>,
+) -> String {
     let mut hasher = Sha256::new();
     let mut add = |label: &str, content: &str| {
         hasher.update(label.as_bytes());
@@ -278,6 +297,24 @@ pub fn reference_fingerprint(def: &ReferenceDef, config: &HashMap<String, toml::
     }
     for (key, value) in referenced {
         add(&key, &value);
+    }
+
+    // Source content guard (issue #97): size + mtime + content hash, through
+    // the SAME helpers as input manifests (issue #72) so the two
+    // invalidation layers cannot drift. A directory or unreadable file
+    // contributes nothing beyond the path string hashed above.
+    if let Some(path) = resolved_source
+        && let Ok(md) = std::fs::metadata(path)
+        && md.is_file()
+    {
+        add("source:size", &md.len().to_string());
+        add(
+            "source:mtime",
+            &crate::executor::checkpoint::mtime_nanos(&md).to_string(),
+        );
+        if let Some(hash) = crate::executor::checkpoint::content_hash_if_small(path, &md) {
+            add("source:hash", &hash);
+        }
     }
 
     format!("sha256:{:x}", hasher.finalize())
@@ -719,13 +756,13 @@ mod tests {
             "ref_dir".to_string(),
             toml::Value::String("refs/v1".to_string()),
         );
-        let f1 = reference_fingerprint(&def, &config);
+        let f1 = reference_fingerprint(&def, &config, None);
 
         config.insert(
             "ref_dir".to_string(),
             toml::Value::String("refs/v2".to_string()),
         );
-        assert_ne!(f1, reference_fingerprint(&def, &config));
+        assert_ne!(f1, reference_fingerprint(&def, &config, None));
 
         let mut edited = def.clone();
         edited.build = "bwa index -p {config.ref_dir}/idx2 {input}".to_string();
@@ -734,8 +771,172 @@ mod tests {
             toml::Value::String("refs/v2".to_string()),
         );
         assert_ne!(
-            reference_fingerprint(&def, &config),
-            reference_fingerprint(&edited, &config)
+            reference_fingerprint(&def, &config, None),
+            reference_fingerprint(&edited, &config, None)
+        );
+    }
+
+    #[test]
+    fn reference_fingerprint_detects_same_path_source_content_replacement() {
+        // issue #97: replacing the source file at the SAME path must change
+        // the fingerprint — the path string alone cannot see it (live: STAR
+        // index silently stale after genome.fa regeneration, twice).
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("genome.fa");
+        let def = ReferenceDef {
+            name: "ref".to_string(),
+            source: Some("genome.fa".to_string()),
+            output: "genome.idx".to_string(),
+            build: "bwa index {input}".to_string(),
+            threads: None,
+            memory: None,
+            environment: None,
+            description: None,
+        };
+        let config = HashMap::new();
+
+        // Same-size content rewrite changes the fingerprint.
+        std::fs::write(&source, b">chr1\nAAAA").unwrap();
+        let before = reference_fingerprint(&def, &config, Some(&source));
+        std::fs::write(&source, b">chr1\nBBBB").unwrap();
+        let after = reference_fingerprint(&def, &config, Some(&source));
+        assert_ne!(
+            before, after,
+            "same-path content rewrite must change the fingerprint"
+        );
+    }
+
+    #[test]
+    fn reference_fingerprint_hashes_content_when_size_and_mtime_are_equal() {
+        // The content-hash branch is what catches a same-size rewrite that
+        // preserves mtime (cp -p, rsync -t, git checkouts) — pin it by
+        // forcing identical size AND mtime across a content change.
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("genome.fa");
+        let def = ReferenceDef {
+            name: "ref".to_string(),
+            source: Some("genome.fa".to_string()),
+            output: "genome.idx".to_string(),
+            build: "bwa index {input}".to_string(),
+            threads: None,
+            memory: None,
+            environment: None,
+            description: None,
+        };
+        let config = HashMap::new();
+        let fixed = filetime::FileTime::from_unix_time(1_700_000_000, 0);
+
+        std::fs::write(&source, b">chr1\nAAAA").unwrap();
+        filetime::set_file_mtime(&source, fixed).unwrap();
+        let before = reference_fingerprint(&def, &config, Some(&source));
+
+        std::fs::write(&source, b">chr1\nBBBB").unwrap();
+        filetime::set_file_mtime(&source, fixed).unwrap();
+        let after = reference_fingerprint(&def, &config, Some(&source));
+
+        assert_ne!(
+            before, after,
+            "same size + same mtime + different content must differ (content hash)"
+        );
+    }
+
+    #[test]
+    fn reference_fingerprint_tracks_source_mtime() {
+        // Identical content at a different mtime must still change the
+        // fingerprint — the size+mtime policy for large files relies on it.
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("genome.fa");
+        let def = ReferenceDef {
+            name: "ref".to_string(),
+            source: Some("genome.fa".to_string()),
+            output: "genome.idx".to_string(),
+            build: "bwa index {input}".to_string(),
+            threads: None,
+            memory: None,
+            environment: None,
+            description: None,
+        };
+        let config = HashMap::new();
+
+        std::fs::write(&source, b">chr1\nAAAA").unwrap();
+        let before = reference_fingerprint(&def, &config, Some(&source));
+        let current =
+            filetime::FileTime::from_last_modification_time(&std::fs::metadata(&source).unwrap());
+        filetime::set_file_mtime(
+            &source,
+            filetime::FileTime::from_unix_time(current.unix_seconds() + 60, 0),
+        )
+        .unwrap();
+        let after = reference_fingerprint(&def, &config, Some(&source));
+
+        assert_ne!(
+            before, after,
+            "a source mtime change must change the fingerprint"
+        );
+    }
+
+    #[test]
+    fn reference_fingerprint_skips_content_hash_above_manifest_threshold() {
+        // Files above MANIFEST_HASH_MAX_BYTES contribute size+mtime only —
+        // fingerprinting stays metadata-cheap for genome-scale sources.
+        // Sparse file: set_len is metadata-only, the test stays instant.
+        let dir = tempfile::tempdir().unwrap();
+        let big = dir.path().join("big.fa");
+        let file = std::fs::File::create(&big).unwrap();
+        file.set_len(crate::executor::checkpoint::MANIFEST_HASH_MAX_BYTES + 1)
+            .unwrap();
+        drop(file);
+
+        let def = ReferenceDef {
+            name: "ref".to_string(),
+            source: Some("big.fa".to_string()),
+            output: "big.idx".to_string(),
+            build: "index {input}".to_string(),
+            threads: None,
+            memory: None,
+            environment: None,
+            description: None,
+        };
+        let config = HashMap::new();
+        let fp1 = reference_fingerprint(&def, &config, Some(&big));
+        let fp2 = reference_fingerprint(&def, &config, Some(&big));
+        assert_eq!(fp1, fp2, "unchanged large source must be deterministic");
+
+        let current =
+            filetime::FileTime::from_last_modification_time(&std::fs::metadata(&big).unwrap());
+        filetime::set_file_mtime(
+            &big,
+            filetime::FileTime::from_unix_time(current.unix_seconds() + 60, 0),
+        )
+        .unwrap();
+        let fp3 = reference_fingerprint(&def, &config, Some(&big));
+        assert_ne!(
+            fp1, fp3,
+            "large sources still detect mtime changes (size+mtime policy)"
+        );
+    }
+
+    #[test]
+    fn reference_fingerprint_degrades_to_path_only_when_source_unreadable() {
+        // A missing (pre-fetch, dry-run) or unreadable source must degrade
+        // to the historical path-string-only fingerprint — no error, same
+        // shape as `file_is_newer`'s degrade policy.
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("not-there.fa");
+        let def = ReferenceDef {
+            name: "ref".to_string(),
+            source: Some("not-there.fa".to_string()),
+            output: "not-there.idx".to_string(),
+            build: "index {input}".to_string(),
+            threads: None,
+            memory: None,
+            environment: None,
+            description: None,
+        };
+        let config = HashMap::new();
+        assert_eq!(
+            reference_fingerprint(&def, &config, Some(&missing)),
+            reference_fingerprint(&def, &config, None)
         );
     }
 

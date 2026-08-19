@@ -57,6 +57,7 @@ nix = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 criterion = { workspace = true }
+filetime = "0.2.29"
 
 [[bench]]
 name = "wildcard_bench"

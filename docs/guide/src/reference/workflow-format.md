@@ -275,11 +275,15 @@ Declare reference artifacts (indexes, data files) that the engine auto-builds
 when missing. Each `[[references]]` entry specifies a source, output, and build
 command. The engine tracks built state in `.oxo-flow/reference-checkpoint.json`
 and never rebuilds unnecessarily: each entry stores a fingerprint of the
-definition plus the config values its build command references. Editing the
-build/source/output, changing a referenced config value, or touching the
-source file triggers a rebuild, and rules that consume the artifact through
-declared `input` paths (plus their downstream) are invalidated so their
-outputs are regenerated.
+definition plus the config values its build command references. The source
+file's **content state** joins the fingerprint: size and mtime for every
+source, plus a content hash for files up to 64 MiB — so for those files even
+a timestamp-preserving same-path replacement (`cp -p`, `rsync -t`, `git
+checkout`) triggers a rebuild; larger sources are guarded by size + mtime.
+Editing the build/source/output, changing a referenced config value, or
+touching the source file also triggers a rebuild, and rules that consume the
+artifact through declared `input` paths (plus their downstream) are
+invalidated so their outputs are regenerated.
 
 When `reference_dir` is set, four standard indexes are auto-derived without
 explicit `[[references]]` blocks: BWA, Bowtie2, STAR, and HISAT2.

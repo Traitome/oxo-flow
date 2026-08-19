@@ -6130,7 +6130,7 @@ shell = "cat {input} > {output}"
     );
     let stderr3 = String::from_utf8_lossy(&run3.stderr);
     assert!(
-        stderr3.contains("definition or referenced config changed"),
+        stderr3.contains("definition, source content, or referenced config changed"),
         "expected rebuild: {stderr3}"
     );
     assert!(
@@ -6140,6 +6140,119 @@ shell = "cat {input} > {output}"
     assert_eq!(
         fs::read_to_string(dir.path().join("result.txt")).unwrap(),
         "built-v2\n"
+    );
+}
+
+#[test]
+fn cli_reference_self_writing_build_does_not_rebuild_loop() {
+    // A build that creates/rewrites its own source (download-then-index)
+    // changes the source mtime DURING the build. The checkpoint must store
+    // the POST-build fingerprint, or every subsequent run sees a
+    // pre-build-vs-post-build mismatch and rebuilds forever.
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("selffetch.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "selffetch"
+version = "1.0.0"
+
+[[references]]
+name = "self_idx"
+source = "genome.fa"
+output = "genome.idx"
+build = "cat seed.fa > genome.fa && cat genome.fa > genome.idx"
+
+[[rules]]
+name = "use_ref"
+input = ["genome.idx"]
+output = ["result.txt"]
+shell = "cat {input} > {output}"
+"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("seed.fa"), b"AAAA").unwrap();
+
+    let run1 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        run1.status.success(),
+        "run1 failed: {}",
+        String::from_utf8_lossy(&run1.stderr)
+    );
+    assert!(String::from_utf8_lossy(&run1.stderr).contains("Building"));
+
+    // Runs 2 and 3: the source state after run1's build matches the stored
+    // fingerprint — no rebuild, no loop.
+    for i in 2..=3 {
+        let run = oxo_flow_cmd()
+            .args(["run", wf.to_str().unwrap()])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(run.status.success(), "run{i} failed");
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        assert!(
+            !stderr.contains("Building"),
+            "run{i} must not rebuild: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn cli_reference_touch_reports_freshness_not_content_change() {
+    // Touching the source (mtime moves, content identical) must report
+    // "source is newer than output" — the freshness branch — not the
+    // generic definition/content message.
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("touchref.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "touchref"
+version = "1.0.0"
+
+[[references]]
+name = "t_idx"
+source = "genome.fa"
+output = "genome.idx"
+build = "cat {input} > {output}"
+
+[[rules]]
+name = "use_ref"
+input = ["genome.idx"]
+output = ["result.txt"]
+shell = "cat {input} > {output}"
+"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("genome.fa"), b"AAAA").unwrap();
+
+    let run1 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run1.status.success());
+
+    // Move the mtime forward WITHOUT changing content or size.
+    let src = dir.path().join("genome.fa");
+    let now = std::time::SystemTime::now() + std::time::Duration::from_secs(30);
+    filetime::set_file_mtime(&src, filetime::FileTime::from_system_time(now)).unwrap();
+
+    let run2 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run2.status.success());
+    let stderr2 = String::from_utf8_lossy(&run2.stderr);
+    assert!(
+        stderr2.contains("source is newer than output"),
+        "expected freshness reason, got: {stderr2}"
     );
 }
 

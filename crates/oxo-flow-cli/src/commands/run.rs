@@ -996,40 +996,42 @@ pub async fn run_command(
                 &wildcard_values,
             );
             let output_full = ref_workdir.join(&output_path);
-            let current_fp =
-                oxo_flow_core::config_impact::reference_fingerprint(ref_def, &config.config);
+            // Resolved once: the fingerprint guards the source CONTENT
+            // (issue #97) and the freshness check below guards mtime vs
+            // the output — both need the same workdir-joined path.
+            let resolved_source = ref_def.source.as_ref().map(|source| {
+                ref_workdir.join(oxo_flow_core::executor::checkpoint::expand_config_in_path(
+                    source,
+                    &wildcard_values,
+                ))
+            });
+            let current_fp = oxo_flow_core::config_impact::reference_fingerprint(
+                ref_def,
+                &config.config,
+                resolved_source.as_deref(),
+            );
             let stored = ref_state.get(&ref_def.name).cloned();
 
-            // Decide whether the artifact must be (re)built. A fingerprint
-            // mismatch means the build/source/output definition — or a config
-            // value its build command references — changed since the last
-            // build, so the old artifact is silently stale.
+            // Decide whether the artifact must be (re)built. The freshness
+            // check comes FIRST so an mtime-only touch reports the accurate
+            // reason; a fingerprint mismatch then covers definition edits,
+            // referenced-config changes, and content changes the freshness
+            // check cannot see (same-path, timestamp-preserving rewrites).
+            let source_newer = resolved_source.as_deref().is_some_and(|p| {
+                p.exists() && oxo_flow_core::executor::checkpoint::file_is_newer(p, &output_full)
+            });
             let rebuild_reason = if !output_full.exists() {
                 Some("output missing")
             } else if stored.as_deref() == Some("") {
                 // Legacy entry: adopt the current fingerprint without rebuilding.
                 ref_state.insert(ref_def.name.clone(), current_fp.clone());
                 None
+            } else if source_newer {
+                Some("source is newer than output")
             } else if let Some(stored_fp) = stored.as_deref()
                 && stored_fp != current_fp
             {
-                Some("definition or referenced config changed")
-            } else if let Some(source) = ref_def.source.as_ref() {
-                let source_path =
-                    ref_workdir.join(oxo_flow_core::executor::checkpoint::expand_config_in_path(
-                        source,
-                        &wildcard_values,
-                    ));
-                if source_path.exists()
-                    && oxo_flow_core::executor::checkpoint::file_is_newer(
-                        &source_path,
-                        &output_full,
-                    )
-                {
-                    Some("source is newer than output")
-                } else {
-                    None
-                }
+                Some("definition, source content, or referenced config changed")
             } else {
                 None
             };
@@ -1120,7 +1122,19 @@ pub async fn run_command(
                     .status();
                 match status {
                     Ok(s) if s.success() => {
-                        ref_state.insert(ref_def.name.clone(), current_fp.clone());
+                        // Store the POST-build fingerprint: the decision
+                        // fingerprint above was computed before the build
+                        // ran, and a build that creates or rewrites its own
+                        // source (download-then-index) changes the source
+                        // state DURING the build — storing the pre-build
+                        // state would mismatch on every subsequent run and
+                        // rebuild forever.
+                        let post_fp = oxo_flow_core::config_impact::reference_fingerprint(
+                            ref_def,
+                            &config.config,
+                            resolved_source.as_deref(),
+                        );
+                        ref_state.insert(ref_def.name.clone(), post_fp);
                         rebuilt_outputs.push(output_path.clone());
                         if let Some(parent) = ref_checkpoint.parent() {
                             let _ = std::fs::create_dir_all(parent);
