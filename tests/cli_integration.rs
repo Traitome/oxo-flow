@@ -6415,6 +6415,45 @@ shell = "cat {input} > {output}"
     );
 }
 
+// ─── #99 B1 review follow-up: the verbose plan print must not leak ────────
+
+/// `--verbose` prints the config-expanded shell command; sensitive values
+/// must be masked there like every other log surface.
+#[test]
+fn cli_verbose_plan_print_masks_sensitive_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("v.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "v"
+version = "1.0.0"
+
+[config]
+api_token = { default = "s3cr3t-token-42", sensitive = true }
+
+[[rules]]
+name = "step"
+output = ["out.txt"]
+shell = "echo {config.api_token} > {output}"
+"#,
+    )
+    .unwrap();
+
+    let out = oxo_flow_cmd()
+        .args(["dry-run", wf.to_str().unwrap(), "--verbose"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stdout.contains("s3cr3t-token-42") && !stderr.contains("s3cr3t-token-42"),
+        "the verbose plan print must mask sensitive values\nstdout: {stdout}\nstderr: {stderr}"
+    );
+}
+
 // ─── #71: run flags after positional overrides get actionable errors ───────
 
 /// clap's trailing config_overrides positional (allow_hyphen_values) cannot

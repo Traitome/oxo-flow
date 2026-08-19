@@ -34,6 +34,9 @@ pub(crate) struct ClusterRunArgs<'a> {
     pub workdir: &'a Path,
     pub wildcard_values: &'a HashMap<String, String>,
     pub sensitive_keys: &'a HashSet<String>,
+    /// Sensitive config values masked out of recorded job commands
+    /// (issue #99 B1, cluster path).
+    pub sensitive_values: &'a [String],
     /// Rules the run's invalidation analysis already forced. The local
     /// executor receives this set to bypass its freshness gate; the cluster
     /// path unions it into the submission set for the same reason.
@@ -48,6 +51,9 @@ pub(crate) struct ClusterRunArgs<'a> {
 pub(crate) struct ClusterRunSummary {
     pub succeeded: usize,
     pub failed: usize,
+    /// Failures of `required = false` rules: recorded and reported, but
+    /// exempt from failing the run (issue #99 B2, cluster path).
+    pub non_required_failed: usize,
     pub skipped: usize,
 }
 
@@ -154,7 +160,18 @@ async fn record_outcome(
             }
         }
         JobStatus::Failed => {
-            summary.failed += 1;
+            // A failed `required = false` rule is recorded and reported but
+            // does not fail the run (issue #99 B2, cluster path) — the same
+            // contract as the local loop.
+            let is_required = args
+                .config
+                .get_rule(&record.rule)
+                .is_none_or(|r| r.required);
+            if is_required {
+                summary.failed += 1;
+            } else {
+                summary.non_required_failed += 1;
+            }
             ck.record_run(record);
             ck.mark_failed(&record.rule);
         }
@@ -218,6 +235,7 @@ pub(crate) async fn run_on_cluster(
     let mut summary = ClusterRunSummary {
         succeeded: 0,
         failed: 0,
+        non_required_failed: 0,
         skipped: 0,
     };
 
@@ -276,6 +294,7 @@ pub(crate) async fn run_on_cluster(
                 run_dir: &run_dir,
                 on_checkpoint: None,
                 merge: None,
+                sensitive_values: args.sensitive_values,
             },
         )
         .await
@@ -285,12 +304,23 @@ pub(crate) async fn run_on_cluster(
         record_outcome(&args, record, &mut summary).await;
     }
 
-    eprintln!(
-        "\n{} {} succeeded, {} failed, {} skipped",
-        "Cluster:".bold(),
-        summary.succeeded,
-        summary.failed,
-        summary.skipped
-    );
+    if summary.non_required_failed > 0 {
+        eprintln!(
+            "\n{} {} succeeded, {} failed, {} non-required failed, {} skipped",
+            "Cluster:".bold(),
+            summary.succeeded,
+            summary.failed,
+            summary.non_required_failed,
+            summary.skipped
+        );
+    } else {
+        eprintln!(
+            "\n{} {} succeeded, {} failed, {} skipped",
+            "Cluster:".bold(),
+            summary.succeeded,
+            summary.failed,
+            summary.skipped
+        );
+    }
     Ok(summary)
 }

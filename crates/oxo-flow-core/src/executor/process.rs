@@ -1044,7 +1044,12 @@ impl LocalExecutor {
                 record.status = JobStatus::Failed;
                 record.finished_at = Some(Utc::now());
                 record.exit_code = Some(-1);
-                record.stderr = Some(format!("\n[oxo-flow] {e}"));
+                // Staging errors embed config-expanded URIs — mask them
+                // like every other captured surface (issue #99 B1).
+                record.stderr = Some(mask_sensitive(
+                    &format!("\n[oxo-flow] {e}"),
+                    &self.config.sensitive_values,
+                ));
                 return Ok(record);
             }
         };

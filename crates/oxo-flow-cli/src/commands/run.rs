@@ -34,6 +34,19 @@ fn config_placeholder_values(config: &HashMap<String, toml::Value>) -> HashMap<S
 /// `--rerun` everything is forced anyway, so the summary is suppressed —
 /// the snapshot/fingerprint refresh still happened silently.
 #[allow(clippy::too_many_arguments)]
+/// Values of `[config_meta.*] sensitive = true` keys, for runner-side
+/// output masking (issue #99 B1). Shared by the local run, the verbose
+/// plan print, and the cluster path.
+fn sensitive_values_of(config: &WorkflowConfig) -> Vec<String> {
+    config
+        .config_meta
+        .iter()
+        .filter(|(_, def)| def.sensitive)
+        .filter_map(|(key, _)| config.config.get(key))
+        .map(oxo_flow_core::config_impact::config_value_string)
+        .collect()
+}
+
 fn print_config_change_summary(
     report: &ConfigChangeReport,
     old_snapshot: &HashMap<String, String>,
@@ -613,13 +626,7 @@ pub async fn run_command(
     // The VALUES themselves, for runner-side output masking (issue #99 B1):
     // they are redacted from captured stdout/stderr and recorded commands
     // before anything reaches the checkpoint, report, AI recovery, or web.
-    let sensitive_values: Vec<String> = config
-        .config_meta
-        .iter()
-        .filter(|(_, def)| def.sensitive)
-        .filter_map(|(key, _)| config.config.get(key))
-        .map(oxo_flow_core::config_impact::config_value_string)
-        .collect();
+    let sensitive_values = sensitive_values_of(&config);
     let old_snapshot = {
         let ck = checkpoint.lock().await;
         ck.config_snapshot.clone()
@@ -835,6 +842,7 @@ pub async fn run_command(
                 workdir: workdir_actual.as_ref(),
                 wildcard_values: wildcard_values.as_ref(),
                 sensitive_keys: &sensitive_keys,
+                sensitive_values: &sensitive_values,
                 force_rules: &force_rules,
                 max_submitted,
                 rerun,
@@ -1440,6 +1448,7 @@ pub async fn run_command(
             let success_count = success_count.clone();
             let fail_count = fail_count.clone();
             let non_required_fail_count = non_required_fail_count.clone();
+            let sensitive_values = sensitive_values.clone();
             let skipped_count = skipped_count.clone();
             let wildcard_values = wildcard_values.clone();
             let workdir_actual = workdir_actual.clone();
@@ -1566,10 +1575,11 @@ pub async fn run_command(
                                 err_msg.push_str(&format!("\nexit code: {}", code));
                             }
                             eprintln!("  {} {}", "✗".red(), err_msg);
-                            // List in the final "Failed rules:" summary when
-                            // the run continues past the failure (keep_going,
-                            // or a non-required rule in either mode).
-                            if keep_going || !rule.required {
+                            // Always record: keep_going needs the final
+                            // listing, non-required failures are listed in
+                            // either mode, and the AI recovery path must be
+                            // able to find the ABORTING rule by name.
+                            {
                                 let mut reason = String::new();
                                 if let Some(code) = record.exit_code {
                                     reason.push_str(&format!("exit code {}", code));
@@ -1623,7 +1633,13 @@ pub async fn run_command(
                             finished_at: None,
                             exit_code: Some(-1),
                             stdout: None,
-                            stderr: Some(e.to_string()),
+                            // Staging/security errors embed config-expanded
+                            // URIs and full commands — mask them like every
+                            // other captured surface (issue #99 B1).
+                            stderr: Some(oxo_flow_core::executor::process::mask_sensitive(
+                                &e.to_string(),
+                                &sensitive_values,
+                            )),
                             command: None,
                             retries: 0,
                             timeout: None,
@@ -1640,15 +1656,18 @@ pub async fn run_command(
                         if !keep_going {
                             eprintln!("  {} rule '{}' failed: {}", "✗".red(), rule_name, e);
                         }
-                        if keep_going || !rule.required {
-                            let mut f = failures.lock().await;
-                            let reason = if rule.required {
-                                e.to_string()
-                            } else {
-                                format!("{} (non-required)", e)
-                            };
-                            f.push((rule_name.clone(), reason));
-                        }
+                        // Always record: keep_going needs the final
+                        // listing, non-required failures are listed in
+                        // either mode, and the AI recovery path must be able
+                        // to find the ABORTING rule by name (a non-required
+                        // failure recorded earlier must not shadow it).
+                        let mut f = failures.lock().await;
+                        let reason = if rule.required {
+                            e.to_string()
+                        } else {
+                            format!("{} (non-required)", e)
+                        };
+                        f.push((rule_name.clone(), reason));
                         (rule_name, oxo_flow_core::executor::JobStatus::Failed, record)
                     }
                 }
@@ -1764,7 +1783,13 @@ pub async fn run_command(
                 ai_recover || crate::commands::ai_template::should_use_ai(Some(&workflow), false);
             if should_recover {
                 let failures_guard = failures.lock().await;
-                if let Some((rule, error)) = failures_guard.first()
+                // Diagnose the rule that actually aborted the run — a
+                // non-required failure recorded earlier must not shadow it.
+                let failure = failures_guard
+                    .iter()
+                    .find(|(name, _)| name == &completed_rule)
+                    .or_else(|| failures_guard.first());
+                if let Some((rule, error)) = failure
                     && let Some(provider) =
                         crate::commands::ai_template::try_resolve_ai(Some(&workflow), true)
                 {
@@ -2361,6 +2386,8 @@ pub async fn dry_run_command(
         .filter(|(_, def)| def.sensitive)
         .map(|(key, _)| key.clone())
         .collect();
+    // The verbose plan print must not leak sensitive values (issue #99 B1).
+    let sensitive_values = sensitive_values_of(&config);
     let interpreter_map = config.workflow.interpreter_map.clone();
     let mut preview = crate::commands::run_preview::preview_run_plan(
         &checkpoint_state,
@@ -2593,6 +2620,10 @@ pub async fn dry_run_command(
                 &wildcard_values,
                 oxo_flow_core::scheduler::detect_system_limits(),
             );
+            // Mask sensitive values (issue #99 B1): the plan print is a log
+            // surface like any other.
+            let expanded =
+                oxo_flow_core::executor::process::mask_sensitive(&expanded, &sensitive_values);
             eprintln!("     command: {}", expanded);
         }
 
