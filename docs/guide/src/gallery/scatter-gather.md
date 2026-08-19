@@ -25,7 +25,7 @@ This is a classic parallel computing pattern:
 2. **Process**: Each scattered job runs GATK HaplotypeCaller restricted to a single chromosome (`-L {chr}`), producing one per-chromosome GVCF.
 3. **Gather**: The `gather_gvcf` rule receives the outputs of all scattered jobs as its `{input}` and merges them with GATK GatherVcfs.
 
-Scatter variables (`{chr}` here) are **not** wildcards — the fan-out comes from the `scatter` declaration, not from `{...}` in paths (see [Wildcards](../reference/wildcards.md) for the difference). When the pattern is split → map → combine within a single rule, use the [`transform` operator](../reference/workflow-format.md#transform-unified-scatter-gather-operator) — see the [Transform Operator](transform-operator.md) gallery.
+Scatter variables (`{chr}` here) are **not** wildcards — the fan-out comes from the `scatter` declaration, not from `{...}` in paths (see [Wildcards](../reference/wildcards.md) for the difference). Within each scattered job the variable substitutes into `input`, `output`, `shell`, `log`, `script`, and the hook fields (`pre_exec` / `on_success` / `on_failure`) — so a per-chromosome script invocation like `script = "scripts/call_{chr}.sh"` resolves per instance. When the pattern is split → map → combine within a single rule, use the [`transform` operator](../reference/workflow-format.md#transform-unified-scatter-gather-operator) — see the [Transform Operator](transform-operator.md) gallery.
 
 !!! info "Gather routing is declared, not inferred"
     Each scatter rule **explicitly names its gather rule** via the `gather = "..."` field — the engine routes outputs by that declaration, never by guessing:

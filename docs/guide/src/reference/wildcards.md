@@ -71,7 +71,7 @@ The most important concept when writing multi-sample workflows: **where you put 
 
 ### Rule-level fan-out: `{sample}` clones the rule
 
-If `{sample}` (or `{group}`, or a pair wildcard such as `{experiment}`) appears anywhere in a rule's `input`, `output`, or `shell`, oxo-flow **clones the entire rule once per value**:
+If `{sample}` (or `{group}`, or a pair wildcard such as `{experiment}`) appears anywhere in a rule's `input`, `output`, or `shell`, oxo-flow **clones the entire rule once per value**; inside each clone, the value also substitutes into `log`, `script`, and the hook fields (`pre_exec` / `on_success` / `on_failure`):
 
 ```toml
 [[rules]]
@@ -81,6 +81,8 @@ output = ["qc/{sample}_fastqc.html"]
 ```
 
 With samples `S1` and `S2`, this becomes **two tasks**: `fastqc_S1` (processing `S1`) and `fastqc_S2` (processing `S2`). This is what you want for per-sample steps — one definition, N tasks.
+
+`script` and the hook fields substitute per clone but never start a fan-out by themselves: a wildcard that appears *only* there keeps the rule as a single task (and `${sample}`-style shell-variable spellings inside `script` are never treated as wildcards).
 
 ### Input-level fan-in: `expand_inputs` fills the input list
 
@@ -113,7 +115,7 @@ output = ["variants/cohort.g.vcf.gz"]
 
 | Mechanism | Where | Effect | Use for |
 |---|---|---|---|
-| `{sample}` / `{group}` / pair wildcards | in `input`, `output`, or `shell` | clones the rule per value (fan-out) | per-sample steps |
+| `{sample}` / `{group}` / pair wildcards | in `input`, `output`, or `shell` | clones the rule per value (fan-out); per-clone values substitute into `log`, `script`, and hooks | per-sample steps |
 | `expand_inputs` | rule field | appends expanded paths to `input` (fan-in) | gather / combine steps |
 | `{config.x}` | any path or shell | single-value text substitution | reusing config values |
 
