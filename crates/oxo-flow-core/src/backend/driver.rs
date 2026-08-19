@@ -55,6 +55,10 @@ pub struct DriverOptions<'a> {
     /// Merges newly created instances into the plan; called when
     /// `on_checkpoint` returns names.
     pub merge: Option<PlanMerge<'a>>,
+    /// Sensitive config values masked out of recorded job commands
+    /// (issue #99 B1, cluster path — mirrors the local executor's
+    /// capture-boundary masking).
+    pub sensitive_values: &'a [String],
 }
 
 /// Executes a static plan through a backend.
@@ -337,7 +341,10 @@ impl BackendDriver {
                                 exit_code: Some(0),
                                 stdout: None,
                                 stderr: None,
-                                command: Some(plan.rules[&f.rule].shell_cmd.clone()),
+                                command: Some(crate::executor::process::mask_sensitive(
+                                    &plan.rules[&f.rule].shell_cmd,
+                                    opts.sensitive_values,
+                                )),
                                 retries: 0,
                                 timeout: None,
                                 skip_reason: None,
@@ -360,7 +367,10 @@ impl BackendDriver {
                                 exit_code: Some(1),
                                 stdout: None,
                                 stderr: None,
-                                command: Some(plan.rules[&f.rule].shell_cmd.clone()),
+                                command: Some(crate::executor::process::mask_sensitive(
+                                    &plan.rules[&f.rule].shell_cmd,
+                                    opts.sensitive_values,
+                                )),
                                 retries: 0,
                                 timeout: None,
                                 skip_reason: None,
@@ -376,7 +386,10 @@ impl BackendDriver {
                             exit_code: None,
                             stdout: None,
                             stderr: None,
-                            command: Some(plan.rules[&f.rule].shell_cmd.clone()),
+                            command: Some(crate::executor::process::mask_sensitive(
+                                &plan.rules[&f.rule].shell_cmd,
+                                opts.sensitive_values,
+                            )),
                             retries: 0,
                             timeout: None,
                             skip_reason: Some("cancelled".into()),
@@ -650,6 +663,7 @@ mod tests {
                     run_dir: fx.run_dir.path(),
                     on_checkpoint: None,
                     merge: None,
+                    sensitive_values: &[],
                 },
             ))
             .unwrap();
@@ -684,6 +698,7 @@ mod tests {
                     run_dir: fx.run_dir.path(),
                     on_checkpoint: None,
                     merge: None,
+                    sensitive_values: &[],
                 },
             ))
             .unwrap();
@@ -723,6 +738,7 @@ mod tests {
                     run_dir: fx.run_dir.path(),
                     on_checkpoint: None,
                     merge: None,
+                    sensitive_values: &[],
                 },
             ))
             .unwrap();
@@ -767,6 +783,7 @@ mod tests {
                     run_dir: fx.run_dir.path(),
                     on_checkpoint: None,
                     merge: None,
+                    sensitive_values: &[],
                 },
             ))
             .unwrap_err();
@@ -809,6 +826,7 @@ mod tests {
                     run_dir: fx.run_dir.path(),
                     on_checkpoint: None,
                     merge: None,
+                    sensitive_values: &[],
                 },
             ))
             .unwrap();
@@ -818,5 +836,43 @@ mod tests {
             noop.skip_reason.as_deref(),
             Some("no shell or script defined")
         );
+    }
+
+    #[test]
+    fn cluster_job_record_command_masks_sensitive_values() {
+        // Review follow-up of #99 B1: the cluster driver recorded the fully
+        // expanded shell command (with {config.*} secrets baked in) into
+        // JobRecord.command, which flows into the checkpoint/report/web —
+        // bypassing the local executor's capture-boundary masking.
+        let fx = setup();
+        let (d, _) = driver(&fx);
+        let mut plan = chain_plan(
+            fx.workdir.path(),
+            &[("echo_secret", "echo token-is-s3cr3t-token-42", "out.txt")],
+        );
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let records = runtime
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &["s3cr3t-token-42".to_string()],
+                },
+            ))
+            .unwrap();
+        let rec = records
+            .iter()
+            .find(|r| r.rule == "echo_secret")
+            .expect("rule must produce a record");
+        let command = rec.command.as_deref().unwrap_or("");
+        assert!(
+            !command.contains("s3cr3t-token-42"),
+            "cluster JobRecord.command must mask sensitive values: {command}"
+        );
+        assert!(command.contains("***"), "masked marker expected: {command}");
     }
 }

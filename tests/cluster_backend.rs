@@ -135,6 +135,7 @@ fn run_driver_with_env(
             &mut plan,
             to_run,
             DriverOptions {
+                sensitive_values: &[],
                 run_dir,
                 on_checkpoint: None,
                 merge: None,
