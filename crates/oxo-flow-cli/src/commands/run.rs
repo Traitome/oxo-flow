@@ -610,6 +610,16 @@ pub async fn run_command(
         .filter(|(_, def)| def.sensitive)
         .map(|(key, _)| key.clone())
         .collect();
+    // The VALUES themselves, for runner-side output masking (issue #99 B1):
+    // they are redacted from captured stdout/stderr and recorded commands
+    // before anything reaches the checkpoint, report, AI recovery, or web.
+    let sensitive_values: Vec<String> = config
+        .config_meta
+        .iter()
+        .filter(|(_, def)| def.sensitive)
+        .filter_map(|(key, _)| config.config.get(key))
+        .map(oxo_flow_core::config_impact::config_value_string)
+        .collect();
     let old_snapshot = {
         let ck = checkpoint.lock().await;
         ck.config_snapshot.clone()
@@ -853,6 +863,7 @@ pub async fn run_command(
         max_jobs: jobs,
         dry_run: false,
         workdir: workdir.clone().unwrap_or_else(|| workdir_default.clone()),
+        sensitive_values: sensitive_values.clone(),
         keep_going,
         retry_count: retry,
         timeout: if timeout_secs > 0 {
@@ -933,6 +944,9 @@ pub async fn run_command(
     let executor = Arc::new(LocalExecutor::new(exec_config));
     let success_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let fail_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    // Failures of `required = false` rules (issue #99 B2): counted
+    // separately, surfaced in the summary, but exempt from failing the run.
+    let non_required_fail_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let skipped_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let failed_rules_set: Arc<Mutex<std::collections::HashSet<String>>> =
         Arc::new(Mutex::new(std::collections::HashSet::new()));
@@ -1150,7 +1164,10 @@ pub async fn run_command(
                             "failed to build reference '{}' (exit {}). Command: {}",
                             ref_def.name,
                             s.code().unwrap_or(-1),
-                            build_cmd
+                            oxo_flow_core::executor::process::mask_sensitive(
+                                &build_cmd,
+                                &sensitive_values
+                            )
                         );
                     }
                     Err(e) => {
@@ -1422,6 +1439,7 @@ pub async fn run_command(
             let failures = failures.clone();
             let success_count = success_count.clone();
             let fail_count = fail_count.clone();
+            let non_required_fail_count = non_required_fail_count.clone();
             let skipped_count = skipped_count.clone();
             let wildcard_values = wildcard_values.clone();
             let workdir_actual = workdir_actual.clone();
@@ -1518,7 +1536,15 @@ pub async fn run_command(
                             }
                             (rule_name, oxo_flow_core::executor::JobStatus::Skipped, record)
                         } else {
-                            fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            // A failed `required = false` rule is recorded and
+                            // blocks its dependents, but does not fail the
+                            // run (issue #99 B2).
+                            if rule.required {
+                                fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            } else {
+                                non_required_fail_count
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
                             {
                                 let mut frs = failed_rules_set.lock().await;
                                 frs.insert(rule_name.clone());
@@ -1540,7 +1566,10 @@ pub async fn run_command(
                                 err_msg.push_str(&format!("\nexit code: {}", code));
                             }
                             eprintln!("  {} {}", "✗".red(), err_msg);
-                            if keep_going {
+                            // List in the final "Failed rules:" summary when
+                            // the run continues past the failure (keep_going,
+                            // or a non-required rule in either mode).
+                            if keep_going || !rule.required {
                                 let mut reason = String::new();
                                 if let Some(code) = record.exit_code {
                                     reason.push_str(&format!("exit code {}", code));
@@ -1560,6 +1589,9 @@ pub async fn run_command(
                                 if reason.is_empty() {
                                     reason.push_str("failed");
                                 }
+                                if !rule.required {
+                                    reason.push_str(" (non-required)");
+                                }
                                 let mut f = failures.lock().await;
                                 f.push((rule_name.clone(), reason));
                             }
@@ -1571,7 +1603,12 @@ pub async fn run_command(
                         }
                     }
                     Err(e) => {
-                        fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if rule.required {
+                            fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        } else {
+                            non_required_fail_count
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
                         {
                             let mut frs = failed_rules_set.lock().await;
                             frs.insert(rule_name.clone());
@@ -1603,9 +1640,14 @@ pub async fn run_command(
                         if !keep_going {
                             eprintln!("  {} rule '{}' failed: {}", "✗".red(), rule_name, e);
                         }
-                        if keep_going {
+                        if keep_going || !rule.required {
                             let mut f = failures.lock().await;
-                            f.push((rule_name.clone(), e.to_string()));
+                            let reason = if rule.required {
+                                e.to_string()
+                            } else {
+                                format!("{} (non-required)", e)
+                            };
+                            f.push((rule_name.clone(), reason));
                         }
                         (rule_name, oxo_flow_core::executor::JobStatus::Failed, record)
                     }
@@ -1627,6 +1669,9 @@ pub async fn run_command(
                 if e.is_panic() {
                     tracing::error!("Task panicked: {e}");
                 }
+                // A panicked task is an ENGINE fault, not a rule-level
+                // best-effort failure — always counts as required (the run
+                // fails), regardless of the rule's `required` flag.
                 fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 continue;
             }
@@ -1688,9 +1733,18 @@ pub async fn run_command(
             }
             {
                 let mut f = failures.lock().await;
-                f.push((completed_rule.clone(), format!("re-entry manifest: {e}")));
+                let reason = if cp_rule.required {
+                    format!("re-entry manifest: {e}")
+                } else {
+                    format!("re-entry manifest: {e} (non-required)")
+                };
+                f.push((completed_rule.clone(), reason));
             }
-            fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if cp_rule.required {
+                fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            } else {
+                non_required_fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
             sched.mark_completed(record);
         }
 
@@ -1734,11 +1788,14 @@ pub async fn run_command(
             return Err(anyhow::anyhow!("workflow execution failed"));
         }
 
-        // With keep_going, propagate failure transitively: every rule that
-        // (transitively) depends on a failed rule is marked as skipped/blocked.
-        // Uses a worklist to ensure transitive propagation (grandchild of a
-        // failed rule is also blocked).
-        if fc > 0 && keep_going {
+        // Propagate failure transitively: every rule that (transitively)
+        // depends on a failed rule is marked as skipped/blocked. Uses a
+        // worklist to ensure transitive propagation (grandchild of a
+        // failed rule is also blocked). Runs when the loop continues past
+        // failures: keep_going with any failure, or a non-required failure
+        // in either mode (issue #99 B2).
+        let nrf = non_required_fail_count.load(std::sync::atomic::Ordering::Relaxed);
+        if (fc > 0 && keep_going) || nrf > 0 {
             // Seed the worklist with every rule that directly depends on a
             // failed rule and has not been submitted yet.
             let frs = failed_rules_set.lock().await;
@@ -1821,6 +1878,8 @@ pub async fn run_command(
 
     let success_count = success_count.load(std::sync::atomic::Ordering::Relaxed);
     let fail_count = fail_count.load(std::sync::atomic::Ordering::Relaxed);
+    let non_required_fail_count =
+        non_required_fail_count.load(std::sync::atomic::Ordering::Relaxed);
     let skipped_count = skipped_count.load(std::sync::atomic::Ordering::Relaxed);
     let mut checkpoint = checkpoint.lock().await;
     let failures = failures.lock().await;
@@ -1853,13 +1912,24 @@ pub async fn run_command(
         }
     }
 
-    eprintln!(
-        "\n{} {} succeeded, {} skipped, {} failed",
-        "Done:".bold(),
-        success_count,
-        skipped_count,
-        fail_count
-    );
+    if non_required_fail_count > 0 {
+        eprintln!(
+            "\n{} {} succeeded, {} skipped, {} failed, {} non-required failed",
+            "Done:".bold(),
+            success_count,
+            skipped_count,
+            fail_count,
+            non_required_fail_count
+        );
+    } else {
+        eprintln!(
+            "\n{} {} succeeded, {} skipped, {} failed",
+            "Done:".bold(),
+            success_count,
+            skipped_count,
+            fail_count
+        );
+    }
 
     // Automatic report snapshot (issue #83 P1-14): capture the final
     // checkpoint as a JSON report plus an index.json entry. One call site
@@ -2110,6 +2180,7 @@ pub async fn run_command(
                 "succeeded": success_count,
                 "skipped": skipped_count,
                 "failed": fail_count,
+                "non_required_failed": non_required_fail_count,
                 "blocked": blocked.len(),
             }),
         });

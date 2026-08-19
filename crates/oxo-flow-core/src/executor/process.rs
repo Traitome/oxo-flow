@@ -284,6 +284,10 @@ pub struct ExecutorConfig {
     /// Storage backends for remote input staging / output upload
     /// (issue #80 item 2). Defaults to the local backend only.
     pub storage_resolver: StorageResolver,
+    /// Values of `[config_meta.*] sensitive = true` config keys — masked out
+    /// of captured stdout/stderr and the recorded command before they reach
+    /// the checkpoint/report (issue #99 B1). Empty = no masking.
+    pub sensitive_values: Vec<String>,
 }
 
 impl Default for ExecutorConfig {
@@ -304,6 +308,7 @@ impl Default for ExecutorConfig {
             cache_dir: None,
             interpreter_map: HashMap::new(),
             storage_resolver: StorageResolver::with_local(),
+            sensitive_values: Vec::new(),
         }
     }
 }
@@ -1116,7 +1121,10 @@ impl LocalExecutor {
 
         let resolved_commands =
             vec![self.resolve_command(&base_cmd, &rule, scratch_dir.as_deref())];
-        record.command = resolved_commands.first().cloned();
+        record.command = resolved_commands
+            .first()
+            .cloned()
+            .map(|c| mask_sensitive(&c, &self.config.sensitive_values));
 
         validate_wildcard_injection(wildcard_values)?;
         for cmd in &resolved_commands {
@@ -1394,8 +1402,17 @@ impl LocalExecutor {
 
         record.finished_at = Some(Utc::now());
         record.exit_code = last_exit_code;
-        record.stdout = Some(combined_stdout);
-        record.stderr = Some(combined_stderr);
+        // Mask sensitive values at the capture boundary (issue #99 B1):
+        // everything downstream — checkpoint stderr_tail, report, AI
+        // recovery, web UI — derives from this record.
+        record.stdout = Some(mask_sensitive(
+            &combined_stdout,
+            &self.config.sensitive_values,
+        ));
+        record.stderr = Some(mask_sensitive(
+            &combined_stderr,
+            &self.config.sensitive_values,
+        ));
         if peak_bytes > 0 {
             record.max_rss_mb = Some(peak_bytes.div_ceil(1024 * 1024));
         }
@@ -1938,6 +1955,29 @@ async fn remove_tree(path: &Path) -> std::io::Result<()> {
 
 /// Append a diagnostic note to a job record's stderr, creating the field
 /// when the rule produced no stderr at all.
+/// Mask sensitive values in captured output (issue #99 B1).
+///
+/// Runner-side masking, GitHub-Actions-style: every occurrence of each
+/// value is replaced with `***` before the text lands in the job record
+/// (checkpoint, report, AI recovery, web). Values shorter than 4
+/// characters are not masked — the same threshold GitHub Actions uses, so
+/// common short strings (thresholds, counts) are not mass-redacted.
+/// Structured forms of a secret (JSON/YAML serialization, base64) do not
+/// match the exact value and pass through — the documented limitation of
+/// exact-match masking.
+pub fn mask_sensitive(text: &str, values: &[String]) -> String {
+    if text.is_empty() || values.is_empty() {
+        return text.to_string();
+    }
+    let mut masked = text.to_string();
+    for value in values {
+        if value.chars().count() >= 4 {
+            masked = masked.replace(value.as_str(), "***");
+        }
+    }
+    masked
+}
+
 fn push_stderr_note(record: &mut JobRecord, note: &str) {
     if let Some(ref mut stderr) = record.stderr {
         stderr.push_str(note);
@@ -2399,6 +2439,26 @@ pub fn hostname() -> String {
 mod tests {
     use super::*;
     use crate::rule::{EnvironmentSpec, Resources};
+
+    #[test]
+    fn mask_sensitive_redacts_matching_values_only() {
+        // Values >= 4 chars are masked; short/empty values are skipped (the
+        // same threshold GitHub Actions uses, to avoid mass-redacting common
+        // short strings like thresholds). Overlapping values are masked
+        // independently of order.
+        let values = vec!["s3cr3t-token-42".to_string(), "ab".to_string()];
+        let text = "token is s3cr3t-token-42 and again s3cr3t-token-42; ab stays";
+        let masked = mask_sensitive(text, &values);
+        assert_eq!(
+            masked, "token is *** and again ***; ab stays",
+            "long values mask, short values stay"
+        );
+        assert!(!masked.contains("s3cr3t-token-42"));
+
+        // Empty input and empty value list are no-ops.
+        assert_eq!(mask_sensitive("plain", &[]), "plain");
+        assert_eq!(mask_sensitive("plain", &["".to_string()]), "plain");
+    }
 
     fn executor_with(max_threads: u32, max_memory_mb: u64) -> LocalExecutor {
         LocalExecutor::new(ExecutorConfig {
