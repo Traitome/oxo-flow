@@ -1052,6 +1052,24 @@ fn expand_rule_shell(shell: &str, combo: &crate::wildcard::WildcardValues) -> St
     }
 }
 
+/// Bake per-instance fan-out values into the free-text command fields
+/// (issue #98): `script` plus the hook fields render through the same
+/// execution-time placeholder pass as `shell`/`log`, and that pass never
+/// sees pair/group/value/scatter names — so the values must be baked in
+/// here. The `expand` closure matches the surrounding block's expansion
+/// semantics (values-namespace-aware for the pair/group/value paths, plain
+/// wildcard expansion for the scatter path).
+fn expand_command_text_fields(
+    expanded: &mut crate::rule::Rule,
+    source: &crate::rule::Rule,
+    expand: impl Fn(&str) -> String,
+) {
+    expanded.script = source.script.as_deref().map(&expand);
+    expanded.pre_exec = source.pre_exec.as_deref().map(&expand);
+    expanded.on_success = source.on_success.as_deref().map(&expand);
+    expanded.on_failure = source.on_failure.as_deref().map(&expand);
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SampleGroup {
     /// Group name (available as `{group}`).
@@ -2637,7 +2655,12 @@ impl WorkflowConfig {
         let mut name_map: HashMap<String, Vec<String>> = HashMap::new();
 
         for rule in &self.rules {
-            // Collect all text fields that might contain wildcards
+            // Collect all text fields that might contain wildcards. The fan-out
+            // TRIGGER set is input/output/shell only — script and the hooks
+            // substitute per instance when the rule fans out, but never start
+            // a fan-out themselves (cloning on a hook-only wildcard would
+            // duplicate the whole rule execution, and `${name}` bash
+            // spellings inside script would false-trigger).
             let mut all_text: Vec<&str> = rule.input.iter().map(String::as_str).collect();
             all_text.extend(rule.output.iter().map(String::as_str));
             if let Some(ref shell) = rule.shell {
@@ -2766,6 +2789,12 @@ impl WorkflowConfig {
                         if let Some(ref log) = rule.log {
                             expanded.log = Some(expand_rule_shell(log, &combo));
                         }
+                        // Script and hooks carry the per-instance
+                        // substitution too (issue #98) — same class as
+                        // shell/log.
+                        expand_command_text_fields(&mut expanded, rule, |s| {
+                            expand_rule_shell(s, &combo)
+                        });
 
                         // Record which sample names this expansion belongs to
                         // (issue #63 readiness attribution).
@@ -2882,6 +2911,14 @@ impl WorkflowConfig {
                                 Some(log.clone())
                             };
                         }
+                        // Free-text command fields take the same per-instance
+                        // substitution as shell/log (issue #98): script and
+                        // the hooks render through the same placeholder pass
+                        // at execution time, which never sees pair/group
+                        // names, so the values must be baked in here.
+                        expand_command_text_fields(&mut expanded, rule, |s| {
+                            expand_rule_shell(s, &merged)
+                        });
 
                         // Record which sample this expansion belongs to
                         // (issue #63 readiness attribution).
@@ -2938,6 +2975,11 @@ impl WorkflowConfig {
                     if let Some(ref log) = rule.log {
                         expanded.log = Some(expand_rule_shell(log, combo));
                     }
+                    // Script and hooks carry the per-instance substitution
+                    // too (issue #98) — same class as shell/log.
+                    expand_command_text_fields(&mut expanded, rule, |s| {
+                        expand_rule_shell(s, combo)
+                    });
 
                     self.expansion_values
                         .insert(new_name.clone(), combo.clone());
@@ -3056,6 +3098,13 @@ impl WorkflowConfig {
                         scattered_rule.log =
                             Some(expand_pattern(log, &combo).unwrap_or_else(|_| log.clone()));
                     }
+                    // Script and hooks take the same substitution (issue #98):
+                    // a script whose path or content depends on the scatter
+                    // variable must resolve per instance (live: the pca rule
+                    // had to be split into three explicit rules).
+                    expand_command_text_fields(&mut scattered_rule, &rule, |text| {
+                        expand_pattern(text, &combo).unwrap_or_else(|_| text.to_string())
+                    });
 
                     // Carry the pre-scatter [[values]] bindings over to the
                     // scattered name and add the scatter variable, so
@@ -6274,6 +6323,174 @@ shell = "echo {config.database} > {output[0]}"
             .into_iter()
             .collect(),
             "every instance must own its log path: {logs:?}"
+        );
+    }
+
+    #[test]
+    fn scatter_expands_script_and_hooks_with_scatter_variable() {
+        // issue #98: the scatter variable must substitute into script (and
+        // the hook fields) per instance — shell/log were the only text
+        // fields covered before. Live: the star-deseq2 pca rule had to be
+        // split into three explicit rules because the per-treatment script
+        // invocation could not be expressed.
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "pca"
+            scatter = { variable = "treatment", values = ["control", "treated"] }
+            output = ["pca/{treatment}.tsv"]
+            script = "scripts/pca_{treatment}.R --out {treatment}.tsv"
+            pre_exec = "mkdir -p tmp/{treatment}"
+            on_success = "echo done {treatment}"
+            on_failure = "echo failed {treatment}"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.expand_wildcards().unwrap();
+
+        assert_eq!(
+            config.rules.len(),
+            2,
+            "scatter over 2 values must produce 2 instances"
+        );
+        for treatment in ["control", "treated"] {
+            let rule = config
+                .rules
+                .iter()
+                .find(|r| r.name == format!("pca_{treatment}"))
+                .unwrap_or_else(|| panic!("scattered instance pca_{treatment} must exist"));
+            assert_eq!(
+                rule.script.as_deref(),
+                Some(format!("scripts/pca_{treatment}.R --out {treatment}.tsv").as_str()),
+                "script must carry the per-instance scatter value"
+            );
+            assert_eq!(
+                rule.pre_exec.as_deref(),
+                Some(format!("mkdir -p tmp/{treatment}").as_str())
+            );
+            assert_eq!(
+                rule.on_success.as_deref(),
+                Some(format!("echo done {treatment}").as_str())
+            );
+            assert_eq!(
+                rule.on_failure.as_deref(),
+                Some(format!("echo failed {treatment}").as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn values_expansion_expands_script_per_instance() {
+        // Same class as issue #98 on the [[values]] fan-out path: script
+        // must carry the per-value substitution, not only shell/log.
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0.0"
+
+            [[values]]
+            name = "assembler"
+            values = ["spades", "megahit"]
+
+            [[rules]]
+            name = "asm"
+            output = ["out/{assembler}.fa"]
+            script = "scripts/asm_{assembler}.R"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.expand_wildcards().unwrap();
+        let scripts: std::collections::BTreeSet<String> = config
+            .rules
+            .iter()
+            .filter_map(|r| r.script.clone())
+            .collect();
+        assert_eq!(
+            scripts,
+            [
+                "scripts/asm_megahit.R".to_string(),
+                "scripts/asm_spades.R".to_string()
+            ]
+            .into_iter()
+            .collect(),
+            "every value instance must own its script invocation: {scripts:?}"
+        );
+    }
+
+    #[test]
+    fn pair_expansion_expands_script_and_hooks_per_pair() {
+        // Same class as issue #98 on the pairs path: {pair_id} must
+        // substitute into script/hooks per instance.
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0.0"
+
+            [[pairs]]
+            pair_id = "P1"
+            experiment = "E1"
+            control = "C1"
+
+            [[rules]]
+            name = "do"
+            output = ["out/{pair_id}.txt"]
+            script = "scripts/run_{pair_id}.R"
+            on_success = "echo ok {pair_id}"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.expand_wildcards().unwrap();
+        let scripts: std::collections::BTreeSet<String> = config
+            .rules
+            .iter()
+            .filter_map(|r| r.script.clone())
+            .collect();
+        assert_eq!(
+            scripts,
+            ["scripts/run_P1.R".to_string()].into_iter().collect(),
+            "the pair instance must own its script invocation: {scripts:?}"
+        );
+        let hooks: std::collections::BTreeSet<String> = config
+            .rules
+            .iter()
+            .filter_map(|r| r.on_success.clone())
+            .collect();
+        assert_eq!(hooks, ["echo ok P1".to_string()].into_iter().collect());
+    }
+
+    #[test]
+    fn script_only_wildcards_do_not_trigger_fan_out() {
+        // The fan-out trigger set is input/output/shell only. A rule whose
+        // ONLY wildcard use is the script field must stay a single rule —
+        // cloning it would duplicate the whole rule execution over
+        // identical paths, and `${name}` bash spellings inside script must
+        // never be mistaken for wildcards. Script substitution applies
+        // when the rule fans out through its path fields (issue #98).
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0.0"
+
+            [[pairs]]
+            pair_id = "P1"
+            experiment = "E1"
+            control = "C1"
+
+            [[rules]]
+            name = "s"
+            script = "scripts/run_${pair_id}.R"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.expand_wildcards().unwrap();
+        assert_eq!(
+            config.rules.len(),
+            1,
+            "script-only wildcard usage must not clone the rule"
+        );
+        assert_eq!(
+            config.rules[0].script.as_deref(),
+            Some("scripts/run_${pair_id}.R"),
+            "a non-fanned rule keeps its script untouched"
         );
     }
 
