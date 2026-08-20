@@ -1118,6 +1118,29 @@ Comma-joined strings are how the engine injects merged sample lists
 [Merging Multiple Sample Sources](#merging-multiple-sample-sources)), so
 they can be referenced directly here.
 
+**The aggregation idiom** — multi-sample merge/collapse steps consume the
+expanded inputs through `{input}`, which renders space-joined:
+
+```toml
+[[rules]]
+name = "merge_bams"
+expand_inputs = [
+  { pattern = "aln/{sample}.bam", variables = { sample = "config.samples_list" } }
+]
+output = ["merged.bam"]
+shell = "samtools merge {output[0]} {input}"   # aln/S1.bam aln/S2.bam ...
+```
+
+Shell loops over the same list work identically
+(`for f in {input}; do ...; done` — the pattern used by the multiqc
+aggregation rules across the community catalog). Note the deliberate
+split: `config.samples_list` is **comma-joined** for expansion-time
+fan-out, while `{input}` is **space-joined** for shell consumption. Do
+not shell-loop over `{config.samples_list}` directly — a comma-joined
+value iterates as a single word; use `tr ',' ' '` only if the expansion
+form is genuinely unavailable. Chunk-level aggregation is the transform
+operator's `combine` stage instead (gallery 10).
+
 ---
 
 ## Wildcards
