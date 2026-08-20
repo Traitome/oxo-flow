@@ -117,6 +117,47 @@ shell = "bwa mem ref.fa {input} > aligned/{sample}.bam"
 
 Resulting rules: `qc::fastqc`, `qc::trim`, `align`
 
+### Interface Contracts
+
+An `[[include]]` may declare a typed interface — what the host must wire
+in, what the module exposes, and config defaults it reads (issue #112).
+All checks run at **validation time**; execution semantics are unchanged,
+and includes without a contract behave exactly as before.
+
+```toml
+# qc.oxoflow
+[[rules]]
+name = "fastqc"
+input = ["raw/{sample}.fq.gz"]      # the module's NEED
+output = ["qc/{sample}_fastqc.html"]
+shell = "fastqc {input} -o {output}"
+
+[[rules]]
+name = "internal"
+input = ["qc/{sample}_fastqc.html"]
+output = ["qc/{sample}.bin"]        # internal — not declared below
+shell = "true"
+
+# main.oxoflow
+[[include]]
+path = "qc.oxoflow"
+namespace = "qc"
+inputs  = ["raw/{sample}.fq.gz"]    # host MUST produce these
+outputs = ["qc/{sample}_fastqc.html"]  # module EXPOSES these
+params  = { threads = "4" }         # config defaults (host values win)
+
+[[rules]]
+name = "download"
+output = ["raw/{sample}.fq.gz"]     # wires the declared input
+shell = "true"
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `inputs` | Array of String | File patterns the host must wire into the module. A concrete declared input (no `{`-wildcard) that no rule produces fails validation with the gap named; wildcarded patterns are verified by DAG edge inference at run time |
+| `outputs` | Array of String | Files the module exposes to the host. A declared output not produced by a module rule fails validation; a host rule reading a module-internal file that is **not** declared here produces an encapsulation warning |
+| `params` | Table | Defaults for config keys the module reads, filled in profile-style (`or_insert` — explicit host values win) |
+
 ---
 
 ## `[workflow]` — Metadata

@@ -323,6 +323,31 @@ pub struct IncludeDirective {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
+
+    /// Interface contract (issue #112 module slice): file patterns the HOST
+    /// must wire into the module. Validation fails when a concrete (no
+    /// `{`-wildcard) declared input is not produced by any rule.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<String>,
+
+    /// Interface contract: files the module exposes to the host. Validation
+    /// fails when a declared output is not produced by a module rule, and
+    /// warns when a host rule reads a module-internal file that is NOT
+    /// declared here (encapsulation).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<String>,
+
+    /// Interface contract: defaults for config keys the module reads —
+    /// filled into the host config profile-style (host values win).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub params: HashMap<String, toml::Value>,
+}
+
+/// A resolved include contract, namespaced rule provenance attached.
+#[derive(Debug, Clone, Default)]
+pub struct ResolvedIncludeContract {
+    pub inputs: Vec<String>,
+    pub outputs: Vec<String>,
 }
 
 /// Execution mode for an execution group.
@@ -1432,6 +1457,14 @@ pub struct WorkflowConfig {
     /// their TEMPLATE, never by guessing name suffixes. Never serialized.
     #[serde(skip)]
     pub expansion_templates: HashMap<String, String>,
+    /// Resolved include contracts (issue #112 module slice): one entry per
+    /// `[[include]]` that declares an interface. Never serialized.
+    #[serde(skip)]
+    pub include_contracts: Vec<ResolvedIncludeContract>,
+    /// Rule → include-contract index provenance (which module a rule came
+    /// from). Never serialized.
+    #[serde(skip)]
+    pub module_of: HashMap<String, usize>,
 
     /// Engine-internal: the sample names each expanded rule came from.
     ///
@@ -2060,6 +2093,18 @@ impl WorkflowConfig {
 
         self.validate_execution_groups()?;
 
+        // Include interface contracts (issue #112): contract errors fail
+        // fast with the wiring gap named; encapsulation gaps warn.
+        let (contract_errors, contract_warnings) = self.check_include_contracts();
+        if let Some(first) = contract_errors.first() {
+            return Err(OxoFlowError::Config {
+                message: first.clone(),
+            });
+        }
+        for warning in &contract_warnings {
+            tracing::warn!("{warning}");
+        }
+
         // Validate [[references]] entries: builder template names must be
         // known, template builds must declare an output, names must be unique.
         crate::references::validate_reference_defs(&self.references)?;
@@ -2385,6 +2430,25 @@ impl WorkflowConfig {
 
             // Recursively resolve nested includes
             inc_config.resolve_includes_with_depth(&inc_base_dir, depth + 1)?;
+            // Nested contracts merge first (their provenance indices shift
+            // by the host's current contract count).
+            let offset = self.include_contracts.len();
+            self.include_contracts
+                .extend(std::mem::take(&mut inc_config.include_contracts));
+            for (rule, idx) in std::mem::take(&mut inc_config.module_of) {
+                self.module_of.insert(rule, idx + offset);
+            }
+            // Record THIS include's contract (issue #112) and its rules'
+            // provenance.
+            let contract_idx = if !inc.inputs.is_empty() || !inc.outputs.is_empty() {
+                self.include_contracts.push(ResolvedIncludeContract {
+                    inputs: inc.inputs.clone(),
+                    outputs: inc.outputs.clone(),
+                });
+                Some(self.include_contracts.len() - 1)
+            } else {
+                None
+            };
             // Collect original rule names from included file for dependency resolution
             let original_rule_names: std::collections::HashSet<String> =
                 inc_config.rules.iter().map(|r| r.name.clone()).collect();
@@ -2400,12 +2464,100 @@ impl WorkflowConfig {
                     }
                 }
                 if !self.rules.iter().any(|r| r.name == rule.name) {
+                    if let Some(idx) = contract_idx {
+                        self.module_of.insert(rule.name.clone(), idx);
+                    }
                     self.rules.push(rule);
                 }
+            }
+            // Contract params fill config keys in profile-style — host
+            // values win (or_insert).
+            for (key, value) in &inc.params {
+                self.config
+                    .entry(key.clone())
+                    .or_insert_with(|| value.clone());
             }
         }
         self.includes = includes;
         Ok(())
+    }
+
+    /// Check the resolved include contracts (issue #112 module slice).
+    ///
+    /// Returns `(errors, warnings)`. Errors cover the fail-fast contract:
+    /// a declared concrete input nobody produces, and a declared output no
+    /// module rule produces (or produced outside the module). Warnings
+    /// cover encapsulation: a host rule reading a module-internal file the
+    /// contract does not declare. Wildcarded patterns are skipped here —
+    /// their wiring is verified by DAG edge inference at run time.
+    pub fn check_include_contracts(&self) -> (Vec<String>, Vec<String>) {
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        if self.include_contracts.is_empty() {
+            return (errors, warnings);
+        }
+        // Producer map: output path → producing rule name (owned — rule
+        // outputs are borrowed across iterations).
+        let mut producers: HashMap<String, String> = HashMap::new();
+        for rule in &self.rules {
+            for out in rule.output.to_vec() {
+                producers.entry(out).or_insert_with(|| rule.name.clone());
+            }
+        }
+        for (idx, contract) in self.include_contracts.iter().enumerate() {
+            for input in &contract.inputs {
+                if input.contains('{') {
+                    continue; // wildcard wiring: DAG-time, documented
+                }
+                if !producers.contains_key(input) {
+                    errors.push(format!(
+                        "include contract: declared input '{input}' is not produced by any rule — wire it to a host rule output"
+                    ));
+                }
+            }
+            for output in &contract.outputs {
+                if output.contains('{') {
+                    continue;
+                }
+                match producers.get(output) {
+                    Some(producer)
+                        if self
+                            .module_of
+                            .get(producer)
+                            .is_some_and(|p| *p == idx) => {}
+                    Some(producer) => errors.push(format!(
+                        "include contract: declared output '{output}' is produced by '{producer}', which is outside the module — module outputs must come from module rules"
+                    )),
+                    None => errors.push(format!(
+                        "include contract: declared output '{output}' is not produced by any module rule"
+                    )),
+                }
+            }
+            // Encapsulation: host rules reading undeclared module-internal
+            // files.
+            let declared: std::collections::HashSet<&str> =
+                contract.outputs.iter().map(String::as_str).collect();
+            for rule in &self.rules {
+                if self.module_of.get(&rule.name).is_some_and(|p| *p == idx) {
+                    continue;
+                }
+                for inp in rule.input.to_vec() {
+                    if inp.contains('{') {
+                        continue;
+                    }
+                    let internal = producers
+                        .get(&inp)
+                        .is_some_and(|p| self.module_of.get(p).is_some_and(|mp| *mp == idx));
+                    if internal && !declared.contains(inp.as_str()) {
+                        warnings.push(format!(
+                            "rule '{}' reads module-internal file '{inp}' which the include contract does not declare — add it to `outputs` to keep the coupling explicit",
+                            rule.name
+                        ));
+                    }
+                }
+            }
+        }
+        (errors, warnings)
     }
 
     /// Validate that all execution group references point to existing rules.
@@ -5970,6 +6122,211 @@ shell = "echo {config.database} > {output[0]}"
 
         // A rule that never fanned out has no template entry.
         assert_eq!(config.template_of("plain"), None);
+    }
+
+    #[test]
+    fn include_contract_unwired_input_is_an_error() {
+        // Issue #112 module slice: a module that DECLARES an input nobody
+        // produces must fail validation with the wiring gap named — instead
+        // of the rule dying at runtime on a missing file.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("qc.oxoflow"),
+            r#"[workflow]
+name = "qc"
+version = "1.0.0"
+
+[[rules]]
+name = "fastqc"
+input = ["raw/sample.fq"]
+output = ["qc/sample.html"]
+shell = "true"
+"#,
+        )
+        .unwrap();
+        let host = r#"[workflow]
+name = "host"
+version = "1.0.0"
+
+[[include]]
+path = "qc.oxoflow"
+inputs = ["raw/sample.fq"]
+outputs = ["qc/sample.html"]
+
+[[rules]]
+name = "final"
+input = ["qc/sample.html"]
+output = ["final.txt"]
+shell = "true"
+"#;
+        let wf = dir.path().join("host.oxoflow");
+        std::fs::write(&wf, host).unwrap();
+        let err = WorkflowConfig::from_file(&wf).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("raw/sample.fq"),
+            "the error must name the unwired input: {msg}"
+        );
+    }
+
+    #[test]
+    fn include_contract_checks_declared_outputs_and_encapsulation() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("qc.oxoflow"),
+            r#"[workflow]
+name = "qc"
+version = "1.0.0"
+
+[[rules]]
+name = "fastqc"
+input = ["raw/sample.fq"]
+output = ["qc/sample.html"]
+shell = "true"
+
+[[rules]]
+name = "internal"
+input = ["qc/sample.html"]
+output = ["qc/tmp.bin"]
+shell = "true"
+"#,
+        )
+        .unwrap();
+        // (a) a declared output that no module rule produces = error
+        let bad_host = r#"[workflow]
+name = "host"
+version = "1.0.0"
+
+[[include]]
+path = "qc.oxoflow"
+inputs = ["raw/sample.fq"]
+outputs = ["qc/nope.html"]
+
+[[rules]]
+name = "rawmaker"
+output = ["raw/sample.fq"]
+shell = "true"
+"#;
+        let wf = dir.path().join("bad.oxoflow");
+        std::fs::write(&wf, bad_host).unwrap();
+        let err = WorkflowConfig::from_file(&wf).unwrap_err();
+        assert!(
+            format!("{err}").contains("qc/nope.html"),
+            "the error must name the unproduced declared output"
+        );
+
+        // (b) host reading an UNDECLARED module-internal file = warning
+        let host2 = r#"[workflow]
+name = "host"
+version = "1.0.0"
+
+[[include]]
+path = "qc.oxoflow"
+inputs = ["raw/sample.fq"]
+outputs = ["qc/sample.html"]
+
+[[rules]]
+name = "rawmaker"
+output = ["raw/sample.fq"]
+shell = "true"
+
+[[rules]]
+name = "peeker"
+input = ["qc/tmp.bin"]
+output = ["peek.txt"]
+shell = "true"
+"#;
+        let wf2 = dir.path().join("ok.oxoflow");
+        std::fs::write(&wf2, host2).unwrap();
+        let config = WorkflowConfig::from_file(&wf2).unwrap();
+        let (errors, warnings) = config.check_include_contracts();
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert!(
+            warnings.iter().any(|w| w.contains("qc/tmp.bin")),
+            "encapsulation warning must name the internal file: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn include_contract_params_fill_in_config_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("mod.oxoflow"),
+            r#"[workflow]
+name = "mod"
+version = "1.0.0"
+
+[[rules]]
+name = "step"
+output = ["o.txt"]
+shell = "echo {config.threads} > o.txt"
+"#,
+        )
+        .unwrap();
+        let host = r#"[workflow]
+name = "host"
+version = "1.0.0"
+
+[[include]]
+path = "mod.oxoflow"
+outputs = ["o.txt"]
+params = { threads = "8" }
+
+[[rules]]
+name = "use"
+input = ["o.txt"]
+output = ["u.txt"]
+shell = "true"
+"#;
+        let wf = dir.path().join("host.oxoflow");
+        std::fs::write(&wf, host).unwrap();
+        let config = WorkflowConfig::from_file(&wf).unwrap();
+        assert_eq!(
+            config.config.get("threads").and_then(toml::Value::as_str),
+            Some("8"),
+            "params defaults must fill in config keys"
+        );
+    }
+
+    #[test]
+    fn include_without_contract_is_unchanged() {
+        // Backward compatibility: includes that declare no interface fields
+        // trigger none of the new checks.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("mod.oxoflow"),
+            r#"[workflow]
+name = "mod"
+version = "1.0.0"
+
+[[rules]]
+name = "step"
+output = ["o.txt"]
+shell = "true"
+"#,
+        )
+        .unwrap();
+        let host = r#"[workflow]
+name = "host"
+version = "1.0.0"
+
+[[include]]
+path = "mod.oxoflow"
+
+[[rules]]
+name = "use"
+input = ["o.txt"]
+output = ["u.txt"]
+shell = "true"
+"#;
+        let wf = dir.path().join("host.oxoflow");
+        std::fs::write(&wf, host).unwrap();
+        let config = WorkflowConfig::from_file(&wf).unwrap();
+        let (errors, warnings) = config.check_include_contracts();
+        assert!(
+            errors.is_empty() && warnings.is_empty(),
+            "{errors:?} {warnings:?}"
+        );
     }
 
     #[test]
