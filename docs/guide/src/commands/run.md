@@ -303,6 +303,36 @@ checkpoint exactly as a local run does — `status`, `resume`, and re-run
 invalidation behave identically, and a second `run --profile slurm` with
 nothing changed submits nothing.
 
+### Job arrays
+
+Same-template instances that are ready together and agree on every
+scheduler-visible directive (threads, memory, time limit, partition,
+account, GPU spec, environment, workdir) are grouped into **one scheduler
+array** automatically (issue #74):
+
+```toml
+[cluster]
+backend        = "slurm"
+max_array_size = 1001   # optional — the scheduler's MaxArraySize; larger
+                        # scatter groups are chunked into several arrays
+```
+
+- One submission instead of N `sbatch`/`qsub` calls — one queue entry that
+  expands internally (SLURM `--array=1-N`, PBS `-J`, SGE `-t`,
+  LSF `-J "name[1-N]"`).
+- Array elements are tracked individually: per-instance job directories
+  stay greppable (`jobs/<instance>/job.sh` + `job.id` + `status.json`),
+  and `index.json` in the run directory maps each array index back to its
+  instance, so the array never leaks into the human-facing layout.
+- Instances that differ on any directive fall out of the group and submit
+  as single jobs — heterogeneity degrades gracefully.
+- Arrays are transport-level: the JobRecord set, checkpoint, and resume
+  semantics are identical to per-job submission.
+
+Element-wise `aftercorr` chaining is not part of this slice: downstream
+instances submit in ready batches as array elements finish, which is
+correct but not as queue-efficient as true element-wise chaining.
+
 Each run leaves a directory you can navigate with ordinary tools:
 
 ```console
