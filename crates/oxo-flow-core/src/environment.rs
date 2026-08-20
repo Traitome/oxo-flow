@@ -524,7 +524,17 @@ impl EnvironmentBackend for SingularityBackend {
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
-        Ok(format!("{} pull {spec}", self.binary))
+        // Pull only when the image is absent: `{binary} pull` refuses
+        // to overwrite an existing SIF (live: "Image file already
+        // exists: ... - will not overwrite" when a previous run left
+        // the SIF in the workdir), and pulling per rule would rebuild
+        // the image every time. The SIF name follows the pull naming
+        // (last path segment, ':' -> '_'); the per-key env lock
+        // serializes the truly-missing case.
+        Ok(format!(
+            "IMG=$(printf '%s' '{spec}' | sed 's#^docker://##; s#.*/##; s#:#_#g').sif; [ -f \"$IMG\" ] || {b} pull {spec}",
+            b = self.binary,
+        ))
     }
 
     fn teardown_command(&self, _spec: &str) -> Result<Option<String>> {
@@ -1387,6 +1397,9 @@ mod tests {
         let backend = SingularityBackend::new();
         let cmd = backend.setup_command("docker://ubuntu:22.04").unwrap();
         assert!(cmd.contains(" pull docker://ubuntu:22.04"));
+        // inspect-first guard for the SIF naming
+        assert!(cmd.starts_with("IMG=$(printf '%s' 'docker://ubuntu:22.04'"));
+        assert!(cmd.contains("[ -f \"$IMG\" ] || "));
     }
 
     #[test]
