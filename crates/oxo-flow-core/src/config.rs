@@ -1717,6 +1717,18 @@ impl WorkflowConfig {
                 }
             }
         }
+        // [[pairs]] members are samples too: experiment/control names are
+        // what {sample}-wildcarded rules fan out over in pair workflows, so
+        // the merged config.samples_list must include them (live: a
+        // pairs-only workflow rendered {config.samples_list} as a literal
+        // because nothing fed the merged list).
+        for pair in &config.pairs {
+            for s in std::iter::once(&pair.experiment).chain(pair.control.iter()) {
+                if !all_samples.contains(s) {
+                    all_samples.push(s.clone());
+                }
+            }
+        }
         if !all_samples.is_empty() {
             let existing = config
                 .config
@@ -6146,6 +6158,55 @@ shell = "echo {config.database} > {output[0]}"
         assert_eq!(
             config.resolve_config_list("config.pairs_list"),
             Some(vec!["CASE_001".to_string(), "CASE_002".to_string(),])
+        );
+    }
+
+    #[test]
+    fn from_file_feeds_pair_members_into_samples_list() {
+        // [[pairs]] members are samples too: a pairs-only workflow renders
+        // {config.samples_list} as a literal before this (live: pair-driven
+        // workflow, shell probe showed the unexpanded placeholder) — the
+        // consolidated list only collected sample_groups members.
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("pairs.oxoflow");
+        std::fs::write(
+            &workflow_path,
+            r#"
+            [workflow]
+            name = "pairs"
+
+            [[pairs]]
+            pair_id = "P1"
+            experiment = "T1"
+            control = "N1"
+
+            [[pairs]]
+            pair_id = "P2"
+            experiment = "T2"
+
+            [[rules]]
+            name = "step1"
+            shell = "echo hi"
+            "#,
+        )
+        .unwrap();
+
+        let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+
+        // Deduplicated experiment+control names, sorted (merge_comma_list
+        // sorts the consolidated list, same as pairs_list).
+        assert_eq!(
+            config
+                .config
+                .get("samples_list")
+                .and_then(toml::Value::as_str),
+            Some("N1,T1,T2")
+        );
+        assert_eq!(
+            config.resolve_config_list("config.samples_list"),
+            Some(vec!["N1".to_string(), "T1".to_string(), "T2".to_string(),])
         );
     }
 
