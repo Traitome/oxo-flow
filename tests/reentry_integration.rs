@@ -296,6 +296,8 @@ fn backend_driver_executes_reentry_rounds() {
         executor,
         DriverConfig {
             max_submitted: 4,
+            max_array_size: 1001,
+            no_arrays: false,
             poll_interval: std::time::Duration::from_millis(50),
             poll_timeout: Some(std::time::Duration::from_secs(30)),
         },

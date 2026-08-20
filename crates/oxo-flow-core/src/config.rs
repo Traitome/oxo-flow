@@ -415,6 +415,12 @@ pub struct ClusterProfile {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_submitted: Option<usize>,
+    /// Maximum scheduler array size (SLURM `MaxArraySize`, commonly 1001):
+    /// larger scatter groups are chunked into several arrays (issue #74
+    /// phase 3).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_array_size: Option<usize>,
     /// Delay between scheduler polls, as a duration string (`30s`, `2m`).
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1421,6 +1427,11 @@ pub struct WorkflowConfig {
     /// serialized — user TOML cannot set it.
     #[serde(skip)]
     pub expansion_values: HashMap<String, crate::wildcard::WildcardValues>,
+    /// Instance → template rule name for every fan-out expansion (issue #74
+    /// phase 3): the cluster driver groups instances into job arrays by
+    /// their TEMPLATE, never by guessing name suffixes. Never serialized.
+    #[serde(skip)]
+    pub expansion_templates: HashMap<String, String>,
 
     /// Engine-internal: the sample names each expanded rule came from.
     ///
@@ -2420,6 +2431,12 @@ impl WorkflowConfig {
         self.rules.iter().map(|r| r.name.as_str()).collect()
     }
 
+    /// The template rule a fanned-out instance was expanded from, if any
+    /// (issue #74 phase 3). Rules that never fan out have no entry.
+    pub fn template_of(&self, instance: &str) -> Option<&str> {
+        self.expansion_templates.get(instance).map(String::as_str)
+    }
+
     /// Apply global defaults to all rules that don't have explicit overrides.
     pub fn apply_defaults(&mut self) {
         for rule in &mut self.rules {
@@ -2848,6 +2865,8 @@ impl WorkflowConfig {
                             self.expansion_values
                                 .insert(expanded.name.clone(), value_combo.clone());
                         }
+                        self.expansion_templates
+                            .insert(expanded.name.clone(), orig_name.clone());
 
                         expanded_rules.push(expanded);
                     }
@@ -2969,6 +2988,8 @@ impl WorkflowConfig {
                             self.expansion_values
                                 .insert(expanded.name.clone(), value_combo.clone());
                         }
+                        self.expansion_templates
+                            .insert(expanded.name.clone(), orig_name.clone());
 
                         expanded_rules.push(expanded);
                     }
@@ -3017,6 +3038,8 @@ impl WorkflowConfig {
 
                     self.expansion_values
                         .insert(new_name.clone(), combo.clone());
+                    self.expansion_templates
+                        .insert(new_name.clone(), orig_name.clone());
                     expanded_rules.push(expanded);
                 }
                 name_map.insert(orig_name, expanded_names);
@@ -3152,6 +3175,8 @@ impl WorkflowConfig {
                     scatter_bindings.insert(scatter.variable.clone(), val.clone());
                     self.expansion_values
                         .insert(scattered_rule.name.clone(), scatter_bindings);
+                    self.expansion_templates
+                        .insert(scattered_rule.name.clone(), rule.name.clone());
 
                     scatter_outputs.extend(scattered_rule.output.to_vec());
                     final_rules.push(scattered_rule);
@@ -5874,6 +5899,65 @@ shell = "echo {config.database} > {output[0]}"
             Some(""),
             "no default: the runtime value is empty until overridden"
         );
+    }
+
+    #[test]
+    fn expansion_templates_track_the_fan_out_source() {
+        // Issue #74 phase 3: array grouping needs the TEMPLATE name each
+        // expanded instance came from. The expansion records it for every
+        // fan-out path (scatter, values, pairs) so the cluster driver never
+        // guesses from instance-name suffixes.
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0.0"
+
+            [[values]]
+            name = "assembler"
+            values = ["spades"]
+
+            [[pairs]]
+            pair_id = "P1"
+            experiment = "E1"
+            control = "C1"
+
+            [[rules]]
+            name = "align"
+            output = ["out/{pair_id}/{assembler}.bam"]
+            shell = "echo hi"
+
+            [[rules]]
+            name = "qc"
+            scatter = { variable = "treatment", values = ["control", "treated"] }
+            output = ["qc/{treatment}.tsv"]
+            shell = "echo hi"
+
+            [[rules]]
+            name = "plain"
+            output = ["p.txt"]
+            shell = "echo hi"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.expand_wildcards().unwrap();
+
+        // The pair-expanded instance maps back to "align".
+        let align_instance = config
+            .rules
+            .iter()
+            .find(|r| r.name.starts_with("align_"))
+            .expect("pair instance must exist");
+        assert_eq!(
+            config.template_of(&align_instance.name),
+            Some("align"),
+            "pair-expanded instances must track their template"
+        );
+
+        // Scatter instances map back to "qc".
+        assert_eq!(config.template_of("qc_control"), Some("qc"));
+        assert_eq!(config.template_of("qc_treated"), Some("qc"));
+
+        // A rule that never fanned out has no template entry.
+        assert_eq!(config.template_of("plain"), None);
     }
 
     #[test]

@@ -293,6 +293,10 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                     .map_err(|e| anyhow::anyhow!("environment wrapping failed: {}", e))?;
                 let scheduled = oxo_flow_core::backend::ScheduledRule {
                     rule: rule.clone(),
+                    // The standalone `cluster submit` command has no
+                    // expansion templates to consult — an instance maps to
+                    // itself.
+                    template: rule_name.clone(),
                     shell_cmd: wrapped_cmd,
                     workdir: std::path::PathBuf::from("."),
                     dependencies: dag.dependencies(rule_name).unwrap_or_default(),
