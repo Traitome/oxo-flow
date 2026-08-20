@@ -266,6 +266,10 @@ pub(crate) async fn run_on_cluster(
             .max_submitted
             .or(cluster.max_submitted)
             .unwrap_or(driver_defaults.max_submitted),
+        max_array_size: cluster
+            .max_array_size
+            .unwrap_or(driver_defaults.max_array_size),
+        no_arrays: false,
         poll_interval: cluster
             .poll_interval_secs()
             .map(std::time::Duration::from_secs)

@@ -57,6 +57,21 @@ pub trait ExecutorBackend: Send + Sync {
     /// Cancel a submitted job.
     async fn cancel(&self, job_id: &str) -> Result<()>;
 
+    /// Render an ARRAY submit script for `count` same-rule instances whose
+    /// per-index commands live in `cmd_dir` (issue #74 phase 3). Backends
+    /// without array support return an error — the driver then falls back
+    /// to per-job submission via the chunk-of-one path.
+    fn render_array_script(
+        &self,
+        _rule: &crate::rule::Rule,
+        _cmd_dir: &str,
+        _count: usize,
+    ) -> Result<String> {
+        Err(OxoFlowError::Config {
+            message: format!("backend '{}' does not support job arrays", self.name()),
+        })
+    }
+
     /// Fetch job logs / accounting output (raw text).
     async fn logs(&self, job_id: &str) -> Result<String>;
 
@@ -75,6 +90,10 @@ pub struct ScheduledRule {
     /// Expanded rule instance (post `expand_wildcards`): the single source
     /// for script rendering and resource directives.
     pub rule: Rule,
+    /// Template rule name this instance was expanded from (issue #74 phase
+    /// 3) — the array-grouping key. Equals the instance name for rules
+    /// that never fanned out.
+    pub template: String,
     /// Environment-wrapped command with `cd <workdir>` folded in.
     pub shell_cmd: String,
     /// Working directory the command runs in.
@@ -171,8 +190,13 @@ fn build_rule(
         })?;
     let dependencies = dag.dependencies(name).unwrap_or_default();
     let shell_cmd = format!("cd '{}' && {}", workdir.display(), wrapped);
+    let template = config
+        .template_of(name)
+        .map(str::to_string)
+        .unwrap_or_else(|| name.to_string());
     Ok(Some(ScheduledRule {
         rule: rule.clone(),
+        template,
         shell_cmd,
         workdir: workdir.to_path_buf(),
         dependencies,

@@ -19,6 +19,36 @@ id=$((id + 1))
 mkdir -p "$dir/jobs/$id"
 echo "PENDING" > "$dir/jobs/$id/state"
 cp "$script" "$dir/jobs/$id/job.sh"
+# Array support (issue #74 phase 3): a script carrying
+# `#SBATCH --array=1-N` (or #PBS -J / #$ -t) fans out into element dirs
+# `<id>_<i>`; each element runs the script with its task-index variable.
+array=$(sed -n 's/^#SBATCH --array=1-\([0-9][0-9]*\)$/\1/p' "$script" 2>/dev/null)
+array="${array:-$(sed -n 's/^#PBS -J 1-\([0-9][0-9]*\)$/\1/p' "$script" 2>/dev/null)}"
+array="${array:-$(sed -n 's/^#$ -t 1-\([0-9][0-9]*\)$/\1/p' "$script" 2>/dev/null)}"
+if [ -n "$array" ]; then
+  rm -rf "$dir/jobs/$id"
+  for i in $(seq 1 "$array"); do
+    mkdir -p "$dir/jobs/${id}_${i}"
+    echo "PENDING" > "$dir/jobs/${id}_${i}/state"
+    cp "$script" "$dir/jobs/${id}_${i}/job.sh"
+    (
+      set +e
+      echo "RUNNING" > "$dir/jobs/${id}_${i}/state"
+      echo $$ > "$dir/jobs/${id}_${i}/pid"
+      SLURM_ARRAY_TASK_ID=$i SGE_TASK_ID=$i PBS_ARRAY_INDEX=$i LSB_JOBINDEX=$i         bash "$script" > "$dir/jobs/${id}_${i}/stdout.log" 2> "$dir/jobs/${id}_${i}/stderr.log"
+      code=$?
+      if [ "$code" -eq 0 ]; then echo "COMPLETED" > "$dir/jobs/${id}_${i}/state"; else echo "FAILED" > "$dir/jobs/${id}_${i}/state"; fi
+      echo "$code" > "$dir/jobs/${id}_${i}/exit_code"
+    ) >/dev/null 2>&1 &
+  done
+  if [ "$parsable" -eq 1 ]; then
+    echo "$id"
+  else
+    echo "Submitted batch job $id" >&2
+    echo "$id"
+  fi
+  exit 0
+fi
 # The subshell redirects ALL its fds: without this it inherits sbatch's
 # stdout pipe, keeping it open until the job finishes — a caller waiting on
 # sbatch's output would block for the job duration. Real sbatch returns

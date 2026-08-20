@@ -6,7 +6,7 @@
 //! [`JobRecord`]s — the same record type the local executor produces, so
 //! checkpoint semantics are identical.
 
-use super::{BackendJobStatus, ExecutorBackend, ScheduledPlan};
+use super::{BackendJobStatus, ExecutorBackend, ScheduledPlan, ScheduledRule};
 use crate::error::{OxoFlowError, Result};
 use crate::executor::{JobRecord, JobStatus};
 use chrono::{DateTime, Utc};
@@ -22,6 +22,13 @@ pub struct DriverConfig {
     /// Jobs in flight at once (pending + running). Submissions top up to
     /// this cap as slots free.
     pub max_submitted: usize,
+    /// Maximum scheduler array size (SLURM MaxArraySize, commonly 1001):
+    /// larger scatter groups are chunked into several arrays (issue #74
+    /// phase 3).
+    pub max_array_size: usize,
+    /// Disable automatic array grouping — every instance submits as its
+    /// own job (the pre-phase-3 behavior).
+    pub no_arrays: bool,
     /// Delay between scheduler polls.
     pub poll_interval: Duration,
     /// Overall wall-clock budget; `None` = run until terminal states.
@@ -32,6 +39,8 @@ impl Default for DriverConfig {
     fn default() -> Self {
         Self {
             max_submitted: 50,
+            max_array_size: 1001,
+            no_arrays: false,
             poll_interval: Duration::from_secs(5),
             poll_timeout: None,
         }
@@ -71,6 +80,33 @@ pub struct BackendDriver {
 struct InFlight {
     rule: String,
     submitted_at: DateTime<Utc>,
+}
+
+/// Scheduler-visible directive signature: two instances are array-eligible
+/// only when every directive a scheduler could split on agrees (issue #74
+/// phase 3). The environment is included — conda vs docker instances must
+/// never share an array.
+fn array_key(sr: &ScheduledRule) -> String {
+    format!(
+        "{}|{}|{}|{}|{}|{:?}|{}",
+        sr.rule.effective_threads(),
+        sr.rule.effective_memory().unwrap_or_default(),
+        sr.rule.resources.time_limit.as_deref().unwrap_or_default(),
+        sr.rule.resources.partition.as_deref().unwrap_or_default(),
+        sr.rule
+            .resources
+            .gpu_spec
+            .as_ref()
+            .map(|g| format!("{:?}", g))
+            .unwrap_or_else(|| sr
+                .rule
+                .resources
+                .gpu
+                .map(|n| n.to_string())
+                .unwrap_or_default()),
+        sr.rule.environment,
+        sr.workdir.display(),
+    )
 }
 
 impl BackendDriver {
@@ -204,44 +240,196 @@ impl BackendDriver {
                         continue;
                     }
                     let sr = plan.rules[&name].clone();
-                    let script = self.backend.render_script(&sr)?;
-                    let job_dir = opts.run_dir.join("jobs").join(sanitize(&name));
-                    std::fs::create_dir_all(&job_dir).map_err(|e| OxoFlowError::Config {
-                        message: format!("cannot create {}: {e}", job_dir.display()),
-                    })?;
-                    let script_path = job_dir.join("job.sh");
-                    std::fs::write(&script_path, &script).map_err(|e| OxoFlowError::Config {
-                        message: format!("cannot write {}: {e}", script_path.display()),
-                    })?;
-                    let job_id = match self.backend.submit(&script_path).await {
-                        Ok(id) => id,
-                        Err(e) => {
-                            // Submit failure mid-DAG: cancel what is in flight,
-                            // leave the rest consistent (skipped by the next
-                            // run's preview — nothing was marked done here).
-                            let jobs: Vec<(String, String)> = inflight
-                                .iter()
-                                .map(|(id, f)| (id.clone(), f.rule.clone()))
-                                .collect();
-                            self.cancel_inflight(&jobs).await?;
-                            return Err(e);
-                        }
+                    // Array grouping (issue #74 phase 3): batch every READY
+                    // sibling instance of the same template with an identical
+                    // directive signature into one scheduler array, chunked
+                    // at max_array_size. Instance-level records, dependency
+                    // gates, and resume semantics are unchanged — arrays are
+                    // transport-level (one submission, element-wise records).
+                    let siblings: Vec<(String, ScheduledRule)> = if self.config.no_arrays {
+                        vec![]
+                    } else {
+                        plan.order
+                            .iter()
+                            .filter(|o| {
+                                **o != name
+                                    && !done.contains_key(*o)
+                                    && to_run_set.contains(*o)
+                                    && !inflight.values().any(|f| f.rule == **o)
+                                    && deps_ok(o, &done, &to_run_set, plan)
+                                    && plan.rules.get(*o).is_some_and(|o_sr| {
+                                        o_sr.template == sr.template
+                                            && array_key(o_sr) == array_key(&sr)
+                                            && o_sr.dependencies == sr.dependencies
+                                    })
+                            })
+                            .map(|o| (o.clone(), plan.rules[o].clone()))
+                            .collect()
                     };
-                    std::fs::write(job_dir.join("job.id"), &job_id).map_err(|e| {
-                        OxoFlowError::Config {
-                            message: format!("cannot write {}: {e}", job_dir.display()),
+                    let mut batch: Vec<(String, ScheduledRule)> = vec![(name.clone(), sr.clone())];
+                    batch.extend(siblings);
+                    let chunks = batch.chunks(self.config.max_array_size.max(1));
+                    for chunk in chunks {
+                        if chunk.len() > 1 {
+                            // Array submission: one script + per-index
+                            // command files under the TEMPLATE's job dir.
+                            let job_dir = opts.run_dir.join("jobs").join(sanitize(&sr.template));
+                            std::fs::create_dir_all(&job_dir).map_err(|e| {
+                                OxoFlowError::Config {
+                                    message: format!("cannot create {}: {e}", job_dir.display()),
+                                }
+                            })?;
+                            for (i, (_, c_sr)) in chunk.iter().enumerate() {
+                                let cmd_path = job_dir.join(format!("cmd.{}.sh", i + 1));
+                                std::fs::write(&cmd_path, &c_sr.shell_cmd).map_err(|e| {
+                                    OxoFlowError::Config {
+                                        message: format!(
+                                            "cannot write {}: {e}",
+                                            cmd_path.display()
+                                        ),
+                                    }
+                                })?;
+                            }
+                            let script = self.backend.render_array_script(
+                                &sr.rule,
+                                &job_dir.to_string_lossy(),
+                                chunk.len(),
+                            )?;
+                            let script_path = job_dir.join("job.sh");
+                            std::fs::write(&script_path, &script).map_err(|e| {
+                                OxoFlowError::Config {
+                                    message: format!("cannot write {}: {e}", script_path.display()),
+                                }
+                            })?;
+                            let base_id = match self.backend.submit(&script_path).await {
+                                Ok(id) => id,
+                                Err(e) => {
+                                    let jobs: Vec<(String, String)> = inflight
+                                        .iter()
+                                        .map(|(id, f)| (id.clone(), f.rule.clone()))
+                                        .collect();
+                                    self.cancel_inflight(&jobs).await?;
+                                    return Err(e);
+                                }
+                            };
+                            std::fs::write(job_dir.join("job.id"), &base_id).map_err(|e| {
+                                OxoFlowError::Config {
+                                    message: format!(
+                                        "cannot write {}: {e}",
+                                        job_dir.join("job.id").display()
+                                    ),
+                                }
+                            })?;
+                            // index.json: array index → instance name, so the
+                            // array stays an implementation detail (issue #74
+                            // phase 3 — "an array index is meaningless on its
+                            // own").
+                            {
+                                let index_path = opts.run_dir.join("index.json");
+                                let mut index: HashMap<String, Vec<String>> =
+                                    std::fs::read_to_string(&index_path)
+                                        .ok()
+                                        .and_then(|raw| serde_json::from_str(&raw).ok())
+                                        .unwrap_or_default();
+                                index.insert(
+                                    base_id.clone(),
+                                    chunk.iter().map(|(n, _)| n.clone()).collect(),
+                                );
+                                if let Some(parent) = index_path.parent() {
+                                    let _ = std::fs::create_dir_all(parent);
+                                }
+                                let _ = std::fs::write(
+                                    &index_path,
+                                    serde_json::to_string_pretty(&index).unwrap_or_default(),
+                                );
+                            }
+                            for (i, (c_name, c_sr)) in chunk.iter().enumerate() {
+                                let element_id = format!("{}_{}", base_id, i + 1);
+                                // Per-INSTANCE dirs keep the run directory
+                                // greppable (jobs/<instance>/job.sh + job.id)
+                                // — the array stays an implementation detail
+                                // (issue #74 phase 3). job.sh is a copy of
+                                // the array script: it is exactly what ran
+                                // for this element.
+                                let inst_dir = opts.run_dir.join("jobs").join(sanitize(c_name));
+                                std::fs::create_dir_all(&inst_dir).map_err(|e| {
+                                    OxoFlowError::Config {
+                                        message: format!(
+                                            "cannot create {}: {e}",
+                                            inst_dir.display()
+                                        ),
+                                    }
+                                })?;
+                                std::fs::copy(&script_path, inst_dir.join("job.sh")).map_err(
+                                    |e| OxoFlowError::Config {
+                                        message: format!(
+                                            "cannot copy {}: {e}",
+                                            inst_dir.join("job.sh").display()
+                                        ),
+                                    },
+                                )?;
+                                std::fs::write(inst_dir.join("job.id"), &element_id).map_err(
+                                    |e| OxoFlowError::Config {
+                                        message: format!(
+                                            "cannot write {}: {e}",
+                                            inst_dir.join("job.id").display()
+                                        ),
+                                    },
+                                )?;
+                                write_status(&inst_dir, &element_id, &c_sr.shell_cmd, "PENDING")?;
+                                inflight.insert(
+                                    element_id.clone(),
+                                    InFlight {
+                                        rule: c_name.clone(),
+                                        submitted_at: Utc::now(),
+                                    },
+                                );
+                                emit(&mut events, "SUBMITTED", c_name, Some(&element_id), None);
+                            }
+                            submitted_this_round += chunk.len();
+                        } else {
+                            let (c_name, c_sr) = &chunk[0];
+                            let script = self.backend.render_script(c_sr)?;
+                            let job_dir = opts.run_dir.join("jobs").join(sanitize(c_name));
+                            std::fs::create_dir_all(&job_dir).map_err(|e| {
+                                OxoFlowError::Config {
+                                    message: format!("cannot create {}: {e}", job_dir.display()),
+                                }
+                            })?;
+                            let script_path = job_dir.join("job.sh");
+                            std::fs::write(&script_path, &script).map_err(|e| {
+                                OxoFlowError::Config {
+                                    message: format!("cannot write {}: {e}", script_path.display()),
+                                }
+                            })?;
+                            let job_id = match self.backend.submit(&script_path).await {
+                                Ok(id) => id,
+                                Err(e) => {
+                                    let jobs: Vec<(String, String)> = inflight
+                                        .iter()
+                                        .map(|(id, f)| (id.clone(), f.rule.clone()))
+                                        .collect();
+                                    self.cancel_inflight(&jobs).await?;
+                                    return Err(e);
+                                }
+                            };
+                            std::fs::write(job_dir.join("job.id"), &job_id).map_err(|e| {
+                                OxoFlowError::Config {
+                                    message: format!("cannot write {}: {e}", job_dir.display()),
+                                }
+                            })?;
+                            write_status(&job_dir, &job_id, &c_sr.shell_cmd, "PENDING")?;
+                            inflight.insert(
+                                job_id.clone(),
+                                InFlight {
+                                    rule: c_name.clone(),
+                                    submitted_at: Utc::now(),
+                                },
+                            );
+                            submitted_this_round += 1;
+                            emit(&mut events, "SUBMITTED", c_name, Some(&job_id), None);
                         }
-                    })?;
-                    write_status(&job_dir, &job_id, &sr.shell_cmd, "PENDING")?;
-                    inflight.insert(
-                        job_id.clone(),
-                        InFlight {
-                            rule: name.clone(),
-                            submitted_at: Utc::now(),
-                        },
-                    );
-                    submitted_this_round += 1;
-                    emit(&mut events, "SUBMITTED", &name, Some(&job_id), None);
+                    }
                 }
             }
 
@@ -639,6 +827,8 @@ mod tests {
             executor.clone(),
             DriverConfig {
                 max_submitted: 2,
+                max_array_size: 1001,
+                no_arrays: false,
                 poll_interval: std::time::Duration::from_millis(50),
                 poll_timeout: Some(std::time::Duration::from_secs(30)),
             },
@@ -681,7 +871,14 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(records.len(), 2);
-        assert!(records.iter().all(|r| r.status == JobStatus::Success));
+        assert!(
+            records.iter().all(|r| r.status == JobStatus::Success),
+            "unexpected records: {:?}",
+            records
+                .iter()
+                .map(|r| (r.rule.clone(), r.status, r.stderr.clone()))
+                .collect::<Vec<_>>()
+        );
         assert!(fx.workdir.path().join("a.txt").exists());
         assert!(fx.workdir.path().join("b.txt").exists());
         let ev = events(&fx);
@@ -823,6 +1020,8 @@ mod tests {
             executor,
             DriverConfig {
                 max_submitted: 2,
+                max_array_size: 1001,
+                no_arrays: false,
                 poll_interval: std::time::Duration::from_millis(50),
                 poll_timeout: None,
             },
@@ -891,6 +1090,120 @@ mod tests {
             noop.skip_reason.as_deref(),
             Some("no shell or script defined")
         );
+    }
+
+    #[test]
+    fn scatter_instances_submit_as_one_array_with_identical_records() {
+        // Issue #74 phase 3: same-template instances group into ONE array
+        // submission (chunked at max_array_size), element-wise tracking
+        // maps back to per-instance JobRecords, and index.json records the
+        // array-index → instance mapping.
+        let fx = setup();
+        let (d, _) = driver(&fx);
+        // Two instances of one template via [[values]] + a dependent rule.
+        let wf_toml = r#"
+[workflow]
+name = "arr"
+version = "1.0.0"
+
+[[values]]
+name = "assembler"
+values = ["spades", "megahit"]
+
+[[rules]]
+name = "asm"
+output = ["out/{assembler}.txt"]
+shell = "echo asm > out/{assembler}.txt"
+
+[[rules]]
+name = "merge"
+input = ["out/spades.txt", "out/megahit.txt"]
+output = ["merged.txt"]
+shell = "cat {input} > merged.txt"
+"#;
+        let wf = fx.workdir.path().join("arr.oxoflow");
+        std::fs::write(&wf, wf_toml).unwrap();
+        let mut config = WorkflowConfig::from_file(&wf).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        let mut plan = ScheduledPlan::build(
+            &config,
+            &dag,
+            fx.workdir.path(),
+            &EnvironmentResolver::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let records = runtime
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    sensitive_values: &[],
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                },
+            ))
+            .unwrap();
+
+        // Both instances + the dependent rule completed.
+        let names: std::collections::BTreeSet<String> =
+            records.iter().map(|r| r.rule.clone()).collect();
+        assert_eq!(
+            names,
+            [
+                "asm_assembler_megahit".to_string(),
+                "asm_assembler_spades".to_string(),
+                "merge".to_string()
+            ]
+            .into_iter()
+            .collect(),
+            "per-instance records must match the per-job path: {names:?}"
+        );
+        assert!(
+            records.iter().all(|r| r.status == JobStatus::Success),
+            "unexpected records: {:?}",
+            records
+                .iter()
+                .map(|r| (r.rule.clone(), r.status, r.stderr.clone()))
+                .collect::<Vec<_>>()
+        );
+
+        // ONE array submission: the events file records two element ids
+        // sharing a base.
+        let ev = events(&fx);
+        let submitted: Vec<serde_json::Value> = ev
+            .iter()
+            .filter(|e| e["t"] == "SUBMITTED")
+            .cloned()
+            .collect();
+        let element_ids: Vec<String> = submitted
+            .iter()
+            .filter(|e| e["rule"].as_str().is_some_and(|r| r.starts_with("asm_")))
+            .map(|e| e["job"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert_eq!(element_ids.len(), 2, "both instances submitted: {ev:?}");
+        let base = element_ids[0].split('_').next().unwrap_or("");
+        assert!(
+            element_ids
+                .iter()
+                .all(|id| id.starts_with(base) && id != base),
+            "both ids must be array elements of one base: {element_ids:?}"
+        );
+
+        // index.json maps the array index back to instance names.
+        let index: std::collections::HashMap<String, Vec<String>> = serde_json::from_str(
+            &std::fs::read_to_string(fx.run_dir.path().join("index.json")).unwrap(),
+        )
+        .unwrap();
+        let mapped = index.get(base).expect("array base must be indexed");
+        assert_eq!(mapped.len(), 2);
+        assert!(mapped.contains(&"asm_assembler_spades".to_string()));
+        assert!(mapped.contains(&"asm_assembler_megahit".to_string()));
     }
 
     #[test]

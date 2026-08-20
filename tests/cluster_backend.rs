@@ -207,6 +207,8 @@ fn local_run_and_backend_run_produce_same_checkpoint_semantics() {
         &to_run,
         DriverConfig {
             max_submitted: 4,
+            max_array_size: 1001,
+            no_arrays: false,
             poll_interval: std::time::Duration::from_millis(50),
             poll_timeout: Some(std::time::Duration::from_secs(30)),
         },
@@ -318,6 +320,8 @@ fn dry_run_will_run_set_equals_driver_submitted_set() {
         &to_run,
         DriverConfig {
             max_submitted: 4,
+            max_array_size: 1001,
+            no_arrays: false,
             poll_interval: std::time::Duration::from_millis(50),
             poll_timeout: Some(std::time::Duration::from_secs(30)),
         },
@@ -366,6 +370,8 @@ output = ["fail.done"]
         &to_run,
         DriverConfig {
             max_submitted: 2,
+            max_array_size: 1001,
+            no_arrays: false,
             poll_interval: std::time::Duration::from_millis(50),
             poll_timeout: Some(std::time::Duration::from_secs(1)),
         },
@@ -538,6 +544,8 @@ fn driver_settles_jobs_that_vanish_from_the_live_queue_via_accounting() {
         &to_run,
         DriverConfig {
             max_submitted: 4,
+            max_array_size: 1001,
+            no_arrays: false,
             poll_interval: std::time::Duration::from_millis(50),
             poll_timeout: Some(std::time::Duration::from_secs(30)),
         },

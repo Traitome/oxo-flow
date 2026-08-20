@@ -154,6 +154,62 @@ pub fn generate_submit_script_with_env(
     ))
 }
 
+/// Generate an ARRAY submit script for a group of same-rule instances
+/// (issue #74 phase 3).
+///
+/// The script carries the backend's array-range directive and dispatches on
+/// the backend's task-index variable to per-index command files the driver
+/// writes next to the script — `sh '<cmd_dir>/cmd.${INDEX}.sh'`. Per-index
+/// files (rather than an inline case table) keep arbitrary multi-line
+/// commands (shell preludes, environment-wrapped commands) valid.
+pub fn generate_array_submit_script(
+    backend: &ClusterBackend,
+    rule: &Rule,
+    cmd_dir: &str,
+    count: usize,
+    config: &ClusterJobConfig,
+) -> String {
+    let base = generate_submit_script(backend, rule, "", config);
+    let mut lines: Vec<String> = base.lines().map(str::to_string).collect();
+
+    let (range_directive, task_var) = match backend {
+        ClusterBackend::Slurm => ("#SBATCH --array=1-{count}", "SLURM_ARRAY_TASK_ID"),
+        ClusterBackend::Pbs => ("#PBS -J 1-{count}", "PBS_ARRAY_INDEX"),
+        ClusterBackend::Sge => ("#$ -t 1-{count}", "SGE_TASK_ID"),
+        ClusterBackend::Lsf => ("#BSUB -J \"{name}[1-{count}]\"", "LSB_JOBINDEX"),
+    };
+    let range = range_directive
+        .replace("{count}", &count.to_string())
+        .replace("{name}", &rule.name);
+
+    // Insert the range after the shebang; for LSF replace the base -J line
+    // so the array name wins instead of duplicating the flag.
+    match backend {
+        ClusterBackend::Lsf => {
+            if let Some(idx) = lines.iter().position(|l| l.starts_with("#BSUB -J ")) {
+                lines[idx] = range;
+            } else {
+                lines.insert(1, range);
+            }
+        }
+        _ => lines.insert(1, range),
+    }
+
+    // Replace the trailing (empty) command line with the dispatch body.
+    while lines.last().is_some_and(|l| l.trim().is_empty()) {
+        lines.pop();
+    }
+    lines.push("set -e".to_string());
+    lines.push("mkdir -p logs".to_string());
+    lines.push(format!("INDEX=\"${task_var}\""));
+    // Double quotes so ${INDEX} expands (single quotes would pass the
+    // literal `${INDEX}` to sh). The run dir is engine-generated and never
+    // contains shell metacharacters.
+    lines.push(format!("sh \"{cmd_dir}/cmd.${{INDEX}}.sh\""));
+
+    lines.join("\n")
+}
+
 /// Returns the shell command used to submit a job to the given backend.
 pub fn submit_command(backend: &ClusterBackend) -> &'static str {
     match backend {
@@ -530,6 +586,46 @@ mod tests {
     use super::*;
     use crate::rule::{EnvironmentSpec, Resources};
     use std::collections::HashMap;
+
+    #[test]
+    fn array_script_carries_directive_and_dispatch() {
+        // Issue #74 phase 3: the array variant keeps the base directives,
+        // adds the backend's array range, and dispatches on the backend's
+        // task-index variable to per-index command files (multi-line-safe).
+        let rule = make_rule("align", 4, Some("8G"));
+        let config = ClusterJobConfig {
+            backend: ClusterBackend::Slurm,
+            queue: Some("compute".to_string()),
+            account: None,
+            walltime: None,
+            extra_args: vec![],
+        };
+        let script = generate_array_submit_script(
+            &ClusterBackend::Slurm,
+            &rule,
+            "/run/jobs/align",
+            3,
+            &config,
+        );
+        assert!(script.contains("#SBATCH --array=1-3"), "{script}");
+        assert!(
+            script.contains("--cpus-per-task=4"),
+            "directives must persist"
+        );
+        assert!(script.contains("SLURM_ARRAY_TASK_ID"), "{script}");
+        assert!(script.contains("/run/jobs/align/cmd."), "{script}");
+
+        // Other backends use their own range syntax + task variable.
+        for (backend, range, var) in [
+            (ClusterBackend::Pbs, "#PBS -J 1-3", "PBS_ARRAY_INDEX"),
+            (ClusterBackend::Sge, "#$ -t 1-3", "SGE_TASK_ID"),
+            (ClusterBackend::Lsf, "#BSUB -J", "LSB_JOBINDEX"),
+        ] {
+            let s2 = generate_array_submit_script(&backend, &rule, "/run/jobs/align", 3, &config);
+            assert!(s2.contains(range), "{backend:?}: {s2}");
+            assert!(s2.contains(var), "{backend:?}: {s2}");
+        }
+    }
 
     fn make_rule(name: &str, threads: u32, memory: Option<&str>) -> Rule {
         Rule {

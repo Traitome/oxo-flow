@@ -6,7 +6,9 @@
 //! array-index mapping need the same logic.
 
 use super::{BackendJobStatus, ScheduledRule};
-use crate::cluster::{ClusterBackend, ClusterJobConfig, generate_submit_script};
+use crate::cluster::{
+    ClusterBackend, ClusterJobConfig, generate_array_submit_script, generate_submit_script,
+};
 use crate::error::{OxoFlowError, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -208,6 +210,21 @@ impl super::ExecutorBackend for ClusterExecutor {
             &self.backend,
             &rule.rule,
             &rule.shell_cmd,
+            &self.cluster,
+        ))
+    }
+
+    fn render_array_script(
+        &self,
+        rule: &crate::rule::Rule,
+        cmd_dir: &str,
+        count: usize,
+    ) -> Result<String> {
+        Ok(generate_array_submit_script(
+            &self.backend,
+            rule,
+            cmd_dir,
+            count,
             &self.cluster,
         ))
     }
