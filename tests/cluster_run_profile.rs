@@ -238,6 +238,53 @@ fn cluster_and_local_agree_on_rerun_set() {
     );
 }
 
+/// Resume after a cluster failure: fix the cause, run again. The upstream is
+/// fresh and stays out of the work set, so the driver has to treat it as
+/// satisfied rather than wait for it — otherwise the everyday recovery path
+/// submits nothing and dies with "driver stall".
+#[test]
+fn resume_after_failure_submits_only_the_failed_rule() {
+    let dir = tempfile::tempdir().unwrap();
+    setup(dir.path(), Some(CLUSTER_PROFILE));
+    // `gate` fails until the FLAG file exists — a stand-in for any fixable
+    // cause (a missing module, a bad path, a full filesystem).
+    std::fs::write(
+        dir.path().join("wf.oxoflow"),
+        r#"
+[workflow]
+name = "resume"
+
+[[rules]]
+name = "prep"
+output = ["prep.txt"]
+shell = "echo prepared > prep.txt"
+
+[[rules]]
+name = "gate"
+input = ["prep.txt"]
+output = ["gate.txt"]
+shell = "test -f FLAG && cp prep.txt gate.txt"
+"#,
+    )
+    .unwrap();
+
+    let first = run(dir.path(), &["--profile", "slurm"]);
+    assert!(!first.status.success(), "`gate` must fail on the first run");
+    assert_eq!(submitted_rules(dir.path()), vec!["gate", "prep"]);
+
+    std::fs::write(dir.path().join("FLAG"), "").unwrap();
+    let second = run(dir.path(), &["--profile", "slurm"]);
+    let stderr = String::from_utf8_lossy(&second.stderr);
+    assert!(second.status.success(), "resume failed:\n{stderr}");
+    assert!(!stderr.contains("driver stall"), "{stderr}");
+    assert_eq!(
+        submitted_rules(dir.path()),
+        vec!["gate"],
+        "only the failed rule re-runs; `prep` is already complete"
+    );
+    assert!(dir.path().join("gate.txt").exists());
+}
+
 /// Condition 4: a profile without a `[cluster]` block keeps the local path,
 /// so existing config-only profiles are unaffected.
 #[test]

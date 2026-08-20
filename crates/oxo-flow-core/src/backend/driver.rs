@@ -171,7 +171,7 @@ impl BackendDriver {
                     if !to_run_set.contains(&name)
                         || done.contains_key(&name)
                         || inflight.values().any(|f| f.rule == name)
-                        || !deps_ok(&name, &done, plan)
+                        || !deps_ok(&name, &done, &to_run_set, plan)
                     {
                         continue;
                     }
@@ -452,11 +452,24 @@ impl BackendDriver {
     }
 }
 
-fn deps_ok(name: &str, done: &HashMap<String, JobStatus>, plan: &ScheduledPlan) -> bool {
+/// Is every dependency of `name` satisfied?
+///
+/// A dependency outside `to_run` is satisfied by definition: the caller's
+/// invalidation analysis decided it is already complete, so it is never
+/// submitted and never lands in `done`. Requiring it there would wedge every
+/// partial re-run — resume after a failure, an edit to a downstream rule,
+/// `--target` on a leaf — into the stall branch below with nothing submitted.
+fn deps_ok(
+    name: &str,
+    done: &HashMap<String, JobStatus>,
+    to_run: &HashSet<String>,
+    plan: &ScheduledPlan,
+) -> bool {
     plan.rules.get(name).is_none_or(|sr| {
-        sr.dependencies
-            .iter()
-            .all(|d| matches!(done.get(d), Some(JobStatus::Success | JobStatus::Skipped)))
+        sr.dependencies.iter().all(|d| {
+            !to_run.contains(d)
+                || matches!(done.get(d), Some(JobStatus::Success | JobStatus::Skipped))
+        })
     })
 }
 
@@ -755,6 +768,48 @@ mod tests {
         }
         assert!(max_seen <= 2, "max in-flight observed: {max_seen}");
         assert!(max_seen >= 1);
+    }
+
+    /// A dependency the caller left out of `to_run` is already complete, not
+    /// pending. Before this, `deps_ok` waited for it to appear in `done`, so
+    /// every partial re-run — resume after a failure, an edit to a downstream
+    /// rule — submitted nothing and died with "driver stall".
+    #[test]
+    fn driver_runs_a_rule_whose_dependency_is_outside_to_run() {
+        let fx = setup();
+        let (d, _) = driver(&fx);
+        let mut plan = chain_plan(
+            fx.workdir.path(),
+            &[
+                ("a", "echo a > a.txt", "a.txt"),
+                ("b", "cat a.txt && echo b > b.txt", "b.txt"),
+            ],
+        );
+        // `a` ran in an earlier run: its output is on disk and the caller's
+        // invalidation analysis kept it out of this run's work set.
+        std::fs::write(fx.workdir.path().join("a.txt"), "a\n").unwrap();
+        let to_run: HashSet<String> = ["b".to_string()].into_iter().collect();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let records = runtime
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                },
+            ))
+            .expect("a fresh dependency must not stall the driver");
+        assert_eq!(
+            records.len(),
+            1,
+            "only `b` belongs to this run: {records:?}"
+        );
+        assert_eq!(records[0].rule, "b");
+        assert_eq!(records[0].status, JobStatus::Success);
+        assert!(fx.workdir.path().join("b.txt").exists());
     }
 
     #[test]
