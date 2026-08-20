@@ -110,7 +110,19 @@ impl EnvironmentBackend for CondaBackend {
     ) -> Result<String> {
         let env_name = conda_env_name_from_spec(spec);
         let escaped = escape_for_sh_single_quote(command);
-        Ok(format!("conda run -n {env_name} bash -c '{escaped}'"))
+        // `--no-capture-output` (conda >= 4.13): without it, `conda run`
+        // buffers the wrapped process's stdout/stderr through its own
+        // internal pipes and polls them for EOF — when the wrapped
+        // command's grandchildren inherit those pipe write-ends (forked
+        // helpers, gzip/pigz workers, sra-tools daemons), the poll never
+        // sees EOF and the whole rule parks for 30+ minutes (live:
+        // auto-sra fasterq-dump rules on tx-ubuntu; the identical command
+        // ran instantly by hand). With the flag, conda forwards the child's
+        // fds straight through — the engine's own pipe draining
+        // (wait_with_output) is the capture mechanism.
+        Ok(format!(
+            "conda run --no-capture-output -n {env_name} bash -c '{escaped}'"
+        ))
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
@@ -169,11 +181,16 @@ impl CondaBackend {
         prefix: Option<&str>,
     ) -> Result<String> {
         let escaped = escape_for_sh_single_quote(command);
+        // Same --no-capture-output rationale as wrap_command above.
         if let Some(prefix) = prefix {
-            Ok(format!("conda run -p {prefix} bash -c '{escaped}'"))
+            Ok(format!(
+                "conda run --no-capture-output -p {prefix} bash -c '{escaped}'"
+            ))
         } else {
             let env_name = conda_env_name_from_spec(spec);
-            Ok(format!("conda run -n {env_name} bash -c '{escaped}'"))
+            Ok(format!(
+                "conda run --no-capture-output -n {env_name} bash -c '{escaped}'"
+            ))
         }
     }
 
@@ -1929,7 +1946,7 @@ mod tests {
             .wrap_command_with_opts("echo hi", "envs/qc.yaml", Some(".oxo-conda"))
             .unwrap();
         assert!(
-            result.contains("conda run -p .oxo-conda"),
+            result.contains("conda run --no-capture-output -p .oxo-conda"),
             "expected -p prefix form, got: {result}"
         );
         assert!(result.contains("echo hi"));
@@ -1941,7 +1958,7 @@ mod tests {
         let result = backend
             .wrap_command_with_opts("echo hi", "envs/qc.yaml", None)
             .unwrap();
-        assert!(result.contains("conda run -n qc"));
+        assert!(result.contains("conda run --no-capture-output -n qc"));
         assert!(!result.contains(" -p "));
     }
 
@@ -2026,7 +2043,7 @@ mod tests {
         let result = resolver
             .wrap_command("fastqc reads.fq", &spec, None, std::path::Path::new("."))
             .unwrap();
-        assert!(result.contains("conda run -p .oxo-conda"));
+        assert!(result.contains("conda run --no-capture-output -p .oxo-conda"));
         assert!(!result.contains(" -n "));
     }
 
