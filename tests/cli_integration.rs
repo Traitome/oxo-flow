@@ -6454,6 +6454,146 @@ shell = "echo {config.api_token} > {output}"
     );
 }
 
+// ─── #97 follow-up: reference checkpoint lives at the documented path ──────
+
+/// Older builds wrote the reference checkpoint into a doubly-nested
+/// `.oxo-flow/.oxo-flow/` directory (the parent already ends in
+/// `.oxo-flow`). The fix reads/writes the documented single-level path and
+/// migrates an existing doubled file over once.
+#[test]
+fn cli_reference_checkpoint_uses_documented_path_and_migrates() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("path.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "path"
+version = "1.0.0"
+
+[[references]]
+name = "idx"
+source = "genome.fa"
+output = "genome.idx"
+build = "cat {input} > {output}"
+"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("genome.fa"), b"AAAA").unwrap();
+    fs::write(dir.path().join("genome.idx"), b"AAAA").unwrap();
+
+    // Seed the OLD doubled path with a stored fingerprint.
+    let doubled = dir.path().join(".oxo-flow/.oxo-flow");
+    fs::create_dir_all(&doubled).unwrap();
+    fs::write(
+        doubled.join("reference-checkpoint.json"),
+        r#"{"idx":"legacy-fp"}"#,
+    )
+    .unwrap();
+
+    let run = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run.status.success());
+
+    // The doubled file is migrated to the documented single-level path.
+    assert!(
+        dir.path()
+            .join(".oxo-flow/reference-checkpoint.json")
+            .exists(),
+        "the documented single-level checkpoint path must be used"
+    );
+    assert!(
+        !doubled.join("reference-checkpoint.json").exists(),
+        "the doubled path must be migrated away"
+    );
+}
+
+// ─── #97 follow-up: legacy reference adoption must persist ─────────────────
+
+/// The legacy (array-format) checkpoint adopts the current fingerprint in
+/// memory only — the adoption never reached the file, so the entry stayed
+/// "" forever and each run silently re-adopted the CURRENT source state:
+/// the content guard could never fire. The adoption must persist.
+#[test]
+fn cli_reference_legacy_adoption_persists_fingerprint() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("legacy.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "legacy"
+version = "1.0.0"
+
+[[references]]
+name = "idx"
+source = "genome.fa"
+output = "genome.idx"
+build = "cat {input} > {output}"
+
+[[rules]]
+name = "use_idx"
+input = ["genome.idx"]
+output = ["result.txt"]
+shell = "cat {input} > {output}"
+"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("genome.fa"), b">chr1\nAAAA").unwrap();
+    // Park the source mtime in the past so the freshness path (source newer
+    // than output) can never fire — only the fingerprint can catch the
+    // rewrite, which is what this test pins.
+    filetime::set_file_mtime(
+        dir.path().join("genome.fa"),
+        filetime::FileTime::from_unix_time(1_600_000_000, 0),
+    )
+    .unwrap();
+    // Pre-seed the artifact AND a legacy array-format checkpoint.
+    fs::write(dir.path().join("genome.idx"), b"AAAA").unwrap();
+    let ck_dir = dir.path().join(".oxo-flow");
+    fs::create_dir_all(&ck_dir).unwrap();
+    fs::write(ck_dir.join("reference-checkpoint.json"), r#"["idx"]"#).unwrap();
+
+    // Run 1: legacy adoption, no rebuild.
+    let run1 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run1.status.success());
+    assert!(
+        !String::from_utf8_lossy(&run1.stderr).contains("Building"),
+        "legacy adoption must not rebuild: {}",
+        String::from_utf8_lossy(&run1.stderr)
+    );
+
+    // Same-path content rewrite with a PRESERVED mtime — the exact class
+    // the content guard exists to catch.
+    let mtime = filetime::FileTime::from_last_modification_time(
+        &fs::metadata(dir.path().join("genome.fa")).unwrap(),
+    );
+    fs::write(dir.path().join("genome.fa"), b">chr2\nBBBB").unwrap();
+    filetime::set_file_mtime(dir.path().join("genome.fa"), mtime).unwrap();
+
+    let run2 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run2.status.success());
+    assert!(
+        String::from_utf8_lossy(&run2.stderr).contains("Building"),
+        "a persisted adoption must guard later rewrites: {}",
+        String::from_utf8_lossy(&run2.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("genome.idx")).unwrap(),
+        ">chr2\nBBBB",
+        "the rebuilt artifact must carry the new source content"
+    );
+}
+
 // ─── #101: rule subprocesses never block on stdin ─────────────────────────
 
 /// Contract smoke test: rule shells must observe null stdin (issue #101).
