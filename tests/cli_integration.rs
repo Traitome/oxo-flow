@@ -6594,6 +6594,97 @@ shell = "cat {input} > {output}"
     );
 }
 
+// ─── #112 elasticity: --module runs one include module only ───────────────
+
+/// A composed workflow (two modules + host rules) runs ONLY the selected
+/// module plus the producers of its declared inputs — the clinical-pipeline
+/// partial-run scenario (clindet-style composition).
+#[test]
+fn cli_run_module_runs_only_that_module() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("germline.oxoflow"),
+        r#"[workflow]
+name = "germline"
+version = "1.0.0"
+
+[[rules]]
+name = "call"
+input = ["bam/n.bam"]
+output = ["vcf/n.vcf"]
+shell = "cp bam/n.bam vcf/n.vcf"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("somatic.oxoflow"),
+        r#"[workflow]
+name = "somatic"
+version = "1.0.0"
+
+[[rules]]
+name = "mutect"
+input = ["bam/n.bam"]
+output = ["vcf/somatic.vcf"]
+shell = "cp bam/n.bam vcf/somatic.vcf"
+"#,
+    )
+    .unwrap();
+    let wf = dir.path().join("main.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "composed"
+version = "1.0.0"
+
+[[include]]
+path = "germline.oxoflow"
+inputs = ["bam/n.bam"]
+outputs = ["vcf/n.vcf"]
+
+[[include]]
+path = "somatic.oxoflow"
+inputs = ["bam/n.bam"]
+outputs = ["vcf/somatic.vcf"]
+
+[[rules]]
+name = "align"
+output = ["bam/n.bam"]
+shell = "echo reads > bam/n.bam"
+"#,
+    )
+    .unwrap();
+
+    let run = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--module", "germline"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "module run failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        dir.path().join("vcf/n.vcf").exists(),
+        "the module rule must run"
+    );
+    assert!(
+        !dir.path().join("vcf/somatic.vcf").exists(),
+        "rules outside the module must NOT run"
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(stderr.contains("Running: call"), "module rule: {stderr}");
+    assert!(
+        stderr.contains("Running: align"),
+        "input producer: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Running: mutect"),
+        "outside-module rule must not execute: {stderr}"
+    );
+}
+
 // ─── #101: rule subprocesses never block on stdin ─────────────────────────
 
 /// Contract smoke test: rule shells must observe null stdin (issue #101).

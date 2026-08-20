@@ -329,7 +329,26 @@ max_array_size = 1001   # optional — the scheduler's MaxArraySize; larger
 - Arrays are transport-level: the JobRecord set, checkpoint, and resume
   semantics are identical to per-job submission.
 
-Element-wise `aftercorr` chaining is not part of this slice: downstream
+Element-wise `aftercorr` chaining is not part of this slice### Partial module runs (`--module`)
+
+A composed workflow (clinical pipelines like clindet: several
+`[[include]]` modules chained together) can run just ONE module and the
+producers of its declared inputs:
+
+```bash
+# run only the germline module (rules/20_germline.oxoflow) of a composed
+# clinical pipeline — the module name defaults to the include's file stem
+oxo-flow run main.oxoflow --module 20_germline
+
+# multiple modules + rule targets union together
+oxo-flow run main.oxoflow --module 20_germline --module 30_vcf_norm -t report
+```
+
+The closure is: the module's rules + every host rule producing one of its
+declared concrete contract inputs; upstream DAG dependents come through
+the regular target machinery. Unknown module names fail with the known
+module list. `dry-run --module` previews the same set.
+: downstream
 instances submit in ready batches as array elements finish, which is
 correct but not as queue-efficient as true element-wise chaining.
 

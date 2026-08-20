@@ -75,34 +75,16 @@ fn repo_dir_name(spec: &str) -> String {
         .to_string()
 }
 
-/// GitHub clone mirrors tried when the official URL fails — ghproxy-style
-/// prefixes, matching docs/guide/src/how-to/china-mirrors.md. Only applied
-/// to github.com URLs; other hosts get no fallback.
-const GITHUB_CLONE_MIRRORS: &[&str] = &["https://ghfast.top/", "https://gh-proxy.com/"];
-
-/// Candidate clone URLs in fallback order: the official URL first, then the
-/// mirror-prefixed forms for github.com URLs.
-pub(crate) fn mirror_candidates(repo_url: &str) -> Vec<String> {
-    let official = repo_url.trim_end_matches('/').to_string();
-    if !official.starts_with("https://github.com/") {
-        return vec![official];
-    }
-    std::iter::once(official.clone())
-        .chain(
-            GITHUB_CLONE_MIRRORS
-                .iter()
-                .map(|prefix| format!("{prefix}{official}")),
-        )
-        .collect()
-}
-
 /// `git clone` with mirror fallback: the official URL is tried first, then
 /// each China mirror in turn (github.com URLs only). Every failure is
 /// reported; a partial clone directory left behind by a failed attempt is
 /// removed so callers can retry cleanly.
 pub(crate) async fn clone_repo(repo_url: &str, git_ref: Option<&str>, target: &Path) -> Result<()> {
     let mut failures: Vec<String> = Vec::new();
-    for (index, candidate) in mirror_candidates(repo_url).iter().enumerate() {
+    for (index, candidate) in oxo_flow_core::git::mirror_candidates(repo_url)
+        .iter()
+        .enumerate()
+    {
         if index > 0 {
             eprintln!(
                 "{} official clone failed — trying mirror {candidate}...",
@@ -433,13 +415,13 @@ mod tests {
 
     #[test]
     fn mirror_candidates_prefix_github_urls_only() {
-        let github = mirror_candidates("https://github.com/owner/repo.git");
-        assert_eq!(github.len(), 1 + GITHUB_CLONE_MIRRORS.len());
+        let github = oxo_flow_core::git::mirror_candidates("https://github.com/owner/repo.git");
+        assert_eq!(github.len(), 1 + 2); // official + ghfast.top + gh-proxy.com
         assert_eq!(github[0], "https://github.com/owner/repo.git");
-        assert!(github[1].starts_with(GITHUB_CLONE_MIRRORS[0]));
+        assert!(github[1].starts_with("https://ghfast.top/"));
         assert!(github[1].contains("github.com/owner/repo.git"));
 
-        let other = mirror_candidates("https://example.com/team/repo.git");
+        let other = oxo_flow_core::git::mirror_candidates("https://example.com/team/repo.git");
         assert_eq!(other.len(), 1, "non-GitHub URLs get no mirror fallback");
     }
 

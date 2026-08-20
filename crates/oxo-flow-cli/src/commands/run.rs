@@ -455,6 +455,7 @@ pub async fn run_command(
     keep_going: bool,
     workdir: Option<PathBuf>,
     target: Vec<String>,
+    module: Vec<String>,
     retry: u32,
     timeout: String,
     resume_failed: bool,
@@ -568,6 +569,31 @@ pub async fn run_command(
     )
     .context("failed to build workflow DAG")?;
 
+    // --module partial runs (issue #112 elasticity): each module name
+    // resolves to its rules plus the host producers of its declared
+    // concrete inputs; upstream DAG dependents come via the target
+    // machinery below.
+    let mut target = target;
+    for m in &module {
+        match config.module_closure(m) {
+            Some(names) => target.extend(names),
+            None => {
+                let known: Vec<&String> = config.module_rules.keys().collect();
+                return Err(anyhow::anyhow!(
+                    "unknown module '{m}' — known modules: {}",
+                    if known.is_empty() {
+                        "(none — no [[include]] modules)".to_string()
+                    } else {
+                        known
+                            .iter()
+                            .map(|k| k.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    }
+                ));
+            }
+        }
+    }
     let mut order = if target.is_empty() {
         dag.execution_order()?
     } else {
@@ -2266,6 +2292,7 @@ pub async fn run_command(
 pub async fn dry_run_command(
     workflow: Option<PathBuf>,
     target: Vec<String>,
+    module: Vec<String>,
     verbose: bool,
     json: bool,
     ai: bool,
@@ -2363,6 +2390,25 @@ pub async fn dry_run_command(
     )
     .context("failed to build workflow DAG")?;
 
+    // --module partial runs (issue #112 elasticity) — same resolution as
+    // `run`.
+    let mut target = target;
+    for m in &module {
+        match config.module_closure(m) {
+            Some(names) => target.extend(names),
+            None => {
+                return Err(anyhow::anyhow!(
+                    "unknown module '{m}' — known modules: {}",
+                    config
+                        .module_rules
+                        .keys()
+                        .map(|k| k.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+    }
     // Compute the execution set (respects --target), then display it in
     // parallel-group order — the same grouping `run` uses for scheduling.
     // Independent rules at the same level appear adjacent, so the listing
@@ -3497,6 +3543,7 @@ pub async fn resume_command(
         keep_going,        // keep_going (same semantics as `run`)
         effective_workdir, // workdir (recorded by the original run)
         Vec::new(),        // target
+        Vec::new(),        // module
         0,                 // retry
         timeout,           // timeout
         false,             // resume_failed (user can re-run with --resume-failed in 'run')

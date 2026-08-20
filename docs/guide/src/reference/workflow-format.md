@@ -157,6 +157,8 @@ shell = "true"
 | `inputs` | Array of String | File patterns the host must wire into the module. A concrete declared input (no `{`-wildcard) that no rule produces fails validation with the gap named; wildcarded patterns are verified by DAG edge inference at run time |
 | `outputs` | Array of String | Files the module exposes to the host. A declared output not produced by a module rule fails validation; a host rule reading a module-internal file that is **not** declared here produces an encapsulation warning |
 | `params` | Table | Defaults for config keys the module reads, filled in profile-style (`or_insert` — explicit host values win) |
+| `name` | String | Module identity for partial runs (`run --module <name>`). Defaults to the included file's stem (`rules/20_germline.oxoflow` → `20_germline`), so existing composed workflows are addressable without changes |
+| `repo` + `ref` | String pair | Pin the included path to a git repository at a tag/branch/commit: `repo = "https://github.com/org/oxo-flow-modules"`, `ref = "v1.2.0"`, `path = "rules/qc.oxoflow"`. Any git URL works (https/ssh/file://); github.com clones fall back to China mirrors. Checkouts are cached under `~/.cache/oxo-flow/modules/<repo>@<ref>` (`OXO_FLOW_MODULE_CACHE` overrides) — versioned modules, reproducible composition |
 
 ---
 
