@@ -546,6 +546,13 @@ nf-core-derived images ship bash, and their scripts rely on bash features
 (`set -o pipefail`, `[[ ]]`) that the container default `sh` (often dash)
 rejects — the re-exec shim keeps these scripts working unmodified.
 
+**Singularity spec shapes:** a `singularity` spec is either a **pull URI**
+(`docker://`, `library://`, `oras://`, `https://`) — the engine pulls and
+converts it to a SIF in the workdir on first use, reusing the SIF when it
+exists — or a **local SIF path** (e.g. a site image store's
+`/data/images/bwa_0.7.17.sif`), which is used as-is with no pull step. A
+local path that does not exist fails the rule with a clear diagnostic.
+
 # # Mamba / micromamba (auto-detects binary, same YAML format as conda)
 # environment = { mamba = "envs/qc.yaml", mamba_prefix = ".oxo-flow/envs" }
 

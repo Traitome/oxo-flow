@@ -524,15 +524,19 @@ impl EnvironmentBackend for SingularityBackend {
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
-        // Pull only when the image is absent: `{binary} pull` refuses
-        // to overwrite an existing SIF (live: "Image file already
-        // exists: ... - will not overwrite" when a previous run left
-        // the SIF in the workdir), and pulling per rule would rebuild
-        // the image every time. The SIF name follows the pull naming
-        // (last path segment, ':' -> '_'); the per-key env lock
-        // serializes the truly-missing case.
+        // Two spec shapes:
+        // - a pull URI (docker://, library://, oras://, https://): pull
+        //   when the derived SIF is absent — `pull` refuses to overwrite
+        //   an existing SIF, and pulling per rule would rebuild the image
+        //   every time. The SIF name follows the pull naming (last path
+        //   segment, ':' -> '_'); the per-key env lock serializes the
+        //   truly-missing case.
+        // - a local SIF path: already deployed (e.g. a shared site image
+        //   store) — nothing to pull. `{binary} pull` accepts only URIs,
+        //   so a path must bypass it entirely; a missing local file fails
+        //   with a clear diagnostic instead of pull's URI parse error.
         Ok(format!(
-            "IMG=$(printf '%s' '{spec}' | sed 's#^docker://##; s#.*/##; s#:#_#g').sif; [ -f \"$IMG\" ] || {b} pull {spec}",
+            "case '{spec}' in *://*) IMG=$(printf '%s' '{spec}' | sed 's#^docker://##; s#.*/##; s#:#_#g').sif; [ -f \"$IMG\" ] || {b} pull {spec} ;; *) [ -f '{spec}' ] || {{ echo \"singularity spec '{spec}' is neither a pull URI nor an existing file\" >&2; exit 1; }} ;; esac",
             b = self.binary,
         ))
     }
@@ -1398,8 +1402,23 @@ mod tests {
         let cmd = backend.setup_command("docker://ubuntu:22.04").unwrap();
         assert!(cmd.contains(" pull docker://ubuntu:22.04"));
         // inspect-first guard for the SIF naming
-        assert!(cmd.starts_with("IMG=$(printf '%s' 'docker://ubuntu:22.04'"));
+        assert!(cmd.starts_with("case 'docker://ubuntu:22.04' in *://*)"));
+        assert!(cmd.contains("IMG=$(printf '%s' 'docker://ubuntu:22.04'"));
         assert!(cmd.contains("[ -f \"$IMG\" ] || "));
+    }
+
+    #[test]
+    fn singularity_setup_local_sif_needs_no_pull() {
+        let backend = SingularityBackend::new();
+        let cmd = backend
+            .setup_command("/data/images/bwa_0.7.17.sif")
+            .unwrap();
+        // A local SIF is already deployed: the local branch is an
+        // existence check with a clear failure for the missing case —
+        // pull only ever appears in the URI arm of the case.
+        assert!(cmd.contains("case '/data/images/bwa_0.7.17.sif' in"));
+        assert!(cmd.contains("*) [ -f '/data/images/bwa_0.7.17.sif' ] ||"));
+        assert!(cmd.contains("neither a pull URI nor an existing file"));
     }
 
     #[test]
