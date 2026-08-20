@@ -987,7 +987,24 @@ pub async fn run_command(
         let ref_checkpoint = checkpoint_path
             .parent()
             .unwrap_or(Path::new("."))
+            .join("reference-checkpoint.json");
+        // Migration: versions before this fix wrote the state one level
+        // deeper (the checkpoint parent already ends in `.oxo-flow`, so
+        // the old join produced `.oxo-flow/.oxo-flow/`). Move the old file
+        // over once so stored fingerprints survive the upgrade.
+        let legacy_ref_checkpoint = ref_checkpoint
+            .parent()
+            .unwrap_or(Path::new("."))
             .join(".oxo-flow/reference-checkpoint.json");
+        if !ref_checkpoint.exists() && legacy_ref_checkpoint.exists() {
+            let _ = std::fs::rename(&legacy_ref_checkpoint, &ref_checkpoint);
+            // The rename runs under the workdir lock (acquired above); the
+            // now-empty nested directory is removed so no shadow path stays
+            // behind for a future reader to mistake for the real one.
+            if let Some(parent) = legacy_ref_checkpoint.parent() {
+                let _ = std::fs::remove_dir(parent);
+            }
+        }
         // name → fingerprint. Legacy checkpoints store a plain JSON array of
         // names; those entries are adopted with the current fingerprint
         // (no rebuild) — the same one-time window as rule config snapshots.
@@ -1047,8 +1064,19 @@ pub async fn run_command(
             let rebuild_reason = if !output_full.exists() {
                 Some("output missing")
             } else if stored.as_deref() == Some("") {
-                // Legacy entry: adopt the current fingerprint without rebuilding.
+                // Legacy entry: adopt the current fingerprint without
+                // rebuilding — and PERSIST the adoption. An in-memory-only
+                // adopt would leave the entry "" forever: every future run
+                // would silently re-adopt the CURRENT source state and the
+                // content guard could never engage.
                 ref_state.insert(ref_def.name.clone(), current_fp.clone());
+                if let Some(parent) = ref_checkpoint.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::write(
+                    &ref_checkpoint,
+                    serde_json::to_string(&ref_state).unwrap_or_default(),
+                );
                 None
             } else if source_newer {
                 Some("source is newer than output")
