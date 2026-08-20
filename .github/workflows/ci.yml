@@ -780,7 +780,14 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-build-
 
       - name: Build the web server (Playwright spawns it)
-        run: cargo build -p oxo-flow-web -p oxo-flow-cli
+        run: |
+          # Build ONLY what Playwright's webServer runs (`cargo run -p
+          # oxo-flow-web`). Adding -p oxo-flow-cli unifies features over
+          # both packages, so the e2e spawn recompiles feature-sensitive
+          # deps (libsqlite3-sys/reqwest/rustls) with the web-only feature
+          # set — a ~53s cold build that blew the old 60s webServer
+          # timeout (live: actions run 32327397451).
+          cargo build -p oxo-flow-web
 
       - uses: actions/setup-node@v4
         with:

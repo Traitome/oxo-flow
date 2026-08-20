@@ -26,7 +26,12 @@ export default defineConfig({
       env: { OXO_FLOW_DISABLE_RATE_LIMIT: '1' },
       port: 3000,
       reuseExistingServer: true,
-      timeout: 60000,
+      // 60s was too tight: after a cold cache the spawn pays a partial
+      // recompile of feature-sensitive deps (CI evidence: libsqlite3-sys/
+      // reqwest/rustls rebuilt on first run in ~53s and the timer fired).
+      // 240s covers cold builds without making genuinely dead servers
+      // wait four minutes — the warm path finishes in seconds.
+      timeout: 240000,
     },
   ],
 });
