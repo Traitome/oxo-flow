@@ -85,6 +85,11 @@ pub enum Commands {
         )]
         target: Vec<String>,
         #[arg(
+            long,
+            help = "Run one include module and the producers of its declared inputs (repeatable; unions with --target). Module names are the include's `name` field or its file stem"
+        )]
+        module: Vec<String>,
+        #[arg(
             short = 'r',
             long,
             default_value = "0",
@@ -232,6 +237,11 @@ pub enum Commands {
             help = "Run only specific target rules (repeatable, prefix matching)"
         )]
         target: Vec<String>,
+        #[arg(
+            long,
+            help = "Run one include module and the producers of its declared inputs (repeatable; unions with --target). Module names are the include's `name` field or its file stem"
+        )]
+        module: Vec<String>,
         /// Enable AI-powered analysis of the workflow.
         #[arg(long)]
         ai: bool,
@@ -880,6 +890,10 @@ pub enum ClusterAction {
             help = "Run only specific target rules (repeatable, prefix matching)"
         )]
         target: Vec<String>,
+        #[arg(
+            long,
+            help = "Run one include module and the producers of its declared inputs (repeatable; unions with --target). Module names are the include's `name` field or its file stem"
+        )]
         #[arg(long, help = "Generate scripts without submitting")]
         dry_run: bool,
         /// Generate job scripts with dependency support and a wrapper script
@@ -1003,6 +1017,7 @@ async fn main() -> Result<()> {
             keep_going,
             workdir,
             target,
+            module,
             retry,
             timeout,
             resume_failed,
@@ -1128,6 +1143,7 @@ async fn main() -> Result<()> {
                 keep_going,
                 wd,
                 target,
+                module,
                 retry,
                 timeout,
                 resume_failed,
@@ -1174,6 +1190,7 @@ async fn main() -> Result<()> {
         Commands::DryRun {
             workflow,
             target,
+            module,
             ai,
             ai_max_retries,
             samples_filter,
@@ -1192,6 +1209,7 @@ async fn main() -> Result<()> {
             dry_run_command(
                 workflow,
                 target,
+                module,
                 cli.verbose,
                 cli.json,
                 ai,
@@ -1446,6 +1464,7 @@ async fn main() -> Result<()> {
             dry_run_command(
                 Some(workflow.clone()),
                 target.clone(),
+                Vec::new(), // module
                 cli.verbose,
                 cli.json,
                 false,
@@ -1472,6 +1491,7 @@ async fn main() -> Result<()> {
                     jobs,
                     keep_going,      // keep_going
                     workdir.clone(), // workdir
+                    Vec::new(),      // module
                     target.clone(),  // target
                     retry,           // retry
                     timeout.clone(), // timeout

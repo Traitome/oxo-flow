@@ -324,6 +324,28 @@ pub struct IncludeDirective {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
 
+    /// Module name for partial runs (`run --module <name>`, issue #112
+    /// elasticity). Defaults to the included file's stem (`rules/20_germline.oxoflow`
+    /// → `20_germline`), so existing composed workflows are addressable
+    /// without changes.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// Git repository the included path lives in (issue #112): `path` is
+    /// resolved inside a checkout pinned at `ref`. Supports any git URL —
+    /// https, ssh, file:// — with the China-mirror fallback for github.com.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+
+    /// The git ref (tag/branch/commit) pinning the module version. Required
+    /// when `repo` is set — versioned modules are the point.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "ref")]
+    pub git_ref: Option<String>,
+
     /// Interface contract (issue #112 module slice): file patterns the HOST
     /// must wire into the module. Validation fails when a concrete (no
     /// `{`-wildcard) declared input is not produced by any rule.
@@ -1465,6 +1487,10 @@ pub struct WorkflowConfig {
     /// from). Never serialized.
     #[serde(skip)]
     pub module_of: HashMap<String, usize>,
+    /// Module name → its rule names (issue #112 elasticity: `--module`
+    /// partial runs). Built at include resolution; never serialized.
+    #[serde(skip)]
+    pub module_rules: HashMap<String, Vec<String>>,
 
     /// Engine-internal: the sample names each expanded rule came from.
     ///
@@ -2394,9 +2420,43 @@ impl WorkflowConfig {
         }
         let includes = std::mem::take(&mut self.includes);
         for inc in &includes {
-            let (content, inc_base_dir) = if inc.path.starts_with("http://")
-                || inc.path.starts_with("https://")
-            {
+            let (content, inc_base_dir) = if let Some(repo) = &inc.repo {
+                // Pinned git include (issue #112): clone once into the
+                // module cache (keyed repo@ref), then resolve `path` inside
+                // the checkout. Cache hits skip the clone entirely.
+                let git_ref = inc.git_ref.as_deref().ok_or_else(|| OxoFlowError::Config {
+                    message: format!(
+                        "include '{}' declares `repo` without `ref` — pin the module version",
+                        inc.path
+                    ),
+                })?;
+                let cache_dir =
+                    crate::git::module_cache_root().join(crate::git::cache_dir_name(repo, git_ref));
+                if !cache_dir.join(".git").exists() {
+                    std::fs::create_dir_all(cache_dir.parent().unwrap_or(&cache_dir)).map_err(
+                        |e| OxoFlowError::Config {
+                            message: format!("cannot create module cache: {e}"),
+                        },
+                    )?;
+                    crate::git::clone_pinned(repo, git_ref, &cache_dir).map_err(|e| {
+                        OxoFlowError::Config {
+                            message: format!(
+                                "failed to clone include repo '{repo}' at '{git_ref}': {e}"
+                            ),
+                        }
+                    })?;
+                }
+                let inc_path = cache_dir.join(&inc.path);
+                let text = std::fs::read_to_string(&inc_path).map_err(|e| OxoFlowError::Parse {
+                    path: inc_path.clone(),
+                    message: format!(
+                        "failed to read include '{}' from repo '{repo}': {e}",
+                        inc.path
+                    ),
+                })?;
+                let next_base = inc_path.parent().unwrap_or(&cache_dir).to_path_buf();
+                (text, next_base)
+            } else if inc.path.starts_with("http://") || inc.path.starts_with("https://") {
                 // Fetch remote include on a dedicated thread to avoid tokio runtime conflicts
                 tracing::info!(url = %inc.path, "fetching remote include");
                 let url = inc.path.clone();
@@ -2450,8 +2510,16 @@ impl WorkflowConfig {
                 None
             };
             // Collect original rule names from included file for dependency resolution
+            // Module identity: explicit `name` field, else the file stem.
+            let module_name = inc.name.clone().unwrap_or_else(|| {
+                Path::new(&inc.path)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| inc.path.clone())
+            });
             let original_rule_names: std::collections::HashSet<String> =
                 inc_config.rules.iter().map(|r| r.name.clone()).collect();
+            let mut module_members: Vec<String> = Vec::new();
             for mut rule in inc_config.rules {
                 if let Some(ref ns) = inc.namespace {
                     // Prefix rule name with namespace
@@ -2467,9 +2535,14 @@ impl WorkflowConfig {
                     if let Some(idx) = contract_idx {
                         self.module_of.insert(rule.name.clone(), idx);
                     }
+                    module_members.push(rule.name.clone());
                     self.rules.push(rule);
                 }
             }
+            self.module_rules
+                .entry(module_name)
+                .or_default()
+                .extend(module_members);
             // Contract params fill config keys in profile-style — host
             // values win (or_insert).
             for (key, value) in &inc.params {
@@ -2480,6 +2553,42 @@ impl WorkflowConfig {
         }
         self.includes = includes;
         Ok(())
+    }
+
+    /// The rule-name closure of a module for partial runs (issue #112
+    /// elasticity): the module's own rules plus every HOST rule producing
+    /// one of its declared concrete inputs. Upstream DAG dependents are
+    /// added by the caller through the regular target machinery.
+    pub fn module_closure(&self, module: &str) -> Option<Vec<String>> {
+        let members = self.module_rules.get(module)?.clone();
+        let mut closure: Vec<String> = members.clone();
+        // Declared concrete inputs the module needs wired in.
+        for (idx, contract) in self.include_contracts.iter().enumerate() {
+            let module_uses_this_contract = members
+                .iter()
+                .any(|r| self.module_of.get(r).is_some_and(|p| *p == idx));
+            if !module_uses_this_contract {
+                continue;
+            }
+            let mut producers: HashMap<String, String> = HashMap::new();
+            for rule in &self.rules {
+                for out in rule.output.to_vec() {
+                    producers.entry(out).or_insert_with(|| rule.name.clone());
+                }
+            }
+            for input in &contract.inputs {
+                if input.contains('{') {
+                    continue;
+                }
+                if let Some(producer) = producers.get(input)
+                    && !members.contains(producer)
+                    && !closure.contains(producer)
+                {
+                    closure.push(producer.clone());
+                }
+            }
+        }
+        Some(closure)
     }
 
     /// Check the resolved include contracts (issue #112 module slice).
@@ -6122,6 +6231,126 @@ shell = "echo {config.database} > {output[0]}"
 
         // A rule that never fanned out has no template entry.
         assert_eq!(config.template_of("plain"), None);
+    }
+
+    #[test]
+    fn module_closure_includes_contract_input_producers() {
+        // Issue #112 elasticity: `--module` must include the host rules
+        // producing the module's declared concrete inputs, so a partial
+        // run of the module alone has everything it needs wired.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("m.oxoflow"),
+            r#"[workflow]
+name = "m"
+version = "1.0.0"
+
+[[rules]]
+name = "step"
+input = ["raw.fq"]
+output = ["out.bam"]
+shell = "true"
+"#,
+        )
+        .unwrap();
+        let host = r#"[workflow]
+name = "host"
+version = "1.0.0"
+
+[[include]]
+path = "m.oxoflow"
+name = "mapper"
+inputs = ["raw.fq"]
+outputs = ["out.bam"]
+
+[[rules]]
+name = "fetch"
+output = ["raw.fq"]
+shell = "true"
+
+[[rules]]
+name = "unrelated"
+output = ["u.txt"]
+shell = "true"
+"#;
+        let wf = dir.path().join("host.oxoflow");
+        std::fs::write(&wf, host).unwrap();
+        let config = WorkflowConfig::from_file(&wf).unwrap();
+        let closure = config.module_closure("mapper").expect("module exists");
+        assert!(
+            closure.contains(&"step".to_string()),
+            "module rules: {closure:?}"
+        );
+        assert!(
+            closure.contains(&"fetch".to_string()),
+            "the declared-input producer must join the closure: {closure:?}"
+        );
+        assert!(
+            !closure.contains(&"unrelated".to_string()),
+            "unrelated rules must stay out: {closure:?}"
+        );
+    }
+
+    #[test]
+    fn include_from_git_repo_resolves_path_inside_checkout() {
+        // Issue #112: includes may come from a pinned git repository
+        // (repo + ref + path) — the versioned-module composition story.
+        // A LOCAL git repo keeps the test network-free (file:// clone).
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("mods");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(
+            repo.join("qc.oxoflow"),
+            r#"[workflow]
+name = "qc"
+version = "1.0.0"
+
+[[rules]]
+name = "fastqc"
+output = ["qc.html"]
+shell = "true"
+"#,
+        )
+        .unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap();
+        };
+        git(&["init"]);
+        git(&["config", "user.email", "t@t"]);
+        git(&["config", "user.name", "t"]);
+        git(&["add", "qc.oxoflow"]);
+        git(&["commit", "-m", "qc"]);
+        git(&["tag", "v1.0.0"]);
+
+        let host = format!(
+            r#"[workflow]
+name = "host"
+version = "1.0.0"
+
+[[include]]
+repo = "file://{}"
+ref = "v1.0.0"
+path = "qc.oxoflow"
+
+[[rules]]
+name = "use"
+input = ["qc.html"]
+output = ["u.txt"]
+shell = "true"
+"#,
+            repo.display()
+        );
+        let wf = dir.path().join("host.oxoflow");
+        std::fs::write(&wf, host).unwrap();
+        let config = WorkflowConfig::from_file(&wf).unwrap();
+        assert!(
+            config.rules.iter().any(|r| r.name == "fastqc"),
+            "the module's rule must resolve from the pinned repo"
+        );
     }
 
     #[test]
