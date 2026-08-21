@@ -1135,6 +1135,16 @@ impl LocalExecutor {
         // so pre-flight failures never leak empty dirs.
         let scratch_dir = rule.scratch.then(|| self.scratch_dir_for(&rule.name));
 
+        // Pre-execution snapshot of the declared outputs: on failure, only
+        // files this attempt creates or modifies are invalidated (issue
+        // #118) — a failed rule must never leave partial outputs that the
+        // freshness gate would treat as up-to-date on the next run.
+        let output_snapshot = super::output_invalidation::snapshot_outputs(
+            &rule,
+            &self.config.workdir,
+            wildcard_values,
+        );
+
         let resolved_commands =
             vec![self.resolve_command(&base_cmd, &rule, scratch_dir.as_deref())];
         record.command = resolved_commands
@@ -1455,6 +1465,7 @@ impl LocalExecutor {
                 push_stderr_note(&mut record, &format!("\n[oxo-flow] {e}"));
                 push_stderr_note(&mut record, &scratch_preserved_note(scratch));
                 cleanup_temp_outputs(&rule, &self.config.workdir).await;
+                super::output_invalidation::invalidate_failed_outputs(&output_snapshot).await;
                 if let Some(ref hook_cmd) = rule.on_failure {
                     run_hook(
                         &render_shell_command(
@@ -1563,6 +1574,7 @@ impl LocalExecutor {
                     push_stderr_note(&mut record, &scratch_preserved_note(scratch));
                 }
                 cleanup_temp_outputs(&rule, &self.config.workdir).await;
+                super::output_invalidation::invalidate_failed_outputs(&output_snapshot).await;
                 if let Some(ref hook_cmd) = rule.on_failure {
                     run_hook(
                         &render_shell_command(
@@ -1587,6 +1599,7 @@ impl LocalExecutor {
                 push_stderr_note(&mut record, &scratch_preserved_note(scratch));
             }
             cleanup_temp_outputs(&rule, &self.config.workdir).await;
+            super::output_invalidation::invalidate_failed_outputs(&output_snapshot).await;
             if let Some(ref hook_cmd) = rule.on_failure {
                 run_hook(
                     &render_shell_command(
