@@ -50,6 +50,8 @@ fn free_port() -> u16 {
 struct TestServer {
     child: Child,
     base: String,
+    /// File capturing the server's stdout+stderr, for failure diagnostics.
+    log_path: PathBuf,
 }
 
 impl Drop for TestServer {
@@ -69,10 +71,28 @@ impl TestServer {
         let _ = self.child.wait();
     }
 
-    async fn start(dir: &std::path::Path) -> Self {
-        let port = free_port();
-        let child = StdCommand::new(workspace_bin("oxo-flow-web"))
-            .current_dir(dir)
+    /// Tail of the server's captured output, for embedding in panic
+    /// messages. The server logs cancel/signal failures (issue #120) through
+    /// tracing — without this, CI failures are undiagnosable because the
+    /// server otherwise runs with nulled output.
+    fn log_tail(&self) -> String {
+        let Ok(bytes) = std::fs::read(&self.log_path) else {
+            return "(no server log captured)".to_string();
+        };
+        let tail = if bytes.len() > 4096 {
+            &bytes[bytes.len() - 4096..]
+        } else {
+            &bytes[..]
+        };
+        String::from_utf8_lossy(tail).into_owned()
+    }
+
+    /// Spawn the web server with its output captured to a log file in `dir`.
+    fn spawn_server(dir: &std::path::Path, port: u16, extra_envs: &[(&str, &str)]) -> Self {
+        let log_path = dir.join("web-server.log");
+        let log_file = std::fs::File::create(&log_path).expect("create server log");
+        let mut cmd = StdCommand::new(workspace_bin("oxo-flow-web"));
+        cmd.current_dir(dir)
             .env("OXO_FLOW_BIN", workspace_bin("oxo-flow"))
             .env("OXO_FLOW_HOST", "127.0.0.1")
             .env("OXO_FLOW_PORT", port.to_string())
@@ -80,25 +100,45 @@ impl TestServer {
             .env(
                 "OXO_FLOW_FRONTEND_DIR",
                 dir.join("missing-frontend").to_str().unwrap(),
-            )
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            );
+        for (k, v) in extra_envs {
+            cmd.env(k, v);
+        }
+        let child = cmd
+            .stdout(Stdio::from(log_file.try_clone().unwrap()))
+            .stderr(Stdio::from(log_file))
             .spawn()
             .expect("web server must start");
+        Self {
+            child,
+            base: format!("http://127.0.0.1:{port}"),
+            log_path,
+        }
+    }
 
-        let base = format!("http://127.0.0.1:{port}");
+    async fn start(dir: &std::path::Path) -> Self {
+        let server = Self::spawn_server(dir, free_port(), &[]);
         let client = reqwest::Client::new();
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             if Instant::now() > deadline {
-                panic!("web server did not become ready at {base}");
+                panic!(
+                    "web server did not become ready at {}\nserver log tail:\n{}",
+                    server.base,
+                    server.log_tail()
+                );
             }
-            if client.get(format!("{base}/api/runs")).send().await.is_ok() {
+            if client
+                .get(format!("{}/api/runs", server.base))
+                .send()
+                .await
+                .is_ok()
+            {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
-        Self { child, base }
+        server
     }
 }
 
@@ -544,11 +584,23 @@ async fn web_cancel_terminates_rule_processes() {
         if !out.status.success() {
             break; // no match — process is gone
         }
-        assert!(
-            Instant::now() < deadline,
-            "rule process survived cancel: {}",
-            String::from_utf8_lossy(&out.stdout)
-        );
+        if Instant::now() >= deadline {
+            // Diagnose, not just fail (issue #120): who survived, in which
+            // process group, and what the server logged while signalling.
+            let survivors = String::from_utf8_lossy(&out.stdout).into_owned();
+            let pids: String = survivors.split_whitespace().collect::<Vec<_>>().join(",");
+            let ps = StdCommand::new("ps")
+                .args(["-o", "pid,ppid,pgid,stat,etime,args", "-p", &pids])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                .unwrap_or_default();
+            panic!(
+                "rule process survived cancel: {survivors}\
+                 survivor details:\n{ps}\
+                 server log tail:\n{}",
+                server.log_tail()
+            );
+        }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
@@ -657,10 +709,21 @@ async fn web_restart_reattaches_live_cli_and_cancel_still_works() {
         if !out.status.success() {
             break;
         }
-        assert!(
-            Instant::now() < deadline,
-            "rule process survived post-restart cancel"
-        );
+        if Instant::now() >= deadline {
+            let survivors = String::from_utf8_lossy(&out.stdout).into_owned();
+            let pids: String = survivors.split_whitespace().collect::<Vec<_>>().join(",");
+            let ps = StdCommand::new("ps")
+                .args(["-o", "pid,ppid,pgid,stat,etime,args", "-p", &pids])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                .unwrap_or_default();
+            panic!(
+                "rule process survived post-restart cancel: {survivors}\
+                 survivor details:\n{ps}\
+                 server log tail:\n{}",
+                server2.log_tail()
+            );
+        }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     let info: serde_json::Value = client
@@ -1140,31 +1203,25 @@ async fn login_as(client: &reqwest::Client, base: &str, username: &str, password
 
 impl TeamServer {
     async fn start(dir: &std::path::Path) -> Self {
-        let port = free_port();
-        let child = StdCommand::new(workspace_bin("oxo-flow-web"))
-            .current_dir(dir)
-            .env("OXO_FLOW_BIN", workspace_bin("oxo-flow"))
-            .env("OXO_FLOW_HOST", "127.0.0.1")
-            .env("OXO_FLOW_PORT", port.to_string())
-            .env("OXO_FLOW_MODE", "team")
-            .env("OXO_FLOW_ADMIN_PASSWORD", "admin-secret")
-            .env("OXO_FLOW_USER_PASSWORD", "user-secret")
-            .env("OXO_FLOW_VIEWER_PASSWORD", "viewer-secret")
-            .env(
-                "OXO_FLOW_FRONTEND_DIR",
-                dir.join("missing-frontend").to_str().unwrap(),
-            )
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("team web server must start");
-
-        let base = format!("http://127.0.0.1:{port}");
+        let server = TestServer::spawn_server(
+            dir,
+            free_port(),
+            &[
+                ("OXO_FLOW_MODE", "team"),
+                ("OXO_FLOW_ADMIN_PASSWORD", "admin-secret"),
+                ("OXO_FLOW_USER_PASSWORD", "user-secret"),
+                ("OXO_FLOW_VIEWER_PASSWORD", "viewer-secret"),
+            ],
+        );
+        let base = server.base.clone();
         let client = reqwest::Client::new();
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             if Instant::now() > deadline {
-                panic!("team web server did not become ready at {base}");
+                panic!(
+                    "team web server did not become ready at {base}\nserver log tail:\n{}",
+                    server.log_tail()
+                );
             }
             // /api/health stays public in every mode (load-balancer probe).
             if client
@@ -1179,7 +1236,7 @@ impl TeamServer {
         }
         let admin_token = login_as(&client, &base, "admin", "admin-secret").await;
         Self {
-            server: TestServer { child, base },
+            server,
             admin_token,
         }
     }
@@ -1947,10 +2004,18 @@ async fn web_run_instances_expose_sample_rule_table() {
         output = [\"qc_{{sample}}.txt\"]\n\
         shell = \"[ \\\"{{sample}}\\\" = S1 ] && echo ok > qc_{{sample}}.txt || exit 1\"\n"
     );
+    // keep_going is load-bearing (issue #120): the default fail-fast policy
+    // aborts in-flight instance tasks when S2 fails, so whether S1's success
+    // lands in the checkpoint is a pure scheduling race. keep_going runs
+    // every instance to completion — the mode this table exists for. The CLI
+    // contract (cli_integration.rs) is that --keep-going reports failures in
+    // the summary and table but still exits 0, so the run is "completed"
+    // with a failed S2 row inside.
     let created: serde_json::Value = client
         .post(format!("{base}/api/runs"))
         .json(&serde_json::json!({
             "toml_content": workflow,
+            "keep_going": true,
         }))
         .send()
         .await
@@ -1959,7 +2024,10 @@ async fn web_run_instances_expose_sample_rule_table() {
         .await
         .unwrap();
     let run_id = created["run_id"].as_str().unwrap().to_string();
-    assert_eq!(wait_for_terminal(&client, &base, &run_id).await, "failed");
+    assert_eq!(
+        wait_for_terminal(&client, &base, &run_id).await,
+        "completed"
+    );
 
     let instances: serde_json::Value = client
         .get(format!("{base}/api/runs/{run_id}/instances"))
@@ -1970,14 +2038,40 @@ async fn web_run_instances_expose_sample_rule_table() {
         .await
         .unwrap();
     let rows = instances.as_array().unwrap();
-    let s1 = rows
-        .iter()
-        .find(|r| r["sample"] == "S1")
-        .expect("S1 instance present");
-    let s2 = rows
-        .iter()
-        .find(|r| r["sample"] == "S2")
-        .expect("S2 instance present");
+    // An empty/thin table here means the run died before writing checkpoint
+    // rows (early spawn failure under parallel load — issue #120), so dump
+    // the evidence instead of a bare expect: run record, CLI log, server log.
+    let missing: Vec<&str> = ["S1", "S2"]
+        .into_iter()
+        .filter(|name| !rows.iter().any(|r| r["sample"] == *name))
+        .collect();
+    if !missing.is_empty() {
+        let run_info: serde_json::Value = client
+            .get(format!("{base}/api/runs/{run_id}"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let logs: String = client
+            .get(format!("{base}/api/runs/{run_id}/logs"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap_or_default();
+        panic!(
+            "instance table missing samples {missing:?}: {instances}\n\
+             run record: {run_info}\n\
+             CLI log:\n{logs}\n\
+             server log tail:\n{}",
+            server.log_tail()
+        );
+    }
+    let s1 = rows.iter().find(|r| r["sample"] == "S1").unwrap();
+    let s2 = rows.iter().find(|r| r["sample"] == "S2").unwrap();
     assert_eq!(s1["status"], "success", "S1 succeeded: {instances}");
     assert_eq!(s2["status"], "failed", "S2 failed: {instances}");
     assert_eq!(s1["rule"], "qc", "base rule attribution");

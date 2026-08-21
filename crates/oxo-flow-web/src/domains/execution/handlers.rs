@@ -1138,25 +1138,63 @@ pub async fn cancel_run(
 
     // Signal the live process group: paused groups need SIGCONT first so the
     // SIGTERM can be delivered, then a bounded grace window before SIGKILL.
-    if let Some(pgid) = crate::process_control::pgid(&id) {
-        use crate::process_control::{SIGCONT, SIGKILL, SIGTERM, signal_group};
+    //
+    // The pgid comes from the in-memory registry, falling back to the pid
+    // recorded at spawn (the wrapper's pid doubles as its pgid — see
+    // process_control). The registry alone is not enough: finalize_run
+    // unregisters the moment the CLI wrapper is reaped, so a cancel landing
+    // in that window would otherwise signal nothing and still return 200
+    // while orphaned rule processes run on (issue #120). The DB fallback is
+    // guarded against pid reuse by liveness + cmdline probes.
+    let pgid = match crate::process_control::pgid(&id) {
+        Some(pgid) => Some(pgid),
+        None => {
+            // fetch_one is safe — load_owned_run above proved the row exists;
+            // the pid column itself is nullable (never spawned / cleaned up).
+            let db_pid: Option<i64> = sqlx::query_scalar("SELECT pid FROM runs WHERE id = ?")
+                .bind(&id)
+                .fetch_one(pool)
+                .await
+                .unwrap_or(None);
+            db_pid.and_then(|pid| {
+                let pid = pid as i32;
+                (pid > 0
+                    && crate::process_control::probe_alive(pid)
+                    && crate::process_control::looks_like_oxo_flow(pid))
+                .then_some(pid)
+            })
+        }
+    };
+
+    if let Some(pgid) = pgid {
+        use crate::process_control::{SIGCONT, SIGKILL, SIGTERM, group_alive, signal_group};
         if run.status == "paused"
             && let Err(e) = signal_group(pgid, SIGCONT)
         {
             tracing::warn!("SIGCONT before cancel failed for run {id} pgid {pgid}: {e}");
         }
         if let Err(e) = signal_group(pgid, SIGTERM) {
-            tracing::warn!("SIGTERM failed for run {id} pgid {pgid}: {e}");
+            tracing::error!("SIGTERM failed for run {id} pgid {pgid}: {e}");
         }
+        // The grace window watches ACTUAL group liveness, not the registry:
+        // the registry entry disappears when the CLI wrapper is reaped, which
+        // can precede the death of orphaned rule subprocesses — gating the
+        // SIGKILL escalation on it let survivors escape (issue #120).
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-        while crate::process_control::pgid(&id).is_some() && tokio::time::Instant::now() < deadline
-        {
+        while group_alive(pgid) && tokio::time::Instant::now() < deadline {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
-        if crate::process_control::pgid(&id).is_some()
-            && let Err(e) = signal_group(pgid, SIGKILL)
-        {
-            tracing::warn!("SIGKILL failed for run {id} pgid {pgid}: {e}");
+        if group_alive(pgid) {
+            if let Err(e) = signal_group(pgid, SIGKILL) {
+                tracing::error!("SIGKILL failed for run {id} pgid {pgid}: {e}");
+            }
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+            while group_alive(pgid) && tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            if group_alive(pgid) {
+                tracing::error!("run {id}: process group {pgid} still alive after SIGKILL");
+            }
         }
         crate::process_control::unregister(&id);
     } else if let Some(cluster_id) = crate::domains::clusters::remote::remote_cluster_of(&id) {

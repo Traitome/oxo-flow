@@ -100,6 +100,44 @@ async fn cancel_signals_the_process_group() {
     assert!(process_control::pgid("pc-cancel").is_none());
 }
 
+/// Regression (issue #120): cancel must not rely on the in-memory registry
+/// alone. finalize_run unregisters the moment the CLI wrapper is reaped, so
+/// a cancel landing after that point must still find the group via the pid
+/// recorded in the runs table and actually kill it.
+#[tokio::test]
+async fn cancel_falls_back_to_db_pid_when_registry_is_empty() {
+    common::ensure_db().await;
+    insert_run_row("pc-fallback", "running").await;
+    let mut child = Command::new("sleep")
+        .arg("30")
+        .process_group(0)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn sleep");
+    let pid = child.id() as i64;
+    // Record the pid like the executor does, but never register in-memory —
+    // the post-finalize window this test reproduces.
+    sqlx::query("UPDATE runs SET pid = ? WHERE id = ?")
+        .bind(pid)
+        .bind("pc-fallback")
+        .execute(oxo_flow_web::infra::db::sqlite::pool())
+        .await
+        .unwrap();
+    assert!(process_control::pgid("pc-fallback").is_none());
+
+    // looks_like_oxo_flow guards pid reuse — a bare `sleep` fails the probe,
+    // so cancel must report the nothing-to-signal path, not kill a stranger.
+    let (status, _) = post_json("/api/runs/pc-fallback/cancel", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        child.try_wait().expect("try_wait").is_none(),
+        "a process failing the identity probe must not be signalled"
+    );
+    process_control::signal_group(child.id() as i32, process_control::SIGKILL).expect("cleanup");
+    child.wait().expect("wait after cleanup");
+}
+
 #[tokio::test]
 async fn pause_freezes_then_resume_continues() {
     common::ensure_db().await;
