@@ -120,8 +120,16 @@ impl EnvironmentBackend for CondaBackend {
         // ran instantly by hand). With the flag, conda forwards the child's
         // fds straight through — the engine's own pipe draining
         // (wait_with_output) is the capture mechanism.
+        //
+        // The wrapped bash also re-prepends $CONDA_PREFIX/bin to PATH:
+        // on conda+pixi (or other toolchain-manager) hybrid boxes the
+        // host PATH can precede the env's bin inside `conda run`, so
+        // tools resolve to unrelated pre-existing envs (live: pinned
+        // gatk 4.4.0.0 was bypassed by a user pixi env with 4.6.2.0 +
+        // JDK 25 → Spark Subject.getSubject crash). The env's own bin
+        // must always win, regardless of host PATH ordering.
         Ok(format!(
-            "conda run --no-capture-output -n {env_name} bash -c '{escaped}'"
+            "conda run --no-capture-output -n {env_name} bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; {escaped}'"
         ))
     }
 
@@ -181,15 +189,16 @@ impl CondaBackend {
         prefix: Option<&str>,
     ) -> Result<String> {
         let escaped = escape_for_sh_single_quote(command);
-        // Same --no-capture-output rationale as wrap_command above.
+        // Same --no-capture-output + CONDA_PREFIX/bin-first rationale as
+        // wrap_command above.
         if let Some(prefix) = prefix {
             Ok(format!(
-                "conda run --no-capture-output -p {prefix} bash -c '{escaped}'"
+                "conda run --no-capture-output -p {prefix} bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; {escaped}'"
             ))
         } else {
             let env_name = conda_env_name_from_spec(spec);
             Ok(format!(
-                "conda run --no-capture-output -n {env_name} bash -c '{escaped}'"
+                "conda run --no-capture-output -n {env_name} bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; {escaped}'"
             ))
         }
     }
@@ -1946,7 +1955,7 @@ mod tests {
             .wrap_command_with_opts("echo hi", "envs/qc.yaml", Some(".oxo-conda"))
             .unwrap();
         assert!(
-            result.contains("conda run --no-capture-output -p .oxo-conda"),
+            result.contains("conda run --no-capture-output -p .oxo-conda bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; echo hi'"),
             "expected -p prefix form, got: {result}"
         );
         assert!(result.contains("echo hi"));
@@ -1958,7 +1967,7 @@ mod tests {
         let result = backend
             .wrap_command_with_opts("echo hi", "envs/qc.yaml", None)
             .unwrap();
-        assert!(result.contains("conda run --no-capture-output -n qc"));
+        assert!(result.contains("conda run --no-capture-output -n qc bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; echo hi'"));
         assert!(!result.contains(" -p "));
     }
 
@@ -2043,7 +2052,7 @@ mod tests {
         let result = resolver
             .wrap_command("fastqc reads.fq", &spec, None, std::path::Path::new("."))
             .unwrap();
-        assert!(result.contains("conda run --no-capture-output -p .oxo-conda"));
+        assert!(result.contains("conda run --no-capture-output -p .oxo-conda bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; fastqc reads.fq'"));
         assert!(!result.contains(" -n "));
     }
 
