@@ -21,6 +21,11 @@ thereby auditable to the exact workflow version that produced it.
 - `oxo-flow provenance verify` prints the recorded SHA alongside the
   workflow path (see [provenance](../commands/provenance.md)); the JSON
   field is there for programmatic use.
+- The version travels with every run artifact, closing the audit chain:
+  the **run log** (`.oxo-flow/logs/oxo-flow.log`, rotated per run, see
+  [run](../commands/run.md#run-logs)) carries the SHA in its header, and
+  **report snapshots** embed `workflow_git_sha` in their JSON and show it
+  in the HTML provenance section.
 - Practical guidance: **commit before you run**; tag milestones
   (`git tag v1.2.0`) so the bare SHA has a human-readable alias in your
   records.

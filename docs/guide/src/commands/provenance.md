@@ -92,5 +92,7 @@ To get real integrity verification, re-run with `--provenance`.
 
 ## See Also
 
-- [oxo-flow run](run.md) — use `--provenance` to enable checksum tracking
+- [oxo-flow run](run.md) — use `--provenance` to enable checksum tracking;
+  the run log (`.oxo-flow/logs/oxo-flow.log`) and report snapshots carry the
+  same workflow version header
 - [REPRODUCIBILITY.md](https://github.com/Traitome/oxo-flow/blob/main/REPRODUCIBILITY.md)

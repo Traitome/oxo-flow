@@ -174,6 +174,12 @@ pub struct Report {
     /// Provenance: path of the workflow file the report describes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_path: Option<String>,
+
+    /// Provenance: git HEAD SHA of the repository the workflow lives in,
+    /// recorded by the run that produced the checkpoint (issue #115
+    /// pillar 1). Absent when the workflow is not in a git repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_git_sha: Option<String>,
 }
 
 const REPORT_SCHEMA_VERSION: u32 = 1;
@@ -200,6 +206,7 @@ impl Report {
             metadata: HashMap::new(),
             checkpoint_path: None,
             workflow_path: None,
+            workflow_git_sha: None,
         }
     }
 
@@ -1011,6 +1018,13 @@ impl ReportBuilder {
     /// Provenance: the workflow file path the report describes.
     pub fn workflow_path(mut self, path: Option<String>) -> Self {
         self.report.workflow_path = path;
+        self
+    }
+
+    /// Provenance: the workflow repository's git HEAD SHA (issue #115
+    /// pillar 1) — which workflow version produced these results.
+    pub fn workflow_git_sha(mut self, sha: Option<String>) -> Self {
+        self.report.workflow_git_sha = sha;
         self
     }
 
@@ -2818,6 +2832,9 @@ impl ReportSectionGenerator for ProvenanceGenerator {
         if let Some(path) = ctx.checkpoint_path {
             pairs.push(("Checkpoint".into(), path.display().to_string()));
         }
+        if let Some(sha) = ctx.checkpoint.and_then(|c| c.workflow_git_sha.as_deref()) {
+            pairs.push(("Workflow git HEAD".into(), sha.into()));
+        }
         vec![ReportSection {
             title: "Provenance".into(),
             id: "provenance".into(),
@@ -2896,6 +2913,20 @@ fn task_summary_section(rules: &[crate::rule::Rule]) -> ReportSection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn report_workflow_git_sha_provenance_roundtrip() {
+        // The builder records the workflow version that produced the
+        // results (issue #115 pillar 1); absent by default.
+        let report = ReportBuilder::new("t", "wf", "1.0.0")
+            .workflow_git_sha(Some("abc123".to_string()))
+            .build();
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("\"workflow_git_sha\":\"abc123\""));
+        let plain = ReportBuilder::new("t", "wf", "1.0.0").build();
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(!json.contains("workflow_git_sha"));
+    }
 
     #[test]
     fn create_report() {
