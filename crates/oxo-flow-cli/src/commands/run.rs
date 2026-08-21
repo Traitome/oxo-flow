@@ -1479,21 +1479,15 @@ pub async fn run_command(
         .iter()
         .map(|r| (r.name.clone(), r.priority))
         .collect();
-    let compute_ready = |sched: &oxo_flow_core::scheduler::SchedulerState,
-                         submitted: &std::collections::HashSet<String>,
-                         dag: &WorkflowDag,
-                         order_set: &std::collections::HashSet<String>|
-     -> Result<Vec<String>, anyhow::Error> {
-        let mut ready = sched.ready_rules(dag)?;
-        ready.retain(|name| order_set.contains(name) && !submitted.contains(name));
-        // Sort by priority (descending), then name.
-        ready.sort_by(|a, b| {
-            let pa = priority_map.get(a).copied().unwrap_or(0);
-            let pb = priority_map.get(b).copied().unwrap_or(0);
-            pb.cmp(&pa).then_with(|| a.cmp(b))
-        });
-        Ok(ready)
-    };
+    // Fair-dispatch aging (issue #123): every dispatch round a rule spends
+    // ready-but-not-submitted adds AGING_STEP to its effective priority, so
+    // high-priority rules that keep failing/re-occupying slots cannot starve
+    // their lower-priority producers forever (live: auto-sra dumps at p10
+    // starved behind merges at p20 sharing the limit_merge group). Aging
+    // only matters under contention — with free slots everything submits
+    // immediately and the relative order is unchanged.
+    const AGING_STEP: i32 = 1;
+    let mut waited_rounds: std::collections::HashMap<String, i32> = Default::default();
 
     // ---- main event loop -------------------------------------------------
 
@@ -1503,9 +1497,22 @@ pub async fn run_command(
             sched.check_deadlock(&dag)?;
         }
 
-        // Submit every rule whose dependencies are now satisfied.
-        let ready = compute_ready(&sched, &submitted, &dag, &order_set)?;
-        for rule_name in &ready {
+        // Submit every rule whose dependencies are now satisfied — capped to
+        // the free -j slots so the semaphore queue never builds, and the
+        // ready list (aged by age_ready_list) decides dispatch order fairly.
+        let ready = age_ready_list(
+            sched.ready_rules(&dag)?,
+            &order_set,
+            &submitted,
+            &priority_map,
+            &waited_rounds,
+        );
+        let available = jobs.saturating_sub(sched.running_count());
+        let to_submit: Vec<String> = ready.iter().take(available).cloned().collect();
+        for name in ready.iter().skip(available) {
+            *waited_rounds.entry(name.clone()).or_insert(0) += AGING_STEP;
+        }
+        for rule_name in &to_submit {
             // Skip rules blocked by a failed upstream dependency.
             let blocked_by = {
                 let frs = failed_rules_set.lock().await;
@@ -2334,6 +2341,26 @@ pub async fn run_command(
     }
 
     Ok(())
+}
+
+/// Sorts the scheduler's ready list by effective priority: declared priority
+/// plus rounds already waited (the aging counter of issue #123), ties broken
+/// by name. Pure and unit-tested — the dispatch loop feeds it the live ready
+/// list every round, so passed-over rules gain priority until submitted.
+fn age_ready_list(
+    mut ready: Vec<String>,
+    order_set: &std::collections::HashSet<String>,
+    submitted: &std::collections::HashSet<String>,
+    priority_map: &std::collections::HashMap<String, i32>,
+    waited: &std::collections::HashMap<String, i32>,
+) -> Vec<String> {
+    ready.retain(|name| order_set.contains(name) && !submitted.contains(name));
+    ready.sort_by(|a, b| {
+        let pa = priority_map.get(a).copied().unwrap_or(0) + waited.get(a).copied().unwrap_or(0);
+        let pb = priority_map.get(b).copied().unwrap_or(0) + waited.get(b).copied().unwrap_or(0);
+        pb.cmp(&pa).then_with(|| a.cmp(b))
+    });
+    ready
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3617,11 +3644,87 @@ pub async fn resume_command(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_cli_overrides;
+    use super::{age_ready_list, parse_cli_overrides};
     use std::collections::HashSet;
 
     fn declared(keys: &[&str]) -> HashSet<String> {
         keys.iter().map(|k| k.to_string()).collect()
+    }
+
+    fn map_of(pairs: &[(&str, i32)]) -> std::collections::HashMap<String, i32> {
+        pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    }
+
+    fn set_of(names: &[&str]) -> HashSet<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    #[test]
+    fn age_ready_list_orders_by_declared_priority_then_name() {
+        // Arrange
+        let priority = map_of(&[("high", 20), ("low", 10)]);
+        // Act
+        let ready = age_ready_list(
+            vec!["low".into(), "high".into()],
+            &set_of(&["high", "low"]),
+            &HashSet::new(),
+            &priority,
+            &std::collections::HashMap::new(),
+        );
+        // Assert
+        assert_eq!(ready, vec!["high", "low"]);
+    }
+
+    #[test]
+    fn age_ready_list_aged_rule_overtakes_higher_declared_priority() {
+        // The starvation cure (issue #123): a producer passed over for many
+        // rounds must eventually outrank the higher-priority rules that keep
+        // re-occupying the slots.
+        // Arrange
+        let priority = map_of(&[("merge", 20), ("dump", 10)]);
+        let waited = map_of(&[("dump", 15)]);
+        // Act
+        let ready = age_ready_list(
+            vec!["merge".into(), "dump".into()],
+            &set_of(&["merge", "dump"]),
+            &HashSet::new(),
+            &priority,
+            &waited,
+        );
+        // Assert
+        assert_eq!(ready, vec!["dump", "merge"]);
+    }
+
+    #[test]
+    fn age_ready_list_drops_submitted_and_out_of_scope_rules() {
+        // Arrange
+        let priority = map_of(&[("a", 5), ("b", 5), ("c", 5)]);
+        let submitted = set_of(&["b"]);
+        // Act
+        let ready = age_ready_list(
+            vec!["c".into(), "b".into(), "a".into()],
+            &set_of(&["a", "b", "c"]),
+            &submitted,
+            &priority,
+            &std::collections::HashMap::new(),
+        );
+        // Assert — b is already submitted, so it cannot be dispatched again.
+        assert_eq!(ready, vec!["a", "c"]);
+    }
+
+    #[test]
+    fn age_ready_list_treats_missing_priority_and_waits_as_zero() {
+        // Arrange — neither rule appears in the maps.
+        // Act
+        let ready = age_ready_list(
+            vec!["z".into(), "a".into()],
+            &set_of(&["a", "z"]),
+            &HashSet::new(),
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        );
+        // Assert — equal effective priority (0), name tie-break.
+        assert_eq!(ready, vec!["a", "z"]);
     }
 
     #[test]

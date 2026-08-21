@@ -837,12 +837,37 @@ impl LocalExecutor {
             }
         }
 
+        // Wait diagnostics (issue #123): a rule parked here is invisible
+        // from the outside — it has printed "Running" but spawned nothing.
+        // Emit a throttled warning every 60s naming what the rule needs and
+        // WHO holds it, so priority-inversion starvation (live: auto-sra
+        // dumps starved by merges sharing the limit_merge group) is
+        // diagnosable from the log instead of hanging silently.
+        let wait_started = std::time::Instant::now();
+        let mut last_report = wait_started;
         loop {
             {
                 let mut pool = self.resource_pool.lock().await;
                 if pool.can_accommodate(rule, self.system_threads, self.system_memory_mb) {
                     pool.reserve(rule, self.system_threads, self.system_memory_mb);
+                    let waited = wait_started.elapsed().as_secs();
+                    if waited >= 60 {
+                        tracing::info!(
+                            rule = %rule.name,
+                            waited_secs = waited,
+                            "resource wait resolved"
+                        );
+                    }
                     return Ok(());
+                }
+                if last_report.elapsed().as_secs() >= 60 {
+                    tracing::warn!(
+                        rule = %rule.name,
+                        waited_secs = wait_started.elapsed().as_secs(),
+                        "waiting for resources: {}",
+                        pool.blockage_report(rule, self.system_threads, self.system_memory_mb)
+                    );
+                    last_report = std::time::Instant::now();
                 }
             }
             // Resources busy — wait for a release notification.
