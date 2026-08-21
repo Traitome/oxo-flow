@@ -331,6 +331,11 @@ pub struct LocalExecutor {
     system_memory_mb: u64,
     /// Shared per-run peak-RSS sampler (issue #67 §4).
     rss_sampler: Arc<super::rss::RssSampler>,
+    /// Currently spawned child pid per rule (issue #131) — the CLI's abort
+    /// path reads this to signal in-flight rule processes before cancelling
+    /// their tasks (`abort_all()` alone orphans them). `std::sync::Mutex`
+    /// because the registry is only ever touched for instant insert/remove.
+    active_pids: Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>,
 }
 
 /// Detect total system memory in MB using the most reliable method available
@@ -404,6 +409,22 @@ pub(crate) fn detect_swap_mb() -> u64 {
     0
 }
 
+/// Removes a rule's pid entry when `execute_rule_with_config` returns on
+/// any path — a rule with no in-flight child must not be signalable
+/// (issue #131). Drop cannot be async, hence the `std::sync::Mutex`.
+struct ActivePidGuard {
+    registry: Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>,
+    rule: String,
+}
+
+impl Drop for ActivePidGuard {
+    fn drop(&mut self) {
+        if let Ok(mut active) = self.registry.lock() {
+            active.remove(&self.rule);
+        }
+    }
+}
+
 impl LocalExecutor {
     pub fn new(config: ExecutorConfig) -> Self {
         let semaphore = Arc::new(Semaphore::new(config.max_jobs));
@@ -433,7 +454,18 @@ impl LocalExecutor {
             system_threads: max_threads,
             system_memory_mb: max_memory_mb,
             rss_sampler: Arc::new(super::rss::RssSampler::new()),
+            active_pids: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
+    }
+
+    /// Snapshot of the in-flight child pid per rule (issue #131). The
+    /// CLI's abort path signals these process trees before cancelling the
+    /// tasks, so a failed run never orphans running rules.
+    pub fn active_pids(&self) -> Vec<(String, u32)> {
+        self.active_pids
+            .lock()
+            .map(|m| m.iter().map(|(k, v)| (k.clone(), *v)).collect())
+            .unwrap_or_default()
     }
 
     fn detect_system_resources(config: &ExecutorConfig) -> (u32, u64) {
@@ -1000,6 +1032,13 @@ impl LocalExecutor {
         wildcard_values: &HashMap<String, String>,
         config: &HashMap<String, toml::Value>,
     ) -> Result<JobRecord> {
+        // Covers every return path of this function: whatever the rule's
+        // outcome, once we leave here it no longer has an in-flight child
+        // (issue #131).
+        let _pid_guard = ActivePidGuard {
+            registry: Arc::clone(&self.active_pids),
+            rule: rule.name.clone(),
+        };
         let timeout = self.get_timeout(rule);
 
         let mut record = JobRecord {
@@ -1377,6 +1416,13 @@ impl LocalExecutor {
                 };
 
                 let child_id = child.id();
+                if let Some(pid) = child_id
+                    && let Ok(mut active) = self.active_pids.lock()
+                {
+                    // Latest spawn wins — a retry's earlier attempt is dead
+                    // (or being killed) by the time its successor starts.
+                    active.insert(rule.name.clone(), pid);
+                }
 
                 let rss_handle = child_id.map(|pid| self.rss_sampler.track(pid));
 
