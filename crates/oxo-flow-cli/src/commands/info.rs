@@ -130,7 +130,7 @@ fn derive_meta(
         .collect();
     references.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
 
-    json!({
+    let mut meta = json!({
         "command": "info",
         "workflow": workflow.display().to_string(),
         "name": cfg.workflow.name,
@@ -152,7 +152,58 @@ fn derive_meta(
         "references": references,
         "input_dirs": top_level_dirs(cfg.rules.iter().flat_map(|rule| rule.input.to_vec())),
         "output_dirs": top_level_dirs(cfg.rules.iter().flat_map(|rule| rule.output.to_vec())),
-    })
+    });
+    // Git provenance (issue #124 pillar 3): a workflow inside a git
+    // repository is uniquely addressable as repo + git ref. Keys are
+    // omitted entirely when unavailable — catalog consumers test presence.
+    if let Some((git_sha, git_remote, git_describe)) = git_provenance(workflow) {
+        meta["git_sha"] = json!(git_sha);
+        if let Some(remote) = git_remote {
+            meta["git_remote"] = json!(remote);
+        }
+        if let Some(describe) = git_describe {
+            meta["git_describe"] = json!(describe);
+        }
+    }
+    meta
+}
+
+/// Git identity of the workflow's repository: `(HEAD sha, origin remote
+/// URL, nearest tag)`. `None` when the workflow is not inside a git
+/// repository — `info --json` then omits the git keys entirely (issue
+/// #124 pillar 3, contract with the community catalog; field names agreed
+/// with the community lane: git_sha / git_remote / git_describe).
+fn git_provenance(workflow: &Path) -> Option<(String, Option<String>, Option<String>)> {
+    let root = oxo_flow_core::git::find_repo_root(workflow)?;
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&root)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if sha.is_empty() {
+        return None;
+    }
+    let git_output = |args: &[&str]| -> Option<String> {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let value = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if value.is_empty() { None } else { Some(value) }
+    };
+    Some((
+        sha,
+        git_output(&["remote", "get-url", "origin"]),
+        git_output(&["describe", "--tags", "--always"]),
+    ))
 }
 
 /// `[config]` parameter records for the catalog parameter table: the default
@@ -524,6 +575,43 @@ mod tests {
             image_name("localhost:5000/biocontainers/star:2.7.10"),
             "star"
         );
+    }
+
+    #[test]
+    fn git_provenance_keys_present_inside_repo() {
+        // oxo-flow's own workspace is a git repository with an origin
+        // remote: deriving metadata for a workflow inside it must carry
+        // the git identity keys (issue #124 pillar 3). The real path is
+        // passed as both display and fixture so the walk-up finds .git.
+        let fixture = "../../examples/gallery/05_conda_environments.oxoflow";
+        let meta = meta(fixture, fixture);
+        assert_eq!(meta["git_sha"].as_str().map(|s| !s.is_empty()), Some(true));
+        assert_eq!(
+            meta["git_remote"].as_str().map(|s| !s.is_empty()),
+            Some(true)
+        );
+        assert_eq!(
+            meta["git_describe"].as_str().map(|s| !s.is_empty()),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn git_provenance_keys_absent_outside_repo() {
+        let dir = std::env::temp_dir().join(format!("oxo-info-git-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let wf = dir.join("wf.oxoflow");
+        std::fs::write(
+            &wf,
+            "[workflow]\nname = \"n\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"r\"\noutput = [\"o.txt\"]\nshell = \"echo hi > {output}\"\n",
+        )
+        .unwrap();
+        let meta = meta(wf.to_str().unwrap(), wf.to_str().unwrap());
+        assert!(meta.get("git_sha").is_none());
+        assert!(meta.get("git_remote").is_none());
+        assert!(meta.get("git_describe").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

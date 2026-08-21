@@ -44,11 +44,13 @@ for the include syntax and interface contracts.
 ## Pillar 3 — Ecosystem: the catalog is versioned
 
 Published workflows are referenced by repo + version, never by an
-unpinned "latest". The engine reads catalog metadata (`metadata.json`)
-when inspecting workflows (`oxo-flow info`); catalog entries and the
-community site record the repository and version of each published
-workflow, so a reference to a catalog entry resolves to a specific,
-reproducible artifact.
+unpinned "latest". `oxo-flow info --json` derives a workflow's git
+identity directly — `git_sha` (HEAD commit), `git_remote` (origin URL),
+and `git_describe` (nearest tag) — with the keys omitted outside a git
+repository (issue #124). Catalog generation consumes these fields to
+record the repository and version of each published workflow, so a
+reference to a catalog entry resolves to a specific, reproducible
+artifact.
 
 ## Comparison with other systems
 

@@ -5,6 +5,26 @@
 const GITHUB_CLONE_MIRRORS: &[&str] = &["https://ghfast.top/", "https://gh-proxy.com/"];
 
 /// Candidate clone URLs: the official URL first, then each mirror.
+/// Locate the root of the git repository containing `path`, if any: the
+/// nearest ancestor directory holding a `.git` entry. Walks up from
+/// `path`'s parent (when `path` is a file) or `path` itself (when it is a
+/// directory). Shared by checkpoint provenance (issue #115 pillar 1) and
+/// catalog metadata derivation (`info --json`, issue #124 pillar 3).
+pub fn find_repo_root(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    // Absolute first: lexical parent-walking on a shallow relative path
+    // (e.g. `examples/gallery/x.oxoflow` from the repo root) terminates at
+    // the empty path and would never reach the CWD's repository.
+    let start = std::path::absolute(path).ok()?;
+    let mut dir = Some(start.parent().unwrap_or(&start));
+    while let Some(d) = dir {
+        if d.join(".git").exists() {
+            return Some(d.to_path_buf());
+        }
+        dir = d.parent();
+    }
+    None
+}
+
 pub fn mirror_candidates(repo_url: &str) -> Vec<String> {
     let official = repo_url.trim_end_matches('/').to_string();
     if !official.starts_with("https://github.com/") {
@@ -63,4 +83,29 @@ pub fn cache_dir_name(repo_url: &str, git_ref: &str) -> String {
         .replace('/', "_");
     name.push_str(&format!("@{}", git_ref.replace('/', "_")));
     name
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn find_repo_root_resolves_cwd_relative_workflow() {
+        // Regression: a shallow CWD-relative path (e.g. `examples/gallery/
+        // x.oxoflow` from the repo root) must still reach the repository —
+        // lexical parent-walking alone stops at the empty path and misses
+        // the CWD's repo. The core crate's test CWD is the workspace root.
+        let wf = std::path::Path::new("Cargo.toml");
+        let root = find_repo_root(wf).expect("workspace root is a git repo");
+        assert!(root.join(".git").exists());
+    }
+
+    #[test]
+    fn find_repo_root_returns_none_outside_repo() {
+        let dir = std::env::temp_dir().join(format!("oxo-gitroot-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(find_repo_root(&dir.join("wf.oxoflow")), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
