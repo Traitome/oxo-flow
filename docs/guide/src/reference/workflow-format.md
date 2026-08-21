@@ -782,6 +782,7 @@ oxo-flow automatically cleans up temporary outputs:
 |---|---|---|
 | Success + `temp_output` | Cleaned after successful completion |
 | Failure + `temp_output` | Cleaned to prevent stale partial files |
+| Failure + declared `output` | Partial outputs created by the failed attempt are deleted; pre-existing files the attempt modified are moved aside as `<name>.oxo-failed`; untouched pre-existing files are preserved |
 | Transform with `cleanup=true` | Chunk files cleaned after the whole run finishes successfully (kept on failed runs for debugging; re-runs recompute the map rules) |
 | Success + `temporary = true` | Outputs deleted after the run once every dependent rule has completed; a tombstone is recorded in the checkpoint so a later run that needs the outputs regenerates the rule first (lazy cascade-up). Leaf rules (no dependents) keep their outputs. |
 
@@ -789,6 +790,20 @@ oxo-flow automatically cleans up temporary outputs:
 only until the queue-level callers finish): the deletion is checkpoint-aware,
 so a plain re-run skips the rule and does NOT regenerate the file — it comes
 back only when a dependent actually needs it again.
+
+**Failed-rule output invalidation.** A rule that fails mid-write must never
+leave partial outputs that the freshness gate would mistake for a completed
+run. Before executing, the engine snapshots each declared output's existence
+and modification time; when the rule fails (non-zero exit, timeout, or
+missing outputs after an exit-0 shell), only what THIS attempt produced is
+invalidated: files created during the attempt are deleted, pre-existing
+files the attempt modified are moved aside as `<name>.oxo-failed` (the
+failed content stays recoverable), and untouched pre-existing files are
+left alone — a failure that never reached a file never destroys user data.
+The next run then re-executes the rule instead of skipping it as
+up-to-date. Note this covers failures the engine observes; a hard kill
+(`SIGKILL`) mid-rule can still leave outputs behind, since no cleanup code
+runs — the `--rerun` flag is the escape hatch for that case.
 
 ### Timeout Enforcement
 
