@@ -711,6 +711,7 @@ pub fn build_report(
             .then(|| checkpoint_path.map(|p| p.display().to_string()))
             .flatten(),
     )
+    .workflow_git_sha(checkpoint.and_then(|c| c.workflow_git_sha.clone()))
     .generated_at(generated_at);
     for section in sections {
         report = report.section(section);

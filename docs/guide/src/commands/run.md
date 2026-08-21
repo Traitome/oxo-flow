@@ -28,6 +28,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--jobs` | `-j` | `1` | Maximum number of concurrent jobs |
 | `--keep-going` | `-k` | — | Continue execution when a job fails |
 | `--workdir` | `-d` | Workflow file's directory | Working directory for execution |
+| `--log-file` | — | `.oxo-flow/logs/oxo-flow.log` in the workdir | Write the run log to a custom path instead (previous logs rotate to `PATH.1` … `PATH.9`) |
 | `--target` | `-t` | All rules | Run only specific target rules |
 | `--retry` | `-r` | `0` | Number of times to retry failed jobs |
 | `--timeout` | — | `0` (disabled) | Timeout per job in seconds |
@@ -502,6 +503,25 @@ The lookup is best-effort — running outside a git repository simply omits
 the field and never fails the run. Commit your workflow before running to
 get fully version-audited results. See
 [Workflow Versioning](../reference/versioning.md) for the full model.
+
+### Run logs
+
+Every run — and `resume`, which re-enters the same path — archives its own
+log under the workdir:
+
+- **`.oxo-flow/logs/oxo-flow.log`** is always the *latest* run; on each new
+  run the previous log rotates to `.oxo-flow/logs/oxo-flow.log.1`, then
+  `.2`, … up to `.9` (the oldest backup is deleted). `--log-file PATH`
+  overrides the location; the same rotation applies to `PATH`.
+- The log header names the exact workflow version that produced the record:
+  timestamp, oxo-flow version, full command line, workflow path,
+  `workflow_name`, `workflow_version`, `git_sha` (the repository HEAD
+  recorded by the run — see [Workflow Versioning](../reference/versioning.md)),
+  and workdir.
+- The engine's tracing stream (rule start/finish verdicts, warnings, errors)
+  is written into the log alongside stderr. Logging is best-effort: if the
+  file cannot be opened or written, the run continues with stderr-only
+  logging and a warning. Dry-run remains stderr-only.
 
 ### Report snapshots
 

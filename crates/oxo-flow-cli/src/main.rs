@@ -5,6 +5,7 @@
 
 pub mod banner;
 pub mod commands;
+mod logging;
 
 use crate::commands::ai_status::{ai_setup_command, ai_status_command, ai_test_command};
 use crate::commands::batch::batch_command;
@@ -78,6 +79,12 @@ pub enum Commands {
         keep_going: bool,
         #[arg(short = 'd', long, help = "Working directory for execution")]
         workdir: Option<PathBuf>,
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Write the run log to PATH instead of the default .oxo-flow/logs/oxo-flow.log (previous logs rotate to PATH.1 .. PATH.9)"
+        )]
+        log_file: Option<PathBuf>,
         #[arg(
             short = 't',
             long,
@@ -1004,7 +1011,7 @@ async fn main() -> Result<()> {
         .with_target(false)
         // Logs go to stderr so machine-readable stdout (graph DOT output,
         // --json, pipes into dot/other tools) stays clean.
-        .with_writer(std::io::stderr)
+        .with_writer(crate::logging::TeeWriter)
         .init();
 
     // Suppress banner in quiet mode
@@ -1016,6 +1023,7 @@ async fn main() -> Result<()> {
             jobs,
             keep_going,
             workdir,
+            log_file,
             target,
             module,
             retry,
@@ -1142,6 +1150,7 @@ async fn main() -> Result<()> {
                 jobs,
                 keep_going,
                 wd,
+                log_file,
                 target,
                 module,
                 retry,
@@ -1491,8 +1500,9 @@ async fn main() -> Result<()> {
                     jobs,
                     keep_going,      // keep_going
                     workdir.clone(), // workdir
-                    Vec::new(),      // module
+                    None,            // log_file (default path)
                     target.clone(),  // target
+                    Vec::new(),      // module
                     retry,           // retry
                     timeout.clone(), // timeout
                     false,           // resume_failed

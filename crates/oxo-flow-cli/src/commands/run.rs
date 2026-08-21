@@ -454,6 +454,7 @@ pub async fn run_command(
     jobs: usize,
     keep_going: bool,
     workdir: Option<PathBuf>,
+    log_file: Option<PathBuf>,
     target: Vec<String>,
     module: Vec<String>,
     retry: u32,
@@ -594,6 +595,48 @@ pub async fn run_command(
             }
         }
     }
+    // ── Run log + workflow provenance (issue #115 pillar 1) ────────────
+    // Every run (and `resume`, which re-enters this function) archives its
+    // own log under the workdir with numbered rotation; the header names
+    // the exact workflow version (name, version, git HEAD) that produced
+    // this record. Best-effort: a logging failure never fails the run.
+    let workflow_abs = absolutize(&workflow)?;
+    let workflow_git_sha =
+        oxo_flow_core::executor::checkpoint::CheckpointState::workflow_git_sha(&workflow_abs);
+    let effective_workdir_log = workdir.as_ref().unwrap_or(&workdir_default);
+    let run_log_path = match &log_file {
+        Some(p) => absolutize(p)?,
+        None => effective_workdir_log.join(".oxo-flow/logs/oxo-flow.log"),
+    };
+    let run_log_header = format!(
+        "oxo-flow run log\nstarted_at: {}\noxo-flow: v{}\ncommand: {}\nworkflow: {}\nworkflow_name: {}\nworkflow_version: {}\ngit_sha: {}\nworkdir: {}\n\n",
+        chrono::Local::now().to_rfc3339(),
+        env!("CARGO_PKG_VERSION"),
+        std::env::args().collect::<Vec<_>>().join(" "),
+        workflow_abs.display(),
+        config.workflow.name,
+        config.workflow.version,
+        workflow_git_sha
+            .as_deref()
+            .unwrap_or("(not inside a git repository)"),
+        effective_workdir_log.display(),
+    );
+    let _run_log_guard = match crate::logging::activate_run_log(&run_log_path, &run_log_header) {
+        Ok(guard) => Some(guard),
+        Err(e) => {
+            tracing::warn!(error = %e, path = %run_log_path.display(), "failed to open run log; continuing without file logging");
+            None
+        }
+    };
+    tracing::info!(
+        workflow = %config.workflow.name,
+        version = %config.workflow.version,
+        git_sha = workflow_git_sha.as_deref().unwrap_or("(none)"),
+        workdir = %effective_workdir_log.display(),
+        "workflow run started (log: {})",
+        run_log_path.display()
+    );
+
     let mut order = if target.is_empty() {
         dag.execution_order()?
     } else {
@@ -635,14 +678,11 @@ pub async fn run_command(
     // invocation directory.
     {
         let mut ck = checkpoint.lock().await;
-        let workflow_abs = absolutize(&workflow)?;
         ck.set_workflow_path(&workflow_abs);
         // Record the workflow repository's HEAD SHA for provenance
         // (issue #115 pillar 1) — best-effort, never fails the run.
-        if let Some(sha) =
-            oxo_flow_core::executor::checkpoint::CheckpointState::workflow_git_sha(&workflow_abs)
-        {
-            ck.set_workflow_git_sha(sha);
+        if let Some(sha) = &workflow_git_sha {
+            ck.set_workflow_git_sha(sha.clone());
         }
         ck.set_workdir(&absolutize(workdir.as_deref().unwrap_or(&workdir_default))?);
     }
@@ -3550,6 +3590,7 @@ pub async fn resume_command(
         jobs,
         keep_going,        // keep_going (same semantics as `run`)
         effective_workdir, // workdir (recorded by the original run)
+        None,              // log_file (default path)
         Vec::new(),        // target
         Vec::new(),        // module
         0,                 // retry
