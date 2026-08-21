@@ -329,7 +329,11 @@ max_array_size = 1001   # optional — the scheduler's MaxArraySize; larger
 - Arrays are transport-level: the JobRecord set, checkpoint, and resume
   semantics are identical to per-job submission.
 
-Element-wise `aftercorr` chaining is not part of this slice### Partial module runs (`--module`)
+Element-wise `aftercorr` chaining is not part of this slice: downstream
+instances submit in ready batches as array elements finish, which is
+correct but not as queue-efficient as true element-wise chaining.
+
+### Partial module runs (`--module`)
 
 A composed workflow (clinical pipelines like clindet: several
 `[[include]]` modules chained together) can run just ONE module and the
