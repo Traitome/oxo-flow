@@ -2343,10 +2343,10 @@ pub async fn run_command(
     Ok(())
 }
 
-/// Sorts the scheduler's ready list by effective priority (declared priority
-/// + rounds already waited, the aging counter of issue #123), ties broken by
-/// name. Pure and unit-tested: the dispatch loop feeds it the live ready list
-/// every round, so passed-over rules gain priority until they are submitted.
+/// Sorts the scheduler's ready list by effective priority: declared priority
+/// plus rounds already waited (the aging counter of issue #123), ties broken
+/// by name. Pure and unit-tested — the dispatch loop feeds it the live ready
+/// list every round, so passed-over rules gain priority until submitted.
 fn age_ready_list(
     mut ready: Vec<String>,
     order_set: &std::collections::HashSet<String>,
