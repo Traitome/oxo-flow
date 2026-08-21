@@ -365,7 +365,29 @@ pub fn spawn_background_run_with_args(
         cmd.stdout(Stdio::from(log_file));
         cmd.stderr(Stdio::from(err_file));
 
-        match cmd.spawn() {
+        // Transient fork failures (EAGAIN/ENOMEM under full-workspace
+        // parallel test load, issue #120) must not permanently fail the run
+        // — retry briefly before giving up.
+        let mut spawn_attempts = 0u32;
+        let spawn_result = loop {
+            match cmd.spawn() {
+                Err(e)
+                    if matches!(
+                        e.raw_os_error(),
+                        Some(nix::libc::EAGAIN) | Some(nix::libc::ENOMEM)
+                    ) && spawn_attempts < 3 =>
+                {
+                    spawn_attempts += 1;
+                    warn!(
+                        "Transient spawn failure for run {run_id} ({e}); \
+                         retrying ({spawn_attempts}/3)"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                }
+                other => break other,
+            }
+        };
+        match spawn_result {
             Ok(mut child) => {
                 // Record PID for cancellation support
                 if let Some(pid) = child.id()

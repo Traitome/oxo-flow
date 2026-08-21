@@ -58,6 +58,16 @@ pub fn signal_group(pgid: i32, sig: nix::sys::signal::Signal) -> io::Result<()> 
     nix::sys::signal::killpg(Pid::from_raw(pgid), sig).map_err(io::Error::from)
 }
 
+/// Probe whether the process group identified by `pgid` still has members
+/// (signal 0). A group outlives its leader, so this stays true while
+/// orphaned rule subprocesses run on; zombies count until reaped, which is
+/// fine for grace windows — the reaper drains them.
+pub fn group_alive(pgid: i32) -> bool {
+    use nix::unistd::Pid;
+
+    nix::sys::signal::killpg(Pid::from_raw(pgid), None::<nix::sys::signal::Signal>).is_ok()
+}
+
 /// Probe whether `pid` still exists (signal 0).
 ///
 /// Zombies answer the probe but are semantically dead, so the state is
