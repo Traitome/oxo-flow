@@ -84,7 +84,7 @@ oxo-flow run gh:owner/pipeline
 
 # Pinned to a git tag or branch (@ref selects a git ref — unlike `pull`,
 # where @tag means a GitHub Release bundle)
-oxo-flow run gh:owner/pipeline@v0.13.1
+oxo-flow run gh:owner/pipeline@v0.14.0
 
 # Any git URL or local repository directory
 oxo-flow run https://example.com/team/pipeline.git
@@ -714,7 +714,7 @@ the config surface.
 ## Output
 
 ```
-oxo-flow 0.13.1 — Bioinformatics Pipeline Engine
+oxo-flow 0.14.0 — Bioinformatics Pipeline Engine
 DAG: 5 rules in execution order
   1. fastqc
   2. trim_reads

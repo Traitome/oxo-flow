@@ -51,7 +51,7 @@ oxo-flow init my-pipeline -d /projects/genomics/my-pipeline
 ## Output
 
 ```
-oxo-flow 0.13.1 — Bioinformatics Pipeline Engine
+oxo-flow 0.14.0 — Bioinformatics Pipeline Engine
 ✓ Created new project at my-pipeline
   my-pipeline/my-pipeline.oxoflow
   my-pipeline/envs/example.yaml
