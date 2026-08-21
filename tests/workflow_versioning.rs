@@ -352,3 +352,94 @@ fn cli_run_report_snapshot_carries_workflow_git_sha() {
     .unwrap();
     assert_eq!(report["workflow_git_sha"].as_str(), Some(head.as_str()));
 }
+
+// ─── info --json git provenance (issue #124 pillar 3) ────────────────────
+
+/// `info --json` derives the workflow's git identity inside a repository
+/// (contract with the community catalog: keys omitted outside a repo).
+#[test]
+fn cli_info_json_carries_git_provenance_in_repo() {
+    let dir = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        out
+    };
+    git(&["init", "-q"]);
+    git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/example/wf.git",
+    ]);
+    let wf = dir.path().join("wf.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"wf\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"gen\"\noutput = [\"out.txt\"]\nshell = \"echo hi > {output}\"\n",
+    )
+    .unwrap();
+    git(&["add", "wf.oxoflow"]);
+    git(&[
+        "-c",
+        "user.name=oxo-test",
+        "-c",
+        "user.email=test@oxo-flow.local",
+        "commit",
+        "-q",
+        "-m",
+        "v1",
+    ]);
+    let head = git_head(dir.path());
+
+    let out = oxo_flow_cmd()
+        .args(["info", "--json", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let meta: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(meta["git_sha"].as_str(), Some(head.as_str()));
+    assert_eq!(
+        meta["git_remote"].as_str(),
+        Some("https://github.com/example/wf.git")
+    );
+    assert!(
+        meta["git_describe"].as_str().is_some_and(|s| !s.is_empty()),
+        "git_describe must fall back to an abbreviated SHA on untagged history"
+    );
+}
+
+/// Outside a git repository the git keys are omitted entirely — never null.
+#[test]
+fn cli_info_json_omits_git_provenance_outside_repo() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("wf.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"wf\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"gen\"\noutput = [\"out.txt\"]\nshell = \"echo hi > {output}\"\n",
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["info", "--json", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let meta: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(meta.get("git_sha").is_none());
+    assert!(meta.get("git_remote").is_none());
+    assert!(meta.get("git_describe").is_none());
+}

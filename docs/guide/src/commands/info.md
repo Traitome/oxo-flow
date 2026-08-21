@@ -59,9 +59,21 @@ oxo-flow info [OPTIONS] <WORKFLOW>
   "pairs": [],
   "references": [],
   "input_dirs": ["raw"],
-  "output_dirs": ["aligned", "qc", "variants"]
+  "output_dirs": ["aligned", "qc", "variants"],
+  "git_sha": "8f005dab60a0ce024acc5048885d88e246119b5c",
+  "git_remote": "https://github.com/example/simple-variant-calling.git",
+  "git_describe": "v0.13.1"
 }
 ```
+
+- **`git_sha` / `git_remote` / `git_describe`** — the workflow's git
+  identity when it lives inside a git repository: the HEAD commit SHA, the
+  `origin` remote URL, and the nearest tag (`git describe --tags --always`,
+  falling back to an abbreviated SHA on untagged history). All three keys
+  are **omitted entirely** outside a git repository (never `null`), so
+  catalog consumers can test presence directly. The SHA matches the
+  `workflow_git_sha` recorded in run checkpoints (see
+  [Workflow Versioning](../reference/versioning.md)).
 
 - **`config`** — every `[config]` parameter with its default value, its
   derived type (`string` / `int` / `float` / `bool` / `array` / `table`), the

@@ -283,24 +283,17 @@ impl CheckpointState {
     /// find `.git`, then runs `git rev-parse HEAD`. Returns `None` when the
     /// workflow is not in a git repository or git is unavailable.
     pub fn workflow_git_sha(workflow_path: &Path) -> Option<String> {
-        let start = workflow_path.parent().unwrap_or(workflow_path);
-        let mut dir = Some(start);
-        while let Some(d) = dir {
-            if d.join(".git").exists() {
-                let out = std::process::Command::new("git")
-                    .args(["rev-parse", "HEAD"])
-                    .current_dir(d)
-                    .output()
-                    .ok()?;
-                if out.status.success() {
-                    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                    if !sha.is_empty() {
-                        return Some(sha);
-                    }
-                }
-                return None;
+        let root = crate::git::find_repo_root(workflow_path)?;
+        let out = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(root)
+            .output()
+            .ok()?;
+        if out.status.success() {
+            let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !sha.is_empty() {
+                return Some(sha);
             }
-            dir = d.parent();
         }
         None
     }
