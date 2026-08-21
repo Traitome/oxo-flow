@@ -157,13 +157,17 @@ async fn record_outcome(
             let benchmark = BenchmarkRecord {
                 rule: record.rule.clone(),
                 wall_time_secs: duration,
-                // Real usage needs `sacct` polling — phase 4. Reporting a
-                // fabricated number here would be worse than reporting none.
-                max_memory_mb: None,
+                // Read from the scheduler's accounting store as the job
+                // settled, so this is the store's own peak rather than the
+                // sampled one the local executor reports. Still `None` when
+                // the store did not report it (LSF, and any job whose
+                // accounting row never appeared) — a fabricated number
+                // would be worse than none.
+                max_memory_mb: record.max_rss_mb,
                 memory_limit_mb: rule
                     .and_then(|r| r.effective_memory())
                     .and_then(oxo_flow_core::scheduler::parse_memory_mb),
-                cpu_seconds: None,
+                cpu_seconds: record.cpu_seconds,
                 retries: record.retries,
             };
             ck.record_run(record);

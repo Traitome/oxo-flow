@@ -249,14 +249,23 @@ names) are both hidden when they have no data.
 
 ### Benchmarks honesty
 
-The Benchmarks table's CPU column reports **sampled** CPU seconds: the
-executor's sampler reads each rule process's CPU time (all its threads) at
-200 ms ticks; child processes are not accumulated. `-` means the sampler
-never observed the process (very short rules, cluster executors, legacy
-checkpoints). Peak memory is sampled peak RSS over the same ticks. The
-values are measurements of a live process, not scheduler allocations, so
-they are documented — here and in the `report` command reference — as
-sampled rather than exact.
+The Benchmarks table's CPU column reports CPU seconds from whichever
+source ran the rule, and the two differ:
+
+- **Local runs** report **sampled** CPU seconds — the executor's sampler
+  reads each rule process's CPU time (all its threads) at 200 ms ticks;
+  child processes are not accumulated. Peak memory is sampled peak RSS over
+  the same ticks. These are measurements of a live process, not scheduler
+  allocations, so they are documented — here and in the `report` command
+  reference — as sampled rather than exact.
+- **Cluster runs** report what the scheduler's own accounting store
+  recorded (`sacct`/`qstat -f`/`qacct`), read once as each job settles.
+  That figure spans every step of the job rather than one sampled process.
+
+`-` means neither source reported a number: very short local rules the
+sampler never observed, LSF (whose `bacct` columns vary too much between
+versions to parse blind), a cluster job whose accounting row never
+appeared, or legacy checkpoints.
 
 ## See Also
 

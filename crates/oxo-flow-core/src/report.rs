@@ -1980,9 +1980,10 @@ impl ReportSectionGenerator for ExecutionStatusGenerator {
             });
         }
 
-        // Sampled CPU seconds (issue #83 P1-13): measured per sampler tick
-        // for local rules, so the column is honest now — `-` only where no
-        // sampler ever ran (cluster executors, legacy checkpoints).
+        // CPU seconds (issue #83 P1-13): sampled per tick for local rules,
+        // read from the scheduler's accounting store for cluster ones, so
+        // the column is honest now — `-` only where neither source reported
+        // a number (LSF, legacy checkpoints).
         let mut bench_names: Vec<&String> = cp.benchmarks.keys().collect();
         bench_names.sort_unstable();
         let mut bench_rows: Vec<Vec<String>> = Vec::new();

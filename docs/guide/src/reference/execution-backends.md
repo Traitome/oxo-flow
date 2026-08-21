@@ -102,8 +102,17 @@ the cluster path runs. `tests/cluster_run_profile.rs` pins that combination to
 what the local executor actually executes from identical state.
 
 Real-cluster validation (SLURM scheduler matrix, version quirks) is tracked
-in the cluster testing checklist; job arrays, re-attach to in-flight jobs, and
-`sacct`-based resource feedback are follow-ups.
+in the cluster testing checklist; job arrays and accounting-backed resource
+feedback have landed, re-attach to in-flight jobs is a follow-up.
+
+Accounting is read once per job as it settles, not once per poll, and feeds
+both the run directory and the checkpoint benchmarks — see
+[what a finished job records](../commands/run.md#what-a-finished-job-records).
+Backends report only what their store proves: SLURM reads exit code, elapsed
+time, peak RSS and total CPU from `sacct` (peak memory comes from the step
+rows, which is where SLURM puts it — the allocation row leaves it blank), PBS
+and SGE report the equivalent `resources_used` / `ru_*` fields, and LSF
+reports state alone.
 
 ## Assumptions
 

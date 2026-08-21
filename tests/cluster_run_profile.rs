@@ -176,6 +176,31 @@ fn run_profile_slurm_submits_tracks_and_records() {
     assert_eq!(completed.len(), 4, "checkpoint: {completed:?}");
     assert_eq!(ck["input_manifests"].as_object().unwrap().len(), 4);
 
+    // Benchmarks carry what the scheduler's accounting store reported, not
+    // nulls: the mock sacct answers `1234K` / `00:00:04` on the STEP row,
+    // so a parser that read the allocation row alone would record neither.
+    let benchmarks = ck["benchmarks"].as_object().unwrap();
+    assert_eq!(benchmarks.len(), 4, "benchmarks: {benchmarks:?}");
+    for (name, b) in benchmarks {
+        assert_eq!(
+            b["max_memory_mb"].as_u64(),
+            Some(1),
+            "{name} lost its peak RSS: {b}"
+        );
+        assert_eq!(
+            b["cpu_seconds"].as_f64(),
+            Some(4.0),
+            "{name} lost its CPU: {b}"
+        );
+        // Elapsed is the RUN time sacct reported (5s), so wall time is not
+        // the submit-to-settle span the driver observes.
+        let wall = b["wall_time_secs"].as_f64().unwrap();
+        assert!(
+            (4.0..=6.0).contains(&wall),
+            "{name} wall time {wall} looks like queue wait: {b}"
+        );
+    }
+
     // Report snapshot parity with the local path: the same artifacts a
     // local run leaves, so reporting pipelines cannot tell the two apart.
     let reports = dir.path().join(".oxo-flow/reports");
