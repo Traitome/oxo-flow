@@ -490,6 +490,19 @@ By default, checkpoints are saved in a hidden `.oxo-flow/` directory located in 
 
 - **Filename**: `checkpoint.json` (the name is always the same regardless of workflow name)
 
+### Workflow version in the checkpoint
+
+When the workflow file lives inside a git repository, oxo-flow records the
+repository's **HEAD commit SHA** in the checkpoint (`workflow_git_sha`) at
+run start. Every result set is therefore auditable to the exact workflow
+version that produced it: `oxo-flow provenance verify` prints the SHA, and
+report snapshots carry it through the checkpoint they embed.
+
+The lookup is best-effort — running outside a git repository simply omits
+the field and never fails the run. Commit your workflow before running to
+get fully version-audited results. See
+[Workflow Versioning](../reference/versioning.md) for the full model.
+
 ### Report snapshots
 
 After every run (and resume) — unless `--no-report-snapshot` is given —

@@ -31,6 +31,21 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf) -> Result<()> {
             )
         })?;
 
+    // Workflow provenance: the git HEAD SHA recorded at run start
+    // (issue #115 pillar 1) — which workflow version produced these
+    // results.
+    if let Some(sha) = checkpoint
+        .get("workflow_git_sha")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        eprintln!("  {} workflow git HEAD: {}", "•".dimmed(), sha);
+    }
+    if let Some(path) = checkpoint.get("workflow_path").and_then(|v| v.as_str()) {
+        eprintln!("  {} workflow path: {}", "•".dimmed(), path);
+    }
+    eprintln!();
+
     // Try embedded checksums first, then companion file
     let stored_checksums: HashMap<String, String> = if let Some(checksums) =
         checkpoint.get("checksums").and_then(|v| v.as_object())

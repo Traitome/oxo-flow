@@ -183,6 +183,7 @@ nav:
   - Architecture & Design:
       - System Architecture: reference/architecture.md
       - Workflow Format: reference/workflow-format.md
+      - Workflow Versioning: reference/versioning.md
       - Wildcards: reference/wildcards.md
       - DAG Engine: reference/dag-engine.md
       - DAG Edit API: reference/dag-edit-api.md

@@ -151,6 +151,12 @@ pub struct CheckpointState {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workflow_path: Option<String>,
+    /// HEAD commit SHA of the git repository the workflow lives in, recorded
+    /// at run start (issue #115 pillar 1): which workflow VERSION produced
+    /// these results, auditably. `None` when the workflow is not inside a
+    /// git repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_git_sha: Option<String>,
     /// Working directory the rules executed in (issue #68). `resume` re-runs
     /// from this directory so completed rules' outputs resolve the same way;
     /// absent in legacy checkpoints, which fall back to the workflow's
@@ -233,6 +239,7 @@ impl CheckpointState {
             failed_rules: HashSet::new(),
             benchmarks: HashMap::new(),
             workflow_path: None,
+            workflow_git_sha: None,
             workdir: None,
             checksums: HashMap::new(),
             config_snapshot: HashMap::new(),
@@ -264,6 +271,38 @@ impl CheckpointState {
     /// Set the workflow path that generated this checkpoint.
     pub fn set_workflow_path(&mut self, path: &Path) {
         self.workflow_path = Some(path.to_string_lossy().to_string());
+    }
+
+    /// Record the workflow repository's HEAD SHA (issue #115 pillar 1).
+    pub fn set_workflow_git_sha(&mut self, sha: String) {
+        self.workflow_git_sha = Some(sha);
+    }
+
+    /// Resolve the HEAD commit SHA of the git repository containing
+    /// `workflow_path`, if any. Walks up from the workflow's directory to
+    /// find `.git`, then runs `git rev-parse HEAD`. Returns `None` when the
+    /// workflow is not in a git repository or git is unavailable.
+    pub fn workflow_git_sha(workflow_path: &Path) -> Option<String> {
+        let start = workflow_path.parent().unwrap_or(workflow_path);
+        let mut dir = Some(start);
+        while let Some(d) = dir {
+            if d.join(".git").exists() {
+                let out = std::process::Command::new("git")
+                    .args(["rev-parse", "HEAD"])
+                    .current_dir(d)
+                    .output()
+                    .ok()?;
+                if out.status.success() {
+                    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if !sha.is_empty() {
+                        return Some(sha);
+                    }
+                }
+                return None;
+            }
+            dir = d.parent();
+        }
+        None
     }
 
     /// Set the working directory rules executed in (issue #68).
@@ -1634,6 +1673,56 @@ mod tests {
         let legacy = r#"{"completed_rules":["r"],"failed_rules":[],"benchmarks":{}}"#;
         let loaded: CheckpointState = serde_json::from_str(legacy).unwrap();
         assert!(loaded.input_manifests.is_empty());
+    }
+
+    #[test]
+    fn workflow_git_sha_roundtrip_preserves_value() {
+        let mut state = CheckpointState::new();
+        state.set_workflow_git_sha("0123456789abcdef".to_string());
+        let json = state.to_json().unwrap();
+        let loaded: CheckpointState = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.workflow_git_sha.as_deref(), Some("0123456789abcdef"));
+        // A checkpoint without the field (legacy) loads as None.
+        let legacy = r#"{"completed_rules":[],"failed_rules":[],"benchmarks":{}}"#;
+        let loaded: CheckpointState = serde_json::from_str(legacy).unwrap();
+        assert!(loaded.workflow_git_sha.is_none());
+    }
+
+    #[test]
+    fn workflow_git_sha_absent_from_json_by_default() {
+        // Fresh checkpoints only carry the field once a git repo is detected
+        // (skip_serializing_if) — legacy consumers never see a null key.
+        let json = CheckpointState::new().to_json().unwrap();
+        assert!(!json.contains("workflow_git_sha"));
+    }
+
+    #[test]
+    fn workflow_git_sha_resolver_returns_none_outside_git_repo() {
+        let dir = std::env::temp_dir().join(format!("oxo-sha-outside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let wf = dir.join("wf.oxoflow");
+        std::fs::write(&wf, "[workflow]").unwrap();
+        assert_eq!(CheckpointState::workflow_git_sha(&wf), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workflow_git_sha_resolver_finds_repo_head() {
+        // oxo-flow-core's manifest sits at the workspace root, which is a git
+        // repository: any path inside it must walk up to the current HEAD.
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let wf = root.join("Cargo.toml");
+        let sha = CheckpointState::workflow_git_sha(&wf);
+        let expected = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(expected.status.success());
+        let expected_sha = String::from_utf8_lossy(&expected.stdout).trim().to_string();
+        assert!(!expected_sha.is_empty());
+        assert_eq!(sha.as_deref(), Some(expected_sha.as_str()));
     }
 }
 
