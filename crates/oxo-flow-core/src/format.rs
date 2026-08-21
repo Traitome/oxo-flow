@@ -829,6 +829,26 @@ pub fn lint_format(config: &WorkflowConfig) -> Vec<Diagnostic> {
             });
         }
 
+        // W019: Rule executes a command but declares no outputs. The engine's
+        // correctness machinery is output-driven — freshness checks, dataflow
+        // edges, failure invalidation (issue #118) — so an empty output list
+        // means downstream rules can only order against this rule via an
+        // explicit depends_on, and the produced files are invisible to the
+        // planner (live: auto-sra's dumps declared output = [] while writing
+        // the FASTQs merges consume — the missing edges fed a priority
+        // starvation incident).
+        if rule.output.is_empty() && (rule.shell.is_some() || rule.script.is_some()) {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: "rule executes a command but declares no outputs".to_string(),
+                rule: Some(rule.name.clone()),
+                code: "W019".to_string(),
+                suggestion: Some(
+                    "declare output = [...] naming the files this rule produces, or add depends_on = [\"<this rule>\"] to every consumer".to_string(),
+                ),
+            });
+        }
+
         // W009: Very high thread count (>32) without memory specification
         if rule.effective_threads() > 32 && rule.effective_memory().is_none() {
             diagnostics.push(Diagnostic {
@@ -3272,5 +3292,39 @@ mod tests {
         let config = WorkflowConfig::parse(toml).unwrap();
         let diagnostics = lint_format(&config);
         assert!(!diagnostics.iter().any(|d| d.code == "W022"));
+    }
+
+    #[test]
+    fn lint_executes_without_declared_outputs() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "produce"
+            shell = "echo data > sra/x.fastq"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(
+            diagnostics.iter().any(|d| d.code == "W019"),
+            "a rule executing a command with no declared outputs must warn: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_no_w019_for_declared_outputs() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "produce"
+            output = ["x.fastq"]
+            shell = "echo data > x.fastq"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(!diagnostics.iter().any(|d| d.code == "W019"));
     }
 }

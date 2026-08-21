@@ -1479,17 +1479,29 @@ pub async fn run_command(
         .iter()
         .map(|r| (r.name.clone(), r.priority))
         .collect();
+    // Fair-dispatch aging (issue #123): every dispatch round a rule spends
+    // ready-but-not-submitted adds AGING_STEP to its effective priority, so
+    // high-priority rules that keep failing/re-occupying slots cannot starve
+    // their lower-priority producers forever (live: auto-sra dumps at p10
+    // starved behind merges at p20 sharing the limit_merge group). Aging
+    // only matters under contention — with free slots everything submits
+    // immediately and the relative order is unchanged.
+    const AGING_STEP: i32 = 1;
+    let mut waited_rounds: std::collections::HashMap<String, i32> = Default::default();
     let compute_ready = |sched: &oxo_flow_core::scheduler::SchedulerState,
                          submitted: &std::collections::HashSet<String>,
                          dag: &WorkflowDag,
-                         order_set: &std::collections::HashSet<String>|
+                         order_set: &std::collections::HashSet<String>,
+                         waited: &std::collections::HashMap<String, i32>|
      -> Result<Vec<String>, anyhow::Error> {
         let mut ready = sched.ready_rules(dag)?;
         ready.retain(|name| order_set.contains(name) && !submitted.contains(name));
-        // Sort by priority (descending), then name.
+        // Sort by effective priority (declared + aging), then name.
         ready.sort_by(|a, b| {
-            let pa = priority_map.get(a).copied().unwrap_or(0);
-            let pb = priority_map.get(b).copied().unwrap_or(0);
+            let pa =
+                priority_map.get(a).copied().unwrap_or(0) + waited.get(a).copied().unwrap_or(0);
+            let pb =
+                priority_map.get(b).copied().unwrap_or(0) + waited.get(b).copied().unwrap_or(0);
             pb.cmp(&pa).then_with(|| a.cmp(b))
         });
         Ok(ready)
@@ -1503,9 +1515,16 @@ pub async fn run_command(
             sched.check_deadlock(&dag)?;
         }
 
-        // Submit every rule whose dependencies are now satisfied.
-        let ready = compute_ready(&sched, &submitted, &dag, &order_set)?;
-        for rule_name in &ready {
+        // Submit every rule whose dependencies are now satisfied — capped to
+        // the free -j slots so the semaphore queue never builds, and the
+        // ready list (aged by compute_ready) decides dispatch order fairly.
+        let ready = compute_ready(&sched, &submitted, &dag, &order_set, &waited_rounds)?;
+        let available = jobs.saturating_sub(sched.running_count());
+        let to_submit: Vec<String> = ready.iter().take(available).cloned().collect();
+        for name in ready.iter().skip(available) {
+            *waited_rounds.entry(name.clone()).or_insert(0) += AGING_STEP;
+        }
+        for rule_name in &to_submit {
             // Skip rules blocked by a failed upstream dependency.
             let blocked_by = {
                 let frs = failed_rules_set.lock().await;
