@@ -29,7 +29,7 @@ jobs:
   sync-version:
     name: Sync version from tag
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
     permissions:
       contents: write
     outputs:
@@ -46,7 +46,7 @@ jobs:
         id: extract
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Tag version: $VERSION"
 
@@ -143,15 +143,16 @@ jobs:
           NEW_SHA=$(git rev-parse HEAD)
           echo "updated_sha=$NEW_SHA" >> "$GITHUB_OUTPUT"
           echo "New commit: $NEW_SHA"
-          if git cat-file -t "$GITHUB_REF_NAME" 2>/dev/null | grep -q '^tag$'; then
-            TAG_MSG=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")
-            git tag -d "$GITHUB_REF_NAME"
-            git tag -a "$GITHUB_REF_NAME" "$NEW_SHA" -m "$TAG_MSG"
+          TAG_NAME="${{ env.RELEASE_TAG }}"
+          if git cat-file -t "$TAG_NAME" 2>/dev/null | grep -q '^tag$'; then
+            TAG_MSG=$(git tag -l --format='%(contents)' "$TAG_NAME")
+            git tag -d "$TAG_NAME"
+            git tag -a "$TAG_NAME" "$NEW_SHA" -m "$TAG_MSG"
           else
-            git tag -f "$GITHUB_REF_NAME" "$NEW_SHA"
+            git tag -f "$TAG_NAME" "$NEW_SHA"
           fi
-          git push origin "$GITHUB_REF_NAME" --force
-          echo "Tag $GITHUB_REF_NAME moved to $NEW_SHA"
+          git push origin "$TAG_NAME" --force
+          echo "Tag $TAG_NAME moved to $NEW_SHA"
 
   # ─── Quality gate: fmt + clippy + tests ────────────────────────────────────
   test:
@@ -647,7 +648,8 @@ jobs:
     runs-on: ubuntu-latest
     if: >-
       always() &&
-      startsWith(github.ref, 'refs/tags/v') &&
+      (startsWith(github.ref, 'refs/tags/v') ||
+       (github.event_name == 'workflow_dispatch' && inputs.tag != '')) &&
       (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped') &&
       needs.test.result == 'success'
     permissions:
@@ -657,9 +659,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # The tag was force-pushed by sync-version to the version-bump commit.
-          # Checking out by tag name resolves to that latest commit.
-          ref: ${{ github.ref }}
+          # Tag events: sync-version force-pushed the tag to the version-bump
+          # commit — checking out by tag name resolves to it. Dispatch:
+          # there is no tag ref for github.ref (it is the default branch),
+          # so use sync-version's recorded bump SHA instead.
+          ref: ${{ (github.event_name == 'workflow_dispatch' && needs.sync-version.outputs.updated_sha) || github.ref }}
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -668,7 +672,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          TAG="${GITHUB_REF_NAME#v}"
+          TAG="${RELEASE_TAG#v}"
           echo "Tag version: $TAG"
           for crate in oxo-flow-core oxo-flow-ai oxo-flow-web oxo-flow-cli; do
             VER=$(cargo metadata --no-deps --format-version=1 \
@@ -683,7 +687,7 @@ jobs:
       - name: Publish oxo-flow-core
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           # Query crates.io API to detect already-published versions (idempotent re-runs).
           # Status 000 means a network failure; we assume not published and attempt anyway.
           STATUS=$(curl -sf "https://crates.io/api/v1/crates/oxo-flow-core/${VERSION}" \
