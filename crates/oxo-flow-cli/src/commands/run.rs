@@ -635,7 +635,15 @@ pub async fn run_command(
     // invocation directory.
     {
         let mut ck = checkpoint.lock().await;
-        ck.set_workflow_path(&absolutize(&workflow)?);
+        let workflow_abs = absolutize(&workflow)?;
+        ck.set_workflow_path(&workflow_abs);
+        // Record the workflow repository's HEAD SHA for provenance
+        // (issue #115 pillar 1) — best-effort, never fails the run.
+        if let Some(sha) =
+            oxo_flow_core::executor::checkpoint::CheckpointState::workflow_git_sha(&workflow_abs)
+        {
+            ck.set_workflow_git_sha(sha);
+        }
         ck.set_workdir(&absolutize(workdir.as_deref().unwrap_or(&workdir_default))?);
     }
 
