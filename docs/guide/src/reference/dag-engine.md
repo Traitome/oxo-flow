@@ -343,6 +343,30 @@ Resolve by giving each rule distinct output paths (e.g., `caller_a/{sample}.vcf`
 3. Check that rules at the same depth level don't have implicit file dependencies between them
 4. Resource constraints may serialize execution — check `--max-threads`/`--max-memory` aren't too restrictive
 
+### "Rules print Running but never spawn a process"
+
+A rule waiting for the resource pool is invisible from the outside — the
+run log shows `Running:` but no child process, no verdict. The most common
+cause is **shared resource-group starvation**: two rule sets claim the same
+`[resource_groups]` entry while a priority or dependency pattern keeps the
+high-priority side re-occupying the slots (e.g. merges at priority 20
+failing on missing inputs while the dumps that produce those inputs starve
+at priority 10).
+
+Since a waiting rule holds nothing (reservations are atomic), true
+deadlock cycles cannot form — the failure mode is livelock/starvation, and
+the engine now makes it **visible**: after 60 seconds of waiting, the run
+log emits, for each waiting rule:
+
+```
+waiting for resources: group 'limit_merge': need 1, have 0 held by [merge_R1_data, merge_R2_data]; top thread holders: [...]
+```
+
+Resolve by removing the shared-group claim (give each rule set its own
+group), restoring the missing `depends_on` edge so downstream rules cannot
+start before their producers, or rebalancing priorities so producers win
+the slots first.
+
 ### "A rule I expect to run is being skipped"
 
 1. Check `depends_on` — does the rule have unresolved explicit dependencies?

@@ -537,6 +537,18 @@ pub fn effective_tool_resources(rule: &Rule, limits: ResourceLimits) -> (u32, u6
     (threads, memory_mb)
 }
 
+/// A rule's current holdings in the pool — the "who holds what" side of
+/// wait diagnostics (issue #123).
+#[derive(Debug, Clone, Default)]
+pub struct ActiveReservation {
+    /// Threads currently held.
+    pub threads: u32,
+    /// Memory currently held, in MB.
+    pub memory_mb: u64,
+    /// Per-group units currently held.
+    pub groups: HashMap<String, u32>,
+}
+
 /// Resource pool tracking available system resources and custom resource groups.
 #[derive(Debug, Clone)]
 pub struct ResourcePool {
@@ -548,6 +560,11 @@ pub struct ResourcePool {
 
     /// Available capacity for each resource group.
     pub groups: HashMap<String, u32>,
+
+    /// Per-rule active reservations — attribution for wait diagnostics.
+    /// A waiting rule holds nothing (reservations are atomic), so this map
+    /// never contains waiters; it is the holders-only side of the picture.
+    pub active: HashMap<String, ActiveReservation>,
 }
 
 impl ResourcePool {
@@ -557,6 +574,7 @@ impl ResourcePool {
             threads,
             memory_mb,
             groups: HashMap::new(),
+            active: HashMap::new(),
         }
     }
 
@@ -603,6 +621,14 @@ impl ResourcePool {
                 *available = available.saturating_sub(amount);
             }
         }
+
+        // Attribution for wait diagnostics (issue #123).
+        let reservation = ActiveReservation {
+            threads: reservation_threads(rule, max_threads),
+            memory_mb: reservation_memory_mb(rule, max_memory_mb),
+            groups: rule.resources.groups.clone(),
+        };
+        self.active.insert(rule.name.clone(), reservation);
     }
 
     /// Release resources after a rule completes.
@@ -627,6 +653,94 @@ impl ResourcePool {
                 *available = (*available + amount).min(max);
             }
         }
+
+        self.active.remove(&rule.name);
+    }
+
+    /// Human-readable explanation of why `rule` cannot be accommodated right
+    /// now, naming the top holders of whatever it needs (issue #123).
+    ///
+    /// Used by the executor's wait diagnostics — a rule stuck waiting on a
+    /// contended group (or on threads/memory) must surface WHO holds it, so
+    /// priority-inversion starvation is visible in the log instead of
+    /// manifesting as rules that print "Running" and never spawn.
+    ///
+    /// Note: requests beyond the pool's total capacity are clamped by
+    /// `can_accommodate`/`reserve` (an over-capacity rule runs alone), so a
+    /// threads/memory shortfall only ever arises from active holders —
+    /// the report is a contention picture, not an impossibility picture.
+    pub fn blockage_report(&self, rule: &Rule, max_threads: u32, max_memory_mb: u64) -> String {
+        let mut parts: Vec<String> = Vec::new();
+
+        let need_threads = reservation_threads(rule, max_threads);
+        if self.threads < need_threads {
+            parts.push(format!(
+                "threads: need {need_threads}, have {}",
+                self.threads
+            ));
+        }
+        let need_memory = reservation_memory_mb(rule, max_memory_mb);
+        if self.memory_mb < need_memory {
+            parts.push(format!(
+                "memory: need {need_memory}MB, have {}MB",
+                self.memory_mb
+            ));
+        }
+        for (group_name, &required) in &rule.resources.groups {
+            let available = self.groups.get(group_name).copied().unwrap_or(0);
+            if available < required {
+                let holders: Vec<&str> = self
+                    .active
+                    .iter()
+                    .filter(|(_, r)| r.groups.get(group_name).copied().unwrap_or(0) > 0)
+                    .map(|(name, _)| name.as_str())
+                    .collect();
+                let holder_note = if holders.is_empty() {
+                    "(none active)".to_string()
+                } else {
+                    format!("held by [{}]", holders.join(", "))
+                };
+                parts.push(format!(
+                    "group '{group_name}': need {required}, have {available} {holder_note}"
+                ));
+            }
+        }
+        if parts.is_empty() {
+            parts.push("no single constraint found".to_string());
+        }
+
+        // Top thread/memory holders help even when a group is the blocker.
+        let mut by_threads: Vec<(&str, u32)> = self
+            .active
+            .iter()
+            .map(|(n, r)| (n.as_str(), r.threads))
+            .collect();
+        by_threads.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
+        let mut by_memory: Vec<(&str, u64)> = self
+            .active
+            .iter()
+            .map(|(n, r)| (n.as_str(), r.memory_mb))
+            .collect();
+        by_memory.sort_by_key(|(_, m)| std::cmp::Reverse(*m));
+        let top_threads: Vec<String> = by_threads
+            .iter()
+            .take(3)
+            .filter(|(_, t)| *t > 0)
+            .map(|(n, t)| format!("{n}({t}t)"))
+            .collect();
+        let top_memory: Vec<String> = by_memory
+            .iter()
+            .take(3)
+            .filter(|(_, m)| *m > 0)
+            .map(|(n, m)| format!("{n}({m}MB)"))
+            .collect();
+        if !top_threads.is_empty() {
+            parts.push(format!("top thread holders: [{}]", top_threads.join(", ")));
+        }
+        if !top_memory.is_empty() {
+            parts.push(format!("top memory holders: [{}]", top_memory.join(", ")));
+        }
+        parts.join("; ")
     }
 }
 
@@ -1152,6 +1266,88 @@ mod tests {
         };
         // Unset threads -> 1 (safe default), unset memory -> whole machine.
         assert_eq!(effective_tool_resources(&rule, limits), (1, 32768));
+    }
+
+    fn rule_with_group(name: &str, group: &str, amount: u32) -> Rule {
+        let mut rule = Rule {
+            name: name.to_string(),
+            ..Default::default()
+        };
+        rule.resources.groups.insert(group.to_string(), amount);
+        rule
+    }
+
+    #[test]
+    fn reserve_records_active_attribution_and_release_clears_it() {
+        let mut pool = ResourcePool::new(16, 32768);
+        pool.set_groups([("limit_merge".to_string(), 2)].into_iter().collect());
+        let rule = rule_with_group("merge_a", "limit_merge", 1);
+
+        pool.reserve(&rule, 16, 32768);
+        assert!(pool.active.contains_key("merge_a"));
+        assert_eq!(pool.groups["limit_merge"], 1);
+
+        pool.release(
+            &rule,
+            16,
+            32768,
+            &[("limit_merge".to_string(), 2)].into_iter().collect(),
+        );
+        assert!(!pool.active.contains_key("merge_a"));
+        assert_eq!(pool.groups["limit_merge"], 2);
+    }
+
+    #[test]
+    fn blockage_report_names_group_holders() {
+        let mut pool = ResourcePool::new(16, 32768);
+        pool.set_groups([("limit_merge".to_string(), 2)].into_iter().collect());
+        let holder = rule_with_group("merge_a", "limit_merge", 1);
+        let holder2 = rule_with_group("merge_b", "limit_merge", 1);
+        pool.reserve(&holder, 16, 32768);
+        pool.reserve(&holder2, 16, 32768);
+        // Group is now exhausted: both units held.
+        let waiter = rule_with_group("dump_x", "limit_merge", 1);
+        let report = pool.blockage_report(&waiter, 16, 32768);
+        assert!(
+            report.contains("group 'limit_merge': need 1, have 0"),
+            "report must state the group shortfall: {report}"
+        );
+        assert!(
+            report.contains("held by [merge_a, merge_b]")
+                || report.contains("held by [merge_b, merge_a]"),
+            "report must name the holders: {report}"
+        );
+    }
+
+    #[test]
+    fn blockage_report_covers_threads_and_memory_contention() {
+        // Over-capacity requests clamp to the whole pool (documented design),
+        // so a threads/memory shortfall only arises from CONTENTION — a
+        // holder consumes the capacity first.
+        let mut pool = ResourcePool::new(2, 4096);
+        let hog = Rule {
+            name: "hog".to_string(),
+            threads: Some(2),
+            memory: Some("3G".to_string()),
+            ..Default::default()
+        };
+        pool.reserve(&hog, 2, 4096);
+        let waiter = Rule {
+            name: "waiter".to_string(),
+            threads: Some(1),
+            memory: Some("2G".to_string()),
+            ..Default::default()
+        };
+        let report = pool.blockage_report(&waiter, 2, 4096);
+        assert!(
+            report.contains("threads: need 1, have 0"),
+            "threads shortfall: {report}"
+        );
+        assert!(
+            report.contains("memory: need 2048MB, have 1024MB"),
+            "memory shortfall: {report}"
+        );
+        assert!(report.contains("hog"), "top holders named: {report}");
     }
 }
 
