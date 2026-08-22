@@ -347,3 +347,25 @@ oxo-flow status .oxo-flow/checkpoint.json
 - [Environment System](../reference/environment-system.md) — Singularity and Docker on HPC
 - [`run` command](../commands/run.md) — `--max-threads`, `--max-memory`, `--skip-env-setup`, `--cache-dir`
 - [`cluster` command](../commands/cluster.md) — cluster submission reference
+
+## Scheduling Fairness
+
+Cluster submission honors the same fairness contract as local execution:
+
+- **Priority is honored**: each round, ready rules are submitted in
+  effective-priority order — declared `priority` plus priority aging
+  (every round a ready rule spends beyond the `max_submitted` cap gains
+  +1). A producer parked at the cap therefore outranks fresh
+  high-priority rules after `priority gap` rounds — priority-inversion
+  starvation cannot persist (issue #134).
+- **In-flight jobs are cancelled on failure**: when a required rule
+  fails, the driver cancels every job already submitted
+  (`scancel`/`qdel`/`bkill`) before the run exits — no orphaned cluster
+  jobs.
+- **Waits inside the scheduler queue** are the scheduler's own
+  ordering and are visible via `squeue`/`qstat`/`bjobs` (job ids are
+  recorded per rule under the run directory). The local 60-second
+  "waiting for resources:" diagnostics have no cluster counterpart by
+  design — the pool lives on the scheduler, not in the engine.
+
+---
