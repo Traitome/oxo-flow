@@ -202,6 +202,28 @@ pub fn rule_fingerprint(
     interpreter_map: &HashMap<String, String>,
     shell_prelude: Option<&str>,
 ) -> String {
+    rule_fingerprint_impl(rule, interpreter_map, shell_prelude, true)
+}
+
+/// Same fingerprint with the `input` field EXCLUDED (issue #142 M1): for an
+/// expand_inputs-over-injected-key rule the baked input list IS the
+/// `--samples` selection, so the full fingerprint differs on every subset
+/// run while this one stays identical. A match proves the rule definition —
+/// shell, outputs, env, conditions, everything else — is unchanged.
+pub fn rule_fingerprint_without_input(
+    rule: &Rule,
+    interpreter_map: &HashMap<String, String>,
+    shell_prelude: Option<&str>,
+) -> String {
+    rule_fingerprint_impl(rule, interpreter_map, shell_prelude, false)
+}
+
+fn rule_fingerprint_impl(
+    rule: &Rule,
+    interpreter_map: &HashMap<String, String>,
+    shell_prelude: Option<&str>,
+    include_input: bool,
+) -> String {
     let mut hasher = Sha256::new();
     // Field name + value pairs separated by NUL bytes: unambiguous framing,
     // deterministic ordering (maps sorted by key, lists in semantic order).
@@ -219,7 +241,9 @@ pub fn rule_fingerprint(
     add("shell_prelude", shell_prelude.unwrap_or(""));
     add("shell", rule.shell.as_deref().unwrap_or(""));
     add("script", rule.script.as_deref().unwrap_or(""));
-    add("input", &canonical_file_patterns(&rule.input));
+    if include_input {
+        add("input", &canonical_file_patterns(&rule.input));
+    }
     add("output", &canonical_file_patterns(&rule.output));
     add("envvars", &canonical_string_map(&rule.envvars));
     add("params", &canonical_toml_map(&rule.params));
@@ -345,6 +369,12 @@ pub struct ConfigChangeReport {
     pub removed_keys: Vec<String>,
     /// Rules whose stored structural fingerprint differs from the current one.
     pub fingerprint_mismatches: Vec<String>,
+    /// Completed rules whose fingerprint differed ONLY in the sample-derived
+    /// input list (`expand_inputs` over an engine-injected key, issue #142
+    /// M1): NOT invalidated — toggling `--samples` must not re-run gather
+    /// rules. The input-manifest check still re-verifies set + content, so a
+    /// genuine input edit invalidates there.
+    pub sample_selection_exempt: Vec<String>,
     /// Rules directly affected (reference a changed key or mismatch).
     pub directly_affected: Vec<String>,
     /// Full invalidation set: directly affected rules plus their transitive
@@ -412,23 +442,52 @@ pub fn detect_config_changes(
     // ── 2. Rule fingerprints (all rules in this run) ─────────────────────
     let graph = ConfigReferenceGraph::from_rules(rules);
     let mut current_fingerprints: HashMap<String, String> = HashMap::new();
+    let mut current_no_input_fingerprints: HashMap<String, String> = HashMap::new();
     let mut fingerprint_mismatches: Vec<String> = Vec::new();
+    let mut sample_selection_exempt: Vec<String> = Vec::new();
     for rule in rules {
         let fingerprint = rule_fingerprint(rule, interpreter_map, shell_prelude);
         if let Some(stored) = checkpoint.rule_fingerprints.get(&rule.name)
             && *stored != fingerprint
             && checkpoint.is_completed(&rule.name)
         {
-            fingerprint_mismatches.push(rule.name.clone());
+            // Issue #142 M1: an expand_inputs-over-injected-key rule bakes
+            // the --samples selection into its input list, so the full
+            // fingerprint differs on every subset run. When the
+            // input-excluded fingerprint still matches, the ONLY change is
+            // the selection — not an invalidation (the input-manifest check
+            // re-verifies set + content later, so a genuine input edit still
+            // invalidates there). Checkpoints from older binaries carry no
+            // input-excluded fingerprints — those keep invalidating.
+            let selection_only = expand_inputs_refs_engine_injected(rule)
+                && checkpoint.rule_fingerprints_no_input.get(&rule.name)
+                    == Some(&rule_fingerprint_without_input(
+                        rule,
+                        interpreter_map,
+                        shell_prelude,
+                    ));
+            if selection_only {
+                sample_selection_exempt.push(rule.name.clone());
+            } else {
+                fingerprint_mismatches.push(rule.name.clone());
+            }
         }
         current_fingerprints.insert(rule.name.clone(), fingerprint);
+        current_no_input_fingerprints.insert(
+            rule.name.clone(),
+            rule_fingerprint_without_input(rule, interpreter_map, shell_prelude),
+        );
     }
     fingerprint_mismatches.sort();
+    sample_selection_exempt.sort();
 
     // ── 3. Bootstrap path: record provenance, keep everything completed ──
     if is_legacy {
         checkpoint.config_snapshot = build_config_snapshot(current, sensitive_keys);
         checkpoint.rule_fingerprints.extend(current_fingerprints);
+        checkpoint
+            .rule_fingerprints_no_input
+            .extend(current_no_input_fingerprints);
         return ConfigChangeReport {
             is_legacy: true,
             ..Default::default()
@@ -460,6 +519,9 @@ pub fn detect_config_changes(
     }
     checkpoint.config_snapshot = build_config_snapshot(current, sensitive_keys);
     checkpoint.rule_fingerprints.extend(current_fingerprints);
+    checkpoint
+        .rule_fingerprints_no_input
+        .extend(current_no_input_fingerprints);
 
     let mut directly_affected: Vec<String> = directly_affected.into_iter().collect();
     directly_affected.sort();
@@ -472,9 +534,23 @@ pub fn detect_config_changes(
         added_keys,
         removed_keys,
         fingerprint_mismatches,
+        sample_selection_exempt,
         directly_affected,
         invalidated,
     }
+}
+
+/// Whether any `expand_inputs` pattern of the rule resolves against an
+/// engine-injected config key (`samples_list` / `samples_<group>` /
+/// `pairs_list`). Only such rules can have a fingerprint mismatch that is
+/// purely the `--samples` selection (issue #142 M1).
+fn expand_inputs_refs_engine_injected(rule: &Rule) -> bool {
+    rule.expand_inputs.iter().any(|exp| {
+        exp.variables.values().any(|var_ref| {
+            let key = var_ref.strip_prefix("config.").unwrap_or(var_ref);
+            is_engine_injected_key(key)
+        })
+    })
 }
 
 /// Build the snapshot map: engine-injected keys excluded, sensitive values

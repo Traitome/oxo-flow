@@ -292,10 +292,13 @@ declares when it applies (e.g. `failure-diagnosis` only when rules failed,
 sections = ["universal", "workflow-info", "commands"]
 ```
 
-- Available built-in section IDs: `universal`, `execution-status`,
-  `failure-diagnosis`, `clinical-compliance`, `workflow-info`, `commands`,
-  `file-manifest`, `environment`, `metrics`, `sample-matrix`, `provenance`,
-  `task-summary`
+- Available built-in section IDs (generator names used by the filter):
+  `universal`, `execution-status`, `failure-diagnosis`,
+  `clinical-compliance`, `workflow-info`, `commands`, `file-manifest`,
+  `environment`, `metrics`, `sample-matrix`, `provenance`, `task-summary` —
+  the rendered HTML id can differ from the generator name: `universal`
+  renders the `dashboard` section, and `execution-status` renders both
+  `execution-status` and `benchmarks`
 - The filter applies to **all** sections, including `task-summary`
 - Explicitly listing `clinical-compliance` includes it regardless of the
   detected workflow domain

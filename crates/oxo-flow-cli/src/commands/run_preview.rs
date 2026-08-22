@@ -10,9 +10,10 @@
 //! read-only and never mutates the on-disk state.
 
 use anyhow::{Context, Result};
+use colored::Colorize;
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
-use oxo_flow_core::executor::checkpoint::{CheckpointState, expand_config_in_path};
+use oxo_flow_core::executor::checkpoint::CheckpointState;
 use oxo_flow_core::rule::Rule;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -92,39 +93,20 @@ pub struct RunPreview {
 /// all outputs exist and (when inputs exist) every output is newer than
 /// every input. `run` skips such rules as "outputs up-to-date" even
 /// without a completion record; the preview mirrors it.
+///
+/// Delegates to the executor's own gate (`checkpoint::should_skip_rule`,
+/// the same function process.rs evaluates) so the two cannot drift: a path
+/// that still contains `{` — an undeclared wildcard like `{sample}` or an
+/// unexpanded config ref — is NOT fresh on the run side (the executor
+/// executes the rule), so the preview must not classify it as "will skip:
+/// outputs up-to-date" (issue #142 H3: dry-run said skip while `run`
+/// actually wrote a literal `out_{sample}.txt`).
 fn rule_outputs_exist_fresh(
     rule: &oxo_flow_core::rule::Rule,
     workdir: &Path,
     wildcard_values: &HashMap<String, String>,
 ) -> bool {
-    !rule.output.is_empty()
-        && rule.output.iter().all(|o| {
-            let expanded = expand_config_in_path(o, wildcard_values);
-            expanded.contains('{') || workdir.join(expanded).exists()
-        })
-        && (rule.input.is_empty()
-            || rule.input.iter().all(|i| {
-                let expanded = expand_config_in_path(i, wildcard_values);
-                if expanded.contains('{') {
-                    return true;
-                }
-                let input_mtime = std::fs::metadata(workdir.join(&expanded))
-                    .and_then(|m| m.modified())
-                    .ok();
-                let Some(input_mtime) = input_mtime else {
-                    return false;
-                };
-                rule.output.iter().all(|o| {
-                    let expanded_o = expand_config_in_path(o, wildcard_values);
-                    if expanded_o.contains('{') {
-                        return true;
-                    }
-                    std::fs::metadata(workdir.join(&expanded_o))
-                        .and_then(|m| m.modified())
-                        .ok()
-                        .is_some_and(|om| om >= input_mtime)
-                })
-            }))
+    oxo_flow_core::executor::checkpoint::should_skip_rule(rule, workdir, wildcard_values)
 }
 
 /// Storage resolver for manifest snapshots and remote staging: local by
@@ -226,18 +208,39 @@ pub fn preview_run_plan(
         config.defaults.shell_prelude.as_deref(),
     );
     let config_invalidated: HashSet<String> = config_report.invalidated.iter().cloned().collect();
+    // Issue #142 M1: rules whose fingerprint differed only in the
+    // sample-derived input list stay completed — warn (mirrors run), and
+    // the input-manifest check below re-verifies set + content, so a
+    // genuine input edit still invalidates.
+    for name in &config_report.sample_selection_exempt {
+        eprintln!(
+            "  {} rule '{}' skipped: its definition only changed with the --samples selection, not a real edit — its outputs still cover the previous run's full sample set",
+            "⚠".yellow(),
+            name
+        );
+    }
 
     // 2. Input-manifest invalidation (issue #72) — on the clone only.
     //    Missing inputs (typically tombstoned temporaries) cascade UP: the
     //    completed producers re-execute first, exactly like run.
-    let (manifest_invalidated, missing_inputs, _baselined) = detect_input_manifest_invalidations(
-        &mut clone,
-        config,
-        dag,
-        order,
-        workdir,
-        wildcard_values,
-    );
+    let (manifest_invalidated, missing_inputs, _baselined, sample_selection_driven) =
+        detect_input_manifest_invalidations(
+            &mut clone,
+            config,
+            dag,
+            order,
+            workdir,
+            wildcard_values,
+        );
+    // Issue #142 M1: rules whose ONLY input change is the engine-injected
+    // sample-list stay skipped — warn (mirrors run), never invalidate.
+    for name in sample_selection_driven.iter() {
+        eprintln!(
+            "  {} rule '{}' skipped: its inputs only reflect the --samples selection, not a real change — its outputs still cover the previous run's full sample set",
+            "⚠".yellow(),
+            name
+        );
+    }
     // Genuinely missing inputs cascade UP: every completed producer of the
     // missing files re-executes first (exactly like run).
     let mut upstream_set: HashSet<String> = cascade_up(&mut clone, dag, &missing_inputs)
@@ -478,8 +481,12 @@ pub fn rule_outputs_exist(
 /// Compare completed rules' input manifests against the current file set.
 ///
 /// Returns (content-mismatched rule names, rules whose inputs are MISSING,
-/// number of legacy-baseline adoptions). The missing set drives cascade-up:
-/// the completed producers of those inputs must re-execute first.
+/// number of legacy-baseline adoptions, rules whose only mismatch is the
+/// engine-injected sample-selection change). The missing set drives
+/// cascade-up: the completed producers of those inputs must re-execute
+/// first. The sample-selection set stays completed — its mismatch does not
+/// invalidate (issue #142 M1, documented run.md contract) and is surfaced
+/// as a warning by the caller.
 ///
 /// Mutates `ck` by recording baselines for legacy checkpoints — exactly
 /// like `run` does; pass a clone for a read-only preview.
@@ -490,10 +497,11 @@ pub fn detect_input_manifest_invalidations(
     order: &[String],
     workdir: &Path,
     wildcard_values: &HashMap<String, String>,
-) -> (HashSet<String>, HashSet<String>, usize) {
+) -> (HashSet<String>, HashSet<String>, usize, HashSet<String>) {
     let mut mismatched: HashSet<String> = HashSet::new();
     let mut missing_inputs: HashSet<String> = HashSet::new();
     let mut baselined = 0usize;
+    let mut sample_selection_driven: HashSet<String> = HashSet::new();
     for name in order {
         if !ck.completed_rules.contains(name) {
             continue;
@@ -511,8 +519,20 @@ pub fn detect_input_manifest_invalidations(
                 Some(recorded)
                     if oxo_flow_core::executor::checkpoint::manifests_match(recorded, &current) => {
                 }
-                Some(_) => {
-                    mismatched.insert(name.clone());
+                Some(recorded) => {
+                    // The file set changed — but if the change is exactly
+                    // the engine's injected sample list (expand_inputs over
+                    // config.samples_list / samples_<group> / pairs_list),
+                    // toggling --samples must stay cheap (run.md contract):
+                    // the rule stays completed, its outputs keep reflecting
+                    // the previous run's sample set. Anything else — a
+                    // genuine file edit, a user-touched set — invalidates
+                    // as before (issue #142 M1).
+                    if manifest_mismatch_is_sample_selection(rule, recorded, &current, config) {
+                        sample_selection_driven.insert(name.clone());
+                    } else {
+                        mismatched.insert(name.clone());
+                    }
                 }
                 None => {
                     // Legacy baseline: adopt the current set.
@@ -547,7 +567,105 @@ pub fn detect_input_manifest_invalidations(
             }
         }
     }
-    (mismatched, missing_inputs, baselined)
+    (
+        mismatched,
+        missing_inputs,
+        baselined,
+        sample_selection_driven,
+    )
+}
+
+/// Whether a recorded-vs-current input-manifest mismatch is caused solely by
+/// the engine's injected sample-list values changing between runs (issue
+/// #142 M1).
+///
+/// The documented contract (run.md): `samples_list` / `samples_<group>` /
+/// `pairs_list` are engine-injected and never trigger invalidation, so
+/// toggling `--samples` stays cheap. Config-impact detection already
+/// excludes those keys; the input-manifest path must too — a gather rule
+/// whose input list is baked from `expand_inputs` over `config.samples_list`
+/// would otherwise re-run on every subset run and overwrite cohort outputs
+/// with a subset table.
+///
+/// Three conditions, ALL verified — the exclusion is never broad:
+/// 1. Some `expand_inputs` pattern of the rule resolves against an
+///    engine-injected config key; any other input source keeps normal
+///    (invalidate) behavior.
+/// 2. Re-expanding under the CURRENT config reproduces the CURRENT manifest
+///    path set exactly — the file set is fully determined by the injected
+///    value; a user-added/removed/touched file set would not reproduce.
+/// 3. Every path present in BOTH manifests is content-identical — a real
+///    edit to a file the rule consumes still invalidates.
+fn manifest_mismatch_is_sample_selection(
+    rule: &Rule,
+    recorded: &[oxo_flow_core::executor::checkpoint::InputManifestEntry],
+    current: &[oxo_flow_core::executor::checkpoint::InputManifestEntry],
+    config: &WorkflowConfig,
+) -> bool {
+    let Some(expected) = engine_expanded_inputs_from_injected(rule, config) else {
+        return false;
+    };
+    // (2) The current manifest must be exactly the engine-derived set.
+    let expected_paths: HashSet<&str> = expected.iter().map(String::as_str).collect();
+    let current_paths: HashSet<&str> = current.iter().map(|e| e.path.as_str()).collect();
+    if current_paths != expected_paths {
+        return false;
+    }
+    // (3) Overlapping entries must be identical (size/hash-aware — the
+    // `PartialEq` on entries covers remote etags too).
+    let current_by_path: HashMap<&str, &oxo_flow_core::executor::checkpoint::InputManifestEntry> =
+        current.iter().map(|e| (e.path.as_str(), e)).collect();
+    recorded
+        .iter()
+        .filter(|r| current_by_path.contains_key(r.path.as_str()))
+        .all(|r| current_by_path[r.path.as_str()] == r)
+}
+
+/// The input paths a rule's `expand_inputs` patterns bake to under the
+/// CURRENT config — the same resolution `expand_wildcards` applies at run
+/// start (config.rs: `resolve_config_list` + `cartesian_expand`, literal
+/// lists, and per-instance `[[values]]` bindings).
+///
+/// Returns None when no `expand_inputs` pattern resolves against an
+/// engine-injected config key (`samples_list` / `samples_<group>` /
+/// `pairs_list`) — the only rules whose manifest mismatch can be a pure
+/// sample-selection change. `[[values]]` per-instance bindings are not
+/// re-applied here: a pattern depending on them fails the path-set
+/// reproduction check (condition 2) and falls back to normal invalidation —
+/// conservative by construction.
+fn engine_expanded_inputs_from_injected(
+    rule: &Rule,
+    config: &WorkflowConfig,
+) -> Option<Vec<String>> {
+    let mut touched_injected = false;
+    let mut expanded: Vec<String> = Vec::new();
+    for exp in &rule.expand_inputs {
+        let mut variables: HashMap<String, Vec<String>> = HashMap::new();
+        for (var_name, var_ref) in &exp.variables {
+            let referenced = var_ref.strip_prefix("config.").unwrap_or(var_ref);
+            if oxo_flow_core::config_impact::is_engine_injected_key(referenced) {
+                touched_injected = true;
+            }
+            if let Some(vals) = config.resolve_config_list(var_ref) {
+                variables.insert(var_name.clone(), vals);
+            } else if var_ref.starts_with('[') && var_ref.ends_with(']') {
+                let inner = &var_ref[1..var_ref.len() - 1];
+                let vals = inner
+                    .split(',')
+                    .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                variables.insert(var_name.clone(), vals);
+            } else {
+                variables.insert(var_name.clone(), vec![var_ref.clone()]);
+            }
+        }
+        expanded.extend(oxo_flow_core::wildcard::cartesian_expand(
+            &exp.pattern,
+            &variables,
+        ));
+    }
+    touched_injected.then_some(expanded)
 }
 
 /// Remove the completed UPSTREAM dependencies of `seeds` from the completed
@@ -658,11 +776,36 @@ pub(crate) fn when_condition_false(
     !oxo_flow_core::executor::process::evaluate_condition(condition, &config_values)
 }
 
+/// The profile names available in `<workflow-dir>/profiles/` — `<NAME>`
+/// from every `<NAME>.toml` / `<NAME>.oxoflow` file, sorted and deduped.
+fn available_profiles(workflow_dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(workflow_dir.join("profiles")) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            for ext in [".toml", ".oxoflow"] {
+                if let Some(stripped) = name.strip_suffix(ext) {
+                    return Some(stripped.to_string());
+                }
+            }
+            None
+        })
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
 /// Merge a profile's `[config]` table into the workflow config — the same
 /// semantics `run` applies. Profile values only FILL IN keys the workflow
 /// does not set (`or_insert`); profile lookup is workflow-dir-only:
 /// `<workflow-dir>/profiles/<NAME>.toml`, then `.oxoflow`; a missing
-/// profile warns and continues (matching run, issue #76 audit).
+/// profile is a HARD error naming every available profile (issue #142 H4 —
+/// a typo'd `--profile` previously warned and ran with the wrong config).
 pub(crate) fn merge_profile(
     config: &mut WorkflowConfig,
     profile_name: &str,
@@ -680,12 +823,17 @@ pub(crate) fn merge_profile(
     ];
     let profile_path = profile_paths.iter().find(|p| p.exists());
     let Some(path) = profile_path else {
-        eprintln!(
-            "{} Profile '{}' not found in profiles/ directory",
-            "Warning:".bold().yellow(),
+        let available = available_profiles(workflow_dir);
+        let hint = if available.is_empty() {
+            "the profiles/ directory does not exist or contains no .toml/.oxoflow profile files"
+                .to_string()
+        } else {
+            format!("available profiles: {}", available.join(", "))
+        };
+        return Err(anyhow::anyhow!(
+            "profile '{}' not found in profiles/ directory ({hint})",
             profile_name
-        );
-        return Ok(());
+        ));
     };
     let profile_content = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read profile {}", path.display()))?;
@@ -1029,8 +1177,15 @@ threshold = 5
     }
 
     #[test]
-    fn merge_profile_missing_profile_warns_and_continues() {
+    fn merge_profile_missing_profile_is_hard_error_with_available_list() {
         let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("profiles")).unwrap();
+        std::fs::write(
+            dir.path().join("profiles/batch.toml"),
+            "[config]\nthreads = 4\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("profiles/dev.oxoflow"), "[config]\n").unwrap();
         let mut config = WorkflowConfig::parse(
             r#"
 [workflow]
@@ -1039,7 +1194,25 @@ version = "1.0"
 "#,
         )
         .unwrap();
-        assert!(merge_profile(&mut config, "nope", dir.path()).is_ok());
+        let err = merge_profile(&mut config, "nope", dir.path()).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("nope"), "error should name the profile: {msg}");
+        assert!(
+            msg.contains("batch") && msg.contains("dev"),
+            "error should list available profiles: {msg}"
+        );
+        // No profile dir at all still errors (with a different hint).
+        let bare = tempfile::tempdir().unwrap();
+        let mut config2 = WorkflowConfig::parse(
+            r#"
+[workflow]
+name = "t"
+version = "1.0"
+"#,
+        )
+        .unwrap();
+        let err2 = merge_profile(&mut config2, "nope", bare.path()).unwrap_err();
+        assert!(format!("{err2:#}").contains("no .toml/.oxoflow profile files"));
     }
 
     #[test]
@@ -1236,5 +1409,205 @@ version = "1.0"
 
         let preview = run_preview(&ck, &config, &dag, &order, dir.path(), &wildcard_values);
         assert!(preview.plan.iter().all(|r| r.status == RuleStatus::Skipped));
+    }
+
+    // ─── Issue #142 H3a: undeclared wildcard parity ────────────────────
+
+    /// A rule whose output contains an undeclared `{sample}` is NEVER fresh:
+    /// the brace path cannot exist as itself (the executor runs the rule and
+    /// writes the literal name), so the preview must say `NeverCompleted` —
+    /// never `SkippedFresh` — matching `should_skip_rule` exactly.
+    #[test]
+    fn undeclared_wildcard_output_is_never_fresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = WorkflowConfig::parse(
+            r#"
+[workflow]
+name = "t"
+version = "1.0"
+
+[[rules]]
+name = "gen"
+output = ["out_{sample}.txt"]
+shell = "echo hi > {output}"
+"#,
+        )
+        .unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        let order = dag.execution_order().unwrap();
+        let wildcard_values = HashMap::new();
+        let ck = CheckpointState::new();
+
+        // Pre-create the LITERAL brace-named file — even then the rule must
+        // not classify as fresh, exactly like the executor treats it.
+        std::fs::write(dir.path().join("out_{sample}.txt"), "hi").unwrap();
+
+        let preview = run_preview(&ck, &config, &dag, &order, dir.path(), &wildcard_values);
+        assert_eq!(
+            status_of(&preview, "gen"),
+            &RuleStatus::NeverCompleted,
+            "an undeclared-wildcard output must never count as up-to-date"
+        );
+        assert!(
+            !preview
+                .plan
+                .iter()
+                .any(|r| r.status == RuleStatus::SkippedFresh)
+        );
+    }
+
+    // ─── Issue #142 M1: sample-selection manifest exclusion ────────────
+
+    fn manifest_entry(
+        path: &str,
+        size: u64,
+    ) -> oxo_flow_core::executor::checkpoint::InputManifestEntry {
+        oxo_flow_core::executor::checkpoint::InputManifestEntry {
+            path: path.to_string(),
+            size,
+            mtime_nanos: 1000,
+            hash: Some("sha256:abc".to_string()),
+            remote: None,
+        }
+    }
+
+    fn gather_config(samples_list: &str) -> WorkflowConfig {
+        let toml = format!(
+            r#"
+[workflow]
+name = "t"
+version = "1.0"
+
+[config]
+samples_list = "{samples_list}"
+
+[[rules]]
+name = "gather"
+output = ["counts.txt"]
+expand_inputs = [{{ pattern = "per/{{sample}}.txt", variables = {{ sample = "config.samples_list" }} }}]
+shell = "cat {{input}} > {{output}}"
+"#
+        );
+        let mut config = WorkflowConfig::parse(&toml).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        config
+    }
+
+    #[test]
+    fn engine_expanded_inputs_from_injected_lists_injected_rules() {
+        let config = gather_config("S1,S2,S3");
+        let gather = config.get_rule("gather").unwrap();
+        let expanded =
+            engine_expanded_inputs_from_injected(gather, &config).expect("injected expansion");
+        assert_eq!(expanded, vec!["per/S1.txt", "per/S2.txt", "per/S3.txt"]);
+    }
+
+    #[test]
+    fn engine_expanded_inputs_from_injected_is_none_without_injected_keys() {
+        let mut config = WorkflowConfig::parse(
+            r#"
+[workflow]
+name = "t"
+version = "1.0"
+
+[config]
+ref = "ref.fa"
+
+[[rules]]
+name = "gather"
+output = ["counts.txt"]
+expand_inputs = [{ pattern = "raw/{sample}.txt", variables = { sample = "config.ref" } }]
+shell = "cat {input} > {output}"
+"#,
+        )
+        .unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let gather = config.get_rule("gather").unwrap();
+        assert!(
+            engine_expanded_inputs_from_injected(gather, &config).is_none(),
+            "a config.key that is NOT engine-injected must not qualify"
+        );
+        // No expand_inputs at all — also none.
+        let mut plain = WorkflowConfig::parse(
+            r#"
+[workflow]
+name = "t"
+version = "1.0"
+
+[[rules]]
+name = "gen"
+output = ["out.txt"]
+shell = "echo hi > {output}"
+"#,
+        )
+        .unwrap();
+        plain.apply_defaults();
+        plain.expand_wildcards().unwrap();
+        assert!(
+            engine_expanded_inputs_from_injected(plain.get_rule("gen").unwrap(), &plain).is_none()
+        );
+    }
+
+    /// The true case: the recorded full-cohort manifest vs the subset
+    /// manifest, under the subset config — identical overlap, set
+    /// reproduced by re-expansion → sample-selection-driven.
+    #[test]
+    fn manifest_mismatch_is_sample_selection_on_pure_subset_change() {
+        let config = gather_config("S2");
+        let gather = config.get_rule("gather").unwrap();
+        let recorded = vec![
+            manifest_entry("per/S1.txt", 10),
+            manifest_entry("per/S2.txt", 20),
+            manifest_entry("per/S3.txt", 30),
+        ];
+        let current = vec![manifest_entry("per/S2.txt", 20)];
+        assert!(
+            manifest_mismatch_is_sample_selection(gather, &recorded, &current, &config),
+            "a pure samples_list subset change must classify as selection-driven"
+        );
+    }
+
+    /// A content edit to a file the rule consumes still invalidates: the
+    /// overlapping entry differs (condition 3).
+    #[test]
+    fn manifest_mismatch_with_edited_file_is_not_sample_selection() {
+        let config = gather_config("S2");
+        let gather = config.get_rule("gather").unwrap();
+        let recorded = vec![
+            manifest_entry("per/S1.txt", 10),
+            manifest_entry("per/S2.txt", 20),
+            manifest_entry("per/S3.txt", 30),
+        ];
+        let mut current = vec![manifest_entry("per/S2.txt", 20)];
+        current[0].size = 99; // the file the rule consumes was edited
+        assert!(
+            !manifest_mismatch_is_sample_selection(gather, &recorded, &current, &config),
+            "an edited consumed file must invalidate, never exempt"
+        );
+    }
+
+    /// A file set the injected value does not reproduce is not exempt: a
+    /// user-added input file means a real (non-selection) change.
+    #[test]
+    fn manifest_mismatch_with_foreign_file_is_not_sample_selection() {
+        let config = gather_config("S2");
+        let gather = config.get_rule("gather").unwrap();
+        let recorded = vec![
+            manifest_entry("per/S1.txt", 10),
+            manifest_entry("per/S2.txt", 20),
+            manifest_entry("per/S3.txt", 30),
+        ];
+        let current = vec![
+            manifest_entry("per/S2.txt", 20),
+            manifest_entry("per/S4.txt", 40), // S4 not in samples_list
+        ];
+        assert!(
+            !manifest_mismatch_is_sample_selection(gather, &recorded, &current, &config),
+            "a set the injected value cannot produce must invalidate"
+        );
     }
 }

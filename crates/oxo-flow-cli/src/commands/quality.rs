@@ -248,6 +248,12 @@ pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool)
             eprint!(" (rule: {})", rule);
         }
         eprintln!();
+        // The fix hint is part of the human output too, not just --json —
+        // the JSON-only placement silently dropped every suggestion from
+        // the text report (issue #142 M11). Same style as validate.
+        if let Some(ref suggestion) = d.suggestion {
+            eprintln!("    hint: {}", suggestion);
+        }
     }
 
     eprintln!(

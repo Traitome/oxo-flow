@@ -27,6 +27,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 |---|---|---|---|
 | `--jobs` | `-j` | `1` | Maximum number of concurrent jobs |
 | `--keep-going` | `-k` | — | Continue execution when a job fails |
+| `--json` | — | — | Emit a machine-readable JSON summary on stdout after the run (`command`, `status`, `results` counts). The document is emitted on **every** exit path — completed, failed, and aborted (preflight failures, budget breaches, cluster runs, plain-failure aborts) — so `--json` consumers never get zero bytes. `status` is `"completed"` only when the run finished with zero required failures; every other exit is `"failed"`. Human progress and result output on stderr is **not** suppressed — this flag appends the summary, it does not switch the run to machine-only mode |
 | `--workdir` | `-d` | Workflow file's directory | Working directory for execution |
 | `--log-file` | — | `.oxo-flow/logs/oxo-flow.log` in the workdir | Write the run log to a custom path instead (relative paths resolve against the workdir; previous logs rotate to `PATH.1` … `PATH.9`) |
 | `--target` | `-t` | All rules | Run only specific target rules |
@@ -258,8 +259,11 @@ name = "rnaseq"
 profile_mode = "override"   # fill | override (default: fill)
 ```
 
-If the named profile file does not exist, `run` prints a
-warning and proceeds with the workflow's own config.
+If the named profile file does not exist, `run` (and `dry-run`) **fail
+loudly** with a nonzero exit and an error listing every available profile
+in the `profiles/` directory — a typo'd `--profile` must never silently
+run with the workflow's own config. The same hard error applies when the
+profile file exists but its TOML fails to parse or merge.
 
 #### Cluster submission
 
@@ -552,7 +556,20 @@ compares them against the current workflow:
 - **Edited rule definitions** (shell, inputs, outputs, environment, …) are
   caught by the per-rule fingerprint and invalidate the same way.
 - `samples_list` / `samples_<group>` are engine-injected and never trigger
-  invalidation, so toggling `--samples` between runs stays cheap.
+  invalidation, so toggling `--samples` between runs stays cheap. This
+  covers rules whose input list is baked from an injected key
+  (`expand_inputs` over `config.samples_list`, a gather-rule pattern):
+  their rule fingerprint and input manifest change with the selection, and
+  oxo-flow treats that change as non-invalidating. When such a rule is
+  skipped because of a selection change, `run` prints a warning naming the
+  rule — **its outputs still reflect the previous run's full sample set**,
+  and `--rerun` is the documented way to regenerate them under the new
+  selection. The exclusion is narrow and verified: the rule's other
+  definition fields must be byte-identical, and the current input file set
+  must be exactly reproducible from the injected value with unchanged
+  content — any genuine edit still invalidates. Checkpoints written by
+  older binaries lack the input-excluded fingerprint, so the first subset
+  run after an upgrade may re-run such a rule once (safe default).
 
 ```bash
 # min_quality is referenced by fastp_trim; only it and its downstream re-run

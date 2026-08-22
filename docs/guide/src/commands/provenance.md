@@ -65,7 +65,14 @@ Summary: 2 matched, 1 mismatched, 0 missing
 - Checksums are stored only when `--provenance` is passed to `oxo-flow run`.
 - File checksums use streaming I/O (64KB buffer) to handle large files
   (BAM, FASTQ >100GB) without excessive memory usage.
-- Mismatches exit with code 1 (useful for CI/CD pipelines).
+- Mismatches and missing files exit with code 1 (useful for CI/CD
+  pipelines).
+- Output paths are resolved against the checkpoint's recorded `workdir`
+  (the directory the run executed in), not the checkpoint's own
+  directory — so the checkpoint can live anywhere (e.g. `.oxo-flow/` on
+  the run host while outputs are read from the recorded run directory).
+  For legacy checkpoints without a `workdir` field, the checkpoint's
+  parent directory is used.
 
 ### Verify without stored checksums
 
@@ -89,6 +96,31 @@ Provenance Verify .oxo-flow/checkpoint.json
 ```
 
 To get real integrity verification, re-run with `--provenance`.
+
+## JSON output
+
+With `--json`, the verification document is written to stdout (stdout
+carries nothing else):
+
+```
+{
+  "command": "provenance",
+  "verify": {
+    "checkpoint": "/path/to/.oxo-flow/checkpoint.json",
+    "matched": 2,
+    "mismatched": 1,
+    "missing": 0,
+    "entries": [
+      {"file": "output/sample1.vcf", "status": "matched", "expected": "sha256:abc123...", "actual": "sha256:abc123..."},
+      {"file": "output/report.html", "status": "mismatched", "expected": "sha256:xxx", "actual": "sha256:yyy"}
+    ]
+  }
+}
+```
+
+`entries` is sorted by file path for byte-stable output. When the
+checkpoint has no stored checksums, the document is still emitted with a
+`note` field describing the degradation.
 
 ## See Also
 

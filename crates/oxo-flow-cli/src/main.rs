@@ -942,8 +942,66 @@ pub enum ProvenanceAction {
     },
 }
 
+/// Migration hint for commands removed in v0.13 (issue #76).
+///
+/// clap would otherwise answer `oxo-flow history` with a bare
+/// "unrecognized subcommand" (and `watch` even suggested unrelated
+/// commands); scripts and muscle memory deserve the actual migration
+/// path (issue #142 H2). Returns the hint when the first positional
+/// argument names a removed command.
+fn legacy_command_hint() -> Option<String> {
+    let mut args = std::env::args_os().skip(1);
+    // Global flags are all boolean and take no values, so skipping them
+    // by name finds the subcommand position deterministically.
+    for arg in args.by_ref() {
+        let s = arg.to_string_lossy();
+        match s.as_ref() {
+            "-v" | "--verbose" | "-q" | "--quiet" | "--json" | "--no-color" | "-h" | "--help"
+            | "-V" | "--version" => continue,
+            "history" => {
+                return Some(
+                    "'history' was removed in v0.13 — 'oxo-flow status --timing' shows run \
+                     history with wall times."
+                        .into(),
+                );
+            }
+            "package" => {
+                return Some(
+                    "'package' was removed in v0.13 — use 'oxo-flow export' (compose support \
+                     included)."
+                        .into(),
+                );
+            }
+            "profile" => {
+                return Some(
+                    "'profile' was removed in v0.13 — use 'run --profile <NAME>' (or dry-run) \
+                     instead."
+                        .into(),
+                );
+            }
+            "watch" => {
+                return Some(
+                    "'watch' was removed in v0.13 with no replacement — poll 'oxo-flow status' \
+                     (or 'status --timing') instead."
+                        .into(),
+                );
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Removed commands (issue #76) get a migration hint instead of clap's
+    // bare "unrecognized subcommand" (issue #142 H2).
+    if let Some(hint) = legacy_command_hint() {
+        eprintln!("{hint}");
+        eprintln!("Run 'oxo-flow --help' to see the current command set.");
+        std::process::exit(1);
+    }
+
     // clap prints -h/--help during parsing, so pick the banner variant up
     // front: colors only on an interactive terminal, and never when
     // NO_COLOR is set or --no-color was passed.
@@ -1439,7 +1497,9 @@ async fn main() -> Result<()> {
             .await?
         }
         Commands::Provenance { action } => match action {
-            ProvenanceAction::Verify { checkpoint } => provenance_verify_command(checkpoint)?,
+            ProvenanceAction::Verify { checkpoint } => {
+                provenance_verify_command(checkpoint, cli.json)?
+            }
         },
         Commands::Schema => {
             let schema = include_str!("../schema/oxoflow-v1.schema.json");

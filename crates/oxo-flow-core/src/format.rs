@@ -9,6 +9,7 @@
 
 use crate::config::WorkflowConfig;
 use crate::dag::WorkflowDag;
+use crate::rule::Rule;
 use serde::{Deserialize, Serialize};
 
 /// Current .oxoflow format specification version.
@@ -110,6 +111,64 @@ impl ValidationResult {
 /// - Resource constraint consistency
 /// - Environment specification validity
 /// - Wildcard consistency between inputs and outputs
+///
+/// E005: references to undefined config variables across a rule's shell,
+/// script, input/output paths, and `when` condition.
+///
+/// The single source of truth shared by `validate` (E005 diagnostics) and
+/// `run`/`dry-run` (hard gate before execution, issue #142 H1): a typo'd
+/// config key must never silently expand to the literal placeholder text
+/// and exit 0 with wrong data. `when` conditions reference keys bare
+/// (`config.enabled`), the other surfaces use the `{config.key}` brace form.
+pub fn undefined_config_refs(rule: &Rule, config: &WorkflowConfig) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let config_ref_re = regex::Regex::new(r"\{config\.(\w+)\}").expect("valid regex");
+    let when_ref_re = regex::Regex::new(r"config\.(\w+)").expect("valid regex");
+
+    let check = |field: &str, text: &str, diagnostics: &mut Vec<Diagnostic>| {
+        for cap in config_ref_re.captures_iter(text) {
+            let key = &cap[1];
+            if config.get_config_value(key).is_none() {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    message: format!("{field} references undefined config variable '{key}'"),
+                    rule: Some(rule.name.clone()),
+                    code: "E005".to_string(),
+                    suggestion: Some(format!("define '{key}' in the [config] section")),
+                });
+            }
+        }
+    };
+
+    if let Some(ref shell) = rule.shell {
+        check("shell command", shell, &mut diagnostics);
+    }
+    if let Some(ref script) = rule.script {
+        check("script path", script, &mut diagnostics);
+    }
+    for output in &rule.output {
+        check("output path", output, &mut diagnostics);
+    }
+    for input in &rule.input {
+        check("input path", input, &mut diagnostics);
+    }
+    if let Some(ref when) = rule.when {
+        for cap in when_ref_re.captures_iter(when) {
+            let key = &cap[1];
+            if config.get_config_value(key).is_none() {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    message: format!("when condition references undefined config variable '{key}'"),
+                    rule: Some(rule.name.clone()),
+                    code: "E005".to_string(),
+                    suggestion: Some(format!("define '{key}' in the [config] section")),
+                });
+            }
+        }
+    }
+    diagnostics
+}
+
 pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
     let mut diagnostics = Vec::new();
 
@@ -123,8 +182,6 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
             suggestion: Some("add a non-empty name to the [workflow] section".to_string()),
         });
     }
-
-    let config_ref_re = regex::Regex::new(r"\{config\.(\w+)\}").expect("valid regex");
 
     // Validate each rule
     for rule in &config.rules {
@@ -240,62 +297,10 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
             });
         }
 
-        // E005: Shell command references existing config variables
-        if let Some(ref shell) = rule.shell {
-            for cap in config_ref_re.captures_iter(shell) {
-                let key = &cap[1];
-                if config.get_config_value(key).is_none() {
-                    diagnostics.push(Diagnostic {
-                        severity: Severity::Error,
-                        message: format!(
-                            "shell command references undefined config variable '{}'",
-                            key
-                        ),
-                        rule: Some(rule.name.clone()),
-                        code: "E005".to_string(),
-                        suggestion: Some(format!("define '{}' in the [config] section", key)),
-                    });
-                }
-            }
-        }
-
-        // E005: Check output paths for undefined config variables
-        for output in &rule.output {
-            for cap in config_ref_re.captures_iter(output) {
-                let key = &cap[1];
-                if config.get_config_value(key).is_none() {
-                    diagnostics.push(Diagnostic {
-                        severity: Severity::Error,
-                        message: format!(
-                            "output path references undefined config variable '{}'",
-                            key
-                        ),
-                        rule: Some(rule.name.clone()),
-                        code: "E005".to_string(),
-                        suggestion: Some(format!("define '{}' in the [config] section", key)),
-                    });
-                }
-            }
-        }
-
-        // E005: Check input paths for undefined config variables
-        for input in &rule.input {
-            for cap in config_ref_re.captures_iter(input) {
-                let key = &cap[1];
-                if config.get_config_value(key).is_none() {
-                    diagnostics.push(Diagnostic {
-                        severity: Severity::Error,
-                        message: format!(
-                            "input path references undefined config variable '{}'",
-                            key
-                        ),
-                        rule: Some(rule.name.clone()),
-                        code: "E005".to_string(),
-                        suggestion: Some(format!("define '{}' in the [config] section", key)),
-                    });
-                }
-            }
-        }
+        // E005: Undefined config variable references — shared with the
+        // run/dry-run pre-execution gate (issue #142 H1), so validate and
+        // run cannot drift on what counts as defined.
+        diagnostics.extend(undefined_config_refs(rule, config));
     }
 
     // E013: checkpoint rule without a re-entry manifest (issue #78 P3).
@@ -747,6 +752,59 @@ pub fn lint_format(config: &WorkflowConfig) -> Vec<Diagnostic> {
     // Build DAG for dependency analysis
     let dag = WorkflowDag::from_rules(&config.rules).ok();
 
+    // Wildcard sources the engine can actually expand (W024): the same
+    // trigger sets expand_wildcards fans out on (config.rs) plus group/pair
+    // metadata keys and [[values]] tables — anything else referenced as
+    // `{name}` stays LITERAL at run time.
+    let mut declared_wildcards: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    if config.workflow.sample_pattern.is_some()
+        || !config.sample_groups.is_empty()
+        || !config.pairs.is_empty()
+    {
+        declared_wildcards.insert("sample".to_string());
+    }
+    if !config.sample_groups.is_empty() {
+        declared_wildcards.insert("group".to_string());
+        for group in &config.sample_groups {
+            for key in group.metadata.keys() {
+                declared_wildcards.insert(key.clone());
+            }
+        }
+    }
+    if !config.pairs.is_empty() {
+        for wc in [
+            "pair_id",
+            "experiment",
+            "control",
+            "tumor",
+            "normal",
+            "experiment_type",
+            "tumor_type",
+        ] {
+            declared_wildcards.insert(wc.to_string());
+        }
+        for pair in &config.pairs {
+            for key in pair.metadata.keys() {
+                declared_wildcards.insert(key.clone());
+            }
+        }
+    }
+    for table in &config.values {
+        declared_wildcards.insert(table.name.clone());
+    }
+    // Engine placeholders substituted at execution time (process.rs) —
+    // always available, never literal.
+    const ENGINE_PLACEHOLDERS: [&str; 7] = [
+        "input",
+        "output",
+        "log",
+        "threads",
+        "memory",
+        "effective_threads",
+        "effective_memory_mb",
+    ];
+
     for rule in &config.rules {
         // W003: Missing rule description
         if rule.description.is_none() {
@@ -782,6 +840,27 @@ pub fn lint_format(config: &WorkflowConfig) -> Vec<Diagnostic> {
                 code: "W005".to_string(),
                 suggestion: Some(
                     "add memory = \"32G\" or appropriate memory specification".to_string(),
+                ),
+            });
+        }
+
+        // W025: Deprecated rule-level threads/memory keys (issue #142 M12).
+        // `threads`/`memory` at rule level were superseded by
+        // `resources.threads`/`resources.memory` in v0.4 and are never
+        // flagged — a deprecated key that silently passes lint invites
+        // new workflows to keep using it.
+        if rule.threads.is_some() || rule.memory.is_some() {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Info,
+                message: "rule uses deprecated rule-level threads/memory — move them under \
+                          [rules.resources]"
+                    .to_string(),
+                rule: Some(rule.name.clone()),
+                code: "W025".to_string(),
+                suggestion: Some(
+                    "replace `threads = N` / `memory = \"8G\"` with \
+                     `resources.threads = N` / `resources.memory = \"8G\"` under this rule"
+                        .to_string(),
                 ),
             });
         }
@@ -1047,6 +1126,46 @@ pub fn lint_format(config: &WorkflowConfig) -> Vec<Diagnostic> {
                     });
                     break;
                 }
+            }
+        }
+
+        // W024: expandable wildcard with no declared source (issue #142 H3).
+        // A `{sample}`/`{group}`/pair wildcard the engine can never expand —
+        // no sample_pattern, [[sample_groups]], [[pairs]], [[values]], or
+        // metadata declares it — stays LITERAL at run time: the shell
+        // receives the raw text and may write a file literally named
+        // `out_{sample}.txt`, silently producing wrong data with exit 0.
+        // MEDIUM severity: a warning, not an error — `--samples <name>`
+        // can declare samples at run time, and transform split variables
+        // (`_`-prefixed) are engine-managed.
+        if !can_never_run {
+            let text = format!(
+                "{} {} {} {}",
+                rule.shell.as_deref().unwrap_or(""),
+                rule.script.as_deref().unwrap_or(""),
+                rule.input.to_vec().join(" "),
+                rule.output.to_vec().join(" ")
+            );
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for wc in crate::wildcard::extract_wildcards(&text) {
+                let declared_here = rule.scatter.as_ref().is_some_and(|s| s.variable == wc)
+                    || ENGINE_PLACEHOLDERS.contains(&wc.as_str())
+                    || declared_wildcards.contains(&wc)
+                    || wc.starts_with('_');
+                if declared_here || !seen.insert(wc.clone()) {
+                    continue;
+                }
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    message: format!(
+                        "wildcard '{{{wc}}}' has no declared source — it will stay literal at run time and files may be written literally named after the placeholder"
+                    ),
+                    rule: Some(rule.name.clone()),
+                    code: "W024".to_string(),
+                    suggestion: Some(
+                        "declare a source for the wildcard (sample_pattern in [config], [[sample_groups]], [[pairs]], or a [[values]] table), or remove the placeholder".to_string(),
+                    ),
+                });
             }
         }
     }
@@ -1852,6 +1971,161 @@ mod tests {
     }
 
     #[test]
+    fn lint_undeclared_sample_wildcard_fires_w024() {
+        // Issue #142 H3: `{sample}` with no sample_pattern / [[pairs]] /
+        // [[sample_groups]] stays literal at run time — the lint must say
+        // so instead of passing silently.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "gen"
+            input = ["in_{sample}.txt"]
+            output = ["out_{sample}.txt"]
+            shell = "cp {input[0]} {output[0]}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        let w024: Vec<&Diagnostic> = diagnostics.iter().filter(|d| d.code == "W024").collect();
+        assert_eq!(
+            w024.len(),
+            1,
+            "one W024 for {{sample}}, got: {diagnostics:?}"
+        );
+        assert!(w024[0].message.contains("sample"));
+        assert_eq!(w024[0].severity, Severity::Warning);
+        assert_eq!(w024[0].rule.as_deref(), Some("gen"));
+        assert!(w024[0].suggestion.is_some());
+    }
+
+    #[test]
+    fn lint_declared_sample_sources_are_silent() {
+        // sample_pattern, sample groups, pairs, values tables, and engine
+        // placeholders all keep the wildcard expandable — no W024.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [config]
+            sample_pattern = "data/{sample}.txt"
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1", "S2"]
+            metadata = { batch = "A" }
+
+            [[pairs]]
+            pair_id = "P1"
+            experiment = "T1"
+            control = "N1"
+            metadata = { lane = "L1" }
+
+            [[values]]
+            name = "assembler"
+            values = ["spades", "megahit"]
+
+            [[rules]]
+            name = "gen"
+            input = ["data/{sample}_{batch}.txt"]
+            output = ["out_{sample}.txt"]
+            shell = "echo {threads} {input} {output} {assembler} {experiment} {pair_id} {lane} > {log}"
+
+            [[rules]]
+            name = "split_gen"
+            input = ["x_{assembler}.txt"]
+            output = ["y_{assembler}.txt"]
+            scatter = { variable = "assembler", values = ["spades", "megahit"] }
+            shell = "echo {assembler}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W024"),
+            "no W024 expected, got: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_underscore_split_variable_is_not_literal() {
+        // Transform split variables (`_`-prefixed) are engine-managed —
+        // never flagged as undeclared.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "map"
+            output = ["chunk_{_part}.txt"]
+            shell = "echo {_part}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(!diagnostics.iter().any(|d| d.code == "W024"));
+    }
+
+    #[test]
+    fn undefined_config_refs_covers_all_surfaces() {
+        // The shared E005 gate (issue #142 H1): shell, script, input,
+        // output, and when must all flag an unknown `{config.*}` key.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [config]
+            good = "yes"
+
+            [[rules]]
+            name = "gen"
+            input = ["{config.ineed_input}.txt"]
+            output = ["{config.ineed_output}.txt"]
+            script = "scripts/{config.ineed_script}.sh"
+            shell = "echo {config.ineed_shell}"
+            when = "config.ineed_when"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let rule = config.rules[0].clone();
+        let diags = undefined_config_refs(&rule, &config);
+        let codes: Vec<&str> = diags.iter().map(|d| d.code.as_str()).collect();
+        assert_eq!(codes, vec!["E005"; 5], "one E005 per surface: {diags:?}");
+        let joined = diags
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect::<Vec<_>>()
+            .join(" | ");
+        for key in [
+            "ineed_shell",
+            "ineed_script",
+            "ineed_input",
+            "ineed_output",
+            "ineed_when",
+        ] {
+            assert!(joined.contains(key), "missing {key}: {joined}");
+        }
+        for d in &diags {
+            assert_eq!(d.rule.as_deref(), Some("gen"));
+            assert!(d.suggestion.is_some());
+        }
+        // Defined keys never flag.
+        let defined_toml = r#"
+            [workflow]
+            name = "test"
+
+            [config]
+            good = "yes"
+
+            [[rules]]
+            name = "gen"
+            input = ["{config.good}.txt"]
+            output = ["{config.good}_out.txt"]
+            shell = "echo {config.good}"
+            when = "config.good"
+        "#;
+        let defined = WorkflowConfig::parse(defined_toml).unwrap();
+        assert!(undefined_config_refs(&defined.rules[0], &defined).is_empty());
+    }
+
+    #[test]
     fn lint_missing_log() {
         let toml = r#"
             [workflow]
@@ -2241,11 +2515,17 @@ mod tests {
 
     #[test]
     fn lint_when_conditional_rule() {
+        // The `when` key must be defined: an undefined one silently
+        // disables the rule (evaluate_condition → false) — E005, the same
+        // gate the run pre-execution check enforces (issue #142 H1).
         let toml = r#"
             [workflow]
             name = "test"
             description = "desc"
             author = "me"
+
+            [config]
+            enabled = "true"
 
             [[rules]]
             name = "step1"
@@ -3434,6 +3714,58 @@ mod tests {
             !suggestion.contains("every consumer"),
             "the old suggestion ('add depends_on to every consumer') could not silence \
              the warning once dependents skip it: {suggestion}"
+        );
+    }
+
+    // ---- W025: Deprecated rule-level threads/memory (issue #142 M12) ----
+
+    #[test]
+    fn lint_w025_flags_deprecated_rule_level_threads_memory() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            output = ["out.txt"]
+            shell = "echo hi > out.txt"
+            threads = 4
+            memory = "8G"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        let w025 = diagnostics
+            .iter()
+            .find(|d| d.code == "W025")
+            .expect("rule-level threads/memory must be flagged (issue #142 M12)");
+        assert_eq!(w025.rule.as_deref(), Some("step1"));
+        let suggestion = w025.suggestion.as_deref().unwrap_or_default();
+        assert!(
+            suggestion.contains("resources"),
+            "the suggestion must point at [rules.resources], got: {suggestion}"
+        );
+    }
+
+    #[test]
+    fn lint_w025_silent_for_resources_block() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            output = ["out.txt"]
+            shell = "echo hi > out.txt"
+
+            [rules.resources]
+            threads = 4
+            memory = "8G"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W025"),
+            "resources-block keys must not be flagged"
         );
     }
 }

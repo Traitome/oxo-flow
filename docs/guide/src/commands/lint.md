@@ -54,11 +54,26 @@ oxo-flow lint pipeline.oxoflow --strict
 ```
 oxo-flow 0.14.1 — Bioinformatics Pipeline Engine
   warning [W003]: rule has no description (rule: bwa_align)
+    hint: add a `description` field to the rule
   warning [W004]: rule has a shell command but no log file specified (rule: bwa_align)
+    hint: add `log = "logs/bwa_align.log"` to the rule
   info [W007]: leaf rule (no dependents) could be marked as target = true (rule: fastqc)
+  info [W025]: rule uses deprecated rule-level threads/memory (rule: bwa_align)
+    hint: move `threads`/`memory` under `[rules.resources]`
 
-Summary: 0 error(s), 2 warning(s), 1 info
+Summary: 0 error(s), 2 warning(s), 2 info
 ```
+
+Each diagnostic prints a `hint:` line (when a suggestion exists) showing
+the fix, matching the style of `validate` and `run` output. W007
+suggests `target = true`: a rule marked as a target is built by default
+when `oxo-flow run` is invoked without an explicit `-t`, so marking the
+final leaf rules (like `fastqc` above) makes them part of the default
+run — see [Workflow Format: Priority and Targeting](workflow-format.md#priority-and-targeting).
+W025 flags the deprecated rule-level `threads = N` / `memory = "8G"`
+fields (removed in v0.4.0 in favor of `[rules.resources]`) so old
+workflows surface the migration instead of silently keeping their old
+settings — see [Workflow Format: Rule resources](workflow-format.md#rule-resources).
 
 ---
 

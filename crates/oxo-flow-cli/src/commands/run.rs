@@ -482,6 +482,27 @@ fn known_modules_hint(module_rules: &std::collections::HashMap<String, Vec<Strin
     }
 }
 
+/// Issue #142 H1 gate: an unknown `{config.*}` placeholder used to expand to
+/// literal text while the run exited 0 — silent wrong outputs. This is the
+/// same E005 detector `validate` uses, applied as a hard gate by both `run`
+/// and `dry-run`, so the three surfaces can never disagree about a typo'd
+/// key. Returns the human-readable findings (rule, key, fix) or empty.
+fn undefined_config_findings(config: &WorkflowConfig) -> Vec<String> {
+    config
+        .rules
+        .iter()
+        .flat_map(|rule| oxo_flow_core::format::undefined_config_refs(rule, config))
+        .map(|d| {
+            format!(
+                "rule '{}': {} ({})",
+                d.rule.as_deref().unwrap_or("<unknown>"),
+                d.message,
+                d.suggestion.unwrap_or_default()
+            )
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_command(
     workflow: Option<PathBuf>,
@@ -605,6 +626,21 @@ pub async fn run_command(
         .expand_wildcards()
         .context("failed to expand wildcard rules")?;
 
+    // ── Undefined `{config.*}` gate (issue #142 H1) ───────────────────────
+    // Runs AFTER expansion so engine-generated rules are covered too, and
+    // before any file is touched — a typo'd key must fail the run, never
+    // produce literal-placeholder outputs with exit 0.
+    let e005 = undefined_config_findings(&config);
+    if !e005.is_empty() {
+        if json {
+            emit_run_json_summary(json, "failed", &workflow, 0, 0, 0, 0, 0);
+        }
+        return Err(anyhow::anyhow!(
+            "workflow references undefined config variable(s) — fix before running:\n  {}",
+            e005.join("\n  ")
+        ));
+    }
+
     let mut dag = WorkflowDag::from_rules_with_config(
         &config.rules,
         &config_placeholder_values(&config.config),
@@ -620,6 +656,9 @@ pub async fn run_command(
         match config.module_closure(m) {
             Some(names) => target.extend(names),
             None => {
+                // Pre-execution abort: nothing ran, but the summary
+                // contract still holds for --json (issue #142 H6).
+                emit_run_json_summary(json, "failed", &workflow, 0, 0, 0, 0, 0);
                 return Err(anyhow::anyhow!(
                     "unknown module '{m}' — known modules: {}",
                     known_modules_hint(&config.module_rules)
@@ -781,6 +820,20 @@ pub async fn run_command(
         rerun,
     );
 
+    // Issue #142 M1: rules whose fingerprint differed only in the
+    // sample-derived input list are NOT invalidated — toggling --samples
+    // must not re-run (and overwrite) cohort-level gather outputs. The
+    // input-manifest check re-verifies set + content below, so a genuine
+    // input edit still invalidates there.
+    if !change_report.sample_selection_exempt.is_empty() {
+        eprintln!(
+            "  {} skipped {} rule(s) whose definition only changed with the --samples selection: {} — outputs still cover the previous run's full sample set; use --rerun to regenerate with the new selection",
+            "⚠".yellow(),
+            change_report.sample_selection_exempt.len(),
+            change_report.sample_selection_exempt.join(", ")
+        );
+    }
+
     // All config values (including CLI --arg overrides) become {config.key} in templates.
     let wildcard_values: Arc<HashMap<String, String>> =
         Arc::new(config_placeholder_values(&config.config));
@@ -798,7 +851,7 @@ pub async fn run_command(
         let mut ck = checkpoint.lock().await;
         // Shared with dry-run's read-only preview (issue #66) — keep the
         // detection semantics in ONE place.
-        let (mismatched, missing_inputs, baselined) =
+        let (mismatched, missing_inputs, baselined, sample_selection_driven) =
             crate::commands::run_preview::detect_input_manifest_invalidations(
                 &mut ck,
                 &config,
@@ -807,6 +860,21 @@ pub async fn run_command(
                 workdir_actual.as_ref(),
                 &wildcard_values,
             );
+        // Issue #142 M1: a rule whose only input-manifest change is the
+        // engine-injected sample list is NOT invalidated — toggling
+        // --samples must not overwrite cohort-level gather outputs with a
+        // subset table. Emit the documented warning; the detection function
+        // already proved (re-expansion + content-identity) the change is
+        // sample-selection-only.
+        if !sample_selection_driven.is_empty() {
+            let names: Vec<&str> = sample_selection_driven.iter().map(String::as_str).collect();
+            eprintln!(
+                "  {} skipped {} rule(s) whose inputs only changed with the --samples selection: {} — outputs still cover the previous run's full sample set; use --rerun to regenerate with the new selection",
+                "⚠".yellow(),
+                names.len(),
+                names.join(", ")
+            );
+        }
         // Cascade-up: missing inputs (tombstoned temporaries) re-run their
         // completed producers first — the same semantics the preview shows.
         if !missing_inputs.is_empty() {
@@ -971,6 +1039,23 @@ pub async fn run_command(
             },
         )
         .await?;
+        // The cluster path returns before the common summary emission, so
+        // it routes through the same `--json` contract itself (issue #142
+        // H6): the document must appear on both outcomes.
+        emit_run_json_summary(
+            json,
+            if summary.is_success() {
+                "completed"
+            } else {
+                "failed"
+            },
+            &workflow,
+            summary.succeeded,
+            summary.skipped,
+            summary.failed,
+            summary.non_required_failed,
+            0,
+        );
         if !summary.is_success() {
             return Err(anyhow::anyhow!("workflow execution failed"));
         }
@@ -1047,6 +1132,9 @@ pub async fn run_command(
             .map(|b| format!("  - {b}"))
             .collect::<Vec<_>>()
             .join("\n");
+        // Pre-execution abort: nothing ran — the summary still reports
+        // the failed run for --json consumers (issue #142 H6).
+        emit_run_json_summary(json, "failed", &workflow, 0, 0, 0, 0, 0);
         return Err(anyhow::anyhow!(
             "resource budget too small for {} rule(s); no rules were run:\n{}",
             breaches.len(),
@@ -1270,6 +1358,9 @@ pub async fn run_command(
                             }
                             Ok(o) => {
                                 let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
+                                // Pre-execution abort — the summary still
+                                // reports the failed run (issue #142 H6).
+                                emit_run_json_summary(json, "failed", &workflow, 0, 0, 0, 0, 0);
                                 return Err(anyhow::anyhow!(
                                     "failed to set up the environment for reference '{}': {}",
                                     ref_def.name,
@@ -1277,6 +1368,7 @@ pub async fn run_command(
                                 ));
                             }
                             Err(e) => {
+                                emit_run_json_summary(json, "failed", &workflow, 0, 0, 0, 0, 0);
                                 return Err(anyhow::anyhow!(
                                     "failed to run the environment setup for reference '{}': {e}",
                                     ref_def.name
@@ -1895,6 +1987,18 @@ pub async fn run_command(
                 let Some(rule_name) = task_rule.remove(&e.id()) else {
                     // Internal invariant: every spawned task registers its
                     // name at spawn. Fail the run rather than leak the cap.
+                    // The engine fault counts as a failure in the summary
+                    // (issue #142 H6).
+                    emit_run_json_summary(
+                        json,
+                        "failed",
+                        &workflow,
+                        success_count.load(std::sync::atomic::Ordering::Relaxed),
+                        skipped_count.load(std::sync::atomic::Ordering::Relaxed),
+                        fail_count.load(std::sync::atomic::Ordering::Relaxed),
+                        non_required_fail_count.load(std::sync::atomic::Ordering::Relaxed),
+                        blocked.lock().await.len(),
+                    );
                     return Err(anyhow::anyhow!(
                         "internal error: task {} has no recorded rule",
                         e.id()
@@ -2068,6 +2172,18 @@ pub async fn run_command(
                 }
             }
 
+            // The plain-failure abort: emit the summary BEFORE returning,
+            // mirroring the keep-going path's document (issue #142 H6).
+            emit_run_json_summary(
+                json,
+                "failed",
+                &workflow,
+                success_count.load(std::sync::atomic::Ordering::Relaxed),
+                skipped_count.load(std::sync::atomic::Ordering::Relaxed),
+                fail_count.load(std::sync::atomic::Ordering::Relaxed),
+                non_required_fail_count.load(std::sync::atomic::Ordering::Relaxed),
+                blocked.lock().await.len(),
+            );
             return Err(anyhow::anyhow!("workflow execution failed"));
         }
 
@@ -2452,23 +2568,23 @@ pub async fn run_command(
         }
     }
 
-    // JSON output mode
-    if json {
-        let wf_path = Some(workflow.to_string_lossy().to_string());
-        let output = serde_json::json!({
-            "command": "run",
-            "status": if fail_count > 0 { "failed" } else { "completed" },
-            "workflow": wf_path,
-            "results": serde_json::json!({
-                "succeeded": success_count,
-                "skipped": skipped_count,
-                "failed": fail_count,
-                "non_required_failed": non_required_fail_count,
-                "blocked": blocked.len(),
-            }),
-        });
-        println!("{}", serde_json::to_string_pretty(&output).unwrap());
-    }
+    // JSON output mode (issue #142 H6): the summary is emitted on EVERY
+    // path — completed, failed, and aborted — so `--json` consumers can
+    // rely on the document regardless of how the run ended.
+    emit_run_json_summary(
+        json,
+        if fail_count > 0 {
+            "failed"
+        } else {
+            "completed"
+        },
+        &workflow,
+        success_count,
+        skipped_count,
+        fail_count,
+        non_required_fail_count,
+        blocked.len(),
+    );
 
     // The verdict is independent of --keep-going (issue #133): keep-going
     // changes SCHEDULING (failures don't stop the run), never the verdict —
@@ -2480,6 +2596,43 @@ pub async fn run_command(
     }
 
     Ok(())
+}
+
+/// Emit the machine-readable run summary (`--json`) in the canonical
+/// `{"command":"run",...}` shape.
+///
+/// Shared by the happy path AND every abort path (preflight failures,
+/// budget breaches, cluster runs, the plain-failure abort) so a failed run
+/// never leaves stdout at zero bytes while the keep-going path emits the
+/// document (issue #142 H6). Only emits when `--json` was requested;
+/// stdout carries nothing else, so the document is always the sole output.
+#[allow(clippy::too_many_arguments)] // matching the crate's established convention
+fn emit_run_json_summary(
+    json: bool,
+    status: &str,
+    workflow: &Path,
+    succeeded: usize,
+    skipped: usize,
+    failed: usize,
+    non_required_failed: usize,
+    blocked: usize,
+) {
+    if !json {
+        return;
+    }
+    let output = serde_json::json!({
+        "command": "run",
+        "status": status,
+        "workflow": workflow.to_string_lossy(),
+        "results": serde_json::json!({
+            "succeeded": succeeded,
+            "skipped": skipped,
+            "failed": failed,
+            "non_required_failed": non_required_failed,
+            "blocked": blocked,
+        }),
+    });
+    println!("{}", serde_json::to_string_pretty(&output).unwrap());
 }
 
 /// Sorts the scheduler's ready list by effective priority: declared priority
@@ -2597,6 +2750,16 @@ pub async fn dry_run_command(
     config
         .expand_wildcards()
         .context("failed to expand wildcard rules")?;
+
+    // ── Undefined `{config.*}` gate (issue #142 H1) — the same gate run
+    // applies: preview must refuse a typo'd key exactly like execution.
+    let e005 = undefined_config_findings(&config);
+    if !e005.is_empty() {
+        return Err(anyhow::anyhow!(
+            "workflow references undefined config variable(s) — fix before running:\n  {}",
+            e005.join("\n  ")
+        ));
+    }
 
     let mut dag = WorkflowDag::from_rules_with_config(
         &config.rules,

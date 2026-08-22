@@ -175,6 +175,19 @@ matched knowledge, findings) with model-written prose in dedicated fields —
 safe for documentation generators. `--level` defaults to `beginner` because
 the audience cannot be inferred from the workflow itself; experts opt in.
 
+### Degraded mode (no model)
+
+`ai explain` exits 0 with the deterministic skeleton whenever the model
+layer is unavailable — provider errors, quota limits, dead endpoints, or
+explicit disable:
+
+- `OXO_FLOW_AI_PROVIDER=disabled` overrides any saved provider
+  configuration and produces the skeleton with a "disabled" note on stderr.
+- A failed provider call degrades the same way, with the error summarized
+  in the note; the skeleton and its knowledge-base grounding (bioSkills,
+  tool table, pipeline graph) are still emitted in full, and `--json`
+  consumers still get the JSON contract (prose fields empty).
+
 ```json
 {
   "workflow_name": "wgs-germline-calling",

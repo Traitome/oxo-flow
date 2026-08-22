@@ -366,8 +366,10 @@ shell = "echo step2 >> exec_log.txt; cp out1.txt out2.txt"
 }
 
 /// 5. Profile fill difference: the baseline ran WITH a profile that filled a
-///    config key; predicting and executing WITHOUT it must agree on the
-///    resulting config-change invalidation.
+///    config key. Dropping the profile leaves `{config.extra}` undefined —
+///    under the H1 gate (issue #142) BOTH dry-run and run must refuse the
+///    run with the same hard error instead of executing with the literal
+///    placeholder. Parity now means: identical refusal.
 #[test]
 fn parity_profile_fill_difference() {
     let dir = tempfile::tempdir().unwrap();
@@ -394,19 +396,25 @@ shell = "echo step1 >> exec_log.txt; cp in.txt out1.txt; echo {config.mode}-{con
     fs::write(dir.path().join("in.txt"), "alpha").unwrap();
     baseline_run(dir.path(), &wf, &["--profile", "batch"]);
 
-    // No profile on either side: `extra` is missing from the merged config,
-    // so both the preview and the run must flag step1 as config-changed.
-    let (predicted_run, _) = assert_parity(
-        dir.path(),
-        &[wf.to_str().unwrap()],
-        &[wf.to_str().unwrap()],
-        "profile fill difference",
-    );
-    assert_eq!(
-        predicted_run,
-        HashSet::from(["step1".to_string()]),
-        "dropping the profile must invalidate exactly the rule referencing the filled key"
-    );
+    // No profile on either side: `{config.extra}` is undefined — the H1
+    // gate refuses the run on BOTH surfaces (parity of the hard error).
+    for surface in ["dry-run", "run"] {
+        let out = oxo_flow()
+            .arg(surface)
+            .arg(wf.to_str().unwrap())
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            !out.status.success(),
+            "[{surface}] without the defining profile the run must be refused"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("extra"),
+            "[{surface}] the refusal must name the undefined key: {stderr}"
+        );
+    }
 }
 
 /// 6. `when` condition flip: the gate rule toggles between executed and

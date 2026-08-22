@@ -154,9 +154,9 @@ shell = "true"
 
 | Field | Type | Description |
 |---|---|---|
-| `inputs` | Array of String | File patterns the host must wire into the module. A concrete declared input (no `{`-wildcard) that no rule produces fails validation with the gap named; wildcarded patterns are verified by DAG edge inference at run time |
-| `outputs` | Array of String | Files the module exposes to the host. A declared output not produced by a module rule fails validation; a host rule reading a module-internal file that is **not** declared here produces an encapsulation warning |
-| `params` | Table | Defaults for config keys the module reads, filled in profile-style (`or_insert` — explicit host values win) |
+| `inputs` | Array of String | File patterns the host must wire into the module. A concrete declared input (no `{`-wildcard) that no rule produces fails validation with the gap named; wildcarded declared inputs are not statically checkable (a `{sample}` input forms no DAG edge — the placeholder only resolves at run time) — the host is responsible for wiring them |
+| `outputs` | Array of String | Files the module exposes to the host. A declared output not produced by a module rule fails validation; a host rule reading a module-internal file that is **not** declared here produces an encapsulation warning. Wildcarded host inputs are matched structurally (identical literal prefix and suffix, e.g. `qc/{sample}.tmp`), so patterns that could address the same files warn too; patterns that resolve to different literals are not statically checkable |
+| `params` | Table | Defaults for config keys the module reads, filled in profile-style (`or_insert` — explicit host values win). The module's own `[config]` entries fill any remaining gaps: a module declaring `[config] trim_quality = "20"` keeps that default when included without `params`, while any host value (its own `[config]` table or `[[include]]` `params`) still wins. A key referenced but defined nowhere remains an E005 error |
 | `name` | String | Module identity for partial runs (`run --module <name>`). Defaults to the included file's stem (`rules/20_germline.oxoflow` → `20_germline`), so existing composed workflows are addressable without changes |
 | `repo` + `ref` | String pair | Pin the included path to a git repository at a tag/branch/commit: `repo = "https://github.com/org/oxo-flow-modules"`, `ref = "v0.14.1"`, `path = "rules/qc.oxoflow"`. Any git URL works (https/ssh/file://); github.com clones fall back to China mirrors. Checkouts are cached under `~/.cache/oxo-flow/modules/<repo>@<ref>` (`OXO_FLOW_MODULE_CACHE` overrides) — versioned modules, reproducible composition |
 
@@ -508,8 +508,8 @@ memory = "32G"
 | `shell` | String | No | Shell command to execute |
 | `script` | String | No | Script file path (auto-detects interpreter) |
 | `description` | String | No | Human-readable description of what this rule does |
-| `threads` | Integer | No | *(Deprecated)* CPU threads — use `resources.threads` instead |
-| `memory` | String | No | *(Deprecated)* Memory allocation — use `resources.memory` instead |
+| `threads` | Integer | No | *(Deprecated)* CPU threads — use `resources.threads` instead. Still honored, but `oxo-flow lint` flags it with a W025 suggestion to move it under `[rules.resources]` |
+| `memory` | String | No | *(Deprecated)* Memory allocation — use `resources.memory` instead. Still honored, but `oxo-flow lint` flags it with a W025 suggestion to move it under `[rules.resources]` |
 | `resources` | Table | No | Full resource specification (threads, memory, gpu, disk, time_limit, partition, groups) |
 | `environment` | Table | No | Environment specification |
 | `transform` | Table | No | Unified scatter-gather operator (split → map → combine) |
@@ -1047,7 +1047,7 @@ target = true   # Included when running without -t
 | Field | Type | Description |
 |-------|------|-------------|
 | `optional` | Boolean | If `true`, missing inputs become warnings instead of errors |
-| `required` | Boolean | If `false`, a failure of this rule does not fail the run: the failure is recorded and listed, its dependents are blocked, and the run exits 0 (best-effort / continue-on-error, e.g. QC steps). Defaults to `true` — required failures fail the run (or, with `--keep-going`, keep it running but exit 0 with failures listed) |
+| `required` | Boolean | If `false`, a failure of this rule does not fail the run: the failure is recorded and listed, its dependents are blocked, and the run exits 0 (best-effort / continue-on-error, e.g. QC steps). Defaults to `true` — required failures fail the run (or, with `--keep-going`, keep it running but still exit non-zero with the failures listed: keep-going changes scheduling, never the verdict) |
 
 ```toml
 [[rules]]

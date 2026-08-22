@@ -26,6 +26,22 @@ oxo-flow ai explain wf.oxoflow
    model-written prose. The grounding is deterministic — the model only
    writes prose around machine-derived facts.
 
+## Degraded mode
+
+`ai explain` never hard-fails on the model: when the provider is
+unreachable, errors, or is explicitly disabled, it emits the
+**deterministic grounding skeleton** (workflow identity, per-step
+order/description/tools/inputs/outputs/resources, and the knowledge-base
+grounding) with a note on stderr, and **exits 0**. The skeleton is the
+same data the model would have received — verification data, not
+hallucination — so scripts can rely on the JSON contract in every state.
+
+- `OXO_FLOW_AI_PROVIDER=disabled` explicitly disables the model and
+  overrides any saved provider configuration: the skeleton is emitted
+  with a "disabled" note and exit 0.
+- A failed provider call (dead endpoint, quota, timeout) degrades the
+  same way, with the error explained in the note.
+
 ## The `--ai` flag on other commands
 
 One flag, a different action per command — the context is the command

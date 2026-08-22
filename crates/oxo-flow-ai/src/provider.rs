@@ -1047,10 +1047,32 @@ pub fn create_provider(
 /// Create a provider from environment variables or persisted config.
 pub fn create_provider_from_env() -> AiProvider {
     let provider_str = std::env::var("OXO_FLOW_AI_PROVIDER").unwrap_or_default();
+    resolve_provider(
+        &provider_str,
+        load_ai_config()
+            .as_ref()
+            .map(|(a, b, c, d)| (a.as_str(), b.as_str(), c.as_str(), d.as_str())),
+    )
+}
 
-    if !provider_str.is_empty()
-        && !provider_str.eq_ignore_ascii_case("disabled")
-        && let Ok(kind) = provider_str.parse::<ProviderKind>()
+/// Pure provider-resolution core: the env provider string plus an optional
+/// persisted config.
+///
+/// Split from the env/file I/O so the precedence contract is unit-testable
+/// without process-global env mutation (this crate forbids unsafe, and
+/// edition-2024 env mutation requires it). Precedence: env > persisted —
+/// and `OXO_FLOW_AI_PROVIDER=disabled` is an explicit opt-out that must
+/// win over a saved config (issue #142 M10): previously the "disabled"
+/// spelling skipped the env branch and fell through to the persisted
+/// provider, so the override silently did nothing.
+fn resolve_provider(provider_env: &str, saved: Option<(&str, &str, &str, &str)>) -> AiProvider {
+    if provider_env.eq_ignore_ascii_case("disabled") {
+        tracing::info!("AI provider disabled via OXO_FLOW_AI_PROVIDER=disabled");
+        return AiProvider::Noop;
+    }
+
+    if !provider_env.is_empty()
+        && let Ok(kind) = provider_env.parse::<ProviderKind>()
     {
         let provider = create_provider(kind, None, None, None);
         tracing::info!(
@@ -1062,7 +1084,7 @@ pub fn create_provider_from_env() -> AiProvider {
     }
 
     // Fall back to persisted config
-    if let Some((kind_str, api_key, api_url, model)) = load_ai_config()
+    if let Some((kind_str, api_key, api_url, model)) = saved
         && !kind_str.is_empty()
         && kind_str != "disabled"
         && let Ok(kind) = kind_str.parse::<ProviderKind>()
@@ -1070,14 +1092,18 @@ pub fn create_provider_from_env() -> AiProvider {
         let key = if api_key.is_empty() {
             None
         } else {
-            Some(api_key)
+            Some(api_key.to_string())
         };
         let url = if api_url.is_empty() {
             None
         } else {
-            Some(api_url)
+            Some(api_url.to_string())
         };
-        let mdl = if model.is_empty() { None } else { Some(model) };
+        let mdl = if model.is_empty() {
+            None
+        } else {
+            Some(model.to_string())
+        };
         let provider = create_provider(kind, key, url, mdl);
         tracing::info!("AI provider from saved config: {}", provider.name());
         return provider;
@@ -1217,6 +1243,34 @@ mod tests {
     fn noop_provider_returns_error() {
         let provider = AiProvider::Noop;
         assert_eq!(provider.name(), "disabled");
+    }
+
+    #[test]
+    fn env_disabled_wins_over_persisted_config() {
+        // Regression (issue #142 M10): `OXO_FLOW_AI_PROVIDER=disabled`
+        // used to skip the env branch and fall through to the persisted
+        // provider — the explicit opt-out silently did nothing. The env
+        // tier is the highest-precedence tier, so it must be able to turn
+        // AI off even when a saved config exists.
+        let saved = ("deepseek", "sk-test", "", "");
+        assert!(
+            matches!(resolve_provider("disabled", Some(saved)), AiProvider::Noop),
+            "OXO_FLOW_AI_PROVIDER=disabled must win over a saved config"
+        );
+        // Case-insensitive, like the ProviderKind parse.
+        assert!(
+            matches!(resolve_provider("DISABLED", Some(saved)), AiProvider::Noop),
+            "the disabled spelling must be case-insensitive"
+        );
+    }
+
+    #[test]
+    fn env_absent_falls_back_to_saved_config() {
+        let saved = ("deepseek", "sk-test", "", "");
+        let provider = resolve_provider("", Some(saved));
+        assert_eq!(provider.name(), "deepseek");
+        // No env, no config → Noop.
+        assert!(matches!(resolve_provider("", None), AiProvider::Noop));
     }
 
     #[tokio::test]

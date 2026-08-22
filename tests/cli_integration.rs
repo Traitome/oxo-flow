@@ -429,7 +429,7 @@ fn cli_ai_explain_unknown_step_fails_fast_without_provider() {
 }
 
 #[test]
-fn cli_ai_explain_without_provider_fails_cleanly() {
+fn cli_ai_explain_without_provider_degrades_to_skeleton() {
     let dir = tempfile::tempdir().unwrap();
     oxo_flow_cmd()
         .env("HOME", dir.path())
@@ -439,7 +439,9 @@ fn cli_ai_explain_without_provider_fails_cleanly() {
             "examples/gallery/13_simple_variant_calling.oxoflow",
         ])
         .assert()
-        .failure()
+        // M10 degraded mode: no provider → deterministic skeleton, exit 0.
+        .success()
+        .stdout(predicate::str::contains("(deterministic skeleton)"))
         .stderr(predicate::str::contains("AI provider not configured"))
         .stderr(predicate::str::contains("ai setup"));
 }
@@ -812,18 +814,32 @@ shell = "echo {config.mode} {config.extra} > out.txt"
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("[skip: up to date]"), "{stderr}");
 
-    // dry-run WITHOUT the profile: `extra` is missing — the preview flags
-    // exactly what run would invalidate.
+    // dry-run WITHOUT the profile: `{config.extra}` is undefined — the H1
+    // gate (issue #142) refuses the run instead of executing with the
+    // literal placeholder. The merged config difference is no longer
+    // previewed as "config changed": it is a hard error.
     let out = oxo_flow_cmd()
         .args(["dry-run", wf.to_str().unwrap()])
         .current_dir(dir.path())
         .output()
         .unwrap();
-    assert!(out.status.success());
+    assert!(
+        !out.status.success(),
+        "a workflow referencing {{config.extra}} without the defining profile must be refused"
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("[run: config changed]"),
-        "preview must flag the profile-driven config difference: {stderr}"
+        stderr.contains("extra"),
+        "the refusal must name the undefined key: {stderr}"
+    );
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "run must apply the same gate: no profile, undefined key, no execution"
     );
 }
 

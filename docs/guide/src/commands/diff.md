@@ -47,3 +47,5 @@ Diff: 2 difference(s) between v1.oxoflow and v2.oxoflow:
 - Performs a semantic comparison of workflow structures, not just a line-by-line diff
 - Detects changes in rules, configuration variables, and metadata
 - Useful for tracking changes during pipeline development
+- All output goes to **stderr** and the exit code is always 0 — CI jobs
+  must capture stderr (not the exit code) to detect differences

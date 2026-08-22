@@ -2489,6 +2489,11 @@ impl WorkflowConfig {
                     message: e.to_string(),
                 })?;
 
+            // Declarative `[config]` entries (`key = { default, ... }`)
+            // are extracted exactly as they would be standalone, so their
+            // defaults merge below as plain values (issue #142 M3).
+            inc_config.extract_declarative_config()?;
+
             // Recursively resolve nested includes
             inc_config.resolve_includes_with_depth(&inc_base_dir, depth + 1)?;
             // Nested contracts merge first (their provenance indices shift
@@ -2545,11 +2550,26 @@ impl WorkflowConfig {
                 .or_default()
                 .extend(module_members);
             // Contract params fill config keys in profile-style — host
-            // values win (or_insert).
+            // values win (or_insert). The module's own `[config]`
+            // defaults are merged after, so they fill only the gaps
+            // params left open (issue #142 M3): a module declaring
+            // `[config] trim_quality = "20"` keeps that default when
+            // included without host params, while any host value — its
+            // own `[config]` table or `[[include]] params` — wins.
             for (key, value) in &inc.params {
                 self.config
                     .entry(key.clone())
                     .or_insert_with(|| value.clone());
+            }
+            for (key, value) in &inc_config.config {
+                self.config
+                    .entry(key.clone())
+                    .or_insert_with(|| value.clone());
+            }
+            for (key, def) in &inc_config.config_meta {
+                self.config_meta
+                    .entry(key.clone())
+                    .or_insert_with(|| def.clone());
             }
         }
         self.includes = includes;
@@ -2598,8 +2618,13 @@ impl WorkflowConfig {
     /// a declared concrete input nobody produces, and a declared output no
     /// module rule produces (or produced outside the module). Warnings
     /// cover encapsulation: a host rule reading a module-internal file the
-    /// contract does not declare. Wildcarded patterns are skipped here —
-    /// their wiring is verified by DAG edge inference at run time.
+    /// contract does not declare. Wildcarded patterns are checked
+    /// structurally — an engine-wildcarded input (`{sample}`, `{config.x}`)
+    /// forms no DAG edge (placeholder values only exist at run time), so a
+    /// wildcarded host input that could address a module-internal output
+    /// pattern (identical literal prefix and suffix) warns when the
+    /// contract declares no overlapping pattern; patterns that resolve to
+    /// different literals are not statically checkable.
     pub fn check_include_contracts(&self) -> (Vec<String>, Vec<String>) {
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
@@ -2653,6 +2678,28 @@ impl WorkflowConfig {
                 }
                 for inp in rule.input.to_vec() {
                     if inp.contains('{') {
+                        // Wildcarded inputs cannot be resolved through the
+                        // exact-string producer map, and they form no DAG
+                        // edge (placeholder values only exist at run time),
+                        // so fall back to a structural pattern match: warn
+                        // when the pattern could address a module-internal
+                        // output and the contract declares no overlapping
+                        // pattern.
+                        let internal = self.rules.iter().any(|r| {
+                            self.module_of.get(&r.name).is_some_and(|p| *p == idx)
+                                && r.output
+                                    .iter()
+                                    .any(|o| Self::wildcarded_patterns_overlap(&inp, o))
+                        });
+                        let declared_overlap = declared
+                            .iter()
+                            .any(|d| Self::wildcarded_patterns_overlap(&inp, d));
+                        if internal && !declared_overlap {
+                            warnings.push(format!(
+                                "rule '{}' reads module-internal file pattern '{inp}' which the include contract does not declare — add it to `outputs` to keep the coupling explicit",
+                                rule.name
+                            ));
+                        }
                         continue;
                     }
                     let internal = producers
@@ -2668,6 +2715,35 @@ impl WorkflowConfig {
             }
         }
         (errors, warnings)
+    }
+
+    /// Split a wildcarded path into its literal prefix (up to the first
+    /// `{`) and literal suffix (after the last `}`). A path without
+    /// wildcards yields `(path, "")`.
+    fn wildcard_literals(pattern: &str) -> (&str, &str) {
+        match (pattern.find('{'), pattern.rfind('}')) {
+            (Some(open), Some(close)) if close > open => (&pattern[..open], &pattern[close + 1..]),
+            _ => (pattern, ""),
+        }
+    }
+
+    /// Structural overlap of a wildcarded `pattern` with another path.
+    ///
+    /// The other side may itself be wildcarded (then both literal prefixes
+    /// and both literal suffixes must match) or concrete (then the pattern
+    /// must bound it on both sides). `qc/{sample}.html` overlaps
+    /// `qc/{sample}.html` but not `qc/{sample}.bcf`; `qc/{sample}.html`
+    /// overlaps the concrete `qc/sample1.html`. Deliberately conservative:
+    /// patterns whose wildcard sits in different places never overlap.
+    fn wildcarded_patterns_overlap(pattern: &str, other: &str) -> bool {
+        debug_assert!(pattern.contains('{'));
+        let (pre, suf) = Self::wildcard_literals(pattern);
+        if other.contains('{') {
+            let (o_pre, o_suf) = Self::wildcard_literals(other);
+            pre == o_pre && suf == o_suf
+        } else {
+            other.starts_with(pre) && other.ends_with(suf) && other.len() >= pre.len() + suf.len()
+        }
     }
 
     /// Validate that all execution group references point to existing rules.
@@ -6478,6 +6554,116 @@ shell = "true"
     }
 
     #[test]
+    fn include_contract_warns_on_wildcarded_internal_reads() {
+        // Wildcarded host inputs cannot be resolved through the
+        // exact-string producer map, and they form no DAG edge (placeholder
+        // values only exist at run time), so the encapsulation check falls
+        // back to a structural pattern match: identical literal prefix and
+        // suffix against a module-internal output.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("qc.oxoflow"),
+            r#"[workflow]
+name = "qc"
+version = "1.0.0"
+
+[[rules]]
+name = "fastqc"
+input = ["raw/{sample}.fq"]
+output = ["qc/{sample}.html"]
+shell = "true"
+
+[[rules]]
+name = "internal"
+input = ["qc/{sample}.html"]
+output = ["qc/{sample}.tmp"]
+shell = "true"
+"#,
+        )
+        .unwrap();
+
+        // (a) host reads a wildcarded pattern that structurally matches a
+        // module-internal output, undeclared → warning
+        let host = r#"[workflow]
+name = "host"
+version = "1.0.0"
+
+[[include]]
+path = "qc.oxoflow"
+inputs = ["raw/{sample}.fq"]
+outputs = ["qc/{sample}.html"]
+
+[[rules]]
+name = "peeker"
+input = ["qc/{sample}.tmp"]
+output = ["peek.txt"]
+shell = "true"
+"#;
+        let wf = dir.path().join("host.oxoflow");
+        std::fs::write(&wf, host).unwrap();
+        let config = WorkflowConfig::from_file(&wf).unwrap();
+        let (errors, warnings) = config.check_include_contracts();
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert!(
+            warnings.iter().any(|w| w.contains("qc/{sample}.tmp")),
+            "wildcarded encapsulation warning must fire: {warnings:?}"
+        );
+
+        // (b) the same pattern declared in the contract → no warning
+        let host2 = r#"[workflow]
+name = "host"
+version = "1.0.0"
+
+[[include]]
+path = "qc.oxoflow"
+inputs = ["raw/{sample}.fq"]
+outputs = ["qc/{sample}.html", "qc/{sample}.tmp"]
+
+[[rules]]
+name = "peeker"
+input = ["qc/{sample}.tmp"]
+output = ["peek.txt"]
+shell = "true"
+"#;
+        let wf2 = dir.path().join("host2.oxoflow");
+        std::fs::write(&wf2, host2).unwrap();
+        let config2 = WorkflowConfig::from_file(&wf2).unwrap();
+        let (errors2, warnings2) = config2.check_include_contracts();
+        assert!(errors2.is_empty(), "unexpected errors: {errors2:?}");
+        assert!(
+            !warnings2.iter().any(|w| w.contains("qc/{sample}.tmp")),
+            "declared wildcarded outputs must not warn: {warnings2:?}"
+        );
+
+        // (c) a pattern that cannot address the module's files (different
+        // literal suffix) → no warning
+        let host3 = r#"[workflow]
+name = "host"
+version = "1.0.0"
+
+[[include]]
+path = "qc.oxoflow"
+inputs = ["raw/{sample}.fq"]
+outputs = ["qc/{sample}.html"]
+
+[[rules]]
+name = "peeker"
+input = ["qc/{sample}.bcf"]
+output = ["peek.txt"]
+shell = "true"
+"#;
+        let wf3 = dir.path().join("host3.oxoflow");
+        std::fs::write(&wf3, host3).unwrap();
+        let config3 = WorkflowConfig::from_file(&wf3).unwrap();
+        let (errors3, warnings3) = config3.check_include_contracts();
+        assert!(errors3.is_empty(), "unexpected errors: {errors3:?}");
+        assert!(
+            !warnings3.iter().any(|w| w.contains("qc/{sample}.bcf")),
+            "patterns with different literals must not warn: {warnings3:?}"
+        );
+    }
+
+    #[test]
     fn include_contract_params_fill_in_config_defaults() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -6515,6 +6701,188 @@ shell = "true"
             config.config.get("threads").and_then(toml::Value::as_str),
             Some("8"),
             "params defaults must fill in config keys"
+        );
+    }
+
+    #[test]
+    fn include_module_config_defaults_fill_gaps() {
+        // Issue #142 M3: a module declaring `[config]` defaults keeps them
+        // when included without host params — previously the run failed
+        // E005 (undefined config variable) because only `[[include]]
+        // params` were merged into the host config.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("mod.oxoflow"),
+            r#"[workflow]
+name = "mod"
+version = "1.0.0"
+
+[config]
+trim_quality = "20"
+
+[[rules]]
+name = "step"
+output = ["o.txt"]
+shell = "echo {config.trim_quality} > o.txt"
+"#,
+        )
+        .unwrap();
+
+        // (a) module default fills the gap when no params are supplied
+        let host = r#"[workflow]
+name = "host"
+version = "1.0.0"
+
+[[include]]
+path = "mod.oxoflow"
+outputs = ["o.txt"]
+
+[[rules]]
+name = "use"
+input = ["o.txt"]
+output = ["u.txt"]
+shell = "true"
+"#;
+        let wf = dir.path().join("host.oxoflow");
+        std::fs::write(&wf, host).unwrap();
+        let config = WorkflowConfig::from_file(&wf).unwrap();
+        assert_eq!(
+            config
+                .config
+                .get("trim_quality")
+                .and_then(toml::Value::as_str),
+            Some("20"),
+            "module [config] defaults must fill gaps left by missing params"
+        );
+
+        // (b) host params win over the module default
+        let host2 = r#"[workflow]
+name = "host"
+version = "1.0.0"
+
+[[include]]
+path = "mod.oxoflow"
+outputs = ["o.txt"]
+params = { trim_quality = "30" }
+
+[[rules]]
+name = "use"
+input = ["o.txt"]
+output = ["u.txt"]
+shell = "true"
+"#;
+        let wf2 = dir.path().join("host2.oxoflow");
+        std::fs::write(&wf2, host2).unwrap();
+        let config2 = WorkflowConfig::from_file(&wf2).unwrap();
+        assert_eq!(
+            config2
+                .config
+                .get("trim_quality")
+                .and_then(toml::Value::as_str),
+            Some("30"),
+            "host params must override the module default"
+        );
+
+        // (c) declarative `{ default = ... }` entries follow the same
+        // extraction semantics as standalone validation
+        std::fs::write(
+            dir.path().join("dec.oxoflow"),
+            r#"[workflow]
+name = "dec"
+version = "1.0.0"
+
+[config]
+trim_quality = { default = "25" }
+
+[[rules]]
+name = "step"
+output = ["o.txt"]
+shell = "echo {config.trim_quality} > o.txt"
+"#,
+        )
+        .unwrap();
+        let host3 = r#"[workflow]
+name = "host"
+version = "1.0.0"
+
+[[include]]
+path = "dec.oxoflow"
+outputs = ["o.txt"]
+
+[[rules]]
+name = "use"
+input = ["o.txt"]
+output = ["u.txt"]
+shell = "true"
+"#;
+        let wf3 = dir.path().join("host3.oxoflow");
+        std::fs::write(&wf3, host3).unwrap();
+        let config3 = WorkflowConfig::from_file(&wf3).unwrap();
+        assert_eq!(
+            config3
+                .config
+                .get("trim_quality")
+                .and_then(toml::Value::as_str),
+            Some("25"),
+            "declarative module defaults must be extracted and merged"
+        );
+    }
+
+    #[test]
+    fn include_module_undefined_config_key_still_errors() {
+        // Issue #142 M3 regression guard: when neither the host config,
+        // `[[include]] params`, nor the module's own `[config]` define a
+        // referenced key, the reference stays undefined — lint still
+        // reports E005.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("mod.oxoflow"),
+            r#"[workflow]
+name = "mod"
+version = "1.0.0"
+
+[[rules]]
+name = "step"
+output = ["o.txt"]
+shell = "echo {config.trim_quality} > o.txt"
+"#,
+        )
+        .unwrap();
+        let host = r#"[workflow]
+name = "host"
+version = "1.0.0"
+
+[[include]]
+path = "mod.oxoflow"
+outputs = ["o.txt"]
+
+[[rules]]
+name = "use"
+input = ["o.txt"]
+output = ["u.txt"]
+shell = "true"
+"#;
+        let wf = dir.path().join("host.oxoflow");
+        std::fs::write(&wf, host).unwrap();
+        let config = WorkflowConfig::from_file(&wf).unwrap();
+        assert!(
+            !config.config.contains_key("trim_quality"),
+            "a key defined nowhere must stay undefined"
+        );
+        let result = crate::format::validate_format(&config);
+        assert!(
+            !result.valid
+                && result
+                    .errors()
+                    .iter()
+                    .any(|d| d.code == "E005" && d.message.contains("trim_quality")),
+            "validation must still flag the undefined config reference, got: {:?}",
+            result
+                .errors()
+                .iter()
+                .filter(|d| d.code == "E005")
+                .map(|d| d.message.as_str())
+                .collect::<Vec<_>>()
         );
     }
 

@@ -2159,17 +2159,43 @@ impl ReportSectionGenerator for CommandManifestGenerator {
             .config
             .rules
             .iter()
-            .map(|r| {
+            .flat_map(|r| {
                 let declared = r.shell.clone().unwrap_or_else(|| "(none)".into());
-                match ctx.checkpoint.and_then(|c| c.rule_runs.get(&r.name)) {
+                // Wildcard rules execute once per sample, and the checkpoint
+                // records each instance under `{rule}_{sample}` (the same
+                // convention config expansion uses). An exact-name lookup
+                // alone therefore reported "no execution record" for every
+                // expanded rule (issue #142 M9): match the rule name itself
+                // OR every expanded instance keyed `{rule}_...`.
+                let mut runs: Vec<(&String, &crate::executor::checkpoint::RuleRunRecord)> = ctx
+                    .checkpoint
+                    .map(|c| {
+                        c.rule_runs
+                            .iter()
+                            .filter(|(name, _)| {
+                                *name == &r.name || name.starts_with(&format!("{}_", r.name))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if runs.is_empty() {
                     // The command that actually ran, with wildcards and
                     // {config.x} resolved (issue #83 P0-6).
-                    Some(run) => vec![r.name.clone(), run.command.clone().unwrap_or(declared)],
-                    None => vec![
+                    return vec![vec![
                         r.name.clone(),
                         format!("{declared} (declared template — no execution record)"),
-                    ],
+                    ]];
                 }
+                // Deterministic order — one row per executed instance.
+                runs.sort_by(|a, b| a.0.cmp(b.0));
+                runs.into_iter()
+                    .map(|(name, run)| {
+                        vec![
+                            name.clone(),
+                            run.command.clone().unwrap_or_else(|| declared.clone()),
+                        ]
+                    })
+                    .collect()
             })
             .collect();
         vec![ReportSection {
@@ -4096,6 +4122,76 @@ shell = "echo hi"
         assert!(html.contains("<main id=\"main\">"));
         assert!(html.contains("scope=\"col\""));
         assert!(html.contains("@media print"));
+    }
+
+    #[test]
+    fn commands_section_renders_expanded_instance_runs() {
+        // A wildcard rule executes once per sample, and the checkpoint
+        // records each instance under `{rule}_{sample}`. The Commands
+        // section must render every executed command instead of reporting
+        // "no execution record" for the whole rule (issue #142 M9).
+        let config = workflow_config(
+            r#"[[rules]]
+name = "summarize_cohort"
+shell = "summarize.sh"
+[[rules]]
+name = "align"
+shell = "bwa mem"
+"#,
+        );
+        let mut ck = fixture_checkpoint();
+        ck.rule_runs.insert(
+            "summarize_cohort_S1".to_string(),
+            crate::executor::checkpoint::RuleRunRecord {
+                exit_code: Some(0),
+                command: Some("summarize.sh cohort_S1".to_string()),
+                stderr_tail: None,
+            },
+        );
+        ck.rule_runs.insert(
+            "summarize_cohort_S2".to_string(),
+            crate::executor::checkpoint::RuleRunRecord {
+                exit_code: Some(0),
+                command: Some("summarize.sh cohort_S2".to_string()),
+                stderr_tail: None,
+            },
+        );
+        let ctx = ctx_for(&config, Some(&ck), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        let commands = sections.iter().find(|s| s.id == "commands").unwrap();
+        let ReportContent::Table { headers, rows } = &commands.content else {
+            panic!("commands section must be a table");
+        };
+        assert_eq!(headers, &vec!["Task".to_string(), "Command".to_string()]);
+        // Declaration order for the rule, then each expanded instance in
+        // deterministic (sorted) order — never "no execution record" for
+        // a rule that actually ran.
+        let tasks: Vec<&String> = rows.iter().map(|r| &r[0]).collect();
+        assert_eq!(
+            tasks,
+            vec!["summarize_cohort_S1", "summarize_cohort_S2", "align"]
+        );
+        assert!(
+            rows.iter().any(|r| r[1] == "summarize.sh cohort_S1"),
+            "expanded command for S1 must be rendered: {rows:?}"
+        );
+        assert!(
+            rows.iter().any(|r| r[1] == "summarize.sh cohort_S2"),
+            "expanded command for S2 must be rendered: {rows:?}"
+        );
+        // The unexpanded template must not be reported for executed rules;
+        // the never-run rule keeps the honest declared-template note.
+        assert!(
+            !rows
+                .iter()
+                .any(|r| r[0] != "align" && r[1].contains("no execution record")),
+            "executed instances must not carry the no-record marker: {rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .any(|r| r[0] == "align" && r[1].contains("no execution record")),
+            "the never-run rule keeps the declared-template marker: {rows:?}"
+        );
     }
 }
 
