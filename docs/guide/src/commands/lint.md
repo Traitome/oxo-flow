@@ -52,7 +52,7 @@ oxo-flow lint pipeline.oxoflow --strict
 ## Output
 
 ```
-oxo-flow 0.14.1 — Bioinformatics Pipeline Engine
+oxo-flow v0.14.1 — Rust-native bioinformatics pipeline engine
   warning [W003]: rule has no description (rule: bwa_align)
     hint: add a `description` field to the rule
   warning [W004]: rule has a shell command but no log file specified (rule: bwa_align)

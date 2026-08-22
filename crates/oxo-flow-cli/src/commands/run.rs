@@ -3085,7 +3085,17 @@ pub async fn dry_run_command(
             // surface like any other.
             let expanded =
                 oxo_flow_core::executor::process::mask_sensitive(&expanded, &sensitive_values);
-            eprintln!("     command: {}", expanded);
+            if let Some((_category, description)) =
+                oxo_flow_core::format::shell_blocking_pattern(&expanded)
+            {
+                eprintln!(
+                    "     command: {}  {}",
+                    expanded,
+                    format!("(blocked: E011 — {description})").red().bold()
+                );
+            } else {
+                eprintln!("     command: {}", expanded);
+            }
         }
 
         // Show input file status for concrete (non-wildcard) paths.

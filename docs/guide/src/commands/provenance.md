@@ -87,7 +87,7 @@ that integrity was not verified.
 Provenance Verify .oxo-flow/checkpoint.json
 
   Note: No stored checksums found. Run workflow with --provenance to enable tracking.
-  Found 3 completed rules:
+  Found completed rules: 3
   ✓ align
   ✓ sort_bam
   ✓ trim_reads

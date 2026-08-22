@@ -21,6 +21,12 @@ pub enum OxoFlowError {
     #[error("parse error in {path}: {message}")]
     Parse { path: PathBuf, message: String },
 
+    /// The workflow file does not exist — reported separately from a parse
+    /// error so a typo'd path is never mislabeled as a syntax problem
+    /// (issue #142 persona testing).
+    #[error("workflow file not found: {0}")]
+    WorkflowNotFound(PathBuf),
+
     /// A cycle was detected in the workflow DAG.
     #[error("cycle detected in workflow DAG: {details}")]
     CycleDetected { details: String },
