@@ -1828,12 +1828,13 @@ fn cli_report_failed_moves_diagnosis_first() {
     )
     .unwrap();
 
-    // -k runs every rule and exits 0 while recording the failure.
+    // -k runs every rule while recording the failure; the verdict is still
+    // non-zero (issue #133 — required failures fail the run regardless).
     oxo_flow_cmd()
         .args(["run", "-k", wf.to_str().unwrap()])
         .current_dir(dir.path())
         .assert()
-        .success();
+        .failure();
 
     let section_ids = |args: &[&str]| -> Vec<String> {
         let out = oxo_flow_cmd()
