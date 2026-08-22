@@ -209,7 +209,7 @@ pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
     let validation = oxo_flow_core::format::validate_format(&config);
-    let lint_diags = oxo_flow_core::format::lint_format(&config);
+    let lint_diags = oxo_flow_core::format::lint_format(&config, workflow.parent());
 
     // Read the raw file content for secret scanning
     let raw_content = std::fs::read_to_string(&workflow).ok();

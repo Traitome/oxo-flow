@@ -1086,7 +1086,7 @@ fn lint_detects_missing_description_warning() {
     "#;
 
     let config = WorkflowConfig::parse(toml).unwrap();
-    let diagnostics = lint_format(&config);
+    let diagnostics = lint_format(&config, None);
 
     // Lint should find at least one warning (no description)
     assert!(
