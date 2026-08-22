@@ -28,7 +28,7 @@ fn abort_kills_inflight_rule_processes() {
     fs::write(
         &wf,
         "[workflow]\nname = \"abort\"\n\n\
-         [[rules]]\nname = \"bad\"\nshell = \"\"\"\nsleep 2\nexit 1\n\"\"\"\n\n\
+         [[rules]]\nname = \"bad\"\nshell = \"\"\"\nsleep 10\nexit 1\n\"\"\"\n\n\
          [[rules]]\nname = \"slow\"\noutput = [\"slow.pid\"]\nshell = \"\"\"\n\
          echo $$ > slow.pid\nsleep 30\n\"\"\"\n",
     )
@@ -36,22 +36,26 @@ fn abort_kills_inflight_rule_processes() {
 
     // Act
     let run = oxo_flow_cmd()
-        .args(["run", wf.to_str().unwrap(), "-j", "2"])
+        .args(["run", wf.to_str().unwrap(), "-j", "2", "-v"])
         .current_dir(dir.path())
         .output()
         .unwrap();
+    let run_log = fs::read_to_string(dir.path().join(".oxo-flow/logs/oxo-flow.log"))
+        .unwrap_or_default();
     assert!(
         !run.status.success(),
-        "the run must fail on 'bad':\n{}",
-        String::from_utf8_lossy(&run.stderr)
+        "the run must fail on 'bad':\n{}\n--- run log ---\n{}",
+        String::from_utf8_lossy(&run.stderr),
+        run_log
     );
 
     // Assert — slow spawned before the abort and must be dead after it.
     let pid_path = dir.path().join("slow.pid");
     assert!(
         pid_path.exists(),
-        "slow must have spawned before the abort:\n{}",
-        String::from_utf8_lossy(&run.stderr)
+        "slow must have spawned before the abort:\n{}\n--- run log ---\n{}",
+        String::from_utf8_lossy(&run.stderr),
+        run_log
     );
     let pid: i32 = fs::read_to_string(&pid_path)
         .unwrap()
