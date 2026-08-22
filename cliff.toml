@@ -65,6 +65,10 @@ filter_unconventional = false
 split_commits = false
 
 commit_parsers = [
+  # Release machinery noise: version bumps and CHANGELOG regen commits are
+  # tooling artifacts, not user-facing changes.
+  { message = "^chore: bump version", skip = true },
+  { message = "^docs: update CHANGELOG", skip = true },
   { message = "^feat", group = "Features" },
   { message = "^fix", group = "Bug Fixes" },
   { message = "^perf", group = "Performance" },

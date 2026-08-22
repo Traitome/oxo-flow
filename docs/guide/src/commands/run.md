@@ -28,7 +28,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--jobs` | `-j` | `1` | Maximum number of concurrent jobs |
 | `--keep-going` | `-k` | — | Continue execution when a job fails |
 | `--workdir` | `-d` | Workflow file's directory | Working directory for execution |
-| `--log-file` | — | `.oxo-flow/logs/oxo-flow.log` in the workdir | Write the run log to a custom path instead (previous logs rotate to `PATH.1` … `PATH.9`) |
+| `--log-file` | — | `.oxo-flow/logs/oxo-flow.log` in the workdir | Write the run log to a custom path instead (relative paths resolve against the workdir; previous logs rotate to `PATH.1` … `PATH.9`) |
 | `--target` | `-t` | All rules | Run only specific target rules |
 | `--retry` | `-r` | `0` | Number of times to retry failed jobs |
 | `--timeout` | — | `0` (disabled) | Timeout per job in seconds |
@@ -353,9 +353,8 @@ The closure is: the module's rules + every host rule producing one of its
 declared concrete contract inputs; upstream DAG dependents come through
 the regular target machinery. Unknown module names fail with the known
 module list. `dry-run --module` previews the same set.
-: downstream
-instances submit in ready batches as array elements finish, which is
-correct but not as queue-efficient as true element-wise chaining.
+
+### Run directory layout
 
 Each run leaves a directory you can navigate with ordinary tools:
 

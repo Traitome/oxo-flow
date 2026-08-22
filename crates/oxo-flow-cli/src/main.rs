@@ -901,6 +901,7 @@ pub enum ClusterAction {
             long,
             help = "Run one include module and the producers of its declared inputs (repeatable; unions with --target). Module names are the include's `name` field or its file stem"
         )]
+        module: Vec<String>,
         #[arg(long, help = "Generate scripts without submitting")]
         dry_run: bool,
         /// Generate job scripts with dependency support and a wrapper script

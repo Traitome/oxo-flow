@@ -177,6 +177,7 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
             extra_args,
             output,
             target,
+            module,
             dry_run,
             with_dependencies,
         } => {
@@ -194,6 +195,32 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
 
             let dag =
                 WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;
+
+            // --module partial runs (issue #112 elasticity) — the same
+            // resolution `run` and `dry-run` use: each module name resolves
+            // to its rules plus the host producers of its declared concrete
+            // inputs, unioned into --target for the ordering machinery below.
+            let mut target = target;
+            for m in &module {
+                match config.module_closure(m) {
+                    Some(names) => target.extend(names),
+                    None => {
+                        let known: Vec<&String> = config.module_rules.keys().collect();
+                        return Err(anyhow::anyhow!(
+                            "unknown module '{m}' — known modules: {}",
+                            if known.is_empty() {
+                                "(none — no [[include]] modules)".to_string()
+                            } else {
+                                known
+                                    .iter()
+                                    .map(|k| k.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            }
+                        ));
+                    }
+                }
+            }
 
             let order = if target.is_empty() {
                 dag.execution_order()?

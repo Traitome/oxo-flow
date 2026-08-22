@@ -478,6 +478,13 @@ pub async fn run_command(
 ) -> Result<()> {
     print_banner();
 
+    // `-j 0` means "no explicit concurrency limit": clamp once at the
+    // boundary so every downstream consumer — the scheduler submit cap,
+    // the run-loop semaphore, and the executor's own semaphore (which
+    // would otherwise be a zero-permit gate that hangs the first
+    // submission) — sees a consistent value (issue #136 fix 1).
+    let jobs = jobs.max(1);
+
     // ── Repository-URL workflows (nextflow-style `run <repo>`) ──────────
     // `oxo-flow run gh:owner/repo[@ref]` (or a *.git URL / local repo dir)
     // checks out into <cwd>/.oxo-flow/repos/<name> (reused on later runs).
@@ -600,19 +607,31 @@ pub async fn run_command(
     // own log under the workdir with numbered rotation; the header names
     // the exact workflow version (name, version, git HEAD) that produced
     // this record. Best-effort: a logging failure never fails the run.
+    // Sensitive values must be computed BEFORE the run-log header is built:
+    // the header embeds the raw command line, and `--arg KEY=secret` would
+    // otherwise land in plaintext in the run log and its rotated backups
+    // (issue #99 B1 / #136 fix 3). Computed once here; the executor's
+    // capture masking below reuses the same list.
+    let sensitive_values = sensitive_values_of(&config);
     let workflow_abs = absolutize(&workflow)?;
     let workflow_git_sha =
         oxo_flow_core::executor::checkpoint::CheckpointState::workflow_git_sha(&workflow_abs);
     let effective_workdir_log = workdir.as_ref().unwrap_or(&workdir_default);
     let run_log_path = match &log_file {
-        Some(p) => absolutize(p)?,
+        // Relative --log-file paths resolve against the workdir, matching
+        // the default log location (issue #136 fix 4).
+        Some(p) if p.is_absolute() => p.clone(),
+        Some(p) => effective_workdir_log.join(p),
         None => effective_workdir_log.join(".oxo-flow/logs/oxo-flow.log"),
     };
     let run_log_header = format!(
         "oxo-flow run log\nstarted_at: {}\noxo-flow: v{}\ncommand: {}\nworkflow: {}\nworkflow_name: {}\nworkflow_version: {}\ngit_sha: {}\nworkdir: {}\n\n",
         chrono::Local::now().to_rfc3339(),
         env!("CARGO_PKG_VERSION"),
-        std::env::args().collect::<Vec<_>>().join(" "),
+        oxo_flow_core::executor::process::mask_sensitive(
+            &std::env::args().collect::<Vec<_>>().join(" "),
+            &sensitive_values,
+        ),
         workflow_abs.display(),
         config.workflow.name,
         config.workflow.version,
@@ -697,10 +716,6 @@ pub async fn run_command(
         .filter(|(_, def)| def.sensitive)
         .map(|(key, _)| key.clone())
         .collect();
-    // The VALUES themselves, for runner-side output masking (issue #99 B1):
-    // they are redacted from captured stdout/stderr and recorded commands
-    // before anything reaches the checkpoint, report, AI recovery, or web.
-    let sensitive_values = sensitive_values_of(&config);
     let old_snapshot = {
         let ck = checkpoint.lock().await;
         ck.config_snapshot.clone()
@@ -1418,6 +1433,11 @@ pub async fn run_command(
     let semaphore = Arc::new(tokio::sync::Semaphore::new(jobs.max(1)));
     let mut join_set = tokio::task::JoinSet::new();
     let mut submitted: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Task id → rule name for panic attribution (issue #136 fix 2): a
+    // panicked task leaves the JoinSet without its payload, so the id is
+    // the only way to learn which rule died and release its scheduler slot.
+    let mut task_rule: std::collections::HashMap<tokio::task::Id, String> =
+        std::collections::HashMap::new();
 
     // Pre-process checkpoint-completed rules so they are never re-submitted.
     {
@@ -1507,6 +1527,8 @@ pub async fn run_command(
             &priority_map,
             &waited_rounds,
         );
+        // jobs was clamped to >= 1 at run_command entry, so a raw 0 can
+        // never silently suppress all submissions (issue #136 fix 1).
         let available = jobs.saturating_sub(sched.running_count());
         let to_submit: Vec<String> = ready.iter().take(available).cloned().collect();
         for name in ready.iter().skip(available) {
@@ -1585,7 +1607,10 @@ pub async fn run_command(
             }
 
             let typed_config = config.config.clone();
-            join_set.spawn(async move {
+            // Register the task name BEFORE the spawn: the closure moves
+            // `rule_name` in, so the id→name map needs its own clone.
+            let task_rule_name = rule_name.clone();
+            let handle = join_set.spawn(async move {
                 let _permit = semaphore.acquire().await;
 
                 // Snapshot the input file set BEFORE execution (issue #72):
@@ -1796,6 +1821,7 @@ pub async fn run_command(
                     }
                 }
             });
+            task_rule.insert(handle.id(), task_rule_name);
         }
 
         // ---- wait for completions -----------------------------------------
@@ -1806,8 +1832,8 @@ pub async fn run_command(
         }
 
         // Wait for the next rule to finish.
-        let (completed_rule, status, record) = match join_set.join_next().await {
-            Some(Ok(v)) => v,
+        let (completed_rule, status, record) = match join_set.join_next_with_id().await {
+            Some(Ok((_id, v))) => v,
             Some(Err(e)) => {
                 if e.is_panic() {
                     tracing::error!("Task panicked: {e}");
@@ -1819,7 +1845,58 @@ pub async fn run_command(
                 // the FIFO line hostage — live waiters re-register.
                 executor.clear_resource_waiters().await;
                 fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                continue;
+                // The task left the JoinSet without its payload, so the id
+                // is the only link back to the rule (issue #136 fix 2).
+                // Without marking it completed the rule would stay in the
+                // scheduler's running set forever, permanently shrinking
+                // the submit cap — with -j 1 every remaining rule would
+                // silently never run. Fall through to the common failure
+                // bookkeeping instead of `continue`, so dependents are
+                // blocked, the checkpoint records the engine fault, and
+                // the standard abort path fails the run loudly.
+                let Some(rule_name) = task_rule.remove(&e.id()) else {
+                    // Internal invariant: every spawned task registers its
+                    // name at spawn. Fail the run rather than leak the cap.
+                    return Err(anyhow::anyhow!(
+                        "internal error: task {} has no recorded rule",
+                        e.id()
+                    ));
+                };
+                {
+                    let mut frs = failed_rules_set.lock().await;
+                    frs.insert(rule_name.clone());
+                }
+                let record = oxo_flow_core::executor::JobRecord {
+                    rule: rule_name.clone(),
+                    status: oxo_flow_core::executor::JobStatus::Failed,
+                    started_at: None,
+                    finished_at: None,
+                    exit_code: Some(-1),
+                    stdout: None,
+                    stderr: Some(oxo_flow_core::executor::process::mask_sensitive(
+                        &e.to_string(),
+                        &sensitive_values,
+                    )),
+                    command: None,
+                    retries: 0,
+                    timeout: None,
+                    skip_reason: None,
+                    max_rss_mb: None,
+                    cpu_seconds: None,
+                };
+                let mut ck = checkpoint.lock().await;
+                ck.record_run(&record);
+                ck.mark_failed(&rule_name);
+                if let Err(save_err) = ck.save_to_file(&checkpoint_path) {
+                    tracing::warn!("Failed to save checkpoint: {save_err}");
+                }
+                let mut f = failures.lock().await;
+                f.push((rule_name.clone(), format!("task panicked: {e}")));
+                (
+                    rule_name,
+                    oxo_flow_core::executor::JobStatus::Failed,
+                    record,
+                )
             }
             None => break,
         };

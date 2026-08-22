@@ -200,7 +200,7 @@ pilot size, or readiness):
 | `--samples @sheet.tsv` | **Replace** — the sheet's groups become the run set, overwriting the workflow's inline / auto-discovered / file-loaded groups |
 | `--samples +@sheet.tsv` | **Append** — same-name groups merge (union, deduplicated); new group names are added. `[[pairs]]` are untouched: appending can only add samples |
 | `--samples S1,S2` | **Filter** on workflows with declared samples (unknown names fail — no phantom samples); **declare** on workflows that ship with no samples at all (the template-workflow invocation pattern) |
-| `--samples first:3` / `--samples ready` | **Filter** — narrow the (possibly replaced, appended, or declared) set to a subset / to samples whose entry inputs are complete (see [Incremental data arrival](#incremental-data-arrival-samples-ready)) |
+| `--samples first:3` / `--samples ready` | **Filter** — narrow the (possibly replaced, appended, or declared) set to a subset / to samples whose entry inputs are complete (see [Incremental data arrival](../commands/run.md#incremental-data-arrival-samples-ready)) |
 
 Sheet specs apply in order and can combine with filters:
 `--samples @real.tsv,first:2` replaces with `real.tsv` then runs the first

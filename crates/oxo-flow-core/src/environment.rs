@@ -216,6 +216,27 @@ impl CondaBackend {
         }
     }
 
+    /// Verify command with optional project-local prefix.
+    ///
+    /// A prefix install (`conda env create -p`) creates no named env, so the
+    /// plain `-n {name}` verify checks a different (nonexistent) env and
+    /// always fails — a healthy pre-existing prefix env then failed verify,
+    /// which sent the executor down the teardown-and-recreate path and
+    /// deleted the user's own env (issue #136).
+    pub fn verify_command_with_opts(
+        &self,
+        spec: &str,
+        prefix: Option<&str>,
+    ) -> Result<Option<String>> {
+        if let Some(prefix) = prefix {
+            Ok(Some(format!(
+                "conda run -p {prefix} bash -c 'test -d \"$CONDA_PREFIX/bin\"'"
+            )))
+        } else {
+            self.verify_command(spec)
+        }
+    }
+
     /// Cache key with optional project-local prefix.
     pub fn cache_key_with_opts(&self, spec: &str, prefix: Option<&str>) -> String {
         if let Some(prefix) = prefix {
@@ -354,6 +375,23 @@ impl MambaBackend {
             Ok(Some(format!("{} env remove -p {prefix} -y", self.binary)))
         } else {
             self.teardown_command(spec)
+        }
+    }
+
+    /// Verify command with optional project-local prefix — same
+    /// prefix-vs-named-env rationale as [`CondaBackend::verify_command_with_opts`].
+    pub fn verify_command_with_opts(
+        &self,
+        spec: &str,
+        prefix: Option<&str>,
+    ) -> Result<Option<String>> {
+        if let Some(prefix) = prefix {
+            Ok(Some(format!(
+                "{} run -p {prefix} bash -c 'test -d \"$CONDA_PREFIX/bin\"'",
+                self.binary
+            )))
+        } else {
+            self.verify_command(spec)
         }
     }
 
@@ -911,6 +949,13 @@ pub struct EnvironmentResolver {
     cache: Arc<Mutex<EnvironmentCache>>,
     /// Per-cache-key setup mutexes (see [`Self::setup_lock`]).
     setup_locks: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Per-cache-key record of environments this resolver issued a setup
+    /// for, with whether the env pre-existed before the setup (true = the
+    /// env was NOT created by this run). Teardown refuses to remove such
+    /// envs — a failed verify must never destroy a pre-existing prefix env
+    /// the user owns (issue #136). The resolver lives for one run, so this
+    /// is exactly "created this run".
+    setup_origins: std::sync::Mutex<HashMap<String, bool>>,
 }
 
 impl Default for EnvironmentResolver {
@@ -933,6 +978,7 @@ impl EnvironmentResolver {
             system: SystemBackend,
             cache: Arc::new(Mutex::new(EnvironmentCache::new())),
             setup_locks: std::sync::Mutex::new(HashMap::new()),
+            setup_origins: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -949,6 +995,7 @@ impl EnvironmentResolver {
             system: SystemBackend,
             cache: Arc::new(Mutex::new(EnvironmentCache::with_cache_dir(cache_dir))),
             setup_locks: std::sync::Mutex::new(HashMap::new()),
+            setup_origins: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -1044,13 +1091,31 @@ impl EnvironmentResolver {
 
     /// Get the setup command for an environment specification.
     /// This command creates/pulls the environment before first use.
+    ///
+    /// Records the setup origin per cache key (see `setup_origins`): for
+    /// prefix installs the snapshot is whether the prefix directory already
+    /// existed (relative prefixes resolve against the process CWD — the
+    /// executor runs conda in the workflow dir, and the standard invocation
+    /// runs from there too).
     pub fn setup_command(&self, env_spec: &EnvironmentSpec) -> Result<String> {
         if let Some(ref mamba) = env_spec.mamba {
+            let pre_existed = env_spec
+                .mamba_prefix
+                .as_deref()
+                .map(|p| std::path::Path::new(p).exists())
+                .unwrap_or(false);
+            self.record_setup(&self.cache_key(env_spec), pre_existed);
             return self
                 .mamba
                 .setup_command_with_opts(mamba, env_spec.mamba_prefix.as_deref());
         }
         if let Some(ref conda) = env_spec.conda {
+            let pre_existed = env_spec
+                .conda_prefix
+                .as_deref()
+                .map(|p| std::path::Path::new(p).exists())
+                .unwrap_or(false);
+            self.record_setup(&self.cache_key(env_spec), pre_existed);
             return self
                 .conda
                 .setup_command_with_opts(conda, env_spec.conda_prefix.as_deref());
@@ -1086,20 +1151,54 @@ impl EnvironmentResolver {
     }
 
     /// Post-setup usability check for the environment (conda/mamba verify
-    /// the env's `bin/` exists; other backends return `None`).
+    /// the env's `bin/` exists; other backends return `None`). Prefix
+    /// installs are verified against the prefix (`-p`), never the named-env
+    /// form — `conda env create -p` creates no named env, so the `-n` check
+    /// would always fail and drive the executor into the teardown path that
+    /// deletes the user's own pre-existing prefix env (issue #136).
     pub fn verify_command(&self, env_spec: &EnvironmentSpec) -> Result<Option<String>> {
         if let Some(ref mamba) = env_spec.mamba {
-            return self.mamba.verify_command(mamba);
+            return self
+                .mamba
+                .verify_command_with_opts(mamba, env_spec.mamba_prefix.as_deref());
         }
         if let Some(ref conda) = env_spec.conda {
-            return self.conda.verify_command(conda);
+            return self
+                .conda
+                .verify_command_with_opts(conda, env_spec.conda_prefix.as_deref());
         }
         Ok(None)
     }
 
     /// Get the teardown command for an environment specification
     /// (removes the env so a broken one can be recreated cleanly).
+    ///
+    /// Refuses to tear down anything this run did not create: an env whose
+    /// setup was never issued (verify failed before any setup) or whose
+    /// prefix directory pre-existed when setup was issued is the user's
+    /// own, and a failed verify must not destroy it. Returns `Ok(None)` in
+    /// those cases; the executor treats that as "no teardown" and skips the
+    /// recreate-retry.
     pub fn teardown_command(&self, env_spec: &EnvironmentSpec) -> Result<Option<String>> {
+        let key = self.cache_key(env_spec);
+        let origins = self.setup_origins.lock().unwrap();
+        match origins.get(&key) {
+            None => {
+                tracing::warn!(
+                    env = %key,
+                    "teardown skipped: no setup was issued for this environment in this run"
+                );
+                return Ok(None);
+            }
+            Some(true) => {
+                tracing::warn!(
+                    env = %key,
+                    "teardown skipped: the environment pre-existed before this run's setup — refusing to remove it"
+                );
+                return Ok(None);
+            }
+            Some(false) => {}
+        }
         if let Some(ref mamba) = env_spec.mamba {
             return self
                 .mamba
@@ -1111,6 +1210,15 @@ impl EnvironmentResolver {
                 .teardown_command_with_opts(conda, env_spec.conda_prefix.as_deref());
         }
         Ok(None)
+    }
+
+    /// Record that this run issued a setup for `key`, and whether the
+    /// target env pre-existed (see `setup_origins`).
+    fn record_setup(&self, key: &str, pre_existed: bool) {
+        self.setup_origins
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), pre_existed);
     }
 
     /// Check which environment backends are available on the system.
@@ -2054,6 +2162,123 @@ mod tests {
             .unwrap();
         assert!(result.contains("conda run --no-capture-output -p .oxo-conda bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; fastqc reads.fq'"));
         assert!(!result.contains(" -n "));
+    }
+
+    #[test]
+    fn conda_verify_command_with_prefix() {
+        let backend = CondaBackend;
+        let cmd = backend
+            .verify_command_with_opts("envs/qc.yaml", Some(".oxo-conda"))
+            .unwrap()
+            .unwrap();
+        assert!(
+            cmd.contains("conda run -p .oxo-conda bash -c 'test -d \"$CONDA_PREFIX/bin\"'"),
+            "a prefix env must be verified with -p (the -n form checks a \
+             named env that `conda env create -p` never creates), got: {cmd}"
+        );
+        assert!(!cmd.contains(" -n "));
+    }
+
+    #[test]
+    fn conda_verify_command_without_prefix() {
+        let backend = CondaBackend;
+        let cmd = backend.verify_command("envs/qc.yaml").unwrap().unwrap();
+        assert!(cmd.contains("conda run -n qc bash -c 'test -d \"$CONDA_PREFIX/bin\"'"));
+        assert!(!cmd.contains(" -p "));
+    }
+
+    #[test]
+    fn mamba_verify_command_with_prefix() {
+        let backend = MambaBackend::new();
+        let cmd = backend
+            .verify_command_with_opts("envs/qc.yaml", Some(".oxo-conda"))
+            .unwrap()
+            .unwrap();
+        assert!(
+            cmd.contains(&format!(
+                "{} run -p .oxo-conda bash -c 'test -d \"$CONDA_PREFIX/bin\"'",
+                backend.binary
+            )),
+            "expected -p prefix form, got: {cmd}"
+        );
+        assert!(!cmd.contains(" -n "));
+    }
+
+    #[test]
+    fn resolver_verify_command_uses_prefix_for_conda_prefix_env() {
+        let resolver = EnvironmentResolver::new();
+        let spec = EnvironmentSpec {
+            conda: Some("envs/qc.yaml".to_string()),
+            conda_prefix: Some(".oxo-conda".to_string()),
+            ..Default::default()
+        };
+        let cmd = resolver.verify_command(&spec).unwrap().unwrap();
+        assert!(
+            cmd.contains("conda run -p .oxo-conda bash -c 'test -d \"$CONDA_PREFIX/bin\"'"),
+            "the named-env verify checks the WRONG env for a prefix install, got: {cmd}"
+        );
+        assert!(!cmd.contains(" -n "));
+    }
+
+    #[test]
+    fn teardown_skips_preexisting_prefix_env() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = dir.path().join("env");
+        std::fs::create_dir_all(&prefix).unwrap();
+        let resolver = EnvironmentResolver::new();
+        let spec = EnvironmentSpec {
+            conda: Some("envs/qc.yaml".to_string()),
+            conda_prefix: Some(prefix.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        // The cold-cache flow: verify failed, setup was issued (its update
+        // fallback exits 0), verify failed again — teardown must refuse to
+        // remove an env that pre-existed before this run's setup.
+        let _setup = resolver.setup_command(&spec).unwrap();
+        assert!(
+            resolver.teardown_command(&spec).unwrap().is_none(),
+            "a pre-existing prefix env (the user's own) must never be torn down"
+        );
+        assert!(
+            prefix.exists(),
+            "the user's pre-existing prefix env must survive"
+        );
+    }
+
+    #[test]
+    fn teardown_skips_when_verify_failed_before_any_setup() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = dir.path().join("env");
+        std::fs::create_dir_all(&prefix).unwrap();
+        let resolver = EnvironmentResolver::new();
+        let spec = EnvironmentSpec {
+            conda: Some("envs/qc.yaml".to_string()),
+            conda_prefix: Some(prefix.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        // Verify failed before any setup was issued this run — teardown must
+        // not remove the env.
+        assert!(resolver.teardown_command(&spec).unwrap().is_none());
+        assert!(prefix.exists());
+    }
+
+    #[test]
+    fn teardown_removes_env_created_this_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = dir.path().join("env"); // does not exist before setup
+        let resolver = EnvironmentResolver::new();
+        let spec = EnvironmentSpec {
+            conda: Some("envs/qc.yaml".to_string()),
+            conda_prefix: Some(prefix.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        let _setup = resolver.setup_command(&spec).unwrap();
+        let cmd = resolver
+            .teardown_command(&spec)
+            .unwrap()
+            .expect("an env this run created may be torn down");
+        assert!(cmd.contains("conda env remove -p"));
+        assert!(cmd.contains(&prefix.to_string_lossy().into_owned()));
     }
 
     #[test]

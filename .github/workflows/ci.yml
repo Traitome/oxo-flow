@@ -15,8 +15,15 @@ on:
         default: ''
 
 # Cancel in-progress runs for the same branch/PR; preserve tag releases.
+# A dispatch-driven release (tag input set) runs in its own concurrency
+# group so that a push to main — including the version-bump commit the
+# release itself pushes — cannot cancel it between the commit push and the
+# tag push (which previously left main bumped with no tag).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: >-
+    ${{ (github.event_name == 'workflow_dispatch' && inputs.tag != '') &&
+         format('{0}-release-{1}', github.workflow, inputs.tag) ||
+         format('{0}-{1}', github.workflow, github.ref) }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
@@ -41,6 +48,30 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate release tag format
+        if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag }}"
+          if ! echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Invalid release tag '${TAG}'. Expected v<major>.<minor>.<patch>, e.g. v0.14.0. Aborting before any commit or push."
+            exit 1
+          fi
+          echo "Release tag format OK: ${TAG}"
+
+      - name: Ensure release tag does not already exist
+        if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag }}"
+          if [ -n "$(git ls-remote --tags origin "refs/tags/${TAG}")" ]; then
+            echo "::error::Tag ${TAG} already exists on origin. Never move a released tag — pick a new version for this release."
+            exit 1
+          fi
+          echo "Tag ${TAG} does not exist yet — safe to create"
 
       - name: Extract version from tag
         id: extract
@@ -132,10 +163,10 @@ jobs:
           [ -d docs/guide/src ] && git add docs/guide/src/*.md docs/guide/src/**/*.md
           # Re-tagging a version whose files are already synced leaves nothing
           # to commit (CITATION.cff/docs branches set CHANGED unconditionally).
-          # Tolerate it: keep the tag where it is and let the rest of the
-          # workflow proceed against the tag SHA.
+          # Tolerate it: the dedicated "Create and push release tag" step
+          # still creates the tag against the current tree.
           if git diff --cached --quiet; then
-            echo "Version already synced — nothing to commit; keeping tag at $GITHUB_SHA"
+            echo "Version already synced — nothing to commit"
             exit 0
           fi
           git commit -m "chore: bump version to ${{ steps.extract.outputs.version }} [skip ci]"
@@ -143,16 +174,63 @@ jobs:
           NEW_SHA=$(git rev-parse HEAD)
           echo "updated_sha=$NEW_SHA" >> "$GITHUB_OUTPUT"
           echo "New commit: $NEW_SHA"
+
+      - name: Install git-cliff
+        if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff@2.12.0
+
+      # The changelog commit is created and pushed BEFORE the tag so the tag
+      # tree (git checkout <tag>) contains its own changelog entry. The tag is
+      # created locally first so git-cliff labels the top section with this
+      # version instead of "[Unreleased]".
+      - name: Generate and commit CHANGELOG.md
+        if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           TAG_NAME="${{ env.RELEASE_TAG }}"
+          git tag -f "$TAG_NAME" "$(git rev-parse HEAD)"
+          git-cliff --config cliff.toml --output CHANGELOG.md
+          if ! git diff --quiet CHANGELOG.md; then
+            git add CHANGELOG.md
+            git commit -m "docs: update CHANGELOG.md for ${TAG_NAME} [skip ci]"
+            git push origin "HEAD:${{ github.event.repository.default_branch }}"
+            echo "CHANGELOG.md committed at $(git rev-parse HEAD)"
+          else
+            echo "CHANGELOG.md is already up-to-date"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO: ${{ github.repository }}
+
+      # Unconditional within the dispatch release path (idempotent): creates
+      # the tag against the current HEAD — the changelog commit when one was
+      # made, otherwise the bump commit or the already-synced main tip — and
+      # pushes it. The interrupted state "main bumped, no tag" is therefore
+      # recoverable by re-dispatching the same version.
+      - name: Create and push release tag
+        if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG_NAME="${{ env.RELEASE_TAG }}"
+          TARGET_SHA=$(git rev-parse HEAD)
           if git cat-file -t "$TAG_NAME" 2>/dev/null | grep -q '^tag$'; then
             TAG_MSG=$(git tag -l --format='%(contents)' "$TAG_NAME")
             git tag -d "$TAG_NAME"
-            git tag -a "$TAG_NAME" "$NEW_SHA" -m "$TAG_MSG"
+            git tag -a "$TAG_NAME" "$TARGET_SHA" -m "$TAG_MSG"
           else
-            git tag -f "$TAG_NAME" "$NEW_SHA"
+            git tag -f "$TAG_NAME" "$TARGET_SHA"
           fi
-          git push origin "$TAG_NAME" --force
-          echo "Tag $TAG_NAME moved to $NEW_SHA"
+          # No --force: the existence guard above already verified the tag is
+          # absent remotely, so a plain push fails safely if one appeared in
+          # between — a released tag is never moved.
+          git push origin "$TAG_NAME"
+          echo "Tag $TAG_NAME created at $TARGET_SHA"
 
   # ─── Quality gate: fmt + clippy + tests ────────────────────────────────────
   test:
