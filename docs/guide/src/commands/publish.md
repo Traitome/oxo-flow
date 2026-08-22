@@ -63,7 +63,7 @@ oxo-flow run --bundle my_pipeline-bundle.tar.zst -j 16
 oxo-flow run --bundle my_pipeline-bundle.tar.zst -j 16 --yes
 
 # Pull a remote bundle and run it
-oxo-flow pull gh:user/repo@v0.14.0
+oxo-flow pull gh:user/repo@v0.14.1
 oxo-flow run --bundle repo-bundle.tar.zst --yes
 ```
 

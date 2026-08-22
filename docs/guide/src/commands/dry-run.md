@@ -265,7 +265,7 @@ instances at runtime are listed under the `reentry` section of `--json`
 ## Output
 
 ```
-oxo-flow 0.14.0 — Bioinformatics Pipeline Engine
+oxo-flow 0.14.1 — Bioinformatics Pipeline Engine
 DAG: (dry-run) 3 rules would execute
   1. generate_data
      threads=1

@@ -48,7 +48,7 @@ oxo-flow touch pipeline.oxoflow -r bwa_align
 ## Output
 
 ```
-oxo-flow 0.14.0 — Bioinformatics Pipeline Engine
+oxo-flow 0.14.1 — Bioinformatics Pipeline Engine
   ✓ sample1.bam
   ✓ sample1.bam.bai
   ✓ sample2.bam
