@@ -82,6 +82,15 @@ pub trait ExecutorBackend: Send + Sync {
     async fn terminal_status(&self, _job_id: &str) -> Option<BackendJobStatus> {
         None
     }
+
+    /// True when `poll` reports ARRAY ELEMENTS by their `{base}_{index}`
+    /// ids (SLURM's squeue does). Schedulers that list only the array's
+    /// base id (PBS/LSF/SGE) return false — the driver then polls and
+    /// cancels by base id and expands the verdict to every element
+    /// (issue #136 H4).
+    fn polls_elements_directly(&self) -> bool {
+        false
+    }
 }
 
 /// One executable unit of the static plan: a fully resolved rule instance.

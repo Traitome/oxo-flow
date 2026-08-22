@@ -136,6 +136,7 @@ fn run_driver_with_env(
             to_run,
             DriverOptions {
                 sensitive_values: &[],
+                on_submit: None,
                 run_dir,
                 on_checkpoint: None,
                 merge: None,
