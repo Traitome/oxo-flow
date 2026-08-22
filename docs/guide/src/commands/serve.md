@@ -69,7 +69,7 @@ POST /oxo-flow/api/pipelines/validate
 ## Output
 
 ```
-oxo-flow 0.14.1 — Bioinformatics Pipeline Engine
+oxo-flow v0.14.1 — Rust-native bioinformatics pipeline engine
 Serve: Starting oxo-flow web server in personal mode on 127.0.0.1:8080
 ```
 

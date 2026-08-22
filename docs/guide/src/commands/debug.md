@@ -58,7 +58,7 @@ For each rule, the debug command shows:
 - **Dependencies** — other rules that must run first
 
 ```
-oxo-flow 0.14.1 — Bioinformatics Pipeline Engine
+oxo-flow v0.14.1 — Rust-native bioinformatics pipeline engine
 Debug: Debugging 3 rules
 ── Rule: transform ──
   Outputs: ["data/filtered.csv"]

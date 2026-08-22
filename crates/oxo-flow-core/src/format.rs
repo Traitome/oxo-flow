@@ -10,7 +10,9 @@
 use crate::config::WorkflowConfig;
 use crate::dag::WorkflowDag;
 use crate::rule::Rule;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 
 /// Current .oxoflow format specification version.
 pub const FORMAT_VERSION: &str = "1.0";
@@ -413,71 +415,6 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
 
     // E011 + W023: Shell command security checks (dangerous patterns detected at lint time)
     {
-        use regex::Regex;
-        use std::sync::LazyLock;
-
-        static BLOCKING_PATTERNS: LazyLock<Vec<(Regex, &str, &str)>> = LazyLock::new(|| {
-            let patterns: &[(&str, &str, &str)] = &[
-                (
-                    r"rm\s+-rf\s+(?:--\S+\s+)*[/~]",
-                    "RECURSIVE_DELETION",
-                    "dangerous recursive deletion of root/home",
-                ),
-                (
-                    r"rm\s+-r\s+(?:--\S+\s+)*/",
-                    "RECURSIVE_DELETION",
-                    "recursive deletion of root without force flag",
-                ),
-                (
-                    r"mkfs\.?\w*",
-                    "FILESYSTEM_DESTRUCTION",
-                    "filesystem creation command",
-                ),
-                (r"mkswap", "FILESYSTEM_DESTRUCTION", "swap creation command"),
-                (
-                    r"dd\s+if=.*of=/dev/sd",
-                    "FILESYSTEM_DESTRUCTION",
-                    "dd write to block device",
-                ),
-                (
-                    r"dd\s+if=/dev/(?:zero|random|urandom)",
-                    "DATA_DESTRUCTION",
-                    "data destruction via dd from /dev",
-                ),
-                (
-                    r"chmod\s+.*777\s+/",
-                    "PERMISSION_ESCALATION",
-                    "world-writable root permission",
-                ),
-                (
-                    r"chmod\s+-R\s+777",
-                    "PERMISSION_ESCALATION",
-                    "recursive world-writable permission",
-                ),
-                (
-                    r">\s*/dev/sd[a-z]",
-                    "BLOCK_DEVICE_WRITE",
-                    "redirect to block device",
-                ),
-                (
-                    r">>\s*/dev/sd[a-z]",
-                    "BLOCK_DEVICE_WRITE",
-                    "append to block device",
-                ),
-                (
-                    r"(?:wget|curl).*\|\s*(?:sh|bash|dash)",
-                    "REMOTE_EXECUTION",
-                    "remote script piped to shell",
-                ),
-                (r"\(\)\s*\{.*:.*\|.*&.*\}", "FORK_BOMB", "fork bomb pattern"),
-                (r":\(\)\s*\{", "FORK_BOMB", "fork bomb variant"),
-            ];
-            patterns
-                .iter()
-                .filter_map(|(re, name, desc)| Regex::new(re).ok().map(|r| (r, *name, *desc)))
-                .collect()
-        });
-
         static WARNING_PATTERNS: LazyLock<Vec<(Regex, &str)>> = LazyLock::new(|| {
             let patterns: &[(&str, &str)] = &[
                 (r"\$\([^)]*\)", "command substitution via $()"),
@@ -517,23 +454,20 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
 
             for (cmd, source) in &commands {
                 // Blocking patterns → E011 Error
-                for (re, category, description) in BLOCKING_PATTERNS.iter() {
-                    if re.is_match(cmd) {
-                        diagnostics.push(Diagnostic {
-                            severity: Severity::Error,
-                            message: format!(
-                                "{} command in rule '{}' matches dangerous pattern [{}]: {}",
-                                source, rule.name, category, description
-                            ),
-                            rule: Some(rule.name.clone()),
-                            code: "E011".to_string(),
-                            suggestion: Some(
-                                "remove dangerous shell constructs or use a script file instead"
-                                    .to_string(),
-                            ),
-                        });
-                        break; // One error per command is enough
-                    }
+                if let Some((category, description)) = shell_blocking_pattern(cmd) {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        message: format!(
+                            "{} command in rule '{}' matches dangerous pattern [{}]: {}",
+                            source, rule.name, category, description
+                        ),
+                        rule: Some(rule.name.clone()),
+                        code: "E011".to_string(),
+                        suggestion: Some(
+                            "remove dangerous shell constructs or use a script file instead"
+                                .to_string(),
+                        ),
+                    });
                 }
 
                 // Warning patterns → W023 Warning
@@ -714,6 +648,81 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
         diagnostics,
         format_version: FORMAT_VERSION.to_string(),
     }
+}
+
+/// Blocking shell patterns shared by lint (E011) and the dry-run preview
+/// (issue #142 LOW) — a blocked command must never be previewed as "would
+/// execute".
+static BLOCKING_PATTERNS: LazyLock<Vec<(Regex, &str, &str)>> = LazyLock::new(|| {
+    let patterns: &[(&str, &str, &str)] = &[
+        (
+            r"rm\s+-rf\s+(?:--\S+\s+)*[/~]",
+            "RECURSIVE_DELETION",
+            "dangerous recursive deletion of root/home",
+        ),
+        (
+            r"rm\s+-r\s+(?:--\S+\s+)*/",
+            "RECURSIVE_DELETION",
+            "recursive deletion of root without force flag",
+        ),
+        (
+            r"mkfs\.?\w*",
+            "FILESYSTEM_DESTRUCTION",
+            "filesystem creation command",
+        ),
+        (r"mkswap", "FILESYSTEM_DESTRUCTION", "swap creation command"),
+        (
+            r"dd\s+if=.*of=/dev/sd",
+            "FILESYSTEM_DESTRUCTION",
+            "dd write to block device",
+        ),
+        (
+            r"dd\s+if=/dev/(?:zero|random|urandom)",
+            "DATA_DESTRUCTION",
+            "data destruction via dd from /dev",
+        ),
+        (
+            r"chmod\s+.*777\s+/",
+            "PERMISSION_ESCALATION",
+            "world-writable root permission",
+        ),
+        (
+            r"chmod\s+-R\s+777",
+            "PERMISSION_ESCALATION",
+            "recursive world-writable permission",
+        ),
+        (
+            r">\s*/dev/sd[a-z]",
+            "BLOCK_DEVICE_WRITE",
+            "redirect to block device",
+        ),
+        (
+            r">>\s*/dev/sd[a-z]",
+            "BLOCK_DEVICE_WRITE",
+            "append to block device",
+        ),
+        (
+            r"(?:wget|curl).*\|\s*(?:sh|bash|dash)",
+            "REMOTE_EXECUTION",
+            "remote script piped to shell",
+        ),
+        (r"\(\)\s*\{.*:.*\|.*&.*\}", "FORK_BOMB", "fork bomb pattern"),
+        (r":\(\)\s*\{", "FORK_BOMB", "fork bomb variant"),
+    ];
+    patterns
+        .iter()
+        .filter_map(|(re, name, desc)| Regex::new(re).ok().map(|r| (r, *name, *desc)))
+        .collect()
+});
+
+/// Whether `shell` matches a blocking (E011) pattern, returning the
+/// category and description of the first match.
+pub fn shell_blocking_pattern(shell: &str) -> Option<(&'static str, &'static str)> {
+    BLOCKING_PATTERNS
+        .iter()
+        .find_map(|(re, category, description)| {
+            re.is_match(shell).then_some((*category, *description))
+        })
 }
 
 /// Perform best-practice linting on a workflow configuration.
@@ -1729,6 +1738,14 @@ pub fn diff_workflows(a: &WorkflowConfig, b: &WorkflowConfig) -> Vec<WorkflowDif
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shell_blocking_pattern_detects_e011_only() {
+        assert!(shell_blocking_pattern("rm -rf /").is_some());
+        assert!(shell_blocking_pattern("rm -rf ~").is_some());
+        assert!(shell_blocking_pattern("rm -rf safe_dir").is_none());
+        assert!(shell_blocking_pattern("echo hello").is_none());
+    }
+
     use super::*;
 
     fn sample_workflow() -> &'static str {
