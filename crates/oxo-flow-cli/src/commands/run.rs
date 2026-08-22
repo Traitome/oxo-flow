@@ -1815,6 +1815,9 @@ pub async fn run_command(
                 // A panicked task is an ENGINE fault, not a rule-level
                 // best-effort failure — always counts as required (the run
                 // fails), regardless of the rule's `required` flag.
+                // Its pool registration (if it was waiting) must not hold
+                // the FIFO line hostage — live waiters re-register.
+                executor.clear_resource_waiters().await;
                 fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 continue;
             }
@@ -1903,6 +1906,9 @@ pub async fn run_command(
             // Kill in-flight rule processes before cancelling their tasks —
             // `abort_all()` alone orphans the OS children, which keep
             // consuming the machine after the run exits (issue #131).
+            // Clear the pool's FIFO waiter queue first so cancelled waiters
+            // cannot hold the line hostage (issue #123 100% guarantee).
+            executor.clear_resource_waiters().await;
             for (rule_name, pid) in executor.active_pids() {
                 if let Err(e) = oxo_flow_core::executor::timeout::kill_process_tree(pid) {
                     tracing::warn!(

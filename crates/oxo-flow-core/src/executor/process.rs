@@ -880,8 +880,10 @@ impl LocalExecutor {
         loop {
             {
                 let mut pool = self.resource_pool.lock().await;
-                if pool.can_accommodate(rule, self.system_threads, self.system_memory_mb) {
-                    pool.reserve(rule, self.system_threads, self.system_memory_mb);
+                // FIFO-gated acquisition (issue #123 100% guarantee): the
+                // pool serves waiters strictly in arrival order, so a senior
+                // waiter can never be leapfrogged by fresh arrivals.
+                if pool.try_acquire_fair(rule, self.system_threads, self.system_memory_mb) {
                     let waited = wait_started.elapsed().as_secs();
                     if waited >= 60 {
                         tracing::info!(
@@ -905,6 +907,14 @@ impl LocalExecutor {
             // Resources busy — wait for a release notification.
             self.resource_notify.notified().await;
         }
+    }
+
+    /// Clears the pool's waiter queue (issue #131): the CLI abort path calls
+    /// this before cancelling in-flight tasks, so cancelled waiters' entries
+    /// cannot hold the FIFO line hostage. Live waiters re-register on their
+    /// next acquisition attempt.
+    pub async fn clear_resource_waiters(&self) {
+        self.resource_pool.lock().await.clear_waiters();
     }
 
     async fn release_resources(&self, rule: &Rule) {

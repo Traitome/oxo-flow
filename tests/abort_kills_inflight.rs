@@ -40,8 +40,8 @@ fn abort_kills_inflight_rule_processes() {
         .current_dir(dir.path())
         .output()
         .unwrap();
-    let run_log = fs::read_to_string(dir.path().join(".oxo-flow/logs/oxo-flow.log"))
-        .unwrap_or_default();
+    let run_log =
+        fs::read_to_string(dir.path().join(".oxo-flow/logs/oxo-flow.log")).unwrap_or_default();
     assert!(
         !run.status.success(),
         "the run must fail on 'bad':\n{}\n--- run log ---\n{}",
