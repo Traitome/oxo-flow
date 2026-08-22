@@ -28,7 +28,7 @@ fn abort_kills_inflight_rule_processes() {
     fs::write(
         &wf,
         "[workflow]\nname = \"abort\"\n\n\
-         [[rules]]\nname = \"bad\"\nshell = \"\"\"\nsleep 0.5\nexit 1\n\"\"\"\n\n\
+         [[rules]]\nname = \"bad\"\nshell = \"\"\"\nsleep 2\nexit 1\n\"\"\"\n\n\
          [[rules]]\nname = \"slow\"\noutput = [\"slow.pid\"]\nshell = \"\"\"\n\
          echo $$ > slow.pid\nsleep 30\n\"\"\"\n",
     )
