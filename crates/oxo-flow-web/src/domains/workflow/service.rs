@@ -173,7 +173,7 @@ pub fn validate_pipeline(
     }
     let config = WorkflowConfig::parse(toml_content).map_err(|e| format!("Parse: {e}"))?;
     let validation = oxo_flow_core::format::validate_format(&config);
-    let lints = oxo_flow_core::format::lint_format(&config);
+    let lints = oxo_flow_core::format::lint_format(&config, None);
 
     // Errors vs warnings stay separate (issue #81: lints previously
     // inflated the error count — the CLI keeps lint its own command).
@@ -307,7 +307,7 @@ pub fn format_workflow(toml_content: &str) -> Result<FormatResponse, String> {
 /// Lint pipeline TOML content and return diagnostics.
 pub fn lint_workflow(toml_content: &str) -> Result<ValidateResponse, String> {
     let config = WorkflowConfig::parse(toml_content).map_err(|e| format!("Parse: {e}"))?;
-    let diagnostics = oxo_flow_core::format::lint_format(&config);
+    let diagnostics = oxo_flow_core::format::lint_format(&config, None);
     Ok(ValidateResponse {
         valid: true,
         errors: vec![],
