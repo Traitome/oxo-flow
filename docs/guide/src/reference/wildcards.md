@@ -213,6 +213,7 @@ If a value discovered from the filesystem does not match its constraint, it is i
 When a rule is expanded from wildcards, its unique name in the DAG is modified to include the wildcard values to avoid collisions:
 
 - **Sample/group wildcards**: `align` → `align_control_S1` — one expanded rule per (group, sample) combination
+- **Group-less declared samples**: a flat sample list with no `[[sample_groups]]` collapses into a single implicit group named `samples`, so `align` → `align_samples_S1`. The same applies to `--samples` overrides of a workflow that declares no groups
 - **Pairs**: `mutect2` → `mutect2_CASE_001`
 
 ---

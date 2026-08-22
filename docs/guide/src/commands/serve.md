@@ -155,7 +155,23 @@ curl http://127.0.0.1:8080/api/health
 ```json
 {
   "status": "ok",
-  "version": "0.14.1"
+  "version": "0.14.1",
+  "mode": "personal",
+  "uptime_secs": 12,
+  "components": {
+    "database": { "status": "ok", "latency_ms": null },
+    "filesystem": { "status": "ok", "latency_ms": null },
+    "scheduler": null,
+    "ai_provider": null
+  },
+  "resources": { "cpu_pct": 0.0, "memory_used_pct": 0.0, "disk_used_pct": 0.0 },
+  "license": {
+    "license_type": "academic",
+    "valid": true,
+    "commercial_use": "requires_authorization",
+    "contact": "w_shixiang@163.com",
+    "message": "Free for academic use. Commercial use requires authorization."
+  }
 }
 ```
 

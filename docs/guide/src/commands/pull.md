@@ -2,8 +2,8 @@
 
 Fetch an oxo-flow workflow from a remote source. Two modes:
 
-- **Bundle mode** — download a published bundle, verify every file's SHA-256
-  checksum against its `manifest.json`, ready for `oxo-flow run --bundle`.
+- **Bundle mode** — download a published bundle, verify every
+  manifest-listed file's SHA-256 checksum, ready for `oxo-flow run --bundle`.
 - **Repository mode** — `git clone` a workflow repository directly. No
   packaging step is needed on the publishing side: anything that is a git
   repo with an `.oxoflow` file at its root works.

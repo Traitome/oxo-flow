@@ -184,6 +184,15 @@ pub struct CheckpointState {
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub rule_fingerprints: HashMap<String, String>,
+    /// Per-rule fingerprints with the input field EXCLUDED (issue #142 M1).
+    /// Distinguishes a genuine rule edit from a pure `--samples` selection
+    /// change: expand_inputs-over-injected-key rules bake the selection into
+    /// their input list, so the full fingerprint differs on every subset
+    /// run while this one stays identical. Absent for checkpoints written by
+    /// older binaries — those keep invalidating (safe default).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub rule_fingerprints_no_input: HashMap<String, String>,
     /// Per-rule input manifests at completion time (issue #72).
     /// Maps rule name → sorted list of (relative path, size, mtime) for every
     /// file the rule's inputs resolved to. A mismatch with the current file
@@ -244,6 +253,7 @@ impl CheckpointState {
             checksums: HashMap::new(),
             config_snapshot: HashMap::new(),
             rule_fingerprints: HashMap::new(),
+            rule_fingerprints_no_input: HashMap::new(),
             input_manifests: HashMap::new(),
             tombstones: HashMap::new(),
             reentries: Vec::new(),

@@ -46,7 +46,9 @@ Output paths are validated to prevent file system escape:
 |-------|----------|------------|
 | `..` in path | Blocked — prevents directory traversal | E009 |
 | Absolute paths outside workdir | Lint warning (W017); blocked at runtime when they escape the workdir | W017 |
-| Interpreter paths | Only simple names or paths under `/usr/bin`, `/usr/local/bin`, `/opt`, `/home`, `/Users` | Validation |
+| Interpreter paths | Only simple names or paths under `/usr/bin`, `/usr/local/bin`, `/opt`, `/home`, `/Users` | Run time (script execution) |
+
+Interpreter paths are enforced at **run time**, when a script rule's `interpreter` override is resolved (`validate_interpreter_path`): a rejected path is logged as a warning and the override is ignored, so the script runs without its declared interpreter. `validate` does not check interpreter paths.
 
 ---
 
@@ -69,7 +71,7 @@ Hardcoded credentials in workflow TOML content are detected by the `oxo-flow lin
 
 Secret values are **redacted** in findings — only the first and last 4 characters are shown.
 
-Additionally, workflow config values declared with `sensitive = true` in a `[config]` definition are masked as `****` in logs, `--help`, and error output.
+Additionally, workflow config values declared with `sensitive = true` in a `[config]` definition are masked as `***` in logs, `--help`, and error output.
 
 ---
 

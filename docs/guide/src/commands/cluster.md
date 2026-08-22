@@ -50,6 +50,7 @@ oxo-flow cluster <ACTION> [OPTIONS]
 | `--extra-arg` | — | — | Extra scheduler argument, passed through verbatim (repeatable) |
 | `--output` | `-o` | `cluster_scripts` | Directory for generated scripts |
 | `--target` | `-t` | — | Target rule(s) to execute |
+| `--module` | — | — | Run one include module plus the producers of its declared inputs (repeatable; unions with `--target`). Module names are the include's `name` field or its file stem |
 | `--with-dependencies` | — | — | Generate dependency-aware submit script with job chains |
 | `--dry-run` | — | — | Preview scripts without generating files |
 
@@ -171,12 +172,12 @@ scheduler's client commands on `PATH`.
 
 ```
 oxo-flow 0.14.1 — Bioinformatics Pipeline Engine
-Cluster: Generating slurm job scripts for 5 rules
+Cluster: Generating slurm job scripts for 5 rule instances
   ✓ cluster_scripts/fastqc.sh
   ✓ cluster_scripts/trim_reads.sh
-  ✓ cluster_scripts/bwa_align.sh
-  ✓ cluster_scripts/sort_bam.sh
-  ✓ cluster_scripts/call_variants.sh
+  ✓ cluster_scripts/bwa_align_S1.sh
+  ✓ cluster_scripts/bwa_align_S2.sh
+  ✓ cluster_scripts/bwa_align_S3.sh
 
 Done: 5 scripts written to cluster_scripts
   Submit with: sbatch cluster_scripts/*.sh
@@ -186,12 +187,12 @@ Done: 5 scripts written to cluster_scripts
 
 ```
 oxo-flow 0.14.1 — Bioinformatics Pipeline Engine
-Cluster: Generating slurm job scripts for 5 rules
+Cluster: Generating slurm job scripts for 5 rule instances
   ✓ cluster_scripts/fastqc.sh
   ✓ cluster_scripts/trim_reads.sh
-  ✓ cluster_scripts/bwa_align.sh
-  ✓ cluster_scripts/sort_bam.sh
-  ✓ cluster_scripts/call_variants.sh
+  ✓ cluster_scripts/bwa_align_S1.sh
+  ✓ cluster_scripts/bwa_align_S2.sh
+  ✓ cluster_scripts/bwa_align_S3.sh
   ✓ cluster_scripts/submit.sh (dependency-aware submit script)
 
 Done: 6 scripts written to cluster_scripts
@@ -204,7 +205,8 @@ Done: 6 scripts written to cluster_scripts
 
 For a workflow rule with conda environment, different backends produce different scripts
 (threads/memory come from the rule's resources; the `-q`/`-a` flags add queue/account
-directives; there is no walltime option):
+directives; `--walltime` — or a rule's `time_limit`, which wins — adds a time directive,
+`#SBATCH --time=` on SLURM and `walltime=` on PBS):
 
 ### SLURM Script
 

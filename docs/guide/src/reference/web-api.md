@@ -126,7 +126,7 @@ Upload a commercial license file for validation and activation.
 ### Users (admin)
 ```
 GET    /api/runs/{id}/preview   # Instance-level dry-run plan (will_run/will_skip + expanded rule instances)
-GET    /api/users          # List users (requires a valid session)
+GET    /api/users          # List users (admin only)
 POST   /api/users          # Create user
 DELETE /api/users/{id}     # Delete user
 ```

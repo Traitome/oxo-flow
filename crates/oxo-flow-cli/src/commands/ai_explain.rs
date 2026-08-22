@@ -325,13 +325,22 @@ pub async fn ai_explain_command(
 
     let provider = oxo_flow_ai::provider::create_provider_from_env();
     if matches!(provider, oxo_flow_ai::provider::AiProvider::Noop) {
-        anyhow::bail!(
-            "AI provider not configured — 'ai explain' needs a provider to write \
-             plain-language prose.\n\
-             Configure one with 'oxo-flow ai setup' (or OXO_FLOW_AI_PROVIDER + *_API_KEY).\n\
-             Offline alternatives: 'oxo-flow graph' (DAG view) and \
-             'oxo-flow dry-run' (what will execute)."
-        );
+        // Degraded mode (issue #142 M10): the model is optional — the
+        // deterministic grounding layers are still useful on their own.
+        // `OXO_FLOW_AI_PROVIDER=disabled` explicitly opts into exactly
+        // this offline path; an unconfigured provider gets the same
+        // skeleton plus configuration guidance.
+        let note = if std::env::var("OXO_FLOW_AI_PROVIDER")
+            .is_ok_and(|v| v.eq_ignore_ascii_case("disabled"))
+        {
+            "AI provider disabled via OXO_FLOW_AI_PROVIDER=disabled — emitting the \
+             deterministic explanation skeleton without model prose."
+        } else {
+            "AI provider not configured — emitting the deterministic explanation \
+             skeleton without model prose. Configure one with 'oxo-flow ai setup' \
+             (or OXO_FLOW_AI_PROVIDER + *_API_KEY) to add prose."
+        };
+        return emit_degraded_explanation(&plan, workflow, level, json, note).await;
     }
 
     // In --json mode stdout carries ONLY the JSON document (machine
@@ -371,9 +380,19 @@ pub async fn ai_explain_command(
     } else {
         println!("  {}", "Explaining...".bold().cyan());
     }
-    let response = provider
-        .chat_with_tools_overflow_safe(&messages, &[])
-        .await?;
+    let response = match provider.chat_with_tools_overflow_safe(&messages, &[]).await {
+        Ok(response) => response,
+        // Provider errors (auth, network) degrade to the deterministic
+        // skeleton instead of hard-failing the command (issue #142 M10).
+        Err(e) => {
+            let note = format!(
+                "AI provider call failed ({e}) — emitting the deterministic explanation \
+                 skeleton without model prose."
+            );
+            session.complete_quiet(0.0);
+            return emit_degraded_explanation(&plan, workflow, level, json, &note).await;
+        }
+    };
     session.record_usage(&response.usage);
     let mut text = response.content.unwrap_or_default();
 
@@ -390,10 +409,16 @@ pub async fn ai_explain_command(
                 "Your response was not valid JSON matching the template. \
                  Reply with ONLY the JSON object, no other text.",
             ));
-            let retry = provider.chat_with_tools(&messages, &[]).await?;
-            session.record_usage(&retry.usage);
-            text = retry.content.unwrap_or_default();
-            explanation = parse_ai_explanation(&text);
+            // A failed retry falls into the same skeleton fallback below —
+            // the command degrades, it does not hard-fail (issue #142 M10).
+            match provider.chat_with_tools(&messages, &[]).await {
+                Ok(retry) => {
+                    session.record_usage(&retry.usage);
+                    text = retry.content.unwrap_or_default();
+                    explanation = parse_ai_explanation(&text);
+                }
+                Err(e) => eprintln!("  {} AI retry failed: {e}", "⚠".yellow()),
+            }
         }
         match explanation {
             Some(ai) => merge_explanation(&mut plan, &ai),
@@ -486,6 +511,109 @@ fn explain_json(
         }),
     );
     output
+}
+
+// ── Degraded mode (no model) ───────────────────────────────────────────────
+
+/// Emit the explanation WITHOUT model prose: the deterministic grounding
+/// layers (plan facts, knowledge-base refs, scientific findings) that the
+/// three-layer explain computes before any provider call.
+///
+/// The degraded path is a first-class output, not an error (issue #142
+/// M10): it is what `OXO_FLOW_AI_PROVIDER=disabled` explicitly requests,
+/// and what a failed provider call (auth/network) falls back to — the
+/// command exits 0 so scripts can rely on the skeleton being present.
+async fn emit_degraded_explanation(
+    plan: &ExplainPlan,
+    workflow: &Path,
+    level: ExplainLevel,
+    json: bool,
+    note: &str,
+) -> Result<()> {
+    use colored::Colorize;
+
+    if json {
+        // stdout carries ONLY the JSON document (machine-output
+        // convention); the note goes to stderr.
+        eprintln!("  {} {note}", "⚠".yellow());
+        let output = explain_json(plan, workflow, level, None);
+        println!("\n{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        eprintln!("\n  {} {note}", "⚠".yellow());
+        print_plan_skeleton(plan);
+    }
+
+    // The deterministic findings are always surfaced — with or without a
+    // model, they cannot be dropped (mirrors the happy path).
+    if !plan.warnings.is_empty() {
+        eprintln!("\n{}", "Scientific findings (verified):".bold().yellow());
+        for warning in &plan.warnings {
+            eprintln!(
+                "  ⚠ [{}] {}: {}",
+                warning.code, warning.rule, warning.message
+            );
+            eprintln!("    {} {}", "→".bold(), warning.suggestion);
+        }
+    }
+
+    if json {
+        eprintln!(
+            "  {} run with a configured provider to add plain-language prose",
+            "Hint:".bold().cyan()
+        );
+    } else {
+        println!(
+            "\n{} Run with a configured provider to add plain-language prose.",
+            "Hint:".bold().cyan()
+        );
+    }
+    Ok(())
+}
+
+/// Human-readable rendering of the deterministic skeleton (no prose) —
+/// the facts the model would have wrapped in prose.
+fn print_plan_skeleton(plan: &ExplainPlan) {
+    use colored::Colorize;
+
+    println!(
+        "\n{} {}",
+        plan.workflow_name.bold(),
+        "(deterministic skeleton)".dimmed()
+    );
+    println!("  version: {}", plan.workflow_version);
+    if let Some(ref desc) = plan.workflow_description {
+        println!("  {desc}");
+    }
+    let domains = if plan.domains.is_empty() {
+        String::new()
+    } else {
+        format!(", domains: {}", plan.domains.join(", "))
+    };
+    println!("  {} rule(s){domains}", plan.rule_count);
+    println!("  entry rules: {}", plan.entry_rules.join(", "));
+    println!("  final rules: {}", plan.final_rules.join(", "));
+    for step in &plan.steps {
+        println!();
+        println!("  {}. {}", step.order, step.name.bold());
+        if let Some(ref desc) = step.description {
+            println!("     {desc}");
+        }
+        if !step.tools.is_empty() {
+            println!("     tools: {}", step.tools.join(", "));
+        }
+        if !step.inputs.is_empty() {
+            println!("     inputs: {}", step.inputs.join(", "));
+        }
+        if !step.outputs.is_empty() {
+            println!("     outputs: {}", step.outputs.join(", "));
+        }
+        if let Some(threads) = step.threads {
+            println!("     threads: {threads}");
+        }
+        if let Some(memory) = &step.memory {
+            println!("     memory: {memory}");
+        }
+    }
 }
 
 // ── AI prose layer ─────────────────────────────────────────────────────────

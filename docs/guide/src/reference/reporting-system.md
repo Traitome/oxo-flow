@@ -201,8 +201,14 @@ sections = ["universal", "workflow-info", "commands", "failure-diagnosis"]
 `[report].sections` filters which sections are included, by generator
 name. Available names: `universal`, `execution-status`,
 `failure-diagnosis`, `clinical-compliance`, `workflow-info`, `commands`,
-`file-manifest`, `environment`, `provenance`, `task-summary` — enumerable
-at runtime with `oxo-flow report WF --list-sections`.
+`file-manifest`, `environment`, `metrics`, `sample-matrix`, `provenance`,
+`task-summary` — enumerable at runtime with
+`oxo-flow report WF --list-sections`.
+
+The filter name is the generator name; the rendered HTML id can differ —
+the `universal` generator renders the `dashboard` section, and
+`execution-status` renders both `execution-status` and `benchmarks`.
+Filters and rendered ids are distinct namespaces.
 
 ### Templates
 
