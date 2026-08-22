@@ -353,18 +353,25 @@ high-priority side re-occupying the slots (e.g. merges at priority 20
 failing on missing inputs while the dumps that produce those inputs starve
 at priority 10).
 
-Two engine mechanisms address this:
+Three engine mechanisms address this — together they make priority
+starvation **impossible**, not merely unlikely:
 
-1. **Fair dispatch prevents it.** The scheduler caps each round's
-   submissions to the free `-j` slots and applies **priority aging**:
-   every round a ready rule is passed over, its effective priority gains
-   +1 (`effective = declared + rounds waited`). Starved producers
-   therefore outrank the higher-priority rules occupying the slots after
-   `priority gap` rounds — no manual priority rebalancing needed.
-2. **The wait is visible.** Since a waiting rule holds nothing
-   (reservations are atomic), true deadlock cycles cannot form — the
-   failure mode is livelock/starvation. After 60 seconds of waiting, the
-   run log emits, for each waiting rule:
+1. **Fair dispatch.** The scheduler caps each round's submissions to the
+   free `-j` slots and applies **priority aging**: every round a ready
+   rule is passed over, its effective priority gains +1 (`effective =
+   declared + rounds waited`). A starved producer therefore outranks
+   fresh high-priority rules after `priority gap` rounds.
+2. **FIFO resource acquisition (the guarantee).** Inside the resource
+   pool, capacity is granted strictly in arrival order: the oldest
+   waiter is served first, everyone else holds the line. The guarantee
+   is inductive — free capacity only grows while waiters stand (holders
+   always release), so the head eventually fits and the line drains. No
+   later arrival can ever leapfrog a senior waiter, and a waiting rule
+   holds nothing (reservations are atomic), so wait-for cycles cannot
+   form: **a ready rule always runs, in a bounded time, no matter the
+   priority pattern.**
+3. **The wait is visible.** After 60 seconds of waiting, the run log
+   emits, for each waiting rule:
 
 ```
 waiting for resources: group 'limit_merge': need 1, have 0 held by [merge_R1_data, merge_R2_data]; top thread holders: [...]

@@ -565,6 +565,11 @@ pub struct ResourcePool {
     /// A waiting rule holds nothing (reservations are atomic), so this map
     /// never contains waiters; it is the holders-only side of the picture.
     pub active: HashMap<String, ActiveReservation>,
+    /// Waiting rules in arrival order (issue #123, the 100% guarantee).
+    /// Acquisition is FIFO-gated on this queue: fresh arrivals can never
+    /// leapfrog a senior waiter, so priority-inversion starvation is
+    /// impossible, not merely unlikely.
+    pub waiters: std::collections::VecDeque<String>,
 }
 
 impl ResourcePool {
@@ -575,6 +580,7 @@ impl ResourcePool {
             memory_mb,
             groups: HashMap::new(),
             active: HashMap::new(),
+            waiters: std::collections::VecDeque::new(),
         }
     }
 
@@ -604,6 +610,40 @@ impl ResourcePool {
         }
 
         true
+    }
+
+    /// FIFO-gated acquisition (issue #123, the 100% guarantee): a rule may
+    /// reserve only when it is the OLDEST waiter. Fresh arrivals can never
+    /// leapfrog a senior waiter, so starvation by priority inversion is
+    /// impossible, not merely unlikely. Callers loop: `false` = registered
+    /// (or already registered) as a waiter, wait for the next release
+    /// notification and try again.
+    ///
+    /// Head-of-line semantics: when the oldest waiter cannot fit yet,
+    /// everyone behind it waits too. That can idle capacity briefly, but it
+    /// is the price of the guarantee — and it cannot deadlock: free capacity
+    /// only grows while waiters stand (holders always release), so the head
+    /// eventually fits and the line drains by induction.
+    pub fn try_acquire_fair(&mut self, rule: &Rule, max_threads: u32, max_memory_mb: u64) -> bool {
+        // An EMPTY queue means no one is ahead: the fast path for
+        // uncontended rules (and survivors after a clear).
+        let is_head = self.waiters.front().is_none_or(|head| head == &rule.name);
+        if is_head && self.can_accommodate(rule, max_threads, max_memory_mb) {
+            self.waiters.pop_front();
+            self.reserve(rule, max_threads, max_memory_mb);
+            return true;
+        }
+        if !self.waiters.iter().any(|w| w == &rule.name) {
+            self.waiters.push_back(rule.name.clone());
+        }
+        false
+    }
+
+    /// Drops every waiter entry — the CLI abort path clears cancelled
+    /// in-flight tasks so their registrations never hold the queue hostage
+    /// (issue #131 interplay). Live waiters re-register on their next try.
+    pub fn clear_waiters(&mut self) {
+        self.waiters.clear();
     }
 
     /// Reserve resources for a rule (clamped to the pool's total capacity).
@@ -1295,6 +1335,132 @@ mod tests {
         );
         assert!(!pool.active.contains_key("merge_a"));
         assert_eq!(pool.groups["limit_merge"], 2);
+    }
+
+    #[test]
+    fn fair_acquire_prevents_fresh_arrivals_leapfrogging_a_senior_waiter() {
+        // The 100% guarantee (issue #123): a senior waiter must be served
+        // before any LATER arrival, even when the later arrival wakes first.
+        let mut pool = ResourcePool::new(16, 32768);
+        pool.set_groups([("limit".to_string(), 1)].into_iter().collect());
+        let senior = rule_with_group("dump", "limit", 1);
+        let fresh = rule_with_group("merge", "limit", 1);
+        let holder = rule_with_group("holder", "limit", 1);
+
+        // Holder occupies the single slot; senior registers first.
+        pool.reserve(&holder, 16, 32768);
+        assert!(
+            !pool.try_acquire_fair(&senior, 16, 32768),
+            "senior must wait"
+        );
+        // Fresh arrival tries (and would win the free-for-all race) —
+        // must NOT acquire ahead of the senior.
+        assert!(!pool.try_acquire_fair(&fresh, 16, 32768), "fresh must wait");
+
+        // Holder releases. Simulate the adversarial wake order: FRESH wakes
+        // and tries first. FIFO must refuse it.
+        pool.release(
+            &holder,
+            16,
+            32768,
+            &[("limit".to_string(), 1)].into_iter().collect(),
+        );
+        assert!(
+            !pool.try_acquire_fair(&fresh, 16, 32768),
+            "fresh arrival must not leapfrog the senior waiter"
+        );
+        assert!(
+            pool.try_acquire_fair(&senior, 16, 32768),
+            "the senior waiter must acquire first"
+        );
+        // After the senior releases, the fresh arrival gets its turn.
+        pool.release(
+            &senior,
+            16,
+            32768,
+            &[("limit".to_string(), 1)].into_iter().collect(),
+        );
+        assert!(
+            pool.try_acquire_fair(&fresh, 16, 32768),
+            "fresh must be served next"
+        );
+    }
+
+    #[test]
+    fn fair_acquire_holds_the_line_behind_an_incompatible_head() {
+        // Head-of-line blocking is the price of the guarantee: a waiter that
+        // cannot fit yet parks everyone behind it (free capacity is monotone
+        // while waiters stand, so the head eventually fits — no deadlock).
+        let mut pool = ResourcePool::new(8, 32768);
+        let head = Rule {
+            name: "big".to_string(),
+            resources: crate::rule::Resources {
+                threads: 8,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let behind = Rule {
+            name: "small".to_string(),
+            resources: crate::rule::Resources {
+                threads: 2,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let holder = Rule {
+            name: "holder".to_string(),
+            resources: crate::rule::Resources {
+                threads: 4,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        pool.reserve(&holder, 8, 32768); // free = 4
+        assert!(!pool.try_acquire_fair(&head, 8, 32768)); // needs 8, waits (head)
+        assert!(
+            !pool.try_acquire_fair(&behind, 8, 32768),
+            "a waiter behind an incompatible head must hold the line"
+        );
+
+        // Holder releases → free = 8 → the head fits and is served first.
+        pool.release(&holder, 8, 32768, &HashMap::new());
+        assert!(
+            pool.try_acquire_fair(&head, 8, 32768),
+            "head must fit after release"
+        );
+        pool.release(&head, 8, 32768, &HashMap::new());
+        assert!(
+            pool.try_acquire_fair(&behind, 8, 32768),
+            "the line must drain"
+        );
+    }
+
+    #[test]
+    fn clear_waiters_removes_stale_entries_from_cancelled_tasks() {
+        // The CLI abort path cancels in-flight tasks; their waiter entries
+        // must not hold the queue hostage (issue #131 interplay).
+        let mut pool = ResourcePool::new(16, 32768);
+        pool.set_groups([("limit".to_string(), 1)].into_iter().collect());
+        let stale = rule_with_group("cancelled", "limit", 1);
+        let holder = rule_with_group("holder", "limit", 1);
+
+        pool.reserve(&holder, 16, 32768);
+        assert!(!pool.try_acquire_fair(&stale, 16, 32768));
+        pool.clear_waiters();
+
+        let survivor = rule_with_group("survivor", "limit", 1);
+        pool.release(
+            &holder,
+            16,
+            32768,
+            &[("limit".to_string(), 1)].into_iter().collect(),
+        );
+        assert!(
+            pool.try_acquire_fair(&survivor, 16, 32768),
+            "a cleared queue must let fresh rules acquire immediately"
+        );
     }
 
     #[test]
