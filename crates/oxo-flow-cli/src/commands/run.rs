@@ -2774,24 +2774,6 @@ fn source_content_sig(path: &std::path::Path) -> Option<String> {
     Some(sig)
 }
 
-/// Free disk space in KiB on the filesystem holding `path`, read from
-/// `df -Pk` (the portable POSIX form; parses the Available column of the
-/// mount line). `None` when df is unavailable or the output is unparsable —
-/// the pre-flight degrades to no check rather than blocking the run.
-fn free_kilobytes(path: &std::path::Path) -> Option<u64> {
-    let out = std::process::Command::new("df")
-        .args(["-Pk", path.to_str()?])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    // The last line is the mount that actually holds the path.
-    let line = stdout.lines().next_back()?;
-    line.split_whitespace().nth(3)?.parse().ok()
-}
-
 /// Sorts the scheduler's ready list by effective priority: declared priority
 /// plus rounds already waited (the aging counter of issue #123), ties broken
 /// by name. Pure and unit-tested — the dispatch loop feeds it the live ready
