@@ -504,6 +504,7 @@ impl ClusterProfile {
             account,
             walltime,
             max_submitted,
+            max_array_size,
             poll_interval
         );
         // Arrays replace wholesale in override mode, matching how
@@ -3519,6 +3520,12 @@ impl WorkflowConfig {
                         input: rule.input.clone(),
                         output: vec![chunk_output].into(),
                         shell: Some(map_shell),
+                        // Inherit the parent's required semantics (issue
+                        // #142 H5): Rule's plain Default makes bools false
+                        // while serde defaults `required` to true — an
+                        // engine-generated chunk must not silently become
+                        // best-effort.
+                        required: rule.required,
 
                         threads: rule.threads,
                         memory: rule.memory.clone(),
@@ -3589,6 +3596,7 @@ impl WorkflowConfig {
                         input: FilePatterns::List(all_chunk_outputs.clone()),
                         output: rule.output.clone(),
                         shell: Some(combine_shell),
+                        required: rule.required,
                         cleanup_chunks: transform.cleanup,
                         threads: rule.threads,
                         memory: rule.memory.clone(),
@@ -7393,6 +7401,131 @@ shell = "true"
         assert_eq!(config.config["threads"].as_str(), Some("32"));
         assert_eq!(config.config["scheduler"].as_str(), Some("slurm"));
         assert_eq!(config.config["genome"].as_str(), Some("hg38"));
+    }
+
+    #[test]
+    fn cluster_profile_merge_carries_max_array_size() {
+        // M4 (#142): profile-level max_array_size was silently dropped by
+        // merge_from — the driver always fell back to its default chunking.
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+            profile_mode = "override"
+
+            [cluster]
+            backend = "slurm"
+            max_array_size = 25
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        let profile: toml::Value = toml::from_str(
+            r#"
+            [cluster]
+            max_array_size = 50
+            poll_interval = "10s"
+            "#,
+        )
+        .unwrap();
+        config.merge_profile(&profile).unwrap();
+        let cluster = config.cluster.as_ref().expect("cluster block present");
+        assert_eq!(
+            cluster.max_array_size,
+            Some(50),
+            "override mode must replace"
+        );
+        assert_eq!(cluster.poll_interval.as_deref(), Some("10s"));
+        assert_eq!(
+            cluster.backend.as_deref(),
+            Some("slurm"),
+            "other keys intact"
+        );
+    }
+
+    #[test]
+    fn cluster_profile_merge_fill_mode_keeps_own_max_array_size() {
+        // Fill mode (default): a profile value must not clobber a value the
+        // workflow already declares.
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [cluster]
+            backend = "slurm"
+            max_array_size = 25
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        let profile: toml::Value = toml::from_str(
+            r#"
+            [cluster]
+            max_array_size = 50
+            "#,
+        )
+        .unwrap();
+        config.merge_profile(&profile).unwrap();
+        let cluster = config.cluster.as_ref().expect("cluster block present");
+        assert_eq!(
+            cluster.max_array_size,
+            Some(25),
+            "fill mode keeps the workflow's own value"
+        );
+    }
+
+    #[test]
+    #[test]
+    fn transform_chunks_inherit_required_from_the_parent_rule() {
+        // H5 (#142): engine-generated map/combine chunk rules were built
+        // with Rule::default() — bools false — so a required=true transform
+        // produced best-effort chunks whose failure exited 0. The serde
+        // default for `required` is true; the plain Default is false.
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "t"
+            required = false
+            output = ["combined.txt"]
+            transform = { split = { by = "part", values = ["a", "b"] },
+                          map = "echo {part} > chunk",
+                          combine = { shell = "cat {chunks} > {output}" } }
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        for name in ["t_a", "t_b", "t_combine"] {
+            let r = config
+                .get_rule(name)
+                .unwrap_or_else(|| panic!("{name} generated"));
+            assert!(!r.required, "{name} must inherit required=false");
+        }
+    }
+
+    #[test]
+    fn transform_chunks_default_to_required_like_the_parent() {
+        // Default parent (serde: required=true) → chunks must be required.
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "t"
+            output = ["combined.txt"]
+            transform = { split = { by = "part", values = ["a", "b"] },
+                          map = "echo {part} > chunk",
+                          combine = { shell = "cat {chunks} > {output}" } }
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        for name in ["t_a", "t_b", "t_combine"] {
+            let r = config
+                .get_rule(name)
+                .unwrap_or_else(|| panic!("{name} generated"));
+            assert!(r.required, "{name} must inherit required=true");
+        }
     }
 
     #[test]

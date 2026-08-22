@@ -207,6 +207,33 @@ pub fn generate_array_submit_script(
     // contains shell metacharacters.
     lines.push(format!("sh \"{cmd_dir}/cmd.${{INDEX}}.sh\""));
 
+    // Per-element logs (issue #142 M5): a shared output/error path would
+    // interleave every element's output into one file. SLURM interpolates
+    // %A (job id) + %a (array index) in the directive; LSF uses %I. PBS and
+    // SGE append per-subjob suffixes themselves, so their directives stay
+    // unchanged.
+    match backend {
+        ClusterBackend::Slurm => {
+            for line in lines.iter_mut() {
+                if line.starts_with("#SBATCH --output=") {
+                    *line = format!("#SBATCH --output=logs/{}.%A_%a.out", rule.name);
+                } else if line.starts_with("#SBATCH --error=") {
+                    *line = format!("#SBATCH --error=logs/{}.%A_%a.err", rule.name);
+                }
+            }
+        }
+        ClusterBackend::Lsf => {
+            for line in lines.iter_mut() {
+                if line.starts_with("#BSUB -o ") {
+                    *line = format!("#BSUB -o logs/{}.%I.out", rule.name);
+                } else if line.starts_with("#BSUB -e ") {
+                    *line = format!("#BSUB -e logs/{}.%I.err", rule.name);
+                }
+            }
+        }
+        _ => {}
+    }
+
     lines.join("\n")
 }
 
@@ -614,6 +641,27 @@ mod tests {
         );
         assert!(script.contains("SLURM_ARRAY_TASK_ID"), "{script}");
         assert!(script.contains("/run/jobs/align/cmd."), "{script}");
+        // Per-element logs (issue #142 M5): shared output paths would
+        // interleave every element's output into one file.
+        assert!(
+            script.contains("#SBATCH --output=logs/align.%A_%a.out"),
+            "{script}"
+        );
+        assert!(
+            script.contains("#SBATCH --error=logs/align.%A_%a.err"),
+            "{script}"
+        );
+
+        // LSF interpolates %I for per-element logs (issue #142 M5).
+        let lsf = generate_array_submit_script(
+            &ClusterBackend::Lsf,
+            &rule,
+            "/run/jobs/align",
+            3,
+            &config,
+        );
+        assert!(lsf.contains("#BSUB -o logs/align.%I.out"), "{lsf}");
+        assert!(lsf.contains("#BSUB -e logs/align.%I.err"), "{lsf}");
 
         // Other backends use their own range syntax + task variable.
         for (backend, range, var) in [
