@@ -586,9 +586,21 @@ mod tests {
         let fixture = "../../examples/gallery/05_conda_environments.oxoflow";
         let meta = meta(fixture, fixture);
         assert_eq!(meta["git_sha"].as_str().map(|s| !s.is_empty()), Some(true));
+        // git_remote is only derivable when the repository has an origin
+        // remote — the key is omitted otherwise (the catalog contract).
+        // Assert presence ONLY when this checkout actually has an origin,
+        // so tarball / --no-remote / mirror checkouts don't fail the test
+        // (issue #136 finding 29: the old unconditional assertion was
+        // environment-coupled).
+        let has_origin = std::process::Command::new("git")
+            .args(["remote", "get-url", "origin"])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
         assert_eq!(
             meta["git_remote"].as_str().map(|s| !s.is_empty()),
-            Some(true)
+            has_origin.then_some(true)
         );
         assert_eq!(
             meta["git_describe"].as_str().map(|s| !s.is_empty()),
