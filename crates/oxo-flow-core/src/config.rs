@@ -7472,7 +7472,6 @@ shell = "true"
     }
 
     #[test]
-    #[test]
     fn transform_chunks_inherit_required_from_the_parent_rule() {
         // H5 (#142): engine-generated map/combine chunk rules were built
         // with Rule::default() — bools false — so a required=true transform
