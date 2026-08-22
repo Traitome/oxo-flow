@@ -218,6 +218,11 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
+    /// `activate_run_log` arms a PROCESS-GLOBAL slot; tests that arm it
+    /// must not interleave with each other (a parallel sibling deactivating
+    /// the slot mid-assertion was a recurring full-suite flake).
+    static GLOBAL_STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("oxo-runlog-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -263,6 +268,7 @@ mod tests {
 
     #[test]
     fn activate_creates_parent_dirs_and_writes_header() {
+        let _guard = GLOBAL_STATE_LOCK.lock().unwrap();
         let dir = scratch("activate");
         let log = dir.join("nested/.oxo-flow/logs/oxo-flow.log");
         let mut guard = activate_run_log(&log, "run header\nsecond line\n").unwrap();
@@ -283,6 +289,7 @@ mod tests {
 
     #[test]
     fn tee_strips_ansi_codes_from_file_writes() {
+        let _guard = GLOBAL_STATE_LOCK.lock().unwrap();
         let dir = scratch("ansi");
         let log = dir.join("run.log");
         let _guard = activate_run_log(&log, "").unwrap();
@@ -305,6 +312,7 @@ mod tests {
 
     #[test]
     fn activate_replaces_previous_run_log_after_rotation() {
+        let _guard = GLOBAL_STATE_LOCK.lock().unwrap();
         let dir = scratch("replace");
         let base = dir.join("oxo-flow.log");
         fs::write(&base, "old run").unwrap();
