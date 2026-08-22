@@ -114,6 +114,27 @@ impl BackendDriver {
         Self { backend, config }
     }
 
+    /// Fair-dispatch ordering (issue #134): the cluster counterpart of the
+    /// local priority aging — ready rules are sorted by effective priority
+    /// (declared + rounds waited, ties by name), so fresh high-priority
+    /// arrivals cannot starve a producer parked at the submission cap.
+    /// The caller ages the tail that is NOT submitted this round.
+    fn aged_ready_order(
+        ready: Vec<String>,
+        plan: &ScheduledPlan,
+        waited: &HashMap<String, i32>,
+    ) -> Vec<String> {
+        let mut ready = ready;
+        ready.sort_by(|a, b| {
+            let pa = plan.rules.get(a).map(|sr| sr.rule.priority).unwrap_or(0)
+                + waited.get(a).copied().unwrap_or(0);
+            let pb = plan.rules.get(b).map(|sr| sr.rule.priority).unwrap_or(0)
+                + waited.get(b).copied().unwrap_or(0);
+            pb.cmp(&pa).then_with(|| a.cmp(b))
+        });
+        ready
+    }
+
     /// Cancel every job in `jobs` (`(job_id, rule_name)` pairs), ignoring
     /// per-job errors — best effort on error paths.
     pub async fn cancel_inflight(&self, jobs: &[(String, String)]) -> Result<()> {
@@ -151,6 +172,9 @@ impl BackendDriver {
         let mut done: HashMap<String, JobStatus> = HashMap::new();
         let mut inflight: HashMap<String, InFlight> = HashMap::new();
         let mut to_run_set: HashSet<String> = to_run.clone();
+        // Priority aging (issue #134): each round a ready rule spends
+        // beyond the cap adds +1 to its effective priority.
+        let mut waited_rounds: HashMap<String, i32> = HashMap::new();
 
         loop {
             // 1. Failure propagation: pending rules blocked by a failed dep.
@@ -197,10 +221,29 @@ impl BackendDriver {
                 }
             }
 
-            // 2. Submit a wave of ready rules up to the in-flight cap.
+            // 2. Submit a wave of ready rules up to the in-flight cap,
+            // ordered by effective priority (aging, issue #134); the tail
+            // passed over this round ages +1.
             let mut submitted_this_round = 0usize;
             if inflight.len() < self.config.max_submitted {
-                for name in plan.order.clone() {
+                let ready_now: Vec<String> = plan
+                    .order
+                    .iter()
+                    .filter(|n| {
+                        to_run_set.contains(*n)
+                            && !done.contains_key(*n)
+                            && !inflight.values().any(|f| f.rule == **n)
+                            && deps_ok(n, &done, &to_run_set, plan)
+                    })
+                    .cloned()
+                    .collect();
+                let ordered = Self::aged_ready_order(ready_now, plan, &waited_rounds);
+                let available = self.config.max_submitted.saturating_sub(inflight.len());
+                let to_submit: Vec<String> = ordered.iter().take(available).cloned().collect();
+                for name in ordered.iter().skip(available) {
+                    *waited_rounds.entry(name.clone()).or_insert(0) += 1;
+                }
+                for name in to_submit {
                     if inflight.len() >= self.config.max_submitted {
                         break;
                     }
@@ -778,6 +821,55 @@ mod tests {
             walltime: None,
             extra_args: vec![],
         }
+    }
+
+    /// A plan with declared priorities and no dependencies (all ready).
+    fn priority_plan(workdir: &Path, rules: &[(&str, i32)]) -> ScheduledPlan {
+        let mut toml = String::from("[workflow]\nname = \"prio\"\n");
+        for (name, priority) in rules {
+            toml.push_str(&format!(
+                "[[rules]]\nname = \"{name}\"\npriority = {priority}\n\
+                 shell = \"true\"\noutput = [\"{name}.txt\"]\n"
+            ));
+        }
+        let config: WorkflowConfig = toml::from_str(&toml).unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        let resolver = EnvironmentResolver::with_cache_dir(&workdir.join(".oxo-flow/env-cache"));
+        ScheduledPlan::build(&config, &dag, workdir, &resolver, &HashMap::new()).unwrap()
+    }
+
+    #[test]
+    fn aged_ready_order_sorts_by_declared_priority_then_name() {
+        let workdir = setup().workdir;
+        let plan = priority_plan(
+            workdir.path(),
+            &[("high", 20), ("low", 10), ("mid_a", 15), ("mid_b", 15)],
+        );
+        let waited = HashMap::new();
+        let ready = plan.order.clone();
+        let ordered = BackendDriver::aged_ready_order(ready, &plan, &waited);
+        assert_eq!(ordered, vec!["high", "mid_a", "mid_b", "low"]);
+    }
+
+    #[test]
+    fn aged_ready_order_aged_rule_overtakes_higher_declared_priority() {
+        // The cluster counterpart of the local aging guarantee (issue #134):
+        // a producer passed over at the cap must eventually outrank fresh
+        // high-priority rules — priority alone must never starve it forever.
+        let workdir = setup().workdir;
+        let plan = priority_plan(workdir.path(), &[("merge", 20), ("dump", 10)]);
+        let waited = [("dump".to_string(), 15)].into_iter().collect();
+        let ordered = BackendDriver::aged_ready_order(plan.order.clone(), &plan, &waited);
+        assert_eq!(ordered, vec!["dump", "merge"]);
+    }
+
+    #[test]
+    fn aged_ready_order_treats_missing_priority_and_waits_as_zero() {
+        let workdir = setup().workdir;
+        let plan = priority_plan(workdir.path(), &[("z", 0), ("a", 0)]);
+        let waited = HashMap::new();
+        let ordered = BackendDriver::aged_ready_order(plan.order.clone(), &plan, &waited);
+        assert_eq!(ordered, vec!["a", "z"]);
     }
 
     /// Build a plan for a chain workflow: rule N+1 consumes rule N's output
