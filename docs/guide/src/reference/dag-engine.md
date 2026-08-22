@@ -330,7 +330,7 @@ Resolve by giving each rule distinct output paths (e.g., `caller_a/{sample}.vcf`
 | `Duplicate rule name` | Two rules share the same `name` field | Rename one rule; use `namespace` with `[[include]]` to avoid conflicts |
 | `Rule not found: 'name'` | `-t` target references a non-existent rule | Check spelling; try prefix matching (`-t al` may match `align`); use `oxo-flow graph` to list all rule names (unknown `depends_on` references are caught by `oxo-flow validate`) |
 | `resource budget too small for N rule(s)` | A rule's request exceeds an explicit `--max-threads`/`--max-memory` budget | Increase the budget, lower the rule's declaration, or drop the flag (auto-detected capacity is soft — over-capacity rules are clamped and run alone) |
-| `resource group 'x' exhausted` | A rule's group requirement exceeds the declared `[resource_groups]` capacity | Raise the declared capacity or lower the rule's group requirement |
+| `resource exhausted: rule 'x' requires N of resource group 'g' (declared capacity: M)` | A rule's group requirement exceeds the declared `[resource_groups]` capacity | Raise the declared capacity or lower the rule's group requirement |
 
 ---
 
@@ -356,11 +356,16 @@ at priority 10).
 Three engine mechanisms address this — together they make priority
 starvation **impossible**, not merely unlikely:
 
-1. **Fair dispatch.** The scheduler caps each round's submissions to the
-   free `-j` slots and applies **priority aging**: every round a ready
-   rule is passed over, its effective priority gains +1 (`effective =
-   declared + rounds waited`). A starved producer therefore outranks
-   fresh high-priority rules after `priority gap` rounds.
+1. **Fair dispatch (the backlog).** The run loop caps each round's
+   submissions to the free `-j` slots and applies **priority aging** to
+   the ready rules it passes over: every round a ready rule left
+   unsubmitted by the cap gains +1 to its effective priority
+   (`effective = declared + rounds waited`). A starved producer in the
+   backlog therefore outranks fresh high-priority rules after `priority
+   gap` rounds. Aging acts only on the dispatch backlog — a rule
+   already handed to the executor is out of the ready list and never
+   ages; its wait happens inside the resource pool, which FIFO
+   acquisition (next) settles.
 2. **FIFO resource acquisition (the guarantee).** Inside the resource
    pool, capacity is granted strictly in arrival order: the oldest
    waiter is served first, everyone else holds the line. The guarantee
@@ -380,7 +385,7 @@ waiting for resources: group 'limit_merge': need 1, have 0 held by [merge_R1_dat
 For workflows that still wait: remove the shared-group claim (give each
 rule set its own group), restore the missing `depends_on` edge so
 downstream rules cannot start before their producers, or declare `output`
-on producer rules that execute commands but declare nothing (`validate`
+on producer rules that execute commands but declare nothing (`lint`
 flags these with warning W019).
 
 ### "A rule I expect to run is being skipped"

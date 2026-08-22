@@ -73,9 +73,20 @@ pub async fn invalidate_failed_outputs(snapshots: &[OutputSnapshot]) {
         };
         if !snapshot.existed {
             // Created during the failed attempt — remove outright.
-            if let Err(e) = tokio::fs::remove_file(&snapshot.path).await {
+            // Directories need `remove_dir_all`: `remove_file` EISDIRs on
+            // them (warned and swallowed), leaving a stale dir that the
+            // freshness gate then treats as a fresh output — the re-run is
+            // skipped and downstream rules consume the partial contents
+            // (#118's residual form).
+            let removal = if current_meta.is_dir() {
+                tokio::fs::remove_dir_all(&snapshot.path).await
+            } else {
+                tokio::fs::remove_file(&snapshot.path).await
+            };
+            if let Err(e) = removal {
                 tracing::warn!(
                     file = %snapshot.path.display(),
+                    is_dir = current_meta.is_dir(),
                     error = %e,
                     "failed to remove output created by a failed rule"
                 );
@@ -150,6 +161,27 @@ mod tests {
         std::fs::write(dir.path().join("out.txt"), b"partial").unwrap();
         invalidate_failed_outputs(&snapshots).await;
         assert!(!dir.path().join("out.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn created_directory_output_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let rule = rule_with_outputs(&["out/"]);
+        let values = HashMap::new();
+        // Snapshot before anything exists.
+        let snapshots = snapshot_outputs(&rule, dir.path(), &values);
+        assert_eq!(snapshots.len(), 1);
+        assert!(!snapshots[0].existed);
+        // The failed attempt "writes" a directory output with content.
+        std::fs::create_dir_all(dir.path().join("out")).unwrap();
+        std::fs::write(dir.path().join("out/partial.txt"), b"partial").unwrap();
+        invalidate_failed_outputs(&snapshots).await;
+        assert!(
+            !dir.path().join("out").exists(),
+            "a directory created by a failed attempt must be removed — remove_file \
+             EISDIRs on directories, so the stale dir would look fresh to the \
+             freshness gate and the re-run would be skipped"
+        );
     }
 
     #[tokio::test]

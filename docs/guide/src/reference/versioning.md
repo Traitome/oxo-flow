@@ -38,7 +38,7 @@ repository URL plus a tag, branch, or commit) alongside `path`. Pinned
 includes are cloned once into `~/.cache/oxo-flow/modules/<repo>@<ref>`
 and reused — the module is frozen at that ref until the workflow author
 moves it deliberately. See
-[Workflow Format](workflow-format.md#include--modular-workflow-composition)
+[Workflow Format](workflow-format.md#include-modular-workflow-composition)
 for the include syntax and interface contracts.
 
 ## Pillar 3 — Ecosystem: the catalog is versioned

@@ -837,14 +837,29 @@ pub fn lint_format(config: &WorkflowConfig) -> Vec<Diagnostic> {
         // planner (live: auto-sra's dumps declared output = [] while writing
         // the FASTQs merges consume — the missing edges fed a priority
         // starvation incident).
-        if rule.output.is_empty() && (rule.shell.is_some() || rule.script.is_some()) {
+        //
+        // Skipped when the rule has dependents — they already order against
+        // it via depends_on (the only possible edge for an output-less
+        // rule), so the old suggestion ("add depends_on to every consumer")
+        // could never silence the warning — and when `when = "false"`: the
+        // rule can never execute, so its missing outputs are moot (mirrors
+        // the engine's evaluate_condition literal handling). Transform rules
+        // are included — `transform.map` executes even though the rule
+        // declares no outputs of its own.
+        let executes = rule.shell.is_some() || rule.script.is_some() || rule.transform.is_some();
+        let can_never_run = matches!(rule.when.as_deref().map(str::trim), Some("false"));
+        let has_dependents = dag
+            .as_ref()
+            .and_then(|d| d.dependents(&rule.name).ok())
+            .is_some_and(|deps| !deps.is_empty());
+        if rule.output.is_empty() && executes && !can_never_run && !has_dependents {
             diagnostics.push(Diagnostic {
                 severity: Severity::Warning,
                 message: "rule executes a command but declares no outputs".to_string(),
                 rule: Some(rule.name.clone()),
                 code: "W019".to_string(),
                 suggestion: Some(
-                    "declare output = [...] naming the files this rule produces, or add depends_on = [\"<this rule>\"] to every consumer".to_string(),
+                    "declare output = [...] naming the files this rule produces, or add a depends_on entry for this rule to each rule that consumes its files".to_string(),
                 ),
             });
         }
@@ -3326,5 +3341,99 @@ mod tests {
         let config = WorkflowConfig::parse(toml).unwrap();
         let diagnostics = lint_format(&config);
         assert!(!diagnostics.iter().any(|d| d.code == "W019"));
+    }
+
+    #[test]
+    fn lint_no_w019_for_rule_with_dependents() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "produce"
+            shell = "echo data > sra/x.fastq"
+
+            [[rules]]
+            name = "consume"
+            input = ["sra/x.fastq"]
+            output = ["out.txt"]
+            shell = "cat sra/x.fastq > out.txt"
+            depends_on = ["produce"]
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W019"),
+            "an output-less rule with dependents already orders against them via \
+             depends_on — W019's suggestion could never silence the warning: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_no_w019_when_condition_is_false() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "never_runs"
+            when = "false"
+            shell = "echo data > sra/x.fastq"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W019"),
+            "a rule with when = \"false\" can never execute — missing outputs are moot: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w019_for_transform_map_without_outputs() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "split_qc"
+
+            [rules.transform]
+            split = { by = "chr", values = ["1", "2"] }
+            map = "echo processing {chr}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        assert!(
+            diagnostics.iter().any(|d| d.code == "W019"),
+            "a transform rule executes `map` but declares no outputs — it must warn: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w019_suggestion_matches_new_semantics() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "produce"
+            shell = "echo data > sra/x.fastq"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config);
+        let w019 = diagnostics
+            .iter()
+            .find(|d| d.code == "W019")
+            .expect("shell rule without outputs and without dependents must warn");
+        let suggestion = w019.suggestion.as_deref().unwrap_or_default();
+        assert!(
+            suggestion.contains("declare output = [...]"),
+            "the suggestion must lead with declaring outputs, got: {suggestion}"
+        );
+        assert!(
+            !suggestion.contains("every consumer"),
+            "the old suggestion ('add depends_on to every consumer') could not silence \
+             the warning once dependents skip it: {suggestion}"
+        );
     }
 }

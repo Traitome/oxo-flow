@@ -125,6 +125,17 @@ pub(crate) fn apply_samples_filter(
     // No subset filter: the sheet operation alone defines the run set.
     if did_sample_op && filter_specs.is_empty() {
         let total: usize = config.sample_groups.iter().map(|g| g.samples.len()).sum();
+        // A sheet whose rows select zero instances must fail loudly — the
+        // same empty-selection guard the filter path enforces below. The
+        // `+@` append path can reach this with a row whose samples cell is
+        // empty on a workflow that declares none, and a silent
+        // "Running 0 sample(s)" would be a zero-instance run (issue #136
+        // audit). `ready` can never reach this path, so an empty selection
+        // always bails when the flag demands it.
+        let selection_empty = total == 0 && config.pairs.is_empty();
+        if selection_empty && bail_on_empty {
+            anyhow::bail!("--samples matched no samples in this workflow");
+        }
         eprintln!(
             "  {} Running {} sample(s) via --samples (sheet selection)",
             "Samples:".cyan(),
@@ -345,6 +356,62 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         assert!(result.is_err(), "empty rows must fail");
         assert!(format!("{result:?}").contains("produced no samples"));
+    }
+
+    #[test]
+    fn zero_instance_append_sheet_fails_loudly_when_flag_demands_it() {
+        // `+@sheet` on a workflow that declares no samples: a row whose
+        // samples cell is empty leaves the selection with zero instances.
+        // The sheet-only path must honor the same empty-selection guard as
+        // name/first:N/ready — never a silent "Running 0 sample(s)".
+        let path = std::env::temp_dir().join("oxo_flow_zero_instance_samples.tsv");
+        std::fs::write(&path, "name\tsamples\ncohort\t\n").unwrap();
+
+        let mut config = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "template"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "analyze"
+            output = ["out/{sample}.txt"]
+            shell = "echo {sample} > {output}"
+            "#,
+        )
+        .unwrap();
+        let spec = format!("+@{}", path.display());
+        let result = apply_samples_filter(&mut config, &[spec], true, std::path::Path::new("."));
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            result.is_err(),
+            "zero-instance append must fail: {result:?}"
+        );
+        assert!(
+            format!("{result:?}").contains("matched no samples"),
+            "error must name the empty selection: {result:?}"
+        );
+
+        // The same append with a sample is a normal selection.
+        let path = std::env::temp_dir().join("oxo_flow_zero_instance_samples.tsv");
+        std::fs::write(&path, "name\tsamples\ncohort\tSRR1\n").unwrap();
+        let mut config = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "template"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "analyze"
+            output = ["out/{sample}.txt"]
+            shell = "echo {sample} > {output}"
+            "#,
+        )
+        .unwrap();
+        let spec = format!("+@{}", path.display());
+        let result = apply_samples_filter(&mut config, &[spec], true, std::path::Path::new("."));
+        let _ = std::fs::remove_file(&path);
+        assert!(result.is_ok(), "non-empty append must succeed: {result:?}");
     }
 
     #[test]

@@ -2421,9 +2421,12 @@ impl WorkflowConfig {
         let includes = std::mem::take(&mut self.includes);
         for inc in &includes {
             let (content, inc_base_dir) = if let Some(repo) = &inc.repo {
-                // Pinned git include (issue #112): clone once into the
-                // module cache (keyed repo@ref), then resolve `path` inside
-                // the checkout. Cache hits skip the clone entirely.
+                // Pinned git include (issue #112): clone into the module
+                // cache (keyed repo@ref), then resolve `path` inside the
+                // checkout. ensure_pinned clones on a cache miss (healing
+                // partial dirs), re-fetches branch/tag refs on every
+                // activation, and pins full commit SHAs by fetch (issue
+                // #136).
                 let git_ref = inc.git_ref.as_deref().ok_or_else(|| OxoFlowError::Config {
                     message: format!(
                         "include '{}' declares `repo` without `ref` — pin the module version",
@@ -2432,20 +2435,18 @@ impl WorkflowConfig {
                 })?;
                 let cache_dir =
                     crate::git::module_cache_root().join(crate::git::cache_dir_name(repo, git_ref));
-                if !cache_dir.join(".git").exists() {
-                    std::fs::create_dir_all(cache_dir.parent().unwrap_or(&cache_dir)).map_err(
-                        |e| OxoFlowError::Config {
-                            message: format!("cannot create module cache: {e}"),
-                        },
-                    )?;
-                    crate::git::clone_pinned(repo, git_ref, &cache_dir).map_err(|e| {
-                        OxoFlowError::Config {
-                            message: format!(
-                                "failed to clone include repo '{repo}' at '{git_ref}': {e}"
-                            ),
-                        }
-                    })?;
-                }
+                std::fs::create_dir_all(cache_dir.parent().unwrap_or(&cache_dir)).map_err(|e| {
+                    OxoFlowError::Config {
+                        message: format!("cannot create module cache: {e}"),
+                    }
+                })?;
+                crate::git::ensure_pinned(repo, git_ref, &cache_dir).map_err(|e| {
+                    OxoFlowError::Config {
+                        message: format!(
+                            "failed to clone or refresh include repo '{repo}' at '{git_ref}': {e}"
+                        ),
+                    }
+                })?;
                 let inc_path = cache_dir.join(&inc.path);
                 let text = std::fs::read_to_string(&inc_path).map_err(|e| OxoFlowError::Parse {
                     path: inc_path.clone(),
