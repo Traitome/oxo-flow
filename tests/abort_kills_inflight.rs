@@ -40,11 +40,19 @@ fn abort_kills_inflight_rule_processes() {
         .current_dir(dir.path())
         .output()
         .unwrap();
-    assert!(!run.status.success(), "the run must fail on 'bad'");
+    assert!(
+        !run.status.success(),
+        "the run must fail on 'bad':\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
 
     // Assert — slow spawned before the abort and must be dead after it.
     let pid_path = dir.path().join("slow.pid");
-    assert!(pid_path.exists(), "slow must have spawned before the abort");
+    assert!(
+        pid_path.exists(),
+        "slow must have spawned before the abort:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
     let pid: i32 = fs::read_to_string(&pid_path)
         .unwrap()
         .trim()
