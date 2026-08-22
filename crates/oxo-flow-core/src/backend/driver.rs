@@ -55,6 +55,18 @@ pub type CheckpointHook<'a> = Box<dyn FnMut(&str) -> Result<Vec<String>> + Send 
 /// caller's re-expansion has already produced them).
 pub type PlanMerge<'a> = Box<dyn FnMut(&mut ScheduledPlan, &[String]) -> Result<()> + Send + 'a>;
 
+/// Submit hook: records a rule as RUNNING in the caller's checkpoint the
+/// moment its job is accepted — a crashed driver then leaves truthful
+/// pending state instead of nothing (issue #136 H6, terminal-state-only
+/// recording). Errors are logged, not fatal.
+pub type SubmitHook = Box<
+    dyn FnMut(
+            String,
+            String,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
+        + Send,
+>;
+
 /// Per-run hooks: checkpoint re-entry (issue #78 P3).
 pub struct DriverOptions<'a> {
     /// Run directory root: `events.jsonl` + `jobs/<rule>/` below it.
@@ -68,6 +80,8 @@ pub struct DriverOptions<'a> {
     /// (issue #99 B1, cluster path — mirrors the local executor's
     /// capture-boundary masking).
     pub sensitive_values: &'a [String],
+    /// Invoked after each successful submission `(rule, job_id)`.
+    pub on_submit: Option<SubmitHook>,
 }
 
 /// Executes a static plan through a backend.
@@ -80,6 +94,10 @@ pub struct BackendDriver {
 struct InFlight {
     rule: String,
     submitted_at: DateTime<Utc>,
+    /// Base array job id for element submissions (`None` = a plain job).
+    /// Polling/cancelling targets the base for schedulers that report
+    /// arrays only by their base id (PBS/LSF/SGE — issue #136 H4).
+    array_base: Option<String>,
 }
 
 /// Scheduler-visible directive signature: two instances are array-eligible
@@ -135,10 +153,19 @@ impl BackendDriver {
         ready
     }
 
-    /// Cancel every job in `jobs` (`(job_id, rule_name)` pairs), ignoring
-    /// per-job errors — best effort on error paths.
-    pub async fn cancel_inflight(&self, jobs: &[(String, String)]) -> Result<()> {
-        for (id, _rule) in jobs {
+    /// Cancel every job in `jobs` (`(job_id, rule_name, array_base)` triples),
+    /// ignoring per-job errors — best effort on error paths. Array elements
+    /// cancel by their BASE id: qdel/bkill do not understand `{base}_{index}`
+    /// (issue #136 H4).
+    pub async fn cancel_inflight(&self, jobs: &[(String, String, Option<String>)]) -> Result<()> {
+        let mut targets: Vec<&str> = Vec::new();
+        for (id, _rule, base) in jobs {
+            let target = base.as_deref().unwrap_or(id);
+            if !targets.contains(&target) {
+                targets.push(target);
+            }
+        }
+        for id in targets {
             let _ = self.backend.cancel(id).await;
         }
         Ok(())
@@ -175,6 +202,11 @@ impl BackendDriver {
         // Priority aging (issue #134): each round a ready rule spends
         // beyond the cap adds +1 to its effective priority.
         let mut waited_rounds: HashMap<String, i32> = HashMap::new();
+        // Array index: base job id → element instance names, accumulated in
+        // memory and persisted after each change (issue #136 H3 — the
+        // read-modify-write pattern could lose earlier chunks).
+        let mut array_index: HashMap<String, Vec<String>> = HashMap::new();
+        let index_path = opts.run_dir.join("index.json");
 
         loop {
             // 1. Failure propagation: pending rules blocked by a failed dep.
@@ -312,11 +344,24 @@ impl BackendDriver {
                     let mut batch: Vec<(String, ScheduledRule)> = vec![(name.clone(), sr.clone())];
                     batch.extend(siblings);
                     let chunks = batch.chunks(self.config.max_array_size.max(1));
-                    for chunk in chunks {
+                    for (chunk_k, chunk) in chunks.enumerate() {
+                        if inflight.len() >= self.config.max_submitted {
+                            // The cap binds per SUBMISSION, not per rule —
+                            // a multi-chunk batch must not overshoot it
+                            // (issue #136 H5).
+                            break;
+                        }
                         if chunk.len() > 1 {
                             // Array submission: one script + per-index
-                            // command files under the TEMPLATE's job dir.
-                            let job_dir = opts.run_dir.join("jobs").join(sanitize(&sr.template));
+                            // command files under a PER-CHUNK job dir —
+                            // sibling chunks must never overwrite each
+                            // other's cmd files / job.sh while the earlier
+                            // array is still pending (issue #136 H3).
+                            let job_dir = opts
+                                .run_dir
+                                .join("jobs")
+                                .join(sanitize(&sr.template))
+                                .join(format!("chunk-{}", chunk_k + 1));
                             std::fs::create_dir_all(&job_dir).map_err(|e| {
                                 OxoFlowError::Config {
                                     message: format!("cannot create {}: {e}", job_dir.display()),
@@ -347,9 +392,11 @@ impl BackendDriver {
                             let base_id = match self.backend.submit(&script_path).await {
                                 Ok(id) => id,
                                 Err(e) => {
-                                    let jobs: Vec<(String, String)> = inflight
+                                    let jobs: Vec<(String, String, Option<String>)> = inflight
                                         .iter()
-                                        .map(|(id, f)| (id.clone(), f.rule.clone()))
+                                        .map(|(id, f)| {
+                                            (id.clone(), f.rule.clone(), f.array_base.clone())
+                                        })
                                         .collect();
                                     self.cancel_inflight(&jobs).await?;
                                     return Err(e);
@@ -366,26 +413,19 @@ impl BackendDriver {
                             // index.json: array index → instance name, so the
                             // array stays an implementation detail (issue #74
                             // phase 3 — "an array index is meaningless on its
-                            // own").
-                            {
-                                let index_path = opts.run_dir.join("index.json");
-                                let mut index: HashMap<String, Vec<String>> =
-                                    std::fs::read_to_string(&index_path)
-                                        .ok()
-                                        .and_then(|raw| serde_json::from_str(&raw).ok())
-                                        .unwrap_or_default();
-                                index.insert(
-                                    base_id.clone(),
-                                    chunk.iter().map(|(n, _)| n.clone()).collect(),
-                                );
-                                if let Some(parent) = index_path.parent() {
-                                    let _ = std::fs::create_dir_all(parent);
-                                }
-                                let _ = std::fs::write(
-                                    &index_path,
-                                    serde_json::to_string_pretty(&index).unwrap_or_default(),
-                                );
+                            // own"). Accumulated in memory; the file is
+                            // rewritten from the full map (issue #136 H3).
+                            array_index.insert(
+                                base_id.clone(),
+                                chunk.iter().map(|(n, _)| n.clone()).collect(),
+                            );
+                            if let Some(parent) = index_path.parent() {
+                                let _ = std::fs::create_dir_all(parent);
                             }
+                            let _ = std::fs::write(
+                                &index_path,
+                                serde_json::to_string_pretty(&array_index).unwrap_or_default(),
+                            );
                             for (i, (c_name, c_sr)) in chunk.iter().enumerate() {
                                 let element_id = format!("{}_{}", base_id, i + 1);
                                 // Per-INSTANCE dirs keep the run directory
@@ -425,9 +465,16 @@ impl BackendDriver {
                                     InFlight {
                                         rule: c_name.clone(),
                                         submitted_at: Utc::now(),
+                                        array_base: Some(base_id.clone()),
                                     },
                                 );
                                 emit(&mut events, "SUBMITTED", c_name, Some(&element_id), None);
+                                if let Some(ref mut hook) = opts.on_submit {
+                                    let fut = hook(c_name.clone(), element_id.clone());
+                                    if let Err(e) = fut.await {
+                                        tracing::warn!(rule = %c_name, error = %e, "checkpoint submit hook failed");
+                                    }
+                                }
                             }
                             submitted_this_round += chunk.len();
                         } else {
@@ -448,9 +495,11 @@ impl BackendDriver {
                             let job_id = match self.backend.submit(&script_path).await {
                                 Ok(id) => id,
                                 Err(e) => {
-                                    let jobs: Vec<(String, String)> = inflight
+                                    let jobs: Vec<(String, String, Option<String>)> = inflight
                                         .iter()
-                                        .map(|(id, f)| (id.clone(), f.rule.clone()))
+                                        .map(|(id, f)| {
+                                            (id.clone(), f.rule.clone(), f.array_base.clone())
+                                        })
                                         .collect();
                                     self.cancel_inflight(&jobs).await?;
                                     return Err(e);
@@ -467,10 +516,17 @@ impl BackendDriver {
                                 InFlight {
                                     rule: c_name.clone(),
                                     submitted_at: Utc::now(),
+                                    array_base: None,
                                 },
                             );
                             submitted_this_round += 1;
                             emit(&mut events, "SUBMITTED", c_name, Some(&job_id), None);
+                            if let Some(ref mut hook) = opts.on_submit {
+                                let fut = hook(c_name.clone(), job_id.clone());
+                                if let Err(e) = fut.await {
+                                    tracing::warn!(rule = %c_name, error = %e, "checkpoint submit hook failed");
+                                }
+                            }
                         }
                     }
                 }
@@ -479,27 +535,83 @@ impl BackendDriver {
             // 3. Poll and settle terminal jobs.
             let mut settled_this_round = 0usize;
             if !inflight.is_empty() {
-                let ids: Vec<String> = inflight.keys().cloned().collect();
-                let mut statuses = self.backend.poll(&ids).await?;
+                // Schedulers that report arrays only by their base id
+                // (PBS/LSF/SGE) are polled by BASE id; the verdict then
+                // expands to every element of that array (issue #136 H4).
+                // SLURM polls element ids directly and keeps per-element
+                // fidelity.
+                let direct = self.backend.polls_elements_directly();
+                let ids: Vec<String> = if direct {
+                    inflight.keys().cloned().collect()
+                } else {
+                    let mut targets: Vec<String> = inflight
+                        .values()
+                        .filter_map(|f| f.array_base.clone())
+                        .collect();
+                    targets.extend(
+                        inflight
+                            .iter()
+                            .filter(|(_, f)| f.array_base.is_none())
+                            .map(|(id, _)| id.clone()),
+                    );
+                    targets.sort();
+                    targets.dedup();
+                    targets
+                };
+                let polled = self.backend.poll(&ids).await?;
+                let mut statuses = HashMap::new();
+                if direct {
+                    statuses = polled;
+                } else {
+                    for (id, f) in &inflight {
+                        let target = f.array_base.as_deref().unwrap_or(id);
+                        if let Some(st) = polled.get(target).copied() {
+                            statuses.insert(id.clone(), st);
+                        }
+                    }
+                }
                 // Short jobs vanish from the live queue the instant they
                 // finish (squeue/qstat only list active jobs), so a missing
                 // id is NOT "still running" — settle it from the accounting
                 // store once it is old enough (a fresh submission can
                 // legitimately be absent for a moment; the accounting
-                // record itself takes a few seconds to appear).
+                // record itself takes a few seconds to appear). Array
+                // elements probe the accounting store by BASE id on
+                // non-element backends (their element ids never exist
+                // there); SLURM probes per element.
                 const ACCOUNT_GRACE_SECS: i64 = 5;
                 let now = Utc::now();
-                for (id, f) in &inflight {
-                    if statuses.contains_key(id) {
-                        continue;
-                    }
-                    if (now - f.submitted_at).num_seconds() < ACCOUNT_GRACE_SECS {
-                        continue;
-                    }
-                    if let Some(st) = self.backend.terminal_status(id).await
+                let mut probes: Vec<String> = inflight
+                    .iter()
+                    .filter(|(id, _)| !statuses.contains_key(*id))
+                    .filter(|(_, f)| (now - f.submitted_at).num_seconds() >= ACCOUNT_GRACE_SECS)
+                    .map(|(id, f)| {
+                        if direct {
+                            id.clone()
+                        } else {
+                            f.array_base.clone().unwrap_or_else(|| id.clone())
+                        }
+                    })
+                    .collect();
+                probes.sort();
+                probes.dedup();
+                for probe in probes {
+                    if let Some(st) = self.backend.terminal_status(&probe).await
                         && st != BackendJobStatus::Unknown
                     {
-                        statuses.insert(id.clone(), st);
+                        if direct {
+                            statuses.insert(probe, st);
+                        } else {
+                            // Base verdict expands to every element of the
+                            // array (per-element accounting fidelity stays
+                            // SLURM-only).
+                            for (id, f) in &inflight {
+                                let target = f.array_base.as_deref().unwrap_or(id);
+                                if target == probe {
+                                    statuses.insert(id.clone(), st);
+                                }
+                            }
+                        }
                     }
                 }
                 let settled: Vec<(String, InFlight, BackendJobStatus)> = inflight
@@ -668,9 +780,9 @@ impl BackendDriver {
             if let Some(d) = deadline
                 && Instant::now() > d
             {
-                let jobs: Vec<(String, String)> = inflight
+                let jobs: Vec<(String, String, Option<String>)> = inflight
                     .iter()
-                    .map(|(id, f)| (id.clone(), f.rule.clone()))
+                    .map(|(id, f)| (id.clone(), f.rule.clone(), f.array_base.clone()))
                     .collect();
                 self.cancel_inflight(&jobs).await?;
                 return Err(OxoFlowError::Config {
@@ -959,6 +1071,7 @@ mod tests {
                     on_checkpoint: None,
                     merge: None,
                     sensitive_values: &[],
+                    on_submit: None,
                 },
             ))
             .unwrap();
@@ -1001,6 +1114,7 @@ mod tests {
                     on_checkpoint: None,
                     merge: None,
                     sensitive_values: &[],
+                    on_submit: None,
                 },
             ))
             .unwrap();
@@ -1041,6 +1155,7 @@ mod tests {
                     on_checkpoint: None,
                     merge: None,
                     sensitive_values: &[],
+                    on_submit: None,
                 },
             ))
             .unwrap();
@@ -1088,6 +1203,7 @@ mod tests {
                     on_checkpoint: None,
                     merge: None,
                     sensitive_values: &[],
+                    on_submit: None,
                 },
             ))
             .expect("a fresh dependency must not stall the driver");
@@ -1130,6 +1246,7 @@ mod tests {
                     on_checkpoint: None,
                     merge: None,
                     sensitive_values: &[],
+                    on_submit: None,
                 },
             ))
             .unwrap_err();
@@ -1173,6 +1290,7 @@ mod tests {
                     on_checkpoint: None,
                     merge: None,
                     sensitive_values: &[],
+                    on_submit: None,
                 },
             ))
             .unwrap();
@@ -1235,6 +1353,7 @@ shell = "cat {input} > merged.txt"
                 &to_run,
                 DriverOptions {
                     sensitive_values: &[],
+                    on_submit: None,
                     run_dir: fx.run_dir.path(),
                     on_checkpoint: None,
                     merge: None,
@@ -1321,6 +1440,7 @@ shell = "cat {input} > merged.txt"
                     on_checkpoint: None,
                     merge: None,
                     sensitive_values: &["s3cr3t-token-42".to_string()],
+                    on_submit: None,
                 },
             ))
             .unwrap();
@@ -1334,5 +1454,311 @@ shell = "cat {input} > merged.txt"
             "cluster JobRecord.command must mask sensitive values: {command}"
         );
         assert!(command.contains("***"), "masked marker expected: {command}");
+    }
+
+    // ─── issue #136 H-items ────────────────────────────────────────────────
+
+    /// Minimal in-test backend: submit returns synthetic ids, poll returns a
+    /// configured verdict for every probed id, and every call is recorded
+    /// for assertions (used by the H3/H4/H5/H6 tests below).
+    struct MockBackend {
+        inner: Arc<std::sync::Mutex<MockState>>,
+        direct: bool,
+    }
+    #[derive(Default)]
+    struct MockState {
+        submit_count: usize,
+        poll_args: Vec<Vec<String>>,
+        cancelled: Vec<String>,
+        verdict: Option<BackendJobStatus>,
+    }
+    impl MockBackend {
+        fn new(direct: bool, verdict: BackendJobStatus) -> Self {
+            Self {
+                inner: Arc::new(std::sync::Mutex::new(MockState {
+                    verdict: Some(verdict),
+                    ..Default::default()
+                })),
+                direct,
+            }
+        }
+        fn state(&self) -> Arc<std::sync::Mutex<MockState>> {
+            self.inner.clone()
+        }
+    }
+    #[async_trait::async_trait]
+    impl ExecutorBackend for MockBackend {
+        fn name(&self) -> &'static str {
+            "mock"
+        }
+        fn render_script(&self, _rule: &ScheduledRule) -> Result<String> {
+            Ok("exit 0".to_string())
+        }
+        fn render_array_script(
+            &self,
+            _rule: &crate::rule::Rule,
+            _cmd_dir: &str,
+            _count: usize,
+        ) -> Result<String> {
+            Ok("exit 0".to_string())
+        }
+        async fn submit(&self, _script_path: &Path) -> Result<String> {
+            let mut st = self.inner.lock().unwrap();
+            st.submit_count += 1;
+            Ok(format!("job-{}", st.submit_count))
+        }
+        async fn poll(&self, job_ids: &[String]) -> Result<HashMap<String, BackendJobStatus>> {
+            let mut st = self.inner.lock().unwrap();
+            st.poll_args.push(job_ids.to_vec());
+            Ok(job_ids
+                .iter()
+                .map(|id| (id.clone(), st.verdict.unwrap()))
+                .collect())
+        }
+        async fn cancel(&self, job_id: &str) -> Result<()> {
+            self.inner
+                .lock()
+                .unwrap()
+                .cancelled
+                .push(job_id.to_string());
+            Ok(())
+        }
+        async fn logs(&self, _job_id: &str) -> Result<String> {
+            Ok(String::new())
+        }
+        fn polls_elements_directly(&self) -> bool {
+            self.direct
+        }
+    }
+
+    /// A plan of `n` siblings sharing one template (array-eligible).
+    fn sibling_plan(workdir: &Path, n: usize) -> ScheduledPlan {
+        let names: Vec<String> = (1..=n).map(|i| format!("sib_{i:02}")).collect();
+        let rules: Vec<(&str, i32)> = names.iter().map(|n| (n.as_str(), 0)).collect();
+        let mut plan = priority_plan(workdir, &rules);
+        for (name, sr) in plan.rules.iter_mut() {
+            sr.template = "sib".to_string();
+            sr.dependencies.clear();
+            // Distinct commands so chunk-isolation assertions can tell
+            // the files apart.
+            sr.shell_cmd = format!("echo {name}");
+        }
+        plan
+    }
+
+    #[test]
+    fn multi_chunk_arrays_use_per_chunk_dirs_without_overwrite() {
+        // H3: two chunks of the same template must not share cmd files.
+        let fx = setup();
+        let plan = sibling_plan(fx.workdir.path(), 4);
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let executor = Arc::new(
+            ClusterExecutor::new(ClusterBackend::Slurm, cluster_config())
+                .with_scheduler_dir(fixtures_dir())
+                .with_env("MOCK_SCHEDULER_DIR", &fx._state.path().to_string_lossy()),
+        );
+        let d = BackendDriver::new(
+            executor,
+            DriverConfig {
+                max_submitted: 8,
+                max_array_size: 2, // 4 siblings → 2 chunks
+                no_arrays: false,
+                poll_interval: std::time::Duration::from_millis(20),
+                poll_timeout: Some(std::time::Duration::from_secs(30)),
+            },
+        );
+        let records = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan.clone(),
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                },
+            ))
+            .unwrap();
+        assert_eq!(records.len(), 4, "all siblings settle");
+        let tpl_dir = fx.run_dir.path().join("jobs/sib");
+        for chunk in ["chunk-1", "chunk-2"] {
+            for i in 1..=2 {
+                let cmd = tpl_dir.join(chunk).join(format!("cmd.{i}.sh"));
+                assert!(cmd.exists(), "{} must exist", cmd.display());
+            }
+        }
+        let c1 = std::fs::read_to_string(tpl_dir.join("chunk-1/cmd.1.sh")).unwrap();
+        let c2 = std::fs::read_to_string(tpl_dir.join("chunk-2/cmd.1.sh")).unwrap();
+        assert_ne!(
+            c1, c2,
+            "sibling chunks must not overwrite each other's cmd files"
+        );
+    }
+
+    #[test]
+    fn non_element_backends_poll_by_base_and_expand_to_elements() {
+        // H4: a PBS/LSF/SGE-style backend sees BASE ids in poll and every
+        // element still settles.
+        let fx = setup();
+        let plan = sibling_plan(fx.workdir.path(), 2);
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let backend = Arc::new(MockBackend::new(false, BackendJobStatus::Completed));
+        let d = BackendDriver::new(
+            backend.clone(),
+            DriverConfig {
+                max_submitted: 4,
+                max_array_size: 1001,
+                no_arrays: false,
+                poll_interval: std::time::Duration::from_millis(10),
+                poll_timeout: Some(std::time::Duration::from_secs(10)),
+            },
+        );
+        let records = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan.clone(),
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                },
+            ))
+            .unwrap();
+        assert_eq!(records.len(), 2);
+        let st = backend.state();
+        let st = st.lock().unwrap();
+        assert!(!st.poll_args.is_empty());
+        for args in &st.poll_args {
+            for id in args {
+                assert!(
+                    !id.contains('_'),
+                    "non-element backends must be polled by base id, got {id}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cancel_inflight_cancels_array_elements_by_base_id() {
+        // H4: qdel/bkill must receive the array base id, not {base}_{index}.
+        let backend = Arc::new(MockBackend::new(false, BackendJobStatus::Running));
+        let d = BackendDriver::new(backend.clone(), DriverConfig::default());
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.cancel_inflight(&[
+                (
+                    "arr_1".to_string(),
+                    "sib_01".to_string(),
+                    Some("arr".to_string()),
+                ),
+                (
+                    "arr_2".to_string(),
+                    "sib_02".to_string(),
+                    Some("arr".to_string()),
+                ),
+                ("plain-9".to_string(), "solo".to_string(), None),
+            ]))
+            .unwrap();
+        let st = backend.state();
+        let st = st.lock().unwrap();
+        assert_eq!(st.cancelled, vec!["arr".to_string(), "plain-9".to_string()]);
+    }
+
+    #[test]
+    fn max_submitted_binds_per_submission_not_per_rule() {
+        // H5: a multi-chunk batch must not overshoot the cap mid-rule.
+        let fx = setup();
+        let plan = sibling_plan(fx.workdir.path(), 4); // 2 chunks at size 2
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let backend = Arc::new(MockBackend::new(false, BackendJobStatus::Running));
+        let d = BackendDriver::new(
+            backend.clone(),
+            DriverConfig {
+                max_submitted: 1,
+                max_array_size: 2,
+                no_arrays: false,
+                poll_interval: std::time::Duration::from_millis(10),
+                poll_timeout: Some(std::time::Duration::from_millis(300)),
+            },
+        );
+        let err = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan.clone(),
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                },
+            ))
+            .unwrap_err();
+        assert!(err.to_string().contains("poll timeout"));
+        let st = backend.state();
+        let st = st.lock().unwrap();
+        assert_eq!(
+            st.submit_count, 1,
+            "the cap binds per submission: only chunk-1 may submit"
+        );
+    }
+
+    #[test]
+    fn on_submit_hook_records_every_accepted_job() {
+        // H6: submit-time checkpoint recording sees each accepted job.
+        let fx = setup();
+        let plan = sibling_plan(fx.workdir.path(), 2);
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let seen: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(vec![]));
+        let hook_seen = seen.clone();
+        let on_submit = move |rule: String, _job: String| {
+            let seen = hook_seen.clone();
+            Box::pin(async move {
+                seen.lock().unwrap().push(rule);
+                Ok(())
+            })
+                as std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
+        };
+        let executor = Arc::new(
+            ClusterExecutor::new(ClusterBackend::Slurm, cluster_config())
+                .with_scheduler_dir(fixtures_dir())
+                .with_env("MOCK_SCHEDULER_DIR", &fx._state.path().to_string_lossy()),
+        );
+        let d = BackendDriver::new(
+            executor,
+            DriverConfig {
+                max_submitted: 4,
+                max_array_size: 1001,
+                no_arrays: false,
+                poll_interval: std::time::Duration::from_millis(20),
+                poll_timeout: Some(std::time::Duration::from_secs(30)),
+            },
+        );
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan.clone(),
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: Some(Box::new(on_submit)),
+                },
+            ))
+            .unwrap();
+        let seen = seen.lock().unwrap();
+        assert_eq!(
+            seen.len(),
+            2,
+            "every accepted job must hit the hook: {seen:?}"
+        );
     }
 }

@@ -341,6 +341,12 @@ impl super::ExecutorBackend for ClusterExecutor {
         let text = self.logs(job_id).await.ok()?;
         parse_accounting(&self.backend, &text)
     }
+
+    fn polls_elements_directly(&self) -> bool {
+        // squeue lists array elements as `{jobid}_{index}`; qstat/bjobs
+        // report only the array base id (issue #136 H4).
+        matches!(self.backend, ClusterBackend::Slurm)
+    }
 }
 
 /// Parse scheduler accounting output into a terminal status, or `None` when

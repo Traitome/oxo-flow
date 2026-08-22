@@ -290,6 +290,38 @@ pub(crate) async fn run_on_cluster(
 
     let executor = ClusterExecutor::new(backend, cluster_config);
     let driver = BackendDriver::new(Arc::new(executor), driver_config);
+    // Submit-time checkpoint recording (issue #136 H6): a crashed driver
+    // leaves truthful RUNNING entries for accepted jobs, so `resume` /
+    // `--resume-failed` re-queue them instead of losing them.
+    let submit_ck = args.checkpoint.clone();
+    let submit_path = args.checkpoint_path.to_path_buf();
+    let on_submit = move |rule: String,
+                          _job: String|
+          -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = oxo_flow_core::error::Result<()>> + Send>,
+    > {
+        let ck = submit_ck.clone();
+        let path = submit_path.clone();
+        Box::pin(async move {
+            let mut ck = ck.lock().await;
+            ck.record_run(&oxo_flow_core::executor::JobRecord {
+                rule: rule.clone(),
+                status: oxo_flow_core::executor::JobStatus::Running,
+                started_at: Some(chrono::Utc::now()),
+                finished_at: None,
+                exit_code: None,
+                stdout: None,
+                stderr: None,
+                command: None,
+                retries: 0,
+                timeout: None,
+                skip_reason: None,
+                max_rss_mb: None,
+                cpu_seconds: None,
+            });
+            ck.save_to_file(&path)
+        })
+    };
     let records = driver
         .run(
             &mut plan,
@@ -299,6 +331,7 @@ pub(crate) async fn run_on_cluster(
                 on_checkpoint: None,
                 merge: None,
                 sensitive_values: args.sensitive_values,
+                on_submit: Some(Box::new(on_submit)),
             },
         )
         .await
