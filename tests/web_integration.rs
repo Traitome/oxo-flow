@@ -2007,10 +2007,10 @@ async fn web_run_instances_expose_sample_rule_table() {
     // keep_going is load-bearing (issue #120): the default fail-fast policy
     // aborts in-flight instance tasks when S2 fails, so whether S1's success
     // lands in the checkpoint is a pure scheduling race. keep_going runs
-    // every instance to completion — the mode this table exists for. The CLI
-    // contract (cli_integration.rs) is that --keep-going reports failures in
-    // the summary and table but still exits 0, so the run is "completed"
-    // with a failed S2 row inside.
+    // every instance to completion. Since issue #133, a run with a REQUIRED
+    // failure exits non-zero (keep-going changes scheduling, never the
+    // verdict), so the run is "failed" — but the instances table still
+    // carries the full per-sample picture (S1 succeeded, S2 failed).
     let created: serde_json::Value = client
         .post(format!("{base}/api/runs"))
         .json(&serde_json::json!({
@@ -2024,10 +2024,7 @@ async fn web_run_instances_expose_sample_rule_table() {
         .await
         .unwrap();
     let run_id = created["run_id"].as_str().unwrap().to_string();
-    assert_eq!(
-        wait_for_terminal(&client, &base, &run_id).await,
-        "completed"
-    );
+    assert_eq!(wait_for_terminal(&client, &base, &run_id).await, "failed");
 
     let instances: serde_json::Value = client
         .get(format!("{base}/api/runs/{run_id}/instances"))

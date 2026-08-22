@@ -2355,7 +2355,12 @@ pub async fn run_command(
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
     }
 
-    if fail_count > 0 && !keep_going {
+    // The verdict is independent of --keep-going (issue #133): keep-going
+    // changes SCHEDULING (failures don't stop the run), never the verdict —
+    // a run with required failures exits non-zero so scripts and the web
+    // delegator (which classifies by exit code) see the truth.
+    // `required = false` failures keep exit 0 (issue #99 B2).
+    if fail_count > 0 {
         return Err(anyhow::anyhow!("workflow execution failed"));
     }
 

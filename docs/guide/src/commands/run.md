@@ -748,6 +748,11 @@ A progress bar shows execution progress with:
 - The DAG is built and validated before any rules execute
 - Rules are executed in topological order; independent rules may run in parallel up to the `-j` limit
 - If `--keep-going` is not set, execution stops at the first failure
+- **`--keep-going` changes scheduling, never the verdict:** it runs the
+  remaining rules past a failure, but the run still exits non-zero when a
+  `required` rule failed — scripts and the web UI (which classifies by
+  exit code) see the truth. Only `required = false` failures leave the
+  exit code at 0.
 - The `--retry` flag re-runs failed jobs up to N times before marking them as failed
 - A timeout of `0` means no timeout
 - Resource constraints (`threads`, `memory`) in rules are checked against available resources before execution
