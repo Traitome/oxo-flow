@@ -1603,13 +1603,14 @@ fn cli_report_sample_matrix_matches_named_group_instances() {
     )
     .unwrap();
 
-    // `--keep-going` runs every expanded instance to completion (exit 0
-    // even with failed jobs), so the checkpoint records align's success
-    // and call's failure for S1 and S2.
+    // `--keep-going` runs every expanded instance to completion; the
+    // verdict is still non-zero because a REQUIRED rule failed (issue
+    // #133 — keep-going changes scheduling, never the verdict). The
+    // checkpoint records align's success and call's failure for S1 and S2.
     oxo_flow_cmd()
         .args(["run", "-k", path.to_str().unwrap()])
         .assert()
-        .success();
+        .failure();
 
     let out = dir.path().join("report.json");
     oxo_flow_cmd()
@@ -1827,12 +1828,13 @@ fn cli_report_failed_moves_diagnosis_first() {
     )
     .unwrap();
 
-    // -k runs every rule and exits 0 while recording the failure.
+    // -k runs every rule while recording the failure; the verdict is still
+    // non-zero (issue #133 — required failures fail the run regardless).
     oxo_flow_cmd()
         .args(["run", "-k", wf.to_str().unwrap()])
         .current_dir(dir.path())
         .assert()
-        .success();
+        .failure();
 
     let section_ids = |args: &[&str]| -> Vec<String> {
         let out = oxo_flow_cmd()
@@ -3334,7 +3336,13 @@ shell = "echo 'I ran despite the failure' > {ok}"
         .output()
         .expect("failed to run");
 
-    // Should not hard-fail (keep-going), but stderr should mention the failure
+    // The verdict stays non-zero: keep-going changes scheduling, never the
+    // verdict (issue #133) — required failures must fail the run.
+    assert!(
+        !output.status.success(),
+        "keep-going must still exit non-zero when a required rule failed"
+    );
+    // Stderr mentions the failure + the consolidated summary.
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("fail_step") || stderr.contains("failed") || stderr.contains("✗"),
@@ -8209,12 +8217,13 @@ fn cli_run_snapshot_after_failed_run() {
          [[rules]]\nname = \"after\"\nshell = \"echo ok > after.txt\"\noutput = [\"after.txt\"]\n",
     );
 
-    // --keep-going runs report failures in the summary and exit 0 (existing
-    // semantics); the snapshot is taken before the summary completes.
+    // --keep-going runs report failures in the summary and exit non-zero
+    // (issue #133: required failures always fail the run); the snapshot is
+    // taken before the verdict.
     oxo_flow_cmd()
         .args(["run", wf.to_str().unwrap(), "--keep-going"])
         .assert()
-        .success();
+        .failure();
 
     let snapshots = snapshot_files(dir.path());
     assert_eq!(
