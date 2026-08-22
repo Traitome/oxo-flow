@@ -318,6 +318,13 @@ impl Default for ExecutorConfig {
     }
 }
 
+/// Default throttle for the resource-wait diagnostics (issue #123): a rule
+/// parked on the pool prints a "waiting for resources" warning at most this
+/// often, so priority-inversion starvation is diagnosable from the log
+/// without spamming it. Injectable per-executor for tests; production runs
+/// keep the 60s default (issue #136).
+pub const DEFAULT_WAIT_REPORT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
 pub struct LocalExecutor {
     config: ExecutorConfig,
     semaphore: Arc<Semaphore>,
@@ -325,6 +332,9 @@ pub struct LocalExecutor {
     resource_pool: Arc<Mutex<ResourcePool>>,
     /// Wakes waiters when resources are released back to the pool.
     resource_notify: Arc<tokio::sync::Notify>,
+    /// Throttle interval for the "waiting for resources" diagnostics
+    /// (issue #123); defaults to [`DEFAULT_WAIT_REPORT_INTERVAL`].
+    wait_report_interval: std::time::Duration,
     /// Detected system thread count (respects cgroup limits on Linux).
     system_threads: u32,
     /// Detected system total memory in MB (respects cgroup limits on Linux).
@@ -451,11 +461,19 @@ impl LocalExecutor {
             env_resolver,
             resource_pool,
             resource_notify: Arc::new(tokio::sync::Notify::new()),
+            wait_report_interval: DEFAULT_WAIT_REPORT_INTERVAL,
             system_threads: max_threads,
             system_memory_mb: max_memory_mb,
             rss_sampler: Arc::new(super::rss::RssSampler::new()),
             active_pids: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
+    }
+
+    /// Override the resource-wait diagnostics throttle (issue #136): tests
+    /// drive a tiny interval to exercise the report path; production keeps
+    /// the 60s [`DEFAULT_WAIT_REPORT_INTERVAL`].
+    pub fn set_wait_report_interval(&mut self, interval: std::time::Duration) {
+        self.wait_report_interval = interval;
     }
 
     /// Snapshot of the in-flight child pid per rule (issue #131). The
@@ -792,6 +810,15 @@ impl LocalExecutor {
             .and_then(crate::scheduler::parse_memory_mb)
             && declared > container_ceiling_mb
         {
+            // Loud, not silent (issue #136 LOW): the clamp keeps the run
+            // alive but a tool that genuinely needs the declared amount
+            // will OOM inside the cgroup — the operator must see why.
+            tracing::warn!(
+                rule = %rule.name,
+                declared_memory_mb = declared,
+                ceiling_memory_mb = container_ceiling_mb,
+                "rule declares more memory than the machine provides — clamping the container --memory limit (OOM risk if the tool actually needs the declared amount)"
+            );
             resources.memory = Some(format!("{container_ceiling_mb}M"));
         }
         match self.env_resolver.wrap_command(
@@ -871,13 +898,29 @@ impl LocalExecutor {
 
         // Wait diagnostics (issue #123): a rule parked here is invisible
         // from the outside — it has printed "Running" but spawned nothing.
-        // Emit a throttled warning every 60s naming what the rule needs and
-        // WHO holds it, so priority-inversion starvation (live: auto-sra
-        // dumps starved by merges sharing the limit_merge group) is
-        // diagnosable from the log instead of hanging silently.
+        // Emit a throttled warning (every `wait_report_interval`, 60s by
+        // default) naming what the rule needs and WHO holds it, so
+        // priority-inversion starvation (live: auto-sra dumps starved by
+        // merges sharing the limit_merge group) is diagnosable from the log
+        // instead of hanging silently.
         let wait_started = std::time::Instant::now();
         let mut last_report = wait_started;
         loop {
+            // Lost-wakeup guard (issue #136): register the wakeup future
+            // BEFORE the acquisition check. `notify_waiters()` wakes only
+            // waiters that are already registered and stores nothing, so a
+            // waiter that registered only at park time could miss a release
+            // that lands between its failed check and its park — and if that
+            // was the last release, sleep forever. Registering first closes
+            // the window: a release after this point wakes this waiter; a
+            // release before it is visible to the check below (or was caught
+            // by the previous cycle's registration).
+            let notified = self.resource_notify.notified();
+            let mut notified = std::pin::pin!(notified);
+            let waker = std::task::Waker::noop();
+            let _ = notified
+                .as_mut()
+                .poll(&mut std::task::Context::from_waker(waker));
             {
                 let mut pool = self.resource_pool.lock().await;
                 // FIFO-gated acquisition (issue #123 100% guarantee): the
@@ -885,7 +928,7 @@ impl LocalExecutor {
                 // waiter can never be leapfrogged by fresh arrivals.
                 if pool.try_acquire_fair(rule, self.system_threads, self.system_memory_mb) {
                     let waited = wait_started.elapsed().as_secs();
-                    if waited >= 60 {
+                    if waited >= self.wait_report_interval.as_secs() {
                         tracing::info!(
                             rule = %rule.name,
                             waited_secs = waited,
@@ -894,7 +937,7 @@ impl LocalExecutor {
                     }
                     return Ok(());
                 }
-                if last_report.elapsed().as_secs() >= 60 {
+                if last_report.elapsed() >= self.wait_report_interval {
                     tracing::warn!(
                         rule = %rule.name,
                         waited_secs = wait_started.elapsed().as_secs(),
@@ -904,8 +947,10 @@ impl LocalExecutor {
                     last_report = std::time::Instant::now();
                 }
             }
-            // Resources busy — wait for a release notification.
-            self.resource_notify.notified().await;
+            // Resources busy — wait for a release notification. The future
+            // was already registered above, so this park cannot miss a
+            // release that happened between the check and the park.
+            notified.await;
         }
     }
 
@@ -2085,9 +2130,9 @@ async fn remove_tree(path: &Path) -> std::io::Result<()> {
 ///
 /// Runner-side masking, GitHub-Actions-style: every occurrence of each
 /// value is replaced with `***` before the text lands in the job record
-/// (checkpoint, report, AI recovery, web). Values shorter than 4
-/// characters are not masked — the same threshold GitHub Actions uses, so
-/// common short strings (thresholds, counts) are not mass-redacted.
+/// (checkpoint, report, AI recovery, web). Every NON-EMPTY value is
+/// masked — 3-character credentials are rare but real, and masking has no
+/// false-positive cost for keys the user declared sensitive (issue #136).
 /// Structured forms of a secret (JSON/YAML serialization, base64) do not
 /// match the exact value and pass through — the documented limitation of
 /// exact-match masking.
@@ -2097,7 +2142,7 @@ pub fn mask_sensitive(text: &str, values: &[String]) -> String {
     }
     let mut masked = text.to_string();
     for value in values {
-        if value.chars().count() >= 4 {
+        if !value.is_empty() {
             masked = masked.replace(value.as_str(), "***");
         }
     }
@@ -2570,18 +2615,19 @@ mod tests {
 
     #[test]
     fn mask_sensitive_redacts_matching_values_only() {
-        // Values >= 4 chars are masked; short/empty values are skipped (the
-        // same threshold GitHub Actions uses, to avoid mass-redacting common
-        // short strings like thresholds). Overlapping values are masked
+        // Every non-empty value is masked — 3-char credentials are rare but
+        // real, and masking has no false-positive cost for keys the user
+        // declared sensitive (issue #136). Overlapping values are masked
         // independently of order.
         let values = vec!["s3cr3t-token-42".to_string(), "ab".to_string()];
-        let text = "token is s3cr3t-token-42 and again s3cr3t-token-42; ab stays";
+        let text = "token is s3cr3t-token-42 and again s3cr3t-token-42; ab is short but masked";
         let masked = mask_sensitive(text, &values);
         assert_eq!(
-            masked, "token is *** and again ***; ab stays",
-            "long values mask, short values stay"
+            masked, "token is *** and again ***; *** is short but masked",
+            "every non-empty value masks, including short ones"
         );
         assert!(!masked.contains("s3cr3t-token-42"));
+        assert!(!masked.contains("ab"));
 
         // Empty input and empty value list are no-ops.
         assert_eq!(mask_sensitive("plain", &[]), "plain");
@@ -2625,5 +2671,236 @@ mod tests {
         let ex = executor_with(4, 2048);
         let cmd = ex.resolve_command("echo hi", &docker_rule("1G"), None);
         assert!(cmd.contains("--memory 1G"), "cmd: {cmd}");
+    }
+
+    // ── Resource-wait diagnostics (issue #123 / #136) ────────────────
+
+    /// Minimal tracing subscriber that captures formatted events (level +
+    /// fields) for assertions — avoids a tracing-subscriber dev-dependency.
+    struct CaptureSubscriber {
+        events: Arc<std::sync::Mutex<Vec<(tracing::Level, String)>>>,
+    }
+
+    impl tracing::Subscriber for CaptureSubscriber {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+        fn enter(&self, _span: &tracing::span::Id) {}
+        fn exit(&self, _span: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            struct Fields(String);
+            impl tracing::field::Visit for Fields {
+                fn record_debug(
+                    &mut self,
+                    field: &tracing::field::Field,
+                    value: &dyn std::fmt::Debug,
+                ) {
+                    if !self.0.is_empty() {
+                        self.0.push(' ');
+                    }
+                    self.0.push_str(field.name());
+                    self.0.push('=');
+                    self.0.push_str(&format!("{value:?}"));
+                }
+                fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                    if !self.0.is_empty() {
+                        self.0.push(' ');
+                    }
+                    self.0.push_str(field.name());
+                    self.0.push('=');
+                    self.0.push_str(value);
+                }
+                fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+                    if !self.0.is_empty() {
+                        self.0.push(' ');
+                    }
+                    self.0.push_str(field.name());
+                    self.0.push('=');
+                    self.0.push_str(&value.to_string());
+                }
+                fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+                    if !self.0.is_empty() {
+                        self.0.push(' ');
+                    }
+                    self.0.push_str(field.name());
+                    self.0.push('=');
+                    self.0.push_str(&value.to_string());
+                }
+                fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+                    if !self.0.is_empty() {
+                        self.0.push(' ');
+                    }
+                    self.0.push_str(field.name());
+                    self.0.push('=');
+                    self.0.push_str(&value.to_string());
+                }
+            }
+            let mut fields = Fields(String::new());
+            event.record(&mut fields);
+            self.events
+                .lock()
+                .unwrap()
+                .push((*event.metadata().level(), fields.0));
+        }
+    }
+
+    /// Recompute every callsite's cached interest under THIS test's
+    /// subscriber. tracing caches `Interest` globally per callsite; a
+    /// callsite is registered (and cached) on first use by whichever thread
+    /// executes it first. A parallel test that emits through a callsite
+    /// while no subscriber is active on its thread (the common case in this
+    /// binary) caches that callsite as `Interest::never` — and `event!`
+    /// then drops it process-wide, silently, forever. Rebuilding while our
+    /// `with_default` guard is live (and is the only registered dispatcher)
+    /// repins every callsite to `always`, so assertions on captured events
+    /// stop depending on global registration order.
+    fn repair_interest_cache() {
+        tracing::callsite::rebuild_interest_cache();
+    }
+
+    fn rule_with_resources(name: &str, threads: u32, memory_mb: u32) -> Rule {
+        Rule {
+            name: name.to_string(),
+            resources: Resources {
+                threads,
+                memory: Some(format!("{memory_mb}M")),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn wait_diagnostics_are_throttled_and_name_holders() {
+        // The report interval is injectable (issue #136): with a 20ms
+        // interval the throttled "waiting for resources" warn must fire
+        // naming the holder, and the "resource wait resolved" info must
+        // follow once the waiter acquires.
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        tracing::subscriber::with_default(
+            CaptureSubscriber {
+                events: Arc::clone(&events),
+            },
+            || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                rt.block_on(async {
+                    let mut ex = executor_with(2, 2048);
+                    ex.set_wait_report_interval(std::time::Duration::from_millis(20));
+                    let ex = Arc::new(ex);
+                    // Occupy the whole pool with two holders so a partial
+                    // release keeps the waiter parked long enough to trip
+                    // the throttled report.
+                    let holder_a = rule_with_resources("holder_a", 1, 1024);
+                    let holder_b = rule_with_resources("holder_b", 1, 1024);
+                    {
+                        let mut pool = ex.resource_pool.lock().await;
+                        pool.reserve(&holder_a, 2, 2048);
+                        pool.reserve(&holder_b, 2, 2048);
+                    }
+                    let waiter = rule_with_resources("waiter", 2, 2048);
+                    let ex_task = Arc::clone(&ex);
+                    let task = tokio::spawn(async move { ex_task.check_resources(&waiter).await });
+                    // First iteration parks without reporting (below the
+                    // interval); the park itself is the wakeup registration.
+                    tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+                    // Partial release: still not enough for the waiter —
+                    // the throttled warn fires now, naming holder_b. The
+                    // interest-cache repair is synchronous here, so the
+                    // waiter task (which only runs when we next await) sees
+                    // a cache that lets its events through.
+                    repair_interest_cache();
+                    {
+                        let mut pool = ex.resource_pool.lock().await;
+                        pool.release(&holder_a, 2, 2048, &HashMap::new());
+                    }
+                    ex.resource_notify.notify_waiters();
+                    tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+                    // Full release: the waiter acquires and logs the
+                    // resolve info.
+                    repair_interest_cache();
+                    {
+                        let mut pool = ex.resource_pool.lock().await;
+                        pool.release(&holder_b, 2, 2048, &HashMap::new());
+                    }
+                    ex.resource_notify.notify_waiters();
+                    task.await
+                        .expect("waiter task joins")
+                        .expect("waiter acquires");
+                });
+            },
+        );
+        let events = events.lock().unwrap();
+        let report_warns: Vec<&str> = events
+            .iter()
+            .filter(|(level, text)| {
+                *level == tracing::Level::WARN && text.contains("waiting for resources")
+            })
+            .map(|(_, text)| text.as_str())
+            .collect();
+        assert!(
+            report_warns.iter().any(|text| text.contains("holder_b")),
+            "the throttled warn must name who holds the resources: {report_warns:?}"
+        );
+        assert!(
+            report_warns.len() <= 2,
+            "the warn must be throttled, not spammed: {report_warns:?}"
+        );
+        assert!(
+            events.iter().any(|(level, text)| {
+                *level == tracing::Level::INFO && text.contains("resource wait resolved")
+            }),
+            "the resolve info must be emitted: {events:?}"
+        );
+    }
+
+    #[test]
+    fn resource_wait_wakes_on_release_notification_after_park() {
+        // Reasoning test for the lost-wakeup ordering guarantee (issue
+        // #136): the wait loop registers its `notified()` future BEFORE
+        // the acquisition check, so a release landing after the check but
+        // before the park wakes the waiter — `notify_waiters()` stores
+        // nothing for unregistered waiters, so a waiter that registered
+        // only at park time could miss the LAST release and sleep forever.
+        // A deterministic reproduction of that scheduling window is not
+        // feasible in a unit test; this pins the observable contract: a
+        // waiter parked on a fully held pool must wake and acquire from a
+        // SINGLE release+notify, with no further notifications ever
+        // arriving.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let mut ex = executor_with(1, 1024);
+            ex.set_wait_report_interval(std::time::Duration::from_millis(1));
+            let ex = Arc::new(ex);
+            let holder = rule_with_resources("holder", 1, 1024);
+            {
+                let mut pool = ex.resource_pool.lock().await;
+                pool.reserve(&holder, 1, 1024);
+            }
+            let waiter = rule_with_resources("waiter", 1, 1024);
+            let ex_task = Arc::clone(&ex);
+            let task = tokio::spawn(async move { ex_task.check_resources(&waiter).await });
+            // Let the waiter register and park.
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            {
+                let mut pool = ex.resource_pool.lock().await;
+                pool.release(&holder, 1, 1024, &HashMap::new());
+            }
+            // Exactly one notification — no retries, no further releases.
+            ex.resource_notify.notify_waiters();
+            task.await
+                .expect("waiter task joins")
+                .expect("waiter must acquire from the single notification");
+        });
     }
 }

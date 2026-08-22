@@ -30,7 +30,7 @@ catch issues early.
 | `--output` | — | — | Output file path to verify after the run (fails with exit code 1 if the file is not found) |
 | `--run` | — | — | Execute the workflow after validation and lint (runs for real) |
 | `--jobs` | `-j` | `1` | Number of parallel jobs (only with `--run`) |
-| `--samples` | — | — | Test only a subset of samples: `first:N` (pilot), explicit names, or `ready` (complete entry inputs; repeatable, comma-separated) |
+| `--samples` | — | — | Sample selection: `@path` **replaces** the workflow's samples from a samplesheet, `+@path` **appends** (same-name groups merge, new groups added); names **filter** (or **declare** when the workflow ships no samples), `first:N` (pilot) and `ready` (samples whose entry inputs are complete) **filter**. Repeatable, comma-separated |
 | `--workdir` | `-d` | — | Working directory for the test run (default: the workflow file's directory) |
 | `--profile` | — | — | Execution profile for the `--run` step (same merge semantics as `run`) |
 | `--target` | `-t` | — | Run only specific target rules (repeatable, prefix matching) — applies to the `--run` step |

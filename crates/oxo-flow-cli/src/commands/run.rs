@@ -448,6 +448,40 @@ fn apply_cli_overrides(
     Ok(())
 }
 
+/// Quote a path for safe embedding in a reference build command (executed
+/// via `bash -c` / `sh -c`): wrap in single quotes and escape embedded
+/// quotes with the POSIX `'\''` sequence — the same idiom the environment
+/// wrapper uses when embedding commands into `sh -c '...'` and the cluster
+/// renderer uses for its `cd '...'`. Without the quoting, a source path
+/// containing spaces or shell metacharacters would be spliced bare into the
+/// command (issue #136 tier-2 audit).
+fn quote_shell_path(path: &str) -> String {
+    format!("'{}'", path.replace('\'', "'\\''"))
+}
+
+/// Substitute the reference builder's `{source}` placeholder with the
+/// expanded source path, shell-quoted so the path survives as one argument
+/// (issue #136 tier-2 audit — the raw splice broke on spaces/metacharacters).
+fn substitute_source_placeholder(build_cmd: &str, expanded_source: &str) -> String {
+    build_cmd.replace("{source}", &quote_shell_path(expanded_source))
+}
+
+/// Render the "known modules" list for an unknown-module error. `run` and
+/// `dry-run` share the phrasing — in particular the explicit empty-list
+/// hint, so a workflow without includes cannot print a trailing "known
+/// modules: " (issue #136 tier-2 audit).
+fn known_modules_hint(module_rules: &std::collections::HashMap<String, Vec<String>>) -> String {
+    if module_rules.is_empty() {
+        "(none — no [[include]] modules)".to_string()
+    } else {
+        module_rules
+            .keys()
+            .map(|k| k.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_command(
     workflow: Option<PathBuf>,
@@ -586,18 +620,9 @@ pub async fn run_command(
         match config.module_closure(m) {
             Some(names) => target.extend(names),
             None => {
-                let known: Vec<&String> = config.module_rules.keys().collect();
                 return Err(anyhow::anyhow!(
                     "unknown module '{m}' — known modules: {}",
-                    if known.is_empty() {
-                        "(none — no [[include]] modules)".to_string()
-                    } else {
-                        known
-                            .iter()
-                            .map(|k| k.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    }
+                    known_modules_hint(&config.module_rules)
                 ));
             }
         }
@@ -937,6 +962,12 @@ pub async fn run_command(
                 max_submitted,
                 rerun,
                 resume_failed,
+                // The cluster path honors --cache-dir (shared env cache);
+                // --skip-env-setup/--ai-recover are unsupported there and
+                // warned about at submit time (issue #136 tier-2 audit).
+                cache_dir: cache_dir.clone(),
+                skip_env_setup,
+                ai_recover,
             },
         )
         .await?;
@@ -1199,13 +1230,16 @@ pub async fn run_command(
                 // `{source}` is the builder-template spelling of the same
                 // thing; render it too (live evidence: tcasia's STAR
                 // genomeGenerate died with 'could not open genomeFastaFile:
-                // {source}' — the placeholder was never substituted).
+                // {source}' — the placeholder was never substituted). The
+                // path is shell-quoted — a bare splice breaks reference
+                // builds whose source path contains spaces (issue #136
+                // tier-2 audit).
                 if let Some(source) = ref_def.source.as_deref() {
                     let expanded = oxo_flow_core::executor::checkpoint::expand_config_in_path(
                         source,
                         &wildcard_values,
                     );
-                    build_cmd = build_cmd.replace("{source}", &expanded);
+                    build_cmd = substitute_source_placeholder(&build_cmd, &expanded);
                 }
                 // References take the same shell prelude as rules (issue #92),
                 // before the environment wrapper resolves.
@@ -1489,11 +1523,15 @@ pub async fn run_command(
         }
     }
 
-    // Returns rules that are ready to run: dependencies satisfied, not yet
-    // submitted, and not blocked by a failed upstream rule.  Sorted by
-    // priority (descending) then name for determinism.
-    // Priorities captured once: the closure may outlive config borrows
-    // across checkpoint re-entry (config mutates mid-run, issue #78 P3).
+    // Ready-list ordering (age_ready_list below, called every dispatch
+    // round): the scheduler's ready rules are filtered to this run's order
+    // set minus already-submitted rules, then sorted by EFFECTIVE priority
+    // — declared priority plus the rounds a rule has waited ready-but-not-
+    // submitted (the aging counter of issue #123, cluster-side issue #134)
+    // — descending, ties broken by name for determinism. Priorities are
+    // captured ONCE up front: the config mutates mid-run across checkpoint
+    // re-entry (issue #78 P3), and re-reading priorities per round would
+    // drift the ordering.
     let priority_map: std::collections::HashMap<String, i32> = config
         .rules
         .iter()
@@ -2575,12 +2613,7 @@ pub async fn dry_run_command(
             None => {
                 return Err(anyhow::anyhow!(
                     "unknown module '{m}' — known modules: {}",
-                    config
-                        .module_rules
-                        .keys()
-                        .map(|k| k.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    known_modules_hint(&config.module_rules)
                 ));
             }
         }
@@ -3745,7 +3778,9 @@ pub async fn resume_command(
 
 #[cfg(test)]
 mod tests {
-    use super::{age_ready_list, parse_cli_overrides};
+    use super::{
+        age_ready_list, known_modules_hint, parse_cli_overrides, substitute_source_placeholder,
+    };
     use std::collections::HashSet;
 
     fn declared(keys: &[&str]) -> HashSet<String> {
@@ -3906,5 +3941,46 @@ mod tests {
     fn rejects_bare_non_key_value_positional() {
         let err = parse_cli_overrides(vec!["naked".to_string()], &declared(&[])).unwrap_err();
         assert!(format!("{err}").contains("KEY=VALUE"), "{err:?}");
+    }
+
+    #[test]
+    fn source_placeholder_quotes_paths_with_spaces() {
+        // A `{source}` path containing spaces must survive the reference
+        // build as ONE shell argument (issue #136 tier-2 audit — the raw
+        // splice broke on spaces/metacharacters).
+        let rendered =
+            substitute_source_placeholder("STAR --genomeDir {source}", "refs/genome data/hg38");
+        assert_eq!(rendered, "STAR --genomeDir 'refs/genome data/hg38'");
+    }
+
+    #[test]
+    fn source_placeholder_escapes_embedded_quotes() {
+        // POSIX-safe: an embedded quote closes and reopens the quoting
+        // (the `'\''` idiom the environment wrapper also uses).
+        let rendered = substitute_source_placeholder("--in {source}", "dir/we'ird");
+        assert_eq!(rendered, "--in 'dir/we'\\''ird'");
+    }
+
+    #[test]
+    fn source_placeholder_without_placeholder_is_unchanged() {
+        let rendered = substitute_source_placeholder("echo built", "ignored");
+        assert_eq!(rendered, "echo built");
+    }
+
+    #[test]
+    fn known_modules_hint_names_the_empty_case() {
+        // Dry-run must print the same explicit "(none — no [[include]]
+        // modules)" hint `run` does instead of a trailing empty list
+        // (issue #136 tier-2 audit).
+        let empty: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        assert_eq!(
+            known_modules_hint(&empty),
+            "(none — no [[include]] modules)"
+        );
+        let mut map: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        map.insert("qc".to_string(), vec!["qc".to_string()]);
+        assert_eq!(known_modules_hint(&map), "qc");
     }
 }

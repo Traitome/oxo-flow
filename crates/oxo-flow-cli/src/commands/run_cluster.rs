@@ -45,6 +45,18 @@ pub(crate) struct ClusterRunArgs<'a> {
     pub max_submitted: Option<usize>,
     pub rerun: bool,
     pub resume_failed: bool,
+    /// `--cache-dir`: env cache location (falls back to the same
+    /// `workdir/.oxo-flow/env-cache` default the local executor uses, so
+    /// the two execution paths share env state — issue #136 tier-2 audit).
+    pub cache_dir: Option<PathBuf>,
+    /// `--skip-env-setup`: honored by the local executor. The cluster path
+    /// never auto-creates environments, so the flag is a no-op there — it
+    /// is announced at submit time, never silently accepted.
+    pub skip_env_setup: bool,
+    /// `--ai-recover`: supported by the local loop only; the cluster path
+    /// has no AI recovery. A request is announced at submit time, never
+    /// silently accepted.
+    pub ai_recover: bool,
 }
 
 /// Outcome of a cluster run, mirroring what the local loop reports.
@@ -113,6 +125,15 @@ fn create_run_dir(workdir: &Path) -> Result<PathBuf> {
         }
     }
     Ok(run_dir)
+}
+
+/// The env cache dir for a cluster run: `--cache-dir` when given, else the
+/// same `workdir/.oxo-flow/env-cache` default the local executor uses, so
+/// the two execution paths share env state (issue #136 tier-2 audit).
+fn cluster_env_cache_dir(cache_dir: Option<&Path>, workdir: &Path) -> PathBuf {
+    cache_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| workdir.join(".oxo-flow").join("env-cache"))
 }
 
 /// Fold one driver-returned record into the checkpoint, mirroring the local
@@ -247,7 +268,30 @@ pub(crate) async fn run_on_cluster(
         return Ok(summary);
     }
 
-    let env_resolver = EnvironmentResolver::new();
+    // The local path's cache default is `workdir/.oxo-flow/env-cache` (or
+    // --cache-dir); the cluster path must share it so env state is not
+    // split across two caches (issue #136 tier-2 audit — `EnvironmentResolver::new()`
+    // would silently use the process-global default instead).
+    let env_resolver = EnvironmentResolver::with_cache_dir(&cluster_env_cache_dir(
+        args.cache_dir.as_deref(),
+        args.workdir,
+    ));
+    // Flags the cluster path cannot honor are announced at submit time —
+    // never silently accepted (issue #136 tier-2 audit).
+    if args.skip_env_setup {
+        eprintln!(
+            "  {} --skip-env-setup has no effect on the cluster path — environments are \
+             never auto-created there (accepted for command-line parity)",
+            "Warning:".bold().yellow()
+        );
+    }
+    if args.ai_recover {
+        eprintln!(
+            "  {} --ai-recover is not supported on the cluster path — failed jobs are \
+             recorded for resume/--resume-failed instead of AI-repaired",
+            "Warning:".bold().yellow()
+        );
+    }
     let mut plan = ScheduledPlan::build(
         args.config,
         args.dag,
@@ -360,4 +404,27 @@ pub(crate) async fn run_on_cluster(
         );
     }
     Ok(summary)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cluster_env_cache_dir;
+
+    #[test]
+    fn env_cache_defaults_to_workdir_env_cache() {
+        // The cluster path must share the local executor's default cache
+        // dir (`workdir/.oxo-flow/env-cache`), not EnvironmentResolver's
+        // process-global default (issue #136 tier-2 audit).
+        let dir = cluster_env_cache_dir(None, std::path::Path::new("/wf"));
+        assert_eq!(dir, std::path::PathBuf::from("/wf/.oxo-flow/env-cache"));
+    }
+
+    #[test]
+    fn env_cache_flag_wins_over_default() {
+        let dir = cluster_env_cache_dir(
+            Some(std::path::Path::new("/custom/cache")),
+            std::path::Path::new("/wf"),
+        );
+        assert_eq!(dir, std::path::PathBuf::from("/custom/cache"));
+    }
 }

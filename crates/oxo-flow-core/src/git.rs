@@ -12,26 +12,6 @@ use fs2::FileExt;
 const GITHUB_CLONE_MIRRORS: &[&str] = &["https://ghfast.top/", "https://gh-proxy.com/"];
 
 /// Candidate clone URLs: the official URL first, then each mirror.
-/// Locate the root of the git repository containing `path`, if any: the
-/// nearest ancestor directory holding a `.git` entry. Walks up from
-/// `path`'s parent (when `path` is a file) or `path` itself (when it is a
-/// directory). Shared by checkpoint provenance (issue #115 pillar 1) and
-/// catalog metadata derivation (`info --json`, issue #124 pillar 3).
-pub fn find_repo_root(path: &std::path::Path) -> Option<std::path::PathBuf> {
-    // Absolute first: lexical parent-walking on a shallow relative path
-    // (e.g. `examples/gallery/x.oxoflow` from the repo root) terminates at
-    // the empty path and would never reach the CWD's repository.
-    let start = std::path::absolute(path).ok()?;
-    let mut dir = Some(start.parent().unwrap_or(&start));
-    while let Some(d) = dir {
-        if d.join(".git").exists() {
-            return Some(d.to_path_buf());
-        }
-        dir = d.parent();
-    }
-    None
-}
-
 pub fn mirror_candidates(repo_url: &str) -> Vec<String> {
     let official = repo_url.trim_end_matches('/').to_string();
     if !official.starts_with("https://github.com/") {
@@ -44,6 +24,33 @@ pub fn mirror_candidates(repo_url: &str) -> Vec<String> {
                 .map(|prefix| format!("{prefix}{official}")),
         )
         .collect()
+}
+
+/// Locate the root of the git repository containing `path`, if any: the
+/// nearest ancestor directory holding a `.git` entry. Walks up from
+/// `path`'s parent (when `path` is a file) or `path` itself (when it is a
+/// directory). Shared by checkpoint provenance (issue #115 pillar 1) and
+/// catalog metadata derivation (`info --json`, issue #124 pillar 3).
+pub fn find_repo_root(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    // Absolute first: lexical parent-walking on a shallow relative path
+    // (e.g. `examples/gallery/x.oxoflow` from the repo root) terminates at
+    // the empty path and would never reach the CWD's repository.
+    let start = std::path::absolute(path).ok()?;
+    // Walk starts at the directory itself when `path` is a directory, and
+    // at its parent when it is a file — the doc promised this, the code
+    // skipped the first step (issue #136).
+    let mut dir = if start.is_dir() {
+        Some(start.as_path())
+    } else {
+        Some(start.parent().unwrap_or(&start))
+    };
+    while let Some(d) = dir {
+        if d.join(".git").exists() {
+            return Some(d.to_path_buf());
+        }
+        dir = d.parent();
+    }
+    None
 }
 
 /// Classify a pinned ref: a full 40-hex commit SHA must be fetched by SHA —
@@ -319,13 +326,40 @@ pub fn module_cache_root() -> std::path::PathBuf {
 }
 
 /// Filesystem-safe cache key for a repo@ref pair.
+///
+/// The readable prefix preserves the old `_`-flattened form; the hash
+/// suffix is the identity. Flattening alone is lossy: `https://a/b` and
+/// `https://a_b` both become `https_a_b`, so unrelated modules would
+/// share a cache dir and clobber each other (issue #136). The FNV-1a
+/// 64-bit hash over `repo\0ref` separates confusable pairs while the
+/// prefix keeps the directory names human-readable.
 pub fn cache_dir_name(repo_url: &str, git_ref: &str) -> String {
-    let mut name = repo_url
+    let repo = repo_url
         .trim_end_matches('/')
         .replace("://", "_")
         .replace('/', "_");
-    name.push_str(&format!("@{}", git_ref.replace('/', "_")));
-    name
+    let reference = git_ref.replace('/', "_");
+    format!(
+        "{repo}@{reference}@{:016x}",
+        cache_dir_hash(repo_url, git_ref)
+    )
+}
+
+/// FNV-1a 64-bit over `repo_url\0git_ref` (NUL-separated so adjacent
+/// segments cannot run together — repo URLs and git refs cannot contain
+/// NUL, so the separator is unambiguous).
+fn cache_dir_hash(repo_url: &str, git_ref: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in repo_url
+        .trim_end_matches('/')
+        .bytes()
+        .chain(std::iter::once(0))
+        .chain(git_ref.bytes())
+    {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 #[cfg(test)]
@@ -457,6 +491,67 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         assert_eq!(find_repo_root(&dir.join("wf.oxoflow")), None);
+        // A directory outside any repository is also None.
+        assert_eq!(find_repo_root(&dir), None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn find_repo_root_handles_directory_inputs() {
+        let dir = std::env::temp_dir().join(format!("oxo-gitdir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(repo.join("sub/dir")).unwrap();
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        // The repo directory itself must be found — the doc promises
+        // "walk starts at the directory itself", but the code skipped the
+        // first step and walked from the parent (issue #136).
+        assert_eq!(
+            find_repo_root(&repo),
+            Some(repo.clone()),
+            "a repo passed as a directory must resolve to itself"
+        );
+        // A directory deep inside the repo resolves to the root.
+        assert_eq!(
+            find_repo_root(&repo.join("sub/dir")),
+            Some(repo),
+            "a nested directory must resolve to the containing repo"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cache_dir_names_are_injective_for_confusable_inputs() {
+        // The old scheme flattened both repo URL and ref with `_` —
+        // `https://github.com/a/b` and `https://github.com/a_b` collapsed
+        // to the same cache dir, so unrelated modules clobbered each other
+        // (issue #136). The pair now carries a hash suffix: identical
+        // inputs still hash identically, confusable inputs differ.
+        let a_b = cache_dir_name("https://github.com/a/b", "main");
+        let a_b_confusable = cache_dir_name("https://github.com/a_b", "main");
+        assert_ne!(
+            a_b, a_b_confusable,
+            "`a/b` and `a_b` must not share a cache dir"
+        );
+        assert_eq!(
+            cache_dir_name("https://github.com/a/b", "main"),
+            a_b,
+            "the name must be deterministic for the same pair"
+        );
+        // Trailing slashes on the repo URL are normalized before hashing.
+        assert_eq!(
+            cache_dir_name("https://github.com/a/b/", "main"),
+            a_b,
+            "a trailing slash must not change the cache dir"
+        );
+        // The prefix stays readable for humans.
+        assert!(
+            a_b.starts_with("https_github.com_a_b@main@"),
+            "the readable prefix must be preserved: {a_b}"
+        );
+        // Ref slashes are flattened like before, still hashed apart.
+        let with_slash = cache_dir_name("https://github.com/a/b", "feature/x");
+        assert!(with_slash.starts_with("https_github.com_a_b@feature_x@"));
+        assert_ne!(with_slash, a_b);
     }
 }
