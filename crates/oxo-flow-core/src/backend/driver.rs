@@ -419,13 +419,25 @@ impl BackendDriver {
                                 base_id.clone(),
                                 chunk.iter().map(|(n, _)| n.clone()).collect(),
                             );
+                            // The array→instance map is what status/resume
+                            // read back — a lost write silently misleads
+                            // them, so it fails the run like the sibling
+                            // run-dir writes above (issue #136 tier-2
+                            // audit; the old `let _ =` swallowed it).
                             if let Some(parent) = index_path.parent() {
-                                let _ = std::fs::create_dir_all(parent);
+                                std::fs::create_dir_all(parent).map_err(|e| {
+                                    OxoFlowError::Config {
+                                        message: format!("cannot create {}: {e}", parent.display()),
+                                    }
+                                })?;
                             }
-                            let _ = std::fs::write(
+                            std::fs::write(
                                 &index_path,
                                 serde_json::to_string_pretty(&array_index).unwrap_or_default(),
-                            );
+                            )
+                            .map_err(|e| OxoFlowError::Config {
+                                message: format!("cannot write {}: {e}", index_path.display()),
+                            })?;
                             for (i, (c_name, c_sr)) in chunk.iter().enumerate() {
                                 let element_id = format!("{}_{}", base_id, i + 1);
                                 // Per-INSTANCE dirs keep the run directory
@@ -1415,6 +1427,67 @@ shell = "cat {input} > merged.txt"
         assert_eq!(mapped.len(), 2);
         assert!(mapped.contains(&"asm_assembler_spades".to_string()));
         assert!(mapped.contains(&"asm_assembler_megahit".to_string()));
+    }
+
+    #[test]
+    fn driver_errors_when_index_json_is_not_writable() {
+        // The array→instance map is what status/resume read back: a write
+        // failure must fail the run, not be swallowed by a `let _ =`
+        // (issue #136 tier-2 audit — a corrupt/missing mapping silently
+        // misleads status about which instance a job id belonged to).
+        let fx = setup();
+        let (d, _) = driver(&fx);
+        // A directory in place of the file makes the write fail.
+        std::fs::create_dir(fx.run_dir.path().join("index.json")).unwrap();
+        // Two instances of one template → one array submission (the only
+        // path that writes index.json).
+        let wf_toml = r#"
+[workflow]
+name = "arr"
+version = "1.0.0"
+
+[[values]]
+name = "assembler"
+values = ["spades", "megahit"]
+
+[[rules]]
+name = "asm"
+output = ["out/{assembler}.txt"]
+shell = "echo asm > out/{assembler}.txt"
+"#;
+        let wf = fx.workdir.path().join("arr.oxoflow");
+        std::fs::write(&wf, wf_toml).unwrap();
+        let mut config = WorkflowConfig::from_file(&wf).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        let mut plan = ScheduledPlan::build(
+            &config,
+            &dag,
+            fx.workdir.path(),
+            &EnvironmentResolver::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let err = runtime
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                },
+            ))
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains("index.json"),
+            "the error must name the index.json write: {err}"
+        );
     }
 
     #[test]

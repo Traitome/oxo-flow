@@ -57,11 +57,17 @@ pub trait EnvironmentBackend: Send + Sync {
     fn cache_key(&self, spec: &str) -> String;
 }
 
-/// Read a conda YAML spec and extract the `name:` field, falling back to file stem.
-fn conda_env_name_from_spec(spec: &str) -> String {
+/// Read a conda YAML spec and extract the `name:` field, falling back to
+/// file stem. The name is interpolated into a shell command string
+/// (`conda run -n <name>`), so it must be validated: an untrusted YAML
+/// `name:` could otherwise break out of the quoting and run arbitrary
+/// shell (issue #136). Fail fast with a clear error instead of emitting
+/// a command that does not do what it says. `kind` names the backend
+/// (conda/mamba) in the error.
+fn conda_env_name_from_spec(kind: &str, spec: &str) -> Result<String> {
     // Try reading the YAML file to extract `name:` field
-    if let Ok(content) = std::fs::read_to_string(spec) {
-        for line in content.lines() {
+    let from_yaml = std::fs::read_to_string(spec).ok().and_then(|content| {
+        content.lines().find_map(|line| {
             let trimmed = line.trim();
             if trimmed.starts_with("name:") || trimmed.starts_with("name :") {
                 let name = trimmed
@@ -71,18 +77,33 @@ fn conda_env_name_from_spec(spec: &str) -> String {
                     .trim()
                     .trim_matches('"')
                     .trim_matches('\'');
-                if !name.is_empty() {
-                    return name.to_string();
-                }
+                (!name.is_empty()).then(|| name.to_string())
+            } else {
+                None
             }
-        }
-    }
+        })
+    });
     // Fall back to file stem
-    std::path::Path::new(spec)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(spec)
-        .to_string()
+    let name = from_yaml.unwrap_or_else(|| {
+        std::path::Path::new(spec)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(spec)
+            .to_string()
+    });
+    if name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        Ok(name)
+    } else {
+        Err(OxoFlowError::Environment {
+            kind: kind.to_string(),
+            message: format!(
+                "invalid environment name '{name}' derived from spec '{spec}': names may contain only alphanumerics, '_' and '-'"
+            ),
+        })
+    }
 }
 
 /// Conda environment backend.
@@ -108,7 +129,7 @@ impl EnvironmentBackend for CondaBackend {
         _resources: Option<&crate::rule::Resources>,
         _workdir: &std::path::Path,
     ) -> Result<String> {
-        let env_name = conda_env_name_from_spec(spec);
+        let env_name = conda_env_name_from_spec("conda", spec)?;
         let escaped = escape_for_sh_single_quote(command);
         // `--no-capture-output` (conda >= 4.13): without it, `conda run`
         // buffers the wrapped process's stdout/stderr through its own
@@ -139,14 +160,14 @@ impl EnvironmentBackend for CondaBackend {
         // or the file stem. Without `-n`, conda 25+ fails with "Unable to
         // determine environment" for YAMLs that declare no name (the common
         // nf-core style — found live: mixscape's seurat_lda.yaml).
-        let env_name = conda_env_name_from_spec(spec);
+        let env_name = conda_env_name_from_spec("conda", spec)?;
         Ok(format!(
             "conda env create -n {env_name} -f {spec} 2>/dev/null || conda env update -n {env_name} -f {spec} --prune"
         ))
     }
 
     fn teardown_command(&self, spec: &str) -> Result<Option<String>> {
-        let env_name = conda_env_name_from_spec(spec);
+        let env_name = conda_env_name_from_spec("conda", spec)?;
         Ok(Some(format!("conda env remove -n {env_name} -y")))
     }
 
@@ -154,9 +175,11 @@ impl EnvironmentBackend for CondaBackend {
         // `conda run` succeeds even when the env's own bin/ is missing
         // (tools then resolve from the system PATH), so the check must
         // target the env prefix itself — CONDA_PREFIX is set by `conda run`.
-        let env_name = conda_env_name_from_spec(spec);
+        // A present-but-empty bin/ (interrupted transaction) is just as
+        // broken: require at least one entry, not just the dir (issue #136).
+        let env_name = conda_env_name_from_spec("conda", spec)?;
         Ok(Some(format!(
-            "conda run -n {env_name} bash -c 'test -d \"$CONDA_PREFIX/bin\"'"
+            "conda run -n {env_name} bash -c 'test -d \"$CONDA_PREFIX/bin\" && ls \"$CONDA_PREFIX/bin\" | head -1 | grep -q .'"
         )))
     }
 
@@ -196,7 +219,7 @@ impl CondaBackend {
                 "conda run --no-capture-output -p {prefix} bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; {escaped}'"
             ))
         } else {
-            let env_name = conda_env_name_from_spec(spec);
+            let env_name = conda_env_name_from_spec("conda", spec)?;
             Ok(format!(
                 "conda run --no-capture-output -n {env_name} bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; {escaped}'"
             ))
@@ -230,7 +253,7 @@ impl CondaBackend {
     ) -> Result<Option<String>> {
         if let Some(prefix) = prefix {
             Ok(Some(format!(
-                "conda run -p {prefix} bash -c 'test -d \"$CONDA_PREFIX/bin\"'"
+                "conda run -p {prefix} bash -c 'test -d \"$CONDA_PREFIX/bin\" && ls \"$CONDA_PREFIX/bin\" | head -1 | grep -q .'"
             )))
         } else {
             self.verify_command(spec)
@@ -357,7 +380,7 @@ impl MambaBackend {
                 self.binary
             ))
         } else {
-            let env_name = conda_env_name_from_spec(spec);
+            let env_name = conda_env_name_from_spec("mamba", spec)?;
             Ok(format!(
                 "{} run -n {env_name} bash -c '{escaped}'",
                 self.binary
@@ -387,7 +410,7 @@ impl MambaBackend {
     ) -> Result<Option<String>> {
         if let Some(prefix) = prefix {
             Ok(Some(format!(
-                "{} run -p {prefix} bash -c 'test -d \"$CONDA_PREFIX/bin\"'",
+                "{} run -p {prefix} bash -c 'test -d \"$CONDA_PREFIX/bin\" && ls \"$CONDA_PREFIX/bin\" | head -1 | grep -q .'",
                 self.binary
             )))
         } else {
@@ -424,7 +447,7 @@ impl EnvironmentBackend for MambaBackend {
         _resources: Option<&crate::rule::Resources>,
         _workdir: &std::path::Path,
     ) -> Result<String> {
-        let env_name = conda_env_name_from_spec(spec);
+        let env_name = conda_env_name_from_spec("mamba", spec)?;
         let escaped = escape_for_sh_single_quote(command);
         Ok(format!(
             "{} run -n {env_name} bash -c '{escaped}'",
@@ -435,7 +458,7 @@ impl EnvironmentBackend for MambaBackend {
     fn setup_command(&self, spec: &str) -> Result<String> {
         // Same name-consistency fix as CondaBackend (see there): mamba 2.x
         // refuses nameless YAMLs without `-n`.
-        let env_name = conda_env_name_from_spec(spec);
+        let env_name = conda_env_name_from_spec("mamba", spec)?;
         Ok(format!(
             "{} env create -n {env_name} -f {spec} 2>/dev/null || {} env update -n {env_name} -f {spec} --prune",
             self.binary, self.binary
@@ -443,14 +466,14 @@ impl EnvironmentBackend for MambaBackend {
     }
 
     fn teardown_command(&self, spec: &str) -> Result<Option<String>> {
-        let env_name = conda_env_name_from_spec(spec);
+        let env_name = conda_env_name_from_spec("mamba", spec)?;
         Ok(Some(format!("{} env remove -n {env_name} -y", self.binary)))
     }
 
     fn verify_command(&self, spec: &str) -> Result<Option<String>> {
-        let env_name = conda_env_name_from_spec(spec);
+        let env_name = conda_env_name_from_spec("mamba", spec)?;
         Ok(Some(format!(
-            "{} run -n {env_name} bash -c 'test -d \"$CONDA_PREFIX/bin\"'",
+            "{} run -n {env_name} bash -c 'test -d \"$CONDA_PREFIX/bin\" && ls \"$CONDA_PREFIX/bin\" | head -1 | grep -q .'",
             self.binary
         )))
     }
@@ -593,14 +616,17 @@ impl EnvironmentBackend for SingularityBackend {
         //   when the derived SIF is absent — `pull` refuses to overwrite
         //   an existing SIF, and pulling per rule would rebuild the image
         //   every time. The SIF name follows the pull naming (last path
-        //   segment, ':' -> '_'); the per-key env lock serializes the
-        //   truly-missing case.
+        //   segment, ':' -> '_'); an https URI whose final segment already
+        //   ends in `.sif` must not get a second `.sif` appended — the
+        //   existence guard would then never match the pulled artifact
+        //   and every rule would re-pull (issue #136). The per-key env
+        //   lock serializes the truly-missing case.
         // - a local SIF path: already deployed (e.g. a shared site image
         //   store) — nothing to pull. `{binary} pull` accepts only URIs,
         //   so a path must bypass it entirely; a missing local file fails
         //   with a clear diagnostic instead of pull's URI parse error.
         Ok(format!(
-            "case '{spec}' in *://*) IMG=$(printf '%s' '{spec}' | sed 's#^docker://##; s#.*/##; s#:#_#g').sif; [ -f \"$IMG\" ] || {b} pull {spec} ;; *) [ -f '{spec}' ] || {{ echo \"singularity spec '{spec}' is neither a pull URI nor an existing file\" >&2; exit 1; }} ;; esac",
+            "case '{spec}' in *://*) IMG=$(printf '%s' '{spec}' | sed 's#^docker://##; s#.*/##; s#:#_#g'); case \"$IMG\" in *.sif) ;; *) IMG=\"$IMG.sif\" ;; esac; [ -f \"$IMG\" ] || {b} pull {spec} ;; *) [ -f '{spec}' ] || {{ echo \"singularity spec '{spec}' is neither a pull URI nor an existing file\" >&2; exit 1; }} ;; esac",
             b = self.binary,
         ))
     }
@@ -1464,6 +1490,59 @@ mod tests {
         assert_eq!(backend.cache_key("envs/qc.yaml"), "conda:envs/qc.yaml");
     }
 
+    #[test]
+    fn conda_env_name_validation_rejects_untrusted_yaml_names() {
+        // The env name is interpolated into `conda run -n <name>` inside a
+        // shell string, so an untrusted YAML `name:` could break out of the
+        // quoting and run arbitrary shell (issue #136). The derived name is
+        // validated and the failure is a clear environment error, not a
+        // silently emitted command that does not do what it says.
+        let dir = tempfile::tempdir().unwrap();
+        let evil = dir.path().join("evil.yaml");
+        std::fs::write(&evil, "name: \"x'; rm -rf ~ ;'\"\n").unwrap();
+        match conda_env_name_from_spec("conda", evil.to_str().unwrap()) {
+            Err(OxoFlowError::Environment { kind, message }) => {
+                assert_eq!(kind, "conda");
+                assert!(
+                    message.contains("invalid environment name"),
+                    "message must explain the rejection: {message}"
+                );
+                assert!(
+                    message.contains("alphanumerics"),
+                    "message must state the allowed alphabet: {message}"
+                );
+            }
+            other => panic!("expected an Environment error, got: {other:?}"),
+        }
+        // The mamba kind is surfaced through the same check.
+        assert!(matches!(
+            conda_env_name_from_spec("mamba", evil.to_str().unwrap()),
+            Err(OxoFlowError::Environment { kind, .. }) if kind == "mamba"
+        ));
+    }
+
+    #[test]
+    fn conda_env_name_validation_accepts_plain_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = dir.path().join("env.yaml");
+        std::fs::write(&yaml, "name: rnaseq_2\nchannels: [bioconda]\n").unwrap();
+        assert_eq!(
+            conda_env_name_from_spec("conda", yaml.to_str().unwrap()).unwrap(),
+            "rnaseq_2",
+            "a YAML name within the allowed alphabet passes"
+        );
+        assert_eq!(
+            conda_env_name_from_spec("conda", "envs/qc.yaml").unwrap(),
+            "qc",
+            "the file-stem fallback passes for plain stems"
+        );
+        assert_eq!(
+            conda_env_name_from_spec("conda", "my-env_1").unwrap(),
+            "my-env_1",
+            "a bare name spec passes"
+        );
+    }
+
     // ── DockerBackend ──────────────────────────────────────────────
 
     #[test]
@@ -1538,6 +1617,27 @@ mod tests {
         // inspect-first guard for the SIF naming
         assert!(cmd.starts_with("case 'docker://ubuntu:22.04' in *://*)"));
         assert!(cmd.contains("IMG=$(printf '%s' 'docker://ubuntu:22.04'"));
+        assert!(cmd.contains("[ -f \"$IMG\" ] || "));
+    }
+
+    #[test]
+    fn singularity_setup_https_uri_derives_final_segment_without_double_sif() {
+        let backend = SingularityBackend::new();
+        let cmd = backend
+            .setup_command("https://example.com/images/foo.sif")
+            .unwrap();
+        // The derived name is the final URI segment — `foo.sif`, not
+        // `foo.sif.sif`: the old unconditional `.sif` append made the
+        // existence guard look for the wrong artifact, so every rule
+        // re-pulled (issue #136).
+        assert!(
+            cmd.contains("IMG=$(printf '%s' 'https://example.com/images/foo.sif'"),
+            "the URI arm must derive the name from the spec: {cmd}"
+        );
+        assert!(
+            cmd.contains("case \"$IMG\" in *.sif) ;; *) IMG=\"$IMG.sif\" ;; esac;"),
+            "a final segment already ending in .sif must not get a second .sif: {cmd}"
+        );
         assert!(cmd.contains("[ -f \"$IMG\" ] || "));
     }
 
@@ -2172,9 +2272,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(
-            cmd.contains("conda run -p .oxo-conda bash -c 'test -d \"$CONDA_PREFIX/bin\"'"),
+            cmd.contains("conda run -p .oxo-conda bash -c 'test -d \"$CONDA_PREFIX/bin\" && ls \"$CONDA_PREFIX/bin\" | head -1 | grep -q .'"),
             "a prefix env must be verified with -p (the -n form checks a \
-             named env that `conda env create -p` never creates), got: {cmd}"
+             named env that `conda env create -p` never creates) and the \
+             check must require at least one entry in bin/, got: {cmd}"
         );
         assert!(!cmd.contains(" -n "));
     }
@@ -2183,7 +2284,11 @@ mod tests {
     fn conda_verify_command_without_prefix() {
         let backend = CondaBackend;
         let cmd = backend.verify_command("envs/qc.yaml").unwrap().unwrap();
-        assert!(cmd.contains("conda run -n qc bash -c 'test -d \"$CONDA_PREFIX/bin\"'"));
+        assert!(
+            cmd.contains("conda run -n qc bash -c 'test -d \"$CONDA_PREFIX/bin\" && ls \"$CONDA_PREFIX/bin\" | head -1 | grep -q .'"),
+            "the named-env verify must also require at least one entry in bin/ \
+             (an empty bin/ is a broken env), got: {cmd}"
+        );
         assert!(!cmd.contains(" -p "));
     }
 
@@ -2196,10 +2301,10 @@ mod tests {
             .unwrap();
         assert!(
             cmd.contains(&format!(
-                "{} run -p .oxo-conda bash -c 'test -d \"$CONDA_PREFIX/bin\"'",
+                "{} run -p .oxo-conda bash -c 'test -d \"$CONDA_PREFIX/bin\" && ls \"$CONDA_PREFIX/bin\" | head -1 | grep -q .'",
                 backend.binary
             )),
-            "expected -p prefix form, got: {cmd}"
+            "expected -p prefix form with a non-empty bin/ check, got: {cmd}"
         );
         assert!(!cmd.contains(" -n "));
     }
@@ -2214,7 +2319,7 @@ mod tests {
         };
         let cmd = resolver.verify_command(&spec).unwrap().unwrap();
         assert!(
-            cmd.contains("conda run -p .oxo-conda bash -c 'test -d \"$CONDA_PREFIX/bin\"'"),
+            cmd.contains("conda run -p .oxo-conda bash -c 'test -d \"$CONDA_PREFIX/bin\" && ls \"$CONDA_PREFIX/bin\" | head -1 | grep -q .'"),
             "the named-env verify checks the WRONG env for a prefix install, got: {cmd}"
         );
         assert!(!cmd.contains(" -n "));

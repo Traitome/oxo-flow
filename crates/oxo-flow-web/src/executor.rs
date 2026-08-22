@@ -119,7 +119,10 @@ fn final_status_from_exit(success: bool) -> &'static str {
 /// attribute a run honestly after a web-server crash — the same pattern
 /// Nextflow uses (`.exitcode` files). Positional forwarding avoids any
 /// shell-quoting of user-controlled arguments.
-const EXIT_CODE_WRAPPER_SCRIPT: &str =
+///
+/// `pub` so the process-control integration tests can compose the exact
+/// same invocation (and the identity guard can recognize it).
+pub const EXIT_CODE_WRAPPER_SCRIPT: &str =
     r#"f="$1"; shift; "$@"; rc=$?; printf '%s' "$rc" > "$f"; exit "$rc""#;
 
 /// Execution options carried from the run request to the CLI subprocess.
@@ -367,10 +370,31 @@ pub fn spawn_background_run_with_args(
 
         // Transient fork failures (EAGAIN/ENOMEM under full-workspace
         // parallel test load, issue #120) must not permanently fail the run
-        // — retry briefly before giving up.
+        // — retry briefly before giving up. While retrying, the run row is
+        // 'running' with a NULL pid: a cancel landing in that window must
+        // win — abort the spawn rather than executing a workflow the user
+        // already stopped (issue #136 tier-2: without the check, the retry
+        // would eventually spawn and a cancelled run would silently execute).
+        //
+        // Test seam: OXO_FLOW_TEST_SPAWN_FAIL deterministically fails the
+        // first N spawn attempts (synthetic EAGAIN) so the retry contract
+        // is exercisable without inducing fork pressure.
+        let fail_first: u32 = std::env::var("OXO_FLOW_TEST_SPAWN_FAIL")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
         let mut spawn_attempts = 0u32;
         let spawn_result = loop {
-            match cmd.spawn() {
+            if run_is_cancelled(&run_id).await {
+                warn!("Run {run_id} cancelled during spawn retries — aborting spawn");
+                return;
+            }
+            let spawned = if spawn_attempts < fail_first {
+                Err(std::io::Error::from_raw_os_error(nix::libc::EAGAIN))
+            } else {
+                cmd.spawn()
+            };
+            match spawned {
                 Err(e)
                     if matches!(
                         e.raw_os_error(),
@@ -389,7 +413,30 @@ pub fn spawn_background_run_with_args(
         };
         match spawn_result {
             Ok(mut child) => {
-                // Record PID for cancellation support
+                // Register the process group FIRST so a cancel racing the
+                // spawn can signal it, then persist the pid for crash
+                // recovery.
+                if let Some(pid) = child.id() {
+                    crate::process_control::register(&run_id, pid as i32);
+                }
+                if run_is_cancelled(&run_id).await {
+                    // The cancel won the race against the final spawn
+                    // attempt: nothing was registered at cancel time, so the
+                    // group was never signalled — kill it here. A cancelled
+                    // run must not execute (issue #136 tier-2).
+                    info!("Run {run_id} cancelled while spawning — killing the late-spawned group");
+                    if let Some(pid) = child.id() {
+                        let _ = crate::process_control::signal_group(
+                            pid as i32,
+                            crate::process_control::SIGTERM,
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                        let _ = crate::process_control::signal_group(
+                            pid as i32,
+                            crate::process_control::SIGKILL,
+                        );
+                    }
+                }
                 if let Some(pid) = child.id()
                     && let Err(e) = sqlx::query("UPDATE runs SET pid = ? WHERE id = ?")
                         .bind(pid as i64)
@@ -398,11 +445,6 @@ pub fn spawn_background_run_with_args(
                         .await
                 {
                     warn!("Failed to record PID for run {run_id}: {e}");
-                }
-
-                // Register the process group so cancel/pause/resume can signal it.
-                if let Some(pid) = child.id() {
-                    crate::process_control::register(&run_id, pid as i32);
                 }
 
                 // Real resource telemetry (issue #82 P1-2): sample the
@@ -429,8 +471,16 @@ pub fn spawn_background_run_with_args(
                 }
             }
             Err(e) => {
-                error!("Failed to spawn child process for run {run_id}: {e}");
-                mark_run_failed(&run_id).await;
+                error!(
+                    "Failed to spawn child process for run {run_id} \
+                     after {spawn_attempts} retries: {e}"
+                );
+                // A cancel that landed during the retry window is the
+                // terminal truth — never overwrite 'cancelled' with a
+                // fabricated 'failed' (issue #136 tier-2).
+                if !run_is_cancelled(&run_id).await {
+                    mark_run_failed(&run_id).await;
+                }
             }
         }
     });
@@ -444,6 +494,18 @@ pub fn spawn_background_run_with_args(
 /// attributed as failed. A run already marked 'cancelled' is left untouched:
 /// the terminal write happened at cancel time and the kill fallout must not
 /// overwrite it back to completed/failed.
+/// True when the run row has been cancelled — the terminal state that must
+/// never be overwritten nor executed past (a cancel is the user's last
+/// word; the kill fallout must not rewrite it).
+async fn run_is_cancelled(run_id: &str) -> bool {
+    sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE id = ? AND status = 'cancelled'")
+        .bind(run_id)
+        .fetch_one(db::pool())
+        .await
+        .map(|n: i64| n > 0)
+        .unwrap_or(false)
+}
+
 pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path: &std::path::Path) {
     crate::process_control::unregister(run_id);
     let success = exit_code == Some(0);
@@ -456,14 +518,7 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
         crate::infra::quota::global_quota_tracker().record_complete(&user_id, threads, memory_mb);
     }
 
-    let cancelled: bool =
-        sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE id = ? AND status = 'cancelled'")
-            .bind(run_id)
-            .fetch_one(db::pool())
-            .await
-            .map(|n: i64| n > 0)
-            .unwrap_or(false);
-    if cancelled {
+    if run_is_cancelled(run_id).await {
         info!("Run {run_id} exited after cancel; keeping 'cancelled'");
         return;
     }

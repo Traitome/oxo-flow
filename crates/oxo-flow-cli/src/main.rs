@@ -730,12 +730,14 @@ pub enum Commands {
             help = "Maximum number of concurrent jobs"
         )]
         jobs: usize,
-        /// Filter to a subset of samples: `first:N` or explicit names
-        /// (repeatable, comma-separated).
+        /// Filter to a subset of samples: `@path`/`+@path` sheet
+        /// operations, `first:N`, explicit names, or `ready` — the SAME
+        /// unified selection `run`/`dry-run` use (the handler forwards the
+        /// specs to both, so the help text mirrors their wording).
         #[arg(
             long = "samples",
             value_name = "LIST",
-            help = "Test only these samples: first:N (pilot), explicit names, or ready (complete inputs; repeatable, comma-separated)"
+            help = "Sample selection: '@path' replaces the workflow's samples from a samplesheet, '+@path' appends (same-name groups merge); names, first:N (pilot), or ready (complete inputs) filter to a subset. Repeatable, comma-separated."
         )]
         samples_filter: Vec<String>,
         /// Run deep health checks (script files, environment definition files,

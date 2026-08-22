@@ -1146,6 +1146,16 @@ pub async fn cancel_run(
     // in that window would otherwise signal nothing and still return 200
     // while orphaned rule processes run on (issue #120). The DB fallback is
     // guarded against pid reuse by liveness + cmdline probes.
+    //
+    // The fallback must probe the process GROUP, not just the recorded pid
+    // (issue #136 tier-2): in exactly the window it exists for — wrapper
+    // leader reaped by the executor, registry already unregistered — the
+    // wrapper pid probes dead (`probe_alive` answers ESRCH), while
+    // `killpg(pgid, 0)` still answers because the orphaned CLI and rule
+    // subprocesses keep running under the same pgid. When the leader is
+    // gone, the identity guard is applied to the group's surviving members
+    // instead, so a recycled pgid belonging to unrelated processes is never
+    // signalled.
     let pgid = match crate::process_control::pgid(&id) {
         Some(pgid) => Some(pgid),
         None => {
@@ -1158,10 +1168,25 @@ pub async fn cancel_run(
                 .unwrap_or(None);
             db_pid.and_then(|pid| {
                 let pid = pid as i32;
-                (pid > 0
-                    && crate::process_control::probe_alive(pid)
-                    && crate::process_control::looks_like_oxo_flow(pid))
-                .then_some(pid)
+                if pid <= 0 {
+                    return None;
+                }
+                // Leader alive: probe + identity guard on the pid itself.
+                if crate::process_control::probe_alive(pid)
+                    && crate::process_control::looks_like_oxo_flow(pid)
+                {
+                    return Some(pid);
+                }
+                // Leader reaped but the GROUP outlived it: probe group
+                // liveness (the wrapper was the group leader, so pid ==
+                // pgid) and guard against pid reuse by scanning the
+                // surviving members' command lines.
+                if crate::process_control::group_alive(pid)
+                    && crate::process_control::group_looks_like_oxo_flow(pid)
+                {
+                    return Some(pid);
+                }
+                None
             })
         }
     };

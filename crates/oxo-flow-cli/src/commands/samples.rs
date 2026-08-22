@@ -94,7 +94,19 @@ pub(crate) fn apply_samples_filter(
                 filter_specs.push(part.to_string());
                 continue;
             };
-            let groups = SampleGroup::load_from_file(std::path::Path::new(path))
+            // Resolve relative sheet paths against base_dir — the SAME
+            // base the `ready` spec uses — never the process CWD, so a
+            // relative sheet does not silently resolve differently
+            // depending on where the CLI was invoked (issue #136 tier-2
+            // audit; `--workdir`/the workflow directory is the documented
+            // resolution base for --samples paths).
+            let sheet_path = std::path::Path::new(path);
+            let sheet_path = if sheet_path.is_absolute() {
+                sheet_path.to_path_buf()
+            } else {
+                base_dir.join(sheet_path)
+            };
+            let groups = SampleGroup::load_from_file(&sheet_path)
                 .with_context(|| format!("failed to load samplesheet '{path}'"))?;
             // A samplesheet with no data rows must fail loudly: silently
             // falling back to the discovered samples would run the WRONG
@@ -468,5 +480,25 @@ mod tests {
             std::path::Path::new("."),
         );
         assert!(result.is_err(), "unknown name must fail: {result:?}");
+    }
+
+    #[test]
+    fn relative_sheet_resolves_against_base_dir_not_cwd() {
+        // `@path` resolves against the workdir base — the SAME base the
+        // `ready` spec uses — never the process CWD (issue #136 tier-2
+        // audit: the two specs used to resolve differently, so a relative
+        // sheet silently depended on where the CLI was invoked).
+        let base = std::env::temp_dir().join("oxo_flow_sheet_base_test");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("sheet.tsv"), "name\tsamples\ncohort\tSRR1\n").unwrap();
+
+        let mut config = config_with_inline_samples();
+        let result = apply_samples_filter(&mut config, &["@sheet.tsv".to_string()], true, &base);
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(
+            result.is_ok(),
+            "sheet must resolve under base_dir, not the CWD: {result:?}"
+        );
+        assert_eq!(config.sample_groups[0].samples, vec!["SRR1".to_string()]);
     }
 }

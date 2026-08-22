@@ -26,6 +26,7 @@ pub struct OutputSnapshot {
     path: PathBuf,
     existed: bool,
     mtime: Option<std::time::SystemTime>,
+    size: Option<u64>,
 }
 
 /// Snapshot a rule's declared outputs (config placeholders expanded using
@@ -47,11 +48,13 @@ pub fn snapshot_outputs(
             let path = workdir.join(expanded);
             let meta = std::fs::metadata(&path).ok();
             let existed = meta.is_some();
-            let mtime = meta.and_then(|m| m.modified().ok());
+            let mtime = meta.as_ref().and_then(|m| m.modified().ok());
+            let size = meta.map(|m| m.len());
             Some(OutputSnapshot {
                 path,
                 existed,
                 mtime,
+                size,
             })
         })
         .collect()
@@ -62,9 +65,11 @@ pub fn snapshot_outputs(
 /// Deletes files created during the attempt; moves pre-existing files the
 /// attempt modified aside to `<name>.oxo-failed` so the failure is
 /// recoverable and the freshness gate no longer sees a "fresh" output.
-/// Pre-existing files whose mtime is unchanged are left alone. Every step
-/// is best-effort with a warning — cleanup must never mask the rule's own
-/// failure.
+/// A pre-existing file is considered modified when its mtime or its size
+/// differs from the snapshot — the size check catches rewrites that
+/// restore the old timestamp. Files matching both are left alone. Every
+/// step is best-effort with a warning — cleanup must never mask the rule's
+/// own failure.
 pub async fn invalidate_failed_outputs(snapshots: &[OutputSnapshot]) {
     for snapshot in snapshots {
         let current_meta = match tokio::fs::metadata(&snapshot.path).await {
@@ -98,15 +103,31 @@ pub async fn invalidate_failed_outputs(snapshots: &[OutputSnapshot]) {
             }
             continue;
         }
-        // Pre-existing: invalidate only if the attempt modified it.
-        let modified = match (&snapshot.mtime, current_meta.modified().ok()) {
+        // Pre-existing: invalidate only if the attempt modified it. The
+        // mtime comparison alone misses rewrites that restore the old
+        // timestamp (tools doing that are rare but real, and coarse
+        // filesystems can share mtimes) — a size change catches those
+        // (issue #136).
+        let mtime_changed = match (&snapshot.mtime, current_meta.modified().ok()) {
             (Some(before), Some(after)) => after != *before,
             // Unreadable mtime: be conservative and leave the file alone.
             _ => false,
         };
-        if modified {
+        let size_changed = snapshot.size != Some(current_meta.len());
+        if mtime_changed || size_changed {
             let aside = aside_path(&snapshot.path);
-            if let Err(e) = tokio::fs::rename(&snapshot.path, &aside).await {
+            if tokio::fs::metadata(&aside).await.is_ok() {
+                // `rename` would silently overwrite a previous failure's
+                // evidence — skip it so recovery keeps every snapshot of
+                // what failed, and leave the current file in place (issue
+                // #136).
+                tracing::warn!(
+                    file = %snapshot.path.display(),
+                    aside = %aside.display(),
+                    "not moving failed output aside: the aside name is already \
+                     held by a previous failure — keeping the current file in place"
+                );
+            } else if let Err(e) = tokio::fs::rename(&snapshot.path, &aside).await {
                 tracing::warn!(
                     file = %snapshot.path.display(),
                     error = %e,
@@ -124,7 +145,8 @@ pub async fn invalidate_failed_outputs(snapshots: &[OutputSnapshot]) {
 }
 
 /// `<path>.oxo-failed` sibling for a moved-aside output. A previous failure
-/// already holding that name is overwritten by `rename`.
+/// already holding that name is never overwritten — the caller skips the
+/// rename with a warning so recovery evidence is never destroyed.
 fn aside_path(path: &Path) -> PathBuf {
     let mut name = path
         .file_name()
@@ -197,6 +219,61 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(dir.path().join("out.txt")).unwrap(),
             "user-data"
+        );
+    }
+
+    #[tokio::test]
+    async fn existing_failed_aside_is_never_clobbered() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.txt");
+        std::fs::write(&path, b"user-data").unwrap();
+        // A previous failure's evidence already holds the aside name.
+        let aside = dir.path().join("out.txt.oxo-failed");
+        std::fs::write(&aside, b"previous-failure-evidence").unwrap();
+        let rule = rule_with_outputs(&["out.txt"]);
+        let values = HashMap::new();
+        let snapshots = snapshot_outputs(&rule, dir.path(), &values);
+        // The attempt overwrites the pre-existing output.
+        std::fs::write(&path, b"corrupt").unwrap();
+        invalidate_failed_outputs(&snapshots).await;
+        assert_eq!(
+            std::fs::read_to_string(&aside).unwrap(),
+            "previous-failure-evidence",
+            "a second failure must never destroy the first failure's evidence"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "corrupt",
+            "the current failure's output stays put when the aside name is taken"
+        );
+    }
+
+    #[tokio::test]
+    async fn same_mtime_but_resized_output_is_moved_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.txt");
+        std::fs::write(&path, b"user-data").unwrap();
+        // Pin the mtime so the failed attempt's rewrite can restore it —
+        // the old mtime-only check then sees no change at all.
+        let mtime =
+            filetime::FileTime::from_last_modification_time(&std::fs::metadata(&path).unwrap());
+        let rule = rule_with_outputs(&["out.txt"]);
+        let values = HashMap::new();
+        let snapshots = snapshot_outputs(&rule, dir.path(), &values);
+        // The attempt overwrites the file with different content, then a
+        // coarse-grained filesystem (or a tool preserving timestamps)
+        // restores the original mtime.
+        std::fs::write(&path, b"partial-corrupt-output").unwrap();
+        filetime::set_file_mtime(&path, mtime).unwrap();
+        invalidate_failed_outputs(&snapshots).await;
+        assert!(
+            !path.exists(),
+            "a resized rewrite must invalidate even when the mtime matches"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("out.txt.oxo-failed")).unwrap(),
+            "partial-corrupt-output",
+            "the failed content must be preserved for recovery"
         );
     }
 

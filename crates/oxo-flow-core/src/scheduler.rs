@@ -746,7 +746,28 @@ impl ResourcePool {
             }
         }
         if parts.is_empty() {
-            parts.push("no single constraint found".to_string());
+            // No constraint shortfall: the rule COULD fit right now, so the
+            // FIFO guarantee (issue #123) is what blocks it — an older
+            // waiter stands ahead in the queue. Name the line ahead; the
+            // previous "no single constraint found" fallback misdiagnosed
+            // this reachable contention state as an internal inconsistency
+            // (issue #136). When the queue is empty this is unreachable
+            // (an empty queue plus satisfiable needs always acquires), so
+            // the fallback below is purely defensive.
+            let ahead: Vec<&str> = self
+                .waiters
+                .iter()
+                .take_while(|w| *w != &rule.name)
+                .map(|w| w.as_str())
+                .collect();
+            if ahead.is_empty() {
+                parts.push("waiting for a release — head of the FIFO queue".to_string());
+            } else {
+                parts.push(format!(
+                    "queued behind [{}] — older waiters acquire first (FIFO)",
+                    ahead.join(", ")
+                ));
+            }
         }
 
         // Top thread/memory holders help even when a group is the blocker.
@@ -1482,6 +1503,50 @@ mod tests {
             report.contains("held by [merge_a, merge_b]")
                 || report.contains("held by [merge_b, merge_a]"),
             "report must name the holders: {report}"
+        );
+    }
+
+    #[test]
+    fn blockage_report_names_senior_waiters_when_rule_can_fit() {
+        // A junior rule whose own needs are satisfiable can still be blocked
+        // by the FIFO guarantee (issue #123): an older waiter stands ahead of
+        // it in the queue and cannot fit yet. The report must explain that
+        // contention state instead of claiming "no single constraint found"
+        // (issue #136) — that fallback misdiagnosed a real, reachable state
+        // as an internal inconsistency.
+        let mut pool = ResourcePool::new(8, 8192);
+        let holder = Rule {
+            name: "holder".to_string(),
+            threads: Some(1),
+            ..Default::default()
+        };
+        pool.reserve(&holder, 8, 8192); // 7 threads free
+        let senior = Rule {
+            name: "senior".to_string(),
+            threads: Some(8),
+            ..Default::default()
+        };
+        assert!(
+            !pool.try_acquire_fair(&senior, 8, 8192),
+            "senior needs all 8 threads; only 7 are free"
+        );
+        let junior = Rule {
+            name: "junior".to_string(),
+            threads: Some(1),
+            ..Default::default()
+        };
+        assert!(
+            !pool.try_acquire_fair(&junior, 8, 8192),
+            "junior fits on paper but the FIFO queue blocks it behind the senior"
+        );
+        let report = pool.blockage_report(&junior, 8, 8192);
+        assert!(
+            !report.contains("no single constraint found"),
+            "the old fallback misdiagnosed FIFO blocking as a bug: {report}"
+        );
+        assert!(
+            report.contains("queued behind") && report.contains("senior"),
+            "the report must name the senior waiter ahead: {report}"
         );
     }
 
