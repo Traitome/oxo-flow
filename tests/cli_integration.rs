@@ -8698,3 +8698,58 @@ fn cli_report_acct_missing_column_fails() {
             "missing required column(s): elapsed, cputime",
         ));
 }
+
+#[test]
+fn cli_reference_path_migration_with_identical_content_skips_rebuild() {
+    // The path-migration exemption: moving a reference source to a new
+    // location with byte-identical content must not rebuild the artifact
+    // (live: --arg index=/new/path where /new/path is a content copy cost
+    // a ~2h reference rebuild + full downstream re-run).
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("ref")).unwrap();
+    std::fs::create_dir(dir.path().join("ref2")).unwrap();
+    std::fs::write(dir.path().join("ref/genome.fa"), ">chr1\nACGT\n").unwrap();
+    // Byte-identical copy at a new path.
+    std::fs::write(dir.path().join("ref2/genome.fa"), ">chr1\nACGT\n").unwrap();
+
+    let write_wf = |source: &str| {
+        let wf = dir.path().join("mig.oxoflow");
+        std::fs::write(
+            &wf,
+            format!(
+                "[workflow]\nname = \"mig\"\nversion = \"1.0.0\"\n\n\
+                 [config]\nreference_dir = \"ref\"\n\n\
+                 [[references]]\nname = \"custom\"\nsource = \"{source}\"\n\
+                 output = \"ref/custom.idx\"\nbuild = \"cp {{input}} {{output}}\"\n\n\
+                 [[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\n\
+                 shell = \"echo done > {{output[0]}}\"\n"
+            ),
+        )
+        .unwrap();
+        wf
+    };
+
+    // Run 1: build at the original path.
+    let wf = write_wf("ref/genome.fa");
+    let run1 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run1.status.success(), "first build must succeed");
+    assert!(dir.path().join("ref/custom.idx").exists());
+
+    // Run 2: the source moves to a content-identical copy at ref2/.
+    let wf = write_wf("ref2/genome.fa");
+    let run2 = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run2.status.success());
+    let stderr = String::from_utf8_lossy(&run2.stderr);
+    assert!(
+        !stderr.contains("built"),
+        "identical content at a new path must not rebuild: {stderr}"
+    );
+}
