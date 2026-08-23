@@ -9,6 +9,7 @@ import RuleInspector from '../components/RuleInspector';
 import RunDialog from '../components/RunDialog';
 import GuidedRuleBuilder from '../components/GuidedRuleBuilder';
 import { usePipelineSession } from '../context/PipelineSession';
+import { useI18n, getLocale } from '../context/I18n';
 
 // Lazy: guided mode (the default) never mounts these, so @xyflow/react,
 // d3-dag and CodeMirror stay out of the initial editor load (issue #79).
@@ -44,6 +45,8 @@ type LeftTab = 'assistant' | 'palette' | 'history';
 
 export default function PipelineEditor() {
   const session = usePipelineSession();
+  const { lang } = useI18n();
+  const locale = getLocale(lang);
   const [toml, setToml] = useState(() => session.state.pipelineToml || DEFAULT_TOML);
   const [dagJson, setDagJson] = useState<DagJson | null>(() => session.state.dagData);
   const [validation, setValidation] = useState<{ valid: boolean; errors: Array<{ code: string; message: string; rule: string | null; suggestion: string | null; line?: number | null }> } | null>(null);
@@ -283,7 +286,7 @@ export default function PipelineEditor() {
               v{r.version} <span className="mono" style={{ fontWeight: 400, fontSize: '0.72rem' }}>{r.id.slice(0, 8)}</span>
             </div>
             <div style={{ fontSize: '0.72rem', color: 'var(--color-text-tertiary)' }}>
-              {new Date(r.created_at).toLocaleString()} · {r.actor}
+              {new Date(r.created_at).toLocaleString(locale)} · {r.actor}
             </div>
             <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
               <button className="btn-sm" onClick={async () => {
@@ -294,7 +297,7 @@ export default function PipelineEditor() {
                 } catch { /* ignore */ }
               }}>Load</button>
               <button className="btn-sm" onClick={async () => {
-                if (!window.confirm(`Roll this pipeline back to the snapshot from ${new Date(r.created_at).toLocaleString()}? A new revision will record the current version first.`)) return;
+                if (!window.confirm(`Roll this pipeline back to the snapshot from ${new Date(r.created_at).toLocaleString(locale)}? A new revision will record the current version first.`)) return;
                 try {
                   await api.rollbackPipeline(savedPipelineId, r.id);
                   setToml((await api.getPipeline(savedPipelineId)).toml_content);
