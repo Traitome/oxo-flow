@@ -73,6 +73,62 @@ jobs:
           fi
           echo "Tag ${TAG} does not exist yet — safe to create"
 
+      - name: Verify embedded knowledge freshness
+        if: (github.event_name == 'workflow_dispatch' && inputs.tag != '') || startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The embedded AI knowledge data (crates/oxo-flow-ai/src/knowledge/)
+          # is refreshed by the Knowledge Refresh workflow. Gate the release
+          # on its freshness so a stale snapshot never ships: any auto:true
+          # source older than 60 days blocks (2x the 16-day cadence, one
+          # missed run tolerated). Manual sources (auto:false) are the
+          # maintainer's call and are skipped.
+          META="crates/oxo-flow-ai/src/knowledge/knowledge_meta.json"
+          python3 - "$META" <<'PY'
+          import datetime, json, sys
+          path = sys.argv[1]
+          MAX_AGE_DAYS = 60
+          def fail(msg):
+              print(f"::error::{msg}")
+              sys.exit(1)
+          try:
+              meta = json.load(open(path))
+          except FileNotFoundError:
+              fail(f"{path} is missing - run the Knowledge Refresh workflow (Actions -> Knowledge Refresh) before releasing")
+          except json.JSONDecodeError as exc:
+              fail(f"{path} is malformed JSON ({exc}) - fix it or re-run the Knowledge Refresh workflow")
+          raw = meta.get("sources")
+          if isinstance(raw, dict):
+              items = raw.items()
+          elif isinstance(raw, list):
+              items = ((s.get("name", f"source#{i}"), s) for i, s in enumerate(raw))
+          else:
+              items = ((k, v) for k, v in meta.items() if isinstance(v, dict))
+          now = datetime.datetime.now(datetime.timezone.utc)
+          stale = []
+          for name, src in items:
+              if not isinstance(src, dict) or not src.get("auto"):
+                  continue
+              raw_at = src.get("generated_at")
+              if not raw_at:
+                  stale.append(f"{name}: no generated_at")
+                  continue
+              try:
+                  ts = datetime.datetime.fromisoformat(str(raw_at).replace("Z", "+00:00"))
+              except ValueError:
+                  stale.append(f"{name}: unparseable generated_at {raw_at!r}")
+                  continue
+              if ts.tzinfo is None:
+                  ts = ts.replace(tzinfo=datetime.timezone.utc)
+              age = (now - ts).days
+              if age > MAX_AGE_DAYS:
+                  stale.append(f"{name}: {age} days old")
+          if stale:
+              fail("embedded knowledge data is stale (" + "; ".join(stale) + ") - run the Knowledge Refresh workflow first (or dispatch it manually), then re-dispatch this release")
+          print("knowledge meta OK: all auto-refreshed sources are within 60 days")
+          PY
+
       - name: Extract version from tag
         id: extract
         shell: bash

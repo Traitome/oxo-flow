@@ -45,6 +45,41 @@ pub async fn ai_status_command() -> Result<()> {
     }
     println!();
 
+    // Embedded knowledge freshness (knowledge_meta.json): per-source record
+    // count, generation date, staleness, and auto/manual origin.
+    println!("{}", "Knowledge freshness:".bold().cyan());
+    match oxo_flow_ai::knowledge::meta::embedded_meta() {
+        Some(meta) => {
+            let now = chrono::Utc::now();
+            if meta.sources.is_empty() {
+                println!("  (no sources recorded in knowledge_meta.json)");
+            }
+            for src in &meta.sources {
+                let row = oxo_flow_ai::knowledge::meta::format_source_row(src, now);
+                let staleness = src.is_stale(now);
+                println!(
+                    "  {}{}",
+                    row,
+                    if staleness {
+                        format!(" {}", "STALE".yellow().bold())
+                    } else {
+                        String::new()
+                    }
+                );
+            }
+            println!(
+                "  {}",
+                "Auto-updated sources older than 60 days are flagged STALE and block releases."
+                    .dimmed()
+            );
+        }
+        None => println!(
+            "  {}",
+            "(knowledge_meta.json not embedded in this build — update the pipeline first)".dimmed()
+        ),
+    }
+    println!();
+
     if name == "disabled" {
         println!("  Status: {}", "DISABLED".yellow().bold());
         println!();
