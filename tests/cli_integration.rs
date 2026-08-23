@@ -62,6 +62,51 @@ fn oxo_flow_web_cmd() -> Command {
 
 // ─── Pilot subset (--samples) & forced re-run (--rerun) ─────────────────────
 
+/// `run --json` carries a per-rule `resources` array (issue #163): the
+/// report's Benchmarks data — wall time, sampled peak RSS, CPU seconds,
+/// retries — machine-readably, on the completed path.
+#[test]
+fn cli_run_json_summary_carries_per_rule_resources() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("res.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"res\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"echo_rule\"\noutput = [\"out.txt\"]\nshell = \"echo done > {output}\"\n",
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "run failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let summary: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("run --json stdout must be one JSON document");
+    assert_eq!(summary["status"], "completed");
+    let resources = summary["resources"]
+        .as_array()
+        .expect("summary must carry a resources array");
+    assert_eq!(resources.len(), 1, "exactly one rule ran: {summary}");
+    let row = &resources[0];
+    assert_eq!(row["rule"], "echo_rule");
+    assert_eq!(row["status"], "completed");
+    assert!(
+        row["wall_time_secs"].as_f64().unwrap() > 0.0,
+        "wall time must be measured: {summary}"
+    );
+    // peak_rss_mb / cpu_seconds are sampled — present as keys, null when
+    // the sampler never ticked on an ultra-fast rule.
+    assert!(row.get("peak_rss_mb").is_some(), "peak_rss_mb key: {summary}");
+    assert!(row.get("cpu_seconds").is_some(), "cpu_seconds key: {summary}");
+    assert_eq!(row["retries"], 0);
+}
+
+// ─── Pilot subset (--samples) & forced re-run (--rerun) ─────────────────────
+
 /// --samples first:N runs a pilot subset; scaling up afterwards skips the
 /// completed samples via the checkpoint and runs only the remaining ones.
 #[test]
