@@ -2333,6 +2333,47 @@ fn render_shell_command_inner(
         expanded = expanded.replace(&format!("{{params.{key}}}"), &string_val);
     }
     expanded = super::expand_to_fixed_point(&expanded, wildcard_values, render_wildcard_value);
+    // Residual-placeholder guard: an unresolved ENGINE-known placeholder
+    // (sample/config/input/output/…) reaching a shell or script arg is a
+    // correctness defect — the rule executes with a literal brace token.
+    // Live incident: auto-sra merges received literal `--sample {sample}`
+    // under a --arg-triggered invalidation cascade (12 instances failed;
+    // unreproducible after the state moved on — this guard makes any
+    // recurrence loud and attributable instead of silent). Literal braces
+    // in user shell code (awk '{print $1}') are NOT flagged — only the
+    // known placeholder grammar is matched.
+    const KNOWN_PLACEHOLDERS: &[&str] = &[
+        "{sample}",
+        "{group}",
+        "{pair_id}",
+        "{experiment}",
+        "{control}",
+        "{tumor}",
+        "{normal}",
+        "{log}",
+        "{threads}",
+        "{memory}",
+        "{effective_threads}",
+        "{effective_memory_mb}",
+        "{chunks}",
+    ];
+    for ph in KNOWN_PLACEHOLDERS {
+        if expanded.contains(ph) {
+            tracing::warn!(
+                rule = %rule.name,
+                placeholder = ph,
+                "unresolved placeholder remained in the rendered command — the rule will execute with a literal brace token (report as an engine bug with the workflow)"
+            );
+        }
+    }
+    if expanded.contains("{config.") || expanded.contains("{input") || expanded.contains("{output")
+    {
+        tracing::warn!(
+            rule = %rule.name,
+            command = %expanded,
+            "unresolved config/input/output placeholder remained in the rendered command"
+        );
+    }
     expanded
 }
 
