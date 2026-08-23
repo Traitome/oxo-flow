@@ -19,20 +19,60 @@ class ApiError extends Error {
   }
 }
 
-async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const token = localStorage.getItem('oxo_token');
-  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(options?.headers as Record<string, string> || {}) };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
+// The server injects window.__OXO_BASE__ when serving under a sub-path
+// (--base-path); every API URL must be prefixed or the request misses the
+// mount point.
+function apiUrl(url: string): string {
+  const base = (window as { __OXO_BASE__?: string }).__OXO_BASE__ ?? '';
+  return `${base}${url}`;
+}
 
-  const res = await fetch(url, { ...options, headers });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new ApiError(body.code || 'UNKNOWN', body.message || res.statusText, body.detail, body.suggestion);
-  }
+function authHeaders(extra?: Record<string, string>): Record<string, string> {
+  const token = localStorage.getItem('oxo_token');
+  const headers: Record<string, string> = { ...extra };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  return headers;
+}
+
+async function toApiError(res: Response): Promise<ApiError> {
+  const body = await res.json().catch(() => ({}));
+  return new ApiError(body.code || 'UNKNOWN', body.message || res.statusText, body.detail, body.suggestion);
+}
+
+async function request<T>(url: string, options?: RequestInit): Promise<T> {
+  const headers = authHeaders({ 'Content-Type': 'application/json', ...(options?.headers as Record<string, string> || {}) });
+
+  const res = await fetch(apiUrl(url), { ...options, headers });
+  if (!res.ok) throw await toApiError(res);
   return res.json();
 }
 
-function get<T>(url: string) { return request<T>(url); }
+// Streaming POST: same base-path/auth handling as request(), but returns the
+// raw Response so callers can read SSE chunks incrementally from res.body.
+async function postStream(url: string, body: unknown): Promise<Response> {
+  const res = await fetch(apiUrl(url), {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw await toApiError(res);
+  return res;
+}
+
+// Text endpoint helper: accepts a JSON-encoded string (what the logs
+// handler returns today) or raw text/plain, so either serialization works.
+async function getText(url: string, signal?: AbortSignal): Promise<string> {
+  const res = await fetch(apiUrl(url), { headers: authHeaders(), signal });
+  if (!res.ok) throw await toApiError(res);
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as string;
+  } catch {
+    return text;
+  }
+}
+
+function get<T>(url: string, signal?: AbortSignal) { return request<T>(url, signal ? { signal } : undefined); }
 function post<T>(url: string, body: unknown) { return request<T>(url, { method: 'POST', body: JSON.stringify(body) }); }
 function put<T>(url: string, body: unknown) { return request<T>(url, { method: 'PUT', body: JSON.stringify(body) }); }
 function del<T>(url: string) { return request<T>(url, { method: 'DELETE' }); }
@@ -47,7 +87,7 @@ export const api = {
   upsertCluster: (cluster: ClusterUpsert) => post<ClusterInfo>('/api/clusters', cluster),
   deleteCluster: (id: string) => del<{ deleted: string }>(`/api/clusters/${id}`),
   probeCluster: (id: string) => post<ClusterProbeResult>(`/api/clusters/${id}/probe`, {}),
-  getRunPreview: (id: string) => get<DryRunPreview>(`/api/runs/${id}/preview`),
+  getRunPreview: (id: string, signal?: AbortSignal) => get<DryRunPreview>(`/api/runs/${id}/preview`, signal),
 
   // ── Auth & License ──
   login: (username: string, password: string) => post<LoginResponse>('/api/auth/login', { username, password }),
@@ -111,9 +151,9 @@ export const api = {
   },
   getRun: (id: string) => get<RunItem>(`/api/runs/${id}`),
   getRunStatus: (id: string) => get<RunStatus>(`/api/runs/${id}/status`),
-  getDagStatus: (id: string) => get<DagStatus>(`/api/runs/${id}/dag-status`),
-  getDiagnostics: (id: string) => get<Diagnostics>(`/api/runs/${id}/diagnostics`),
-  getRunLogs: (id: string) => get<string>(`/api/runs/${id}/logs`),
+  getDagStatus: (id: string, signal?: AbortSignal) => get<DagStatus>(`/api/runs/${id}/dag-status`, signal),
+  getDiagnostics: (id: string, signal?: AbortSignal) => get<Diagnostics>(`/api/runs/${id}/diagnostics`, signal),
+  getRunLogs: (id: string, signal?: AbortSignal) => getText(`/api/runs/${id}/logs`, signal),
   getRunInstances: (id: string) => get<RunInstance[]>(`/api/runs/${id}/instances`),
   getRunResults: (id: string) => get<Array<{ name: string; path: string; size_bytes: number; is_dir: boolean }>>(`/api/runs/${id}/results`),
   retryRun: (id: string, skipSucceeded = true) => post<RetryPlan>(`/api/runs/${id}/retry`, { skip_succeeded: skipSucceeded }),
@@ -122,10 +162,10 @@ export const api = {
   resumeRun: (id: string, from_rule?: string) => post<{ run_id: string; status: string }>(`/api/runs/${id}/resume`, { from_rule }),
   cleanRun: (id: string) => post<{ run_id: string; exit_code: number | null; stdout: string; stderr: string }>(`/api/runs/${id}/clean`, {}),
   resumeCheckpoint: (id: string, maxJobs = 1) => post<{ run_id: string; resumed_from: string; max_jobs: number }>(`/api/runs/${id}/resume-checkpoint`, { max_jobs: maxJobs }),
-  aiStatus: (id: string) => get<MonitorStatus>(`/api/runs/${id}/ai-status`),
+  aiStatus: (id: string, signal?: AbortSignal) => get<MonitorStatus>(`/api/runs/${id}/ai-status`, signal),
 
   // ── Report ──
-  runReport: (id: string) => get<ReportData>(`/api/runs/${id}/report`),
+  runReport: (id: string, signal?: AbortSignal) => get<ReportData>(`/api/runs/${id}/report`, signal),
   askReport: (id: string, question: string) => post<string>(`/api/runs/${id}/report/ask`, { question }),
   visualizeReport: (id: string, type: string) => post<{ chart_type: string; data: unknown[]; spec: Record<string, unknown> }>(`/api/runs/${id}/report/visualize`, { type }),
 
@@ -146,6 +186,8 @@ export const api = {
   // ── Chat ──
   chatSessions: () => get<Array<{ id: string; title: string; updated_at: string }>>('/api/chat/sessions'),
   chatSendJson: (message: string, context?: Record<string, unknown>) => post<{ reply: string }>('/api/chat/send/json', { message, context }),
+  // SSE-over-fetch stream; callers read res.body chunk by chunk.
+  chatSendStream: (message: string, context?: Record<string, unknown>) => postStream('/api/chat/send', { message, context }),
 
   // ── Templates ──
   listTemplates: () => get<Template[]>('/api/templates'),
@@ -181,10 +223,9 @@ export function createEventSource(): EventSource {
   // EventSource cannot set an Authorization header, so the session token
   // travels as ?token= (validated by the SSE endpoint in team/hpc modes —
   // issue #82 P0-5). Personal mode has no token and connects anonymously.
-  const base = (window as { __OXO_BASE__?: string }).__OXO_BASE__ ?? '';
   const token = localStorage.getItem('oxo_token');
   const query = token ? `?token=${encodeURIComponent(token)}` : '';
-  return new EventSource(`${base}/api/events${query}`);
+  return new EventSource(apiUrl(`/api/events${query}`));
 }
 export { ApiError };
 

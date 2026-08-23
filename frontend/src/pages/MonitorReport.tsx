@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api, createEventSource } from '../api/client';
 import type { RunItem, MonitorStatus, ReportData, DagStatus, Diagnostics, DryRunPreview, RunInstance } from '../api/types';
@@ -34,7 +34,6 @@ export default function MonitorReport() {
   const [instances, setInstances] = useState<RunInstance[] | null>(null);
   const [onlyFailed, setOnlyFailed] = useState(false);
   const [explainState, setExplainState] = useState<Record<string, { loading?: boolean; text?: string }>>({});
-  const [, setLoading] = useState(true);
   // Pagination: the full list is ≤100 rows (API LIMIT); render a page of
   // 20 so the Run Detail card below is not buried under 5700px of history
   // (issue #79 P2). "Show more" grows the page.
@@ -47,22 +46,41 @@ export default function MonitorReport() {
   const navigate = useNavigate();
 
 
-  const [, setAlertOpen] = useState<string[]>([]);
+  // Monotonic selection sequence + abort: a slow response for run A must
+  // never overwrite the state of run B (same pattern as the editor's
+  // editSeq), and a new selection aborts the previous one in flight.
+  const selectSeq = useRef(0);
+  const selectAbort = useRef<AbortController | null>(null);
   const selectRun = useCallback(async (id: string) => {
+    const seq = ++selectSeq.current;
+    selectAbort.current?.abort();
+    const ctrl = new AbortController();
+    selectAbort.current = ctrl;
     setSelId(id);
     setTab('monitor');
     setQaAnswer(null);
     session.setActiveRunId(id);
     session.setChatContext('monitor');
-    try { setMonitorStatus(await api.aiStatus(id)); } catch { setMonitorStatus(null); }
-    try { setReportData(await api.runReport(id)); } catch { setReportData(null); }
-    try { setDagStatus(await api.getDagStatus(id)); } catch { setDagStatus(null); }
-    try { setDiagnostics(await api.getDiagnostics(id)); } catch { setDiagnostics(null); }
-    try { setPreview(await api.getRunPreview(id)); } catch { setPreview(null); }
+    const [status, report, dag, diag, prev] = await Promise.allSettled([
+      api.aiStatus(id, ctrl.signal),
+      api.runReport(id, ctrl.signal),
+      api.getDagStatus(id, ctrl.signal),
+      api.getDiagnostics(id, ctrl.signal),
+      api.getRunPreview(id, ctrl.signal),
+    ]);
+    if (seq !== selectSeq.current) return; // superseded by a newer selection
+    setMonitorStatus(status.status === 'fulfilled' ? status.value : null);
+    setReportData(report.status === 'fulfilled' ? report.value : null);
+    setDagStatus(dag.status === 'fulfilled' ? dag.value : null);
+    setDiagnostics(diag.status === 'fulfilled' ? diag.value : null);
+    setPreview(prev.status === 'fulfilled' ? prev.value : null);
     // A row click means the user wants the detail — bring it into view
     // instead of leaving it below a long list (issue #79 P2).
     requestAnimationFrame(() => detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   }, []);
+
+  // Abort in-flight detail loads when the page unmounts.
+  useEffect(() => () => selectAbort.current?.abort(), []);
 
   useEffect(() => {
     if (routeId && routeId !== selId) {
@@ -73,24 +91,23 @@ export default function MonitorReport() {
     }
   }, [routeId, selectRun, selId]);
 
-  const toggleAlert = (idx: string) => {
-    setAlertOpen(prev => prev.includes(idx) ? prev.filter(x => x !== idx) : [...prev, idx]);
-  };
-
   useEffect(() => {
-    api.listRuns().then((r) => { setRuns(r.items); setLoading(false); }).catch(() => setLoading(false));
+    api.listRuns().then((r) => setRuns(r.items)).catch(() => { /* ignore */ });
   }, []);
 
-  // Update monitor status in real-time via SSE
+  // Update monitor status in real-time via SSE; the 5s fallback poll only
+  // runs while the monitor tab is actually visible.
   useEffect(() => {
     if (!selId) return;
     const es = createEventSource();
-    const interval = setInterval(async () => {
-      try {
-        const status = await api.aiStatus(selId);
-        setMonitorStatus(status);
-      } catch { /* ignore */ }
-    }, 5000);
+    const interval = tab === 'monitor'
+      ? setInterval(async () => {
+          try {
+            const status = await api.aiStatus(selId);
+            setMonitorStatus(status);
+          } catch { /* ignore */ }
+        }, 5000)
+      : null;
 
     es.onmessage = (evt) => {
       try {
@@ -101,14 +118,14 @@ export default function MonitorReport() {
         const mine = !event.user || event.user === localStorage.getItem('oxo_user_id');
         if (mine && event.data?.run_id === selId) {
           if (event.type === 'run_completed' || event.type === 'run_failed') {
-            clearInterval(interval);
+            if (interval) clearInterval(interval);
             api.listRuns().then((r) => setRuns(r.items));
           }
         }
       } catch { /* ignore */ }
     };
-    return () => { clearInterval(interval); es.close(); };
-  }, [selId]);
+    return () => { if (interval) clearInterval(interval); es.close(); };
+  }, [selId, tab]);
 
 
 
@@ -186,7 +203,7 @@ export default function MonitorReport() {
 
   const renderLogs = () => (
     <div>
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+      <div className="row" style={{ marginBottom: '0.75rem' }}>
         <input className="search-input" placeholder="Search logs…" value={logQuery}
           onChange={e => setLogQuery(e.target.value)} style={{ flex: 1, minWidth: 180 }} />
         <select value={logRule} onChange={e => setLogRule(e.target.value)}
@@ -226,12 +243,12 @@ export default function MonitorReport() {
     const rows = (instances ?? []).filter(r => !onlyFailed || r.status === 'failed');
     return (
       <div>
-        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', alignItems: 'center' }}>
-          <label style={{ fontSize: '0.82rem', display: 'flex', gap: '6px', alignItems: 'center' }}>
+        <div className="row" style={{ marginBottom: '0.75rem' }}>
+          <label className="check-label">
             <input type="checkbox" checked={onlyFailed} onChange={e => setOnlyFailed(e.target.checked)} />
             Show failed only
           </label>
-          <span style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>
+          <span className="muted">
             {instances === null ? 'Loading…' : `${rows.length} instance${rows.length === 1 ? '' : 's'}`}
           </span>
         </div>
@@ -284,12 +301,13 @@ export default function MonitorReport() {
           )}
           {/* Pause/Resume/Retry buttons */}
           <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px' }}>
-            <button className="btn-sm" onClick={handlePause} title="Pause"><Pause size={14} /></button>
-            <button className="btn-sm" onClick={handleResume} title="Resume"><Play size={14} /></button>
-            <button className="btn-sm" onClick={handleRetry} title="Retry"><RotateCcw size={14} /></button>
+            <button className="btn-sm" onClick={handlePause} title="Pause" aria-label="Pause"><Pause size={14} /></button>
+            <button className="btn-sm" onClick={handleResume} title="Resume" aria-label="Resume"><Play size={14} /></button>
+            <button className="btn-sm" onClick={handleRetry} title="Retry" aria-label="Retry"><RotateCcw size={14} /></button>
             <button className="btn-sm" style={{ color: 'var(--color-error)', borderColor: 'var(--color-error)' }}
-              onClick={handleCancel} title="Cancel run"><Ban size={14} /></button>
+              onClick={handleCancel} title="Cancel run" aria-label="Cancel run"><Ban size={14} /></button>
             <button className="btn-sm" title="Resume from checkpoint (re-runs unfinished rules)"
+              aria-label="Resume from checkpoint (re-runs unfinished rules)"
               onClick={async () => {
                 if (!selId) return;
                 if (!window.confirm('Resume this run from its checkpoint? Unfinished rules continue in place.')) return;
@@ -301,6 +319,7 @@ export default function MonitorReport() {
               <StepForward size={14} />
             </button>
             <button className="btn-sm" title="Clean run workdir (chunks + stale state)"
+              aria-label="Clean run workdir (chunks + stale state)"
               onClick={async () => {
                 if (!selId) return;
                 if (!window.confirm('Clean this run\'s workdir? Chunk files and stale state are removed (checkpoint stays).')) return;
@@ -332,8 +351,7 @@ export default function MonitorReport() {
                   background: `${levelColors[alert.level] || 'var(--color-text-tertiary)'}08`,
                   borderRadius: 'var(--radius-md)', padding: '12px', marginBottom: '8px',
                 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', cursor: 'pointer' }}
-                    onClick={() => toggleAlert(`${i}`)}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>
                       {levelNames[alert.level] || alert.level}: {alert.rule_name || 'System'}
                     </div>
@@ -497,35 +515,23 @@ export default function MonitorReport() {
           </div>
         )}
 
-        {/* Charts */}
-        {reportData.charts.length > 0 && (
-          <div className="dash-card" style={{ marginBottom: '1rem' }}>
-            <h4 style={{ fontSize: '0.85rem', marginBottom: '6px' }}>📊 Available Charts</h4>
-            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-              {reportData.charts.map((c, i) => (
-                <button key={i} className="btn-sm">{c.title}</button>
-              ))}
-            </div>
-          </div>
-        )}
-
         {/* Q&A Input */}
         <div className="dash-card">
           <h4 style={{ fontSize: '0.85rem', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Bot size={14} /> Ask AI About Results
           </h4>
-          <div style={{ display: 'flex', gap: '6px' }}>
+          <div className="row" style={{ flexWrap: 'nowrap' }}>
             <input
               type="text"
               value={qaInput}
               onChange={e => setQaInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleAsk()}
               placeholder="Ask a question about the results..."
-              className="intent-input"
-              style={{ flex: 1 }}
+              className="search-input"
+              style={{ flex: 1, minWidth: 0 }}
             />
             <button onClick={handleAsk} className="btn-run" disabled={!qaInput.trim()}>
-              <Bot size={14} style={{ marginRight: 4 }} /> Ask
+              <Bot size={14} /> Ask
             </button>
           </div>
           {qaAnswer && (
@@ -595,11 +601,32 @@ export default function MonitorReport() {
   };
 
   // ── DAG Status ──
+  // Memoized so the 5s poll / SSE re-renders don't hand WorkflowCanvas a
+  // fresh dag/statusById identity every time (its rebuild effect lists both
+  // in its deps and would tear down all nodes/edges).
+  const dagCanvasData = useMemo(() => {
+    if (!dagStatus) return null;
+    return {
+      nodes: dagStatus.nodes.map(n => ({
+        id: n.id,
+        label: n.label,
+        color: n.color,
+        environment: 'system',
+        rule: {},
+      })),
+      edges: dagStatus.edges.map(e => ({ from: e.source, to: e.target, kind: 'declared' as const })),
+    };
+  }, [dagStatus]);
+  const statusById = useMemo(
+    () => Object.fromEntries((dagStatus?.nodes ?? []).map(n => [n.id, n.status])),
+    [dagStatus],
+  );
+
   const renderDag = () => {
-    if (!dagStatus || dagStatus.nodes.length === 0) return <div className="empty-state">No DAG status available</div>;
+    if (!dagStatus || dagStatus.nodes.length === 0 || !dagCanvasData) return <div className="empty-state">No DAG status available</div>;
     return (
       <div>
-        <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem', fontSize: '0.82rem', flexWrap: 'wrap' }}>
+        <div className="row" style={{ gap: '1rem', marginBottom: '0.75rem', fontSize: '0.82rem' }}>
           <span>Total: <strong>{dagStatus.metrics.total_nodes}</strong></span>
           <span style={{ color: 'var(--color-success)' }}>✅ Done: <strong>{dagStatus.metrics.completed_nodes}</strong></span>
           <span style={{ color: 'var(--color-info)' }}>🔄 Running: <strong>{dagStatus.metrics.running_nodes}</strong></span>
@@ -611,19 +638,10 @@ export default function MonitorReport() {
         </div>
         <div style={{ height: '480px', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
           <WorkflowCanvas
-            dag={{
-              nodes: dagStatus.nodes.map(n => ({
-                id: n.id,
-                label: n.label,
-                color: n.color,
-                environment: 'system',
-                rule: {},
-              })),
-              edges: dagStatus.edges.map(e => ({ from: e.source, to: e.target, kind: 'declared' as const })),
-            }}
+            dag={dagCanvasData}
             editable={false}
             scopeKey={`monitor-${routeId}`}
-            statusById={Object.fromEntries(dagStatus.nodes.map(n => [n.id, n.status]))}
+            statusById={statusById}
             context="monitor"
           />
         </div>
@@ -640,8 +658,8 @@ export default function MonitorReport() {
 
       {/* Run selector */}
       <div className="section">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-          <h2 className="section-title" style={{ marginBottom: 0 }}>Run History</h2>
+        <div className="section-head">
+          <h2 className="section-title">Run History</h2>
           <button className="btn-sm" onClick={() => api.listRuns().then((r) => setRuns(r.items))}>Refresh</button>
         </div>
         <table className="run-table">
@@ -715,15 +733,15 @@ export default function MonitorReport() {
       {/* Run Detail */}
       {(selId) && (
         <div className="dash-card" ref={detailRef}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+          <div className="row" style={{ justifyContent: 'space-between', marginBottom: '0.75rem' }}>
             <div>
               <h3 style={{ fontSize: '1rem', fontFamily: 'var(--font-mono)' }}>Run {selId.slice(0, 12)}...</h3>
-              <div style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>
+              <div className="muted">
                 Status: <span className={`status-badge ${selectedRun?.status || 'unknown'}`}>{selectedRun?.status || 'unknown'}</span>
                 · Phase: {selectedRun?.phase || '-'}
               </div>
             </div>
-            <div style={{ display: 'flex', gap: '4px' }}>
+            <div className="row" style={{ gap: '4px' }}>
               {(['monitor', 'report', 'diagnostics', 'dag', 'logs', 'instances'] as const).map((t) => (
                 <button key={t} onClick={() => { setTab(t); setQaAnswer(null); }}
                   className={tab === t ? 'btn-run' : 'btn-sm'}>

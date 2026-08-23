@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, type Dispatch, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type Dispatch, type ReactNode } from 'react';
 import type { DagJson } from '../api/types';
 
 // ── Types ──
@@ -161,10 +161,24 @@ const SessionCtx = createContext<SessionContextValue | null>(null);
 export function PipelineSessionProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, null, createInitialState);
 
-  // Persist key state to localStorage on every change
+  // Persist key state to localStorage — trailing 500ms debounce: streamed
+  // chat chunks dispatch SET_CHAT_MESSAGES many times per second, and
+  // stringifying the whole history per chunk janked the UI. The latest
+  // state is flushed on unmount/page unload so the tail isn't lost.
+  const stateRef = useRef(state);
   useEffect(() => {
-    saveState(state);
-  }, [state.pipelineToml, state.dagData, state.activeRunId, state.chatMessages]);
+    stateRef.current = state;
+    const timer = setTimeout(() => saveState(state), 500);
+    return () => clearTimeout(timer);
+  }, [state]);
+  useEffect(() => {
+    const flush = () => saveState(stateRef.current);
+    window.addEventListener('beforeunload', flush);
+    return () => {
+      window.removeEventListener('beforeunload', flush);
+      flush();
+    };
+  }, []);
 
   // Stable setter identities: consumers can list them in effect deps
   // without retriggering on unrelated context changes.

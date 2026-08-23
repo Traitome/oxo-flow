@@ -1,16 +1,19 @@
-import { useCallback, useEffect, useState, useRef } from 'react';
+import { useCallback, useEffect, useState, useRef, lazy, Suspense } from 'react';
 import { Play, CheckCircle, AlertCircle, Undo2, Redo2, Save, Wand2, Blocks } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import type { DagJson, KnowledgeTool } from '../api/types';
 import ChatUI from '../components/ChatUI';
 import ToolPalette from '../components/ToolPalette';
-import WorkflowCanvas from '../components/WorkflowCanvas';
 import RuleInspector from '../components/RuleInspector';
 import RunDialog from '../components/RunDialog';
-import TomlEditor from '../components/TomlEditor';
 import GuidedRuleBuilder from '../components/GuidedRuleBuilder';
 import { usePipelineSession } from '../context/PipelineSession';
+
+// Lazy: guided mode (the default) never mounts these, so @xyflow/react,
+// d3-dag and CodeMirror stay out of the initial editor load (issue #79).
+const WorkflowCanvas = lazy(() => import('../components/WorkflowCanvas'));
+const TomlEditor = lazy(() => import('../components/TomlEditor'));
 
 const DEFAULT_TOML = `[workflow]
 name = "my-pipeline"
@@ -136,10 +139,13 @@ export default function PipelineEditor() {
     }
   }, []);
 
+  // Debounced buildDag+validate only matters to the canvas/TOML view; in
+  // guided mode the heavy panels aren't mounted, so skip the round-trips.
   useEffect(() => {
+    if (viewMode !== 'canvas') return;
     const timer = setTimeout(() => updateDag(toml), 300);
     return () => clearTimeout(timer);
-  }, [toml, updateDag]);
+  }, [toml, updateDag, viewMode]);
 
   const handleRun = async (dryRun = false, options: { maxJobs: number; keepGoing: boolean; samples: string[]; targets: string[]; clusterId?: string } = { maxJobs: 4, keepGoing: false, samples: [], targets: [] }) => {
     setRunning(true);
@@ -334,9 +340,9 @@ export default function PipelineEditor() {
 
   return (
     <div className="page">
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
         <h1 className="page-title" style={{ margin: 0 }}>Pipeline Editor</h1>
-        <div style={{ display: 'flex', gap: '4px' }}>
+        <div className="row" style={{ gap: '4px' }}>
           <button
             className={viewMode === 'guided' ? 'btn-run' : 'btn-sm'}
             onClick={() => switchViewMode('guided')}
@@ -360,7 +366,13 @@ export default function PipelineEditor() {
         </div>
       )}
 
-      <div className="editor-layout" style={{ display: viewMode === 'guided' ? 'none' : undefined }}>
+      {/* Canvas/TOML/chat panels mount only in canvas mode — guided mode
+          must not pay for xyflow/CodeMirror mounting. Editor state lives in
+          this parent (toml/dagJson/validation), so switching back loses
+          nothing. */}
+      {viewMode === 'canvas' && (
+      <Suspense fallback={<div className="empty-state">Loading editor…</div>}>
+      <div className="editor-layout">
         <div className="left-rail">
           <div className="left-rail-tabs" role="tablist">
             <button
@@ -494,6 +506,8 @@ export default function PipelineEditor() {
           <TomlEditor value={toml} onChange={(v) => setToml(v)} highlightLine={highlightLine} />
         </div>
       </div>
+      </Suspense>
+      )}
 
       {session.state.lastRunResult && (
         <div
