@@ -598,12 +598,28 @@ jobs:
           # under /usr/share/oxo-flow (resolved by the executable-relative
           # frontend lookup). Built from the host-target binaries artifact.
           mkdir -p deb-root/DEBIAN deb-root/usr/bin deb-root/usr/share/oxo-flow
+          mkdir -p deb-root/usr/share/applications deb-root/usr/share/icons/hicolor/512x512/apps \
+            deb-root/usr/share/pixmaps
           tar -xzf artifacts/binaries-x86_64-unknown-linux-gnu/oxo-flow-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz \
             -C deb-root/usr/bin
           # The SPA build output was produced by build-macos (not an artifact);
           # rebuild it here so the deb is self-contained.
           cd frontend && npm ci && npm run build && cd ..
           cp -r crates/oxo-flow-web/static deb-root/usr/share/oxo-flow/static
+          # Desktop entry + icon (app menu integration, same treatment the
+          # macOS bundle got: launcher opens the local web interface).
+          cp assets/oxo-flow.png deb-root/usr/share/icons/hicolor/512x512/apps/oxo-flow.png
+          cp assets/oxo-flow.png deb-root/usr/share/pixmaps/oxo-flow.png
+          printf '%s\n' \
+            '[Desktop Entry]' \
+            'Type=Application' \
+            'Name=oxo-flow' \
+            'Comment=Bioinformatics workflow engine with web interface' \
+            'Exec=oxo-flow serve --open' \
+            'Icon=oxo-flow' \
+            'Terminal=false' \
+            'Categories=Science;Development;' \
+            > deb-root/usr/share/applications/oxo-flow.desktop
           VERSION="${RELEASE_TAG#v}"
           printf 'Package: oxo-flow\n' > deb-root/DEBIAN/control
           printf 'Version: %s\n' "${VERSION}" >> deb-root/DEBIAN/control
@@ -643,11 +659,18 @@ jobs:
             'starts the local web interface (oxo-flow serve --open).' \
             '%install' \
             'mkdir -p %{buildroot}/usr/bin %{buildroot}/usr/share/oxo-flow' \
+            'mkdir -p %{buildroot}/usr/share/applications %{buildroot}/usr/share/icons/hicolor/512x512/apps %{buildroot}/usr/share/pixmaps' \
             "cp $PWD/deb-root/usr/bin/oxo-flow %{buildroot}/usr/bin/oxo-flow" \
             "cp -r $PWD/deb-root/usr/share/oxo-flow/static %{buildroot}/usr/share/oxo-flow/static" \
+            "cp $PWD/deb-root/usr/share/applications/oxo-flow.desktop %{buildroot}/usr/share/applications/oxo-flow.desktop" \
+            "cp $PWD/assets/oxo-flow.png %{buildroot}/usr/share/icons/hicolor/512x512/apps/oxo-flow.png" \
+            "cp $PWD/assets/oxo-flow.png %{buildroot}/usr/share/pixmaps/oxo-flow.png" \
             '%files' \
             '/usr/bin/oxo-flow' \
             '/usr/share/oxo-flow/static' \
+            '/usr/share/applications/oxo-flow.desktop' \
+            '/usr/share/icons/hicolor/512x512/apps/oxo-flow.png' \
+            '/usr/share/pixmaps/oxo-flow.png' \
             > rpm-build/SPECS/oxo-flow.spec
           rpmbuild --define "_topdir $PWD/rpm-build" --define "version ${VERSION}" \
             -bb rpm-build/SPECS/oxo-flow.spec
@@ -666,6 +689,9 @@ jobs:
           cp -r deb-root/usr/share/oxo-flow/static "${APPDIR}/usr/share/oxo-flow/static"
           printf '%s\n' '#!/bin/sh' \
             '# Desktop entry: start the local web interface and open the browser.' \
+            '# cd $HOME first: desktop launchers may start us in a read-only' \
+            '# cwd (same defect class the macOS launcher guards against).' \
+            'cd "${HOME:-/tmp}" || true' \
             'HERE="$(dirname "$(readlink -f "$0")")"' \
             'exec "${HERE}/usr/bin/oxo-flow" serve --open "$@"' \
             > "${APPDIR}/AppRun"
@@ -680,7 +706,7 @@ jobs:
             'Terminal=false' \
             'Categories=Science;Development;' \
             > "${APPDIR}/oxo-flow.desktop"
-          cp crates/oxo-flow-web/static/favicon.svg "${APPDIR}/oxo-flow.svg"
+          cp assets/oxo-flow.png "${APPDIR}/oxo-flow.png"
           curl -sL -o appimagetool \
             "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
           chmod +x appimagetool
