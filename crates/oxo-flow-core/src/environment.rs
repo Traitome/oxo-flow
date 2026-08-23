@@ -1539,8 +1539,13 @@ mod tests {
         // issue #159: same stem, different content → different env names,
         // so two workflows' `deseq2.yaml` variants never share a prefix.
         let dir = tempfile::tempdir().unwrap();
-        let a = dir.path().join("deseq2.yaml");
-        let b = dir.path().join("deseq2.yaml");
+        // Distinct directories so both specs share the STEM `deseq2` while
+        // carrying different content — the exact cross-workflow collision
+        // shape from the live incident.
+        let a = dir.path().join("wf-a").join("deseq2.yaml");
+        let b = dir.path().join("wf-b").join("deseq2.yaml");
+        std::fs::create_dir_all(a.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(b.parent().unwrap()).unwrap();
         std::fs::write(&a, "channels: [bioconda]\ndependencies: [r-deseq2]\n").unwrap();
         let name_a = CondaBackend.setup_command(a.to_str().unwrap()).unwrap();
         std::fs::write(
@@ -1618,15 +1623,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let yaml = dir.path().join("env.yaml");
         std::fs::write(&yaml, "name: rnaseq_2\nchannels: [bioconda]\n").unwrap();
-        assert_eq!(
-            conda_env_name_from_spec("conda", yaml.to_str().unwrap()).unwrap(),
-            "rnaseq_2",
-            "a YAML name within the allowed alphabet passes"
+        let derived = conda_env_name_from_spec("conda", yaml.to_str().unwrap()).unwrap();
+        assert!(
+            derived.starts_with("rnaseq_2-") && derived.len() == "rnaseq_2-".len() + 8,
+            "file specs keep the YAML name and gain the 8-hex content-hash suffix: {derived}"
         );
         assert_eq!(
             conda_env_name_from_spec("conda", "envs/qc.yaml").unwrap(),
             "qc",
-            "the file-stem fallback passes for plain stems"
+            "the file-stem fallback passes for plain stems (no file on disk → no suffix)"
         );
         assert_eq!(
             conda_env_name_from_spec("conda", "my-env_1").unwrap(),
