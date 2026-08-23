@@ -138,6 +138,12 @@ sudo dpkg -i target/release/bundle/deb/oxo-flow_*.deb
 oxo-flow serve --open
 ```
 
+The release `.deb` / `.rpm` ship an application-menu entry with the
+oxo-flow icon (`oxo-flow serve --open`), so after install you can also
+launch it from the desktop environment's app menu. The `.AppImage`
+carries the same entry (AppRun + `oxo-flow.desktop` + `oxo-flow.png`);
+double-click the file or run `./oxo-flow-*.AppImage`.
+
 ## Windows
 
 There is no Windows bundle yet — the release pipeline does not build one
