@@ -1,7 +1,7 @@
 .PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit contributors
 
 ## Run all local CI quality-gate checks (mirrors the "Test" job in ci.yml).
-ci: fmt clippy build test audit
+ci: fmt clippy build test schema-drift audit
 
 fmt:
 	cargo fmt -- --check
@@ -17,6 +17,12 @@ test:
 
 audit:
 	cargo audit --no-fetch 2>&1 || cargo audit
+
+## Single-source rule: the CLI-embedded workflow schema must match the
+## docs copy (the docs copy is canonical; `oxo-flow schema` serves the
+## CLI copy — drift means users validate against an outdated schema).
+schema-drift:
+	diff -q crates/oxo-flow-cli/schema/oxoflow-v1.schema.json docs/schema/oxoflow-v1.schema.json >/dev/null 2>&1 || { echo "schema drift: sync crates/oxo-flow-cli/schema with docs/schema"; exit 1; }
 
 ## Generate code coverage report (requires cargo-tarpaulin).
 coverage:
