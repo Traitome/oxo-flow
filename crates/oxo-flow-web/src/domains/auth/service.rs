@@ -53,10 +53,20 @@ pub fn authenticate(username: &str, password: &str) -> Result<LoginResponse, Str
             "DEV MODE: accepted password==username login for '{}'",
             username
         );
+        // The role must reflect the account, not a hardcoded "user" —
+        // /api/auth/me derives admin for the admin username, and the login
+        // response must agree (issue #142 persona testing, M6).
+        let role = if username == "admin" {
+            "admin"
+        } else if username == "viewer" {
+            "viewer"
+        } else {
+            "user"
+        };
         return Ok(LoginResponse {
             token: generate_token(),
             username: username.into(),
-            role: "user".into(),
+            role: role.into(),
         });
     }
 
@@ -278,6 +288,20 @@ pub async fn handle_oauth_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_dev_mode_login_role_matches_account() {
+        // M6 regression: the dev-mode password==username fallback must not
+        // hardcode "user" — admin must come back as admin (agrees with
+        // /api/auth/me's derivation).
+        if std::env::var("OXO_FLOW_DEV_MODE").as_deref() != Ok("1") {
+            return; // dev-mode branch not active in this environment
+        }
+        let resp = authenticate("admin", "admin").unwrap();
+        assert_eq!(resp.role, "admin");
+        let resp = authenticate("alice", "alice").unwrap();
+        assert_eq!(resp.role, "user");
+    }
 
     #[test]
     fn test_authenticate_password_equals_username_rejected_in_production() {
