@@ -26,6 +26,14 @@ cargo build --workspace --verbose
 cargo test --workspace --verbose
 ```
 
+Focused suites (needs `cargo build --workspace` first when the test
+spawns the web server):
+
+```bash
+cargo test --test web_role_matrix   # deployment + 3-role simulation matrix (auth, RBAC, persistence, base-path)
+cargo test --test web_integration   # web API integration tests
+```
+
 ### Run All CI Checks Locally
 
 ```bash
