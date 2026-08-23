@@ -100,8 +100,14 @@ fn cli_run_json_summary_carries_per_rule_resources() {
     );
     // peak_rss_mb / cpu_seconds are sampled — present as keys, null when
     // the sampler never ticked on an ultra-fast rule.
-    assert!(row.get("peak_rss_mb").is_some(), "peak_rss_mb key: {summary}");
-    assert!(row.get("cpu_seconds").is_some(), "cpu_seconds key: {summary}");
+    assert!(
+        row.get("peak_rss_mb").is_some(),
+        "peak_rss_mb key: {summary}"
+    );
+    assert!(
+        row.get("cpu_seconds").is_some(),
+        "cpu_seconds key: {summary}"
+    );
     assert_eq!(row["retries"], 0);
 }
 

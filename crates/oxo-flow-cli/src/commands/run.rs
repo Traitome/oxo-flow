@@ -1477,7 +1477,17 @@ pub async fn run_command(
                                 let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
                                 // Pre-execution abort — the summary still
                                 // reports the failed run (issue #142 H6).
-                                emit_run_json_summary(json, "failed", &workflow, 0, 0, 0, 0, 0, vec![]);
+                                emit_run_json_summary(
+                                    json,
+                                    "failed",
+                                    &workflow,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    vec![],
+                                );
                                 return Err(anyhow::anyhow!(
                                     "failed to set up the environment for reference '{}': {}",
                                     ref_def.name,
@@ -1485,7 +1495,17 @@ pub async fn run_command(
                                 ));
                             }
                             Err(e) => {
-                                emit_run_json_summary(json, "failed", &workflow, 0, 0, 0, 0, 0, vec![]);
+                                emit_run_json_summary(
+                                    json,
+                                    "failed",
+                                    &workflow,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    vec![],
+                                );
                                 return Err(anyhow::anyhow!(
                                     "failed to run the environment setup for reference '{}': {e}",
                                     ref_def.name

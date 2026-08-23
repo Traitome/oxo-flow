@@ -107,10 +107,7 @@ fn conda_env_name_from_spec(kind: &str, spec: &str) -> Result<String> {
     if let Some(bytes) = file_content {
         use sha2::Digest;
         let digest = sha2::Sha256::digest(bytes);
-        let hash8: String = digest[..4]
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
+        let hash8: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
         name.push('-');
         name.push_str(&hash8);
     }
@@ -1546,7 +1543,11 @@ mod tests {
         let b = dir.path().join("deseq2.yaml");
         std::fs::write(&a, "channels: [bioconda]\ndependencies: [r-deseq2]\n").unwrap();
         let name_a = CondaBackend.setup_command(a.to_str().unwrap()).unwrap();
-        std::fs::write(&b, "channels: [bioconda]\ndependencies: [r-deseq2, r-optparse=1.7.5]\n").unwrap();
+        std::fs::write(
+            &b,
+            "channels: [bioconda]\ndependencies: [r-deseq2, r-optparse=1.7.5]\n",
+        )
+        .unwrap();
         let name_b = CondaBackend.setup_command(b.to_str().unwrap()).unwrap();
         let extract = |cmd: String| {
             let start = cmd.find(" -n ").unwrap() + 4;
@@ -1556,14 +1557,21 @@ mod tests {
         let na = extract(name_a);
         let nb = extract(name_b);
         assert_ne!(na, nb, "different content must derive different env names");
-        assert!(na.starts_with("deseq2-"), "file specs carry a hash suffix: {na}");
+        assert!(
+            na.starts_with("deseq2-"),
+            "file specs carry a hash suffix: {na}"
+        );
         assert!(nb.starts_with("deseq2-"));
         // Same content → same name (dedup preserved).
         let c = dir.path().join("other-dir").join("deseq2.yaml");
         std::fs::create_dir_all(c.parent().unwrap()).unwrap();
         std::fs::copy(&a, &c).unwrap();
         let name_c = CondaBackend.setup_command(c.to_str().unwrap()).unwrap();
-        assert_eq!(extract(name_c), na, "identical content must keep the same env name");
+        assert_eq!(
+            extract(name_c),
+            na,
+            "identical content must keep the same env name"
+        );
     }
 
     #[test]
