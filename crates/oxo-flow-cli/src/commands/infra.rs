@@ -290,19 +290,53 @@ pub fn handle_config(action: ConfigAction) -> Result<()> {
 }
 
 /// Verify a license file, or display the current license status without one.
-pub fn handle_license(path: Option<std::path::PathBuf>) -> Result<()> {
+/// With `json` set, both branches emit a machine-readable object on stdout
+/// instead of the human summary (the global `--json` flag was previously a
+/// silent no-op for this command).
+pub fn handle_license(path: Option<std::path::PathBuf>, json: bool) -> Result<()> {
     let status = oxo_flow_web::check_license();
     if let Some(p) = path {
         match oxo_license::load_and_verify(Some(&p), &oxo_flow_web::OXO_FLOW_CONFIG) {
             Ok(license) => {
-                println!("{} License verified successfully", "✓".green().bold());
-                println!("  Type:    {}", license.payload.license_type);
-                println!("  Issued:  {}", license.payload.issued_to_org);
-                println!("  Schema:  {}", license.payload.schema);
-                println!("  ID:      {}", license.payload.license_id);
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "verified": true,
+                            "type": license.payload.license_type,
+                            "issued_to": license.payload.issued_to_org,
+                            "schema": license.payload.schema,
+                            "id": license.payload.license_id,
+                        })
+                    );
+                } else {
+                    println!("{} License verified successfully", "✓".green().bold());
+                    println!("  Type:    {}", license.payload.license_type);
+                    println!("  Issued:  {}", license.payload.issued_to_org);
+                    println!("  Schema:  {}", license.payload.schema);
+                    println!("  ID:      {}", license.payload.license_id);
+                }
             }
-            Err(e) => anyhow::bail!("License verification failed: {e}"),
+            Err(e) => {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({ "verified": false, "error": e.to_string() })
+                    );
+                }
+                anyhow::bail!("License verification failed: {e}");
+            }
         }
+    } else if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "valid": status.valid,
+                "license_type": status.license_type,
+                "issued_to": status.issued_to,
+                "message": status.message,
+            })
+        );
     } else {
         println!("License status:");
         if status.valid {

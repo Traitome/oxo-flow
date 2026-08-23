@@ -2964,6 +2964,22 @@ fn cli_license_invalid_path_fails() {
         .stderr(predicate::str::contains("License verification failed"));
 }
 
+#[test]
+fn cli_license_status_json_emits_machine_readable_object() {
+    // `license --json` must not be a silent no-op: status mode emits a
+    // single JSON object with a `valid` boolean on stdout.
+    let output = oxo_flow_cmd()
+        .args(["license", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&output)
+        .expect("license --json stdout must be a single JSON document");
+    assert!(parsed.get("valid").and_then(|v| v.as_bool()).is_some());
+}
+
 // ─── Config subcommand ───────────────────────────────────────────────────────
 
 #[test]
