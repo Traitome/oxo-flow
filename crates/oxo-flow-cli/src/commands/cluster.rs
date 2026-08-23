@@ -387,6 +387,12 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 _ => oxo_flow_core::cluster::ClusterBackend::Slurm,
             };
 
+            if job_ids.is_empty() {
+                anyhow::bail!(
+                    "cluster status requires at least one job ID from a submit/run output — '{}' with an empty job list is not useful",
+                    oxo_flow_core::cluster::status_command(&cluster_backend)
+                );
+            }
             let status_cmd = oxo_flow_core::cluster::status_command(&cluster_backend);
             eprintln!("{} Executing '{}'...", "Cluster:".bold().cyan(), status_cmd);
 

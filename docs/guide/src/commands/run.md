@@ -730,7 +730,7 @@ the config surface.
 ## Output
 
 ```
-oxo-flow 0.14.1 — Bioinformatics Pipeline Engine
+oxo-flow v0.14.1 — Rust-native bioinformatics pipeline engine
 DAG: 5 rules in execution order
   1. fastqc
   2. trim_reads

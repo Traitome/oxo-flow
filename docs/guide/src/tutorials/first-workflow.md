@@ -209,7 +209,7 @@ oxo-flow dry-run qc-pipeline.oxoflow
 ```
 
 ```
-oxo-flow 0.14.1 — Bioinformatics Pipeline Engine
+oxo-flow v0.14.1 — Rust-native bioinformatics pipeline engine
 INFO Auto-discovered 2 samples from pattern 'raw_data/{sample}_R1.fastq.gz'
 DAG: (dry-run) 8 rules would execute
   1. fastp_trim_auto-discovered_sample1

@@ -1626,9 +1626,15 @@ impl WorkflowConfig {
     /// Parse a workflow configuration from a `.oxoflow` file.
     #[must_use = "parsing a config file returns a Result that must be used"]
     pub fn from_file(path: &Path) -> Result<Self> {
-        let content = std::fs::read_to_string(path).map_err(|e| OxoFlowError::Parse {
-            path: path.to_path_buf(),
-            message: e.to_string(),
+        let content = std::fs::read_to_string(path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                OxoFlowError::WorkflowNotFound(path.to_path_buf())
+            } else {
+                OxoFlowError::Parse {
+                    path: path.to_path_buf(),
+                    message: e.to_string(),
+                }
+            }
         })?;
         let mut config: WorkflowConfig =
             toml::from_str(&content).map_err(|e| OxoFlowError::Parse {

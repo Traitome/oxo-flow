@@ -34,7 +34,7 @@ oxo-flow cluster <ACTION> [OPTIONS]
 | Argument | Description |
 |---|---|
 | `<WORKFLOW>` | Path to the `.oxoflow` workflow file (for `submit`) |
-| `[JOB_IDS]...` | Optional cluster job IDs (for `status` and `cancel`) |
+| `[JOB_IDS]...` | Cluster job IDs from a submit/run output — required for `status` (an empty job list is rejected); optional for `cancel` |
 | `<JOB_ID>` | Job ID (for `logs`) |
 
 ---
@@ -171,7 +171,7 @@ scheduler's client commands on `PATH`.
 ### Basic Output
 
 ```
-oxo-flow 0.14.1 — Bioinformatics Pipeline Engine
+oxo-flow v0.14.1 — Rust-native bioinformatics pipeline engine
 Cluster: Generating slurm job scripts for 5 rule instances
   ✓ cluster_scripts/fastqc.sh
   ✓ cluster_scripts/trim_reads.sh
@@ -186,7 +186,7 @@ Done: 5 scripts written to cluster_scripts
 ### With Dependencies Output
 
 ```
-oxo-flow 0.14.1 — Bioinformatics Pipeline Engine
+oxo-flow v0.14.1 — Rust-native bioinformatics pipeline engine
 Cluster: Generating slurm job scripts for 5 rule instances
   ✓ cluster_scripts/fastqc.sh
   ✓ cluster_scripts/trim_reads.sh
@@ -222,7 +222,7 @@ directives; `--walltime` — or a rule's `time_limit`, which wins — adds a tim
 set -e
 
 mkdir -p logs
-conda run -n bwa_env bash -c 'bwa mem -t 16 ref.fa reads.fq > aligned.sam'
+conda run --no-capture-output -n bwa_env bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; bwa mem -t 16 ref.fa reads.fq > aligned.sam'
 ```
 
 ### PBS/Torque Script
@@ -237,7 +237,7 @@ conda run -n bwa_env bash -c 'bwa mem -t 16 ref.fa reads.fq > aligned.sam'
 set -e
 
 mkdir -p logs
-conda run -n bwa_env bash -c 'bwa mem -t 16 ref.fa reads.fq > aligned.sam'
+conda run --no-capture-output -n bwa_env bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; bwa mem -t 16 ref.fa reads.fq > aligned.sam'
 ```
 
 ### SGE Script
@@ -253,7 +253,7 @@ conda run -n bwa_env bash -c 'bwa mem -t 16 ref.fa reads.fq > aligned.sam'
 set -e
 
 mkdir -p logs
-conda run -n bwa_env bash -c 'bwa mem -t 16 ref.fa reads.fq > aligned.sam'
+conda run --no-capture-output -n bwa_env bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; bwa mem -t 16 ref.fa reads.fq > aligned.sam'
 ```
 
 ### LSF Script
@@ -269,11 +269,11 @@ conda run -n bwa_env bash -c 'bwa mem -t 16 ref.fa reads.fq > aligned.sam'
 set -e
 
 mkdir -p logs
-conda run -n bwa_env bash -c 'bwa mem -t 16 ref.fa reads.fq > aligned.sam'
+conda run --no-capture-output -n bwa_env bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; bwa mem -t 16 ref.fa reads.fq > aligned.sam'
 ```
 
 Environment wrapping is applied automatically: conda rules are wrapped in
-`conda run -n <env> bash -c '...'`, docker rules in
+`conda run --no-capture-output -n <env> bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; ...'`, docker rules in
 `docker run --rm --user $(id -u):$(id -g) ... <image> sh -c '...'`, and rules
 without an environment run the command directly.
 

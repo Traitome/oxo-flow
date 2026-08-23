@@ -10,7 +10,9 @@
 use crate::config::WorkflowConfig;
 use crate::dag::WorkflowDag;
 use crate::rule::Rule;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 
 /// Current .oxoflow format specification version.
 pub const FORMAT_VERSION: &str = "1.0";
@@ -413,71 +415,6 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
 
     // E011 + W023: Shell command security checks (dangerous patterns detected at lint time)
     {
-        use regex::Regex;
-        use std::sync::LazyLock;
-
-        static BLOCKING_PATTERNS: LazyLock<Vec<(Regex, &str, &str)>> = LazyLock::new(|| {
-            let patterns: &[(&str, &str, &str)] = &[
-                (
-                    r"rm\s+-rf\s+(?:--\S+\s+)*[/~]",
-                    "RECURSIVE_DELETION",
-                    "dangerous recursive deletion of root/home",
-                ),
-                (
-                    r"rm\s+-r\s+(?:--\S+\s+)*/",
-                    "RECURSIVE_DELETION",
-                    "recursive deletion of root without force flag",
-                ),
-                (
-                    r"mkfs\.?\w*",
-                    "FILESYSTEM_DESTRUCTION",
-                    "filesystem creation command",
-                ),
-                (r"mkswap", "FILESYSTEM_DESTRUCTION", "swap creation command"),
-                (
-                    r"dd\s+if=.*of=/dev/sd",
-                    "FILESYSTEM_DESTRUCTION",
-                    "dd write to block device",
-                ),
-                (
-                    r"dd\s+if=/dev/(?:zero|random|urandom)",
-                    "DATA_DESTRUCTION",
-                    "data destruction via dd from /dev",
-                ),
-                (
-                    r"chmod\s+.*777\s+/",
-                    "PERMISSION_ESCALATION",
-                    "world-writable root permission",
-                ),
-                (
-                    r"chmod\s+-R\s+777",
-                    "PERMISSION_ESCALATION",
-                    "recursive world-writable permission",
-                ),
-                (
-                    r">\s*/dev/sd[a-z]",
-                    "BLOCK_DEVICE_WRITE",
-                    "redirect to block device",
-                ),
-                (
-                    r">>\s*/dev/sd[a-z]",
-                    "BLOCK_DEVICE_WRITE",
-                    "append to block device",
-                ),
-                (
-                    r"(?:wget|curl).*\|\s*(?:sh|bash|dash)",
-                    "REMOTE_EXECUTION",
-                    "remote script piped to shell",
-                ),
-                (r"\(\)\s*\{.*:.*\|.*&.*\}", "FORK_BOMB", "fork bomb pattern"),
-                (r":\(\)\s*\{", "FORK_BOMB", "fork bomb variant"),
-            ];
-            patterns
-                .iter()
-                .filter_map(|(re, name, desc)| Regex::new(re).ok().map(|r| (r, *name, *desc)))
-                .collect()
-        });
-
         static WARNING_PATTERNS: LazyLock<Vec<(Regex, &str)>> = LazyLock::new(|| {
             let patterns: &[(&str, &str)] = &[
                 (r"\$\([^)]*\)", "command substitution via $()"),
@@ -517,23 +454,20 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
 
             for (cmd, source) in &commands {
                 // Blocking patterns → E011 Error
-                for (re, category, description) in BLOCKING_PATTERNS.iter() {
-                    if re.is_match(cmd) {
-                        diagnostics.push(Diagnostic {
-                            severity: Severity::Error,
-                            message: format!(
-                                "{} command in rule '{}' matches dangerous pattern [{}]: {}",
-                                source, rule.name, category, description
-                            ),
-                            rule: Some(rule.name.clone()),
-                            code: "E011".to_string(),
-                            suggestion: Some(
-                                "remove dangerous shell constructs or use a script file instead"
-                                    .to_string(),
-                            ),
-                        });
-                        break; // One error per command is enough
-                    }
+                if let Some((category, description)) = shell_blocking_pattern(cmd) {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        message: format!(
+                            "{} command in rule '{}' matches dangerous pattern [{}]: {}",
+                            source, rule.name, category, description
+                        ),
+                        rule: Some(rule.name.clone()),
+                        code: "E011".to_string(),
+                        suggestion: Some(
+                            "remove dangerous shell constructs or use a script file instead"
+                                .to_string(),
+                        ),
+                    });
                 }
 
                 // Warning patterns → W023 Warning
@@ -716,6 +650,81 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
     }
 }
 
+/// Blocking shell patterns shared by lint (E011) and the dry-run preview
+/// (issue #142 LOW) — a blocked command must never be previewed as "would
+/// execute".
+static BLOCKING_PATTERNS: LazyLock<Vec<(Regex, &str, &str)>> = LazyLock::new(|| {
+    let patterns: &[(&str, &str, &str)] = &[
+        (
+            r"rm\s+-rf\s+(?:--\S+\s+)*[/~]",
+            "RECURSIVE_DELETION",
+            "dangerous recursive deletion of root/home",
+        ),
+        (
+            r"rm\s+-r\s+(?:--\S+\s+)*/",
+            "RECURSIVE_DELETION",
+            "recursive deletion of root without force flag",
+        ),
+        (
+            r"mkfs\.?\w*",
+            "FILESYSTEM_DESTRUCTION",
+            "filesystem creation command",
+        ),
+        (r"mkswap", "FILESYSTEM_DESTRUCTION", "swap creation command"),
+        (
+            r"dd\s+if=.*of=/dev/sd",
+            "FILESYSTEM_DESTRUCTION",
+            "dd write to block device",
+        ),
+        (
+            r"dd\s+if=/dev/(?:zero|random|urandom)",
+            "DATA_DESTRUCTION",
+            "data destruction via dd from /dev",
+        ),
+        (
+            r"chmod\s+.*777\s+/",
+            "PERMISSION_ESCALATION",
+            "world-writable root permission",
+        ),
+        (
+            r"chmod\s+-R\s+777",
+            "PERMISSION_ESCALATION",
+            "recursive world-writable permission",
+        ),
+        (
+            r">\s*/dev/sd[a-z]",
+            "BLOCK_DEVICE_WRITE",
+            "redirect to block device",
+        ),
+        (
+            r">>\s*/dev/sd[a-z]",
+            "BLOCK_DEVICE_WRITE",
+            "append to block device",
+        ),
+        (
+            r"(?:wget|curl).*\|\s*(?:sh|bash|dash)",
+            "REMOTE_EXECUTION",
+            "remote script piped to shell",
+        ),
+        (r"\(\)\s*\{.*:.*\|.*&.*\}", "FORK_BOMB", "fork bomb pattern"),
+        (r":\(\)\s*\{", "FORK_BOMB", "fork bomb variant"),
+    ];
+    patterns
+        .iter()
+        .filter_map(|(re, name, desc)| Regex::new(re).ok().map(|r| (r, *name, *desc)))
+        .collect()
+});
+
+/// Whether `shell` matches a blocking (E011) pattern, returning the
+/// category and description of the first match.
+pub fn shell_blocking_pattern(shell: &str) -> Option<(&'static str, &'static str)> {
+    BLOCKING_PATTERNS
+        .iter()
+        .find_map(|(re, category, description)| {
+            re.is_match(shell).then_some((*category, *description))
+        })
+}
+
 /// Perform best-practice linting on a workflow configuration.
 ///
 /// Checks for:
@@ -724,7 +733,10 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
 /// - Naming convention violations
 /// - Missing log files for complex rules
 /// - Suboptimal resource allocations
-pub fn lint_format(config: &WorkflowConfig) -> Vec<Diagnostic> {
+pub fn lint_format(
+    config: &WorkflowConfig,
+    script_base: Option<&std::path::Path>,
+) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
     // W001: Missing workflow description
@@ -941,6 +953,73 @@ pub fn lint_format(config: &WorkflowConfig) -> Vec<Diagnostic> {
                     "declare output = [...] naming the files this rule produces, or add a depends_on entry for this rule to each rule that consumes its files".to_string(),
                 ),
             });
+        }
+
+        // W021: a script rule consumes another rule's declared output
+        // without any ordering edge. Scripts are opaque to the DAG builder
+        // — their file references form no edges — so the producer can race
+        // or starve the consumer (live: auto-sra's script rules polled
+        // 00_/01_/02_ directories for 90 minutes before the FIFO fair-
+        // dispatch exposed the missing depends_on). The check reads each
+        // script's CONTENT (relative to the workflow file) and matches the
+        // literal prefix of other rules' output patterns (up to the first
+        // wildcard; fully literal paths match whole). Excluded when the
+        // ordering already exists (depends_on or an inferred DAG edge).
+        // Without a script base dir (e.g. bare-config callers) the content
+        // scan is skipped — the script path itself is still matched.
+        {
+            let dag = crate::dag::WorkflowDag::from_rules(&config.rules).ok();
+            let has_edge = |rule: &crate::rule::Rule, producer: &str| {
+                rule.depends_on.iter().any(|d| d == producer)
+                    || dag.as_ref().is_some_and(|d| {
+                        d.dependencies(&rule.name)
+                            .map(|deps| deps.iter().any(|d| d == producer))
+                            .unwrap_or(false)
+                    })
+            };
+            for rule in &config.rules {
+                let Some(script_path) = rule.script.as_deref() else {
+                    continue;
+                };
+                let mut scanned = script_path.to_string();
+                if let Some(base) = script_base
+                    && let Ok(content) = std::fs::read_to_string(base.join(script_path))
+                {
+                    scanned.push('\n');
+                    scanned.push_str(&content);
+                }
+                for producer in &config.rules {
+                    if producer.name == rule.name || has_edge(rule, &producer.name) {
+                        continue;
+                    }
+                    for output in &producer.output {
+                        // The literal prefix up to the first wildcard; a
+                        // fully literal path matches itself. Prefixes under
+                        // 4 chars are too generic to flag.
+                        let prefix: &str = output
+                            .split(['{', '*', '['])
+                            .next()
+                            .unwrap_or(output)
+                            .trim_end_matches('/');
+                        if prefix.len() < 4 || !scanned.contains(prefix) {
+                            continue;
+                        }
+                        diagnostics.push(Diagnostic {
+                            severity: Severity::Warning,
+                            message: format!(
+                                "script of rule '{}' references output path '{}' of rule '{}' without an ordering edge",
+                                rule.name, output, producer.name
+                            ),
+                            rule: Some(rule.name.clone()),
+                            code: "W021".to_string(),
+                            suggestion: Some(format!(
+                                "add depends_on = [\"{}\"] to '{}' — script references form no DAG edges",
+                                producer.name, rule.name
+                            )),
+                        });
+                    }
+                }
+            }
         }
 
         // W009: Very high thread count (>32) without memory specification
@@ -1729,6 +1808,14 @@ pub fn diff_workflows(a: &WorkflowConfig, b: &WorkflowConfig) -> Vec<WorkflowDif
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shell_blocking_pattern_detects_e011_only() {
+        assert!(shell_blocking_pattern("rm -rf /").is_some());
+        assert!(shell_blocking_pattern("rm -rf ~").is_some());
+        assert!(shell_blocking_pattern("rm -rf safe_dir").is_none());
+        assert!(shell_blocking_pattern("echo hello").is_none());
+    }
+
     use super::*;
 
     fn sample_workflow() -> &'static str {
@@ -1948,7 +2035,7 @@ mod tests {
             shell = "echo hello"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(diagnostics.iter().any(|d| d.code == "W001"));
         assert!(diagnostics.iter().any(|d| d.code == "W003"));
     }
@@ -1966,7 +2053,7 @@ mod tests {
             shell = "echo hello"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(diagnostics.iter().any(|d| d.code == "W005"));
     }
 
@@ -1986,7 +2073,7 @@ mod tests {
             shell = "cp {input[0]} {output[0]}"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         let w024: Vec<&Diagnostic> = diagnostics.iter().filter(|d| d.code == "W024").collect();
         assert_eq!(
             w024.len(),
@@ -2039,7 +2126,7 @@ mod tests {
             shell = "echo {assembler}"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(
             !diagnostics.iter().any(|d| d.code == "W024"),
             "no W024 expected, got: {diagnostics:?}"
@@ -2060,7 +2147,7 @@ mod tests {
             shell = "echo {_part}"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(!diagnostics.iter().any(|d| d.code == "W024"));
     }
 
@@ -2137,7 +2224,7 @@ mod tests {
             shell = "echo hello"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(diagnostics.iter().any(|d| d.code == "W004"));
     }
 
@@ -2611,7 +2698,7 @@ mod tests {
             shell = "echo hello"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(diagnostics.iter().any(|d| d.code == "W009"));
     }
 
@@ -2627,7 +2714,7 @@ mod tests {
             checkpoint = true
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(diagnostics.iter().any(|d| d.code == "W010"));
     }
 
@@ -2644,7 +2731,7 @@ mod tests {
             checkpoint = true
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(!diagnostics.iter().any(|d| d.code == "W010"));
     }
 
@@ -2661,7 +2748,7 @@ mod tests {
             shadow = "minimal"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(diagnostics.iter().any(|d| d.code == "W011"));
     }
 
@@ -2679,7 +2766,7 @@ mod tests {
             shadow = "minimal"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(!diagnostics.iter().any(|d| d.code == "W011"));
     }
 
@@ -2798,7 +2885,7 @@ mod tests {
             shell = "curl http://example.com > out.txt"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(diagnostics.iter().any(|d| d.code == "W012"));
     }
 
@@ -2816,7 +2903,7 @@ mod tests {
             shell = "curl http://example.com > out.txt"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(!diagnostics.iter().any(|d| d.code == "W012"));
     }
 
@@ -2835,7 +2922,7 @@ mod tests {
             shell = "process data"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(diagnostics.iter().any(|d| d.code == "W013"));
     }
 
@@ -2853,7 +2940,7 @@ mod tests {
             shell = "process data"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(!diagnostics.iter().any(|d| d.code == "W013"));
     }
 
@@ -2872,7 +2959,7 @@ mod tests {
             shell = "echo hello"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(diagnostics.iter().any(|d| d.code == "W014"));
     }
 
@@ -2893,7 +2980,7 @@ mod tests {
             shell = "echo hello"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(!diagnostics.iter().any(|d| d.code == "W014"));
     }
 
@@ -3228,7 +3315,7 @@ mod tests {
             conda = "envs/align.yaml"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         let w016 = diagnostics.iter().find(|d| d.code == "W016");
         assert!(w016.is_some(), "should warn about unlocked conda env");
         assert!(w016.unwrap().message.contains("lockfile"));
@@ -3498,7 +3585,7 @@ mod tests {
             shell = "process data"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(diagnostics.iter().any(|d| d.code == "W020"));
     }
 
@@ -3515,8 +3602,8 @@ mod tests {
             shell = "process data"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
-        assert!(!diagnostics.iter().any(|d| d.code == "W020"));
+        let diagnostics = lint_format(&config, None);
+        assert!(!diagnostics.iter().any(|d| d.code == "W021"));
     }
 
     #[test]
@@ -3532,7 +3619,7 @@ mod tests {
             shell = "process data"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(diagnostics.iter().any(|d| d.code == "W021"));
     }
 
@@ -3549,7 +3636,7 @@ mod tests {
             shell = "process data"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(!diagnostics.iter().any(|d| d.code == "W021"));
     }
 
@@ -3567,7 +3654,7 @@ mod tests {
             shell = "process data"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(diagnostics.iter().any(|d| d.code == "W022"));
     }
 
@@ -3585,7 +3672,7 @@ mod tests {
             shell = "process data"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(!diagnostics.iter().any(|d| d.code == "W022"));
     }
 
@@ -3600,10 +3687,77 @@ mod tests {
             shell = "echo data > sra/x.fastq"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(
             diagnostics.iter().any(|d| d.code == "W019"),
             "a rule executing a command with no declared outputs must warn: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w021_script_content_referencing_output_without_edge() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+        std::fs::write(
+            dir.path().join("scripts/merge.py"),
+            "for f in 00_fastq/*.fastq.gz:\n    merge(f)\n",
+        )
+        .unwrap();
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "dump"
+            output = ["00_fastq/{sample}.fastq.gz"]
+            shell = "echo hi > 00_fastq/x.fastq.gz"
+
+            [[rules]]
+            name = "merge"
+            script = "scripts/merge.py"
+            output = ["merged.fastq.gz"]
+        "#;
+        let config: WorkflowConfig = toml::from_str(toml).unwrap();
+        let diagnostics = lint_format(&config, Some(dir.path()));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.code == "W021" && d.rule.as_deref() == Some("merge")),
+            "script content referencing dump's output dir must warn: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_no_w021_when_ordering_edge_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+        std::fs::write(
+            dir.path().join("scripts/merge.py"),
+            "for f in 00_fastq/*.fastq.gz:\n    merge(f)\n",
+        )
+        .unwrap();
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "dump"
+            output = ["00_fastq/{sample}.fastq.gz"]
+            shell = "echo hi > 00_fastq/x.fastq.gz"
+
+            [[rules]]
+            name = "merge"
+            depends_on = ["dump"]
+            script = "scripts/merge.py"
+            output = ["merged.fastq.gz"]
+        "#;
+        let config: WorkflowConfig = toml::from_str(toml).unwrap();
+        let diagnostics = lint_format(&config, Some(dir.path()));
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W021"),
+            "an existing depends_on edge must silence W020: {diagnostics:?}"
         );
     }
 
@@ -3619,7 +3773,7 @@ mod tests {
             shell = "echo data > x.fastq"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(!diagnostics.iter().any(|d| d.code == "W019"));
     }
 
@@ -3641,7 +3795,7 @@ mod tests {
             depends_on = ["produce"]
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(
             !diagnostics.iter().any(|d| d.code == "W019"),
             "an output-less rule with dependents already orders against them via \
@@ -3661,7 +3815,7 @@ mod tests {
             shell = "echo data > sra/x.fastq"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(
             !diagnostics.iter().any(|d| d.code == "W019"),
             "a rule with when = \"false\" can never execute — missing outputs are moot: {diagnostics:?}"
@@ -3682,7 +3836,7 @@ mod tests {
             map = "echo processing {chr}"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(
             diagnostics.iter().any(|d| d.code == "W019"),
             "a transform rule executes `map` but declares no outputs — it must warn: {diagnostics:?}"
@@ -3700,7 +3854,7 @@ mod tests {
             shell = "echo data > sra/x.fastq"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         let w019 = diagnostics
             .iter()
             .find(|d| d.code == "W019")
@@ -3733,7 +3887,7 @@ mod tests {
             memory = "8G"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         let w025 = diagnostics
             .iter()
             .find(|d| d.code == "W025")
@@ -3762,7 +3916,7 @@ mod tests {
             memory = "8G"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config);
+        let diagnostics = lint_format(&config, None);
         assert!(
             !diagnostics.iter().any(|d| d.code == "W025"),
             "resources-block keys must not be flagged"

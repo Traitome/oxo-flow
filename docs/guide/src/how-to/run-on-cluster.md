@@ -115,7 +115,7 @@ for the first instance is:
 set -e
 
 mkdir -p logs
-singularity exec --bind .:. docker://biocontainers/bwa:0.7.17 sh -c 'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'
+singularity exec --bind /abs/path/to/workdir:/abs/path/to/workdir docker://biocontainers/bwa:0.7.17 sh -c 'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'
 ```
 
 Note: one script is generated per **rule instance**. Wildcards expand before
@@ -138,7 +138,7 @@ plans, so a script maps back to a planned rule by name.
 set -e
 
 mkdir -p logs
-singularity exec --bind .:. docker://biocontainers/bwa:0.7.17 sh -c 'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'
+singularity exec --bind /abs/path/to/workdir:/abs/path/to/workdir docker://biocontainers/bwa:0.7.17 sh -c 'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'
 ```
 
 ---
@@ -157,7 +157,7 @@ singularity exec --bind .:. docker://biocontainers/bwa:0.7.17 sh -c 'bwa mem -t 
 set -e
 
 mkdir -p logs
-singularity exec --bind .:. docker://biocontainers/bwa:0.7.17 sh -c 'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'
+singularity exec --bind /abs/path/to/workdir:/abs/path/to/workdir docker://biocontainers/bwa:0.7.17 sh -c 'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'
 ```
 
 ---

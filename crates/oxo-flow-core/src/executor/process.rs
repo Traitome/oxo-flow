@@ -1242,6 +1242,26 @@ impl LocalExecutor {
             && super::checkpoint::should_skip_rule(&rule, &self.config.workdir, wildcard_values)
             && self.remote_outputs_present(&uploads).await
         {
+            // A 0-byte "up to date" output is usually a failed attempt's
+            // leftover, not a legitimate result — warn loudly so the user
+            // knows the skip may be serving an empty file (live: a 0-byte
+            // BAM from a failed postprocess was silently reused, and the
+            // downstream sort died on the header). Empty outputs CAN be
+            // legitimate (empty call sets), so the verdict stays a skip —
+            // the warning tells the user when to reach for --rerun.
+            for output in &rule.output {
+                let expanded = super::checkpoint::expand_config_in_path(output, wildcard_values);
+                if let Ok(md) = std::fs::metadata(self.config.workdir.join(&expanded))
+                    && md.is_file()
+                    && md.len() == 0
+                {
+                    tracing::warn!(
+                        rule = %rule.name,
+                        output = %expanded,
+                        "output is up to date but 0 bytes — possibly a failed attempt's leftover; re-execute with --rerun to regenerate it"
+                    );
+                }
+            }
             record.status = JobStatus::Skipped;
             record.skip_reason = Some("outputs up-to-date".to_string());
             record.finished_at = Some(Utc::now());

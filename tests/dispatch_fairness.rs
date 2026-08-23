@@ -844,3 +844,15 @@ fn cli_samples_subset_does_not_overwrite_gather_output() {
         "preview must not report gather as input-invalidated, got: {preview_err}"
     );
 }
+
+/// `cluster status` with no job IDs must fail with a clear message instead
+/// of invoking the scheduler's status command with an empty list
+/// (issue #142 LOW).
+#[test]
+fn cli_cluster_status_requires_job_ids() {
+    oxo_flow_cmd()
+        .args(["cluster", "status", "-b", "slurm"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("requires at least one job ID"));
+}

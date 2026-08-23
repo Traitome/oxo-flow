@@ -839,6 +839,27 @@ pub async fn run_command(
         Arc::new(config_placeholder_values(&config.config));
     let workdir_actual = Arc::new(workdir.as_ref().unwrap_or(&workdir_default).clone());
 
+    // ── Pre-flight disk check (issue #75, wired 2026-08-23) ────────────────
+    // ENOSPC mid-run is the classic silent-loss incident (live: TMPDIR full
+    // killed a scatter campaign half-way). Warn when either the workdir or
+    // the temp dir has less than 1 GB free BEFORE any rule runs.
+    for (label, path) in [
+        ("workdir", workdir_actual.as_path()),
+        ("temp dir", std::env::temp_dir().as_path()),
+    ] {
+        if let Some(free_kb) = free_kilobytes(path) {
+            let free_gb = free_kb as f64 / 1024.0 / 1024.0;
+            if free_gb < 1.0 {
+                tracing::warn!(
+                    label,
+                    path = %path.display(),
+                    free_gb = format!("{free_gb:.1}"),
+                    "less than 1 GB free disk space — the run may fail with ENOSPC mid-way"
+                );
+            }
+        }
+    }
+
     // ── Input manifest comparison (issue #72) ──────────────────────────────
     // A completed rule is reused only when the file set its inputs resolved
     // to at completion time (paths + size + mtime) still matches. Globs and
@@ -2774,6 +2795,24 @@ fn source_content_sig(path: &std::path::Path) -> Option<String> {
     Some(sig)
 }
 
+/// Free disk space in KiB on the filesystem holding `path`, read from
+/// `df -Pk` (the portable POSIX form; parses the Available column of the
+/// mount line). `None` when df is unavailable or the output is unparsable —
+/// the pre-flight degrades to no check rather than blocking the run.
+fn free_kilobytes(path: &std::path::Path) -> Option<u64> {
+    let out = std::process::Command::new("df")
+        .args(["-Pk", path.to_str()?])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // The last line is the mount that actually holds the path.
+    let line = stdout.lines().next_back()?;
+    line.split_whitespace().nth(3)?.parse().ok()
+}
+
 /// Sorts the scheduler's ready list by effective priority: declared priority
 /// plus rounds already waited (the aging counter of issue #123), ties broken
 /// by name. Pure and unit-tested — the dispatch loop feeds it the live ready
@@ -3224,7 +3263,17 @@ pub async fn dry_run_command(
             // surface like any other.
             let expanded =
                 oxo_flow_core::executor::process::mask_sensitive(&expanded, &sensitive_values);
-            eprintln!("     command: {}", expanded);
+            if let Some((_category, description)) =
+                oxo_flow_core::format::shell_blocking_pattern(&expanded)
+            {
+                eprintln!(
+                    "     command: {}  {}",
+                    expanded,
+                    format!("(blocked: E011 — {description})").red().bold()
+                );
+            } else {
+                eprintln!("     command: {}", expanded);
+            }
         }
 
         // Show input file status for concrete (non-wildcard) paths.
