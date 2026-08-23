@@ -373,6 +373,7 @@ pub struct ListRunsQuery {
     get,
     path = "/api/runs",
     tag = "runs",
+    security(("bearerAuth" = [])),
     responses(
         (status = 200, description = "Success", body = serde_json::Value),
         (status = 400, description = "Error", body = ApiError),

@@ -80,6 +80,24 @@ pub fn validate(cluster: &super::types::ClusterUpsertRequest) -> Result<(), Stri
     Ok(())
 }
 
+/// Sanitize a probe error so the UI never leaks hostnames, IP addresses, or
+/// local filesystem paths. The raw error is logged server-side for admins.
+fn sanitize_probe_error(raw: &str) -> String {
+    let has_hostname = raw
+        .split_whitespace()
+        .any(|w| w.trim_end_matches([':', ',', '.']).contains('.'));
+    let has_ip = raw
+        .split(|c: char| !c.is_ascii_digit() && c != '.')
+        .any(|s| s.matches('.').count() == 3 && s.parse::<std::net::IpAddr>().is_ok());
+    let has_path = raw.starts_with('/') || raw.contains('\\') || raw.contains('~');
+
+    if has_ip || has_hostname || has_path {
+        "Could not reach cluster scheduler".into()
+    } else {
+        raw.into()
+    }
+}
+
 /// Probe a cluster endpoint over SSH: connectivity, remote hostname, and
 /// scheduler detection. Best-effort — a failed probe is a structured
 /// result, never a panic.
@@ -129,29 +147,31 @@ pub async fn probe(cluster: &ClusterInfo) -> ClusterProbeResult {
         Ok(output) => {
             let duration_ms = started.elapsed().as_millis() as u64;
             let stderr = String::from_utf8_lossy(&output.stderr);
+            let raw = stderr
+                .lines()
+                .next()
+                .unwrap_or("ssh probe failed")
+                .to_string();
+            tracing::warn!("cluster probe failed: {raw}");
             ClusterProbeResult {
                 ok: false,
                 hostname: None,
                 scheduler: None,
                 version: None,
-                error: Some(
-                    stderr
-                        .lines()
-                        .next()
-                        .unwrap_or("ssh probe failed")
-                        .to_string(),
-                ),
+                error: Some(sanitize_probe_error(&raw)),
                 duration_ms,
             }
         }
         Err(e) => {
             let duration_ms = started.elapsed().as_millis() as u64;
+            let raw = format!("failed to run ssh: {e}");
+            tracing::warn!("cluster probe failed: {raw}");
             ClusterProbeResult {
                 ok: false,
                 hostname: None,
                 scheduler: None,
                 version: None,
-                error: Some(format!("failed to run ssh: {e}")),
+                error: Some(sanitize_probe_error(&raw)),
                 duration_ms,
             }
         }

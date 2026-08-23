@@ -570,6 +570,7 @@ pub async fn save_pipeline(
     get,
     path = "/api/pipelines",
     tag = "workflow",
+    security(("bearerAuth" = [])),
     responses(
         (status = 200, description = "Success", body = Vec<Pipeline>),
         (status = 400, description = "Error", body = ApiError),
