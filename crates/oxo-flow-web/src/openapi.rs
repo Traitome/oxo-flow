@@ -4,7 +4,8 @@
 //! route handler in the crate (see `domains/*/handlers.rs`, `sse.rs`, and
 //! `server.rs`) plus the `utoipa::ToSchema` derives on the domain types.
 //! There is no hand-maintained static spec anymore — `GET /api/openapi.json`
-//! serializes [`ApiDoc::openapi`] at request time.
+//! serves the serialized [`ApiDoc::openapi`] document, cached in memory on
+//! first request (the schema graph is static per build).
 //!
 //! The drift gate is `tests/openapi_gate.rs`: it asserts that every route
 //! registered in [`crate::server::build_router`] is present in the
@@ -141,11 +142,21 @@ use utoipa::OpenApi;
 )]
 pub struct ApiDoc;
 
+/// Serialized spec, generated once per process. The schema graph is fully
+/// determined by the `#[utoipa::path]` annotations compiled into the binary,
+/// so regenerating per request only burns CPU.
+static SPEC_JSON: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 /// Serialize the generated spec to a JSON string (served at
-/// `GET /api/openapi.json`).
+/// `GET /api/openapi.json`). The serialization is cached after the first
+/// call; each call clones the cached string.
 pub fn spec_json() -> String {
-    // The schema graph is static and known-good; serialization cannot fail.
-    ApiDoc::openapi()
-        .to_json()
-        .expect("generated OpenAPI spec is always serializable")
+    SPEC_JSON
+        .get_or_init(|| {
+            // The schema graph is static and known-good; serialization cannot fail.
+            ApiDoc::openapi()
+                .to_json()
+                .expect("generated OpenAPI spec is always serializable")
+        })
+        .clone()
 }
