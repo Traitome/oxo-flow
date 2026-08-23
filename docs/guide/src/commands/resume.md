@@ -46,6 +46,7 @@ re-execute the affected rules (see
 | `--keep-going` | `-k` | Continue execution when a job fails (same semantics as `run`) |
 | `--timeout <SECS>` | — | Timeout per job in seconds (0 = disabled), or a duration like `1h`/`30m` |
 | `--no-report-snapshot` | — | Skip the automatic report snapshot after the resumed run (same flag as `run`) |
+| `--background` | — | Detach the resumed run into a background process and exit 0 immediately (see [Background runs (--background)](run.md#background-runs---background)) |
 
 ## Examples
 
@@ -67,6 +68,8 @@ oxo-flow resume .oxo-flow/checkpoint.json -j 4
   The standalone `resume` command is useful for explicitly re-running after
   inspecting the checkpoint state.
 - Use `oxo-flow status` to inspect the checkpoint before resuming.
+- `--background` detaches the resumed run (see
+  [run's Background runs section](run.md#background-runs---background)).
 
 ## See Also
 

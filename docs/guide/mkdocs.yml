@@ -144,6 +144,7 @@ nav:
       - Generate Reports: how-to/generate-reports.md
       - Experiment-Control Pairing: how-to/experiment-control-pairing.md
       - Cohort Sample Groups: how-to/cohort-sample-groups.md
+      - Concurrent Runs: how-to/concurrent-runs.md
       - Conditional Rules: how-to/conditional-rules.md
       - China Mirrors: how-to/china-mirrors.md
       - Editor Setup: how-to/editor-setup.md
