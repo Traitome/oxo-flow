@@ -910,6 +910,18 @@ impl EnvironmentCache {
         }
     }
 
+    /// Remove the entry for `key` — the cached environment no longer exists
+    /// on disk (migrated, deleted, or failed mid-setup). The next readiness
+    /// check misses and the setup path rebuilds it.
+    pub fn invalidate(&mut self, key: &str) {
+        if self.ready.remove(key) {
+            // Persist to file if configured
+            if let Err(e) = self.save() {
+                tracing::warn!("could not save environment cache: {}", e);
+            }
+        }
+    }
+
     /// Load cache from file.
     fn load(&mut self) -> Result<()> {
         if let Some(ref path) = self.cache_file
@@ -1035,6 +1047,12 @@ impl EnvironmentResolver {
     pub async fn cache_mark_ready(&self, key: &str) {
         let mut cache = self.cache.lock().await;
         cache.mark_ready(key);
+    }
+
+    /// Invalidate a cache entry (the cached environment vanished on disk).
+    pub async fn cache_invalidate(&self, key: &str) {
+        let mut cache = self.cache.lock().await;
+        cache.invalidate(key);
     }
 
     /// Wrap a command using the appropriate environment backend.
@@ -1759,6 +1777,18 @@ mod tests {
         cache.mark_ready("system");
         cache.mark_ready("system");
         assert!(cache.is_ready("system"));
+    }
+
+    #[test]
+    fn cache_invalidate_removes_entry() {
+        let mut cache = EnvironmentCache::new();
+        cache.mark_ready("conda:envs/qc.yaml");
+        cache.mark_ready("docker:ubuntu:22.04");
+        cache.invalidate("conda:envs/qc.yaml");
+        assert!(!cache.is_ready("conda:envs/qc.yaml"));
+        assert!(cache.is_ready("docker:ubuntu:22.04"));
+        // Invalidating an unknown key is a no-op, not an error.
+        cache.invalidate("pixi:default");
     }
 
     // ── EnvironmentResolver ────────────────────────────────────────

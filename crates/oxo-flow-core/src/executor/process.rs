@@ -615,7 +615,33 @@ impl LocalExecutor {
         }
         let key = self.env_resolver.cache_key(env_spec);
         if self.env_resolver.cache_is_ready(&key).await {
-            return Ok(());
+            // A cache HIT is a promise, not a proof: the env may have
+            // vanished since it was recorded (box migration, manual rm,
+            // disk cleanup — live: tx-ubuntu's ENOSPC env migration left
+            // stale entries that surfaced as EnvironmentLocationNotFound
+            // at rule time). Re-verify in place; a failed check
+            // invalidates the entry and falls through to the setup path
+            // below instead of failing the rule later.
+            match self.env_resolver.verify_command(env_spec) {
+                Ok(Some(verify)) => {
+                    if self.env_verify(&verify).await {
+                        return Ok(());
+                    }
+                    tracing::warn!(
+                        rule = %rule.name,
+                        env = %key,
+                        "cached environment no longer exists; invalidating the cache entry and rebuilding"
+                    );
+                    self.env_resolver.cache_invalidate(&key).await;
+                }
+                // Backends without a filesystem env (system) or unverifiable
+                // specs: nothing to check — keep the cache hit.
+                Ok(None) => return Ok(()),
+                Err(_) => {
+                    // Unparseable spec: let the setup path produce the
+                    // proper error instead of failing here.
+                }
+            }
         }
         // Cold cache but the env may already exist (checkpoint wipe, a
         // previous run, an external `conda create`): verify it in place
