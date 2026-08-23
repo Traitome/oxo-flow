@@ -88,6 +88,13 @@ test.describe('oxo-flow v0.9 Core User Flows', () => {
   // ── AI Chat ──
 
   test('Dashboard AI entry card navigates to the chat', async ({ page }) => {
+    await page.route('**/api/ai/config', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ provider: 'deepseek', model: 'deepseek-chat', api_url: '', is_configured: true }),
+      }),
+    );
     await page.goto('/');
     // The task-oriented home offers an AI card; the chat input lives on
     // the dedicated /chat page (issue #82 P1-7).

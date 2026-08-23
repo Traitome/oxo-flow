@@ -24,6 +24,13 @@ const SSE_BODY = [
 ].join('\n');
 
 test('chat renders grounded tool-call cards', async ({ page }) => {
+  await page.route('**/api/ai/config', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ provider: 'deepseek', model: 'deepseek-chat', api_url: '', is_configured: true }),
+    }),
+  );
   await page.route('**/api/chat/send', (route) =>
     route.fulfill({
       status: 200,
