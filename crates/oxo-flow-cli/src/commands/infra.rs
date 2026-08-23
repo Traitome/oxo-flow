@@ -319,7 +319,10 @@ pub fn handle_license(path: Option<std::path::PathBuf>, json: bool) -> Result<()
             }
             Err(e) => {
                 if json {
-                    println!("{}", serde_json::json!({ "verified": false, "error": e.to_string() }));
+                    println!(
+                        "{}",
+                        serde_json::json!({ "verified": false, "error": e.to_string() })
+                    );
                 }
                 anyhow::bail!("License verification failed: {e}");
             }
