@@ -1237,17 +1237,46 @@ pub async fn run_command(
         // name → fingerprint. Legacy checkpoints store a plain JSON array of
         // names; those entries are adopted with the current fingerprint
         // (no rebuild) — the same one-time window as rule config snapshots.
-        let mut ref_state: HashMap<String, String> = if ref_checkpoint.exists() {
+        let mut ref_state: HashMap<String, RefRecord> = if ref_checkpoint.exists() {
             let raw = std::fs::read_to_string(&ref_checkpoint).unwrap_or_default();
-            serde_json::from_str::<HashMap<String, String>>(&raw)
+            serde_json::from_str::<HashMap<String, RefRecord>>(&raw)
                 .ok()
+                .or_else(|| {
+                    // Legacy formats: a plain name→fingerprint map, or a
+                    // bare name list — adopted with no content signature.
+                    serde_json::from_str::<HashMap<String, String>>(&raw)
+                        .ok()
+                        .map(|m| {
+                            m.into_iter()
+                                .map(|(k, v)| {
+                                    (
+                                        k,
+                                        RefRecord {
+                                            fingerprint: v,
+                                            content_sig: None,
+                                            source_path: None,
+                                        },
+                                    )
+                                })
+                                .collect()
+                        })
+                })
                 .or_else(|| {
                     serde_json::from_str::<Vec<String>>(&raw)
                         .map(|names| {
                             names
                                 .into_iter()
-                                .map(|n| (n, String::new()))
-                                .collect::<HashMap<String, String>>()
+                                .map(|n| {
+                                    (
+                                        n,
+                                        RefRecord {
+                                            fingerprint: String::new(),
+                                            content_sig: None,
+                                            source_path: None,
+                                        },
+                                    )
+                                })
+                                .collect::<HashMap<String, RefRecord>>()
                         })
                         .ok()
                 })
@@ -1280,7 +1309,13 @@ pub async fn run_command(
                 &config.config,
                 resolved_source.as_deref(),
             );
-            let stored = ref_state.get(&ref_def.name).cloned();
+            let stored: Option<RefRecord> = ref_state.get(&ref_def.name).cloned();
+            // Content signature of the CURRENT source (size + full content
+            // hash for small files). Equality with the stored signature
+            // means the source is a byte-identical copy at a new path — the
+            // fingerprint differs only in the path string, so a rebuild
+            // would reproduce identical output (issue #142 follow-up).
+            let current_sig = resolved_source.as_deref().and_then(source_content_sig);
 
             // Decide whether the artifact must be (re)built. The freshness
             // check comes FIRST so an mtime-only touch reports the accurate
@@ -1292,13 +1327,20 @@ pub async fn run_command(
             });
             let rebuild_reason = if !output_full.exists() {
                 Some("output missing")
-            } else if stored.as_deref() == Some("") {
+            } else if stored.as_ref().is_some_and(|r| r.fingerprint.is_empty()) {
                 // Legacy entry: adopt the current fingerprint without
                 // rebuilding — and PERSIST the adoption. An in-memory-only
                 // adopt would leave the entry "" forever: every future run
                 // would silently re-adopt the CURRENT source state and the
                 // content guard could never engage.
-                ref_state.insert(ref_def.name.clone(), current_fp.clone());
+                ref_state.insert(
+                    ref_def.name.clone(),
+                    RefRecord {
+                        fingerprint: current_fp.clone(),
+                        content_sig: current_sig.clone(),
+                        source_path: ref_def.source.clone(),
+                    },
+                );
                 if let Some(parent) = ref_checkpoint.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
@@ -1309,10 +1351,61 @@ pub async fn run_command(
                 None
             } else if source_newer {
                 Some("source is newer than output")
-            } else if let Some(stored_fp) = stored.as_deref()
-                && stored_fp != current_fp
-            {
-                Some("definition, source content, or referenced config changed")
+            } else if stored.as_ref().is_some_and(|r| r.fingerprint != current_fp) {
+                // The fingerprint changed. One benign cause: a pure PATH
+                // migration — the same byte content now lives at a new
+                // location (live: --arg index=/new/path where /new/path is
+                // a content copy). PROOF of purity: re-fingerprinting the
+                // definition with the STORED source path must reproduce the
+                // stored fingerprint (so the build/output/config did NOT
+                // change), AND the content signatures must match with a
+                // full hash component (size-only is too weak).
+                let pure_path_migration = (|| {
+                    let rec = stored.as_ref()?;
+                    let old_path_str = rec.source_path.as_deref()?;
+                    let old_def = oxo_flow_core::config::ReferenceDef {
+                        source: Some(old_path_str.to_string()),
+                        ..ref_def.clone()
+                    };
+                    let fp_at_old_path = oxo_flow_core::config_impact::reference_fingerprint(
+                        &old_def,
+                        &config.config,
+                        Some(ref_workdir.join(old_path_str)).as_deref(),
+                    );
+                    if fp_at_old_path != rec.fingerprint {
+                        return None; // definition or config really changed
+                    }
+                    let cur = current_sig.as_deref()?;
+                    if !cur.contains("|hash:") {
+                        return None; // no strong hash — never exempt
+                    }
+                    (rec.content_sig.as_deref() == Some(cur)).then_some(())
+                })()
+                .is_some();
+                if pure_path_migration {
+                    tracing::info!(
+                        reference = %ref_def.name,
+                        "reference source moved to a new path with identical content — keeping the existing artifact"
+                    );
+                    ref_state.insert(
+                        ref_def.name.clone(),
+                        RefRecord {
+                            fingerprint: current_fp.clone(),
+                            content_sig: current_sig.clone(),
+                            source_path: ref_def.source.clone(),
+                        },
+                    );
+                    if let Some(parent) = ref_checkpoint.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    let _ = std::fs::write(
+                        &ref_checkpoint,
+                        serde_json::to_string(&ref_state).unwrap_or_default(),
+                    );
+                    None
+                } else {
+                    Some("definition, source content, or referenced config changed")
+                }
             } else {
                 None
             };
@@ -1435,7 +1528,16 @@ pub async fn run_command(
                             &config.config,
                             resolved_source.as_deref(),
                         );
-                        ref_state.insert(ref_def.name.clone(), post_fp);
+                        ref_state.insert(
+                            ref_def.name.clone(),
+                            RefRecord {
+                                fingerprint: post_fp,
+                                content_sig: resolved_source
+                                    .as_deref()
+                                    .and_then(source_content_sig),
+                                source_path: ref_def.source.clone(),
+                            },
+                        );
                         rebuilt_outputs.push(output_path.clone());
                         if let Some(parent) = ref_checkpoint.parent() {
                             let _ = std::fs::create_dir_all(parent);
@@ -1463,7 +1565,14 @@ pub async fn run_command(
                 }
             } else if stored.is_none() {
                 // Output exists but not tracked — adopt as built.
-                ref_state.insert(ref_def.name.clone(), current_fp);
+                ref_state.insert(
+                    ref_def.name.clone(),
+                    RefRecord {
+                        fingerprint: current_fp,
+                        content_sig: current_sig,
+                        source_path: ref_def.source.clone(),
+                    },
+                );
                 if let Some(parent) = ref_checkpoint.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
@@ -2654,6 +2763,36 @@ fn emit_run_json_summary(
         }),
     });
     println!("{}", serde_json::to_string_pretty(&output).unwrap());
+}
+
+/// Stored reference state: the decision fingerprint plus the source's
+/// content signature (size + full content hash for small files) at the
+/// time it was recorded. The signature enables the path-migration
+/// exemption — identical content at a new path skips the rebuild.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+struct RefRecord {
+    fingerprint: String,
+    content_sig: Option<String>,
+    /// The source path (config-expanded, workdir-relative) this record was
+    /// computed against — the exemption re-fingerprints with it to prove a
+    /// fingerprint change is a PURE path migration.
+    source_path: Option<String>,
+}
+
+/// Content signature of a reference SOURCE: `size:<bytes>` plus
+/// `|hash:<sha256>` for files under the manifest hash cap. Directories
+/// and large files return `None` — the path-migration exemption requires
+/// the strong hash component, so anything weaker never skips a rebuild.
+fn source_content_sig(path: &std::path::Path) -> Option<String> {
+    let md = std::fs::metadata(path).ok()?;
+    if !md.is_file() {
+        return None;
+    }
+    let mut sig = format!("size:{}", md.len());
+    if let Some(hash) = oxo_flow_core::executor::checkpoint::content_hash_if_small(path, &md) {
+        sig.push_str(&format!("|hash:{hash}"));
+    }
+    Some(sig)
 }
 
 /// Free disk space in KiB on the filesystem holding `path`, read from
