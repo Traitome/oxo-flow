@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api/client';
 import type { AuditLogResponse } from '../api/types';
+import { useI18n, getLocale } from '../context/I18n';
 
 // Audit trail (issue #79 P1-05): every state-changing request is recorded
 // server-side; this page renders the trail. Previously no page called the
 // audit client function, so the trail was invisible even when written.
 export default function Audit() {
+  const { lang } = useI18n();
   const [data, setData] = useState<AuditLogResponse | null>(null);
   const [days, setDays] = useState(7);
   const [error, setError] = useState<string | null>(null);
@@ -52,7 +54,7 @@ export default function Audit() {
           <tbody>
             {(data?.entries ?? []).map((e, i) => (
               <tr key={i}>
-                <td>{e.timestamp.replace('T', ' ').slice(0, 19)}</td>
+                <td>{new Date(e.timestamp).toLocaleString(getLocale(lang))}</td>
                 <td>{e.user}</td>
                 <td>{e.action}</td>
                 <td>{e.resource}</td>

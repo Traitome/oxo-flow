@@ -6,6 +6,7 @@ import { Play, Pause, RotateCcw, BarChart3, Loader2, Bot, Ban, Trash2, StepForwa
 import WorkflowCanvas from '../components/WorkflowCanvas';
 import RunTimeline from '../components/RunTimeline';
 import { usePipelineSession } from '../context/PipelineSession';
+import { useI18n, getLocale } from '../context/I18n';
 
 type TabType = 'monitor' | 'report' | 'diagnostics' | 'dag' | 'logs' | 'instances';
 
@@ -20,6 +21,8 @@ function StatCard({ value, label, color }: { value: string; label: string; color
 
 export default function MonitorReport() {
   const session = usePipelineSession();
+  const { t, lang } = useI18n();
+  const locale = getLocale(lang);
   const [runs, setRuns] = useState<RunItem[]>([]);
   const [selId, setSelId] = useState<string | null>(null);
   const [monitorStatus, setMonitorStatus] = useState<MonitorStatus | null>(null);
@@ -356,7 +359,7 @@ export default function MonitorReport() {
                       {levelNames[alert.level] || alert.level}: {alert.rule_name || 'System'}
                     </div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--color-text-tertiary)' }}>
-                      {new Date(alert.timestamp).toLocaleTimeString()}
+                      {new Date(alert.timestamp).toLocaleTimeString(locale)}
                     </div>
                   </div>
                   <div style={{ fontSize: '0.82rem', marginTop: '6px' }}>
@@ -419,7 +422,7 @@ export default function MonitorReport() {
               <tbody>
                 {monitorStatus.alerts.slice(0, 10).map((a, i) => (
                   <tr key={i}>
-                    <td style={{ fontSize: '0.75rem' }}>{new Date(a.timestamp).toLocaleTimeString()}</td>
+                    <td style={{ fontSize: '0.75rem' }}>{new Date(a.timestamp).toLocaleTimeString(locale)}</td>
                     <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>{a.rule_name || '-'}</td>
                     <td><span className={`status-badge ${a.level}`}>{a.level}</span></td>
                     <td style={{ fontSize: '0.78rem', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.prediction}</td>
@@ -581,7 +584,7 @@ export default function MonitorReport() {
                     setExplainState((prev) => ({ ...prev, [fn.rule]: { text: 'AI explanation unavailable — the deterministic diagnosis above is authoritative.' } }));
                   }
                 }}>
-                {exp?.loading ? 'Explaining…' : '🤖 AI 解释'}
+                {exp?.loading ? t('run.explaining') : `🤖 ${t('run.aiExplain')}`}
               </button>
               {exp?.text && (
                 <div style={{ marginTop: '6px', fontSize: '0.82rem', background: 'var(--color-bg-tertiary)', padding: '8px', borderRadius: 'var(--radius-sm)' }}>
@@ -674,7 +677,7 @@ export default function MonitorReport() {
                 <td className="mono">{r.id.slice(0, 8)}</td>
                 <td><span className={`status-badge ${r.status}`}>{r.status}</span></td>
                 <td>{r.phase || '-'}</td>
-                <td style={{ fontSize: '0.8rem' }}>{r.created_at ? new Date(r.created_at).toLocaleString() : '-'}</td>
+                <td style={{ fontSize: '0.8rem' }}>{r.created_at ? new Date(r.created_at).toLocaleString(locale) : '-'}</td>
                 <td>
                   <button className="btn-sm" onClick={() => navigate(`/runs/${r.id}`)}>
                     {r.status === 'running' ? <Loader2 size={12} className="spin" style={{ marginRight: 4 }} /> : null}
@@ -741,10 +744,15 @@ export default function MonitorReport() {
                 · Phase: {selectedRun?.phase || '-'}
               </div>
             </div>
-            <div className="row" style={{ gap: '4px' }}>
+            <div className="row" style={{ gap: '4px' }} role="tablist">
               {(['monitor', 'report', 'diagnostics', 'dag', 'logs', 'instances'] as const).map((t) => (
-                <button key={t} onClick={() => { setTab(t); setQaAnswer(null); }}
-                  className={tab === t ? 'btn-run' : 'btn-sm'}>
+                <button
+                  key={t}
+                  role="tab"
+                  aria-selected={tab === t}
+                  onClick={() => { setTab(t); setQaAnswer(null); }}
+                  className={tab === t ? 'btn-run' : 'btn-sm'}
+                >
                   {t === 'monitor' ? '📡 Monitor' : t === 'report' ? '📊 Report' : t === 'diagnostics' ? '🔍 Diagnostics' : t === 'dag' ? '🔷 DAG' : t === 'logs' ? '📜 Logs' : '🧬 Instances'}
                 </button>
               ))}

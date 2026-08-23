@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { apiUrl } from '../api/client';
 
 interface Endpoint {
   method: string; path: string; summary: string; tags: string[];
@@ -48,6 +49,7 @@ export default function ApiDocs() {
   }, []);
 
   const tags = [...new Set(endpoints.flatMap((e) => e.tags))];
+  const openApiUrl = apiUrl('/api/openapi.json');
   const filtered = endpoints.filter(
     (e) =>
       (!search || e.path.toLowerCase().includes(search.toLowerCase()) || e.summary.toLowerCase().includes(search.toLowerCase())) &&
@@ -60,8 +62,11 @@ export default function ApiDocs() {
     <div className="page">
       <h1 className="page-title">API Reference</h1>
       <p className="page-subtitle" style={{ marginBottom: '1rem' }}>
-        All 53 endpoints across 8 domains. OpenAPI 3.1 spec available at{' '}
-        <a href="/api/openapi.json" target="_blank" style={{ color: 'var(--color-primary)' }}>/api/openapi.json</a>.
+        {endpoints.length > 0
+          ? `All ${endpoints.length} endpoints across ${tags.length} domains. `
+          : 'OpenAPI 3.1 spec with all documented endpoints. '}
+        Spec available at{' '}
+        <a href={openApiUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--color-primary)' }}>{openApiUrl}</a>.
       </p>
 
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>

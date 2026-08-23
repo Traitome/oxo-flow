@@ -10,7 +10,7 @@ import { Bot, FileCode2, PlayCircle, Sparkles } from 'lucide-react';
 import { api } from '../api/client';
 import type { HealthResponse, SystemInfo, RunItem, Template } from '../api/types';
 import { usePipelineSession } from '../context/PipelineSession';
-import { useI18n } from '../context/I18n';
+import { useI18n, getLocale } from '../context/I18n';
 import Glossary from '../components/Glossary';
 import StatCard from '../components/StatCard';
 
@@ -24,6 +24,7 @@ export default function Dashboard() {
   const [sys, setSys] = useState<SystemInfo | null>(null);
   const [runs, setRuns] = useState<RunItem[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
+  const [aiConfigured, setAiConfigured] = useState(true);
   const [showOnboarding, setShowOnboarding] = useState(
     () => localStorage.getItem(ONBOARDING_KEY) !== '1',
   );
@@ -33,6 +34,7 @@ export default function Dashboard() {
     api.system().then(setSys).catch(() => {});
     api.listRuns().then((r) => setRuns(r.items)).catch(() => {});
     api.listTemplates().then(setTemplates).catch(() => {});
+    api.aiConfig().then((c) => setAiConfigured(c.is_configured)).catch(() => setAiConfigured(false));
   }, []);
 
   const dismissOnboarding = () => {
@@ -67,11 +69,27 @@ export default function Dashboard() {
 
       {/* Three entry cards: AI / templates / editor */}
       <div className="dashboard-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', marginBottom: '1rem' }}>
-        <button className="dash-card entry-card" onClick={() => navigate('/chat')}>
-          <Sparkles size={22} style={{ color: 'var(--color-primary)' }} />
-          <h3>{t('dashboard.ai')}</h3>
-          <p>{t('dashboard.ai.desc')}</p>
-        </button>
+        {aiConfigured ? (
+          <button className="dash-card entry-card" onClick={() => navigate('/chat')}>
+            <Sparkles size={22} style={{ color: 'var(--color-primary)' }} />
+            <h3>{t('dashboard.ai')}</h3>
+            <p>{t('dashboard.ai.desc')}</p>
+          </button>
+        ) : (
+          <div className="dash-card entry-card" style={{ opacity: 0.65, cursor: 'not-allowed' }}>
+            <Sparkles size={22} style={{ color: 'var(--color-text-tertiary)' }} />
+            <h3>{t('dashboard.ai')}</h3>
+            <p>{t('dashboard.ai.disabledDesc')}</p>
+            <div style={{ marginTop: '0.75rem' }}>
+              <Link to="/pipelines" className="btn-run" style={{ textDecoration: 'none' }}>
+                {t('dashboard.ai.disabledCta')}
+              </Link>
+            </div>
+            <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: 'var(--color-text-tertiary)' }}>
+              {t('dashboard.ai.disabledNote')}
+            </div>
+          </div>
+        )}
         <button className="dash-card entry-card" onClick={() => navigate('/pipelines')}>
           <FileCode2 size={22} style={{ color: 'var(--color-primary)' }} />
           <h3>{t('dashboard.templates')}</h3>
@@ -122,7 +140,7 @@ export default function Dashboard() {
                   <tr key={r.id}>
                     <td>{r.workflow_name ?? r.id.slice(0, 8)}</td>
                     <td><span className={`status-badge ${r.status}`}>{r.status}</span></td>
-                    <td>{r.started_at ? new Date(r.started_at).toLocaleString() : '-'}</td>
+                    <td>{r.started_at ? new Date(r.started_at).toLocaleString(getLocale(lang)) : '-'}</td>
                     <td><Link to={`/runs/${r.id}`} className="view-link">View</Link></td>
                   </tr>
                 ))}

@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../api/client';
 import type { ShareLanding } from '../api/types';
+import { useI18n, getLocale } from '../context/I18n';
 
 type LandingState =
   | { phase: 'loading' }
@@ -16,6 +17,8 @@ type LandingState =
 export default function Share() {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
+  const { lang } = useI18n();
+  const locale = getLocale(lang);
   const [state, setState] = useState<LandingState>(() =>
     token ? { phase: 'loading' } : { phase: 'error', message: 'Missing share token.' },
   );
@@ -85,7 +88,7 @@ export default function Share() {
                 </button>
                 {state.data.expires_at && (
                   <span style={{ fontSize: '0.75rem', color: 'var(--color-text-tertiary)' }}>
-                    expires {new Date(state.data.expires_at).toLocaleDateString()}
+                    expires {new Date(state.data.expires_at).toLocaleDateString(locale)}
                   </span>
                 )}
               </div>
@@ -100,7 +103,7 @@ export default function Share() {
               </span>
               {state.data.recent_run.finished_at && (
                 <span style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)', marginLeft: '8px' }}>
-                  {new Date(state.data.recent_run.finished_at).toLocaleString()}
+                  {new Date(state.data.recent_run.finished_at).toLocaleString(locale)}
                 </span>
               )}
             </div>

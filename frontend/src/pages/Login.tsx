@@ -36,7 +36,7 @@ export default function Login() {
         <h1 className="page-title">{t('login.title')}</h1>
         <form onSubmit={handleSubmit} className="login-form">
           <label className="inspector-field">
-            <span>Username</span>
+            <span>{t('login.username')}</span>
             <input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
@@ -45,7 +45,7 @@ export default function Login() {
             />
           </label>
           <label className="inspector-field">
-            <span>Password</span>
+            <span>{t('login.password')}</span>
             <input
               type="password"
               value={password}
@@ -55,7 +55,7 @@ export default function Login() {
           </label>
           {error && <div className="tool-palette-hint error">{error}</div>}
           <button className="btn-run" type="submit" disabled={loading || !username.trim() || !password}>
-            <KeyRound size={14} /> {loading ? 'Signing in…' : 'Sign in'}
+            <KeyRound size={14} /> {loading ? t('login.signingIn') : t('login.submit')}
           </button>
           <p className="run-dialog-hint">
             Credentials come from OXO_FLOW_ADMIN_PASSWORD / OXO_FLOW_USER_PASSWORD

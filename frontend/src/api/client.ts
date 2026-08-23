@@ -12,7 +12,7 @@ import type {
 } from './types';
 
 
-class ApiError extends Error {
+export class ApiError extends Error {
   code: string; detail?: string; suggestion?: string;
   constructor(code: string, message: string, detail?: string, suggestion?: string) {
     super(message); this.code = code; this.detail = detail; this.suggestion = suggestion; this.name = 'ApiError';
@@ -22,7 +22,7 @@ class ApiError extends Error {
 // The server injects window.__OXO_BASE__ when serving under a sub-path
 // (--base-path); every API URL must be prefixed or the request misses the
 // mount point.
-function apiUrl(url: string): string {
+export function apiUrl(url: string): string {
   const base = (window as { __OXO_BASE__?: string }).__OXO_BASE__ ?? '';
   return `${base}${url}`;
 }
@@ -227,5 +227,4 @@ export function createEventSource(): EventSource {
   const query = token ? `?token=${encodeURIComponent(token)}` : '';
   return new EventSource(apiUrl(`/api/events${query}`));
 }
-export { ApiError };
 

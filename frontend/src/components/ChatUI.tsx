@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, Loader2, Check, Wrench } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
 import { usePipelineSession, type ChatContextType, type ChatMessage, type ChatAction } from '../context/PipelineSession';
 import { useServerVersion } from '../api/version';
-import { api } from '../api/client';
-import { useNavigate } from 'react-router-dom';
+import { api, ApiError } from '../api/client';
+import { useI18n } from '../context/I18n';
 
 const CONTEXT_LABELS: Record<ChatContextType, string> = {
   dashboard: 'Pipeline Generation',
@@ -29,10 +30,12 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
   const session = usePipelineSession();
   const version = useServerVersion();
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [messages, setMessages] = useState<ChatMessage[]>(() => session.state.chatMessages[context] || []);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [agents, setAgents] = useState<Record<string, string>>({});
+  const [aiConfigured, setAiConfigured] = useState(true);
   const chatRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -45,6 +48,12 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
   useEffect(() => {
     session.setChatContext(context);
   }, [context]);
+
+  // Detect whether the server has a working AI provider so we can surface a
+  // friendly fallback instead of a raw env-var error.
+  useEffect(() => {
+    api.aiConfig().then((c) => setAiConfigured(c.is_configured)).catch(() => setAiConfigured(false));
+  }, []);
 
   useEffect(() => { chatRef.current?.scrollTo(0, chatRef.current.scrollHeight); }, [messages, agents]);
 
@@ -140,6 +149,9 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
       }
       setAgents({});
     } catch (e: unknown) {
+      if (e instanceof ApiError && e.code === 'AI_NOT_CONFIGURED') {
+        setAiConfigured(false);
+      }
       const errMsg = e instanceof Error ? e.message : 'Connection error.';
       setMessages(prev => prev.map(m =>
         m.id === assistantId ? { ...m, content: m.content + `\n❌ ${errMsg}`, agentStatus: undefined } : m
@@ -188,7 +200,23 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
 
       {/* Messages */}
       <div ref={chatRef} aria-live="polite" aria-label="Chat messages" className="chat-messages">
-        {messages.length === 0 && (
+        {!aiConfigured && (
+          <div className="chat-empty" style={{ textAlign: 'center' }}>
+            <Bot size={32} style={{ opacity: 0.5 }} />
+            <p style={{ fontSize: '0.9rem', maxWidth: 360, margin: '0 auto 1rem' }}>
+              {t('chat.disabled.message')}
+            </p>
+            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+              <Link to="/pipelines" className="btn-run" style={{ textDecoration: 'none' }}>
+                {t('chat.disabled.templates')}
+              </Link>
+              <Link to="/editor" className="btn-sm" style={{ textDecoration: 'none' }}>
+                {t('chat.disabled.editor')}
+              </Link>
+            </div>
+          </div>
+        )}
+        {messages.length === 0 && aiConfigured && (
           <div className="chat-empty">
             <Bot size={32} style={{ opacity: 0.5 }} />
             <p style={{ fontSize: '0.9rem' }}>{PLACEHOLDERS[context]}</p>
@@ -272,8 +300,8 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }}}
-          placeholder="Describe your analysis... (Shift+Enter for newline)"
-          disabled={loading}
+          placeholder={aiConfigured ? 'Describe your analysis... (Shift+Enter for newline)' : t('chat.disabled.message')}
+          disabled={loading || !aiConfigured}
           rows={2}
           className="search-input intent-input"
           style={{ flex: 1, minWidth: 0 }}

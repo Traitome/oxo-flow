@@ -3,6 +3,7 @@ import { api } from '../api/client';
 import type { AiConfig, HealthResponse } from '../api/types';
 import { FlaskConical, Cpu, HardDrive, Database, Shield } from 'lucide-react';
 import StatCard from '../components/StatCard';
+import { useI18n, getLocale } from '../context/I18n';
 
 interface QuotaInfo { enabled: boolean; limits: { max_concurrent_runs: number; max_total_threads: number; max_total_memory_mb: number; max_runs_per_day: number } }
 
@@ -40,6 +41,7 @@ function SettingInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
 }
 
 export default function Settings() {
+  const { lang } = useI18n();
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [aiConfig, setAiConfig] = useState<AiConfig | null>(null);
   const [quota, setQuota] = useState<QuotaInfo | null>(null);
@@ -129,6 +131,7 @@ export default function Settings() {
                 <select value={provider} onChange={(e) => setProvider(e.target.value)}
                   className="search-input" style={{ width: '100%' }}>
                   <option value="openai">OpenAI / DeepSeek / Groq</option>
+                  <option value="deepseek">DeepSeek (native)</option>
                   <option value="claude">Claude (Anthropic)</option>
                   <option value="ollama">Ollama (local)</option>
                   <option value="disabled">Disabled</option>
@@ -149,7 +152,7 @@ export default function Settings() {
             <div>Provider: <strong>{aiConfig?.provider || 'unknown'}</strong></div>
             <div>Model: <strong>{aiConfig?.model || 'default'}</strong></div>
             <div>URL: <code style={{ fontSize: '0.7rem', overflowWrap: 'anywhere' }}>{aiConfig?.api_url || 'default'}</code></div>
-            <div style={{ marginTop: '4px' }}>Status: <span className={`status-badge ${aiConfig?.is_configured ? 'success' : 'cancelled'}`}>{aiConfig?.is_configured ? 'Configured' : 'Not Configured'}</span></div>
+            <div style={{ marginTop: '4px' }}>Status: <span className={`status-badge ${aiConfig?.is_configured ? 'success' : 'failed'}`}>{aiConfig?.is_configured ? 'Configured' : 'Not Configured'}</span></div>
             <div className="settings-note" style={{ marginTop: '1rem', marginBottom: 0 }}>
               <div style={{ fontWeight: 600, marginBottom: '4px' }}>Advanced Options</div>
               {/* issue #82 P1-4: these controls were display-only; now they
@@ -283,8 +286,8 @@ export default function Settings() {
                 {apiKeys.map((k) => (
                   <tr key={k.id}>
                     <td>{k.name}</td>
-                    <td>{new Date(k.created_at).toLocaleString()}</td>
-                    <td>{k.last_used_at ? new Date(k.last_used_at).toLocaleString() : 'never'}</td>
+                    <td>{new Date(k.created_at).toLocaleString(getLocale(lang))}</td>
+                    <td>{k.last_used_at ? new Date(k.last_used_at).toLocaleString(getLocale(lang)) : 'never'}</td>
                     <td>
                       <button className="btn-sm btn-error" onClick={() => {
                         if (!window.confirm(`Revoke key "${k.name}"? Requests using it will fail immediately.`)) return;
