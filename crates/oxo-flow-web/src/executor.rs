@@ -535,14 +535,17 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
     {
         error!("Failed to update final status for run {run_id}: {e}");
     }
+    // Read the log once (async): it feeds both the dry-run preview
+    // extraction and the invalidation summary below.
+    let log = tokio::fs::read_to_string(log_path).await.ok();
     // Persist the dry-run preview (instance-level plan) next to the log so
     // /api/runs/{id}/preview can serve it without re-parsing the log.
-    if let Ok(log) = std::fs::read_to_string(log_path)
-        && let Some(preview) = extract_dry_run_preview(&log)
+    if let Some(log) = log.as_deref()
+        && let Some(preview) = extract_dry_run_preview(log)
         && let Ok(json) = serde_json::to_string_pretty(&preview)
         && let Some(dir) = log_path.parent()
     {
-        let _ = std::fs::write(dir.join("dry-run-preview.json"), json);
+        let _ = tokio::fs::write(dir.join("dry-run-preview.json"), json).await;
     }
     info!("Run {run_id} finished: {final_state}");
 
@@ -556,9 +559,7 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
     // Surfacing the CLI's invalidation summary (issue #69): config changes,
     // rule-definition edits, and input-set changes that invalidated
     // checkpoint records this run.
-    let summary = std::fs::read_to_string(log_path)
-        .ok()
-        .and_then(|log| extract_invalidation_summary(&log));
+    let summary = log.as_deref().and_then(extract_invalidation_summary);
     // Scope the terminal event to the run owner (issue #82 P0-5).
     let user_id: Option<String> = sqlx::query_scalar("SELECT user_id FROM runs WHERE id = ?")
         .bind(run_id)
@@ -641,7 +642,7 @@ fn spawn_log_tailer(run_id: String, workdir: PathBuf) {
                 Some("running") | Some("paused") | Some("queued") => {}
                 _ => break,
             }
-            let Ok(meta) = std::fs::metadata(&log_path) else {
+            let Ok(meta) = tokio::fs::metadata(&log_path).await else {
                 continue;
             };
             let len = meta.len();
@@ -651,15 +652,15 @@ fn spawn_log_tailer(run_id: String, workdir: PathBuf) {
             if len == offset {
                 continue;
             }
-            let Ok(mut file) = std::fs::File::open(&log_path) else {
+            let Ok(mut file) = tokio::fs::File::open(&log_path).await else {
                 continue;
             };
-            use std::io::{Read, Seek, SeekFrom};
-            if file.seek(SeekFrom::Start(offset)).is_err() {
+            use tokio::io::{AsyncReadExt, AsyncSeekExt};
+            if file.seek(std::io::SeekFrom::Start(offset)).await.is_err() {
                 continue;
             }
             let mut buf = String::new();
-            if file.read_to_string(&mut buf).is_err() {
+            if file.read_to_string(&mut buf).await.is_err() {
                 continue;
             }
             offset = len;
@@ -700,6 +701,13 @@ fn spawn_resource_sampler(run_id: String, cli_pid: u32, workdir: PathBuf) {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
         ticker.tick().await; // fire immediately, then every 5s
+        // The sampler is the only writer of metrics.jsonl, so counting the
+        // pre-existing lines once lets append_metrics skip the O(file)
+        // read+rewrite on every tick and only trim at the 2000-line cap.
+        let mut metrics_lines: usize = tokio::fs::read_to_string(workdir.join("metrics.jsonl"))
+            .await
+            .map(|content| content.lines().count())
+            .unwrap_or(0);
         loop {
             ticker.tick().await;
             let active: Option<String> = sqlx::query_scalar("SELECT status FROM runs WHERE id = ?")
@@ -719,7 +727,7 @@ fn spawn_resource_sampler(run_id: String, cli_pid: u32, workdir: PathBuf) {
                     cpu_pct,
                     processes
                 );
-                append_metrics(&workdir, &line).await;
+                metrics_lines = append_metrics(&workdir, &line, metrics_lines).await;
             }
         }
     });
@@ -727,20 +735,43 @@ fn spawn_resource_sampler(run_id: String, cli_pid: u32, workdir: PathBuf) {
 
 /// Append one sample to `workdir/metrics.jsonl`, keeping at most the last
 /// 2000 lines (≈2.7 h at 5 s ticks) so long runs cannot grow the file
-/// unboundedly.
-async fn append_metrics(workdir: &std::path::Path, line: &str) {
+/// unboundedly. Returns the number of lines now in the file.
+///
+/// `existing_lines` is the caller's running count (the sampler is the sole
+/// writer): below the cap this is an O(1) append; the read +
+/// truncate-rewrite only runs once the cap is actually reached.
+async fn append_metrics(workdir: &std::path::Path, line: &str, existing_lines: usize) -> usize {
     const MAX_METRICS_LINES: usize = 2000;
     let path = workdir.join("metrics.jsonl");
-    let mut content = tokio::fs::read_to_string(&path).await.unwrap_or_default();
-    content.push_str(line);
-    content.push('\n');
-    let lines: Vec<&str> = content.lines().collect();
+
+    if existing_lines < MAX_METRICS_LINES {
+        use tokio::io::AsyncWriteExt;
+        let Ok(mut file) = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .await
+        else {
+            return existing_lines;
+        };
+        return if file.write_all(format!("{line}\n").as_bytes()).await.is_ok() {
+            existing_lines + 1
+        } else {
+            existing_lines
+        };
+    }
+
+    // Over the cap: trim to the newest MAX_METRICS_LINES and rewrite once.
+    let content = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+    let mut lines: Vec<&str> = content.lines().collect();
+    lines.push(line);
     let keep = if lines.len() > MAX_METRICS_LINES {
         &lines[lines.len() - MAX_METRICS_LINES..]
     } else {
         &lines[..]
     };
     let _ = tokio::fs::write(&path, format!("{}\n", keep.join("\n"))).await;
+    keep.len()
 }
 
 /// Mark a run as failed with the current timestamp.
@@ -940,6 +971,33 @@ mod tests {
         assert!(!re.is_match("root /etc/passwd"));
         assert!(!re.is_match(""));
         assert!(!re.is_match("UPPERCASE"));
+    }
+
+    #[tokio::test]
+    async fn append_metrics_appends_below_cap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut lines = append_metrics(dir.path(), "l1", 0).await;
+        lines = append_metrics(dir.path(), "l2", lines).await;
+        assert_eq!(lines, 2);
+        let content = tokio::fs::read_to_string(dir.path().join("metrics.jsonl"))
+            .await
+            .unwrap();
+        assert_eq!(content, "l1\nl2\n");
+    }
+
+    #[tokio::test]
+    async fn append_metrics_trims_at_cap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("metrics.jsonl");
+        let body: String = (0..2005).map(|i| format!("old{i}\n")).collect();
+        tokio::fs::write(&path, body).await.unwrap();
+        let lines = append_metrics(dir.path(), "new", 2005).await;
+        assert_eq!(lines, 2000);
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        let kept: Vec<&str> = content.lines().collect();
+        assert_eq!(kept.len(), 2000);
+        assert_eq!(kept.last(), Some(&"new"));
+        assert!(!kept.contains(&"old5"), "oldest lines are trimmed first");
     }
 }
 

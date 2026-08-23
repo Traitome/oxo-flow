@@ -86,15 +86,14 @@ pub async fn system_info() -> ApiResult<SystemInfoResponse> {
 )]
 /// GET /api/metrics
 pub async fn runtime_metrics() -> ApiResult<RuntimeMetricsResponse> {
-    // Collect real system metrics via sysinfo
-    let mut sys = sysinfo::System::new_all();
-    sys.refresh_all();
-
-    let total_memory_mb = sys.total_memory() / 1024;
-    let used_memory_mb = sys.used_memory() / 1024;
-    let total_swap_mb = sys.total_swap() / 1024;
-    let used_swap_mb = sys.used_swap() / 1024;
-    let cpu_usage = sys.global_cpu_usage();
+    // Real system metrics from the crate-wide shared sysinfo handle
+    // (crate::sys): a persistent System with targeted CPU/memory refreshes.
+    // A fresh System::new_all() + refresh_all() per request both blocks the
+    // worker on a full process-table scan and reports a meaningless
+    // global_cpu_usage() — CPU deltas need two refreshes of the SAME
+    // System, spaced apart. The response includes no per-process data, so
+    // no process refresh is needed here.
+    let host = crate::sys::get_host_resources();
 
     // Count active runs from DB
     let (active_workflows, total_requests) = if let Ok(pool) = get_pool() {
@@ -124,11 +123,11 @@ pub async fn runtime_metrics() -> ApiResult<RuntimeMetricsResponse> {
         total_requests,
         active_workflows,
         host: HostResources {
-            cpu_usage_percent: cpu_usage as f64,
-            total_memory_mb,
-            used_memory_mb,
-            total_swap_mb,
-            used_swap_mb,
+            cpu_usage_percent: host.cpu_usage_percent as f64,
+            total_memory_mb: host.total_memory_mb,
+            used_memory_mb: host.used_memory_mb,
+            total_swap_mb: host.total_swap_mb,
+            used_swap_mb: host.used_swap_mb,
         },
     }))
 }
