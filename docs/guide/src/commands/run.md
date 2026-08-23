@@ -518,6 +518,17 @@ Mechanics:
   If the spawn fails (for example because another run already holds the
   workdir lock), the foreground exits nonzero with the reason.
 
+Which commands accept `--background`:
+
+- `run` and `resume` — the only long-lived terminal-bound commands.
+  Cluster runs go through `run --profile <name>` and therefore detach the
+  same way: `run --profile slurm --background` submits and polls the
+  cluster jobs entirely inside the background process.
+- `dry-run` intentionally does not: a preview is fast and read-only —
+  keep it in the foreground.
+- Other commands (`pull`, `test`, `export`, `ai`, …) are either quick or
+  one-shot; run them before the background run and keep them foreground.
+
 Monitoring a background run works exactly like a foreground one: poll
 `oxo-flow status .oxo-flow/checkpoint.json` (or `status --timing`), read
 the run log, and check the report snapshots in `.oxo-flow/reports/`. Stop
