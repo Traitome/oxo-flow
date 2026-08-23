@@ -582,7 +582,14 @@ pub async fn run_command(
     // releases it automatically if this process exits or crashes, so there
     // are no stale locks.
     let workdir_effective = workdir.as_ref().unwrap_or(&workdir_default);
-    let _workdir_lock = WorkdirLock::acquire(workdir_effective)?;
+    // Surface the lock error's suggestion (issue #158): without it a user
+    // hitting a busy workdir learns WHAT is wrong but not that the lock
+    // auto-releases when the other process exits.
+    let _workdir_lock =
+        WorkdirLock::acquire(workdir_effective).map_err(|e| match e.suggestion() {
+            Some(s) => anyhow::anyhow!("{e}\n  hint: {s}"),
+            None => anyhow::anyhow!("{e}"),
+        })?;
 
     let mut config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
