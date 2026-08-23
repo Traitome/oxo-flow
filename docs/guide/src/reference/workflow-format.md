@@ -443,6 +443,19 @@ shell_prelude = "set -euo pipefail"
 | `environment` | Table | Default environment specification |
 | `shell_prelude` | String | Shell text prepended to every rule command, hook, reference build, and cluster job script on its own line (issue #92) — e.g. `set -euo pipefail` for fail-fast shells. **Opt-in**: empty by default, so existing workflows keep their exact command text. Applies inside environment wrappers (containers, conda) on every execution path. `pipefail` requires bash (the engine falls back to `sh` only when bash is absent) |
 
+### Conda/mamba environment naming
+
+For file-backed env specs the conda/mamba env name is derived as
+`<stem-or-yaml-name>-<hash8>`, where `hash8` is the first 8 hex chars
+of the SHA-256 of the YAML **content** (issue #159). Two workflows that
+ship different YAMLs under the same name therefore build into distinct
+envs instead of silently sharing one prefix; identical content keeps
+the same name, so specs still deduplicate. Non-file specs (plain names
+or inline strings) keep their plain name. Note: the first run after
+this convention shipped rebuilds envs once under the new names —
+remove the old plain-named envs with `conda env remove -n <old>` if
+disk space matters.
+
 ---
 
 ## `[report]` — Report Configuration

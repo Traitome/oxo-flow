@@ -640,7 +640,7 @@ pub async fn run_command(
     let e005 = undefined_config_findings(&config);
     if !e005.is_empty() {
         if json {
-            emit_run_json_summary(json, "failed", &workflow, 0, 0, 0, 0, 0);
+            emit_run_json_summary(json, "failed", &workflow, 0, 0, 0, 0, 0, vec![]);
         }
         return Err(anyhow::anyhow!(
             "workflow references undefined config variable(s) — fix before running:\n  {}",
@@ -665,7 +665,7 @@ pub async fn run_command(
             None => {
                 // Pre-execution abort: nothing ran, but the summary
                 // contract still holds for --json (issue #142 H6).
-                emit_run_json_summary(json, "failed", &workflow, 0, 0, 0, 0, 0);
+                emit_run_json_summary(json, "failed", &workflow, 0, 0, 0, 0, 0, vec![]);
                 return Err(anyhow::anyhow!(
                     "unknown module '{m}' — known modules: {}",
                     known_modules_hint(&config.module_rules)
@@ -1083,6 +1083,9 @@ pub async fn run_command(
             summary.failed,
             summary.non_required_failed,
             0,
+            // Cluster per-rule resources come from sacct accounting at
+            // report time, not the live checkpoint — empty here.
+            vec![],
         );
         if !summary.is_success() {
             return Err(anyhow::anyhow!("workflow execution failed"));
@@ -1162,7 +1165,7 @@ pub async fn run_command(
             .join("\n");
         // Pre-execution abort: nothing ran — the summary still reports
         // the failed run for --json consumers (issue #142 H6).
-        emit_run_json_summary(json, "failed", &workflow, 0, 0, 0, 0, 0);
+        emit_run_json_summary(json, "failed", &workflow, 0, 0, 0, 0, 0, vec![]);
         return Err(anyhow::anyhow!(
             "resource budget too small for {} rule(s); no rules were run:\n{}",
             breaches.len(),
@@ -1481,7 +1484,17 @@ pub async fn run_command(
                                 let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
                                 // Pre-execution abort — the summary still
                                 // reports the failed run (issue #142 H6).
-                                emit_run_json_summary(json, "failed", &workflow, 0, 0, 0, 0, 0);
+                                emit_run_json_summary(
+                                    json,
+                                    "failed",
+                                    &workflow,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    vec![],
+                                );
                                 return Err(anyhow::anyhow!(
                                     "failed to set up the environment for reference '{}': {}",
                                     ref_def.name,
@@ -1489,7 +1502,17 @@ pub async fn run_command(
                                 ));
                             }
                             Err(e) => {
-                                emit_run_json_summary(json, "failed", &workflow, 0, 0, 0, 0, 0);
+                                emit_run_json_summary(
+                                    json,
+                                    "failed",
+                                    &workflow,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    vec![],
+                                );
                                 return Err(anyhow::anyhow!(
                                     "failed to run the environment setup for reference '{}': {e}",
                                     ref_def.name
@@ -2135,6 +2158,7 @@ pub async fn run_command(
                         fail_count.load(std::sync::atomic::Ordering::Relaxed),
                         non_required_fail_count.load(std::sync::atomic::Ordering::Relaxed),
                         blocked.lock().await.len(),
+                        vec![],
                     );
                     return Err(anyhow::anyhow!(
                         "internal error: task {} has no recorded rule",
@@ -2311,6 +2335,7 @@ pub async fn run_command(
 
             // The plain-failure abort: emit the summary BEFORE returning,
             // mirroring the keep-going path's document (issue #142 H6).
+            let ck = checkpoint.lock().await;
             emit_run_json_summary(
                 json,
                 "failed",
@@ -2320,6 +2345,7 @@ pub async fn run_command(
                 fail_count.load(std::sync::atomic::Ordering::Relaxed),
                 non_required_fail_count.load(std::sync::atomic::Ordering::Relaxed),
                 blocked.lock().await.len(),
+                rule_resource_rows(&ck),
             );
             return Err(anyhow::anyhow!("workflow execution failed"));
         }
@@ -2721,6 +2747,9 @@ pub async fn run_command(
         fail_count,
         non_required_fail_count,
         blocked.len(),
+        // `checkpoint` here is the MutexGuard locked above (line ~2415);
+        // Deref coercion hands rule_resource_rows the underlying state.
+        rule_resource_rows(&checkpoint),
     );
 
     // The verdict is independent of --keep-going (issue #133): keep-going
@@ -2753,6 +2782,7 @@ fn emit_run_json_summary(
     failed: usize,
     non_required_failed: usize,
     blocked: usize,
+    resources: Vec<serde_json::Value>,
 ) {
     if !json {
         return;
@@ -2768,8 +2798,41 @@ fn emit_run_json_summary(
             "non_required_failed": non_required_failed,
             "blocked": blocked,
         }),
+        "resources": resources,
     });
     println!("{}", serde_json::to_string_pretty(&output).unwrap());
+}
+
+/// Per-rule resource rows for the `--json` summary (issue #163): the same
+/// data the report's Benchmarks table shows — wall time, sampled peak RSS,
+/// sampled CPU seconds, retries — keyed by rule, deterministic order.
+/// Empty for aborted paths where no checkpoint summary is meaningful.
+fn rule_resource_rows(
+    checkpoint: &oxo_flow_core::executor::checkpoint::CheckpointState,
+) -> Vec<serde_json::Value> {
+    let mut names: Vec<&String> = checkpoint.benchmarks.keys().collect();
+    names.sort_unstable();
+    names
+        .into_iter()
+        .map(|name| {
+            let b = &checkpoint.benchmarks[name];
+            let status = if checkpoint.completed_rules.contains(name) {
+                "completed"
+            } else if checkpoint.failed_rules.contains(name) {
+                "failed"
+            } else {
+                "running"
+            };
+            serde_json::json!({
+                "rule": name,
+                "status": status,
+                "wall_time_secs": b.wall_time_secs,
+                "peak_rss_mb": b.max_memory_mb,
+                "cpu_seconds": b.cpu_seconds,
+                "retries": b.retries,
+            })
+        })
+        .collect()
 }
 
 /// Stored reference state: the decision fingerprint plus the source's

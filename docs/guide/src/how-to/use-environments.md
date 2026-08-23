@@ -38,11 +38,11 @@ shell = "bwa mem ref.fa reads.fastq.gz | samtools sort -o aligned.bam"
 
 1. oxo-flow checks if the environment already exists (keyed by the YAML specification)
 2. If not, it creates it from the YAML file
-3. The shell command runs inside the environment via `conda run -n <env-name> bash -c '<command>'`, where `<env-name>` is the `name:` from your YAML
+3. The shell command runs inside the environment via `conda run -n <env-name> bash -c '<command>'`, where `<env-name>` is the `name:` from your YAML plus a short content-hash suffix for file specs (`<name>-<hash8>`, see workflow-format) — so two different YAMLs that happen to share a name never collide
 4. The environment is created once and reused by every rule that references the same YAML
 
 !!! tip "Reuse environments"
-    Multiple rules can share the same conda YAML file. oxo-flow creates the environment once and reuses it.
+    Multiple rules can share the same conda YAML file. oxo-flow creates the environment once and reuses it — identical YAML content reuses the same env even across workflows.
 
 ---
 
