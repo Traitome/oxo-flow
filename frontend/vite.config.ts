@@ -11,7 +11,25 @@ export default defineConfig({
   build: {
     // Output directly into the Rust crate's static directory
     outDir: '../crates/oxo-flow-web/static',
-    emptyOutDir: false, // preserve favicon.svg, icons.svg, openapi.json
+    emptyOutDir: false, // preserve favicon.svg, icons.svg
+    rollupOptions: {
+      output: {
+        // Split the large vendor bundles so the editor's CodeMirror and the
+        // DAG viewer don't block the initial dashboard load.
+        manualChunks(id: string) {
+          if (!id.includes('node_modules')) return undefined;
+          const pkg = /node_modules\/((?:@[^/]+\/)?[^/]+)/.exec(id)?.[1] ?? '';
+          if (['react', 'react-dom', 'react-router', 'react-router-dom', 'scheduler'].includes(pkg)) {
+            return 'react';
+          }
+          if (pkg.startsWith('@xyflow/') || pkg === 'd3-dag') return 'dag';
+          if (pkg === 'codemirror' || pkg.startsWith('@codemirror/') || pkg.startsWith('@lezer/')) {
+            return 'codemirror';
+          }
+          return 'vendor';
+        },
+      },
+    },
   },
   server: {
     port: 5173,

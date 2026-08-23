@@ -19,7 +19,7 @@ export default function ResultNotification() {
     : 'var(--color-info)';
 
   return (
-    <div style={{
+    <div role="status" aria-live="polite" style={{
       background: bg, border: `1px solid ${border}`, color,
       borderRadius: 'var(--radius-sm)', padding: '0.5rem 0.75rem',
       margin: '0 0 0.75rem', fontSize: '0.85rem',
@@ -33,7 +33,7 @@ export default function ResultNotification() {
         </button>
       )}
       <button className="btn-sm" style={{ background: 'transparent', border: 'none', color, padding: '2px 4px', cursor: 'pointer' }}
-        onClick={() => session.setRunResult(null)} title="Dismiss">
+        onClick={() => session.setRunResult(null)} title="Dismiss" aria-label="Dismiss">
         <X size={14} />
       </button>
     </div>

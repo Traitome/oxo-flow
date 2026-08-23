@@ -112,9 +112,11 @@ const handleExport = async (id: string, format: 'dockerfile' | 'singularity') =>
                     <div key={t.id} className="template-card">
                       <h3>{t.name}</h3>
                       <p>{t.description}</p>
-                      <div className="template-meta">
-                        <span className="tag">{t.tags}</span>
-                      </div>
+                      {t.tags.length > 0 && (
+                        <div className="template-meta">
+                          {t.tags.map((tag) => <span key={tag} className="tag">{tag}</span>)}
+                        </div>
+                      )}
                       <Link to={`/editor?template=${t.id}`} className="template-use">
                         Use Template
                       </Link>

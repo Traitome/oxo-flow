@@ -12,6 +12,7 @@ import type { HealthResponse, SystemInfo, RunItem, Template } from '../api/types
 import { usePipelineSession } from '../context/PipelineSession';
 import { useI18n } from '../context/I18n';
 import Glossary from '../components/Glossary';
+import StatCard from '../components/StatCard';
 
 const ONBOARDING_KEY = 'oxo_onboarded';
 
@@ -133,15 +134,12 @@ export default function Dashboard() {
 
       {/* Compact system strip — data kept, prominence reduced */}
       <div className="stat-grid" style={{ marginTop: '1rem', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
-        <div className="stat-card"><div className="stat-value">{health?.version || '-'}</div><div className="stat-label">Version</div></div>
-        <div className="stat-card"><div className="stat-value">{runs.length}</div><div className="stat-label">Total Runs</div></div>
-        <div className="stat-card"><div className="stat-value" style={{ color: activeRuns > 0 ? 'var(--color-warning)' : 'var(--color-success)' }}>{activeRuns}</div><div className="stat-label">Active</div></div>
-        <div className="stat-card"><div className="stat-value">{sys ? `${sys.os}/${sys.arch}` : '-'}</div><div className="stat-label">Platform</div></div>
+        <StatCard value={health?.version || '-'} label="Version" />
+        <StatCard value={runs.length} label="Total Runs" />
+        <StatCard value={activeRuns} label="Active" valueStyle={{ color: activeRuns > 0 ? 'var(--color-warning)' : 'var(--color-success)' }} />
+        <StatCard value={sys ? `${sys.os}/${sys.arch}` : '-'} label="Platform" />
         {health?.resources && (
-          <div className="stat-card">
-            <div className="stat-value">{Math.round(health.resources.memory_used_pct * 100)}%</div>
-            <div className="stat-label">Memory</div>
-          </div>
+          <StatCard value={`${Math.round(health.resources.memory_used_pct * 100)}%`} label="Memory" />
         )}
       </div>
 

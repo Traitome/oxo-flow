@@ -155,7 +155,7 @@ export default function Clusters() {
                   )}
                 </td>
                 <td>
-                  <button className="icon-btn danger" title={`Remove ${c.name}`} onClick={() => handleDelete(c.id, c.name)}>
+                  <button className="icon-btn danger" title={`Remove ${c.name}`} aria-label={`Remove ${c.name}`} onClick={() => handleDelete(c.id, c.name)}>
                     <Trash2 size={14} />
                   </button>
                 </td>

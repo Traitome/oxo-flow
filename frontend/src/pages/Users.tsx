@@ -111,6 +111,7 @@ export default function Users() {
                   <button
                     className="icon-btn danger"
                     title={`Delete ${u.username}`}
+                    aria-label={`Delete ${u.username}`}
                     onClick={() => handleDelete(u.id, u.username)}
                   >
                     <Trash2 size={14} />

@@ -2,8 +2,23 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
 import type { AiConfig, HealthResponse } from '../api/types';
 import { FlaskConical, Cpu, HardDrive, Database, Shield } from 'lucide-react';
+import StatCard from '../components/StatCard';
 
 interface QuotaInfo { enabled: boolean; limits: { max_concurrent_runs: number; max_total_threads: number; max_total_memory_mb: number; max_runs_per_day: number } }
+
+// The typed client has no quota endpoint — mirror its request pattern
+// (base-path prefix + bearer token, see api/client.ts) so team-mode
+// deployments under a sub-path or with auth enabled still load.
+function fetchQuota(): Promise<QuotaInfo> {
+  const base = (window as { __OXO_BASE__?: string }).__OXO_BASE__ ?? '';
+  const token = localStorage.getItem('oxo_token');
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  return fetch(`${base}/api/quota`, { headers }).then((r) => {
+    if (!r.ok) throw new Error(`quota: ${r.status}`);
+    return r.json() as Promise<QuotaInfo>;
+  });
+}
 
 // Module-level components — defined outside the render function so React
 // preserves their identity across re-renders (prevents input focus loss).
@@ -21,7 +36,7 @@ function SettingLabel({ text }: { text: string }) {
 }
 
 function SettingInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
-  return <input {...props} style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', fontSize: '0.9rem', background: 'var(--color-bg)', color: 'var(--color-text)', ...(props.style as object) }} />;
+  return <input {...props} className="search-input" style={{ width: '100%', ...(props.style as object) }} />;
 }
 
 export default function Settings() {
@@ -51,7 +66,7 @@ export default function Settings() {
   useEffect(() => {
     api.health().then(setHealth).catch(() => {});
     api.aiConfig().then((c) => { setAiConfig(c); setProvider(c.provider); if (c.api_url) setApiUrl(c.api_url); if (c.model) setModel(c.model); }).catch(() => {});
-    fetch('/api/quota').then(r => r.json()).then(setQuota).catch(() => {});
+    fetchQuota().then(setQuota).catch(() => setNotice('Could not load resource quota'));
     api.referenceStatus().then(setRefs).catch(() => {});
     api.aiConfigUser().then((c) => {
       const u = c.user_config as Partial<typeof adv> | undefined;
@@ -103,16 +118,16 @@ export default function Settings() {
 
       {/* ── AI Provider ── */}
       <Section title="AI Provider Configuration" icon={<Cpu size={16} color="var(--color-primary)" />}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+        <div className="settings-grid">
           <div>
-            <div style={{ marginBottom: '0.5rem', padding: '8px 12px', background: 'var(--color-bg-tertiary)', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem', color: 'var(--color-text-secondary)' }}>
+            <div className="settings-note">
               Config Priority: <strong>User Settings</strong> → Server Config → Environment → Default
             </div>
-            <div style={{ display: 'grid', gap: '0.75rem' }}>
+            <div className="settings-form">
               <div>
                 <SettingLabel text="Provider" />
                 <select value={provider} onChange={(e) => setProvider(e.target.value)}
-                  style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', fontSize: '0.9rem', background: 'var(--color-bg)', color: 'var(--color-text)' }}>
+                  className="search-input" style={{ width: '100%' }}>
                   <option value="openai">OpenAI / DeepSeek / Groq</option>
                   <option value="claude">Claude (Anthropic)</option>
                   <option value="ollama">Ollama (local)</option>
@@ -122,36 +137,36 @@ export default function Settings() {
               <div><SettingLabel text="API Key" /><SettingInput type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-..." /></div>
               <div><SettingLabel text="Model" /><SettingInput type="text" value={model} onChange={(e) => setModel(e.target.value)} placeholder="deepseek-v4-pro" /></div>
               <div><SettingLabel text="API URL (optional)" /><SettingInput type="text" value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://api.deepseek.com/v1/chat/completions" /></div>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <div className="row">
                 <button onClick={handleSave} disabled={saving} className="btn-run">{saving ? 'Saving...' : 'Save'}</button>
                 <button onClick={handleTest} className="action-btn">Test Connection</button>
               </div>
-              {testResult && <div className={`result-bar ${testResult.startsWith('✅') ? 'success' : 'error'}`}>{testResult}</div>}
+              {testResult && <div className={`result-bar ${testResult.startsWith('✅') ? 'success' : 'error'}`} style={{ marginTop: 0 }}>{testResult}</div>}
             </div>
           </div>
-          <div style={{ fontSize: '0.85rem', paddingLeft: '1rem', borderLeft: '1px solid var(--color-border)' }}>
+          <div className="settings-side">
             <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>Current Status</div>
             <div>Provider: <strong>{aiConfig?.provider || 'unknown'}</strong></div>
             <div>Model: <strong>{aiConfig?.model || 'default'}</strong></div>
-            <div>URL: <code style={{ fontSize: '0.7rem' }}>{aiConfig?.api_url || 'default'}</code></div>
+            <div>URL: <code style={{ fontSize: '0.7rem', overflowWrap: 'anywhere' }}>{aiConfig?.api_url || 'default'}</code></div>
             <div style={{ marginTop: '4px' }}>Status: <span className={`status-badge ${aiConfig?.is_configured ? 'success' : 'cancelled'}`}>{aiConfig?.is_configured ? 'Configured' : 'Not Configured'}</span></div>
-            <div style={{ marginTop: '1rem', background: 'var(--color-bg-tertiary)', padding: '8px 12px', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem' }}>
+            <div className="settings-note" style={{ marginTop: '1rem', marginBottom: 0 }}>
               <div style={{ fontWeight: 600, marginBottom: '4px' }}>Advanced Options</div>
               {/* issue #82 P1-4: these controls were display-only; now they
                   read and persist the per-user AI config. */}
-              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.8rem' }}>
+              <label className="check-label">
                 <input type="checkbox" checked={adv.search_enabled} onChange={(e) => setAdv({ ...adv, search_enabled: e.target.checked })} /> Internet search
               </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.8rem' }}>
+              <label className="check-label">
                 <input type="checkbox" checked={adv.monitor_enabled} onChange={(e) => setAdv({ ...adv, monitor_enabled: e.target.checked })} /> AI monitoring
               </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.8rem' }}>
+              <label className="check-label">
                 <input type="checkbox" checked={adv.auto_retry_enabled} onChange={(e) => setAdv({ ...adv, auto_retry_enabled: e.target.checked })} /> Auto retry without asking
               </label>
               <div style={{ marginTop: '6px' }}>
                 <SettingLabel text="Max correction rounds" />
                 <select value={adv.max_correction_rounds} onChange={(e) => setAdv({ ...adv, max_correction_rounds: Number(e.target.value) })}
-                  style={{ padding: '2px 6px', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem' }}>
+                  className="search-input">
                   {[1,2,3,4,5].map(n => <option key={n} value={n}>{n}</option>)}
                 </select>
               </div>
@@ -173,27 +188,27 @@ export default function Settings() {
       {/* ── References ── */}
       <Section title="Reference Genomes" icon={<Database size={16} color="var(--color-primary)" />}>
         <div style={{ fontSize: '0.85rem' }}>
-          <div style={{ marginBottom: '0.5rem', padding: '8px 12px', background: 'var(--color-bg-tertiary)', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem', color: 'var(--color-text-secondary)' }}>
+          <div className="settings-note">
             Base path: <code>/data/references</code>
           </div>
-          <div style={{ display: 'grid', gap: '6px' }}>
+          <div style={{ display: 'grid', gap: '2px' }}>
             {refs?.installed?.map((ref: Record<string, unknown>, idx: number) => (
-              <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border-light)' }}>
+              <div key={idx} className="ref-row">
                 <div>
                   <strong>{String(ref.genome || 'unknown')}</strong>
-                  <span style={{ color: 'var(--color-text-secondary)', marginLeft: '8px', fontSize: '0.8rem' }}>{Array.isArray(ref.components) ? ref.components.join(', ') : ''}</span>
+                  <span className="muted" style={{ marginLeft: '8px' }}>{Array.isArray(ref.components) ? ref.components.join(', ') : ''}</span>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div className="row">
                   <span className="status-badge success">Complete</span>
                 </div>
               </div>
             ))}
             {refs?.missing?.map((missingName: string, idx: number) => (
-              <div key={`missing-${idx}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border-light)' }}>
+              <div key={`missing-${idx}`} className="ref-row">
                 <div>
                   <strong>{missingName}</strong>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div className="row">
                   <span className="status-badge warning">Missing</span>
                   <button className="btn-sm" style={{ fontSize: '0.7rem' }}
                     onClick={() => { api.discoverReference(missingName, []).then(() => api.referenceStatus().then(setRefs)).catch(() => setNotice(`Could not start download for ${missingName}`)); }}>
@@ -224,10 +239,10 @@ export default function Settings() {
             {['conda', 'docker', 'singularity', 'pixi'].map(envName => {
               const available = null; // env detection via system API
               return (
-              <div key={envName} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border-light)' }}>
+              <div key={envName} className="ref-row">
                 <div>
                   <strong>{envName}</strong>
-                  <span style={{ color: 'var(--color-text-secondary)', marginLeft: '8px', fontSize: '0.8rem' }}>{available ? 'detected' : 'not detected'}</span>
+                  <span className="muted" style={{ marginLeft: '8px' }}>{available ? 'detected' : 'not detected'}</span>
                 </div>
                 <span className={`status-badge ${available ? 'success' : 'cancelled'}`}>{available ? 'available' : 'unavailable'}</span>
               </div>
@@ -240,11 +255,11 @@ export default function Settings() {
       <Section title="Resource Quota" icon={<HardDrive size={16} color="var(--color-primary)" />}>
         <div style={{ fontSize: '0.85rem' }}>
           {quota?.enabled ? (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem' }}>
-              <div className="stat-card"><div className="stat-value">{quota.limits.max_concurrent_runs}</div><div className="stat-label">Max Concurrent Runs</div></div>
-              <div className="stat-card"><div className="stat-value">{quota.limits.max_total_threads}</div><div className="stat-label">Max Total Threads</div></div>
-              <div className="stat-card"><div className="stat-value">{(quota.limits.max_total_memory_mb / 1024).toFixed(0)} GB</div><div className="stat-label">Max Total Memory</div></div>
-              <div className="stat-card"><div className="stat-value">{quota.limits.max_runs_per_day}</div><div className="stat-label">Max Runs / Day</div></div>
+            <div className="stat-grid" style={{ marginBottom: 0 }}>
+              <StatCard value={quota.limits.max_concurrent_runs} label="Max Concurrent Runs" />
+              <StatCard value={quota.limits.max_total_threads} label="Max Total Threads" />
+              <StatCard value={`${(quota.limits.max_total_memory_mb / 1024).toFixed(0)} GB`} label="Max Total Memory" />
+              <StatCard value={quota.limits.max_runs_per_day} label="Max Runs / Day" />
             </div>
           ) : (
             <span style={{ color: 'var(--color-text-secondary)' }}>Quota system enabled for team mode.</span>
@@ -312,7 +327,7 @@ export default function Settings() {
             <SettingInput type="password" placeholder={webhook.secret_set ? '••••••••' : 'secret'} value={webhookSecret}
               onChange={(e) => setWebhookSecret(e.target.value)} />
           </div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '0.5rem', fontSize: '0.82rem' }}>
+          <label className="check-label" style={{ marginTop: '0.5rem' }}>
             <input type="checkbox" checked={webhook.enabled} onChange={(e) => setWebhook({ ...webhook, enabled: e.target.checked })} />
             Enable notifications
           </label>

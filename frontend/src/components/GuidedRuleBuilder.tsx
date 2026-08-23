@@ -126,43 +126,43 @@ export default function GuidedRuleBuilder({ toml, onChange }: GuidedRuleBuilderP
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
-        <label style={{ fontSize: '0.82rem', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+      <div className="guided-meta">
+        <label className="field" style={{ minWidth: 220 }}>
           <Glossary term="pipeline">Workflow name</Glossary>
-          <input className="search-input" value={workflowName}
+          <input className="mono" value={workflowName}
             onChange={(e) => { setWorkflowName(e.target.value); emitMeta(e.target.value, workflowVersion); }} />
         </label>
-        <label style={{ fontSize: '0.82rem', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <label className="field" style={{ width: 110 }}>
           Version
-          <input className="search-input" value={workflowVersion} style={{ width: 90 }}
+          <input value={workflowVersion}
             onChange={(e) => { setWorkflowVersion(e.target.value); emitMeta(workflowName, e.target.value); }} />
         </label>
       </div>
 
       {cards.map((card, index) => (
         <div key={index} className="dash-card" style={{ marginBottom: '0.75rem' }}>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem' }}>
+          <div className="row" style={{ marginBottom: '0.6rem', flexWrap: 'nowrap' }}>
             <span className="tag" style={{ fontWeight: 700 }}>Rule {index + 1}</span>
             <input
               className="search-input mono"
-              style={{ flex: 1, minWidth: 160 }}
+              style={{ flex: 1, minWidth: 120 }}
               placeholder="rule name (e.g. fastp_trim)"
               value={card.name}
               onChange={(e) => patchCard(index, { name: e.target.value })}
               aria-label={`Rule ${index + 1} name`}
             />
-            <button className="btn-sm btn-error" title="Remove rule"
+            <button className="icon-btn danger" title="Remove rule" aria-label={`Remove rule ${index + 1}`}
               onClick={() => updateCards(cards.filter((_, i) => i !== index))}>
               <Trash2 size={13} />
             </button>
           </div>
 
-          <label style={{ fontSize: '0.82rem', display: 'block', marginBottom: '0.5rem' }}>
+          <label className="field" style={{ marginBottom: '0.6rem' }}>
             <Glossary term="rule">Command</Glossary>
             <textarea
-              className="search-input mono"
+              className="mono"
               rows={2}
-              style={{ width: '100%', marginTop: '4px', resize: 'vertical' }}
+              style={{ resize: 'vertical' }}
               placeholder="fastp -i {sample}.fq -o clean_{sample}.fq"
               value={card.shell}
               onChange={(e) => patchCard(index, { shell: e.target.value })}
@@ -170,39 +170,39 @@ export default function GuidedRuleBuilder({ toml, onChange }: GuidedRuleBuilderP
             />
           </label>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.5rem' }}>
-            <label style={{ fontSize: '0.8rem' }}>
-              Inputs <span style={{ color: 'var(--color-text-tertiary)' }}>(comma-separated, <Glossary term="wildcard">wildcards</Glossary> ok)</span>
-              <input className="search-input mono" style={{ marginTop: '4px' }}
+          <div className="rule-fields">
+            <label className="field">
+              <span>Inputs <span className="muted">(comma-separated, <Glossary term="wildcard">wildcards</Glossary> ok)</span></span>
+              <input className="mono"
                 value={card.inputs.join(', ')}
                 onChange={(e) => patchCard(index, { inputs: splitList(e.target.value) })}
                 aria-label={`Rule ${index + 1} inputs`} />
             </label>
-            <label style={{ fontSize: '0.8rem' }}>
+            <label className="field">
               Outputs
-              <input className="search-input mono" style={{ marginTop: '4px' }}
+              <input className="mono"
                 value={card.outputs.join(', ')}
                 onChange={(e) => patchCard(index, { outputs: splitList(e.target.value) })}
                 aria-label={`Rule ${index + 1} outputs`} />
             </label>
-            <label style={{ fontSize: '0.8rem' }}>
+            <label className="field">
               Threads
-              <input className="search-input" style={{ marginTop: '4px', width: 80 }} type="number" min={1}
+              <input type="number" min={1}
                 value={card.threads}
                 onChange={(e) => patchCard(index, { threads: e.target.value })}
                 aria-label={`Rule ${index + 1} threads`} />
             </label>
-            <label style={{ fontSize: '0.8rem' }}>
+            <label className="field">
               Memory
-              <input className="search-input" style={{ marginTop: '4px', width: 100 }}
+              <input
                 placeholder="e.g. 4GB"
                 value={card.memory}
                 onChange={(e) => patchCard(index, { memory: e.target.value })}
                 aria-label={`Rule ${index + 1} memory`} />
             </label>
-            <label style={{ fontSize: '0.8rem' }}>
+            <label className="field">
               Environment
-              <input className="search-input mono" style={{ marginTop: '4px' }}
+              <input className="mono"
                 placeholder="system | bioconda::fastp | conda::env"
                 value={card.environment}
                 onChange={(e) => patchCard(index, { environment: e.target.value })}
@@ -216,7 +216,7 @@ export default function GuidedRuleBuilder({ toml, onChange }: GuidedRuleBuilderP
         <Plus size={13} /> Add rule
       </button>
 
-      <p style={{ fontSize: '0.78rem', color: 'var(--color-text-tertiary)', marginTop: '0.75rem' }}>
+      <p className="muted" style={{ marginTop: '0.75rem' }}>
         Every change is converted to workflow TOML immediately — switch to the canvas view to
         see the <Glossary term="pipeline">pipeline</Glossary> graph or fine-tune advanced
         options like <Glossary term="depends_on">depends_on</Glossary>.

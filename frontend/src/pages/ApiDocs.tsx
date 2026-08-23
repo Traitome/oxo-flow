@@ -4,6 +4,20 @@ interface Endpoint {
   method: string; path: string; summary: string; tags: string[];
 }
 
+// The typed client has no OpenAPI endpoint — mirror its request pattern
+// (base-path prefix + bearer token, see api/client.ts) so deployments under
+// a sub-path or with auth enabled still load the spec.
+function fetchOpenApiSpec(): Promise<Record<string, unknown>> {
+  const base = (window as { __OXO_BASE__?: string }).__OXO_BASE__ ?? '';
+  const token = localStorage.getItem('oxo_token');
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  return fetch(`${base}/api/openapi.json`, { headers }).then((r) => {
+    if (!r.ok) throw new Error(`openapi: ${r.status}`);
+    return r.json() as Promise<Record<string, unknown>>;
+  });
+}
+
 export default function ApiDocs() {
   const [spec, setSpec] = useState<Record<string, unknown> | null>(null);
   const [endpoints, setEndpoints] = useState<Endpoint[]>([]);
@@ -11,8 +25,7 @@ export default function ApiDocs() {
   const [selectedTag, setSelectedTag] = useState('');
 
   useEffect(() => {
-    fetch('/api/openapi.json')
-      .then((r) => r.json())
+    fetchOpenApiSpec()
       .then((data) => {
         setSpec(data);
         const eps: Endpoint[] = [];
