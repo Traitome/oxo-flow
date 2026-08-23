@@ -33,6 +33,7 @@ are up to date is predicted as skipped, exactly as `run` would skip it.
 | Option | Short | Description |
 |---|---|---|
 | `--target` | `-t` | Run only specific target rules and their dependencies (repeatable, prefix matching) |
+| `--module` | — | Run one include module and the producers of its declared inputs (repeatable; unions with `--target`). Module names are the include's `name` field or its file stem |
 | `--samples <LIST>` | — | Sample selection: `@path` **replaces** the workflow's samples from a samplesheet, `+@path` **appends** (same-name groups merge, new groups added); names **filter** (or **declare** when the workflow ships no samples), `first:N` (pilot) and `ready` (samples whose entry inputs are complete) **filter**. Repeatable, comma-separated |
 | `--workdir <DIR>` | `-d` | Resolve relative paths against this directory (default: the workflow file's directory) |
 | `--profile <NAME>` | — | Execution profile loaded from `profiles/<NAME>.toml` — the SAME merge semantics as `run` |

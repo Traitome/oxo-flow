@@ -31,6 +31,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--workdir` | `-d` | Workflow file's directory | Working directory for execution |
 | `--log-file` | — | `.oxo-flow/logs/oxo-flow.log` in the workdir | Write the run log to a custom path instead (relative paths resolve against the workdir; previous logs rotate to `PATH.1` … `PATH.9`) |
 | `--target` | `-t` | All rules | Run only specific target rules |
+| `--module` | — | — | Run one include module and the producers of its declared inputs (repeatable; unions with `--target`). Module names are the include's `name` field or its file stem (see [Partial module runs](#partial-module-runs---module)) |
 | `--retry` | `-r` | `0` | Number of times to retry failed jobs |
 | `--timeout` | — | `0` (disabled) | Timeout per job in seconds |
 | `--max-threads` | — | `0` (auto-detect) | Maximum CPU threads available for execution |
@@ -40,6 +41,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--cache-dir` | — | — | Directory for caching environment setup state (entries untouched for 90 days are cleaned up after each run; override with the `cache_max_age_days` config key, `0` disables aging) |
 | `--resume-failed` | — | — | Resume only failed rules from a previous run |
 | `--profile` | — | — | Execution profile name, loaded from `profiles/<NAME>.toml` or `profiles/<NAME>.oxoflow` (see [Execution profiles](#execution-profiles)) |
+| `--max-submitted` | — | `N` | Cluster jobs in flight at once (overrides the profile's `max_submitted`) |
 | `--provenance` | — | — | Track output file checksums for later verification |
 | `--arg` | — | — | Legacy form: set a workflow config value (`KEY=VALUE`). Repeatable. See `[config]` in workflow-format |
 | `--bundle` | — | — | Execute from a published bundle (`.tar.zst` or `.tar.gz`). Extracts, verifies checksums, shows resource requirements, and prompts for confirmation |

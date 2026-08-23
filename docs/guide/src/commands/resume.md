@@ -45,6 +45,7 @@ re-execute the affected rules (see
 | `--workdir <DIR>` | `-d` | Working directory to resume in (default: the one recorded in the checkpoint) |
 | `--keep-going` | `-k` | Continue execution when a job fails (same semantics as `run`) |
 | `--timeout <SECS>` | — | Timeout per job in seconds (0 = disabled), or a duration like `1h`/`30m` |
+| `--no-report-snapshot` | — | Skip the automatic report snapshot after the resumed run (same flag as `run`) |
 
 ## Examples
 

@@ -57,7 +57,7 @@ pub struct Cli {
     #[arg(global = true, long)]
     no_color: bool,
 
-    /// Output machine-readable JSON to stdout (suppresses human-readable stderr output).
+    /// Output machine-readable JSON to stdout (human-readable logs stay on stderr).
     #[arg(global = true, long)]
     json: bool,
 }
@@ -296,7 +296,6 @@ pub enum Commands {
             help = "Direct config overrides: KEY=VALUE or --KEY=VALUE; --KEY VALUE (space form) is accepted for declared [config] keys — unknown --flags are rejected"
         )]
         config_overrides: Vec<String>,
-        /// Add a sample to the preview (repeatable, merges with all
         /// Force re-execution of this run's rules (ignore up-to-date
         /// checks) — previews exactly what `run --rerun` would execute.
         #[arg(long)]
@@ -1612,7 +1611,7 @@ async fn main() -> Result<()> {
             with_lockfiles,
             format,
         } => publish_command(workflow, output, with_lockfiles, format)?,
-        Commands::License { path } => handle_license(path)?,
+        Commands::License { path } => handle_license(path, cli.json)?,
     }
 
     Ok(())
