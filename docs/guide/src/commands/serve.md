@@ -24,7 +24,6 @@ oxo-flow serve [OPTIONS]
 | `--verbose` | `-v` | — | Enable debug-level logging |
 | `--quiet` | — | — | Suppress non-essential output (errors only) |
 | `--no-color` | — | — | Disable colored output |
-| `--json` | — | — | Output machine-readable JSON to stdout (suppresses human-readable stderr output) |
 
 ---
 
