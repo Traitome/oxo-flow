@@ -25,6 +25,11 @@ All errors return a unified JSON format:
 }
 ```
 
+Rate limiting follows the same contract: over-limit requests get
+`429 {"code":"RATE_LIMITED", "message":"Rate limit exceeded", "detail":"retry in Ns", ...}`
+with a `Retry-After` header (sliding window, 100 requests / 60 s per
+client IP by default).
+
 ---
 
 ## Starting the Server
@@ -79,7 +84,10 @@ Accept: text/event-stream
 SSE stream for real-time workflow execution events: terminal events
 (`run_completed`, `run_failed`, `run_cancelled`) plus per-rule events
 (`rule_started`, `rule_completed`, `rule_failed`, `rule_skipped` — parsed
-live from the engine's execution log). Includes a 5-second heartbeat.
+live from the engine's execution log). Keepalive is axum's 15-second
+comment ping; if the client falls behind the broadcast buffer, the stream
+carries a synthetic `{"type":"lagged","data":{"missed":N}}` event —
+refetch run state when you see it.
 
 **Team/hpc modes require `?token=<session token>`** (EventSource cannot set
 an Authorization header), and the stream is filtered to the subscriber's own

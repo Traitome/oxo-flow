@@ -67,7 +67,9 @@ The web crate follows a **domain-driven modular monolith** pattern. Each domain 
 |  +---------+ +---------+ +----------------+  |
 |  +-------------------------------------------+|
 |  |           Middleware Stack                 | |
-|  |  LicenseHeader -> RateLimit -> Auth       | |
+|  |  (outermost first) Compression -> Trace ->| |
+|  |  CORS -> RateLimit -> SecurityHeaders ->  | |
+|  |  LicenseHeader                            | |
 |  +-------------------------------------------+|
 |  +-------------------------------------------+|
 |  | StorageBackend trait (SQLite + PostgreSQL)| |
@@ -79,6 +81,53 @@ The web crate follows a **domain-driven modular monolith** pattern. Each domain 
 |  DAG . Executor . Environment . Wildcards    |
 +-----------------------------------------------+
 ```
+
+### Middleware & Runtime Behavior
+
+Applied outermost-first in `server.rs::build_router`:
+
+- **Compression** — tower-http `CompressionLayer` (brotli + gzip). The
+  default predicate skips `text/event-stream`, so the SSE endpoints
+  (`/api/events`, `/api/ai/translate/stream`) stream uncompressed.
+- **Tracing** — `TraceLayer` emits an INFO `http.request` span plus a
+  completion log (status, latency) per request; `/api/health` runs at DEBUG
+  because the dashboard polls it every few seconds.
+- **CORS → Rate limit → Security headers → License header** — the rate
+  limiter sits inside the `Extension` layer so it can see the shared
+  limiter state.
+
+Static serving and caching:
+
+- `/assets/*` holds Vite content-hashed files, served with
+  `Cache-Control: public, max-age=31536000, immutable`; `index.html` stays
+  `no-cache` so new deploys are picked up immediately.
+- The SPA `index.html` (with `<base>`/base-path injection) is computed once
+  per process and cached in memory, as is the serialized OpenAPI document
+  behind `GET /api/openapi.json`.
+
+Async-runtime hygiene:
+
+- Run-log reads (logs, diagnostics, preview, finalize) and the log tailer
+  use `tokio::fs`; `metrics.jsonl` appends are O(1) with a truncate-rewrite
+  only past the 2000-line cap.
+- bcrypt password hash/verify runs via `tokio::task::block_in_place` so it
+  does not block the async worker.
+- `GET /api/metrics` reads a shared persistent `sysinfo::System` with
+  targeted CPU/memory refreshes (real CPU deltas; memory fields are true
+  MB, matching their `_mb` names).
+
+Rate limiting and SSE:
+
+- The rate limiter is a sliding window (default 100 requests / 60 s) keyed
+  by client IP (`X-Forwarded-For` → `X-Real-IP` → fallback). Over-limit
+  requests get `429` with the standard structured error body
+  (`{"code":"RATE_LIMITED", ...}`) and a `Retry-After` header; keys whose
+  timestamps have all expired are evicted opportunistically (every 1024
+  checks, no background task).
+- `/api/events` relies solely on axum's 15-second `KeepAlive` comment ping.
+  If a subscriber falls behind the 100-slot broadcast buffer, the server
+  emits a synthetic `{"type":"lagged","data":{"missed":N}}` event so the
+  client can refetch instead of silently missing run state transitions.
 
 ---
 
