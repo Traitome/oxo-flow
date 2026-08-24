@@ -433,6 +433,64 @@ oxo-flow run workflow.oxoflow --ai-recover
 
 ---
 
+## Embedded Knowledge Freshness
+
+The four knowledge sources are compiled into the binary at build time, so
+they only change when the binary is rebuilt. Every data file is documented
+by `crates/oxo-flow-ai/src/knowledge/knowledge_meta.json` — a plain JSON
+document listing each source's record count, generation timestamp, and
+whether it is auto-updated or manually curated:
+
+```json
+{
+  "sources": [
+    {
+      "name": "bioconda_tools",
+      "description": "Bioconda CLI tool database",
+      "data_file": "bioconda_tools.jsonl",
+      "count": 6132,
+      "generated_at": "2026-08-22T10:54:00Z",
+      "auto": true
+    }
+  ]
+}
+```
+
+`count` always equals the number of records in `data_file` — a drift-guard
+test fails the build if the two ever diverge.
+
+### Seeing freshness
+
+`oxo-flow ai` prints a **Knowledge freshness** section: per-source record
+count, generation date, staleness in days, and the `auto`/`manual` origin.
+Auto-updated sources older than 60 days are flagged `STALE`. The
+`lookup_tool` tool response likewise appends a freshness note (data date +
+record count), so AI agents can weigh how current the embedded database is.
+
+### Update cadence and the Knowledge Refresh workflow
+
+A scheduled GitHub Action — the **Knowledge Refresh** workflow
+(`.github/workflows/refresh-knowledge.yml`) — runs on the 1st and 16th of
+each month at 03:00 UTC, and can be dispatched manually at any time
+(Actions → Knowledge Refresh → Run workflow). It re-pulls each upstream
+source, rewrites the JSONL data files only when content changed, and opens
+a reviewed PR (`chore(knowledge): automatic knowledge refresh <date>`)
+with per-source entry-count changes. A run that finds no data changes
+completes green without a PR. A failing upstream source is tolerated — the
+other sources still refresh and the failure is reported in the PR body.
+
+### Staleness gate
+
+The release pipeline rejects a dispatch release when any `auto: true`
+source is older than 60 days (twice the 16-day cadence, tolerating one
+missed run). The gate lives in `ci.yml`'s version-sync job, so a stale
+snapshot is blocked before any version bump or tag is created. Manually
+curated sources (`auto: false`) are exempt — their freshness is the
+maintainer's call. If a release is blocked, run the Knowledge Refresh
+workflow, merge its PR, and re-dispatch the release.
+
+---
+
 ## Troubleshooting
 
 ### "AI provider not configured"
