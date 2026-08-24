@@ -66,13 +66,15 @@ pub async fn provider_for(user_id: &str) -> AiProvider {
         if let Some((provider_kind, api_url, model, api_key)) = row
             && provider_kind != "disabled"
         {
-            let kind: ProviderKind = provider_kind.parse().unwrap_or(ProviderKind::OpenAi);
-            resolved = Some(create_provider(
-                kind,
-                Some(api_key.unwrap_or_default()),
-                api_url,
-                model,
-            ));
+            let key = api_key.unwrap_or_default();
+            // A per-user row without a key is not a usable configuration.
+            // Fall back to the shared runtime so the user gets the global
+            // provider (or Noop if none is configured) instead of a provider
+            // carrying an empty key that fails with a cryptic builder error.
+            if !key.trim().is_empty() {
+                let kind: ProviderKind = provider_kind.parse().unwrap_or(ProviderKind::OpenAi);
+                resolved = Some(create_provider(kind, Some(key), api_url, model));
+            }
         }
     }
 
