@@ -172,7 +172,34 @@ export interface DataAnalysis {
 export interface ReferenceResult { found: string[]; missing: string[]; download_commands: string[]; }
 
 // ── Audit ──
-export interface AuditLogResponse { entries: Array<{ timestamp: string; user: string; action: string; resource: string; result?: string }>; days: number; }
+export interface AuditLogResponse {
+  entries: Array<{ timestamp: string; user: string; action: string; resource: string; result?: string }>;
+  days: number;
+  page: number;
+  per_page: number;
+  total: number;
+}
+
+// ── Resource Quota ──
+export interface QuotaConfig {
+  max_concurrent_runs: number;
+  max_total_threads: number;
+  max_total_memory_mb: number;
+  max_runs_per_day: number;
+}
+
+export interface QuotaUsage {
+  active_runs: number;
+  used_threads: number;
+  used_memory_mb: number;
+  runs_today: number;
+}
+
+export interface QuotaInfo {
+  enabled: boolean;
+  limits: QuotaConfig;
+  usage: QuotaUsage;
+}
 
 // ── Cluster connections (SSH endpoints) ──
 export interface ClusterInfo {

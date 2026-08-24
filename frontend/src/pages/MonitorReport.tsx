@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api, createEventSource } from '../api/client';
 import type { RunItem, MonitorStatus, ReportData, DagStatus, Diagnostics, DryRunPreview, RunInstance } from '../api/types';
@@ -6,6 +6,7 @@ import { Play, Pause, RotateCcw, BarChart3, Loader2, Bot, Ban, Trash2, StepForwa
 import WorkflowCanvas from '../components/WorkflowCanvas';
 import RunTimeline from '../components/RunTimeline';
 import { usePipelineSession } from '../context/PipelineSession';
+import { useI18n, getLocale } from '../context/I18n';
 
 type TabType = 'monitor' | 'report' | 'diagnostics' | 'dag' | 'logs' | 'instances';
 
@@ -20,6 +21,8 @@ function StatCard({ value, label, color }: { value: string; label: string; color
 
 export default function MonitorReport() {
   const session = usePipelineSession();
+  const { t, lang } = useI18n();
+  const locale = getLocale(lang);
   const [runs, setRuns] = useState<RunItem[]>([]);
   const [selId, setSelId] = useState<string | null>(null);
   const [monitorStatus, setMonitorStatus] = useState<MonitorStatus | null>(null);
@@ -34,7 +37,6 @@ export default function MonitorReport() {
   const [instances, setInstances] = useState<RunInstance[] | null>(null);
   const [onlyFailed, setOnlyFailed] = useState(false);
   const [explainState, setExplainState] = useState<Record<string, { loading?: boolean; text?: string }>>({});
-  const [, setLoading] = useState(true);
   // Pagination: the full list is ≤100 rows (API LIMIT); render a page of
   // 20 so the Run Detail card below is not buried under 5700px of history
   // (issue #79 P2). "Show more" grows the page.
@@ -47,22 +49,41 @@ export default function MonitorReport() {
   const navigate = useNavigate();
 
 
-  const [, setAlertOpen] = useState<string[]>([]);
+  // Monotonic selection sequence + abort: a slow response for run A must
+  // never overwrite the state of run B (same pattern as the editor's
+  // editSeq), and a new selection aborts the previous one in flight.
+  const selectSeq = useRef(0);
+  const selectAbort = useRef<AbortController | null>(null);
   const selectRun = useCallback(async (id: string) => {
+    const seq = ++selectSeq.current;
+    selectAbort.current?.abort();
+    const ctrl = new AbortController();
+    selectAbort.current = ctrl;
     setSelId(id);
     setTab('monitor');
     setQaAnswer(null);
     session.setActiveRunId(id);
     session.setChatContext('monitor');
-    try { setMonitorStatus(await api.aiStatus(id)); } catch { setMonitorStatus(null); }
-    try { setReportData(await api.runReport(id)); } catch { setReportData(null); }
-    try { setDagStatus(await api.getDagStatus(id)); } catch { setDagStatus(null); }
-    try { setDiagnostics(await api.getDiagnostics(id)); } catch { setDiagnostics(null); }
-    try { setPreview(await api.getRunPreview(id)); } catch { setPreview(null); }
+    const [status, report, dag, diag, prev] = await Promise.allSettled([
+      api.aiStatus(id, ctrl.signal),
+      api.runReport(id, ctrl.signal),
+      api.getDagStatus(id, ctrl.signal),
+      api.getDiagnostics(id, ctrl.signal),
+      api.getRunPreview(id, ctrl.signal),
+    ]);
+    if (seq !== selectSeq.current) return; // superseded by a newer selection
+    setMonitorStatus(status.status === 'fulfilled' ? status.value : null);
+    setReportData(report.status === 'fulfilled' ? report.value : null);
+    setDagStatus(dag.status === 'fulfilled' ? dag.value : null);
+    setDiagnostics(diag.status === 'fulfilled' ? diag.value : null);
+    setPreview(prev.status === 'fulfilled' ? prev.value : null);
     // A row click means the user wants the detail — bring it into view
     // instead of leaving it below a long list (issue #79 P2).
     requestAnimationFrame(() => detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   }, []);
+
+  // Abort in-flight detail loads when the page unmounts.
+  useEffect(() => () => selectAbort.current?.abort(), []);
 
   useEffect(() => {
     if (routeId && routeId !== selId) {
@@ -73,24 +94,23 @@ export default function MonitorReport() {
     }
   }, [routeId, selectRun, selId]);
 
-  const toggleAlert = (idx: string) => {
-    setAlertOpen(prev => prev.includes(idx) ? prev.filter(x => x !== idx) : [...prev, idx]);
-  };
-
   useEffect(() => {
-    api.listRuns().then((r) => { setRuns(r.items); setLoading(false); }).catch(() => setLoading(false));
+    api.listRuns().then((r) => setRuns(r.items)).catch(() => { /* ignore */ });
   }, []);
 
-  // Update monitor status in real-time via SSE
+  // Update monitor status in real-time via SSE; the 5s fallback poll only
+  // runs while the monitor tab is actually visible.
   useEffect(() => {
     if (!selId) return;
     const es = createEventSource();
-    const interval = setInterval(async () => {
-      try {
-        const status = await api.aiStatus(selId);
-        setMonitorStatus(status);
-      } catch { /* ignore */ }
-    }, 5000);
+    const interval = tab === 'monitor'
+      ? setInterval(async () => {
+          try {
+            const status = await api.aiStatus(selId);
+            setMonitorStatus(status);
+          } catch { /* ignore */ }
+        }, 5000)
+      : null;
 
     es.onmessage = (evt) => {
       try {
@@ -101,14 +121,14 @@ export default function MonitorReport() {
         const mine = !event.user || event.user === localStorage.getItem('oxo_user_id');
         if (mine && event.data?.run_id === selId) {
           if (event.type === 'run_completed' || event.type === 'run_failed') {
-            clearInterval(interval);
+            if (interval) clearInterval(interval);
             api.listRuns().then((r) => setRuns(r.items));
           }
         }
       } catch { /* ignore */ }
     };
-    return () => { clearInterval(interval); es.close(); };
-  }, [selId]);
+    return () => { if (interval) clearInterval(interval); es.close(); };
+  }, [selId, tab]);
 
 
 
@@ -140,7 +160,7 @@ export default function MonitorReport() {
 
   const handleCancel = async () => {
     if (!selId) return;
-    if (!window.confirm('Cancel this run? Its processes will be terminated.')) return;
+    if (!window.confirm(t('monitor.cancelConfirm'))) return;
     try {
       await api.cancelRun(selId);
       api.listRuns().then((r) => setRuns(r.items));
@@ -155,7 +175,7 @@ export default function MonitorReport() {
       const answer = await api.askReport(selId, qaInput);
       setQaAnswer(answer);
     } catch {
-      setQaAnswer('Sorry, I could not answer that question. Please try rephrasing.');
+      setQaAnswer(t('monitor.askError'));
     }
   };
 
@@ -186,21 +206,21 @@ export default function MonitorReport() {
 
   const renderLogs = () => (
     <div>
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
-        <input className="search-input" placeholder="Search logs…" value={logQuery}
+      <div className="row" style={{ marginBottom: '0.75rem' }}>
+        <input className="search-input" placeholder={t('monitor.logs.searchPlaceholder')} value={logQuery}
           onChange={e => setLogQuery(e.target.value)} style={{ flex: 1, minWidth: 180 }} />
         <select value={logRule} onChange={e => setLogRule(e.target.value)}
-          className="search-input" style={{ minWidth: 140 }} aria-label="Filter by rule">
-          <option value="">All rules</option>
+          className="search-input" style={{ minWidth: 140 }} aria-label={t('monitor.logs.filterByRule')}>
+          <option value="">{t('monitor.logs.allRules')}</option>
           {ruleNames.map(r => <option key={r} value={r}>{r}</option>)}
         </select>
-        <button className="btn-sm" onClick={downloadLogs} title="Download full log">⬇ Download</button>
-        <button className="btn-sm" onClick={() => setLogs(null)} title="Reload">↻</button>
+        <button className="btn-sm" onClick={downloadLogs} title={t('monitor.logs.download')}>{t('monitor.logs.download')}</button>
+        <button className="btn-sm" onClick={() => setLogs(null)} title={t('monitor.logs.reload')}>{t('monitor.logs.reload')}</button>
       </div>
       {logs === null ? (
-        <div className="empty-state">Loading logs…</div>
+        <div className="empty-state">{t('monitor.logs.loading')}</div>
       ) : logs === '' || filteredSections.length === 0 ? (
-        <div className="empty-state">No matching log output.</div>
+        <div className="empty-state">{t('monitor.logs.empty')}</div>
       ) : (
         <pre className="log-view">
           {filteredSections.map((sec, i) => {
@@ -226,23 +246,23 @@ export default function MonitorReport() {
     const rows = (instances ?? []).filter(r => !onlyFailed || r.status === 'failed');
     return (
       <div>
-        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', alignItems: 'center' }}>
-          <label style={{ fontSize: '0.82rem', display: 'flex', gap: '6px', alignItems: 'center' }}>
+        <div className="row" style={{ marginBottom: '0.75rem' }}>
+          <label className="check-label">
             <input type="checkbox" checked={onlyFailed} onChange={e => setOnlyFailed(e.target.checked)} />
-            Show failed only
+            {t('monitor.instances.showFailed')}
           </label>
-          <span style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>
-            {instances === null ? 'Loading…' : `${rows.length} instance${rows.length === 1 ? '' : 's'}`}
+          <span className="muted">
+            {instances === null ? t('monitor.logs.loading') : `${rows.length} ${t('monitor.instances.instance')}${rows.length === 1 ? '' : 's'}`}
           </span>
         </div>
         {instances === null ? (
-          <div className="empty-state">Loading instances…</div>
+          <div className="empty-state">{t('monitor.instances.loading')}</div>
         ) : rows.length === 0 ? (
-          <div className="empty-state">No instance records — the checkpoint has no per-sample data yet.</div>
+          <div className="empty-state">{t('monitor.instances.empty')}</div>
         ) : (
           <table className="run-table">
             <thead>
-              <tr><th>Instance</th><th>Rule</th><th>Sample</th><th>Status</th><th>Duration</th><th>Exit</th></tr>
+              <tr><th>{t('monitor.instances.instance')}</th><th>{t('monitor.rule')}</th><th>{t('monitor.instances.sample')}</th><th>{t('monitor.status')}</th><th>{t('monitor.instances.duration')}</th><th>{t('monitor.instances.exit')}</th></tr>
             </thead>
             <tbody>
               {rows.map(r => (
@@ -266,7 +286,7 @@ export default function MonitorReport() {
 
   // ── Monitor Dashboard ──
   const renderMonitor = () => {
-    if (!monitorStatus) return <div className="empty-state">No monitor data available</div>;
+    if (!monitorStatus) return <div className="empty-state">{t('monitor.noMonitorData')}</div>;
 
     const hasAlerts = monitorStatus.alerts.length > 0;
 
@@ -279,20 +299,21 @@ export default function MonitorReport() {
           </span>
           {monitorStatus.estimated_completion && (
             <span style={{ fontSize: '0.82rem', color: 'var(--color-text-secondary)' }}>
-              ETA: {monitorStatus.estimated_completion}
+              {t('monitor.eta').replace('{{eta}}', monitorStatus.estimated_completion)}
             </span>
           )}
           {/* Pause/Resume/Retry buttons */}
           <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px' }}>
-            <button className="btn-sm" onClick={handlePause} title="Pause"><Pause size={14} /></button>
-            <button className="btn-sm" onClick={handleResume} title="Resume"><Play size={14} /></button>
-            <button className="btn-sm" onClick={handleRetry} title="Retry"><RotateCcw size={14} /></button>
+            <button className="btn-sm" onClick={handlePause} title={t('monitor.pause')} aria-label={t('monitor.pause')}><Pause size={14} /></button>
+            <button className="btn-sm" onClick={handleResume} title={t('monitor.resume')} aria-label={t('monitor.resume')}><Play size={14} /></button>
+            <button className="btn-sm" onClick={handleRetry} title={t('monitor.retry')} aria-label={t('monitor.retry')}><RotateCcw size={14} /></button>
             <button className="btn-sm" style={{ color: 'var(--color-error)', borderColor: 'var(--color-error)' }}
-              onClick={handleCancel} title="Cancel run"><Ban size={14} /></button>
-            <button className="btn-sm" title="Resume from checkpoint (re-runs unfinished rules)"
+              onClick={handleCancel} title={t('monitor.cancel')} aria-label={t('monitor.cancel')}><Ban size={14} /></button>
+            <button className="btn-sm" title={t('monitor.resumeCheckpoint')}
+              aria-label={t('monitor.resumeCheckpoint')}
               onClick={async () => {
                 if (!selId) return;
-                if (!window.confirm('Resume this run from its checkpoint? Unfinished rules continue in place.')) return;
+                if (!window.confirm(t('monitor.resumeCheckpointConfirm'))) return;
                 try {
                   const res = await api.resumeCheckpoint(selId);
                   setSelId(res.run_id);
@@ -300,10 +321,11 @@ export default function MonitorReport() {
               }}>
               <StepForward size={14} />
             </button>
-            <button className="btn-sm" title="Clean run workdir (chunks + stale state)"
+            <button className="btn-sm" title={t('monitor.cleanWorkdir')}
+              aria-label={t('monitor.cleanWorkdir')}
               onClick={async () => {
                 if (!selId) return;
-                if (!window.confirm('Clean this run\'s workdir? Chunk files and stale state are removed (checkpoint stays).')) return;
+                if (!window.confirm(t('monitor.cleanWorkdirConfirm'))) return;
                 try {
                   await api.cleanRun(selId);
                 } catch { /* ignore */ }
@@ -332,13 +354,12 @@ export default function MonitorReport() {
                   background: `${levelColors[alert.level] || 'var(--color-text-tertiary)'}08`,
                   borderRadius: 'var(--radius-md)', padding: '12px', marginBottom: '8px',
                 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', cursor: 'pointer' }}
-                    onClick={() => toggleAlert(`${i}`)}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>
                       {levelNames[alert.level] || alert.level}: {alert.rule_name || 'System'}
                     </div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--color-text-tertiary)' }}>
-                      {new Date(alert.timestamp).toLocaleTimeString()}
+                      {new Date(alert.timestamp).toLocaleTimeString(locale)}
                     </div>
                   </div>
                   <div style={{ fontSize: '0.82rem', marginTop: '6px' }}>
@@ -372,7 +393,7 @@ export default function MonitorReport() {
         {dagStatus && dagStatus.nodes.length > 0 && (
           <div style={{ marginBottom: '1rem' }}>
             <h4 style={{ fontSize: '0.85rem', marginBottom: '8px', color: 'var(--color-text)' }}>
-              Rule timeline
+              {t('monitor.ruleTimeline')}
             </h4>
             <RunTimeline dag={dagStatus} />
           </div>
@@ -381,27 +402,27 @@ export default function MonitorReport() {
         {/* Resource Forecast */}
         <div className="dash-card" style={{ marginBottom: '1rem' }}>
           <h4 style={{ fontSize: '0.85rem', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <BarChart3 size={14} /> Resource Forecast
+            <BarChart3 size={14} /> {t('monitor.resourceForecast')}
           </h4>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.5rem' }}>
-            <StatCard value={monitorStatus.resource_forecast.cpu_trend} label="CPU Trend" color="var(--color-info)" />
-            <StatCard value={monitorStatus.resource_forecast.memory_trend} label="Memory Trend" color="var(--color-warning)" />
-            <StatCard value={monitorStatus.resource_forecast.disk_trend} label="Disk Trend" color="var(--color-error)" />
-            <StatCard value={`${(monitorStatus.resource_forecast.oom_risk * 100).toFixed(0)}%`} label="OOM Risk" color={monitorStatus.resource_forecast.oom_risk > 0.5  ? 'var(--color-error)' : 'var(--color-success)'} />
-            <StatCard value={`${(monitorStatus.resource_forecast.timeout_risk * 100).toFixed(0)}%`} label="Timeout Risk" color={monitorStatus.resource_forecast.timeout_risk > 0.5 ? 'var(--color-warning)' : 'var(--color-success)'} />
+            <StatCard value={monitorStatus.resource_forecast.cpu_trend} label={t('monitor.cpuTrend')} color="var(--color-info)" />
+            <StatCard value={monitorStatus.resource_forecast.memory_trend} label={t('monitor.memoryTrend')} color="var(--color-warning)" />
+            <StatCard value={monitorStatus.resource_forecast.disk_trend} label={t('monitor.diskTrend')} color="var(--color-error)" />
+            <StatCard value={`${(monitorStatus.resource_forecast.oom_risk * 100).toFixed(0)}%`} label={t('monitor.oomRisk')} color={monitorStatus.resource_forecast.oom_risk > 0.5  ? 'var(--color-error)' : 'var(--color-success)'} />
+            <StatCard value={`${(monitorStatus.resource_forecast.timeout_risk * 100).toFixed(0)}%`} label={t('monitor.timeoutRisk')} color={monitorStatus.resource_forecast.timeout_risk > 0.5 ? 'var(--color-warning)' : 'var(--color-success)'} />
           </div>
         </div>
 
         {/* Node status table */}
         {monitorStatus.alerts.length > 0 && (
           <div style={{ marginTop: '0.5rem', fontSize: '0.82rem' }}>
-            <h4 style={{ marginBottom: '6px' }}>Recent Events</h4>
+            <h4 style={{ marginBottom: '6px' }}>{t('monitor.recentEvents')}</h4>
             <table className="run-table">
-              <thead><tr><th>Time</th><th>Rule</th><th>Level</th><th>Prediction</th></tr></thead>
+              <thead><tr><th>{t('monitor.time')}</th><th>{t('monitor.rule')}</th><th>{t('monitor.level')}</th><th>{t('monitor.prediction')}</th></tr></thead>
               <tbody>
                 {monitorStatus.alerts.slice(0, 10).map((a, i) => (
                   <tr key={i}>
-                    <td style={{ fontSize: '0.75rem' }}>{new Date(a.timestamp).toLocaleTimeString()}</td>
+                    <td style={{ fontSize: '0.75rem' }}>{new Date(a.timestamp).toLocaleTimeString(locale)}</td>
                     <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>{a.rule_name || '-'}</td>
                     <td><span className={`status-badge ${a.level}`}>{a.level}</span></td>
                     <td style={{ fontSize: '0.78rem', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.prediction}</td>
@@ -417,32 +438,32 @@ export default function MonitorReport() {
 
   // ── Report Viewer ──
   const renderReport = () => {
-    if (!reportData) return <div className="empty-state">No report data available</div>;
+    if (!reportData) return <div className="empty-state">{t('monitor.noReportData')}</div>;
 
     return (
       <div>
         {/* QC Stats */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.5rem', marginBottom: '1rem' }}>
-          <StatCard value={`${reportData.qc_summary?.total_files || 0}`} label="Output Files" color="var(--color-success)" />
-          <StatCard value={String(reportData.qc_summary?.total_size_mb || '0')} label="Total Size (MB)" />
-          <StatCard value={`${reportData.qc_summary?.directories || 0}`} label="Directories" />
-          <StatCard value={reportData.key_findings.length > 0 ? `${reportData.key_findings.length}` : '0'} label="Findings" color={reportData.key_findings.length > 0 ? 'var(--color-warning)' : 'var(--color-success)'} />
+          <StatCard value={`${reportData.qc_summary?.total_files || 0}`} label={t('monitor.outputFiles')} color="var(--color-success)" />
+          <StatCard value={String(reportData.qc_summary?.total_size_mb || '0')} label={t('monitor.totalSize')} />
+          <StatCard value={`${reportData.qc_summary?.directories || 0}`} label={t('monitor.directories')} />
+          <StatCard value={reportData.key_findings.length > 0 ? `${reportData.key_findings.length}` : '0'} label={t('monitor.findings')} color={reportData.key_findings.length > 0 ? 'var(--color-warning)' : 'var(--color-success)'} />
         </div>
 
         {/* AI Narrative */}
         <div className="dash-card" style={{ marginBottom: '1rem' }}>
           <div style={{ fontWeight: 600, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Bot size={16} /> AI Narrative
+            <Bot size={16} /> {t('monitor.aiNarrative')}
           </div>
           <div style={{ fontSize: '0.85rem', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
-            {reportData.narrative_md || 'No narrative generated.'}
+            {reportData.narrative_md || t('monitor.noNarrative')}
           </div>
         </div>
 
         {/* Key Findings */}
         {reportData.key_findings.length > 0 && (
           <div className="dash-card" style={{ marginBottom: '1rem' }}>
-            <h4 style={{ fontSize: '0.85rem', marginBottom: '6px' }}>🔬 Key Findings</h4>
+            <h4 style={{ fontSize: '0.85rem', marginBottom: '6px' }}>{t('monitor.keyFindings')}</h4>
             {reportData.key_findings.map((f, i) => (
               <div key={i} style={{ padding: '6px 0', borderBottom: '1px solid var(--color-border-light)', fontSize: '0.82rem' }}>
                 <div><strong>{f.finding}</strong> <span className="status-badge">{f.significance}</span></div>
@@ -455,7 +476,7 @@ export default function MonitorReport() {
         {/* Suggested Next Steps */}
         {reportData.suggested_next.length > 0 && (
           <div className="dash-card" style={{ marginBottom: '1rem' }}>
-            <h4 style={{ fontSize: '0.85rem', marginBottom: '6px' }}>💡 Suggested Next Steps</h4>
+            <h4 style={{ fontSize: '0.85rem', marginBottom: '6px' }}>{t('monitor.suggestedNext')}</h4>
             <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.82rem' }}>
               {reportData.suggested_next.map((s, i) => (
                 <li key={i} style={{ marginBottom: '4px' }}>{s}</li>
@@ -467,7 +488,7 @@ export default function MonitorReport() {
         {/* Caveats */}
         {reportData.caveats.length > 0 && (
           <div className="dash-card" style={{ marginBottom: '1rem', background: 'var(--color-warning-bg)', border: '1px solid var(--color-warning)' }}>
-            <h4 style={{ fontSize: '0.85rem', marginBottom: '6px', color: 'var(--color-warning)' }}>⚠️ Caveats</h4>
+            <h4 style={{ fontSize: '0.85rem', marginBottom: '6px', color: 'var(--color-warning)' }}>{t('monitor.caveats')}</h4>
             <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.82rem' }}>
               {reportData.caveats.map((c, i) => (
                 <li key={i} style={{ marginBottom: '2px' }}>{c}</li>
@@ -479,16 +500,16 @@ export default function MonitorReport() {
         {/* File Tree */}
         {reportData.file_tree.length > 0 && (
           <div className="dash-card" style={{ marginBottom: '1rem' }}>
-            <h4 style={{ fontSize: '0.85rem', marginBottom: '6px' }}>📁 Output Files</h4>
+            <h4 style={{ fontSize: '0.85rem', marginBottom: '6px' }}>{t('monitor.outputFiles')}</h4>
             <div style={{ maxHeight: '200px', overflow: 'auto', fontSize: '0.78rem' }}>
               <table className="run-table">
-                <thead><tr><th>Name</th><th>Size</th><th>Type</th></tr></thead>
+                <thead><tr><th>{t('monitor.rule')}</th><th>{t('monitor.totalSize')}</th><th>{t('monitor.status')}</th></tr></thead>
                 <tbody>
                   {reportData.file_tree.map((f, i) => (
                     <tr key={i}>
                       <td style={{ fontFamily: 'var(--font-mono)' }}>{f.is_dir ? '📁' : '📄'} {f.name}</td>
                       <td>{f.size_bytes > 1024 ? `${(f.size_bytes / 1024).toFixed(1)} KB` : `${f.size_bytes} B`}</td>
-                      <td>{f.is_dir ? 'Directory' : 'File'}</td>
+                      <td>{f.is_dir ? t('monitor.directory') : t('monitor.file')}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -497,35 +518,23 @@ export default function MonitorReport() {
           </div>
         )}
 
-        {/* Charts */}
-        {reportData.charts.length > 0 && (
-          <div className="dash-card" style={{ marginBottom: '1rem' }}>
-            <h4 style={{ fontSize: '0.85rem', marginBottom: '6px' }}>📊 Available Charts</h4>
-            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-              {reportData.charts.map((c, i) => (
-                <button key={i} className="btn-sm">{c.title}</button>
-              ))}
-            </div>
-          </div>
-        )}
-
         {/* Q&A Input */}
         <div className="dash-card">
           <h4 style={{ fontSize: '0.85rem', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Bot size={14} /> Ask AI About Results
+            <Bot size={14} /> {t('monitor.askAi')}
           </h4>
-          <div style={{ display: 'flex', gap: '6px' }}>
+          <div className="row" style={{ flexWrap: 'nowrap' }}>
             <input
               type="text"
               value={qaInput}
               onChange={e => setQaInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleAsk()}
-              placeholder="Ask a question about the results..."
-              className="intent-input"
-              style={{ flex: 1 }}
+              placeholder={t('monitor.askPlaceholder')}
+              className="search-input"
+              style={{ flex: 1, minWidth: 0 }}
             />
             <button onClick={handleAsk} className="btn-run" disabled={!qaInput.trim()}>
-              <Bot size={14} style={{ marginRight: 4 }} /> Ask
+              <Bot size={14} /> {t('monitor.ask')}
             </button>
           </div>
           {qaAnswer && (
@@ -540,9 +549,9 @@ export default function MonitorReport() {
 
   // ── Diagnostics ──
   const renderDiagnostics = () => {
-    if (!diagnostics) return <div className="empty-state">No diagnostics available</div>;
+    if (!diagnostics) return <div className="empty-state">{t('monitor.noDiagnostics')}</div>;
     const hasIssues = diagnostics.failed_nodes.length > 0 || diagnostics.warnings.length > 0;
-    if (!hasIssues) return <div className="empty-state">✅ No issues detected — pipeline looks healthy</div>;
+    if (!hasIssues) return <div className="empty-state">{t('monitor.noIssues')}</div>;
     return (
       <div>
         {diagnostics.failed_nodes.map((fn, i) => {
@@ -569,13 +578,13 @@ export default function MonitorReport() {
                     const result = selId ? await api.aiExplain(selId, 'zh') : null;
                     const text = result
                       ? `${result.summary}${result.fix_suggestion ? `\n→ ${result.fix_suggestion.action}` : ''}`
-                      : 'AI explanation unavailable — the deterministic diagnosis above is authoritative.';
+                      : t('monitor.aiExplainUnavailable');
                     setExplainState((prev) => ({ ...prev, [fn.rule]: { text } }));
                   } catch {
-                    setExplainState((prev) => ({ ...prev, [fn.rule]: { text: 'AI explanation unavailable — the deterministic diagnosis above is authoritative.' } }));
+                    setExplainState((prev) => ({ ...prev, [fn.rule]: { text: t('monitor.aiExplainUnavailable') } }));
                   }
                 }}>
-                {exp?.loading ? 'Explaining…' : '🤖 AI 解释'}
+                {exp?.loading ? t('run.explaining') : `🤖 ${t('run.aiExplain')}`}
               </button>
               {exp?.text && (
                 <div style={{ marginTop: '6px', fontSize: '0.82rem', background: 'var(--color-bg-tertiary)', padding: '8px', borderRadius: 'var(--radius-sm)' }}>
@@ -595,35 +604,47 @@ export default function MonitorReport() {
   };
 
   // ── DAG Status ──
+  // Memoized so the 5s poll / SSE re-renders don't hand WorkflowCanvas a
+  // fresh dag/statusById identity every time (its rebuild effect lists both
+  // in its deps and would tear down all nodes/edges).
+  const dagCanvasData = useMemo(() => {
+    if (!dagStatus) return null;
+    return {
+      nodes: dagStatus.nodes.map(n => ({
+        id: n.id,
+        label: n.label,
+        color: n.color,
+        environment: 'system',
+        rule: {},
+      })),
+      edges: dagStatus.edges.map(e => ({ from: e.source, to: e.target, kind: 'declared' as const })),
+    };
+  }, [dagStatus]);
+  const statusById = useMemo(
+    () => Object.fromEntries((dagStatus?.nodes ?? []).map(n => [n.id, n.status])),
+    [dagStatus],
+  );
+
   const renderDag = () => {
-    if (!dagStatus || dagStatus.nodes.length === 0) return <div className="empty-state">No DAG status available</div>;
+    if (!dagStatus || dagStatus.nodes.length === 0 || !dagCanvasData) return <div className="empty-state">{t('monitor.noDagStatus')}</div>;
     return (
       <div>
-        <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem', fontSize: '0.82rem', flexWrap: 'wrap' }}>
-          <span>Total: <strong>{dagStatus.metrics.total_nodes}</strong></span>
-          <span style={{ color: 'var(--color-success)' }}>✅ Done: <strong>{dagStatus.metrics.completed_nodes}</strong></span>
-          <span style={{ color: 'var(--color-info)' }}>🔄 Running: <strong>{dagStatus.metrics.running_nodes}</strong></span>
-          <span style={{ color: 'var(--color-error)' }}>❌ Failed: <strong>{dagStatus.metrics.failed_nodes}</strong></span>
-          <span>⏳ Pending: <strong>{dagStatus.metrics.pending_nodes}</strong></span>
+        <div className="row" style={{ gap: '1rem', marginBottom: '0.75rem', fontSize: '0.82rem' }}>
+          <span>{t('monitor.total').replace('{{n}}', String(dagStatus.metrics.total_nodes))} <strong>{dagStatus.metrics.total_nodes}</strong></span>
+          <span style={{ color: 'var(--color-success)' }}>{t('monitor.done').replace('{{n}}', String(dagStatus.metrics.completed_nodes))} <strong>{dagStatus.metrics.completed_nodes}</strong></span>
+          <span style={{ color: 'var(--color-info)' }}>{t('monitor.running').replace('{{n}}', String(dagStatus.metrics.running_nodes))} <strong>{dagStatus.metrics.running_nodes}</strong></span>
+          <span style={{ color: 'var(--color-error)' }}>{t('monitor.failed').replace('{{n}}', String(dagStatus.metrics.failed_nodes))} <strong>{dagStatus.metrics.failed_nodes}</strong></span>
+          <span>{t('monitor.pending').replace('{{n}}', String(dagStatus.metrics.pending_nodes))} <strong>{dagStatus.metrics.pending_nodes}</strong></span>
           {dagStatus.metrics.eta_ms != null && dagStatus.metrics.eta_ms > 0 && (
-            <span style={{ color: 'var(--color-text-secondary)' }}>ETA: {(dagStatus.metrics.eta_ms / 60000).toFixed(0)}min</span>
+            <span style={{ color: 'var(--color-text-secondary)' }}>{t('monitor.eta').replace('{{eta}}', `${(dagStatus.metrics.eta_ms / 60000).toFixed(0)}min`)}</span>
           )}
         </div>
         <div style={{ height: '480px', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
           <WorkflowCanvas
-            dag={{
-              nodes: dagStatus.nodes.map(n => ({
-                id: n.id,
-                label: n.label,
-                color: n.color,
-                environment: 'system',
-                rule: {},
-              })),
-              edges: dagStatus.edges.map(e => ({ from: e.source, to: e.target, kind: 'declared' as const })),
-            }}
+            dag={dagCanvasData}
             editable={false}
             scopeKey={`monitor-${routeId}`}
-            statusById={Object.fromEntries(dagStatus.nodes.map(n => [n.id, n.status]))}
+            statusById={statusById}
             context="monitor"
           />
         </div>
@@ -635,17 +656,17 @@ export default function MonitorReport() {
 
   return (
     <div className="page">
-      <h1 className="page-title">Monitor & Reports</h1>
-      <p className="page-subtitle">AI-powered execution monitoring and results interpretation</p>
+      <h1 className="page-title">{t('monitor.title')}</h1>
+      <p className="page-subtitle">{t('monitor.subtitle')}</p>
 
       {/* Run selector */}
       <div className="section">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-          <h2 className="section-title" style={{ marginBottom: 0 }}>Run History</h2>
-          <button className="btn-sm" onClick={() => api.listRuns().then((r) => setRuns(r.items))}>Refresh</button>
+        <div className="section-head">
+          <h2 className="section-title">{t('monitor.runHistory')}</h2>
+          <button className="btn-sm" onClick={() => api.listRuns().then((r) => setRuns(r.items))}>{t('monitor.refresh')}</button>
         </div>
         <table className="run-table">
-          <thead><tr><th>ID</th><th>Status</th><th>Phase</th><th>Created</th><th>Monitor</th></tr></thead>
+          <thead><tr><th>{t('monitor.id')}</th><th>{t('monitor.status')}</th><th>{t('monitor.phase')}</th><th>{t('monitor.created')}</th><th>{t('monitor.monitor')}</th></tr></thead>
           <tbody>
             {runs.slice(0, visibleCount).map((r) => (
               <tr
@@ -656,11 +677,11 @@ export default function MonitorReport() {
                 <td className="mono">{r.id.slice(0, 8)}</td>
                 <td><span className={`status-badge ${r.status}`}>{r.status}</span></td>
                 <td>{r.phase || '-'}</td>
-                <td style={{ fontSize: '0.8rem' }}>{r.created_at ? new Date(r.created_at).toLocaleString() : '-'}</td>
+                <td style={{ fontSize: '0.8rem' }}>{r.created_at ? new Date(r.created_at).toLocaleString(locale) : '-'}</td>
                 <td>
                   <button className="btn-sm" onClick={() => navigate(`/runs/${r.id}`)}>
                     {r.status === 'running' ? <Loader2 size={12} className="spin" style={{ marginRight: 4 }} /> : null}
-                    {r.status === 'completed' ? '📊 Report' : r.status === 'failed' ? '🔍 Diagnose' : '📡 Monitor'}
+                    {r.status === 'completed' ? t('monitor.report') : r.status === 'failed' ? t('monitor.diagnose') : t('monitor.monitor')}
                   </button>
                 </td>
               </tr>
@@ -669,7 +690,7 @@ export default function MonitorReport() {
         </table>
         {runs.length > visibleCount && (
           <button className="btn-sm" style={{ marginTop: '0.5rem' }} onClick={() => setVisibleCount((n) => n + 20)}>
-            Show {Math.min(20, runs.length - visibleCount)} more of {runs.length} runs
+            {t('monitor.showMore').replace('{{n}}', String(Math.min(20, runs.length - visibleCount))).replace('{{total}}', String(runs.length))}
           </button>
         )}
       </div>
@@ -679,22 +700,22 @@ export default function MonitorReport() {
       {preview && (
         <div className="dash-card" ref={detailRef}>
           <h3 style={{ fontSize: '1rem', fontFamily: 'var(--font-mono)', marginBottom: '0.5rem' }}>
-            Dry-run preview
+            {t('monitor.dryRunPreview')}
           </h3>
           <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
             <span className={`status-badge ${preview.checkpoint_preview.summary.will_run > 0 ? 'running' : 'skipped'}`}>
-              {preview.checkpoint_preview.summary.will_run} will run
+              {t('monitor.willRun').replace('{{n}}', String(preview.checkpoint_preview.summary.will_run))}
             </span>
             <span className="status-badge skipped">
-              {preview.checkpoint_preview.summary.will_skip} will skip
+              {t('monitor.willSkip').replace('{{n}}', String(preview.checkpoint_preview.summary.will_skip))}
             </span>
             <span style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>
-              {preview.checkpoint_preview.summary.protected_outside} completed outside this set (preserved)
+              {t('monitor.protectedOutside').replace('{{n}}', String(preview.checkpoint_preview.summary.protected_outside))}
             </span>
           </div>
           <div className="overflow-x">
             <table className="data-table">
-              <thead><tr><th>Instance</th><th>Status</th></tr></thead>
+              <thead><tr><th>{t('monitor.instance')}</th><th>{t('monitor.status')}</th></tr></thead>
               <tbody>
                 {preview.checkpoint_preview.plan.map((p) => (
                   <tr key={p.name}>
@@ -715,19 +736,24 @@ export default function MonitorReport() {
       {/* Run Detail */}
       {(selId) && (
         <div className="dash-card" ref={detailRef}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+          <div className="row" style={{ justifyContent: 'space-between', marginBottom: '0.75rem' }}>
             <div>
               <h3 style={{ fontSize: '1rem', fontFamily: 'var(--font-mono)' }}>Run {selId.slice(0, 12)}...</h3>
-              <div style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>
+              <div className="muted">
                 Status: <span className={`status-badge ${selectedRun?.status || 'unknown'}`}>{selectedRun?.status || 'unknown'}</span>
                 · Phase: {selectedRun?.phase || '-'}
               </div>
             </div>
-            <div style={{ display: 'flex', gap: '4px' }}>
-              {(['monitor', 'report', 'diagnostics', 'dag', 'logs', 'instances'] as const).map((t) => (
-                <button key={t} onClick={() => { setTab(t); setQaAnswer(null); }}
-                  className={tab === t ? 'btn-run' : 'btn-sm'}>
-                  {t === 'monitor' ? '📡 Monitor' : t === 'report' ? '📊 Report' : t === 'diagnostics' ? '🔍 Diagnostics' : t === 'dag' ? '🔷 DAG' : t === 'logs' ? '📜 Logs' : '🧬 Instances'}
+            <div className="row" style={{ gap: '4px' }} role="tablist">
+              {(['monitor', 'report', 'diagnostics', 'dag', 'logs', 'instances'] as const).map((tabKey) => (
+                <button
+                  key={tabKey}
+                  role="tab"
+                  aria-selected={tab === tabKey}
+                  onClick={() => { setTab(tabKey); setQaAnswer(null); }}
+                  className={tab === tabKey ? 'btn-run' : 'btn-sm'}
+                >
+                  {t(`monitor.tabs.${tabKey}` as const)}
                 </button>
               ))}
             </div>

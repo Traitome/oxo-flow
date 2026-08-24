@@ -1,20 +1,20 @@
 import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet } from 'react-router-dom';
-import { LayoutDashboard, GitBranch, PlayCircle, BarChart3, Library, Settings, BookOpen, FlaskConical, Menu, X, MessageCircle, Users, ShieldCheck, Server } from 'lucide-react';
-import Toast from './Toast';
+import { LayoutDashboard, GitBranch, PlayCircle, Library, Settings, BookOpen, FlaskConical, Menu, X, MessageCircle, Users, ShieldCheck, Server } from 'lucide-react';
 import ResultNotification from './ResultNotification';
 import { usePipelineSession } from '../context/PipelineSession';
 import { api } from '../api/client';
-import { useServerVersion } from '../api/version';
+import { useServerVersion, fetchServerHealth } from '../api/version';
 import { useI18n } from '../context/I18n';
 
 function LicenseFooterLabel() {
+  const { t } = useI18n();
   const [label, setLabel] = useState<string>('');
   useEffect(() => {
     api.licenseStatus()
-      .then((l) => setLabel(l.license_type ? `${l.license_type} license` : 'academic license'))
-      .catch(() => setLabel('academic license'));
-  }, []);
+      .then((l) => setLabel(l.license_type ? t('layout.license').replace('{{type}}', l.license_type) : t('layout.academicLicense')))
+      .catch(() => setLabel(t('layout.academicLicense')));
+  }, [t]);
   return <span>{label}</span>;
 }
 
@@ -36,17 +36,17 @@ const nav: NavItem[] = [
 ];
 
 // /monitor was a duplicate of /runs (issue #82 P1-15) — merged.
-const BarChart3Unused = BarChart3;
-void BarChart3Unused;
 
 type ServerStatus = 'checking' | 'ok' | 'degraded' | 'down';
 
-const STATUS_TITLES: Record<ServerStatus, string> = {
-  checking: 'Checking server status...',
-  ok: 'Server connected',
-  degraded: 'Server degraded',
-  down: 'Server unreachable',
-};
+function useStatusTitles(t: (key: string) => string): Record<ServerStatus, string> {
+  return {
+    checking: t('status.checking'),
+    ok: t('status.ok'),
+    degraded: t('status.degraded'),
+    down: t('status.down'),
+  };
+}
 
 const STATUS_POLL_MS = 30000;
 
@@ -54,6 +54,7 @@ export default function Layout() {
   const [menuOpen, setMenuOpen] = useState(false);
   const version = useServerVersion();
   const { t, lang, setLang } = useI18n();
+  const STATUS_TITLES = useStatusTitles(t);
   const [theme, setThemeState] = useState<string>(
     () => localStorage.getItem('oxo_theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'),
   );
@@ -86,29 +87,47 @@ export default function Layout() {
   const [serverStatus, setServerStatus] = useState<ServerStatus>('checking');
   const session = usePipelineSession();
 
+  const handleSkipToContent = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    e.preventDefault();
+    const main = document.getElementById('main-content');
+    if (!main) return;
+    main.focus({ preventScroll: false });
+    main.scrollIntoView({ behavior: 'smooth' });
+    const previousTitle = document.title;
+    document.title = `${t('skip.toContent')} – ${previousTitle.replace(/^[^–]+ – /, '')}`;
+    window.setTimeout(() => {
+      document.title = previousTitle;
+    }, 1200);
+  };
+
   useEffect(() => {
     let cancelled = false;
-    const check = async () => {
-      try {
-        const res = await api.health();
-        if (!cancelled) {
-          setServerStatus(res.status === 'ok' ? 'ok' : res.status === 'degraded' ? 'degraded' : 'down');
-        }
-      } catch {
-        if (!cancelled) setServerStatus('down');
+    const check = async (fresh: boolean) => {
+      // Fresh polls bypass the cache so the status dot reflects live health;
+      // the first check shares the single cached fetch with useServerVersion.
+      const res = await fetchServerHealth(fresh);
+      if (!cancelled) {
+        setServerStatus(res === null ? 'down' : res.status === 'ok' ? 'ok' : res.status === 'degraded' ? 'degraded' : 'down');
       }
     };
-    check();
-    const timer = setInterval(check, STATUS_POLL_MS);
+    check(false);
+    const timer = setInterval(() => check(true), STATUS_POLL_MS);
     return () => { cancelled = true; clearInterval(timer); };
   }, []);
 
   return (
     <div className="app-shell">
+      <a
+        href="#main-content"
+        className="skip-link"
+        onClick={handleSkipToContent}
+      >
+        {t('skip.toContent')}
+      </a>
       {/* Header */}
       <header className="app-header">
         <div className="header-left">
-          <button className="mobile-menu-btn" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle menu">
+          <button className="mobile-menu-btn" onClick={() => setMenuOpen(!menuOpen)} aria-label={t('layout.toggleMenu')}>
             {menuOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
           <FlaskConical size={20} />
@@ -123,12 +142,12 @@ export default function Layout() {
           ))}
         </nav>
         <div className="header-right">
-          <button className="btn-sm" style={{ marginRight: '8px' }} onClick={() => setLang(lang === 'en' ? 'zh' : 'en')}
+          <button className="btn-sm" onClick={() => setLang(lang === 'en' ? 'zh' : 'en')}
             title={lang === 'en' ? '切换到中文' : 'Switch to English'}>
             {t('lang.toggle')}
           </button>
-          <button className="btn-sm" style={{ marginRight: '8px' }} onClick={toggleTheme}
-            title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}>
+          <button className="btn-sm" onClick={toggleTheme}
+            title={theme === 'dark' ? t('theme.light') : t('theme.dark')}>
             {theme === 'dark' ? '☀️' : '🌙'}
           </button>
           <span id="header-status" role="status" aria-label={STATUS_TITLES[serverStatus]} className={`status-dot ${serverStatus}`} title={STATUS_TITLES[serverStatus]} />
@@ -148,7 +167,7 @@ export default function Layout() {
               <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
                 <Icon size={18} /><span>{t(key)}</span>
                 {key === 'nav.runs' && session.state.activeRunId && (
-                  <span style={{ marginLeft: 'auto', width: 6, height: 6, borderRadius: '50%', background: 'var(--color-primary)', animation: 'pulse 1.5s infinite' }} title="Active run" />
+                  <span style={{ marginLeft: 'auto', width: 6, height: 6, borderRadius: '50%', background: 'var(--color-primary)', animation: 'pulse 1.5s infinite' }} title={t('layout.activeRun')} />
                 )}
               </NavLink>
             ))}
@@ -162,7 +181,7 @@ export default function Layout() {
           </div>
         </aside>
 
-        <main className="main-content">
+        <main id="main-content" tabIndex={-1} className="main-content">
           <ResultNotification />
           <Outlet />
         </main>
@@ -170,12 +189,9 @@ export default function Layout() {
 
       {/* Footer */}
       <footer className="app-footer">
-        <span>{version ? `oxo-flow v${version}` : 'oxo-flow'} — Academic License. Free for academic use. Commercial use requires authorization.</span>
-        <span>Contact: w_shixiang@163.com</span>
+        <span>{version ? `oxo-flow v${version}` : 'oxo-flow'} — {t('footer.tagline')}</span>
+        <span>{t('footer.contact')}: w_shixiang@163.com</span>
       </footer>
-
-      {/* Toast notifications */}
-      <Toast />
     </div>
   );
 }

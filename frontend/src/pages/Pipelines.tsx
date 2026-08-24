@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Download, Pencil, Share2, Trash2 } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Download, GitFork, Pencil, Share2, Trash2 } from 'lucide-react';
 import { api } from '../api/client';
 import type { Pipeline, Template } from '../api/types';
+import { useI18n } from '../context/I18n';
 
 type Tab = 'templates' | 'mine';
 
 export default function Pipelines() {
+  const { t } = useI18n();
+  const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>('templates');
   const [templates, setTemplates] = useState<Template[]>([]);
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
@@ -27,14 +30,14 @@ export default function Pipelines() {
   const categories = [...new Set(templates.map((t) => t.category))];
 
   const handleDelete = async (id: string, name: string) => {
-    if (!window.confirm(`Delete pipeline "${name}"? Its runs keep their snapshots.`)) return;
+    if (!window.confirm(t('pipelines.deleteConfirm').replace('{{name}}', name))) return;
     try {
       await api.deletePipeline(id);
       setPipelines((prev) => prev.filter((p) => p.id !== id));
-      setNotice(`Deleted "${name}"`);
+      setNotice(t('pipelines.deleted').replace('{{name}}', name));
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Delete failed';
-      setNotice(`Delete failed: ${msg}`);
+      const msg = err instanceof Error ? err.message : t('common.unknownError');
+      setNotice(t('pipelines.deleteFailed').replace('{{error}}', msg));
     }
   };
 
@@ -45,13 +48,24 @@ export default function Pipelines() {
       // link (the oxo+ scheme is the import format).
       const httpsUrl = res.share_url.replace('oxo+', '');
       await navigator.clipboard.writeText(httpsUrl);
-      setNotice(`Share link copied to clipboard (30 days): ${httpsUrl}`);
+      setNotice(t('pipelines.shareCopied').replace('{{days}}', '30') + `: ${httpsUrl}`);
     } catch {
-      setNotice('Could not create share link.');
+      setNotice(t('pipelines.shareFailed'));
     }
   };
 
-const handleExport = async (id: string, format: 'dockerfile' | 'singularity') => {
+  const handleFork = async (id: string) => {
+    try {
+      const res = await api.forkPipeline(id);
+      setNotice(t('pipelines.forked').replace('{{name}}', res.name));
+      navigate(`/editor?pipeline=${res.forked_id}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : t('common.unknownError');
+      setNotice(t('pipelines.forkFailed').replace('{{error}}', msg));
+    }
+  };
+
+  const handleExport = async (id: string, format: 'dockerfile' | 'singularity') => {
     try {
       const res = await api.exportPipeline(id, format);
       const blob = new Blob([res.content], { type: 'text/plain' });
@@ -61,16 +75,16 @@ const handleExport = async (id: string, format: 'dockerfile' | 'singularity') =>
       a.download = format === 'dockerfile' ? 'Dockerfile' : 'Singularity.def';
       a.click();
       URL.revokeObjectURL(url);
-      setNotice(`Exported ${format}`);
+      setNotice(t('pipelines.exported').replace('{{format}}', format));
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Export failed';
-      setNotice(`Export failed: ${msg}`);
+      const msg = err instanceof Error ? err.message : t('common.unknownError');
+      setNotice(t('pipelines.exportFailed').replace('{{error}}', msg));
     }
   };
 
   return (
     <div className="page">
-      <h1 className="page-title">Pipelines</h1>
+      <h1 className="page-title">{t('pipelines.title')}</h1>
 
       <div className="left-rail-tabs" role="tablist" style={{ maxWidth: 320, marginBottom: 16 }}>
         <button
@@ -79,7 +93,7 @@ const handleExport = async (id: string, format: 'dockerfile' | 'singularity') =>
           className={`left-rail-tab ${tab === 'templates' ? 'active' : ''}`}
           onClick={() => setTab('templates')}
         >
-          Templates
+          {t('pipelines.templates')}
         </button>
         <button
           role="tab"
@@ -87,36 +101,38 @@ const handleExport = async (id: string, format: 'dockerfile' | 'singularity') =>
           className={`left-rail-tab ${tab === 'mine' ? 'active' : ''}`}
           onClick={() => setTab('mine')}
         >
-          My Pipelines
+          {t('pipelines.mine')}
         </button>
       </div>
 
       {notice && (
         <div className="result-bar success" style={{ cursor: 'pointer' }} onClick={() => setNotice(null)}>
           {notice}
-          <span style={{ marginLeft: 'auto', fontSize: '0.7rem', opacity: 0.7 }}>click to dismiss</span>
+          <span style={{ marginLeft: 'auto', fontSize: '0.7rem', opacity: 0.7 }}>{t('common.dismiss')}</span>
         </div>
       )}
 
       {tab === 'templates' &&
         (categories.length === 0 ? (
-          <div className="empty-state">No templates available.</div>
+          <div className="empty-state">{t('pipelines.emptyTemplates')}</div>
         ) : (
           categories.map((cat) => (
             <div key={cat} className="section">
               <h2 className="section-title">{cat}</h2>
               <div className="template-grid">
                 {templates
-                  .filter((t) => t.category === cat)
-                  .map((t) => (
-                    <div key={t.id} className="template-card">
-                      <h3>{t.name}</h3>
-                      <p>{t.description}</p>
-                      <div className="template-meta">
-                        <span className="tag">{t.tags}</span>
-                      </div>
-                      <Link to={`/editor?template=${t.id}`} className="template-use">
-                        Use Template
+                  .filter((tpl) => tpl.category === cat)
+                  .map((tpl) => (
+                    <div key={tpl.id} className="template-card">
+                      <h3>{tpl.name}</h3>
+                      <p>{tpl.description}</p>
+                      {tpl.tags.length > 0 && (
+                        <div className="template-meta">
+                          {tpl.tags.map((tag) => <span key={tag} className="tag">{tag}</span>)}
+                        </div>
+                      )}
+                      <Link to={`/editor?template=${tpl.id}`} className="template-use">
+                        {t('pipelines.useTemplate')}
                       </Link>
                     </div>
                   ))}
@@ -129,18 +145,19 @@ const handleExport = async (id: string, format: 'dockerfile' | 'singularity') =>
         <>
           {pipelines.length === 0 ? (
             <div className="empty-state">
-              No saved pipelines yet — build one on the{' '}
-              <Link to="/editor">editor canvas</Link>, then Save.
+              {t('pipelines.emptyMine').split(t('pipelines.emptyMineLink'))[0]}
+              <Link to="/editor">{t('pipelines.emptyMineLink')}</Link>
+              {t('pipelines.emptyMine').split(t('pipelines.emptyMineLink'))[1]}
             </div>
           ) : (
             <table className="pipeline-table">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Version</th>
-                  <th>Rules</th>
-                  <th>Updated</th>
-                  <th>Actions</th>
+                  <th>{t('pipelines.name')}</th>
+                  <th>{t('pipelines.version')}</th>
+                  <th>{t('pipelines.rules')}</th>
+                  <th>{t('pipelines.updated')}</th>
+                  <th>{t('pipelines.actions')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -152,19 +169,22 @@ const handleExport = async (id: string, format: 'dockerfile' | 'singularity') =>
                     <td>{p.updated_at.slice(0, 10)}</td>
                     <td>
                       <span className="pipeline-actions">
-                        <Link to={`/editor?pipeline=${p.id}`} className="btn-sm" title="Open in editor">
-                          <Pencil size={13} /> Open
+                        <Link to={`/editor?pipeline=${p.id}`} className="btn-sm" title={t('pipelines.open')}>
+                          <Pencil size={13} /> {t('pipelines.open')}
                         </Link>
-                        <button className="btn-sm" onClick={() => handleExport(p.id, 'dockerfile')} title="Export Dockerfile">
-                          <Download size={13} /> Docker
+                        <button className="btn-sm" onClick={() => handleFork(p.id)} title={t('pipelines.fork')}>
+                          <GitFork size={13} /> {t('pipelines.fork')}
                         </button>
-                        <button className="btn-sm" onClick={() => handleExport(p.id, 'singularity')} title="Export Singularity definition">
-                          <Download size={13} /> Singularity
+                        <button className="btn-sm" onClick={() => handleExport(p.id, 'dockerfile')} title={t('pipelines.exportDocker')}>
+                          <Download size={13} /> {t('pipelines.exportDocker')}
                         </button>
-                        <button className="btn-sm" onClick={() => handleShare(p.id)} title="Share link">
+                        <button className="btn-sm" onClick={() => handleExport(p.id, 'singularity')} title={t('pipelines.exportSingularity')}>
+                          <Download size={13} /> {t('pipelines.exportSingularity')}
+                        </button>
+                        <button className="btn-sm" onClick={() => handleShare(p.id)} title={t('pipelines.share')}>
                           <Share2 size={13} />
                         </button>
-                        <button className="btn-sm btn-error" onClick={() => handleDelete(p.id, p.name)} title="Delete">
+                        <button className="btn-sm btn-error" onClick={() => handleDelete(p.id, p.name)} title={t('pipelines.delete')}>
                           <Trash2 size={13} />
                         </button>
                       </span>

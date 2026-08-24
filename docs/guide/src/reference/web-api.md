@@ -10,6 +10,7 @@ oxo-flow includes a built-in REST API server for building, validating, running, 
 - **Errors**: `{ code: "E001", message, detail?, suggestion? }`
 - **Lists**: `GET /api/runs` returns a cursor-paginated envelope `{ items, next_cursor, total }` (limit ≤ 500, `status`/`q` filters); other list endpoints return bare arrays (≤ 100 items)
 - **Versioning**: `/api/` prefix for all endpoints
+- **Authentication**: in team/hpc mode, protected endpoints accept a `Authorization: Bearer <token>` session token or an `X-API-Key` header. The generated OpenAPI spec at `GET /api/openapi.json` declares both `bearerAuth` and `apiKey` security schemes; public endpoints (health, login, license, openapi.json, etc.) require no auth.
 - **Self-discoverable**: OpenAPI 3.1 spec at `GET /api/openapi.json`. The spec is **code-generated** via [utoipa](https://github.com/juhaku/utoipa) from the `#[utoipa::path]` annotations on every route handler — there is no hand-maintained static file. `crates/oxo-flow-web/tests/openapi_gate.rs` is the drift gate: it asserts every route in the router appears in the generated spec, so a new route without an annotation fails CI.
 
 ### Structured Error Format
@@ -24,6 +25,11 @@ All errors return a unified JSON format:
   "suggestion": "Please login at POST /api/auth/login to obtain a session token"
 }
 ```
+
+Rate limiting follows the same contract: over-limit requests get
+`429 {"code":"RATE_LIMITED", "message":"Rate limit exceeded", "detail":"retry in Ns", ...}`
+with a `Retry-After` header (sliding window, 100 requests / 60 s per
+client IP by default).
 
 ---
 
@@ -67,9 +73,19 @@ Returns real-time resource metrics: CPU%, memory (used/total/swap), active workf
 
 ### Audit Logs
 ```
-GET /api/audit?days=7
+GET /api/audit?days=7&page=1&per_page=50
 ```
-Returns structured audit entries: `{ entries: [{ timestamp, user, action, resource, result }], days }`. **Team/hpc modes: admin-only** (the trail spans every user's actions; personal mode keeps the localhost trust model).
+Returns paginated structured audit entries:
+```json
+{
+  "entries": [{ "timestamp", "user", "action", "resource", "result" }],
+  "days": 7,
+  "page": 1,
+  "per_page": 50,
+  "total": 128
+}
+```
+`page` defaults to 1 and `per_page` defaults to 50 (max 500). **Team/hpc modes: admin-only** (the trail spans every user's actions; personal mode keeps the localhost trust model).
 
 ### Server-Sent Events
 ```
@@ -79,7 +95,10 @@ Accept: text/event-stream
 SSE stream for real-time workflow execution events: terminal events
 (`run_completed`, `run_failed`, `run_cancelled`) plus per-rule events
 (`rule_started`, `rule_completed`, `rule_failed`, `rule_skipped` — parsed
-live from the engine's execution log). Includes a 5-second heartbeat.
+live from the engine's execution log). Keepalive is axum's 15-second
+comment ping; if the client falls behind the broadcast buffer, the stream
+carries a synthetic `{"type":"lagged","data":{"missed":N}}` event —
+refetch run state when you see it.
 
 **Team/hpc modes require `?token=<session token>`** (EventSource cannot set
 an Authorization header), and the stream is filtered to the subscriber's own
@@ -478,7 +497,15 @@ immediate.
 
 Runs pre-flight the quota tracker with the workflow's declared threads and
 memory; over-limit requests get `429 QUOTA_EXCEEDED` with the violation
-list. Usage is visible at `GET /api/quota`.
+list.
+
+```
+GET  /api/quota           # current limits and usage
+PUT  /api/quota           # update limits (admin-only outside personal mode)
+```
+
+`PUT /api/quota` accepts `{ max_concurrent_runs, max_total_threads, max_total_memory_mb, max_runs_per_day }`.
+Usage is visible at `GET /api/quota`.
 
 ## Cluster Connections & Remote Execution
 

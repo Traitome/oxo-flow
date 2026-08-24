@@ -124,6 +124,7 @@ impl ScriptedBackend {
         };
         Ok(AiResponse {
             content: turn.content,
+            reasoning_content: None,
             tool_calls: turn.tool_calls,
             usage: Usage::default(),
             finish_reason: finish_reason.to_string(),

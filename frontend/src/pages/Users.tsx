@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react';
 import { Trash2, UserPlus } from 'lucide-react';
 import { api } from '../api/client';
 import type { UserInfo } from '../api/types';
+import { useI18n } from '../context/I18n';
 
 // User management (issue #79 P1-06): the client functions existed but no
 // page called them. Create users with a bcrypt-hashed password (they sign
 // in via /api/auth/login), list all users, delete by id.
 export default function Users() {
+  const { t } = useI18n();
   const [users, setUsers] = useState<UserInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [username, setUsername] = useState('');
@@ -14,12 +16,27 @@ export default function Users() {
   const [role, setRole] = useState('user');
   const [creating, setCreating] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<string | null>(null);
+  const [currentUserLoaded, setCurrentUserLoaded] = useState(false);
+
+  useEffect(() => {
+    api
+      .authMe()
+      .then((me) => {
+        setCurrentUser(me.authenticated ? me.username ?? null : null);
+        setCurrentUserLoaded(true);
+      })
+      .catch(() => {
+        setCurrentUser(null);
+        setCurrentUserLoaded(true);
+      });
+  }, []);
 
   const reload = () => {
     api
       .listUsers()
       .then(setUsers)
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to load users'));
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : t('users.loadFailed')));
   };
   useEffect(reload, []);
 
@@ -31,36 +48,32 @@ export default function Users() {
     setNotice(null);
     try {
       await api.createUser(username.trim(), role, password);
-      setNotice(`User ${username.trim()} created.`);
+      setNotice(t('users.created').replace('{{name}}', username.trim()));
       setUsername('');
       setPassword('');
       reload();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to create user');
+      setError(err instanceof Error ? err.message : t('users.createFailed'));
     } finally {
       setCreating(false);
     }
   };
 
   const handleDelete = async (id: string, name: string) => {
-    if (!window.confirm(`Delete user ${name}?`)) return;
+    if (!window.confirm(t('users.deleteConfirm').replace('{{name}}', name))) return;
     try {
       await api.deleteUser(id);
-      setNotice(`User ${name} deleted.`);
+      setNotice(t('users.deleted').replace('{{name}}', name));
       reload();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to delete user');
+      setError(err instanceof Error ? err.message : t('users.deleteFailed'));
     }
   };
 
   return (
     <div className="page">
-      <h1 className="page-title">Users</h1>
-      <p className="page-subtitle">
-        Accounts created here sign in with their password (bcrypt-hashed).
-        Env-var credentials (OXO_FLOW_ADMIN_PASSWORD / _USER_ / _VIEWER_)
-        continue to work alongside them.
-      </p>
+      <h1 className="page-title">{t('users.title')}</h1>
+      <p className="page-subtitle">{t('users.subtitle')}</p>
 
       {notice && <div className="tool-palette-hint">{notice}</div>}
       {error && <div className="tool-palette-hint error">{error}</div>}
@@ -68,24 +81,24 @@ export default function Users() {
       <form onSubmit={handleCreate} className="login-form" style={{ maxWidth: 480, margin: '0 0 1.5rem' }}>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <label className="inspector-field" style={{ flex: 1, minWidth: 140 }}>
-            <span>Username</span>
+            <span>{t('users.username')}</span>
             <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" />
           </label>
           <label className="inspector-field" style={{ flex: 1, minWidth: 140 }}>
-            <span>Password</span>
+            <span>{t('users.password')}</span>
             <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
           </label>
           <label className="inspector-field" style={{ minWidth: 120 }}>
-            <span>Role</span>
+            <span>{t('users.role')}</span>
             <select value={role} onChange={(e) => setRole(e.target.value)}>
-              <option value="user">user</option>
-              <option value="viewer">viewer</option>
-              <option value="admin">admin</option>
+              <option value="user">{t('users.roles.user')}</option>
+              <option value="viewer">{t('users.roles.viewer')}</option>
+              <option value="admin">{t('users.roles.admin')}</option>
             </select>
           </label>
         </div>
         <button className="btn-run" type="submit" disabled={creating || !username.trim() || !password}>
-          <UserPlus size={14} /> {creating ? 'Creating…' : 'Create user'}
+          <UserPlus size={14} /> {creating ? t('users.creating') : t('users.create')}
         </button>
       </form>
 
@@ -93,10 +106,10 @@ export default function Users() {
         <table className="data-table">
           <thead>
             <tr>
-              <th>Username</th>
-              <th>Role</th>
-              <th>Auth type</th>
-              <th>Created</th>
+              <th>{t('users.username')}</th>
+              <th>{t('users.role')}</th>
+              <th>{t('users.authType')}</th>
+              <th>{t('users.createdAt')}</th>
               <th></th>
             </tr>
           </thead>
@@ -110,7 +123,17 @@ export default function Users() {
                 <td>
                   <button
                     className="icon-btn danger"
-                    title={`Delete ${u.username}`}
+                    title={
+                      currentUser === u.username
+                        ? t('users.deleteSelf')
+                        : t('users.deleteAria').replace('{{name}}', u.username)
+                    }
+                    aria-label={
+                      currentUser === u.username
+                        ? t('users.deleteSelf')
+                        : t('users.deleteAria').replace('{{name}}', u.username)
+                    }
+                    disabled={!currentUserLoaded || currentUser === u.username}
                     onClick={() => handleDelete(u.id, u.username)}
                   >
                     <Trash2 size={14} />
@@ -121,7 +144,7 @@ export default function Users() {
             {users.length === 0 && (
               <tr>
                 <td colSpan={5} style={{ textAlign: 'center', opacity: 0.6 }}>
-                  No users
+                  {t('users.noUsers')}
                 </td>
               </tr>
             )}

@@ -12,6 +12,11 @@ use serde::{Deserialize, Serialize};
 pub struct Message {
     pub role: MessageRole,
     pub content: String,
+    /// DeepSeek reasoning models emit `reasoning_content` for assistant turns.
+    /// It must be echoed back verbatim on subsequent API calls, so we keep it
+    /// in the transcript (ignored by non-DeepSeek providers).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -25,6 +30,7 @@ impl Message {
         Self {
             role: MessageRole::System,
             content: content.to_string(),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
             name: None,
@@ -35,6 +41,7 @@ impl Message {
         Self {
             role: MessageRole::User,
             content: content.to_string(),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
             name: None,
@@ -45,6 +52,18 @@ impl Message {
         Self {
             role: MessageRole::Assistant,
             content: content.to_string(),
+            reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }
+    }
+
+    pub fn assistant_with_reasoning(content: &str, reasoning_content: &str) -> Self {
+        Self {
+            role: MessageRole::Assistant,
+            content: content.to_string(),
+            reasoning_content: Some(reasoning_content.to_string()),
             tool_calls: None,
             tool_call_id: None,
             name: None,
@@ -55,6 +74,21 @@ impl Message {
         Self {
             role: MessageRole::Assistant,
             content: String::new(),
+            reasoning_content: None,
+            tool_calls: Some(tool_calls),
+            tool_call_id: None,
+            name: None,
+        }
+    }
+
+    pub fn assistant_with_tools_and_reasoning(
+        tool_calls: Vec<ToolCall>,
+        reasoning_content: &str,
+    ) -> Self {
+        Self {
+            role: MessageRole::Assistant,
+            content: String::new(),
+            reasoning_content: Some(reasoning_content.to_string()),
             tool_calls: Some(tool_calls),
             tool_call_id: None,
             name: None,
@@ -69,6 +103,7 @@ impl Message {
         Self {
             role: MessageRole::Tool,
             content: bound_tool_result(content),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: Some(tool_call_id.to_string()),
             name: Some(name.to_string()),
@@ -161,6 +196,10 @@ pub struct ToolCall {
 pub struct AiResponse {
     /// Text content (None when the model issues a tool call instead).
     pub content: Option<String>,
+    /// Reasoning content emitted by DeepSeek-style reasoning models; must be
+    /// echoed back in the next request when it is non-empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
     /// Tool calls requested by the model (None when returning text).
     pub tool_calls: Option<Vec<ToolCall>>,
     /// Token usage for this call.

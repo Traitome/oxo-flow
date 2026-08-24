@@ -52,7 +52,13 @@ pub async fn process_chat(
     let ai_response = provider
         .chat(&system_prompt, &user_prompt)
         .await
-        .map_err(|e| format!("AI generation failed: {e}"))?;
+        .map_err(|e| {
+            tracing::warn!("AI provider {} request failed: {e}", provider.name());
+            format!(
+                "AI provider request failed for {}: please check the provider configuration and network connectivity",
+                provider.name()
+            )
+        })?;
 
     // Phase 4: Extract TOML and validate
     let toml_content =

@@ -143,18 +143,36 @@ fn generate_token() -> String {
     Uuid::new_v4().to_string()
 }
 
+/// Run a CPU-heavy bcrypt operation off the async worker thread.
+///
+/// The handlers call the bcrypt helpers synchronously (match guards,
+/// `Option::map`), so the offload has to happen inside the sync API:
+/// `block_in_place` tells the multi-threaded runtime this worker is about to
+/// block so it can move other tasks elsewhere. On a current-thread runtime
+/// (unit tests) there is no worker to protect — run inline.
+fn blocking_crypto<T>(op: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(op)
+        }
+        _ => op(),
+    }
+}
+
 /// Hash a password for storage (bcrypt, default cost).
 ///
 /// DB-created accounts (POST /api/users) store this hash in
 /// `users.password_hash`; env-var credentials are unaffected.
 pub fn hash_password(password: &str) -> Result<String, String> {
-    bcrypt::hash(password, bcrypt::DEFAULT_COST)
-        .map_err(|e| format!("Failed to hash password: {e}"))
+    blocking_crypto(|| {
+        bcrypt::hash(password, bcrypt::DEFAULT_COST)
+            .map_err(|e| format!("Failed to hash password: {e}"))
+    })
 }
 
 /// Verify a password against a stored bcrypt hash.
 pub fn verify_db_password(password: &str, hash: &str) -> bool {
-    bcrypt::verify(password, hash).unwrap_or(false)
+    blocking_crypto(|| bcrypt::verify(password, hash).unwrap_or(false))
 }
 
 /// Build a login response for a DB-verified account (role from the users
@@ -380,5 +398,21 @@ mod tests {
         let status = license_status();
         assert!(status.valid);
         assert_eq!(status.license_type, Some("academic".into()));
+    }
+
+    #[tokio::test]
+    async fn test_bcrypt_roundtrip_current_thread_runtime() {
+        // Exercises the inline path (no multi-thread runtime to protect).
+        let hash = hash_password("s3cret").expect("hash succeeds");
+        assert!(verify_db_password("s3cret", &hash));
+        assert!(!verify_db_password("wrong", &hash));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_bcrypt_roundtrip_multi_thread_runtime() {
+        // Exercises the block_in_place offload path used by the real server.
+        let hash = hash_password("s3cret").expect("hash succeeds");
+        assert!(verify_db_password("s3cret", &hash));
+        assert!(!verify_db_password("wrong", &hash));
     }
 }

@@ -66,13 +66,15 @@ pub async fn provider_for(user_id: &str) -> AiProvider {
         if let Some((provider_kind, api_url, model, api_key)) = row
             && provider_kind != "disabled"
         {
-            let kind: ProviderKind = provider_kind.parse().unwrap_or(ProviderKind::OpenAi);
-            resolved = Some(create_provider(
-                kind,
-                Some(api_key.unwrap_or_default()),
-                api_url,
-                model,
-            ));
+            let key = api_key.unwrap_or_default();
+            // A per-user row without a key is not a usable configuration.
+            // Fall back to the shared runtime so the user gets the global
+            // provider (or Noop if none is configured) instead of a provider
+            // carrying an empty key that fails with a cryptic builder error.
+            if !key.trim().is_empty() {
+                let kind: ProviderKind = provider_kind.parse().unwrap_or(ProviderKind::OpenAi);
+                resolved = Some(create_provider(kind, Some(key), api_url, model));
+            }
         }
     }
 
@@ -112,11 +114,31 @@ impl AiProviderRegistry {
     pub fn get_config(&self) -> ProviderConfig {
         oxo_flow_ai::AI
             .config()
-            .map(|c| ProviderConfig {
-                provider: format!("{:?}", c.provider).to_lowercase(),
-                api_url: c.api_url,
-                model: c.model,
-                is_configured: c.enabled,
+            .map(|c| {
+                let provider = format!("{:?}", c.provider).to_lowercase();
+                let active_provider = oxo_flow_ai::AI.provider();
+                let is_configured = match active_provider {
+                    // Test/scripted providers are always considered configured;
+                    // they do not need a real API key.
+                    Ok(AiProvider::Scripted(_)) => true,
+                    Ok(AiProvider::Noop) => false,
+                    Ok(_) if provider == "ollama" => {
+                        // Ollama is local and needs no key, but a reachable URL
+                        // must be configured (the backend default is localhost).
+                        c.enabled && c.api_url.is_some()
+                    }
+                    Ok(_) => {
+                        // API-key providers require a non-empty key to be usable.
+                        c.enabled && c.api_key.as_ref().is_some_and(|k| !k.trim().is_empty())
+                    }
+                    Err(_) => false,
+                };
+                ProviderConfig {
+                    provider,
+                    api_url: c.api_url,
+                    model: c.model,
+                    is_configured,
+                }
             })
             .unwrap_or(ProviderConfig {
                 provider: "disabled".to_string(),

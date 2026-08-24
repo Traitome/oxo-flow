@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Plus, Search } from 'lucide-react';
 import { api } from '../api/client';
 import type { KnowledgeTool } from '../api/types';
+import { useI18n } from '../context/I18n';
 
 export interface ToolPaletteProps {
   /** Called when the user picks a tool to add as a new rule. */
@@ -11,6 +12,7 @@ export interface ToolPaletteProps {
 const DEBOUNCE_MS = 300;
 
 export default function ToolPalette({ onAddTool }: ToolPaletteProps) {
+  const { t } = useI18n();
   const [query, setQuery] = useState('');
   const [tools, setTools] = useState<KnowledgeTool[]>([]);
   const [total, setTotal] = useState<number | null>(null);
@@ -31,7 +33,7 @@ export default function ToolPalette({ onAddTool }: ToolPaletteProps) {
         setTools(res.tools);
         setTotal(res.total);
       } catch (e: unknown) {
-        setError(e instanceof Error ? e.message : 'Search failed');
+        setError(e instanceof Error ? e.message : t('toolPalette.error'));
         setTools([]);
         setTotal(null);
       } finally {
@@ -53,7 +55,7 @@ export default function ToolPalette({ onAddTool }: ToolPaletteProps) {
   return (
     <div className="tool-palette">
       <div className="tool-palette-head">
-        <span className="tool-palette-title">Tool palette</span>
+        <span className="tool-palette-title">{t('toolPalette.title')}</span>
         {total !== null && <span className="tool-palette-total">{total.toLocaleString()} tools</span>}
       </div>
       <div className="tool-palette-search">
@@ -61,17 +63,16 @@ export default function ToolPalette({ onAddTool }: ToolPaletteProps) {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search Bioconda tools (e.g. fastp)"
-          aria-label="Search Bioconda tools"
+          placeholder={t('toolPalette.searchPlaceholder')}
+          aria-label={t('toolPalette.searchAria')}
         />
       </div>
       <div className="tool-palette-results">
-        {loading && <div className="tool-palette-hint">Searching…</div>}
+        {loading && <div className="tool-palette-hint">{t('toolPalette.loading')}</div>}
         {!loading && error && <div className="tool-palette-hint error">{error}</div>}
         {effectiveQuery === '' && (
           <div className="tool-palette-hint">
-            Search to add a real tool as a rule. Each result carries its Bioconda name and version — no
-            stub commands.
+            {t('toolPalette.hint')}
           </div>
         )}
         {effectiveQuery !== '' &&
@@ -79,7 +80,7 @@ export default function ToolPalette({ onAddTool }: ToolPaletteProps) {
           !error &&
           tools.length === 0 && (
             <div className="tool-palette-hint">
-              No tools match “{effectiveQuery}”. Try a tool name like fastp, bwa, or star.
+              {t('toolPalette.empty').replace('{{query}}', effectiveQuery)}
             </div>
           )}
         {effectiveQuery !== '' &&
@@ -93,7 +94,7 @@ export default function ToolPalette({ onAddTool }: ToolPaletteProps) {
                 <button
                   className="btn-sm tool-palette-add"
                   onClick={() => handleAdd(tool)}
-                  title={`Add ${tool.name} as a rule`}
+                  title={t('toolPalette.addTitle').replace('{{tool}}', tool.name)}
                 >
                   <Plus size={12} />
                 </button>

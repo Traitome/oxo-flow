@@ -19,13 +19,21 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::OnceLock;
 use tokio::sync::broadcast;
-use tokio_stream::StreamExt as _;
+
+/// One broadcast event: the owning user id (`None` = system-wide) travels
+/// alongside the pre-serialized JSON payload, so subscribers filter by a
+/// plain string compare instead of re-parsing every message.
+#[derive(Debug, Clone)]
+pub struct SseEvent {
+    pub user: Option<String>,
+    pub payload: String,
+}
 
 /// Broadcast channel for Server-Sent Events (SSE).
-static EVENT_TX: OnceLock<broadcast::Sender<String>> = OnceLock::new();
+static EVENT_TX: OnceLock<broadcast::Sender<SseEvent>> = OnceLock::new();
 
 /// Get or initialize the broadcast channel sender.
-pub fn event_tx() -> broadcast::Sender<String> {
+pub fn event_tx() -> broadcast::Sender<SseEvent> {
     EVENT_TX
         .get_or_init(|| {
             let (tx, _rx) = broadcast::channel(100);
@@ -51,14 +59,17 @@ pub fn broadcast_event_for(event_type: &str, data: &Value, user: Option<&str>) {
         Some(u) => serde_json::to_string(u).unwrap_or_else(|_| "null".to_string()),
         None => "null".to_string(),
     };
-    let msg = format!(
+    let payload = format!(
         r#"{{"type":"{}","time":"{}","user":{},"data":{}}}"#,
         event_type,
         Utc::now().to_rfc3339(),
         user_json,
         serde_json::to_string(data).unwrap_or_else(|_| "{}".to_string())
     );
-    let _ = event_tx().send(msg);
+    let _ = event_tx().send(SseEvent {
+        user: user.map(String::from),
+        payload,
+    });
 }
 
 /// Validate a `?token=` session token; returns the acting user on success.
@@ -150,27 +161,31 @@ pub async fn sse_events(Query(params): Query<HashMap<String, String>>) -> Respon
 
     // Stream that yields events from the broadcast channel, filtered by
     // ownership: userless events reach everyone; user-scoped events reach
-    // their owner and admins only.
+    // their owner and admins only. The owner id travels beside the payload,
+    // so the filter is a string compare — no per-subscriber JSON re-parse.
     let event_stream = async_stream::stream! {
         loop {
             match rx.recv().await {
-                Ok(msg) => {
+                Ok(event) => {
                     if let Some(me) = &me {
-                        let user_ok = serde_json::from_str::<serde_json::Value>(&msg)
-                            .map(|v| {
-                                let u = v.get("user").and_then(|u| u.as_str());
-                                u.is_none() || u == Some(me.id.as_str()) || me.is_admin()
-                            })
-                            .unwrap_or(false);
+                        let user_ok = event.user.is_none()
+                            || event.user.as_deref() == Some(me.id.as_str())
+                            || me.is_admin();
                         if !user_ok {
                             continue;
                         }
                     }
-                    yield Ok::<_, Infallible>(Event::default().data(msg));
+                    yield Ok::<_, Infallible>(Event::default().data(event.payload));
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => {
-                    // Skip lagged messages
-                    continue;
+                Err(broadcast::error::RecvError::Lagged(missed)) => {
+                    // The client fell behind the 100-slot ring buffer and
+                    // silently lost events. Emit a synthetic marker so the
+                    // frontend can refetch/invalidate instead of missing
+                    // run state transitions.
+                    yield Ok::<_, Infallible>(Event::default().data(format!(
+                        r#"{{"type":"lagged","time":"{}","data":{{"missed":{missed}}}}}"#,
+                        Utc::now().to_rfc3339()
+                    )));
                 }
                 Err(broadcast::error::RecvError::Closed) => {
                     break;
@@ -179,26 +194,44 @@ pub async fn sse_events(Query(params): Query<HashMap<String, String>>) -> Respon
         }
     };
 
-    // Heartbeat stream every 5 seconds
-    let heartbeat_stream = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(
-        std::time::Duration::from_secs(5),
-    ))
-    .map(|_| {
-        let msg = format!(
-            r#"{{"type":"heartbeat","time":"{}"}}"#,
-            Utc::now().to_rfc3339()
-        );
-        Ok::<_, Infallible>(Event::default().data(msg))
-    });
-
-    // Merge the streams
-    let stream = tokio_stream::StreamExt::merge(event_stream, heartbeat_stream);
-
-    Sse::new(stream)
+    // Keepalive comes from axum's KeepAlive alone (15s comment ping) — a
+    // second merged heartbeat stream would double the traffic.
+    Sse::new(event_stream)
         .keep_alive(
             KeepAlive::new()
                 .interval(std::time::Duration::from_secs(15))
                 .text("ping"),
         )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn broadcast_carries_owner_alongside_payload() {
+        let mut rx = event_tx().subscribe();
+        broadcast_event_for(
+            "run_started",
+            &serde_json::json!({"run_id": "r1"}),
+            Some("alice"),
+        );
+        let event = rx.recv().await.expect("event arrives");
+        assert_eq!(event.user.as_deref(), Some("alice"));
+        let payload: serde_json::Value = serde_json::from_str(&event.payload).unwrap();
+        assert_eq!(payload["type"], "run_started");
+        assert_eq!(payload["user"], "alice");
+        assert_eq!(payload["data"]["run_id"], "r1");
+    }
+
+    #[tokio::test]
+    async fn broadcast_system_event_has_no_owner() {
+        let mut rx = event_tx().subscribe();
+        broadcast_event("engine_ready", &serde_json::json!({}));
+        let event = rx.recv().await.expect("event arrives");
+        assert!(event.user.is_none());
+        let payload: serde_json::Value = serde_json::from_str(&event.payload).unwrap();
+        assert!(payload["user"].is_null());
+    }
 }

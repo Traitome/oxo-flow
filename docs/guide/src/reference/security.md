@@ -83,7 +83,7 @@ The web server applies per-IP rate limiting across all API endpoints:
 |---------|---------|
 | Max requests | 100 per window |
 | Window duration | 60 seconds |
-| Response | HTTP 429 with `retry_after_secs` |
+| Response | HTTP 429 with structured error body (`code: "RATE_LIMITED"`) and `Retry-After` header |
 
 Rate limiting is active in all deployment modes (personal, team, hpc).
 

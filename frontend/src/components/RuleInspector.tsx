@@ -1,5 +1,7 @@
 import { useCallback, useState } from 'react';
 import { Save, X } from 'lucide-react';
+import Modal from './Modal';
+import { useI18n } from '../context/I18n';
 
 /** The fields the inspector edits; everything else stays in the TOML pane. */
 interface RuleFormState {
@@ -118,6 +120,7 @@ type StringFieldKey = {
 }[keyof RuleFormState];
 
 export default function RuleInspector({ ruleName, rule, onSave, onClose }: RuleInspectorProps) {
+  const { t } = useI18n();
   // The inspector remounts per rule via the `key` prop on the parent, so the
   // form initializes from props once — no effect-sync needed.
   const [form, setForm] = useState<RuleFormState>(() =>
@@ -196,15 +199,15 @@ export default function RuleInspector({ ruleName, rule, onSave, onClose }: RuleI
           <input
             value={item}
             onChange={(e) => setListItem(key, i, e.target.value)}
-            placeholder={key === 'input' ? 'input path (wildcards ok)' : 'output path (wildcards ok)'}
+            placeholder={key === 'input' ? t('inspector.inputPlaceholder') : t('inspector.outputPlaceholder')}
           />
-          <button type="button" className="btn-sm" onClick={() => removeListItem(key, i)} title="Remove">
+          <button type="button" className="btn-sm" onClick={() => removeListItem(key, i)} title={t('inspector.remove')}>
             <X size={12} />
           </button>
         </div>
       ))}
       <button type="button" className="btn-sm" onClick={() => addListItem(key)}>
-        + Add {key}
+        {key === 'input' ? t('inspector.addInput') : t('inspector.addOutput')}
       </button>
     </div>
   );
@@ -227,135 +230,127 @@ export default function RuleInspector({ ruleName, rule, onSave, onClose }: RuleI
   );
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div
-        className="modal-dialog inspector-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="rule-inspector-title"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="inspector-header">
-          <h3 id="rule-inspector-title">Rule: {form.name}</h3>
-          <button className="btn-sm" onClick={onClose} title="Close">
-            <X size={14} />
-          </button>
-        </div>
+    <Modal onClose={onClose} labelledBy="rule-inspector-title" className="inspector-dialog">
+      <div className="inspector-header">
+        <h3 id="rule-inspector-title">{t('inspector.title').replace('{{name}}', form.name)}</h3>
+        <button className="btn-sm" onClick={onClose} title={t('inspector.close')} aria-label={t('inspector.close')}>
+          <X size={14} />
+        </button>
+      </div>
 
-        <div className="inspector-body">
-          {textInput('Description', 'description', 'Human-readable description')}
+      <div className="inspector-body">
+        {textInput(t('inspector.description'), 'description', t('inspector.descriptionPlaceholder'))}
+        <label className="inspector-field">
+          <span>{t('inspector.shell')}</span>
+          <textarea
+            className="inspector-shell"
+            value={form.shell}
+            onChange={(e) => set('shell', e.target.value)}
+            placeholder={t('inspector.shellPlaceholder')}
+            rows={3}
+          />
+        </label>
+        {textInput(t('inspector.script'), 'script', t('inspector.scriptPlaceholder'))}
+
+        <div className="inspector-section">{t('inspector.inputs')}</div>
+        {stringList('input')}
+        <div className="inspector-section">{t('inspector.outputs')}</div>
+        {stringList('output')}
+
+        <div className="inspector-grid">
           <label className="inspector-field">
-            <span>Shell command</span>
-            <textarea
-              className="inspector-shell"
-              value={form.shell}
-              onChange={(e) => set('shell', e.target.value)}
-              placeholder="fastp --in1 {input[0]} --out1 {output[0]}"
-              rows={3}
-            />
+            <span>{t('inspector.environment')}</span>
+            <select value={form.environment} onChange={(e) => set('environment', e.target.value)}>
+              {ENV_BACKENDS.map((b) => (
+                <option key={b} value={b}>
+                  {b}
+                </option>
+              ))}
+            </select>
           </label>
-          {textInput('Script (optional)', 'script', 'scripts/analyze.py')}
-
-          <div className="inspector-section">Inputs</div>
-          {stringList('input')}
-          <div className="inspector-section">Outputs</div>
-          {stringList('output')}
-
-          <div className="inspector-grid">
-            <label className="inspector-field">
-              <span>Environment</span>
-              <select value={form.environment} onChange={(e) => set('environment', e.target.value)}>
-                {ENV_BACKENDS.map((b) => (
-                  <option key={b} value={b}>
-                    {b}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {textInput('Environment spec', 'environmentSpec', 'envs/tools.yaml or biocontainers/x:y')}
-          </div>
-
-          <div className="inspector-section">Resources</div>
-          <div className="inspector-grid">
-            {textInput('Threads', 'threads', '8', 'number')}
-            {textInput('Memory', 'memory', '16G')}
-            {textInput('GPU', 'gpu', '1', 'number')}
-            {textInput('Disk', 'disk', '200G')}
-            {textInput('Time limit', 'timeLimit', '48h')}
-          </div>
-
-          <div className="inspector-section">Environment variables</div>
-          {form.envvars.map((ev, i) => (
-            <div className="inspector-list-row" key={i}>
-              <input
-                placeholder="NAME"
-                value={ev.key}
-                onChange={(e) =>
-                  setForm((prev) => {
-                    const next = [...prev.envvars];
-                    next[i] = { ...next[i], key: e.target.value };
-                    return { ...prev, envvars: next };
-                  })
-                }
-              />
-              <input
-                placeholder="value"
-                value={ev.value}
-                onChange={(e) =>
-                  setForm((prev) => {
-                    const next = [...prev.envvars];
-                    next[i] = { ...next[i], value: e.target.value };
-                    return { ...prev, envvars: next };
-                  })
-                }
-              />
-              <button
-                type="button"
-                className="btn-sm"
-                onClick={() => setForm((prev) => ({ ...prev, envvars: prev.envvars.filter((_, j) => j !== i) }))}
-                title="Remove"
-              >
-                <X size={12} />
-              </button>
-            </div>
-          ))}
-          <button
-            type="button"
-            className="btn-sm"
-            onClick={() => setForm((prev) => ({ ...prev, envvars: [...prev.envvars, { key: '', value: '' }] }))}
-          >
-            + Add variable
-          </button>
-
-          <div className="inspector-grid">
-            {textInput('Condition (when)', 'when', 'config.run_qc')}
-            {textInput('Retries', 'retries', '0', 'number')}
-            {textInput('Tags', 'tags', 'qc, alignment')}
-            {textInput('Log file', 'log', 'logs/{sample}.log')}
-            {textInput('Benchmark file', 'benchmark', 'benchmarks/{sample}.tsv')}
-          </div>
-
-          <div className="inspector-grid">
-            <label className="inspector-check">
-              <input type="checkbox" checked={form.optional} onChange={(e) => set('optional', e.target.checked)} />
-              <span>Optional (skip when inputs are missing)</span>
-            </label>
-            <label className="inspector-check">
-              <input type="checkbox" checked={form.required} onChange={(e) => set('required', e.target.checked)} />
-              <span>Required (failure stops the pipeline)</span>
-            </label>
-          </div>
+          {textInput(t('inspector.environmentSpec'), 'environmentSpec', t('inspector.environmentSpecPlaceholder'))}
         </div>
 
-        <div className="modal-actions">
-          <button className="btn-sm" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="btn-run" onClick={handleSave}>
-            <Save size={14} /> Apply changes
-          </button>
+        <div className="inspector-section">{t('inspector.resources')}</div>
+        <div className="inspector-grid">
+          {textInput(t('inspector.threads'), 'threads', t('inspector.threadsPlaceholder'), 'number')}
+          {textInput(t('inspector.memory'), 'memory', t('inspector.memoryPlaceholder'))}
+          {textInput(t('inspector.gpu'), 'gpu', t('inspector.gpuPlaceholder'), 'number')}
+          {textInput(t('inspector.disk'), 'disk', t('inspector.diskPlaceholder'))}
+          {textInput(t('inspector.timeLimit'), 'timeLimit', t('inspector.timeLimitPlaceholder'))}
+        </div>
+
+        <div className="inspector-section">{t('inspector.envvars')}</div>
+        {form.envvars.map((ev, i) => (
+          <div className="inspector-list-row" key={i}>
+            <input
+              placeholder={t('inspector.envvarNamePlaceholder')}
+              value={ev.key}
+              onChange={(e) =>
+                setForm((prev) => {
+                  const next = [...prev.envvars];
+                  next[i] = { ...next[i], key: e.target.value };
+                  return { ...prev, envvars: next };
+                })
+              }
+            />
+            <input
+              placeholder={t('inspector.envvarValuePlaceholder')}
+              value={ev.value}
+              onChange={(e) =>
+                setForm((prev) => {
+                  const next = [...prev.envvars];
+                  next[i] = { ...next[i], value: e.target.value };
+                  return { ...prev, envvars: next };
+                })
+              }
+            />
+            <button
+              type="button"
+              className="btn-sm"
+              onClick={() => setForm((prev) => ({ ...prev, envvars: prev.envvars.filter((_, j) => j !== i) }))}
+              title={t('inspector.remove')}
+            >
+              <X size={12} />
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="btn-sm"
+          onClick={() => setForm((prev) => ({ ...prev, envvars: [...prev.envvars, { key: '', value: '' }] }))}
+        >
+          {t('inspector.addVariable')}
+        </button>
+
+        <div className="inspector-grid">
+          {textInput(t('inspector.condition'), 'when', t('inspector.conditionPlaceholder'))}
+          {textInput(t('inspector.retries'), 'retries', t('inspector.retriesPlaceholder'), 'number')}
+          {textInput(t('inspector.tags'), 'tags', t('inspector.tagsPlaceholder'))}
+          {textInput(t('inspector.log'), 'log', t('inspector.logPlaceholder'))}
+          {textInput(t('inspector.benchmark'), 'benchmark', t('inspector.benchmarkPlaceholder'))}
+        </div>
+
+        <div className="inspector-grid">
+          <label className="inspector-check">
+            <input type="checkbox" checked={form.optional} onChange={(e) => set('optional', e.target.checked)} />
+            <span>{t('inspector.optional')}</span>
+          </label>
+          <label className="inspector-check">
+            <input type="checkbox" checked={form.required} onChange={(e) => set('required', e.target.checked)} />
+            <span>{t('inspector.required')}</span>
+          </label>
         </div>
       </div>
-    </div>
+
+      <div className="modal-actions">
+        <button className="btn-sm" onClick={onClose}>
+          {t('inspector.cancel')}
+        </button>
+        <button className="btn-run" onClick={handleSave}>
+          <Save size={14} /> {t('inspector.apply')}
+        </button>
+      </div>
+    </Modal>
   );
 }

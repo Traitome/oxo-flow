@@ -4,11 +4,23 @@
 //! Suitable for reuse from handlers, CLI commands, or tests without
 //! coupling to axum or any web framework.
 
+use std::sync::OnceLock;
+use std::time::Instant;
+
 use crate::domains::observability::types::*;
+
+/// Process start time, initialized on the first observability call so the
+/// uptime reported by `/api/health` and `/api/system` is meaningful even if
+/// the server startup path does not explicitly seed it.
+static START_TIME: OnceLock<Instant> = OnceLock::new();
+
+fn uptime_secs() -> u64 {
+    START_TIME.get_or_init(Instant::now).elapsed().as_secs()
+}
 
 /// Build health check response with component status.
 pub fn health_check(mode: &str, db_healthy: bool) -> HealthResponse {
-    let uptime = std::time::Instant::now().elapsed().as_secs(); // approximation
+    let uptime = uptime_secs();
 
     HealthResponse {
         status: if db_healthy {
@@ -70,7 +82,7 @@ pub fn system_info() -> SystemInfoResponse {
         os: std::env::consts::OS.into(),
         arch: std::env::consts::ARCH.into(),
         pid: std::process::id(),
-        uptime_secs: 0,
+        uptime_secs: uptime_secs(),
     }
 }
 

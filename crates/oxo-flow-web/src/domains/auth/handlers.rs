@@ -296,6 +296,7 @@ pub async fn auth_me(headers: axum::http::HeaderMap) -> ApiResult<AuthMeResponse
     get,
     path = "/api/users",
     tag = "auth",
+    security(("bearerAuth" = [])),
     responses(
         (status = 200, description = "Success", body = Vec<UserResponse>),
         (status = 403, description = "Error", body = ApiError),
@@ -337,6 +338,7 @@ pub async fn list_users(headers: axum::http::HeaderMap) -> ApiResult<Vec<UserRes
     post,
     path = "/api/users",
     tag = "auth",
+    security(("bearerAuth" = [])),
     responses(
         (status = 200, description = "Success", body = UserResponse),
         (status = 403, description = "Error", body = ApiError),

@@ -1,23 +1,28 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, Loader2, Check, Wrench } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
 import { usePipelineSession, type ChatContextType, type ChatMessage, type ChatAction } from '../context/PipelineSession';
 import { useServerVersion } from '../api/version';
-import { api } from '../api/client';
-import { useNavigate } from 'react-router-dom';
+import { api, ApiError } from '../api/client';
+import { useI18n } from '../context/I18n';
 
-const CONTEXT_LABELS: Record<ChatContextType, string> = {
-  dashboard: 'Pipeline Generation',
-  editor: 'Pipeline Refinement',
-  monitor: 'Run Diagnosis',
-  report: 'Results Interpretation',
-};
+function useContextLabels(t: (key: string) => string): Record<ChatContextType, string> {
+  return {
+    dashboard: t('chat.context.dashboard'),
+    editor: t('chat.context.editor'),
+    monitor: t('chat.context.monitor'),
+    report: t('chat.context.report'),
+  };
+}
 
-const PLACEHOLDERS: Record<ChatContextType, string> = {
-  dashboard: 'Describe your analysis and I\'ll generate a pipeline. Try: "RNA-seq paired-end, hg38, STAR + featureCounts"',
-  editor: 'Ask me to refine this pipeline — add rules, change parameters, or fix validation issues.',
-  monitor: 'Ask me about the running pipeline — status, errors, or predictions.',
-  report: 'Ask me about the results — findings, comparisons, or next steps.',
-};
+function usePlaceholders(t: (key: string) => string): Record<ChatContextType, string> {
+  return {
+    dashboard: t('chat.placeholder.dashboard'),
+    editor: t('chat.placeholder.editor'),
+    monitor: t('chat.placeholder.monitor'),
+    report: t('chat.placeholder.report'),
+  };
+}
 
 interface ChatUIProps {
   context?: ChatContextType;
@@ -29,10 +34,14 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
   const session = usePipelineSession();
   const version = useServerVersion();
   const navigate = useNavigate();
+  const { t } = useI18n();
+  const contextLabels = useContextLabels(t);
+  const placeholders = usePlaceholders(t);
   const [messages, setMessages] = useState<ChatMessage[]>(() => session.state.chatMessages[context] || []);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [agents, setAgents] = useState<Record<string, string>>({});
+  const [aiConfigured, setAiConfigured] = useState(true);
   const chatRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -45,6 +54,12 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
   useEffect(() => {
     session.setChatContext(context);
   }, [context]);
+
+  // Detect whether the server has a working AI provider so we can surface a
+  // friendly fallback instead of a raw env-var error.
+  useEffect(() => {
+    api.aiConfig().then((c) => setAiConfigured(c.is_configured)).catch(() => setAiConfigured(false));
+  }, []);
 
   useEffect(() => { chatRef.current?.scrollTo(0, chatRef.current.scrollHeight); }, [messages, agents]);
 
@@ -59,14 +74,12 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
 
     // Add assistant placeholder
     const assistantId = crypto.randomUUID();
-    setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: '', agentStatus: 'Thinking...' }]);
+    setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: '', agentStatus: t('chat.thinking') }]);
 
     try {
-      const resp = await fetch('/api/chat/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, context: { intent: context } }),
-      });
+      // Goes through the API client so the base-path prefix and the
+      // Authorization header apply (team/HPC mode, --base-path deploys).
+      const resp = await api.chatSendStream(text, { intent: context });
       if (!resp.body) throw new Error("No response body");
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
@@ -127,12 +140,12 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
         setMessages(prev => prev.map(m =>
           m.id === assistantId ? {
             ...m,
-            content: m.content + `\n\n✅ Pipeline generated!\n\n\`\`\`toml\n${tomlPreview}\n...\n\`\`\``,
+            content: m.content + `\n\n✅ ${t('chat.generated')}\n\n\`\`\`toml\n${tomlPreview}\n...\n\`\`\``,
             agentStatus: undefined,
             actions: [
-              { type: 'primary', label: '✅ Accept', action: 'accept', data: finalPipelineData },
-              { type: 'secondary', label: '✏️ Edit', action: 'edit', data: finalPipelineData },
-              { type: 'ghost', label: '🔄 Regenerate', action: 'regenerate' },
+              { type: 'primary', label: `✅ ${t('chat.accept')}`, action: 'accept', data: finalPipelineData },
+              { type: 'secondary', label: `✏️ ${t('chat.edit')}`, action: 'edit', data: finalPipelineData },
+              { type: 'ghost', label: `🔄 ${t('chat.regenerate')}`, action: 'regenerate' },
             ],
           } : m
         ));
@@ -142,6 +155,9 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
       }
       setAgents({});
     } catch (e: unknown) {
+      if (e instanceof ApiError && e.code === 'AI_NOT_CONFIGURED') {
+        setAiConfigured(false);
+      }
       const errMsg = e instanceof Error ? e.message : 'Connection error.';
       setMessages(prev => prev.map(m =>
         m.id === assistantId ? { ...m, content: m.content + `\n❌ ${errMsg}`, agentStatus: undefined } : m
@@ -157,7 +173,7 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
       // backend attached to the pipeline_ready payload.
       const data = action.data as { toml_content?: string; validation?: { valid?: boolean } | null };
       if (data.validation && data.validation.valid === false) {
-        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: '❌ The generated pipeline did not pass validation — use ✏️ Edit to review it in the editor.' }]);
+        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: `❌ ${t('chat.validationFailed')}` }]);
         return;
       }
       try {
@@ -166,10 +182,10 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
         await api.createPipeline({ name, toml_content: toml });
         session.setPipelineToml(toml);
         onPipelineReady?.(action.data);
-        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: `✅ Pipeline "${name}" saved and opened in the editor.` }]);
+        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: `✅ ${t('chat.saved').replace('{{name}}', name)}` }]);
         navigate('/editor');
       } catch (err: unknown) {
-        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: `❌ Save failed: ${err instanceof Error ? err.message : 'unknown error'}` }]);
+        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: `❌ ${t('chat.saveFailed').replace('{{error}}', err instanceof Error ? err.message : 'unknown error')}` }]);
       }
     } else if (action.action === 'regenerate') {
       sendMessage();
@@ -179,35 +195,51 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
   };
 
   return (
-    <div className="chat-container" style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--color-bg)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
+    <div className="chat-container">
       {/* Header */}
-      <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--color-border)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+      <div className="chat-header">
         <Bot size={18} color="var(--color-primary)" />
-        <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>AI Companion</span>
-        <span style={{ fontSize: '0.65rem', color: 'var(--color-primary)', background: 'var(--color-primary-light)', padding: '1px 6px', borderRadius: '3px', fontWeight: 500 }}>{CONTEXT_LABELS[context]}</span>
-        <span style={{ fontSize: '0.7rem', color: 'var(--color-text-tertiary)', marginLeft: 'auto' }}>{version ? `v${version}` : ''}</span>
+        <span className="chat-title">{t('chat.title')}</span>
+        <span className="chat-context-tag">{contextLabels[context]}</span>
+        <span className="chat-version">{version ? `v${version}` : ''}</span>
       </div>
 
       {/* Messages */}
-      <div ref={chatRef} aria-live="polite" aria-label="Chat messages" style={{ flex: 1, overflow: 'auto', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        {messages.length === 0 && (
-          <div style={{ textAlign: 'center', color: 'var(--color-text-tertiary)', padding: '2rem 1rem' }}>
-            <Bot size={32} style={{ marginBottom: '8px', opacity: 0.5 }} />
-            <p style={{ fontSize: '0.9rem', marginBottom: '4px' }}>{PLACEHOLDERS[context]}</p>
+      <div ref={chatRef} aria-live="polite" aria-label={t('chat.messages')} className="chat-messages">
+        {!aiConfigured && (
+          <div className="chat-empty" style={{ textAlign: 'center' }}>
+            <Bot size={32} style={{ opacity: 0.5 }} />
+            <p style={{ fontSize: '0.9rem', maxWidth: 360, margin: '0 auto 1rem' }}>
+              {t('chat.disabled.message')}
+            </p>
+            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+              <Link to="/pipelines" className="btn-run" style={{ textDecoration: 'none' }}>
+                {t('chat.disabled.templates')}
+              </Link>
+              <Link to="/editor" className="btn-sm" style={{ textDecoration: 'none' }}>
+                {t('chat.disabled.editor')}
+              </Link>
+            </div>
+          </div>
+        )}
+        {messages.length === 0 && aiConfigured && (
+          <div className="chat-empty">
+            <Bot size={32} style={{ opacity: 0.5 }} />
+            <p style={{ fontSize: '0.9rem' }}>{placeholders[context]}</p>
           </div>
         )}
 
         {messages.map(msg => (
-          <div key={msg.id} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
-            <div style={{ width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, background: msg.role === 'user' ? 'var(--color-primary-light)' : 'var(--color-bg-tertiary)', color: msg.role === 'user' ? 'var(--color-primary)' : 'var(--color-text-secondary)' }}>
+          <div key={msg.id} className="chat-msg">
+            <div className={`chat-avatar${msg.role === 'user' ? ' user' : ''}`}>
               {msg.role === 'user' ? <User size={14} /> : msg.role === 'system' ? <Check size={14} /> : <Bot size={14} />}
             </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--color-text-secondary)', marginBottom: '2px' }}>
-                {msg.role === 'user' ? 'You' : msg.role === 'system' ? 'System' : 'AI'}
+            <div className="chat-msg-body">
+              <div className="chat-msg-author">
+                {msg.role === 'user' ? t('chat.user') : msg.role === 'system' ? t('chat.system') : t('chat.ai')}
               </div>
               {msg.agentStatus && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 0', color: 'var(--color-text-secondary)', fontSize: '0.8rem' }}>
+                <div className="chat-status">
                   <Loader2 size={12} className="spin" /> {msg.agentStatus}
                 </div>
               )}
@@ -233,17 +265,16 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
                 </div>
               )}
               {msg.content && (
-                <div style={{ fontSize: '0.85rem', lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.content}</div>
+                <div className="chat-content">{msg.content}</div>
               )}
               {/* Action buttons */}
               {msg.actions && msg.actions.length > 0 && (
-                <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
+                <div className="chat-actions">
                   {msg.actions.map((act, i) => (
                     <button
                       key={i}
                       onClick={() => handleAction(act)}
-                      className={act.type === 'primary' ? 'btn-run' : act.type === 'secondary' ? 'btn-sm' : 'btn-sm'}
-                      style={act.type === 'primary' ? {} : { background: 'transparent', border: '1px solid var(--color-border)' }}
+                      className={act.type === 'primary' ? 'btn-run' : 'btn-sm'}
                     >
                       {act.label}
                     </button>
@@ -256,10 +287,10 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
 
         {/* Agent status bar */}
         {Object.keys(agents).length > 0 && (
-          <div style={{ background: 'var(--color-bg-secondary)', borderRadius: 'var(--radius-sm)', padding: '8px 12px', fontSize: '0.75rem' }}>
+          <div className="chat-agents">
             {Object.entries(agents).map(([agent, status]) => (
-              <div key={agent} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '2px 0' }}>
-                <div style={{ width: 6, height: 6, borderRadius: '50%', background: status === 'done' ? 'var(--color-success)' : 'var(--color-primary)', animation: status !== 'done' ? 'pulse 1.5s infinite' : 'none' }} />
+              <div key={agent} className="chat-agent-row">
+                <div className="chat-agent-dot" style={{ background: status === 'done' ? 'var(--color-success)' : 'var(--color-primary)', animation: status !== 'done' ? 'pulse 1.5s infinite' : 'none' }} />
                 <span style={{ fontWeight: 500 }}>{agent}</span>
                 <span style={{ color: 'var(--color-text-tertiary)' }}>{status}</span>
               </div>
@@ -269,19 +300,19 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
       </div>
 
       {/* Input */}
-      <div style={{ padding: '12px 16px', borderTop: '1px solid var(--color-border)', display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
+      <div className="chat-input-row">
         <textarea
           ref={inputRef}
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }}}
-          placeholder="Describe your analysis... (Shift+Enter for newline)"
-          disabled={loading}
+          placeholder={aiConfigured ? t('chat.inputPlaceholder') : t('chat.disabled.message')}
+          disabled={loading || !aiConfigured}
           rows={2}
-          className="intent-input"
-          style={{ flex: 1 }}
+          className="search-input intent-input"
+          style={{ flex: 1, minWidth: 0 }}
         />
-        <button onClick={sendMessage} disabled={loading || !input.trim()} className="btn-run" aria-label="Send message" style={{ width: 40, height: 40, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <button onClick={sendMessage} disabled={loading || !input.trim()} className="btn-run chat-send" aria-label={t('chat.send')}>
           {loading ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
         </button>
       </div>

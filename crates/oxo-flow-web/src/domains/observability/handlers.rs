@@ -86,15 +86,14 @@ pub async fn system_info() -> ApiResult<SystemInfoResponse> {
 )]
 /// GET /api/metrics
 pub async fn runtime_metrics() -> ApiResult<RuntimeMetricsResponse> {
-    // Collect real system metrics via sysinfo
-    let mut sys = sysinfo::System::new_all();
-    sys.refresh_all();
-
-    let total_memory_mb = sys.total_memory() / 1024;
-    let used_memory_mb = sys.used_memory() / 1024;
-    let total_swap_mb = sys.total_swap() / 1024;
-    let used_swap_mb = sys.used_swap() / 1024;
-    let cpu_usage = sys.global_cpu_usage();
+    // Real system metrics from the crate-wide shared sysinfo handle
+    // (crate::sys): a persistent System with targeted CPU/memory refreshes.
+    // A fresh System::new_all() + refresh_all() per request both blocks the
+    // worker on a full process-table scan and reports a meaningless
+    // global_cpu_usage() — CPU deltas need two refreshes of the SAME
+    // System, spaced apart. The response includes no per-process data, so
+    // no process refresh is needed here.
+    let host = crate::sys::get_host_resources();
 
     // Count active runs from DB
     let (active_workflows, total_requests) = if let Ok(pool) = get_pool() {
@@ -124,11 +123,11 @@ pub async fn runtime_metrics() -> ApiResult<RuntimeMetricsResponse> {
         total_requests,
         active_workflows,
         host: HostResources {
-            cpu_usage_percent: cpu_usage as f64,
-            total_memory_mb,
-            used_memory_mb,
-            total_swap_mb,
-            used_swap_mb,
+            cpu_usage_percent: host.cpu_usage_percent as f64,
+            total_memory_mb: host.total_memory_mb,
+            used_memory_mb: host.used_memory_mb,
+            total_swap_mb: host.total_swap_mb,
+            used_swap_mb: host.used_swap_mb,
         },
     }))
 }
@@ -211,16 +210,48 @@ pub async fn quota_status(
 }
 
 #[utoipa::path(
+    put,
+    path = "/api/quota",
+    tag = "observability",
+    request_body = crate::infra::quota::QuotaConfig,
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+        (status = 403, description = "Forbidden", body = ApiError),
+    )
+)]
+/// PUT /api/quota — update resource quota limits (admin only).
+pub async fn update_quota_status(
+    headers: axum::http::HeaderMap,
+    Json(body): Json<crate::infra::quota::QuotaConfig>,
+) -> ApiResult<serde_json::Value> {
+    crate::domains::auth::handlers::require_admin(&headers).await?;
+    crate::infra::quota::global_quota_tracker().update_config(body.clone());
+    Ok(Json(serde_json::json!({
+        "updated": true,
+        "limits": {
+            "max_concurrent_runs": body.max_concurrent_runs,
+            "max_total_threads": body.max_total_threads,
+            "max_total_memory_mb": body.max_total_memory_mb,
+            "max_runs_per_day": body.max_runs_per_day,
+        }
+    })))
+}
+
+#[utoipa::path(
     get,
     path = "/api/audit",
     tag = "observability",
-    params(("days" = Option<u8>, Query, description = "Number of days of audit history to return (default 30)")),
+    params(
+        ("days" = Option<u8>, Query, description = "Number of days of audit history to return (default 7)"),
+        ("page" = Option<u32>, Query, description = "Page number, 1-based (default 1)"),
+        ("per_page" = Option<u32>, Query, description = "Items per page, max 200 (default 50)"),
+    ),
     responses(
         (status = 200, description = "Success", body = AuditLogResponse),
         (status = 400, description = "Error", body = ApiError),
     )
 )]
-/// GET /api/audit
+/// GET /api/audit — paginated audit trail for compliance review.
 pub async fn get_audit_logs(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
     headers: axum::http::HeaderMap,
@@ -229,18 +260,32 @@ pub async fn get_audit_logs(
     // it to admins only (personal mode keeps the localhost trust model).
     crate::domains::auth::handlers::require_admin(&headers).await?;
     let days: u8 = params.get("days").and_then(|d| d.parse().ok()).unwrap_or(7);
+    let page: u32 = params
+        .get("page")
+        .and_then(|d| d.parse().ok())
+        .unwrap_or(1)
+        .max(1);
+    let per_page: u32 = params
+        .get("per_page")
+        .and_then(|d| d.parse().ok())
+        .unwrap_or(50)
+        .clamp(1, 200);
+    let offset = (page - 1) * per_page;
 
-    let entries: Vec<AuditEntry> = if let Ok(pool) = get_pool() {
+    let (entries, total) = if let Ok(pool) = get_pool() {
         let cutoff = (chrono::Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339();
         let rows: Vec<models::AuditLogRow> = sqlx::query_as(
-            "SELECT * FROM audit_logs WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT 500",
+            "SELECT * FROM audit_logs WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT ? OFFSET ?",
         )
         .bind(&cutoff)
+        .bind(per_page as i64)
+        .bind(offset as i64)
         .fetch_all(pool)
         .await
         .unwrap_or_default();
 
-        rows.into_iter()
+        let entries = rows
+            .into_iter()
             .map(|r| AuditEntry {
                 timestamp: r.timestamp,
                 user: r.user_id,
@@ -248,12 +293,26 @@ pub async fn get_audit_logs(
                 resource: r.target,
                 result: r.result,
             })
-            .collect()
+            .collect();
+
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_logs WHERE timestamp >= ?")
+            .bind(&cutoff)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+
+        (entries, total as u32)
     } else {
-        vec![]
+        (vec![], 0)
     };
 
-    Ok(Json(AuditLogResponse { entries, days }))
+    Ok(Json(AuditLogResponse {
+        entries,
+        days,
+        page,
+        per_page,
+        total,
+    }))
 }
 
 #[utoipa::path(

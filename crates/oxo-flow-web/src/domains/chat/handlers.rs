@@ -114,6 +114,7 @@ async fn persist_assistant_message(
     post,
     path = "/api/chat/send",
     tag = "chat",
+    security(("bearerAuth" = [])),
     responses(
         (status = 200, description = "Success", content_type = "text/event-stream"),
         (status = 400, description = "Error", body = ApiError),
@@ -143,17 +144,35 @@ pub async fn chat_send(
 
     // Chat runs on the acting user's own AI provider (isolation fix).
     let provider = crate::ai_provider::provider_for(&user.id).await;
-    let run = service::spawn_chat_agent(
-        message,
-        session_id.clone(),
-        context,
-        req.run_id,
-        user.id.clone(),
-        user.is_admin(),
-        provider,
-    );
+    let config = crate::ai_provider::AiProviderRegistry::global().get_config();
+    let is_configured = config.is_configured;
 
     let stream = async_stream::stream! {
+        if !is_configured {
+            yield Ok::<_, Infallible>(Event::default()
+                .event("error")
+                .data(serde_json::json!({
+                    "code": "AI_NOT_CONFIGURED",
+                    "message": "AI assistant is not configured",
+                    "detail": format!("provider={}", config.provider),
+                    "suggestion": "Set OXO_FLOW_AI_PROVIDER and its API key, or ask your admin."
+                }).to_string()));
+            yield Ok::<_, Infallible>(Event::default()
+                .event("done")
+                .data(serde_json::json!({"session_id": session_id}).to_string()));
+            return;
+        }
+
+        let run = service::spawn_chat_agent(
+            message,
+            session_id.clone(),
+            context,
+            req.run_id,
+            user.id.clone(),
+            user.is_admin(),
+            provider,
+        );
+
         let mut events = run.events;
         while let Some(event) = events.recv().await {
             match event {
@@ -272,6 +291,22 @@ pub async fn chat_send_json(
     persist_user_message(pool, &user, &session_id, &req.message).await;
 
     let provider = crate::ai_provider::provider_for(&user.id).await;
+
+    let config = crate::ai_provider::AiProviderRegistry::global().get_config();
+    if !config.is_configured {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError {
+                code: "AI_NOT_CONFIGURED".into(),
+                message: "AI assistant is not configured".into(),
+                detail: Some(format!("provider={}", config.provider)),
+                suggestion: Some(
+                    "Set OXO_FLOW_AI_PROVIDER and its API key, or ask your admin.".into(),
+                ),
+            }),
+        ));
+    }
+
     match service::process_chat(
         &req.message,
         Some(&session_id),

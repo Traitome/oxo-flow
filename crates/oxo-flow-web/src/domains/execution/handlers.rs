@@ -373,6 +373,7 @@ pub struct ListRunsQuery {
     get,
     path = "/api/runs",
     tag = "runs",
+    security(("bearerAuth" = [])),
     responses(
         (status = 200, description = "Success", body = serde_json::Value),
         (status = 400, description = "Error", body = ApiError),
@@ -712,8 +713,14 @@ pub async fn get_dag_status(
         None
     };
 
+    // Compute metrics before moving dag_nodes into the response (no clone of
+    // the full node vec).
+    let failed_nodes = dag_nodes.iter().filter(|n| n.status == "failed").count();
+    let running_nodes = dag_nodes.iter().filter(|n| n.status == "running").count();
+    let pending_nodes = dag_nodes.iter().filter(|n| n.status == "pending").count();
+
     Ok(Json(DagStatusResponse {
-        nodes: dag_nodes.clone(),
+        nodes: dag_nodes,
         edges,
         parallel_groups: dag
             .as_ref()
@@ -726,9 +733,9 @@ pub async fn get_dag_status(
         metrics: DagMetrics {
             total_nodes: total_count,
             completed_nodes: completed_count,
-            failed_nodes: dag_nodes.iter().filter(|n| n.status == "failed").count(),
-            running_nodes: dag_nodes.iter().filter(|n| n.status == "running").count(),
-            pending_nodes: dag_nodes.iter().filter(|n| n.status == "pending").count(),
+            failed_nodes,
+            running_nodes,
+            pending_nodes,
             eta_ms,
         },
     }))
@@ -845,11 +852,12 @@ pub async fn get_diagnostics(
     );
 
     // Try to read log output from workdir
-    let log_output = run
-        .workdir
-        .as_ref()
-        .map(|wd| std::fs::read_to_string(format!("{wd}/execution.log")).unwrap_or_default())
-        .unwrap_or_default();
+    let log_output = match run.workdir.as_ref() {
+        Some(wd) => tokio::fs::read_to_string(format!("{wd}/execution.log"))
+            .await
+            .unwrap_or_default(),
+        None => String::new(),
+    };
 
     let benchmarks = checkpoint_status::load_benchmarks(std::path::Path::new(
         run.workdir.as_deref().unwrap_or(""),
@@ -884,11 +892,13 @@ pub async fn get_run_logs(
     let user = current_user::resolve(authenticated.as_ref());
     let run = load_owned_run(pool, &user, &id).await?;
 
-    let log_content = run
-        .workdir
-        .as_ref()
-        .and_then(|wd| std::fs::read_to_string(format!("{wd}/execution.log")).ok())
-        .unwrap_or_else(|| "No execution log available.".to_string());
+    let log_content = match run.workdir.as_ref() {
+        Some(wd) => tokio::fs::read_to_string(format!("{wd}/execution.log"))
+            .await
+            .ok(),
+        None => None,
+    }
+    .unwrap_or_else(|| "No execution log available.".to_string());
 
     Ok(Json(log_content))
 }
@@ -1439,7 +1449,8 @@ pub async fn get_run_preview(
     let run = load_owned_run(pool, &user, &id).await?;
     let workdir = run.workdir.as_deref().unwrap_or("");
     let content =
-        std::fs::read_to_string(std::path::Path::new(workdir).join("dry-run-preview.json"))
+        tokio::fs::read_to_string(std::path::Path::new(workdir).join("dry-run-preview.json"))
+            .await
             .map_err(|_| {
                 err(
                     StatusCode::NOT_FOUND,
@@ -1525,7 +1536,9 @@ pub async fn get_ai_status(
 /// Build the deterministic report data from a run row — shared by the report
 /// page, the Q&A, and the visualization endpoints so they all answer from
 /// the SAME real data.
-fn build_report_for_run(run: &models::RunRow) -> crate::domains::ai::agents::types::ReportData {
+async fn build_report_for_run(
+    run: &models::RunRow,
+) -> crate::domains::ai::agents::types::ReportData {
     let pipeline_name = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
         .ok()
         .map(|c| c.workflow.name.clone())
@@ -1550,11 +1563,12 @@ fn build_report_for_run(run: &models::RunRow) -> crate::domains::ai::agents::typ
         })
         .unwrap_or_default();
 
-    let log_summary = run
-        .workdir
-        .as_ref()
-        .and_then(|wd| std::fs::read_to_string(format!("{wd}/execution.log")).ok())
-        .unwrap_or_default();
+    let log_summary = match run.workdir.as_ref() {
+        Some(wd) => tokio::fs::read_to_string(format!("{wd}/execution.log"))
+            .await
+            .unwrap_or_default(),
+        None => String::new(),
+    };
 
     report_agent::generate_report(&pipeline_name, &files, &log_summary, &[])
 }
@@ -1583,7 +1597,7 @@ pub async fn get_run_report(
     let user = current_user::resolve(authenticated.as_ref());
     let run = load_owned_run(pool, &user, &id).await?;
 
-    let report = build_report_for_run(&run);
+    let report = build_report_for_run(&run).await;
 
     Ok(Json(serde_json::json!(report)))
 }
@@ -1619,7 +1633,7 @@ pub async fn ask_report_question(
     let run = load_owned_run(pool, &user, &id).await?;
 
     // Answer from the same deterministic report the report page shows.
-    let report = build_report_for_run(&run);
+    let report = build_report_for_run(&run).await;
     let answer = report_agent::answer_question(&report, question);
     Ok(Json(answer))
 }
@@ -1656,7 +1670,7 @@ pub async fn visualize_report(
 
     // Real data sources: the run's file tree, or per-rule timings from the
     // engine's checkpoint. No canned rows.
-    let report = build_report_for_run(&run);
+    let report = build_report_for_run(&run).await;
     let data: Vec<serde_json::Value> = if chart_type == "files" {
         report
             .file_tree

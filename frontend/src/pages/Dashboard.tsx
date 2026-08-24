@@ -10,8 +10,9 @@ import { Bot, FileCode2, PlayCircle, Sparkles } from 'lucide-react';
 import { api } from '../api/client';
 import type { HealthResponse, SystemInfo, RunItem, Template } from '../api/types';
 import { usePipelineSession } from '../context/PipelineSession';
-import { useI18n } from '../context/I18n';
+import { useI18n, getLocale } from '../context/I18n';
 import Glossary from '../components/Glossary';
+import StatCard from '../components/StatCard';
 
 const ONBOARDING_KEY = 'oxo_onboarded';
 
@@ -23,6 +24,7 @@ export default function Dashboard() {
   const [sys, setSys] = useState<SystemInfo | null>(null);
   const [runs, setRuns] = useState<RunItem[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
+  const [aiConfigured, setAiConfigured] = useState(true);
   const [showOnboarding, setShowOnboarding] = useState(
     () => localStorage.getItem(ONBOARDING_KEY) !== '1',
   );
@@ -32,6 +34,7 @@ export default function Dashboard() {
     api.system().then(setSys).catch(() => {});
     api.listRuns().then((r) => setRuns(r.items)).catch(() => {});
     api.listTemplates().then(setTemplates).catch(() => {});
+    api.aiConfig().then((c) => setAiConfigured(c.is_configured)).catch(() => setAiConfigured(false));
   }, []);
 
   const dismissOnboarding = () => {
@@ -66,11 +69,27 @@ export default function Dashboard() {
 
       {/* Three entry cards: AI / templates / editor */}
       <div className="dashboard-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', marginBottom: '1rem' }}>
-        <button className="dash-card entry-card" onClick={() => navigate('/chat')}>
-          <Sparkles size={22} style={{ color: 'var(--color-primary)' }} />
-          <h3>{t('dashboard.ai')}</h3>
-          <p>{t('dashboard.ai.desc')}</p>
-        </button>
+        {aiConfigured ? (
+          <button className="dash-card entry-card" onClick={() => navigate('/chat')}>
+            <Sparkles size={22} style={{ color: 'var(--color-primary)' }} />
+            <h3>{t('dashboard.ai')}</h3>
+            <p>{t('dashboard.ai.desc')}</p>
+          </button>
+        ) : (
+          <div className="dash-card entry-card" style={{ opacity: 0.65, cursor: 'not-allowed' }}>
+            <Sparkles size={22} style={{ color: 'var(--color-text-tertiary)' }} />
+            <h3>{t('dashboard.ai')}</h3>
+            <p>{t('dashboard.ai.disabledDesc')}</p>
+            <div style={{ marginTop: '0.75rem' }}>
+              <Link to="/pipelines" className="btn-run" style={{ textDecoration: 'none' }}>
+                {t('dashboard.ai.disabledCta')}
+              </Link>
+            </div>
+            <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: 'var(--color-text-tertiary)' }}>
+              {t('dashboard.ai.disabledNote')}
+            </div>
+          </div>
+        )}
         <button className="dash-card entry-card" onClick={() => navigate('/pipelines')}>
           <FileCode2 size={22} style={{ color: 'var(--color-primary)' }} />
           <h3>{t('dashboard.templates')}</h3>
@@ -98,7 +117,7 @@ export default function Dashboard() {
       {/* Quick templates + recent runs */}
       <div className="dashboard-grid">
         <div className="dash-card">
-          <h3 className="dash-card-title">Templates</h3>
+          <h3 className="dash-card-title">{t('dashboard.templatesCard')}</h3>
           <div className="quick-templates">
             {quickTemplates.map((tpl) => (
               <button key={tpl.id} className="qt-btn" onClick={() => navigate(`/editor?template=${tpl.id}`)}>
@@ -106,7 +125,7 @@ export default function Dashboard() {
                 <span className="qt-cat">{tpl.category}</span>
               </button>
             ))}
-            <Link to="/pipelines" className="qt-btn qt-more">View all templates →</Link>
+            <Link to="/pipelines" className="qt-btn qt-more">{t('dashboard.viewAllTemplates')}</Link>
           </div>
         </div>
         <div className="dash-card">
@@ -115,14 +134,14 @@ export default function Dashboard() {
             <div className="empty-state">{t('dashboard.noRuns')}</div>
           ) : (
             <table className="run-table">
-              <thead><tr><th>Workflow</th><th>Status</th><th>Started</th><th></th></tr></thead>
+              <thead><tr><th>{t('dashboard.workflow')}</th><th>{t('dashboard.status')}</th><th>{t('dashboard.started')}</th><th></th></tr></thead>
               <tbody>
                 {runs.slice(0, 5).map((r) => (
                   <tr key={r.id}>
                     <td>{r.workflow_name ?? r.id.slice(0, 8)}</td>
                     <td><span className={`status-badge ${r.status}`}>{r.status}</span></td>
-                    <td>{r.started_at ? new Date(r.started_at).toLocaleString() : '-'}</td>
-                    <td><Link to={`/runs/${r.id}`} className="view-link">View</Link></td>
+                    <td>{r.started_at ? new Date(r.started_at).toLocaleString(getLocale(lang)) : '-'}</td>
+                    <td><Link to={`/runs/${r.id}`} className="view-link">{t('dashboard.view')}</Link></td>
                   </tr>
                 ))}
               </tbody>
@@ -133,21 +152,18 @@ export default function Dashboard() {
 
       {/* Compact system strip — data kept, prominence reduced */}
       <div className="stat-grid" style={{ marginTop: '1rem', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
-        <div className="stat-card"><div className="stat-value">{health?.version || '-'}</div><div className="stat-label">Version</div></div>
-        <div className="stat-card"><div className="stat-value">{runs.length}</div><div className="stat-label">Total Runs</div></div>
-        <div className="stat-card"><div className="stat-value" style={{ color: activeRuns > 0 ? 'var(--color-warning)' : 'var(--color-success)' }}>{activeRuns}</div><div className="stat-label">Active</div></div>
-        <div className="stat-card"><div className="stat-value">{sys ? `${sys.os}/${sys.arch}` : '-'}</div><div className="stat-label">Platform</div></div>
+        <StatCard value={health?.version || '-'} label={t('dashboard.version')} />
+        <StatCard value={runs.length} label={t('dashboard.totalRuns')} />
+        <StatCard value={activeRuns} label={t('dashboard.active')} valueStyle={{ color: activeRuns > 0 ? 'var(--color-warning)' : 'var(--color-success)' }} />
+        <StatCard value={sys ? `${sys.os}/${sys.arch}` : '-'} label={t('dashboard.platform')} />
         {health?.resources && (
-          <div className="stat-card">
-            <div className="stat-value">{Math.round(health.resources.memory_used_pct * 100)}%</div>
-            <div className="stat-label">Memory</div>
-          </div>
+          <StatCard value={`${Math.round(health.resources.memory_used_pct * 100)}%`} label={t('dashboard.memory')} />
         )}
       </div>
 
       {/* Quick access to the AI chat stays one click away */}
       <div style={{ marginTop: '1rem', fontSize: '0.8rem', color: 'var(--color-text-tertiary)' }}>
-        <Bot size={13} style={{ verticalAlign: '-2px' }} /> {t('dashboard.ai')} — <Link to="/chat" style={{ color: 'var(--color-primary)' }}>open the AI chat</Link>
+        <Bot size={13} style={{ verticalAlign: '-2px' }} /> {t('dashboard.ai')} — <Link to="/chat" style={{ color: 'var(--color-primary)' }}>{t('dashboard.openAiChat')}</Link>
       </div>
     </div>
   );

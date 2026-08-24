@@ -24,45 +24,44 @@ export default function Login() {
       localStorage.setItem('oxo_user_id', username.trim());
       navigate('/');
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Login failed');
+      setError(err instanceof Error ? err.message : t('login.failed'));
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="page" style={{ maxWidth: 380, margin: '0 auto' }}>
-      <h1 className="page-title">{t('login.title')}</h1>
-      <form onSubmit={handleSubmit} className="login-form">
-        <label className="inspector-field">
-          <span>Username</span>
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            autoFocus
-            autoComplete="username"
-          />
-        </label>
-        <label className="inspector-field">
-          <span>Password</span>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="current-password"
-          />
-        </label>
-        {error && <div className="tool-palette-hint error">{error}</div>}
-        <button className="btn-run" type="submit" disabled={loading || !username.trim() || !password}>
-          <KeyRound size={14} /> {loading ? 'Signing in…' : 'Sign in'}
-        </button>
-        <p className="run-dialog-hint">
-          Credentials come from OXO_FLOW_ADMIN_PASSWORD / OXO_FLOW_USER_PASSWORD
-          / OXO_FLOW_VIEWER_PASSWORD, or from accounts created on the Users
-          page. Team/HPC servers require a session for protected endpoints;
-          personal mode does not need a login.
-        </p>
-      </form>
+    <div className="page login-wrap">
+      <div className="dash-card login-card">
+        <h1 className="page-title">{t('login.title')}</h1>
+        <form onSubmit={handleSubmit} className="login-form">
+          <label className="inspector-field">
+            <span>{t('login.username')}</span>
+            <input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoFocus
+              autoComplete="username"
+            />
+          </label>
+          <label className="inspector-field">
+            <span>{t('login.password')}</span>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+            />
+          </label>
+          {error && <div className="tool-palette-hint error">{error}</div>}
+          <button className="btn-run" type="submit" disabled={loading || !username.trim() || !password}>
+            <KeyRound size={14} /> {loading ? t('login.signingIn') : t('login.submit')}
+          </button>
+          <p className="run-dialog-hint">
+            {t('login.hint')}
+          </p>
+        </form>
+      </div>
     </div>
   );
 }

@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 /// Per-user resource quota configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct QuotaConfig {
     /// Maximum concurrent runs per user.
     pub max_concurrent_runs: u32,
@@ -60,7 +60,7 @@ pub struct QuotaCheckResult {
 
 /// In-memory quota tracker.
 pub struct QuotaTracker {
-    config: QuotaConfig,
+    config: std::sync::RwLock<QuotaConfig>,
     /// Per-user usage counters.
     usage: Mutex<HashMap<String, QuotaUsage>>,
 }
@@ -69,39 +69,47 @@ impl QuotaTracker {
     /// Create a new quota tracker with the given config.
     pub fn new(config: QuotaConfig) -> Self {
         Self {
-            config,
+            config: std::sync::RwLock::new(config),
             usage: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Update the configured limits at runtime (admin only).
+    pub fn update_config(&self, config: QuotaConfig) {
+        if let Ok(mut c) = self.config.write() {
+            *c = config;
         }
     }
 
     /// Check whether a user can start a new run with the given resources.
     pub fn check(&self, user_id: &str, threads: u32, memory_mb: u64) -> QuotaCheckResult {
+        let config = self.config.read().unwrap().clone();
         let mut usage_map = self.usage.lock().unwrap();
         let usage = usage_map.entry(user_id.to_string()).or_default();
         let mut violations = Vec::new();
 
-        if usage.active_runs >= self.config.max_concurrent_runs {
+        if usage.active_runs >= config.max_concurrent_runs {
             violations.push(format!(
                 "Concurrent run limit reached: {}/{}",
-                usage.active_runs, self.config.max_concurrent_runs
+                usage.active_runs, config.max_concurrent_runs
             ));
         }
-        if usage.used_threads + threads > self.config.max_total_threads {
+        if usage.used_threads + threads > config.max_total_threads {
             violations.push(format!(
                 "Thread limit would be exceeded: {}+{} > {}",
-                usage.used_threads, threads, self.config.max_total_threads
+                usage.used_threads, threads, config.max_total_threads
             ));
         }
-        if usage.used_memory_mb + memory_mb > self.config.max_total_memory_mb {
+        if usage.used_memory_mb + memory_mb > config.max_total_memory_mb {
             violations.push(format!(
                 "Memory limit would be exceeded: {}+{} MB > {} MB",
-                usage.used_memory_mb, memory_mb, self.config.max_total_memory_mb
+                usage.used_memory_mb, memory_mb, config.max_total_memory_mb
             ));
         }
-        if usage.runs_today >= self.config.max_runs_per_day {
+        if usage.runs_today >= config.max_runs_per_day {
             violations.push(format!(
                 "Daily run limit reached: {}/{}",
-                usage.runs_today, self.config.max_runs_per_day
+                usage.runs_today, config.max_runs_per_day
             ));
         }
 
@@ -109,7 +117,7 @@ impl QuotaTracker {
             allowed: violations.is_empty(),
             violations,
             usage: usage.clone(),
-            limits: self.config.clone(),
+            limits: config,
         }
     }
 
@@ -148,8 +156,8 @@ impl QuotaTracker {
     }
 
     /// Get the configured limits.
-    pub fn config(&self) -> &QuotaConfig {
-        &self.config
+    pub fn config(&self) -> QuotaConfig {
+        self.config.read().unwrap().clone()
     }
 }
 

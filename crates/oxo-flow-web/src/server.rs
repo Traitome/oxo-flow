@@ -20,14 +20,35 @@ use crate::infra::license::LicenseHeaderLayer;
 // Embedded SPA frontend
 // ---------------------------------------------------------------------------
 
-/// Serve the React SPA index.html, reading from disk to avoid
-/// compile-time embedding mismatches with frontend build hashes.
+/// Serve the React SPA index.html.
+///
+/// The fully-injected HTML is computed once per process and cached in
+/// memory: the frontend directory, the index contents, and the base path
+/// are all fixed at startup, so re-reading from disk on every request
+/// (this handler is also the catch-all fallback) only added latency.
 ///
 /// Path resolution order:
 /// 1. `OXO_FLOW_FRONTEND_DIR` env var (set in Docker/deployment)
 /// 2. `--frontend-dir` CLI flag (via FRONTEND_DIR env var)
 /// 3. Compile-time `crates/oxo-flow-web/static/` (dev)
 pub async fn spa_index() -> impl IntoResponse {
+    static SPA_INDEX_HTML: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let html: &'static str = SPA_INDEX_HTML.get_or_init(load_spa_index_html);
+
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "text/html; charset=utf-8"),
+            ("cache-control", "no-cache"),
+        ],
+        html,
+    )
+}
+
+/// Read index.html from disk and inject the `<base>` tag +
+/// `window.__OXO_BASE__` script. Runs exactly once, on the first request
+/// (see [`spa_index`]).
+fn load_spa_index_html() -> String {
     let fallback = r#"<!doctype html><html><body><h1>oxo-flow</h1><p>SPA not built. Run <code>npm run build</code> in frontend/ first.</p></body></html>"#;
 
     let html = std::env::var("OXO_FLOW_FRONTEND_DIR")
@@ -65,22 +86,13 @@ pub async fn spa_index() -> impl IntoResponse {
     // Insert right after <head>: <base> only affects URLs that FOLLOW it,
     // and vite emits its <link>/<script> tags immediately — injecting at
     // </head> would leave them resolving against the current route.
-    let html = match html.find("<head>") {
+    match html.find("<head>") {
         Some(head_start) => {
             let insert_at = head_start + "<head>".len();
             format!("{}{}{}", &html[..insert_at], tag, &html[insert_at..])
         }
         None => html,
-    };
-
-    (
-        StatusCode::OK,
-        [
-            ("content-type", "text/html; charset=utf-8"),
-            ("cache-control", "no-cache"),
-        ],
-        html,
-    )
+    }
 }
 
 /// Serve embedded favicon
@@ -182,13 +194,23 @@ pub fn build_router(mode: &str) -> Router {
     }
 
     // ---- Frontend / SPA routes ----
+    //
+    // Vite emits content-hashed filenames under /assets (the hash changes on
+    // every build), so they are safe to cache forever — `immutable` keeps
+    // repeat loads from revalidating. index.html itself stays `no-cache`
+    // (see spa_index) so new deploys are picked up immediately.
+    let assets_service = tower::ServiceBuilder::new()
+        .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("public, max-age=31536000, immutable"),
+        ))
+        .service(tower_http::services::ServeDir::new(
+            frontend_dir().join("assets"),
+        ));
     let frontend_routes = Router::new()
         .route("/favicon.svg", get(favicon))
         .route("/icons.svg", get(icons))
-        .nest_service(
-            "/assets",
-            tower_http::services::ServeDir::new(frontend_dir().join("assets")),
-        )
+        .nest_service("/assets", assets_service)
         .route("/", get(spa_index));
 
     // ---- Workflow routes ----
@@ -481,6 +503,10 @@ pub fn build_router(mode: &str) -> Router {
         .route("/api/audit", get(observability::handlers::get_audit_logs))
         .route("/api/quota", get(observability::handlers::quota_status))
         .route(
+            "/api/quota",
+            put(observability::handlers::update_quota_status),
+        )
+        .route(
             "/api/webhook",
             get(observability::handlers::get_webhook_config),
         )
@@ -594,6 +620,49 @@ pub fn build_router(mode: &str) -> Router {
         ))
         .layer(axum::Extension(rate_limiter))
         .layer(cors)
+        // Request tracing: INFO span + completion log per request, except
+        // /api/health — the dashboard polls it every few seconds, so its
+        // span (and its completion event, which mirrors the span's level)
+        // run at DEBUG to keep steady-state logs quiet.
+        .layer(
+            tower_http::trace::TraceLayer::new_for_http()
+                .make_span_with(|request: &axum::extract::Request| {
+                    let path = request.uri().path();
+                    if path == "/api/health" {
+                        tracing::debug_span!(
+                            "http.request",
+                            method = %request.method(),
+                            path,
+                        )
+                    } else {
+                        tracing::info_span!(
+                            "http.request",
+                            method = %request.method(),
+                            path,
+                        )
+                    }
+                })
+                .on_response(
+                    |response: &axum::response::Response,
+                     latency: std::time::Duration,
+                     span: &tracing::Span| {
+                        let status = response.status().as_u16();
+                        let latency_ms = latency.as_millis();
+                        if span
+                            .metadata()
+                            .is_some_and(|m| m.level() == &tracing::Level::DEBUG)
+                        {
+                            tracing::debug!(status, latency_ms, "request completed");
+                        } else {
+                            tracing::info!(status, latency_ms, "request completed");
+                        }
+                    },
+                ),
+        )
+        // Brotli/gzip response compression. The default predicate already
+        // skips text/event-stream, so the SSE endpoints (/api/events,
+        // /api/ai/translate/stream) stream through uncompressed.
+        .layer(tower_http::compression::CompressionLayer::new())
 }
 
 /// Deployment mode of the running server ("personal" | "team" | "hpc"),
