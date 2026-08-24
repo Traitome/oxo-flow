@@ -73,6 +73,62 @@ jobs:
           fi
           echo "Tag ${TAG} does not exist yet — safe to create"
 
+      - name: Verify embedded knowledge freshness
+        if: (github.event_name == 'workflow_dispatch' && inputs.tag != '') || startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The embedded AI knowledge data (crates/oxo-flow-ai/src/knowledge/)
+          # is refreshed by the Knowledge Refresh workflow. Gate the release
+          # on its freshness so a stale snapshot never ships: any auto:true
+          # source older than 60 days blocks (2x the 16-day cadence, one
+          # missed run tolerated). Manual sources (auto:false) are the
+          # maintainer's call and are skipped.
+          META="crates/oxo-flow-ai/src/knowledge/knowledge_meta.json"
+          python3 - "$META" <<'PY'
+          import datetime, json, sys
+          path = sys.argv[1]
+          MAX_AGE_DAYS = 60
+          def fail(msg):
+              print(f"::error::{msg}")
+              sys.exit(1)
+          try:
+              meta = json.load(open(path))
+          except FileNotFoundError:
+              fail(f"{path} is missing - run the Knowledge Refresh workflow (Actions -> Knowledge Refresh) before releasing")
+          except json.JSONDecodeError as exc:
+              fail(f"{path} is malformed JSON ({exc}) - fix it or re-run the Knowledge Refresh workflow")
+          raw = meta.get("sources")
+          if isinstance(raw, dict):
+              items = raw.items()
+          elif isinstance(raw, list):
+              items = ((s.get("name", f"source#{i}"), s) for i, s in enumerate(raw))
+          else:
+              items = ((k, v) for k, v in meta.items() if isinstance(v, dict))
+          now = datetime.datetime.now(datetime.timezone.utc)
+          stale = []
+          for name, src in items:
+              if not isinstance(src, dict) or not src.get("auto"):
+                  continue
+              raw_at = src.get("generated_at")
+              if not raw_at:
+                  stale.append(f"{name}: no generated_at")
+                  continue
+              try:
+                  ts = datetime.datetime.fromisoformat(str(raw_at).replace("Z", "+00:00"))
+              except ValueError:
+                  stale.append(f"{name}: unparseable generated_at {raw_at!r}")
+                  continue
+              if ts.tzinfo is None:
+                  ts = ts.replace(tzinfo=datetime.timezone.utc)
+              age = (now - ts).days
+              if age > MAX_AGE_DAYS:
+                  stale.append(f"{name}: {age} days old")
+          if stale:
+              fail("embedded knowledge data is stale (" + "; ".join(stale) + ") - run the Knowledge Refresh workflow first (or dispatch it manually), then re-dispatch this release")
+          print("knowledge meta OK: all auto-refreshed sources are within 60 days")
+          PY
+
       - name: Extract version from tag
         id: extract
         shell: bash
@@ -465,16 +521,37 @@ jobs:
           set -euxo pipefail
           TARGET_DIR="target/${{ matrix.target }}/release"
           mkdir -p dist
-          # Hand-rolled .app bundle (same layout cargo-bundle produces):
-          # the CLI binary doubles as the desktop entry (serve --open), and
-          # the SPA build ships in Contents/Resources/static so the app is
-          # self-contained (see docs/how-to/desktop-app.md).
+          # Hand-rolled .app bundle (cargo-bundle-style layout, extended
+          # with launcher script, icon, and code signature):
+          # - Contents/MacOS/oxo-flow     launcher script (double-click in
+          #                               Finder runs the bundle executable
+          #                               with NO arguments, so the script
+          #                               routes the launch to the CLI's
+          #                               `serve --open` entry point)
+          # - Contents/MacOS/oxo-flow-bin the real CLI binary
+          # - Contents/Resources/static   built SPA (self-contained app)
+          # - Contents/Resources/oxo-flow.icns
+          # - bundle-level ad-hoc code signature (arm64 macOS requires
+          #   signed executables; the linker's ad-hoc Mach-O signature is
+          #   not a bundle signature — unsigned bundles are reported as
+          #   "damaged" by Gatekeeper on Apple Silicon).
           APP="oxo-flow.app"
           mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
-          cp "${TARGET_DIR}/oxo-flow" "${APP}/Contents/MacOS/oxo-flow"
+          cp "${TARGET_DIR}/oxo-flow" "${APP}/Contents/MacOS/oxo-flow-bin"
           cp -r crates/oxo-flow-web/static "${APP}/Contents/Resources/static"
+          cp assets/oxo-flow.icns "${APP}/Contents/Resources/oxo-flow.icns"
           # (printf instead of a heredoc: YAML block scalars cannot host a
           # heredoc terminator at column 0.)
+          LAUNCHER="${APP}/Contents/MacOS/oxo-flow"
+          printf '%s\n' \
+            '#!/bin/sh' \
+            '# oxo-flow desktop launcher: macOS double-click runs the bundle' \
+            '# executable with no arguments; route it to serve --open. Start' \
+            '# in $HOME: Finder launches apps with cwd=/, where the server' \
+            '# cannot create its SQLite DB (oxo-flow.db) and exits.' \
+            'cd "${HOME:-$PWD}" || exit 1' \
+            'exec "$(dirname "$0")/oxo-flow-bin" serve --open "$@"' > "$LAUNCHER"
+          chmod +x "$LAUNCHER" "${APP}/Contents/MacOS/oxo-flow-bin"
           PLIST="${APP}/Contents/Info.plist"
           printf '<?xml version="1.0" encoding="UTF-8"?>\n' > "$PLIST"
           printf '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n' >> "$PLIST"
@@ -486,8 +563,15 @@ jobs:
           printf '  <key>CFBundleShortVersionString</key><string>%s</string>\n' "${RELEASE_TAG#v}" >> "$PLIST"
           printf '  <key>CFBundlePackageType</key><string>APPL</string>\n' >> "$PLIST"
           printf '  <key>CFBundleExecutable</key><string>oxo-flow</string>\n' >> "$PLIST"
+          printf '  <key>CFBundleIconFile</key><string>oxo-flow</string>\n' >> "$PLIST"
           printf '  <key>LSMinimumSystemVersion</key><string>11.0</string>\n' >> "$PLIST"
           printf '</dict></plist>\n' >> "$PLIST"
+          # Ad-hoc (not Developer ID): makes the bundle internally consistent
+          # so Gatekeeper does not flag it as "damaged" once the download
+          # quarantine is cleared; a downloaded ad-hoc app is still blocked
+          # by Gatekeeper until the quarantine attribute is removed (see
+          # docs/guide/src/how-to/desktop-app.md).
+          codesign --force --deep --sign - "${APP}"
           (cd dist && zip -qry "oxo-flow-${RELEASE_TAG}-desktop-${{ matrix.target }}-app.zip" "../${APP}")
           hdiutil create -volname "oxo-flow" -srcfolder "${APP}" -ov -format UDZO \
             "dist/oxo-flow-${RELEASE_TAG}-desktop-${{ matrix.target }}.dmg"
@@ -570,12 +654,28 @@ jobs:
           # under /usr/share/oxo-flow (resolved by the executable-relative
           # frontend lookup). Built from the host-target binaries artifact.
           mkdir -p deb-root/DEBIAN deb-root/usr/bin deb-root/usr/share/oxo-flow
+          mkdir -p deb-root/usr/share/applications deb-root/usr/share/icons/hicolor/512x512/apps \
+            deb-root/usr/share/pixmaps
           tar -xzf artifacts/binaries-x86_64-unknown-linux-gnu/oxo-flow-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz \
             -C deb-root/usr/bin
           # The SPA build output was produced by build-macos (not an artifact);
           # rebuild it here so the deb is self-contained.
           cd frontend && npm ci && npm run build && cd ..
           cp -r crates/oxo-flow-web/static deb-root/usr/share/oxo-flow/static
+          # Desktop entry + icon (app menu integration, same treatment the
+          # macOS bundle got: launcher opens the local web interface).
+          cp assets/oxo-flow.png deb-root/usr/share/icons/hicolor/512x512/apps/oxo-flow.png
+          cp assets/oxo-flow.png deb-root/usr/share/pixmaps/oxo-flow.png
+          printf '%s\n' \
+            '[Desktop Entry]' \
+            'Type=Application' \
+            'Name=oxo-flow' \
+            'Comment=Bioinformatics workflow engine with web interface' \
+            'Exec=oxo-flow serve --open' \
+            'Icon=oxo-flow' \
+            'Terminal=false' \
+            'Categories=Science;Development;' \
+            > deb-root/usr/share/applications/oxo-flow.desktop
           VERSION="${RELEASE_TAG#v}"
           printf 'Package: oxo-flow\n' > deb-root/DEBIAN/control
           printf 'Version: %s\n' "${VERSION}" >> deb-root/DEBIAN/control
@@ -615,11 +715,18 @@ jobs:
             'starts the local web interface (oxo-flow serve --open).' \
             '%install' \
             'mkdir -p %{buildroot}/usr/bin %{buildroot}/usr/share/oxo-flow' \
+            'mkdir -p %{buildroot}/usr/share/applications %{buildroot}/usr/share/icons/hicolor/512x512/apps %{buildroot}/usr/share/pixmaps' \
             "cp $PWD/deb-root/usr/bin/oxo-flow %{buildroot}/usr/bin/oxo-flow" \
             "cp -r $PWD/deb-root/usr/share/oxo-flow/static %{buildroot}/usr/share/oxo-flow/static" \
+            "cp $PWD/deb-root/usr/share/applications/oxo-flow.desktop %{buildroot}/usr/share/applications/oxo-flow.desktop" \
+            "cp $PWD/assets/oxo-flow.png %{buildroot}/usr/share/icons/hicolor/512x512/apps/oxo-flow.png" \
+            "cp $PWD/assets/oxo-flow.png %{buildroot}/usr/share/pixmaps/oxo-flow.png" \
             '%files' \
             '/usr/bin/oxo-flow' \
             '/usr/share/oxo-flow/static' \
+            '/usr/share/applications/oxo-flow.desktop' \
+            '/usr/share/icons/hicolor/512x512/apps/oxo-flow.png' \
+            '/usr/share/pixmaps/oxo-flow.png' \
             > rpm-build/SPECS/oxo-flow.spec
           rpmbuild --define "_topdir $PWD/rpm-build" --define "version ${VERSION}" \
             -bb rpm-build/SPECS/oxo-flow.spec
@@ -638,6 +745,9 @@ jobs:
           cp -r deb-root/usr/share/oxo-flow/static "${APPDIR}/usr/share/oxo-flow/static"
           printf '%s\n' '#!/bin/sh' \
             '# Desktop entry: start the local web interface and open the browser.' \
+            '# cd $HOME first: desktop launchers may start us in a read-only' \
+            '# cwd (same defect class the macOS launcher guards against).' \
+            'cd "${HOME:-/tmp}" || true' \
             'HERE="$(dirname "$(readlink -f "$0")")"' \
             'exec "${HERE}/usr/bin/oxo-flow" serve --open "$@"' \
             > "${APPDIR}/AppRun"
@@ -652,7 +762,7 @@ jobs:
             'Terminal=false' \
             'Categories=Science;Development;' \
             > "${APPDIR}/oxo-flow.desktop"
-          cp crates/oxo-flow-web/static/favicon.svg "${APPDIR}/oxo-flow.svg"
+          cp assets/oxo-flow.png "${APPDIR}/oxo-flow.png"
           curl -sL -o appimagetool \
             "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
           chmod +x appimagetool

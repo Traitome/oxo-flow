@@ -82,3 +82,7 @@ crates/oxo-flow-web/static/assets/*.js
 crates/oxo-flow-cli/static/
 crates/oxo-flow-web/static/assets/*.css
 crates/oxo-flow-web/static/index.html
+
+# Python bytecode (refresh-knowledge / eval scripts)
+__pycache__/
+*.pyc

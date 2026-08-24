@@ -42,6 +42,30 @@ hallucination — so scripts can rely on the JSON contract in every state.
 - A failed provider call (dead endpoint, quota, timeout) degrades the
   same way, with the error explained in the note.
 
+## Embedded knowledge freshness
+
+`oxo-flow ai` reports how fresh the four embedded knowledge sources are
+(tool reference, Bioconda database, bioSkills library, pipeline graph) in a
+**Knowledge freshness** section: per-source record count, generation date,
+staleness in days, and whether the source is auto-updated (`auto`) or
+manually curated (`manual`):
+
+```text
+Knowledge freshness:
+  bioconda_tools (auto) 6132 records, generated 2026-08-22 (1 day ago)
+  skills_index (auto) 562 records, generated 2026-08-22 (1 day ago)
+  pipeline_graph (auto) 548 records, generated 2026-08-22 (1 day ago)
+```
+
+- Auto-updated sources older than 60 days are flagged `STALE` — the same
+  threshold the release pipeline's staleness gate enforces, so a shipped
+  binary never embeds auto-updated knowledge older than 60 days.
+- `lookup_tool` responses carry the same data date and record count as a
+  freshness note, so agents can weigh how current the embedded database is.
+- See "Embedded Knowledge Freshness" in the
+  [AI CLI reference](https://traitome.github.io/oxo-flow/documentation/reference/ai-cli/)
+  for the update cadence, the update GitHub Action, and the gate details.
+
 ## The `--ai` flag on other commands
 
 One flag, a different action per command — the context is the command

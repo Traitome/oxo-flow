@@ -27,7 +27,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 |---|---|---|---|
 | `--jobs` | `-j` | `1` | Maximum number of concurrent jobs |
 | `--keep-going` | `-k` | — | Continue execution when a job fails |
-| `--json` | — | — | Emit a machine-readable JSON summary on stdout after the run (`command`, `status`, `results` counts). The document is emitted on **every** exit path — completed, failed, and aborted (preflight failures, budget breaches, cluster runs, plain-failure aborts) — so `--json` consumers never get zero bytes. `status` is `"completed"` only when the run finished with zero required failures; every other exit is `"failed"`. Human progress and result output on stderr is **not** suppressed — this flag appends the summary, it does not switch the run to machine-only mode |
+| `--json` | — | — | Emit a machine-readable JSON summary on stdout after the run (`command`, `status`, `results` counts, `resources`). The document is emitted on **every** exit path — completed, failed, and aborted (preflight failures, budget breaches, cluster runs, plain-failure aborts) — so `--json` consumers never get zero bytes. `status` is `"completed"` only when the run finished with zero required failures; every other exit is `"failed"`. Human progress and result output on stderr is **not** suppressed — this flag appends the summary, it does not switch the run to machine-only mode. `resources` lists every benchmarked rule (`rule`, `status`, `wall_time_secs`, `peak_rss_mb`, `cpu_seconds`, `retries`) — the same data as the report's Benchmarks table; it is empty on aborted paths and on cluster runs (use the report's sacct-based Resource Accounting section there) |
 | `--workdir` | `-d` | Workflow file's directory | Working directory for execution |
 | `--log-file` | — | `.oxo-flow/logs/oxo-flow.log` in the workdir | Write the run log to a custom path instead (relative paths resolve against the workdir; previous logs rotate to `PATH.1` … `PATH.9`) |
 | `--target` | `-t` | All rules | Run only specific target rules |
@@ -51,6 +51,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--samples` | — | `LIST` | Sample selection: `@path` **replaces** the workflow's samples from a samplesheet, `+@path` **appends** (same-name groups merge, new groups added); names **filter** (or **declare** when the workflow ships no samples), `first:N` (pilot) and `ready` (samples whose entry inputs are complete) **filter**. Repeatable, comma-separated |
 | `--rerun` | — | — | Force re-execution of this run's rules (ignore up-to-date checks). Checkpoint records for rules outside this run are kept |
 | `--no-report-snapshot` | — | — | Skip the automatic report snapshot written after the run (see [Report snapshots](#report-snapshots)); `resume` has the same flag |
+| `--background` | — | — | Detach the run into a background process and exit 0 immediately (see [Background runs (--background)](#background-runs---background)) |
 | `--verbose` | `-v` | — | Enable debug-level logging |
 
 ---
@@ -480,6 +481,71 @@ Semantics:
   reported as workflow-level inputs.
 - The report is also available as JSON via `dry-run --json` (the `samples`
   block), and `--samples ready` works in `test --run` as well.
+
+---
+
+## Background runs (`--background`)
+
+`run --background` (and `resume --background`) detaches execution into a
+background process and returns to the shell immediately:
+
+```bash
+# Foreground prints one line and exits 0; the run continues in the background
+oxo-flow run pipeline.oxoflow --background
+#   started in background (pid 48291) · log: .oxo-flow/logs/oxo-flow.log ·
+#   monitor: oxo-flow status .oxo-flow/checkpoint.json · stop: kill 48291
+
+# Detach a resumed run the same way
+oxo-flow resume .oxo-flow/checkpoint.json --background
+```
+
+Mechanics:
+
+- The foreground process spawns a **detached child** that re-runs the same
+  command with `--background` removed — every other flag (`-j`, `--profile`,
+  `--samples`, `--rerun`, `--log-file`, …) passes through verbatim, so a
+  background run behaves exactly like a foreground one: checkpoint, workdir
+  lock, report snapshots, and resume semantics are unchanged.
+- The child's stdout and stderr are redirected to the run log
+  (`--log-file` if given, otherwise `.oxo-flow/logs/oxo-flow.log` in the
+  workdir) — the tracing stream lands there too, so the log records the
+  whole run.
+- The child's pid is written to `.oxo-flow/background.pid` in the workdir
+  (also shown in the summary).
+- The child gets its own process group, so it survives terminal close and
+  Ctrl-C at the shell — it keeps running until it finishes or is killed.
+- The foreground exits **0** once the child is spawned; it does not wait.
+  If the spawn fails (for example because another run already holds the
+  workdir lock), the foreground exits nonzero with the reason.
+
+Which commands accept `--background`:
+
+- `run` and `resume` — the only long-lived terminal-bound commands.
+  Cluster runs go through `run --profile <name>` and therefore detach the
+  same way: `run --profile slurm --background` submits and polls the
+  cluster jobs entirely inside the background process.
+- `dry-run` intentionally does not: a preview is fast and read-only —
+  keep it in the foreground.
+- Other commands (`pull`, `test`, `export`, `ai`, …) are either quick or
+  one-shot; run them before the background run and keep them foreground.
+
+Monitoring a background run works exactly like a foreground one: poll
+`oxo-flow status .oxo-flow/checkpoint.json` (or `status --timing`), read
+the run log, and check the report snapshots in `.oxo-flow/reports/`. Stop
+a background run with `kill <pid>` (Unix) or `taskkill /PID <pid>` —
+the pid is in the summary line and in `.oxo-flow/background.pid`.
+
+Notes:
+
+- Combined with the global `--json`, the foreground still prints its
+  one-line summary to **stderr** and exits 0; stdout stays empty (the JSON
+  run summary belongs to the actual run, which happens in the child).
+- Bundle runs need an explicit `--workdir` (the bundle's extracted
+  directory is created per-process, so it cannot be predicted from the
+  foreground invocation) and `--yes` — a detached child cannot prompt.
+- `--background` is a launcher flag, not a workflow setting: the child
+  re-parses the remaining argv, so flag ordering rules (run flags before
+  `KEY=VALUE` overrides) apply to the whole command line as usual.
 
 ---
 

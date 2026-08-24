@@ -1,0 +1,89 @@
+{
+  "sources": {
+    "bioconda_tools": {
+      "count": 6470,
+      "url": "https://conda.anaconda.org/bioconda/channeldata.json",
+      "excluded": 6191,
+      "description": "",
+      "data_file": "bioconda_tools.jsonl",
+      "generated_at": "2026-08-24T03:55:33Z",
+      "auto": true
+    },
+    "skills_index": {
+      "count": 562,
+      "url": "https://github.com/GPTomics/bioSkills",
+      "domains": 64,
+      "description": "",
+      "data_file": "skills_index.jsonl",
+      "generated_at": "2026-08-23T16:01:26Z",
+      "auto": true
+    },
+    "nfcore_modules": {
+      "count": 2000,
+      "url": "https://github.com/nf-core/modules",
+      "description": "",
+      "data_file": "nfcore_modules.jsonl",
+      "generated_at": "2026-08-23T16:01:36Z",
+      "auto": true
+    },
+    "commercial_tools": {
+      "count": 25,
+      "auto_count": 10,
+      "kinds": [
+        "github-releases",
+        "manual",
+        "pin",
+        "scrape"
+      ],
+      "description": "",
+      "data_file": "commercial_tools.jsonl",
+      "generated_at": "2026-08-23T16:36:34Z",
+      "auto": true
+    },
+    "pipeline_graph": {
+      "count": 543,
+      "url": "https://skillgraph.pipette.bio/mcp",
+      "stats": {
+        "skills": 78,
+        "transitions": 483,
+        "papers": 11337,
+        "nodes": 78,
+        "edges": 465
+      },
+      "description": "",
+      "data_file": "pipeline_graph.jsonl",
+      "generated_at": "2026-08-23T16:02:58Z",
+      "auto": true
+    },
+    "biotools_overlay": {
+      "count": 1925,
+      "url": "https://bio.tools/api/tool/",
+      "targets": 8159,
+      "seen": 32523,
+      "stop_reason": "max-pages reached",
+      "description": "",
+      "data_file": "biotools_overlay.jsonl",
+      "generated_at": "2026-08-23T16:44:04Z",
+      "auto": true
+    },
+    "edam_terms": {
+      "count": 839,
+      "records": 835,
+      "url": "https://github.com/edamontology/edamontology",
+      "license": "CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/)",
+      "description": "",
+      "data_file": "edam_terms.jsonl",
+      "generated_at": "2026-08-23T16:08:40Z",
+      "auto": true
+    },
+    "skillgraph_docs": {
+      "count": 77,
+      "url": "https://skillgraph.pipette.bio/mcp",
+      "description": "full SKILL.md docs per skill (reserved for a later doc layer)",
+      "data_file": "skillgraph_docs.jsonl",
+      "generated_at": "2026-08-23T16:02:58Z",
+      "auto": true
+    }
+  },
+  "generated_at": "2026-08-24T03:55:33Z"
+}

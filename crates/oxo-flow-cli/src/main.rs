@@ -3,6 +3,7 @@
 //!
 //! Provides subcommands for running, validating, and managing workflows.
 
+mod background;
 pub mod banner;
 pub mod commands;
 mod logging;
@@ -188,6 +189,14 @@ pub enum Commands {
             help = "Cluster jobs in flight at once (overrides the profile's max_submitted)"
         )]
         max_submitted: Option<usize>,
+        /// Detach execution into a background process: the foreground
+        /// invocation spawns a detached child that re-runs this command
+        /// without the flag, writes its pid to .oxo-flow/background.pid,
+        /// prints a summary on stderr, and exits 0 immediately. Monitor
+        /// with `oxo-flow status`, the run log, or report snapshots; stop
+        /// with `kill <pid>` (the pid is in the summary and the pid file).
+        #[arg(long)]
+        background: bool,
     },
     /// Resume an interrupted workflow from a checkpoint.
     Resume {
@@ -233,6 +242,13 @@ pub enum Commands {
             help = "Skip the automatic report snapshot after the resumed run"
         )]
         no_report_snapshot: bool,
+        /// Detach the resumed run into a background process: the foreground
+        /// invocation spawns a detached child that re-runs `resume` without
+        /// the flag, writes its pid to .oxo-flow/background.pid, prints a
+        /// summary on stderr, and exits 0 immediately (see `run
+        /// --background`).
+        #[arg(long)]
+        background: bool,
     },
     /// Preview execution without running any commands.
     DryRun {
@@ -343,7 +359,11 @@ pub enum Commands {
             help = "Template name or natural-language description (with --ai)"
         )]
         template: Option<String>,
-        #[arg(short = 'o', long, help = "Output file path")]
+        #[arg(
+            short = 'o',
+            long,
+            help = "Output file or directory (a trailing slash forces a directory)"
+        )]
         output: Option<PathBuf>,
         /// Enable AI-powered workflow generation from natural language.
         #[arg(long)]
@@ -1106,7 +1126,30 @@ async fn main() -> Result<()> {
             rerun,
             no_report_snapshot,
             max_submitted,
+            background,
         } => {
+            // ── Background runs (issue #158) ─────────────────────────────
+            // The foreground process never executes the workflow: it spawns
+            // a DETACHED child that re-runs the same command without
+            // --background (same argv, so --bundle/--profile/--samples/…
+            // pass through verbatim), writes the child's pid, prints a
+            // one-line summary on stderr, and exits 0. The child then runs
+            // the normal flow — checkpoint, workdir lock, and resume
+            // semantics are unchanged. Bundle confirmation still applies in
+            // the child; a detached child cannot prompt, so bundle runs
+            // need --yes (fail-closed, same as any non-interactive session).
+            if background {
+                let bg_workdir = crate::background::background_workdir_for_run(
+                    workflow.as_deref(),
+                    workdir.as_deref(),
+                    bundle.as_deref(),
+                )?;
+                let log_path =
+                    crate::background::resolve_log_path(&bg_workdir, log_file.as_deref());
+                let args = crate::background::strip_background_flag(std::env::args_os());
+                crate::background::launch_in_background(&args, &bg_workdir, &log_path)?;
+                std::process::exit(0);
+            }
             use anyhow::Context as _;
             use colored::Colorize as _;
             #[allow(unused_imports)]
@@ -1243,7 +1286,22 @@ async fn main() -> Result<()> {
             timeout,
             workdir,
             no_report_snapshot,
+            background,
         } => {
+            // ── Background resume (issue #158) ───────────────────────────
+            // Same detach contract as `run --background`; the workdir comes
+            // from the checkpoint when --workdir is not given, exactly as
+            // `resume_command` resolves it.
+            if background {
+                let bg_workdir = crate::background::background_workdir_for_resume(
+                    &checkpoint,
+                    workdir.as_deref(),
+                )?;
+                let log_path = crate::background::resolve_log_path(&bg_workdir, None);
+                let args = crate::background::strip_background_flag(std::env::args_os());
+                crate::background::launch_in_background(&args, &bg_workdir, &log_path)?;
+                std::process::exit(0);
+            }
             resume_command(
                 checkpoint,
                 jobs,

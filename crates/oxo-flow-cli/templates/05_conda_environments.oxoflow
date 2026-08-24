@@ -40,19 +40,26 @@ conda = "envs/qc.yaml"
 [[rules]]
 name = "align_sequences"
 input = ["data/sequences.fasta"]
-output = ["aligned/alignment.bam"]
-shell = "echo 'Alignment placeholder' > {output[0]}"
+output = ["aligned/alignment.sam"]
+# Self-alignment demo: the demo sequences serve as both reference and
+# reads, so the rule runs end-to-end with only the pinned docker image.
+description = "Self-alignment with BWA-MEM2 (reference = demo sequences)"
+shell = """
+mkdir -p aligned
+bwa-mem2 index {input[0]}
+bwa-mem2 mem -t {threads} {input[0]} {input[0]} > {output[0]}
+"""
 
 [rules.resources]
 threads = 8
 memory = "16G"
 
 [rules.environment]
-docker = "biocontainers/bwa-mem2:2.2.1"
+docker = "quay.io/biocontainers/bwa-mem2:2.2.1--he70b90d_8"
 
 [[rules]]
 name = "analyze_results"
-input = ["aligned/alignment.bam", "qc/report.txt"]
+input = ["aligned/alignment.sam", "qc/report.txt"]
 output = ["results/analysis.json"]
 shell = """
 mkdir -p results

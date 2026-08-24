@@ -64,33 +64,53 @@ pub trait EnvironmentBackend: Send + Sync {
 /// shell (issue #136). Fail fast with a clear error instead of emitting
 /// a command that does not do what it says. `kind` names the backend
 /// (conda/mamba) in the error.
+///
+/// When the spec is a readable file, the name gets a short content-hash
+/// suffix (`name-<hash8>`): two workflows that ship DIFFERENT yamls with
+/// the same name then build into distinct envs instead of silently
+/// sharing one prefix (live evidence: rnaseq vs rnaseq-star-deseq2
+/// deseq2 collision, issue #159). Same content → same name, so
+/// identical specs keep deduplicating. Non-file specs (inline strings)
+/// keep the plain name.
 fn conda_env_name_from_spec(kind: &str, spec: &str) -> Result<String> {
     // Try reading the YAML file to extract `name:` field
-    let from_yaml = std::fs::read_to_string(spec).ok().and_then(|content| {
-        content.lines().find_map(|line| {
-            let trimmed = line.trim();
-            if trimmed.starts_with("name:") || trimmed.starts_with("name :") {
-                let name = trimmed
-                    .split_once(':')
-                    .map(|(_, v)| v)
-                    .unwrap_or("")
-                    .trim()
-                    .trim_matches('"')
-                    .trim_matches('\'');
-                (!name.is_empty()).then(|| name.to_string())
-            } else {
-                None
-            }
-        })
-    });
+    let file_content = std::fs::read(spec).ok();
+    let from_yaml = file_content
+        .as_deref()
+        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        .and_then(|content| {
+            content.lines().find_map(|line| {
+                let trimmed = line.trim();
+                if trimmed.starts_with("name:") || trimmed.starts_with("name :") {
+                    let name = trimmed
+                        .split_once(':')
+                        .map(|(_, v)| v)
+                        .unwrap_or("")
+                        .trim()
+                        .trim_matches('"')
+                        .trim_matches('\'');
+                    (!name.is_empty()).then(|| name.to_string())
+                } else {
+                    None
+                }
+            })
+        });
     // Fall back to file stem
-    let name = from_yaml.unwrap_or_else(|| {
+    let mut name = from_yaml.unwrap_or_else(|| {
         std::path::Path::new(spec)
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or(spec)
             .to_string()
     });
+    // Content-hash suffix for file-backed specs (issue #159).
+    if let Some(bytes) = file_content {
+        use sha2::Digest;
+        let digest = sha2::Sha256::digest(bytes);
+        let hash8: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
+        name.push('-');
+        name.push_str(&hash8);
+    }
     if name
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
@@ -487,6 +507,36 @@ impl EnvironmentBackend for MambaBackend {
 #[derive(Debug, Default)]
 pub struct DockerBackend;
 
+/// The quay.io retry target for a bare Docker image name, if any.
+///
+/// Biocontainers publishes on quay.io, not Docker Hub, so the common
+/// patterns `biocontainers/<tool>:<tag>` and bare `<tool>:<tag>` 404 on
+/// Docker Hub. The retry only fires after a failed `docker pull` — an
+/// explicitly registry-qualified spec (quay.io/…, docker.io/…,
+/// localhost:5000/…) or a multi-segment path is pulled verbatim.
+fn quay_biocontainers_fallback(spec: &str) -> Option<String> {
+    let image = spec.split('@').next().unwrap_or(spec); // strip digest: name@sha256:…
+    // Strip the tag, but only when the colon starts a tag — a colon whose
+    // suffix contains '/' belongs to a host:port registry prefix
+    // (localhost:5000/team/tool:1.0), which must be left intact.
+    let name = match image.rsplit_once(':') {
+        Some((head, tail)) if !tail.is_empty() && !tail.contains('/') => head,
+        _ => image,
+    };
+    let segments: Vec<&str> = name.split('/').collect();
+    if segments
+        .first()
+        .is_some_and(|s| s.contains('.') || s.contains(':'))
+    {
+        return None; // registry-qualified: quay.io/…, docker.io/…, host:port/…
+    }
+    match segments.as_slice() {
+        [_single] => Some(format!("quay.io/biocontainers/{spec}")),
+        ["biocontainers", _rest] => Some(format!("quay.io/{spec}")),
+        _ => None,
+    }
+}
+
 impl EnvironmentBackend for DockerBackend {
     fn name(&self) -> &str {
         "docker"
@@ -530,8 +580,17 @@ impl EnvironmentBackend for DockerBackend {
         // `docker pull`s of the same image race in the daemon (live:
         // fastqc x2 -> "failed to lease content: NotFound"). The
         // per-key env lock serializes the truly-missing case.
+        //
+        // Bare image names that 404 on Docker Hub get one quay.io
+        // retry (biocontainers publishes there, not on Docker Hub —
+        // see quay_biocontainers_fallback). Explicit registries are
+        // never shadowed.
+        let mut pull = format!("docker pull {spec}");
+        if let Some(fallback) = quay_biocontainers_fallback(spec) {
+            pull.push_str(&format!(" || docker pull {fallback}"));
+        }
         Ok(format!(
-            "docker image inspect {spec} >/dev/null 2>&1 || docker pull {spec}"
+            "docker image inspect {spec} >/dev/null 2>&1 || {pull}"
         ))
     }
 
@@ -625,8 +684,14 @@ impl EnvironmentBackend for SingularityBackend {
         //   store) — nothing to pull. `{binary} pull` accepts only URIs,
         //   so a path must bypass it entirely; a missing local file fails
         //   with a clear diagnostic instead of pull's URI parse error.
+        // - URI-encoded colons (%3A/%3a) are decoded BEFORE the colon
+        //   substitution so the derived IMG name matches the name a
+        //   previous `pull` produced — otherwise the existence guard
+        //   never fires and every rule re-pulls (issue #162). Only %3A
+        //   is decoded on purpose: decoding %2F would introduce path
+        //   separators into the segment-derived filename.
         Ok(format!(
-            "case '{spec}' in *://*) IMG=$(printf '%s' '{spec}' | sed 's#^docker://##; s#.*/##; s#:#_#g'); case \"$IMG\" in *.sif) ;; *) IMG=\"$IMG.sif\" ;; esac; [ -f \"$IMG\" ] || {b} pull {spec} ;; *) [ -f '{spec}' ] || {{ echo \"singularity spec '{spec}' is neither a pull URI nor an existing file\" >&2; exit 1; }} ;; esac",
+            "case '{spec}' in *://*) IMG=$(printf '%s' '{spec}' | sed 's#^docker://##; s#.*/##; s#%3A#:#g; s#%3a#:#g; s#:#_#g'); case \"$IMG\" in *.sif) ;; *) IMG=\"$IMG.sif\" ;; esac; [ -f \"$IMG\" ] || {b} pull {spec} ;; *) [ -f '{spec}' ] || {{ echo \"singularity spec '{spec}' is neither a pull URI nor an existing file\" >&2; exit 1; }} ;; esac",
             b = self.binary,
         ))
     }
@@ -910,6 +975,18 @@ impl EnvironmentCache {
         }
     }
 
+    /// Remove the entry for `key` — the cached environment no longer exists
+    /// on disk (migrated, deleted, or failed mid-setup). The next readiness
+    /// check misses and the setup path rebuilds it.
+    pub fn invalidate(&mut self, key: &str) {
+        if self.ready.remove(key) {
+            // Persist to file if configured
+            if let Err(e) = self.save() {
+                tracing::warn!("could not save environment cache: {}", e);
+            }
+        }
+    }
+
     /// Load cache from file.
     fn load(&mut self) -> Result<()> {
         if let Some(ref path) = self.cache_file
@@ -1035,6 +1112,12 @@ impl EnvironmentResolver {
     pub async fn cache_mark_ready(&self, key: &str) {
         let mut cache = self.cache.lock().await;
         cache.mark_ready(key);
+    }
+
+    /// Invalidate a cache entry (the cached environment vanished on disk).
+    pub async fn cache_invalidate(&self, key: &str) {
+        let mut cache = self.cache.lock().await;
+        cache.invalidate(key);
     }
 
     /// Wrap a command using the appropriate environment backend.
@@ -1491,6 +1574,59 @@ mod tests {
     }
 
     #[test]
+    fn conda_env_name_carries_content_hash_for_file_specs() {
+        // issue #159: same stem, different content → different env names,
+        // so two workflows' `deseq2.yaml` variants never share a prefix.
+        let dir = tempfile::tempdir().unwrap();
+        // Distinct directories so both specs share the STEM `deseq2` while
+        // carrying different content — the exact cross-workflow collision
+        // shape from the live incident.
+        let a = dir.path().join("wf-a").join("deseq2.yaml");
+        let b = dir.path().join("wf-b").join("deseq2.yaml");
+        std::fs::create_dir_all(a.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(b.parent().unwrap()).unwrap();
+        std::fs::write(&a, "channels: [bioconda]\ndependencies: [r-deseq2]\n").unwrap();
+        let name_a = CondaBackend.setup_command(a.to_str().unwrap()).unwrap();
+        std::fs::write(
+            &b,
+            "channels: [bioconda]\ndependencies: [r-deseq2, r-optparse=1.7.5]\n",
+        )
+        .unwrap();
+        let name_b = CondaBackend.setup_command(b.to_str().unwrap()).unwrap();
+        let extract = |cmd: String| {
+            let start = cmd.find(" -n ").unwrap() + 4;
+            let rest = &cmd[start..];
+            rest.split_whitespace().next().unwrap().to_string()
+        };
+        let na = extract(name_a);
+        let nb = extract(name_b);
+        assert_ne!(na, nb, "different content must derive different env names");
+        assert!(
+            na.starts_with("deseq2-"),
+            "file specs carry a hash suffix: {na}"
+        );
+        assert!(nb.starts_with("deseq2-"));
+        // Same content → same name (dedup preserved).
+        let c = dir.path().join("other-dir").join("deseq2.yaml");
+        std::fs::create_dir_all(c.parent().unwrap()).unwrap();
+        std::fs::copy(&a, &c).unwrap();
+        let name_c = CondaBackend.setup_command(c.to_str().unwrap()).unwrap();
+        assert_eq!(
+            extract(name_c),
+            na,
+            "identical content must keep the same env name"
+        );
+    }
+
+    #[test]
+    fn conda_env_name_bare_name_has_no_hash() {
+        // Non-file specs (plain names) keep the plain name — no suffix.
+        let backend = CondaBackend;
+        let cmd = backend.setup_command("myenv").unwrap();
+        assert!(cmd.contains("conda env create -n myenv -f myenv"));
+    }
+
+    #[test]
     fn conda_env_name_validation_rejects_untrusted_yaml_names() {
         // The env name is interpolated into `conda run -n <name>` inside a
         // shell string, so an untrusted YAML `name:` could break out of the
@@ -1526,15 +1662,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let yaml = dir.path().join("env.yaml");
         std::fs::write(&yaml, "name: rnaseq_2\nchannels: [bioconda]\n").unwrap();
-        assert_eq!(
-            conda_env_name_from_spec("conda", yaml.to_str().unwrap()).unwrap(),
-            "rnaseq_2",
-            "a YAML name within the allowed alphabet passes"
+        let derived = conda_env_name_from_spec("conda", yaml.to_str().unwrap()).unwrap();
+        assert!(
+            derived.starts_with("rnaseq_2-") && derived.len() == "rnaseq_2-".len() + 8,
+            "file specs keep the YAML name and gain the 8-hex content-hash suffix: {derived}"
         );
         assert_eq!(
             conda_env_name_from_spec("conda", "envs/qc.yaml").unwrap(),
             "qc",
-            "the file-stem fallback passes for plain stems"
+            "the file-stem fallback passes for plain stems (no file on disk → no suffix)"
         );
         assert_eq!(
             conda_env_name_from_spec("conda", "my-env_1").unwrap(),
@@ -1567,7 +1703,54 @@ mod tests {
         let cmd = backend.setup_command("biocontainers/bwa:0.7.17").unwrap();
         assert_eq!(
             cmd,
-            "docker image inspect biocontainers/bwa:0.7.17 >/dev/null 2>&1 || docker pull biocontainers/bwa:0.7.17"
+            "docker image inspect biocontainers/bwa:0.7.17 >/dev/null 2>&1 || \
+             docker pull biocontainers/bwa:0.7.17 || \
+             docker pull quay.io/biocontainers/bwa:0.7.17"
+        );
+    }
+
+    #[test]
+    fn docker_setup_command_falls_back_to_quay_for_bare_names() {
+        let backend = DockerBackend;
+        // Bare single-name specs (a common bioinformatics pattern) retry
+        // against quay.io/biocontainers after a docker.io failure.
+        let cmd = backend.setup_command("bwa:0.7.19").unwrap();
+        assert!(
+            cmd.contains("docker pull bwa:0.7.19 || docker pull quay.io/biocontainers/bwa:0.7.19"),
+            "bare name must get the quay.io/biocontainers fallback: {cmd}"
+        );
+    }
+
+    #[test]
+    fn docker_setup_command_has_no_fallback_for_registry_qualified_specs() {
+        let backend = DockerBackend;
+        // Explicit registries must never be shadowed by a fallback.
+        let cmd = backend
+            .setup_command("quay.io/nf-core/cellranger:7.1.0")
+            .unwrap();
+        assert_eq!(
+            cmd.matches("docker pull").count(),
+            1,
+            "explicit quay spec must not get a second (fallback) pull: {cmd}"
+        );
+        assert!(
+            cmd.ends_with("docker pull quay.io/nf-core/cellranger:7.1.0"),
+            "explicit quay spec must be pulled verbatim: {cmd}"
+        );
+        // Local registries (host:port) and multi-segment paths also stay verbatim.
+        let cmd = backend
+            .setup_command("localhost:5000/team/tool:1.0")
+            .unwrap();
+        assert!(
+            !cmd.contains("quay.io/biocontainers"),
+            "local registry: {cmd}"
+        );
+        let cmd = backend
+            .setup_command("docker.io/library/ubuntu:22.04")
+            .unwrap();
+        assert!(
+            !cmd.contains("quay.io/biocontainers"),
+            "docker.io explicit: {cmd}"
         );
     }
 
@@ -1639,6 +1822,22 @@ mod tests {
             "a final segment already ending in .sif must not get a second .sif: {cmd}"
         );
         assert!(cmd.contains("[ -f \"$IMG\" ] || "));
+    }
+
+    #[test]
+    fn singularity_setup_decodes_uri_encoded_colons_before_img_naming() {
+        // %3A-encoded colons must be decoded before the `s#:#_#g`
+        // substitution, or the derived IMG name never matches the file a
+        // previous pull produced and every rule re-pulls (issue #162 —
+        // live evidence: clindet's lofreq URI on tx-ubuntu).
+        let backend = SingularityBackend::new();
+        let cmd = backend
+            .setup_command("docker://quay.io/biocontainers/tool%3A1.2.3--h1a2b3c4")
+            .unwrap();
+        assert!(
+            cmd.contains("sed 's#^docker://##; s#.*/##; s#%3A#:#g; s#%3a#:#g; s#:#_#g'"),
+            "the URI arm must decode %3A before the colon substitution: {cmd}"
+        );
     }
 
     #[test]
@@ -1759,6 +1958,18 @@ mod tests {
         cache.mark_ready("system");
         cache.mark_ready("system");
         assert!(cache.is_ready("system"));
+    }
+
+    #[test]
+    fn cache_invalidate_removes_entry() {
+        let mut cache = EnvironmentCache::new();
+        cache.mark_ready("conda:envs/qc.yaml");
+        cache.mark_ready("docker:ubuntu:22.04");
+        cache.invalidate("conda:envs/qc.yaml");
+        assert!(!cache.is_ready("conda:envs/qc.yaml"));
+        assert!(cache.is_ready("docker:ubuntu:22.04"));
+        // Invalidating an unknown key is a no-op, not an error.
+        cache.invalidate("pixi:default");
     }
 
     // ── EnvironmentResolver ────────────────────────────────────────

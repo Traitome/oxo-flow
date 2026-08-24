@@ -1,548 +1,543 @@
-{"i": "admet-prediction", "n": "Admet Prediction", "t": "5", "o": "Predict ADMET properties and drug-likeness for compounds using ADMET-AI (119 endpoints) and RDKit de"}
-{"i": "alphafold-query", "n": "Alphafold Query", "t": "1", "o": "Query AlphaFold Database for AI-predicted protein structures. AlphaFold provides high-confidence 3D"}
-{"i": "archr", "n": "Archr", "t": "2", "o": "Perform single-cell ATAC-seq analysis using ArchR (R): from fragments to peaks, clusters, and motif"}
-{"i": "atacseq", "n": "Atacseq", "t": "2", "o": ""}
-{"i": "bacterial-pangenome", "n": "Bacterial Pangenome", "t": "5", "o": "Analyze pan-genome across multiple bacterial isolates to identify core, accessory, and unique genes."}
-{"i": "batch-correction", "n": "Batch Correction", "t": "9", "o": ""}
-{"i": "binding-site-detection", "n": "Binding Site Detection", "t": "3", "o": "Identify and rank druggable binding pockets on protein surfaces using Fpocket. Returns pocket locati"}
-{"i": "bisulfite-seq", "n": "Bisulfite Seq", "t": "4", "o": ""}
-{"i": "cbioportal-query", "n": "Cbioportal Query", "t": "1", "o": "Query cBioPortal for cancer genomics data. cBioPortal provides access to large-scale cancer genomics"}
-{"i": "cell-type-annotation", "n": "Cell Type Annotation", "t": "4", "o": "Automatically annotate cell types in single-cell RNA-seq data using reference-based methods (SingleR"}
-{"i": "cellchat", "n": "Cellchat", "t": "2", "o": ""}
-{"i": "cellphonedb", "n": "Cellphonedb", "t": "1", "o": ""}
-{"i": "chembl-query", "n": "Chembl Query", "t": "1", "o": "Search the ChEMBL database for bioactivity data, known inhibitors, approved drugs, and target inform"}
-{"i": "chipseq", "n": "Chipseq", "t": "7", "o": "Perform ChIP-seq analysis: from FASTQ to peaks, annotations, motifs, and visualizations."}
-{"i": "citeseq", "n": "Citeseq", "t": "2", "o": "CITE-seq combines scRNA-seq with surface protein detection via antibody-derived tags (ADTs). Seurat"}
-{"i": "clinical-variant", "n": "Clinical Variant", "t": "4", "o": "Deterministic clinical variant analysis for rare disease diagnosis. This skill uses a Python script"}
-{"i": "clinicaltrials-query", "n": "Clinicaltrials Query", "t": "1", "o": "Query ClinicalTrials.gov for clinical study information. The database contains 400,000+ studies from"}
-{"i": "clinvar-query", "n": "Clinvar Query", "t": "1", "o": "Query NCBI ClinVar database for clinical interpretations of genetic variants. ClinVar aggregates var"}
-{"i": "cnv-analysis", "n": "Cnv Analysis", "t": "4", "o": "Detect copy number variations (amplifications, deletions) from WGS, WES, or targeted sequencing data"}
-{"i": "compound-analysis", "n": "Compound Analysis", "t": "2", "o": "Analyze and compare small molecules using RDKit: compute molecular descriptors, generate fingerprint"}
-{"i": "cosmic-query", "n": "Cosmic Query", "t": "1", "o": "Query the COSMIC (Catalogue Of Somatic Mutations In Cancer) database for somatic mutation data. COSM"}
-{"i": "crispr-screen", "n": "Crispr Screen", "t": "3", "o": ""}
-{"i": "data-inspection", "n": "Data Inspection", "t": "4", "o": ""}
-{"i": "dbsnp-query", "n": "Dbsnp Query", "t": "1", "o": "Query NCBI dbSNP database for SNP and small variant information. dbSNP is the primary repository for"}
-{"i": "denovo-assembly", "n": "Denovo Assembly", "t": "12", "o": "Assemble a single bacterial/archaeal isolate genome from paired-end reads with polishing and quality"}
-{"i": "differential-expression", "n": "Differential Expression", "t": "7", "o": ""}
-{"i": "dtu-analysis", "n": "Dtu Analysis", "t": "5", "o": "Detect changes in transcript/isoform proportions between conditions. Unlike differential gene expres"}
-{"i": "ensembl-query", "n": "Ensembl Query", "t": "1", "o": "Query Ensembl REST API for gene annotations, coordinates, sequences, and variant information. Ensemb"}
-{"i": "flux-analysis", "n": "Flux Analysis", "t": "3", "o": ""}
-{"i": "fusion-detection", "n": "Fusion Detection", "t": "6", "o": "Detect gene fusions from RNA-seq data using STAR-Fusion, Arriba, or other fusion callers. Identifies"}
-{"i": "geo-query", "n": "Geo Query", "t": "1", "o": "Query NCBI Gene Expression Omnibus (GEO) for gene expression datasets. GEO is a public repository fo"}
-{"i": "gnomad-query", "n": "Gnomad Query", "t": "1", "o": "Query the Genome Aggregation Database (gnomAD) for population allele frequencies. gnomAD v4 contains"}
-{"i": "golden-gate-assembly", "n": "Golden Gate Assembly", "t": "2", "o": "Design and simulate Golden Gate or Gibson DNA assemblies. Handles restriction enzyme selection, over"}
-{"i": "gwas-analysis", "n": "Gwas Analysis", "t": "7", "o": "Perform genome-wide association study from VCF genotype data and phenotype file. Includes QC filteri"}
-{"i": "gwas-query", "n": "Gwas Query", "t": "0", "o": "Query the NHGRI-EBI GWAS Catalog for genome-wide association study results. The catalog contains all"}
-{"i": "isoform-analysis", "n": "Isoform Analysis", "t": "5", "o": "Quantify transcript-level expression using Salmon or kallisto, and perform transcript-level differen"}
-{"i": "kegg-query", "n": "Kegg Query", "t": "0", "o": "Query KEGG (Kyoto Encyclopedia of Genes and Genomes) and Reactome pathway databases for pathway info"}
-{"i": "lead-optimization", "n": "Lead Optimization", "t": "3", "o": "Generate and evaluate structural analogs of a lead compound using RDKit: R-group enumeration, bioiso"}
-{"i": "ligand-preparation", "n": "Ligand Preparation", "t": "3", "o": "Convert SMILES to docking-ready 3D structures using RDKit, Gypsum-DL (tautomer/protomer enumeration)"}
-{"i": "md-simulation", "n": "Md Simulation", "t": "6", "o": "Run short molecular dynamics simulations using GROMACS or OpenMM. Includes system setup (solvation,"}
-{"i": "metagenome-binning", "n": "Metagenome Binning", "t": "6", "o": "Assemble metagenomic reads and bin contigs into metagenome-assembled genomes (MAGs)."}
-{"i": "microbiome-profiling", "n": "Microbiome Profiling", "t": "13", "o": "Identify and characterize viral sequences from metagenomic data. Supports both viral species identif"}
-{"i": "molecular-docking", "n": "Molecular Docking", "t": "8", "o": "Dock small molecules into protein binding sites using AutoDock Vina or SMINA. Produces ranked bindin"}
-{"i": "multi-omics-integration", "n": "Multi Omics Integration", "t": "5", "o": ""}
-{"i": "nanopore-analysis", "n": "Nanopore Analysis", "t": "6", "o": "QC, filter, align, assemble, and polish long-read nanopore sequencing data. Handles ONT reads from M"}
-{"i": "oligo-design", "n": "Oligo Design", "t": "2", "o": "Design primers, oligo pools, and probes using primer3-py with thermodynamic validation. Includes sec"}
-{"i": "openfda-query", "n": "Openfda Query", "t": "0", "o": "Query OpenFDA for drug safety and regulatory data. OpenFDA provides access to FDA databases includin"}
-{"i": "opentargets-query", "n": "Opentargets Query", "t": "1", "o": "Query Open Targets Platform for drug target-disease associations. Open Targets integrates evidence f"}
-{"i": "pathway-enrichment", "n": "Pathway Enrichment", "t": "17", "o": ""}
-{"i": "pdb-query", "n": "Pdb Query", "t": "1", "o": "Search and download protein structures from the RCSB Protein Data Bank using the rcsb-api Python cli"}
-{"i": "phylogenetic-tree", "n": "Phylogenetic Tree", "t": "7", "o": "Build phylogenetic trees from DNA or protein sequences: alignment, trimming, tree inference, and vis"}
-{"i": "protein-ligand-interaction", "n": "Protein Ligand Interaction", "t": "3", "o": "Analyze non-covalent interactions between a protein and ligand using PLIP (from PDB/docking structur"}
-{"i": "proteomics", "n": "Proteomics", "t": "9", "o": "Analyze mass spectrometry-based proteomics data. Perform quality control, normalization, differentia"}
-{"i": "pubchem-query", "n": "Pubchem Query", "t": "1", "o": "Search PubChem for compounds by name, SMILES, CID, or formula using PubChemPy. Retrieve compound str"}
-{"i": "pubmed-query", "n": "Pubmed Query", "t": "0", "o": ""}
-{"i": "rna-velocity", "n": "Rna Velocity", "t": "2", "o": ""}
-{"i": "rnaseq-alignment", "n": "Rnaseq Alignment", "t": "13", "o": ""}
-{"i": "scanpy", "n": "Scanpy", "t": "2", "o": ""}
-{"i": "scenic", "n": "Scenic", "t": "2", "o": ""}
-{"i": "seurat", "n": "Seurat", "t": "2", "o": ""}
-{"i": "shared", "n": "Shared", "t": "0", "o": ""}
-{"i": "signac", "n": "Signac", "t": "2", "o": "Perform single-cell ATAC-seq analysis using Signac (R): Seurat extension for chromatin accessibility"}
-{"i": "somatic-variants", "n": "Somatic Variants", "t": "8", "o": "Call somatic (cancer) mutations from tumor-normal paired samples or tumor-only samples using GATK Mu"}
-{"i": "spatial-atacseq", "n": "Spatial Atacseq", "t": "0", "o": "Analyze spatial ATAC-seq data (e.g., DBiT-seq) combining chromatin accessibility with spatial coordi"}
-{"i": "spatial-transcriptomics", "n": "Spatial Transcriptomics", "t": "6", "o": "Analyze spatial transcriptomics data using Seurat: from raw counts to clusters, spatially variable g"}
-{"i": "starsolo", "n": "Starsolo", "t": "4", "o": ""}
-{"i": "string-query", "n": "String Query", "t": "1", "o": "Query the STRING database (Search Tool for the Retrieval of Interacting Genes/Proteins) for protein-"}
-{"i": "structural-variants", "n": "Structural Variants", "t": "5", "o": ""}
-{"i": "survival-analysis", "n": "Survival Analysis", "t": "4", "o": ""}
-{"i": "trajectory-analysis", "n": "Trajectory Analysis", "t": "8", "o": ""}
-{"i": "ucsc-query", "n": "Ucsc Query", "t": "0", "o": "Query UCSC Genome Browser for genomic sequences, annotations, and track data. UCSC provides comprehe"}
-{"i": "uniprot-query", "n": "Uniprot Query", "t": "1", "o": "Query UniProt database for comprehensive protein sequence and functional information. UniProt is the"}
-{"i": "variant-annotation", "n": "Variant Annotation", "t": "5", "o": "Annotate VCF files with functional consequences, population frequencies, and clinical significance u"}
-{"i": "variant-calling", "n": "Variant Calling", "t": "9", "o": "Call germline variants from aligned BAM files using GATK or Freebayes, producing filtered and normal"}
-{"i": "viral-metagenomics", "n": "Viral Metagenomics", "t": "3", "o": "Identify, quality-assess, and quantify viral sequences from metagenomic data."}
-{"i": "virtual-screening", "n": "Virtual Screening", "t": "3", "o": "Screen a library of compounds against a protein target using AutoDock Vina. Includes library prepara"}
-{"i": "wgcna", "n": "Wgcna", "t": "2", "o": ""}
-{"i": "wgs-alignment", "n": "Wgs Alignment", "t": "8", "o": ""}
-{"f": "admet-prediction", "t": "lead-optimization", "d": "ADMET_RESULTS", "p": 0}
-{"f": "alphafold-query", "t": "molecular-docking", "d": "PDB", "p": 14}
-{"f": "alphafold-query", "t": "md-simulation", "d": "PDB", "p": 9}
-{"f": "alphafold-query", "t": "virtual-screening", "d": "PDB", "p": 6}
-{"f": "alphafold-query", "t": "protein-ligand-interaction", "d": "PDB", "p": 3}
-{"f": "alphafold-query", "t": "binding-site-detection", "d": "PDB", "p": 0}
-{"f": "archr", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 6}
-{"f": "archr", "t": "survival-analysis", "d": "GENE_LIST", "p": 0}
-{"f": "archr", "t": "string-query", "d": "GENE_LIST", "p": 0}
-{"f": "atacseq", "t": "differential-expression", "d": "COUNT_MATRIX", "p": 86}
-{"f": "atacseq", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 44}
-{"f": "atacseq", "t": "seurat", "d": "COUNT_MATRIX", "p": 37}
-{"f": "atacseq", "t": "archr", "d": "FRAGMENT_FILE", "p": 24}
-{"f": "atacseq", "t": "batch-correction", "d": "COUNT_MATRIX", "p": 14}
-{"f": "atacseq", "t": "signac", "d": "FRAGMENT_FILE", "p": 13}
-{"f": "atacseq", "t": "scanpy", "d": "COUNT_MATRIX", "p": 13}
-{"f": "atacseq", "t": "survival-analysis", "d": "GENE_LIST", "p": 8}
-{"f": "atacseq", "t": "multi-omics-integration", "d": "COUNT_MATRIX", "p": 4}
-{"f": "atacseq", "t": "citeseq", "d": "COUNT_MATRIX", "p": 3}
-{"f": "atacseq", "t": "crispr-screen", "d": "COUNT_MATRIX", "p": 3}
-{"f": "atacseq", "t": "string-query", "d": "GENE_LIST", "p": 3}
-{"f": "atacseq", "t": "dtu-analysis", "d": "COUNT_MATRIX", "p": 0}
-{"f": "atacseq", "t": "wgcna", "d": "COUNT_MATRIX", "p": 0}
-{"f": "atacseq", "t": "cellphonedb", "d": "COUNT_MATRIX", "p": 0}
-{"f": "atacseq", "t": "spatial-transcriptomics", "d": "COUNT_MATRIX", "p": 0}
-{"f": "atacseq", "t": "data-inspection", "d": "COUNT_MATRIX", "p": 0}
-{"f": "bacterial-pangenome", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 0}
-{"f": "bacterial-pangenome", "t": "survival-analysis", "d": "GENE_LIST", "p": 0}
-{"f": "bacterial-pangenome", "t": "string-query", "d": "GENE_LIST", "p": 0}
-{"f": "batch-correction", "t": "differential-expression", "d": "COUNT_MATRIX", "p": 112}
-{"f": "batch-correction", "t": "seurat", "d": "COUNT_MATRIX, H5AD", "p": 94}
-{"f": "batch-correction", "t": "wgcna", "d": "COUNT_MATRIX", "p": 55}
-{"f": "batch-correction", "t": "cell-type-annotation", "d": "H5AD, RDS", "p": 29}
-{"f": "batch-correction", "t": "scanpy", "d": "COUNT_MATRIX, H5AD", "p": 25}
-{"f": "batch-correction", "t": "trajectory-analysis", "d": "H5AD, RDS", "p": 22}
-{"f": "batch-correction", "t": "cellchat", "d": "H5AD, RDS", "p": 12}
-{"f": "batch-correction", "t": "citeseq", "d": "COUNT_MATRIX, H5AD", "p": 10}
-{"f": "batch-correction", "t": "cellphonedb", "d": "COUNT_MATRIX, H5AD", "p": 6}
-{"f": "batch-correction", "t": "signac", "d": "H5AD", "p": 5}
-{"f": "batch-correction", "t": "scenic", "d": "H5AD, RDS", "p": 5}
-{"f": "batch-correction", "t": "dtu-analysis", "d": "COUNT_MATRIX", "p": 0}
-{"f": "batch-correction", "t": "rna-velocity", "d": "H5AD", "p": 0}
-{"f": "batch-correction", "t": "multi-omics-integration", "d": "COUNT_MATRIX, H5AD", "p": 0}
-{"f": "batch-correction", "t": "spatial-transcriptomics", "d": "COUNT_MATRIX, H5AD", "p": 0}
-{"f": "batch-correction", "t": "crispr-screen", "d": "COUNT_MATRIX", "p": 0}
-{"f": "batch-correction", "t": "data-inspection", "d": "COUNT_MATRIX, H5AD", "p": 0}
-{"f": "binding-site-detection", "t": "molecular-docking", "d": "PDB", "p": 3}
-{"f": "binding-site-detection", "t": "virtual-screening", "d": "PDB", "p": 0}
-{"f": "binding-site-detection", "t": "protein-ligand-interaction", "d": "PDB", "p": 0}
-{"f": "binding-site-detection", "t": "md-simulation", "d": "PDB", "p": 0}
-{"f": "bisulfite-seq", "t": "differential-expression", "d": "COUNT_MATRIX", "p": 37}
-{"f": "bisulfite-seq", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 36}
-{"f": "bisulfite-seq", "t": "batch-correction", "d": "COUNT_MATRIX", "p": 6}
-{"f": "bisulfite-seq", "t": "survival-analysis", "d": "GENE_LIST", "p": 4}
-{"f": "bisulfite-seq", "t": "seurat", "d": "COUNT_MATRIX", "p": 3}
-{"f": "bisulfite-seq", "t": "dtu-analysis", "d": "COUNT_MATRIX", "p": 0}
-{"f": "bisulfite-seq", "t": "wgcna", "d": "COUNT_MATRIX", "p": 0}
-{"f": "bisulfite-seq", "t": "scanpy", "d": "COUNT_MATRIX", "p": 0}
-{"f": "bisulfite-seq", "t": "cellphonedb", "d": "COUNT_MATRIX", "p": 0}
-{"f": "bisulfite-seq", "t": "citeseq", "d": "COUNT_MATRIX", "p": 0}
-{"f": "bisulfite-seq", "t": "multi-omics-integration", "d": "COUNT_MATRIX", "p": 0}
-{"f": "bisulfite-seq", "t": "spatial-transcriptomics", "d": "COUNT_MATRIX", "p": 0}
-{"f": "bisulfite-seq", "t": "crispr-screen", "d": "COUNT_MATRIX", "p": 0}
-{"f": "bisulfite-seq", "t": "string-query", "d": "GENE_LIST", "p": 0}
-{"f": "bisulfite-seq", "t": "data-inspection", "d": "COUNT_MATRIX", "p": 0}
-{"f": "cbioportal-query", "t": "survival-analysis", "d": "CLINICAL_DATA, EXPRESSION_MATRIX", "p": 12}
-{"f": "cbioportal-query", "t": "wgcna", "d": "EXPRESSION_MATRIX", "p": 6}
-{"f": "cbioportal-query", "t": "scenic", "d": "EXPRESSION_MATRIX", "p": 0}
-{"f": "cbioportal-query", "t": "multi-omics-integration", "d": "EXPRESSION_MATRIX", "p": 0}
-{"f": "cell-type-annotation", "t": "seurat", "d": "H5AD", "p": 55}
-{"f": "cell-type-annotation", "t": "trajectory-analysis", "d": "H5AD, RDS", "p": 8}
-{"f": "cell-type-annotation", "t": "scanpy", "d": "H5AD", "p": 8}
-{"f": "cell-type-annotation", "t": "cellchat", "d": "CELL_LABELS, H5AD, RDS", "p": 8}
-{"f": "cell-type-annotation", "t": "batch-correction", "d": "H5AD, RDS", "p": 3}
-{"f": "cell-type-annotation", "t": "rna-velocity", "d": "H5AD", "p": 0}
-{"f": "cell-type-annotation", "t": "scenic", "d": "H5AD, RDS", "p": 0}
-{"f": "cell-type-annotation", "t": "cellphonedb", "d": "CELL_LABELS, H5AD", "p": 0}
-{"f": "cell-type-annotation", "t": "citeseq", "d": "H5AD", "p": 0}
-{"f": "cell-type-annotation", "t": "multi-omics-integration", "d": "H5AD", "p": 0}
-{"f": "cell-type-annotation", "t": "spatial-transcriptomics", "d": "H5AD", "p": 0}
-{"f": "cell-type-annotation", "t": "signac", "d": "H5AD", "p": 0}
-{"f": "cell-type-annotation", "t": "data-inspection", "d": "H5AD", "p": 0}
-{"f": "cellchat", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 11}
-{"f": "cellchat", "t": "survival-analysis", "d": "GENE_LIST", "p": 5}
-{"f": "cellchat", "t": "string-query", "d": "GENE_LIST", "p": 0}
-{"f": "cellphonedb", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 4}
-{"f": "cellphonedb", "t": "survival-analysis", "d": "GENE_LIST", "p": 0}
-{"f": "cellphonedb", "t": "string-query", "d": "GENE_LIST", "p": 0}
-{"f": "chembl-query", "t": "admet-prediction", "d": "SDF, SMILES", "p": 14}
-{"f": "chembl-query", "t": "pubchem-query", "d": "SMILES", "p": 12}
-{"f": "chembl-query", "t": "virtual-screening", "d": "SDF, SMILES", "p": 8}
-{"f": "chembl-query", "t": "molecular-docking", "d": "SDF, SMILES", "p": 6}
-{"f": "chembl-query", "t": "compound-analysis", "d": "SDF, SMILES", "p": 3}
-{"f": "chembl-query", "t": "protein-ligand-interaction", "d": "SDF", "p": 0}
-{"f": "chembl-query", "t": "lead-optimization", "d": "SDF, SMILES", "p": 0}
-{"f": "chembl-query", "t": "ligand-preparation", "d": "SDF, SMILES", "p": 0}
-{"f": "chipseq", "t": "differential-expression", "d": "COUNT_MATRIX", "p": 111}
-{"f": "chipseq", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 62}
-{"f": "chipseq", "t": "seurat", "d": "COUNT_MATRIX", "p": 19}
-{"f": "chipseq", "t": "batch-correction", "d": "COUNT_MATRIX", "p": 5}
-{"f": "chipseq", "t": "scanpy", "d": "COUNT_MATRIX", "p": 5}
-{"f": "chipseq", "t": "survival-analysis", "d": "GENE_LIST", "p": 4}
-{"f": "chipseq", "t": "dtu-analysis", "d": "COUNT_MATRIX", "p": 0}
-{"f": "chipseq", "t": "wgcna", "d": "COUNT_MATRIX", "p": 0}
-{"f": "chipseq", "t": "cellphonedb", "d": "COUNT_MATRIX", "p": 0}
-{"f": "chipseq", "t": "citeseq", "d": "COUNT_MATRIX", "p": 0}
-{"f": "chipseq", "t": "multi-omics-integration", "d": "COUNT_MATRIX", "p": 0}
-{"f": "chipseq", "t": "spatial-transcriptomics", "d": "COUNT_MATRIX", "p": 0}
-{"f": "chipseq", "t": "crispr-screen", "d": "COUNT_MATRIX", "p": 0}
-{"f": "chipseq", "t": "string-query", "d": "GENE_LIST", "p": 0}
-{"f": "chipseq", "t": "data-inspection", "d": "COUNT_MATRIX", "p": 0}
-{"f": "citeseq", "t": "seurat", "d": "H5AD", "p": 22}
-{"f": "citeseq", "t": "batch-correction", "d": "H5AD", "p": 8}
-{"f": "citeseq", "t": "spatial-transcriptomics", "d": "H5AD", "p": 7}
-{"f": "citeseq", "t": "scanpy", "d": "H5AD", "p": 6}
-{"f": "citeseq", "t": "multi-omics-integration", "d": "H5AD", "p": 4}
-{"f": "citeseq", "t": "cell-type-annotation", "d": "CLUSTER_DATA, H5AD", "p": 0}
-{"f": "citeseq", "t": "trajectory-analysis", "d": "CLUSTER_DATA, H5AD", "p": 0}
-{"f": "citeseq", "t": "rna-velocity", "d": "H5AD", "p": 0}
-{"f": "citeseq", "t": "scenic", "d": "H5AD", "p": 0}
-{"f": "citeseq", "t": "cellchat", "d": "CLUSTER_DATA, H5AD", "p": 0}
-{"f": "citeseq", "t": "cellphonedb", "d": "H5AD", "p": 0}
-{"f": "citeseq", "t": "signac", "d": "H5AD", "p": 0}
-{"f": "citeseq", "t": "data-inspection", "d": "H5AD", "p": 0}
-{"f": "clinical-variant", "t": "survival-analysis", "d": "CLINICAL_DATA", "p": 0}
-{"f": "clinvar-query", "t": "survival-analysis", "d": "CLINICAL_DATA", "p": 0}
-{"f": "clinvar-query", "t": "clinical-variant", "d": "VARIANT_INFO", "p": 0}
-{"f": "cnv-analysis", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 7}
-{"f": "cnv-analysis", "t": "survival-analysis", "d": "GENE_LIST", "p": 4}
-{"f": "cnv-analysis", "t": "string-query", "d": "GENE_LIST", "p": 0}
-{"f": "compound-analysis", "t": "admet-prediction", "d": "SDF", "p": 3}
-{"f": "compound-analysis", "t": "molecular-docking", "d": "SDF", "p": 0}
-{"f": "compound-analysis", "t": "virtual-screening", "d": "SDF", "p": 0}
-{"f": "compound-analysis", "t": "protein-ligand-interaction", "d": "SDF", "p": 0}
-{"f": "compound-analysis", "t": "lead-optimization", "d": "SDF", "p": 0}
-{"f": "compound-analysis", "t": "ligand-preparation", "d": "SDF", "p": 0}
-{"f": "cosmic-query", "t": "clinical-variant", "d": "VARIANT_INFO", "p": 0}
-{"f": "crispr-screen", "t": "pathway-enrichment", "d": "DE_RESULTS, GENE_LIST", "p": 11}
-{"f": "crispr-screen", "t": "survival-analysis", "d": "GENE_LIST", "p": 3}
-{"f": "crispr-screen", "t": "string-query", "d": "GENE_LIST", "p": 0}
-{"f": "denovo-assembly", "t": "wgs-alignment", "d": "FASTA", "p": 624}
-{"f": "denovo-assembly", "t": "phylogenetic-tree", "d": "ASSEMBLY, FASTA", "p": 192}
-{"f": "denovo-assembly", "t": "rnaseq-alignment", "d": "FASTA", "p": 185}
-{"f": "denovo-assembly", "t": "microbiome-profiling", "d": "FASTA", "p": 122}
-{"f": "denovo-assembly", "t": "metagenome-binning", "d": "ASSEMBLY, FASTA", "p": 88}
-{"f": "denovo-assembly", "t": "bacterial-pangenome", "d": "FASTA", "p": 70}
-{"f": "denovo-assembly", "t": "viral-metagenomics", "d": "ASSEMBLY, FASTA", "p": 22}
-{"f": "denovo-assembly", "t": "oligo-design", "d": "FASTA", "p": 10}
-{"f": "differential-expression", "t": "pathway-enrichment", "d": "DE_RESULTS, GENE_LIST", "p": 590}
-{"f": "differential-expression", "t": "wgcna", "d": "EXPRESSION_MATRIX", "p": 409}
-{"f": "differential-expression", "t": "string-query", "d": "GENE_LIST", "p": 75}
-{"f": "differential-expression", "t": "survival-analysis", "d": "EXPRESSION_MATRIX, GENE_LIST", "p": 64}
-{"f": "differential-expression", "t": "multi-omics-integration", "d": "EXPRESSION_MATRIX", "p": 9}
-{"f": "differential-expression", "t": "scenic", "d": "EXPRESSION_MATRIX", "p": 0}
-{"f": "dtu-analysis", "t": "pathway-enrichment", "d": "DE_RESULTS, GENE_LIST", "p": 4}
-{"f": "dtu-analysis", "t": "survival-analysis", "d": "GENE_LIST", "p": 0}
-{"f": "dtu-analysis", "t": "string-query", "d": "GENE_LIST", "p": 0}
-{"f": "flux-analysis", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 11}
-{"f": "flux-analysis", "t": "string-query", "d": "GENE_LIST", "p": 3}
-{"f": "flux-analysis", "t": "survival-analysis", "d": "GENE_LIST", "p": 0}
-{"f": "fusion-detection", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 3}
-{"f": "fusion-detection", "t": "survival-analysis", "d": "GENE_LIST", "p": 0}
-{"f": "fusion-detection", "t": "string-query", "d": "GENE_LIST", "p": 0}
-{"f": "gnomad-query", "t": "clinical-variant", "d": "VARIANT_INFO", "p": 0}
-{"f": "golden-gate-assembly", "t": "oligo-design", "d": "SEQUENCE", "p": 5}
-{"f": "gwas-analysis", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 31}
-{"f": "gwas-analysis", "t": "survival-analysis", "d": "GENE_LIST", "p": 7}
-{"f": "gwas-analysis", "t": "string-query", "d": "GENE_LIST", "p": 3}
-{"f": "isoform-analysis", "t": "differential-expression", "d": "COUNT_MATRIX", "p": 171}
-{"f": "isoform-analysis", "t": "seurat", "d": "COUNT_MATRIX", "p": 24}
-{"f": "isoform-analysis", "t": "wgcna", "d": "COUNT_MATRIX", "p": 17}
-{"f": "isoform-analysis", "t": "dtu-analysis", "d": "COUNT_MATRIX, TPM_MATRIX", "p": 12}
-{"f": "isoform-analysis", "t": "scanpy", "d": "COUNT_MATRIX", "p": 8}
-{"f": "isoform-analysis", "t": "batch-correction", "d": "COUNT_MATRIX", "p": 8}
-{"f": "isoform-analysis", "t": "cellphonedb", "d": "COUNT_MATRIX", "p": 0}
-{"f": "isoform-analysis", "t": "citeseq", "d": "COUNT_MATRIX", "p": 0}
-{"f": "isoform-analysis", "t": "multi-omics-integration", "d": "COUNT_MATRIX", "p": 0}
-{"f": "isoform-analysis", "t": "spatial-transcriptomics", "d": "COUNT_MATRIX", "p": 0}
-{"f": "isoform-analysis", "t": "crispr-screen", "d": "COUNT_MATRIX", "p": 0}
-{"f": "isoform-analysis", "t": "data-inspection", "d": "COUNT_MATRIX", "p": 0}
-{"f": "lead-optimization", "t": "molecular-docking", "d": "SDF, SMILES", "p": 0}
-{"f": "lead-optimization", "t": "virtual-screening", "d": "SDF, SMILES", "p": 0}
-{"f": "lead-optimization", "t": "protein-ligand-interaction", "d": "SDF", "p": 0}
-{"f": "lead-optimization", "t": "admet-prediction", "d": "SDF, SMILES", "p": 0}
-{"f": "lead-optimization", "t": "compound-analysis", "d": "SDF, SMILES", "p": 0}
-{"f": "lead-optimization", "t": "ligand-preparation", "d": "SDF, SMILES", "p": 0}
-{"f": "lead-optimization", "t": "pubchem-query", "d": "SMILES", "p": 0}
-{"f": "ligand-preparation", "t": "molecular-docking", "d": "PDBQT, SDF", "p": 0}
-{"f": "ligand-preparation", "t": "virtual-screening", "d": "SDF", "p": 0}
-{"f": "ligand-preparation", "t": "protein-ligand-interaction", "d": "SDF", "p": 0}
-{"f": "ligand-preparation", "t": "admet-prediction", "d": "SDF", "p": 0}
-{"f": "ligand-preparation", "t": "compound-analysis", "d": "SDF", "p": 0}
-{"f": "ligand-preparation", "t": "lead-optimization", "d": "SDF", "p": 0}
-{"f": "md-simulation", "t": "molecular-docking", "d": "PDB", "p": 8}
-{"f": "md-simulation", "t": "virtual-screening", "d": "PDB", "p": 5}
-{"f": "md-simulation", "t": "binding-site-detection", "d": "PDB", "p": 0}
-{"f": "md-simulation", "t": "protein-ligand-interaction", "d": "PDB", "p": 0}
-{"f": "metagenome-binning", "t": "wgs-alignment", "d": "FASTA", "p": 47}
-{"f": "metagenome-binning", "t": "microbiome-profiling", "d": "FASTA", "p": 30}
-{"f": "metagenome-binning", "t": "denovo-assembly", "d": "FASTA", "p": 21}
-{"f": "metagenome-binning", "t": "phylogenetic-tree", "d": "FASTA", "p": 19}
-{"f": "metagenome-binning", "t": "viral-metagenomics", "d": "FASTA", "p": 7}
-{"f": "metagenome-binning", "t": "bacterial-pangenome", "d": "FASTA", "p": 7}
-{"f": "metagenome-binning", "t": "rnaseq-alignment", "d": "FASTA", "p": 0}
-{"f": "metagenome-binning", "t": "oligo-design", "d": "FASTA", "p": 0}
-{"f": "microbiome-profiling", "t": "wgs-alignment", "d": "FASTA", "p": 180}
-{"f": "microbiome-profiling", "t": "denovo-assembly", "d": "FASTA", "p": 130}
-{"f": "microbiome-profiling", "t": "phylogenetic-tree", "d": "FASTA", "p": 62}
-{"f": "microbiome-profiling", "t": "rnaseq-alignment", "d": "FASTA", "p": 25}
-{"f": "microbiome-profiling", "t": "metagenome-binning", "d": "FASTA", "p": 23}
-{"f": "microbiome-profiling", "t": "bacterial-pangenome", "d": "FASTA", "p": 17}
-{"f": "microbiome-profiling", "t": "viral-metagenomics", "d": "FASTA", "p": 9}
-{"f": "microbiome-profiling", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 5}
-{"f": "microbiome-profiling", "t": "survival-analysis", "d": "GENE_LIST", "p": 0}
-{"f": "microbiome-profiling", "t": "oligo-design", "d": "FASTA", "p": 0}
-{"f": "microbiome-profiling", "t": "string-query", "d": "GENE_LIST", "p": 0}
-{"f": "molecular-docking", "t": "md-simulation", "d": "PDB", "p": 22}
-{"f": "molecular-docking", "t": "virtual-screening", "d": "PDB, SDF", "p": 13}
-{"f": "molecular-docking", "t": "admet-prediction", "d": "SDF", "p": 13}
-{"f": "molecular-docking", "t": "protein-ligand-interaction", "d": "DOCKING_POSES, PDB, SDF", "p": 5}
-{"f": "molecular-docking", "t": "binding-site-detection", "d": "PDB", "p": 0}
-{"f": "molecular-docking", "t": "compound-analysis", "d": "SDF", "p": 0}
-{"f": "molecular-docking", "t": "lead-optimization", "d": "SDF", "p": 0}
-{"f": "molecular-docking", "t": "ligand-preparation", "d": "SDF", "p": 0}
-{"f": "multi-omics-integration", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 7}
-{"f": "multi-omics-integration", "t": "survival-analysis", "d": "GENE_LIST", "p": 0}
-{"f": "multi-omics-integration", "t": "string-query", "d": "GENE_LIST", "p": 0}
-{"f": "nanopore-analysis", "t": "wgs-alignment", "d": "FASTQ", "p": 332}
-{"f": "nanopore-analysis", "t": "denovo-assembly", "d": "FASTQ", "p": 187}
-{"f": "nanopore-analysis", "t": "microbiome-profiling", "d": "FASTQ", "p": 72}
-{"f": "nanopore-analysis", "t": "variant-calling", "d": "BAM", "p": 55}
-{"f": "nanopore-analysis", "t": "rnaseq-alignment", "d": "FASTQ", "p": 38}
-{"f": "nanopore-analysis", "t": "metagenome-binning", "d": "BAM", "p": 12}
-{"f": "nanopore-analysis", "t": "isoform-analysis", "d": "BAM, FASTQ", "p": 8}
-{"f": "nanopore-analysis", "t": "bisulfite-seq", "d": "FASTQ", "p": 8}
-{"f": "nanopore-analysis", "t": "starsolo", "d": "FASTQ", "p": 4}
-{"f": "nanopore-analysis", "t": "crispr-screen", "d": "FASTQ", "p": 3}
-{"f": "nanopore-analysis", "t": "somatic-variants", "d": "BAM", "p": 3}
-{"f": "nanopore-analysis", "t": "qc", "d": "BAM, FASTQ", "p": 0}
-{"f": "nanopore-analysis", "t": "cnv-analysis", "d": "BAM", "p": 0}
-{"f": "nanopore-analysis", "t": "structural-variants", "d": "BAM", "p": 0}
-{"f": "nanopore-analysis", "t": "fusion-detection", "d": "BAM, FASTQ", "p": 0}
-{"f": "nanopore-analysis", "t": "chipseq", "d": "BAM", "p": 0}
-{"f": "nanopore-analysis", "t": "atacseq", "d": "BAM, FASTQ", "p": 0}
-{"f": "nanopore-analysis", "t": "archr", "d": "BAM", "p": 0}
-{"f": "nanopore-analysis", "t": "data-inspection", "d": "BAM, FASTQ", "p": 0}
-{"f": "oligo-design", "t": "golden-gate-assembly", "d": "PRIMER_LIST, SEQUENCE", "p": 0}
-{"f": "opentargets-query", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 0}
-{"f": "opentargets-query", "t": "survival-analysis", "d": "GENE_LIST", "p": 0}
-{"f": "opentargets-query", "t": "string-query", "d": "GENE_LIST", "p": 0}
-{"f": "opentargets-query", "t": "clinicaltrials-query", "d": "DRUG_DATA", "p": 0}
-{"f": "pdb-query", "t": "molecular-docking", "d": "PDB", "p": 0}
-{"f": "pdb-query", "t": "virtual-screening", "d": "PDB", "p": 0}
-{"f": "pdb-query", "t": "binding-site-detection", "d": "PDB", "p": 0}
-{"f": "pdb-query", "t": "protein-ligand-interaction", "d": "PDB", "p": 0}
-{"f": "pdb-query", "t": "md-simulation", "d": "PDB", "p": 0}
-{"f": "protein-ligand-interaction", "t": "molecular-docking", "d": "PDB, SDF, SMILES", "p": 0}
-{"f": "protein-ligand-interaction", "t": "virtual-screening", "d": "PDB, SDF, SMILES", "p": 0}
-{"f": "protein-ligand-interaction", "t": "binding-site-detection", "d": "PDB", "p": 0}
-{"f": "protein-ligand-interaction", "t": "md-simulation", "d": "PDB", "p": 0}
-{"f": "protein-ligand-interaction", "t": "admet-prediction", "d": "SDF, SMILES", "p": 0}
-{"f": "protein-ligand-interaction", "t": "compound-analysis", "d": "SDF, SMILES", "p": 0}
-{"f": "protein-ligand-interaction", "t": "lead-optimization", "d": "SDF, SMILES", "p": 0}
-{"f": "protein-ligand-interaction", "t": "ligand-preparation", "d": "SDF, SMILES", "p": 0}
-{"f": "protein-ligand-interaction", "t": "pubchem-query", "d": "SMILES", "p": 0}
-{"f": "proteomics", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 68}
-{"f": "proteomics", "t": "string-query", "d": "GENE_LIST, PROTEIN_LIST", "p": 18}
-{"f": "proteomics", "t": "survival-analysis", "d": "GENE_LIST", "p": 6}
-{"f": "pubchem-query", "t": "molecular-docking", "d": "SDF, SMILES", "p": 48}
-{"f": "pubchem-query", "t": "admet-prediction", "d": "SDF, SMILES", "p": 11}
-{"f": "pubchem-query", "t": "virtual-screening", "d": "SDF, SMILES", "p": 9}
-{"f": "pubchem-query", "t": "protein-ligand-interaction", "d": "SDF", "p": 0}
-{"f": "pubchem-query", "t": "compound-analysis", "d": "SDF, SMILES", "p": 0}
-{"f": "pubchem-query", "t": "lead-optimization", "d": "SDF, SMILES", "p": 0}
-{"f": "pubchem-query", "t": "ligand-preparation", "d": "SDF, SMILES", "p": 0}
-{"f": "rna-velocity", "t": "seurat", "d": "H5AD", "p": 10}
-{"f": "rna-velocity", "t": "scanpy", "d": "H5AD", "p": 7}
-{"f": "rna-velocity", "t": "trajectory-analysis", "d": "H5AD", "p": 6}
-{"f": "rna-velocity", "t": "spatial-transcriptomics", "d": "H5AD", "p": 4}
-{"f": "rna-velocity", "t": "cell-type-annotation", "d": "H5AD", "p": 0}
-{"f": "rna-velocity", "t": "batch-correction", "d": "H5AD", "p": 0}
-{"f": "rna-velocity", "t": "scenic", "d": "H5AD", "p": 0}
-{"f": "rna-velocity", "t": "cellchat", "d": "H5AD", "p": 0}
-{"f": "rna-velocity", "t": "cellphonedb", "d": "H5AD", "p": 0}
-{"f": "rna-velocity", "t": "citeseq", "d": "H5AD", "p": 0}
-{"f": "rna-velocity", "t": "multi-omics-integration", "d": "H5AD", "p": 0}
-{"f": "rna-velocity", "t": "signac", "d": "H5AD", "p": 0}
-{"f": "rna-velocity", "t": "data-inspection", "d": "H5AD", "p": 0}
-{"f": "rnaseq-alignment", "t": "differential-expression", "d": "COUNT_MATRIX", "p": 457}
-{"f": "rnaseq-alignment", "t": "isoform-analysis", "d": "BAM", "p": 172}
-{"f": "rnaseq-alignment", "t": "variant-calling", "d": "BAM", "p": 108}
-{"f": "rnaseq-alignment", "t": "chipseq", "d": "BAM", "p": 80}
-{"f": "rnaseq-alignment", "t": "atacseq", "d": "BAM", "p": 76}
-{"f": "rnaseq-alignment", "t": "seurat", "d": "COUNT_MATRIX", "p": 69}
-{"f": "rnaseq-alignment", "t": "wgcna", "d": "COUNT_MATRIX", "p": 48}
-{"f": "rnaseq-alignment", "t": "batch-correction", "d": "COUNT_MATRIX", "p": 27}
-{"f": "rnaseq-alignment", "t": "scanpy", "d": "COUNT_MATRIX", "p": 24}
-{"f": "rnaseq-alignment", "t": "somatic-variants", "d": "BAM", "p": 18}
-{"f": "rnaseq-alignment", "t": "fusion-detection", "d": "BAM", "p": 14}
-{"f": "rnaseq-alignment", "t": "dtu-analysis", "d": "COUNT_MATRIX", "p": 12}
-{"f": "rnaseq-alignment", "t": "crispr-screen", "d": "COUNT_MATRIX", "p": 9}
-{"f": "rnaseq-alignment", "t": "spatial-transcriptomics", "d": "COUNT_MATRIX", "p": 5}
-{"f": "rnaseq-alignment", "t": "cnv-analysis", "d": "BAM", "p": 5}
-{"f": "rnaseq-alignment", "t": "structural-variants", "d": "BAM", "p": 3}
-{"f": "rnaseq-alignment", "t": "multi-omics-integration", "d": "COUNT_MATRIX", "p": 3}
-{"f": "rnaseq-alignment", "t": "archr", "d": "BAM", "p": 3}
-{"f": "rnaseq-alignment", "t": "qc", "d": "BAM, SAM", "p": 0}
-{"f": "rnaseq-alignment", "t": "metagenome-binning", "d": "BAM", "p": 0}
-{"f": "rnaseq-alignment", "t": "cellphonedb", "d": "COUNT_MATRIX", "p": 0}
-{"f": "rnaseq-alignment", "t": "citeseq", "d": "COUNT_MATRIX", "p": 0}
-{"f": "rnaseq-alignment", "t": "data-inspection", "d": "BAM, COUNT_MATRIX", "p": 0}
-{"f": "scanpy", "t": "seurat", "d": "H5AD", "p": 63}
-{"f": "scanpy", "t": "batch-correction", "d": "H5AD", "p": 35}
-{"f": "scanpy", "t": "spatial-transcriptomics", "d": "H5AD", "p": 17}
-{"f": "scanpy", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 17}
-{"f": "scanpy", "t": "trajectory-analysis", "d": "CLUSTER_DATA, H5AD", "p": 16}
-{"f": "scanpy", "t": "scenic", "d": "H5AD", "p": 10}
-{"f": "scanpy", "t": "citeseq", "d": "H5AD", "p": 8}
-{"f": "scanpy", "t": "rna-velocity", "d": "H5AD", "p": 7}
-{"f": "scanpy", "t": "cell-type-annotation", "d": "CLUSTER_DATA, H5AD", "p": 7}
-{"f": "scanpy", "t": "cellchat", "d": "CLUSTER_DATA, H5AD", "p": 5}
-{"f": "scanpy", "t": "cellphonedb", "d": "H5AD", "p": 5}
-{"f": "scanpy", "t": "survival-analysis", "d": "GENE_LIST", "p": 4}
-{"f": "scanpy", "t": "multi-omics-integration", "d": "H5AD", "p": 4}
-{"f": "scanpy", "t": "signac", "d": "H5AD", "p": 0}
-{"f": "scanpy", "t": "string-query", "d": "GENE_LIST", "p": 0}
-{"f": "scanpy", "t": "data-inspection", "d": "H5AD", "p": 0}
-{"f": "scenic", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 14}
-{"f": "scenic", "t": "survival-analysis", "d": "GENE_LIST", "p": 3}
-{"f": "scenic", "t": "string-query", "d": "GENE_LIST", "p": 0}
-{"f": "seurat", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 122}
-{"f": "seurat", "t": "batch-correction", "d": "RDS", "p": 111}
-{"f": "seurat", "t": "cell-type-annotation", "d": "CLUSTER_DATA, RDS", "p": 85}
-{"f": "seurat", "t": "trajectory-analysis", "d": "CLUSTER_DATA, RDS", "p": 77}
-{"f": "seurat", "t": "cellchat", "d": "CLUSTER_DATA, RDS", "p": 49}
-{"f": "seurat", "t": "scenic", "d": "RDS", "p": 22}
-{"f": "seurat", "t": "survival-analysis", "d": "GENE_LIST", "p": 17}
-{"f": "seurat", "t": "string-query", "d": "GENE_LIST", "p": 6}
-{"f": "signac", "t": "seurat", "d": "H5AD", "p": 21}
-{"f": "signac", "t": "batch-correction", "d": "H5AD", "p": 7}
-{"f": "signac", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 4}
-{"f": "signac", "t": "scenic", "d": "H5AD", "p": 3}
-{"f": "signac", "t": "scanpy", "d": "H5AD", "p": 0}
-{"f": "signac", "t": "cell-type-annotation", "d": "H5AD", "p": 0}
-{"f": "signac", "t": "trajectory-analysis", "d": "H5AD", "p": 0}
-{"f": "signac", "t": "rna-velocity", "d": "H5AD", "p": 0}
-{"f": "signac", "t": "cellchat", "d": "H5AD", "p": 0}
-{"f": "signac", "t": "cellphonedb", "d": "H5AD", "p": 0}
-{"f": "signac", "t": "citeseq", "d": "H5AD", "p": 0}
-{"f": "signac", "t": "multi-omics-integration", "d": "H5AD", "p": 0}
-{"f": "signac", "t": "spatial-transcriptomics", "d": "H5AD", "p": 0}
-{"f": "signac", "t": "survival-analysis", "d": "GENE_LIST", "p": 0}
-{"f": "signac", "t": "string-query", "d": "GENE_LIST", "p": 0}
-{"f": "signac", "t": "data-inspection", "d": "H5AD", "p": 0}
-{"f": "somatic-variants", "t": "variant-annotation", "d": "BCF, VCF", "p": 59}
-{"f": "somatic-variants", "t": "clinvar-query", "d": "VCF", "p": 15}
-{"f": "somatic-variants", "t": "cnv-analysis", "d": "VCF", "p": 11}
-{"f": "somatic-variants", "t": "gwas-analysis", "d": "VCF", "p": 5}
-{"f": "somatic-variants", "t": "survival-analysis", "d": "GENE_LIST", "p": 3}
-{"f": "somatic-variants", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 3}
-{"f": "somatic-variants", "t": "string-query", "d": "GENE_LIST", "p": 0}
-{"f": "somatic-variants", "t": "clinical-variant", "d": "VCF", "p": 0}
-{"f": "somatic-variants", "t": "data-inspection", "d": "VCF", "p": 0}
-{"f": "spatial-transcriptomics", "t": "seurat", "d": "H5AD", "p": 21}
-{"f": "spatial-transcriptomics", "t": "scanpy", "d": "H5AD", "p": 19}
-{"f": "spatial-transcriptomics", "t": "trajectory-analysis", "d": "H5AD", "p": 4}
-{"f": "spatial-transcriptomics", "t": "citeseq", "d": "H5AD", "p": 3}
-{"f": "spatial-transcriptomics", "t": "batch-correction", "d": "H5AD", "p": 3}
-{"f": "spatial-transcriptomics", "t": "cell-type-annotation", "d": "H5AD", "p": 0}
-{"f": "spatial-transcriptomics", "t": "rna-velocity", "d": "H5AD", "p": 0}
-{"f": "spatial-transcriptomics", "t": "scenic", "d": "H5AD", "p": 0}
-{"f": "spatial-transcriptomics", "t": "cellchat", "d": "H5AD", "p": 0}
-{"f": "spatial-transcriptomics", "t": "cellphonedb", "d": "H5AD", "p": 0}
-{"f": "spatial-transcriptomics", "t": "multi-omics-integration", "d": "H5AD", "p": 0}
-{"f": "spatial-transcriptomics", "t": "signac", "d": "H5AD", "p": 0}
-{"f": "spatial-transcriptomics", "t": "data-inspection", "d": "H5AD", "p": 0}
-{"f": "starsolo", "t": "seurat", "d": "COUNT_MATRIX, H5AD", "p": 188}
-{"f": "starsolo", "t": "scanpy", "d": "COUNT_MATRIX, H5AD", "p": 44}
-{"f": "starsolo", "t": "batch-correction", "d": "COUNT_MATRIX, H5AD", "p": 42}
-{"f": "starsolo", "t": "differential-expression", "d": "COUNT_MATRIX", "p": 28}
-{"f": "starsolo", "t": "cell-type-annotation", "d": "H5AD", "p": 22}
-{"f": "starsolo", "t": "trajectory-analysis", "d": "H5AD", "p": 14}
-{"f": "starsolo", "t": "rna-velocity", "d": "H5AD", "p": 11}
-{"f": "starsolo", "t": "citeseq", "d": "COUNT_MATRIX, H5AD", "p": 10}
-{"f": "starsolo", "t": "signac", "d": "H5AD", "p": 9}
-{"f": "starsolo", "t": "spatial-transcriptomics", "d": "COUNT_MATRIX, H5AD", "p": 7}
-{"f": "starsolo", "t": "cellchat", "d": "H5AD", "p": 5}
-{"f": "starsolo", "t": "dtu-analysis", "d": "COUNT_MATRIX", "p": 0}
-{"f": "starsolo", "t": "wgcna", "d": "COUNT_MATRIX", "p": 0}
-{"f": "starsolo", "t": "scenic", "d": "H5AD", "p": 0}
-{"f": "starsolo", "t": "cellphonedb", "d": "COUNT_MATRIX, H5AD", "p": 0}
-{"f": "starsolo", "t": "multi-omics-integration", "d": "COUNT_MATRIX, H5AD", "p": 0}
-{"f": "starsolo", "t": "crispr-screen", "d": "COUNT_MATRIX", "p": 0}
-{"f": "starsolo", "t": "data-inspection", "d": "COUNT_MATRIX, H5AD", "p": 0}
-{"f": "string-query", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 106}
-{"f": "string-query", "t": "survival-analysis", "d": "GENE_LIST", "p": 21}
-{"f": "structural-variants", "t": "variant-annotation", "d": "VCF", "p": 17}
-{"f": "structural-variants", "t": "clinvar-query", "d": "VCF", "p": 13}
-{"f": "structural-variants", "t": "somatic-variants", "d": "VCF", "p": 12}
-{"f": "structural-variants", "t": "cnv-analysis", "d": "VCF", "p": 9}
-{"f": "structural-variants", "t": "gwas-analysis", "d": "VCF", "p": 0}
-{"f": "structural-variants", "t": "clinical-variant", "d": "VCF", "p": 0}
-{"f": "structural-variants", "t": "data-inspection", "d": "VCF", "p": 0}
-{"f": "trajectory-analysis", "t": "seurat", "d": "H5AD", "p": 40}
-{"f": "trajectory-analysis", "t": "cellchat", "d": "H5AD, RDS", "p": 12}
-{"f": "trajectory-analysis", "t": "scanpy", "d": "H5AD", "p": 11}
-{"f": "trajectory-analysis", "t": "scenic", "d": "H5AD, RDS", "p": 10}
-{"f": "trajectory-analysis", "t": "batch-correction", "d": "H5AD, RDS", "p": 7}
-{"f": "trajectory-analysis", "t": "rna-velocity", "d": "H5AD", "p": 7}
-{"f": "trajectory-analysis", "t": "cell-type-annotation", "d": "H5AD, RDS", "p": 4}
-{"f": "trajectory-analysis", "t": "cellphonedb", "d": "H5AD", "p": 4}
-{"f": "trajectory-analysis", "t": "spatial-transcriptomics", "d": "H5AD", "p": 4}
-{"f": "trajectory-analysis", "t": "citeseq", "d": "H5AD", "p": 3}
-{"f": "trajectory-analysis", "t": "multi-omics-integration", "d": "H5AD", "p": 0}
-{"f": "trajectory-analysis", "t": "signac", "d": "H5AD", "p": 0}
-{"f": "trajectory-analysis", "t": "data-inspection", "d": "H5AD", "p": 0}
-{"f": "variant-annotation", "t": "clinvar-query", "d": "VCF", "p": 109}
-{"f": "variant-annotation", "t": "gwas-analysis", "d": "VCF", "p": 45}
-{"f": "variant-annotation", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 26}
-{"f": "variant-annotation", "t": "somatic-variants", "d": "VCF", "p": 19}
-{"f": "variant-annotation", "t": "cnv-analysis", "d": "VCF", "p": 7}
-{"f": "variant-annotation", "t": "survival-analysis", "d": "GENE_LIST", "p": 7}
-{"f": "variant-annotation", "t": "string-query", "d": "GENE_LIST", "p": 0}
-{"f": "variant-annotation", "t": "clinical-variant", "d": "VARIANT_INFO, VCF", "p": 0}
-{"f": "variant-annotation", "t": "data-inspection", "d": "VCF", "p": 0}
-{"f": "variant-calling", "t": "variant-annotation", "d": "BCF, VCF", "p": 260}
-{"f": "variant-calling", "t": "somatic-variants", "d": "BAM, VCF", "p": 125}
-{"f": "variant-calling", "t": "gwas-analysis", "d": "VCF", "p": 91}
-{"f": "variant-calling", "t": "clinvar-query", "d": "VCF", "p": 75}
-{"f": "variant-calling", "t": "structural-variants", "d": "BAM", "p": 52}
-{"f": "variant-calling", "t": "isoform-analysis", "d": "BAM", "p": 17}
-{"f": "variant-calling", "t": "cnv-analysis", "d": "BAM, VCF", "p": 14}
-{"f": "variant-calling", "t": "atacseq", "d": "BAM", "p": 9}
-{"f": "variant-calling", "t": "fusion-detection", "d": "BAM", "p": 5}
-{"f": "variant-calling", "t": "chipseq", "d": "BAM", "p": 3}
-{"f": "variant-calling", "t": "qc", "d": "BAM", "p": 0}
-{"f": "variant-calling", "t": "metagenome-binning", "d": "BAM", "p": 0}
-{"f": "variant-calling", "t": "archr", "d": "BAM", "p": 0}
-{"f": "variant-calling", "t": "clinical-variant", "d": "VCF", "p": 0}
-{"f": "variant-calling", "t": "data-inspection", "d": "BAM, VCF", "p": 0}
-{"f": "viral-metagenomics", "t": "wgs-alignment", "d": "FASTA", "p": 18}
-{"f": "viral-metagenomics", "t": "microbiome-profiling", "d": "FASTA", "p": 8}
-{"f": "viral-metagenomics", "t": "denovo-assembly", "d": "FASTA", "p": 7}
-{"f": "viral-metagenomics", "t": "phylogenetic-tree", "d": "FASTA", "p": 6}
-{"f": "viral-metagenomics", "t": "metagenome-binning", "d": "FASTA", "p": 6}
-{"f": "viral-metagenomics", "t": "rnaseq-alignment", "d": "FASTA", "p": 3}
-{"f": "viral-metagenomics", "t": "bacterial-pangenome", "d": "FASTA", "p": 0}
-{"f": "viral-metagenomics", "t": "oligo-design", "d": "FASTA", "p": 0}
-{"f": "virtual-screening", "t": "molecular-docking", "d": "SDF", "p": 31}
-{"f": "virtual-screening", "t": "admet-prediction", "d": "SDF", "p": 22}
-{"f": "virtual-screening", "t": "protein-ligand-interaction", "d": "SDF", "p": 0}
-{"f": "virtual-screening", "t": "compound-analysis", "d": "SDF", "p": 0}
-{"f": "virtual-screening", "t": "lead-optimization", "d": "SDF", "p": 0}
-{"f": "virtual-screening", "t": "ligand-preparation", "d": "SDF", "p": 0}
-{"f": "wgcna", "t": "pathway-enrichment", "d": "GENE_LIST", "p": 397}
-{"f": "wgcna", "t": "string-query", "d": "GENE_LIST", "p": 103}
-{"f": "wgcna", "t": "survival-analysis", "d": "GENE_LIST", "p": 72}
-{"f": "wgs-alignment", "t": "variant-calling", "d": "BAM, CRAM", "p": 765}
-{"f": "wgs-alignment", "t": "chipseq", "d": "BAM", "p": 288}
-{"f": "wgs-alignment", "t": "atacseq", "d": "BAM", "p": 148}
-{"f": "wgs-alignment", "t": "isoform-analysis", "d": "BAM", "p": 132}
-{"f": "wgs-alignment", "t": "somatic-variants", "d": "BAM, CRAM", "p": 126}
-{"f": "wgs-alignment", "t": "metagenome-binning", "d": "BAM", "p": 70}
-{"f": "wgs-alignment", "t": "structural-variants", "d": "BAM, CRAM", "p": 39}
-{"f": "wgs-alignment", "t": "archr", "d": "BAM", "p": 10}
-{"f": "wgs-alignment", "t": "cnv-analysis", "d": "BAM", "p": 9}
-{"f": "wgs-alignment", "t": "fusion-detection", "d": "BAM", "p": 6}
-{"f": "wgs-alignment", "t": "qc", "d": "BAM, SAM", "p": 0}
-{"f": "wgs-alignment", "t": "data-inspection", "d": "BAM", "p": 0}
-{"i": "qc", "n": "QC", "t": "0", "o": "Quality control for sequencing data (FastQC, MultiQC, read trimming)"}
+{"i":"admet-prediction","n":"Admet Prediction","t":"5","o":"Predict ADMET properties and drug-likeness for compounds using ADMET-AI (119 endpoints) and RDKit de"}
+{"i":"alphafold-query","n":"Alphafold Query","t":"1","o":"Query AlphaFold Database for AI-predicted protein structures. AlphaFold provides high-confidence 3D"}
+{"i":"archr","n":"Archr","t":"2","o":"Perform single-cell ATAC-seq analysis using ArchR (R): from fragments to peaks, clusters, and motif"}
+{"i":"atacseq","n":"Atacseq","t":"2","o":""}
+{"i":"bacterial-pangenome","n":"Bacterial Pangenome","t":"5","o":"Analyze pan-genome across multiple bacterial isolates to identify core, accessory, and unique genes."}
+{"i":"batch-correction","n":"Batch Correction","t":"9","o":""}
+{"i":"binding-site-detection","n":"Binding Site Detection","t":"3","o":"Identify and rank druggable binding pockets on protein surfaces using Fpocket. Returns pocket locati"}
+{"i":"bisulfite-seq","n":"Bisulfite Seq","t":"4","o":""}
+{"i":"cbioportal-query","n":"Cbioportal Query","t":"1","o":"Query cBioPortal for cancer genomics data. cBioPortal provides access to large-scale cancer genomics"}
+{"i":"cell-type-annotation","n":"Cell Type Annotation","t":"4","o":"Automatically annotate cell types in single-cell RNA-seq data using reference-based methods (SingleR"}
+{"i":"cellchat","n":"Cellchat","t":"2","o":""}
+{"i":"cellphonedb","n":"Cellphonedb","t":"1","o":""}
+{"i":"chembl-query","n":"Chembl Query","t":"1","o":"Search the ChEMBL database for bioactivity data, known inhibitors, approved drugs, and target inform"}
+{"i":"chipseq","n":"Chipseq","t":"7","o":"Perform ChIP-seq analysis: from FASTQ to peaks, annotations, motifs, and visualizations."}
+{"i":"citeseq","n":"Citeseq","t":"2","o":"CITE-seq combines scRNA-seq with surface protein detection via antibody-derived tags (ADTs). Seurat"}
+{"i":"clinical-variant","n":"Clinical Variant","t":"4","o":"Deterministic clinical variant analysis for rare disease diagnosis. This skill uses a Python script"}
+{"i":"clinicaltrials-query","n":"Clinicaltrials Query","t":"1","o":"Query ClinicalTrials.gov for clinical study information. The database contains 400,000+ studies from"}
+{"i":"clinvar-query","n":"Clinvar Query","t":"1","o":"Query NCBI ClinVar database for clinical interpretations of genetic variants. ClinVar aggregates var"}
+{"i":"cnv-analysis","n":"Cnv Analysis","t":"4","o":"Detect copy number variations (amplifications, deletions) from WGS, WES, or targeted sequencing data"}
+{"i":"compound-analysis","n":"Compound Analysis","t":"2","o":"Analyze and compare small molecules using RDKit: compute molecular descriptors, generate fingerprint"}
+{"i":"cosmic-query","n":"Cosmic Query","t":"1","o":"Query the COSMIC (Catalogue Of Somatic Mutations In Cancer) database for somatic mutation data. COSM"}
+{"i":"crispr-screen","n":"Crispr Screen","t":"3","o":""}
+{"i":"data-inspection","n":"Data Inspection","t":"4","o":""}
+{"i":"dbsnp-query","n":"Dbsnp Query","t":"1","o":"Query NCBI dbSNP database for SNP and small variant information. dbSNP is the primary repository for"}
+{"i":"denovo-assembly","n":"Denovo Assembly","t":"12","o":"Assemble a single bacterial/archaeal isolate genome from paired-end reads with polishing and quality"}
+{"i":"differential-expression","n":"Differential Expression","t":"7","o":""}
+{"i":"dtu-analysis","n":"Dtu Analysis","t":"5","o":"Detect changes in transcript/isoform proportions between conditions. Unlike differential gene expres"}
+{"i":"ensembl-query","n":"Ensembl Query","t":"1","o":"Query Ensembl REST API for gene annotations, coordinates, sequences, and variant information. Ensemb"}
+{"i":"flux-analysis","n":"Flux Analysis","t":"3","o":""}
+{"i":"fusion-detection","n":"Fusion Detection","t":"6","o":"Detect gene fusions from RNA-seq data using STAR-Fusion, Arriba, or other fusion callers. Identifies"}
+{"i":"geo-query","n":"Geo Query","t":"1","o":"Query NCBI Gene Expression Omnibus (GEO) for gene expression datasets. GEO is a public repository fo"}
+{"i":"gnomad-query","n":"Gnomad Query","t":"1","o":"Query the Genome Aggregation Database (gnomAD) for population allele frequencies. gnomAD v4 contains"}
+{"i":"golden-gate-assembly","n":"Golden Gate Assembly","t":"2","o":"Design and simulate Golden Gate or Gibson DNA assemblies. Handles restriction enzyme selection, over"}
+{"i":"gwas-analysis","n":"Gwas Analysis","t":"7","o":"Perform genome-wide association study from VCF genotype data and phenotype file. Includes QC filteri"}
+{"i":"gwas-query","n":"Gwas Query","t":"0","o":"Query the NHGRI-EBI GWAS Catalog for genome-wide association study results. The catalog contains all"}
+{"i":"isoform-analysis","n":"Isoform Analysis","t":"5","o":"Quantify transcript-level expression using Salmon or kallisto, and perform transcript-level differen"}
+{"i":"kegg-query","n":"Kegg Query","t":"0","o":"Query KEGG (Kyoto Encyclopedia of Genes and Genomes) and Reactome pathway databases for pathway info"}
+{"i":"lead-optimization","n":"Lead Optimization","t":"3","o":"Generate and evaluate structural analogs of a lead compound using RDKit: R-group enumeration, bioiso"}
+{"i":"ligand-preparation","n":"Ligand Preparation","t":"3","o":"Convert SMILES to docking-ready 3D structures using RDKit, Gypsum-DL (tautomer/protomer enumeration)"}
+{"i":"md-simulation","n":"Md Simulation","t":"6","o":"Run short molecular dynamics simulations using GROMACS or OpenMM. Includes system setup (solvation,"}
+{"i":"metagenome-binning","n":"Metagenome Binning","t":"6","o":"Assemble metagenomic reads and bin contigs into metagenome-assembled genomes (MAGs)."}
+{"i":"microbiome-profiling","n":"Microbiome Profiling","t":"13","o":"Identify and characterize viral sequences from metagenomic data. Supports both viral species identif"}
+{"i":"molecular-docking","n":"Molecular Docking","t":"8","o":"Dock small molecules into protein binding sites using AutoDock Vina or SMINA. Produces ranked bindin"}
+{"i":"multi-omics-integration","n":"Multi Omics Integration","t":"5","o":""}
+{"i":"nanopore-analysis","n":"Nanopore Analysis","t":"6","o":"QC, filter, align, assemble, and polish long-read nanopore sequencing data. Handles ONT reads from M"}
+{"i":"oligo-design","n":"Oligo Design","t":"2","o":"Design primers, oligo pools, and probes using primer3-py with thermodynamic validation. Includes sec"}
+{"i":"openfda-query","n":"Openfda Query","t":"0","o":"Query OpenFDA for drug safety and regulatory data. OpenFDA provides access to FDA databases includin"}
+{"i":"opentargets-query","n":"Opentargets Query","t":"1","o":"Query Open Targets Platform for drug target-disease associations. Open Targets integrates evidence f"}
+{"i":"pathway-enrichment","n":"Pathway Enrichment","t":"17","o":""}
+{"i":"pdb-query","n":"Pdb Query","t":"1","o":"Search and download protein structures from the RCSB Protein Data Bank using the rcsb-api Python cli"}
+{"i":"phylogenetic-tree","n":"Phylogenetic Tree","t":"7","o":"Build phylogenetic trees from DNA or protein sequences: alignment, trimming, tree inference, and vis"}
+{"i":"protein-ligand-interaction","n":"Protein Ligand Interaction","t":"3","o":"Analyze non-covalent interactions between a protein and ligand using PLIP (from PDB/docking structur"}
+{"i":"proteomics","n":"Proteomics","t":"9","o":"Analyze mass spectrometry-based proteomics data. Perform quality control, normalization, differentia"}
+{"i":"pubchem-query","n":"Pubchem Query","t":"1","o":"Search PubChem for compounds by name, SMILES, CID, or formula using PubChemPy. Retrieve compound str"}
+{"i":"pubmed-query","n":"Pubmed Query","t":"0","o":""}
+{"i":"rna-velocity","n":"Rna Velocity","t":"2","o":""}
+{"i":"rnaseq-alignment","n":"Rnaseq Alignment","t":"13","o":""}
+{"i":"scanpy","n":"Scanpy","t":"2","o":""}
+{"i":"scenic","n":"Scenic","t":"2","o":""}
+{"i":"seurat","n":"Seurat","t":"2","o":""}
+{"i":"shared","n":"Shared","t":"0","o":""}
+{"i":"signac","n":"Signac","t":"2","o":"Perform single-cell ATAC-seq analysis using Signac (R): Seurat extension for chromatin accessibility"}
+{"i":"somatic-variants","n":"Somatic Variants","t":"8","o":"Call somatic (cancer) mutations from tumor-normal paired samples or tumor-only samples using GATK Mu"}
+{"i":"spatial-atacseq","n":"Spatial Atacseq","t":"0","o":"Analyze spatial ATAC-seq data (e.g., DBiT-seq) combining chromatin accessibility with spatial coordi"}
+{"i":"spatial-transcriptomics","n":"Spatial Transcriptomics","t":"6","o":"Analyze spatial transcriptomics data using Seurat: from raw counts to clusters, spatially variable g"}
+{"i":"starsolo","n":"Starsolo","t":"4","o":""}
+{"i":"string-query","n":"String Query","t":"1","o":"Query the STRING database (Search Tool for the Retrieval of Interacting Genes/Proteins) for protein-"}
+{"i":"structural-variants","n":"Structural Variants","t":"5","o":""}
+{"i":"survival-analysis","n":"Survival Analysis","t":"4","o":""}
+{"i":"trajectory-analysis","n":"Trajectory Analysis","t":"8","o":""}
+{"i":"ucsc-query","n":"Ucsc Query","t":"0","o":"Query UCSC Genome Browser for genomic sequences, annotations, and track data. UCSC provides comprehe"}
+{"i":"uniprot-query","n":"Uniprot Query","t":"1","o":"Query UniProt database for comprehensive protein sequence and functional information. UniProt is the"}
+{"i":"variant-annotation","n":"Variant Annotation","t":"5","o":"Annotate VCF files with functional consequences, population frequencies, and clinical significance u"}
+{"i":"variant-calling","n":"Variant Calling","t":"9","o":"Call germline variants from aligned BAM files using GATK or Freebayes, producing filtered and normal"}
+{"i":"viral-metagenomics","n":"Viral Metagenomics","t":"3","o":"Identify, quality-assess, and quantify viral sequences from metagenomic data."}
+{"i":"virtual-screening","n":"Virtual Screening","t":"3","o":"Screen a library of compounds against a protein target using AutoDock Vina. Includes library prepara"}
+{"i":"wgcna","n":"Wgcna","t":"2","o":""}
+{"i":"wgs-alignment","n":"Wgs Alignment","t":"8","o":""}
+{"f":"admet-prediction","t":"lead-optimization","d":"ADMET_RESULTS","p":0}
+{"f":"alphafold-query","t":"binding-site-detection","d":"PDB","p":0}
+{"f":"alphafold-query","t":"md-simulation","d":"PDB","p":9}
+{"f":"alphafold-query","t":"molecular-docking","d":"PDB","p":14}
+{"f":"alphafold-query","t":"protein-ligand-interaction","d":"PDB","p":3}
+{"f":"alphafold-query","t":"virtual-screening","d":"PDB","p":6}
+{"f":"archr","t":"pathway-enrichment","d":"GENE_LIST","p":6}
+{"f":"archr","t":"string-query","d":"GENE_LIST","p":0}
+{"f":"archr","t":"survival-analysis","d":"GENE_LIST","p":0}
+{"f":"atacseq","t":"archr","d":"FRAGMENT_FILE","p":24}
+{"f":"atacseq","t":"batch-correction","d":"COUNT_MATRIX","p":14}
+{"f":"atacseq","t":"cellphonedb","d":"COUNT_MATRIX","p":0}
+{"f":"atacseq","t":"citeseq","d":"COUNT_MATRIX","p":3}
+{"f":"atacseq","t":"crispr-screen","d":"COUNT_MATRIX","p":3}
+{"f":"atacseq","t":"data-inspection","d":"COUNT_MATRIX","p":0}
+{"f":"atacseq","t":"differential-expression","d":"COUNT_MATRIX","p":86}
+{"f":"atacseq","t":"dtu-analysis","d":"COUNT_MATRIX","p":0}
+{"f":"atacseq","t":"multi-omics-integration","d":"COUNT_MATRIX","p":4}
+{"f":"atacseq","t":"pathway-enrichment","d":"GENE_LIST","p":44}
+{"f":"atacseq","t":"scanpy","d":"COUNT_MATRIX","p":13}
+{"f":"atacseq","t":"seurat","d":"COUNT_MATRIX","p":37}
+{"f":"atacseq","t":"signac","d":"FRAGMENT_FILE","p":13}
+{"f":"atacseq","t":"spatial-transcriptomics","d":"COUNT_MATRIX","p":0}
+{"f":"atacseq","t":"string-query","d":"GENE_LIST","p":3}
+{"f":"atacseq","t":"survival-analysis","d":"GENE_LIST","p":8}
+{"f":"atacseq","t":"wgcna","d":"COUNT_MATRIX","p":0}
+{"f":"bacterial-pangenome","t":"pathway-enrichment","d":"GENE_LIST","p":0}
+{"f":"bacterial-pangenome","t":"string-query","d":"GENE_LIST","p":0}
+{"f":"bacterial-pangenome","t":"survival-analysis","d":"GENE_LIST","p":0}
+{"f":"batch-correction","t":"cell-type-annotation","d":"H5AD, RDS","p":29}
+{"f":"batch-correction","t":"cellchat","d":"H5AD, RDS","p":12}
+{"f":"batch-correction","t":"cellphonedb","d":"COUNT_MATRIX, H5AD","p":6}
+{"f":"batch-correction","t":"citeseq","d":"COUNT_MATRIX, H5AD","p":10}
+{"f":"batch-correction","t":"crispr-screen","d":"COUNT_MATRIX","p":0}
+{"f":"batch-correction","t":"data-inspection","d":"COUNT_MATRIX, H5AD","p":0}
+{"f":"batch-correction","t":"differential-expression","d":"COUNT_MATRIX","p":112}
+{"f":"batch-correction","t":"dtu-analysis","d":"COUNT_MATRIX","p":0}
+{"f":"batch-correction","t":"multi-omics-integration","d":"COUNT_MATRIX, H5AD","p":0}
+{"f":"batch-correction","t":"rna-velocity","d":"H5AD","p":0}
+{"f":"batch-correction","t":"scanpy","d":"COUNT_MATRIX, H5AD","p":25}
+{"f":"batch-correction","t":"scenic","d":"H5AD, RDS","p":5}
+{"f":"batch-correction","t":"seurat","d":"COUNT_MATRIX, H5AD","p":94}
+{"f":"batch-correction","t":"signac","d":"H5AD","p":5}
+{"f":"batch-correction","t":"spatial-transcriptomics","d":"COUNT_MATRIX, H5AD","p":0}
+{"f":"batch-correction","t":"trajectory-analysis","d":"H5AD, RDS","p":22}
+{"f":"batch-correction","t":"wgcna","d":"COUNT_MATRIX","p":55}
+{"f":"binding-site-detection","t":"md-simulation","d":"PDB","p":0}
+{"f":"binding-site-detection","t":"molecular-docking","d":"PDB","p":3}
+{"f":"binding-site-detection","t":"protein-ligand-interaction","d":"PDB","p":0}
+{"f":"binding-site-detection","t":"virtual-screening","d":"PDB","p":0}
+{"f":"bisulfite-seq","t":"batch-correction","d":"COUNT_MATRIX","p":6}
+{"f":"bisulfite-seq","t":"cellphonedb","d":"COUNT_MATRIX","p":0}
+{"f":"bisulfite-seq","t":"citeseq","d":"COUNT_MATRIX","p":0}
+{"f":"bisulfite-seq","t":"crispr-screen","d":"COUNT_MATRIX","p":0}
+{"f":"bisulfite-seq","t":"data-inspection","d":"COUNT_MATRIX","p":0}
+{"f":"bisulfite-seq","t":"differential-expression","d":"COUNT_MATRIX","p":37}
+{"f":"bisulfite-seq","t":"dtu-analysis","d":"COUNT_MATRIX","p":0}
+{"f":"bisulfite-seq","t":"multi-omics-integration","d":"COUNT_MATRIX","p":0}
+{"f":"bisulfite-seq","t":"pathway-enrichment","d":"GENE_LIST","p":36}
+{"f":"bisulfite-seq","t":"scanpy","d":"COUNT_MATRIX","p":0}
+{"f":"bisulfite-seq","t":"seurat","d":"COUNT_MATRIX","p":3}
+{"f":"bisulfite-seq","t":"spatial-transcriptomics","d":"COUNT_MATRIX","p":0}
+{"f":"bisulfite-seq","t":"string-query","d":"GENE_LIST","p":0}
+{"f":"bisulfite-seq","t":"survival-analysis","d":"GENE_LIST","p":4}
+{"f":"bisulfite-seq","t":"wgcna","d":"COUNT_MATRIX","p":0}
+{"f":"cbioportal-query","t":"multi-omics-integration","d":"EXPRESSION_MATRIX","p":0}
+{"f":"cbioportal-query","t":"scenic","d":"EXPRESSION_MATRIX","p":0}
+{"f":"cbioportal-query","t":"survival-analysis","d":"CLINICAL_DATA, EXPRESSION_MATRIX","p":12}
+{"f":"cbioportal-query","t":"wgcna","d":"EXPRESSION_MATRIX","p":6}
+{"f":"cell-type-annotation","t":"batch-correction","d":"H5AD, RDS","p":3}
+{"f":"cell-type-annotation","t":"cellchat","d":"CELL_LABELS, H5AD, RDS","p":8}
+{"f":"cell-type-annotation","t":"cellphonedb","d":"CELL_LABELS, H5AD","p":0}
+{"f":"cell-type-annotation","t":"citeseq","d":"H5AD","p":0}
+{"f":"cell-type-annotation","t":"data-inspection","d":"H5AD","p":0}
+{"f":"cell-type-annotation","t":"multi-omics-integration","d":"H5AD","p":0}
+{"f":"cell-type-annotation","t":"rna-velocity","d":"H5AD","p":0}
+{"f":"cell-type-annotation","t":"scanpy","d":"H5AD","p":8}
+{"f":"cell-type-annotation","t":"scenic","d":"H5AD, RDS","p":0}
+{"f":"cell-type-annotation","t":"seurat","d":"H5AD","p":55}
+{"f":"cell-type-annotation","t":"signac","d":"H5AD","p":0}
+{"f":"cell-type-annotation","t":"spatial-transcriptomics","d":"H5AD","p":0}
+{"f":"cell-type-annotation","t":"trajectory-analysis","d":"H5AD, RDS","p":8}
+{"f":"cellchat","t":"pathway-enrichment","d":"GENE_LIST","p":11}
+{"f":"cellchat","t":"string-query","d":"GENE_LIST","p":0}
+{"f":"cellchat","t":"survival-analysis","d":"GENE_LIST","p":5}
+{"f":"cellphonedb","t":"pathway-enrichment","d":"GENE_LIST","p":4}
+{"f":"cellphonedb","t":"string-query","d":"GENE_LIST","p":0}
+{"f":"cellphonedb","t":"survival-analysis","d":"GENE_LIST","p":0}
+{"f":"chembl-query","t":"admet-prediction","d":"SDF, SMILES","p":14}
+{"f":"chembl-query","t":"compound-analysis","d":"SDF, SMILES","p":3}
+{"f":"chembl-query","t":"lead-optimization","d":"SDF, SMILES","p":0}
+{"f":"chembl-query","t":"ligand-preparation","d":"SDF, SMILES","p":0}
+{"f":"chembl-query","t":"molecular-docking","d":"SDF, SMILES","p":6}
+{"f":"chembl-query","t":"protein-ligand-interaction","d":"SDF","p":0}
+{"f":"chembl-query","t":"pubchem-query","d":"SMILES","p":12}
+{"f":"chembl-query","t":"virtual-screening","d":"SDF, SMILES","p":8}
+{"f":"chipseq","t":"batch-correction","d":"COUNT_MATRIX","p":5}
+{"f":"chipseq","t":"cellphonedb","d":"COUNT_MATRIX","p":0}
+{"f":"chipseq","t":"citeseq","d":"COUNT_MATRIX","p":0}
+{"f":"chipseq","t":"crispr-screen","d":"COUNT_MATRIX","p":0}
+{"f":"chipseq","t":"data-inspection","d":"COUNT_MATRIX","p":0}
+{"f":"chipseq","t":"differential-expression","d":"COUNT_MATRIX","p":111}
+{"f":"chipseq","t":"dtu-analysis","d":"COUNT_MATRIX","p":0}
+{"f":"chipseq","t":"multi-omics-integration","d":"COUNT_MATRIX","p":0}
+{"f":"chipseq","t":"pathway-enrichment","d":"GENE_LIST","p":62}
+{"f":"chipseq","t":"scanpy","d":"COUNT_MATRIX","p":5}
+{"f":"chipseq","t":"seurat","d":"COUNT_MATRIX","p":19}
+{"f":"chipseq","t":"spatial-transcriptomics","d":"COUNT_MATRIX","p":0}
+{"f":"chipseq","t":"string-query","d":"GENE_LIST","p":0}
+{"f":"chipseq","t":"survival-analysis","d":"GENE_LIST","p":4}
+{"f":"chipseq","t":"wgcna","d":"COUNT_MATRIX","p":0}
+{"f":"citeseq","t":"batch-correction","d":"H5AD","p":8}
+{"f":"citeseq","t":"cell-type-annotation","d":"CLUSTER_DATA, H5AD","p":0}
+{"f":"citeseq","t":"cellchat","d":"CLUSTER_DATA, H5AD","p":0}
+{"f":"citeseq","t":"cellphonedb","d":"H5AD","p":0}
+{"f":"citeseq","t":"data-inspection","d":"H5AD","p":0}
+{"f":"citeseq","t":"multi-omics-integration","d":"H5AD","p":4}
+{"f":"citeseq","t":"rna-velocity","d":"H5AD","p":0}
+{"f":"citeseq","t":"scanpy","d":"H5AD","p":6}
+{"f":"citeseq","t":"scenic","d":"H5AD","p":0}
+{"f":"citeseq","t":"seurat","d":"H5AD","p":22}
+{"f":"citeseq","t":"signac","d":"H5AD","p":0}
+{"f":"citeseq","t":"spatial-transcriptomics","d":"H5AD","p":7}
+{"f":"citeseq","t":"trajectory-analysis","d":"CLUSTER_DATA, H5AD","p":0}
+{"f":"clinical-variant","t":"survival-analysis","d":"CLINICAL_DATA","p":0}
+{"f":"clinvar-query","t":"clinical-variant","d":"VARIANT_INFO","p":0}
+{"f":"clinvar-query","t":"survival-analysis","d":"CLINICAL_DATA","p":0}
+{"f":"cnv-analysis","t":"pathway-enrichment","d":"GENE_LIST","p":7}
+{"f":"cnv-analysis","t":"string-query","d":"GENE_LIST","p":0}
+{"f":"cnv-analysis","t":"survival-analysis","d":"GENE_LIST","p":4}
+{"f":"compound-analysis","t":"admet-prediction","d":"SDF","p":3}
+{"f":"compound-analysis","t":"lead-optimization","d":"SDF","p":0}
+{"f":"compound-analysis","t":"ligand-preparation","d":"SDF","p":0}
+{"f":"compound-analysis","t":"molecular-docking","d":"SDF","p":0}
+{"f":"compound-analysis","t":"protein-ligand-interaction","d":"SDF","p":0}
+{"f":"compound-analysis","t":"virtual-screening","d":"SDF","p":0}
+{"f":"cosmic-query","t":"clinical-variant","d":"VARIANT_INFO","p":0}
+{"f":"crispr-screen","t":"pathway-enrichment","d":"DE_RESULTS, GENE_LIST","p":11}
+{"f":"crispr-screen","t":"string-query","d":"GENE_LIST","p":0}
+{"f":"crispr-screen","t":"survival-analysis","d":"GENE_LIST","p":3}
+{"f":"denovo-assembly","t":"bacterial-pangenome","d":"FASTA","p":70}
+{"f":"denovo-assembly","t":"metagenome-binning","d":"ASSEMBLY, FASTA","p":88}
+{"f":"denovo-assembly","t":"microbiome-profiling","d":"FASTA","p":122}
+{"f":"denovo-assembly","t":"oligo-design","d":"FASTA","p":10}
+{"f":"denovo-assembly","t":"phylogenetic-tree","d":"ASSEMBLY, FASTA","p":192}
+{"f":"denovo-assembly","t":"rnaseq-alignment","d":"FASTA","p":185}
+{"f":"denovo-assembly","t":"viral-metagenomics","d":"ASSEMBLY, FASTA","p":22}
+{"f":"denovo-assembly","t":"wgs-alignment","d":"FASTA","p":624}
+{"f":"differential-expression","t":"multi-omics-integration","d":"EXPRESSION_MATRIX","p":9}
+{"f":"differential-expression","t":"pathway-enrichment","d":"DE_RESULTS, GENE_LIST","p":590}
+{"f":"differential-expression","t":"scenic","d":"EXPRESSION_MATRIX","p":0}
+{"f":"differential-expression","t":"string-query","d":"GENE_LIST","p":75}
+{"f":"differential-expression","t":"survival-analysis","d":"EXPRESSION_MATRIX, GENE_LIST","p":64}
+{"f":"differential-expression","t":"wgcna","d":"EXPRESSION_MATRIX","p":409}
+{"f":"dtu-analysis","t":"pathway-enrichment","d":"DE_RESULTS, GENE_LIST","p":4}
+{"f":"dtu-analysis","t":"string-query","d":"GENE_LIST","p":0}
+{"f":"dtu-analysis","t":"survival-analysis","d":"GENE_LIST","p":0}
+{"f":"flux-analysis","t":"pathway-enrichment","d":"GENE_LIST","p":11}
+{"f":"flux-analysis","t":"string-query","d":"GENE_LIST","p":3}
+{"f":"flux-analysis","t":"survival-analysis","d":"GENE_LIST","p":0}
+{"f":"fusion-detection","t":"pathway-enrichment","d":"GENE_LIST","p":3}
+{"f":"fusion-detection","t":"string-query","d":"GENE_LIST","p":0}
+{"f":"fusion-detection","t":"survival-analysis","d":"GENE_LIST","p":0}
+{"f":"gnomad-query","t":"clinical-variant","d":"VARIANT_INFO","p":0}
+{"f":"golden-gate-assembly","t":"oligo-design","d":"SEQUENCE","p":5}
+{"f":"gwas-analysis","t":"pathway-enrichment","d":"GENE_LIST","p":31}
+{"f":"gwas-analysis","t":"string-query","d":"GENE_LIST","p":3}
+{"f":"gwas-analysis","t":"survival-analysis","d":"GENE_LIST","p":7}
+{"f":"isoform-analysis","t":"batch-correction","d":"COUNT_MATRIX","p":8}
+{"f":"isoform-analysis","t":"cellphonedb","d":"COUNT_MATRIX","p":0}
+{"f":"isoform-analysis","t":"citeseq","d":"COUNT_MATRIX","p":0}
+{"f":"isoform-analysis","t":"crispr-screen","d":"COUNT_MATRIX","p":0}
+{"f":"isoform-analysis","t":"data-inspection","d":"COUNT_MATRIX","p":0}
+{"f":"isoform-analysis","t":"differential-expression","d":"COUNT_MATRIX","p":171}
+{"f":"isoform-analysis","t":"dtu-analysis","d":"COUNT_MATRIX, TPM_MATRIX","p":12}
+{"f":"isoform-analysis","t":"multi-omics-integration","d":"COUNT_MATRIX","p":0}
+{"f":"isoform-analysis","t":"scanpy","d":"COUNT_MATRIX","p":8}
+{"f":"isoform-analysis","t":"seurat","d":"COUNT_MATRIX","p":24}
+{"f":"isoform-analysis","t":"spatial-transcriptomics","d":"COUNT_MATRIX","p":0}
+{"f":"isoform-analysis","t":"wgcna","d":"COUNT_MATRIX","p":17}
+{"f":"lead-optimization","t":"admet-prediction","d":"SDF, SMILES","p":0}
+{"f":"lead-optimization","t":"compound-analysis","d":"SDF, SMILES","p":0}
+{"f":"lead-optimization","t":"ligand-preparation","d":"SDF, SMILES","p":0}
+{"f":"lead-optimization","t":"molecular-docking","d":"SDF, SMILES","p":0}
+{"f":"lead-optimization","t":"protein-ligand-interaction","d":"SDF","p":0}
+{"f":"lead-optimization","t":"pubchem-query","d":"SMILES","p":0}
+{"f":"lead-optimization","t":"virtual-screening","d":"SDF, SMILES","p":0}
+{"f":"ligand-preparation","t":"admet-prediction","d":"SDF","p":0}
+{"f":"ligand-preparation","t":"compound-analysis","d":"SDF","p":0}
+{"f":"ligand-preparation","t":"lead-optimization","d":"SDF","p":0}
+{"f":"ligand-preparation","t":"molecular-docking","d":"PDBQT, SDF","p":0}
+{"f":"ligand-preparation","t":"protein-ligand-interaction","d":"SDF","p":0}
+{"f":"ligand-preparation","t":"virtual-screening","d":"SDF","p":0}
+{"f":"md-simulation","t":"binding-site-detection","d":"PDB","p":0}
+{"f":"md-simulation","t":"molecular-docking","d":"PDB","p":8}
+{"f":"md-simulation","t":"protein-ligand-interaction","d":"PDB","p":0}
+{"f":"md-simulation","t":"virtual-screening","d":"PDB","p":5}
+{"f":"metagenome-binning","t":"bacterial-pangenome","d":"FASTA","p":7}
+{"f":"metagenome-binning","t":"denovo-assembly","d":"FASTA","p":21}
+{"f":"metagenome-binning","t":"microbiome-profiling","d":"FASTA","p":30}
+{"f":"metagenome-binning","t":"oligo-design","d":"FASTA","p":0}
+{"f":"metagenome-binning","t":"phylogenetic-tree","d":"FASTA","p":19}
+{"f":"metagenome-binning","t":"rnaseq-alignment","d":"FASTA","p":0}
+{"f":"metagenome-binning","t":"viral-metagenomics","d":"FASTA","p":7}
+{"f":"metagenome-binning","t":"wgs-alignment","d":"FASTA","p":47}
+{"f":"microbiome-profiling","t":"bacterial-pangenome","d":"FASTA","p":17}
+{"f":"microbiome-profiling","t":"denovo-assembly","d":"FASTA","p":130}
+{"f":"microbiome-profiling","t":"metagenome-binning","d":"FASTA","p":23}
+{"f":"microbiome-profiling","t":"oligo-design","d":"FASTA","p":0}
+{"f":"microbiome-profiling","t":"pathway-enrichment","d":"GENE_LIST","p":5}
+{"f":"microbiome-profiling","t":"phylogenetic-tree","d":"FASTA","p":62}
+{"f":"microbiome-profiling","t":"rnaseq-alignment","d":"FASTA","p":25}
+{"f":"microbiome-profiling","t":"string-query","d":"GENE_LIST","p":0}
+{"f":"microbiome-profiling","t":"survival-analysis","d":"GENE_LIST","p":0}
+{"f":"microbiome-profiling","t":"viral-metagenomics","d":"FASTA","p":9}
+{"f":"microbiome-profiling","t":"wgs-alignment","d":"FASTA","p":180}
+{"f":"molecular-docking","t":"admet-prediction","d":"SDF","p":13}
+{"f":"molecular-docking","t":"binding-site-detection","d":"PDB","p":0}
+{"f":"molecular-docking","t":"compound-analysis","d":"SDF","p":0}
+{"f":"molecular-docking","t":"lead-optimization","d":"SDF","p":0}
+{"f":"molecular-docking","t":"ligand-preparation","d":"SDF","p":0}
+{"f":"molecular-docking","t":"md-simulation","d":"PDB","p":22}
+{"f":"molecular-docking","t":"protein-ligand-interaction","d":"DOCKING_POSES, PDB, SDF","p":5}
+{"f":"molecular-docking","t":"virtual-screening","d":"PDB, SDF","p":13}
+{"f":"multi-omics-integration","t":"pathway-enrichment","d":"GENE_LIST","p":7}
+{"f":"multi-omics-integration","t":"string-query","d":"GENE_LIST","p":0}
+{"f":"multi-omics-integration","t":"survival-analysis","d":"GENE_LIST","p":0}
+{"f":"nanopore-analysis","t":"archr","d":"BAM","p":0}
+{"f":"nanopore-analysis","t":"atacseq","d":"BAM, FASTQ","p":0}
+{"f":"nanopore-analysis","t":"bisulfite-seq","d":"FASTQ","p":8}
+{"f":"nanopore-analysis","t":"chipseq","d":"BAM","p":0}
+{"f":"nanopore-analysis","t":"cnv-analysis","d":"BAM","p":0}
+{"f":"nanopore-analysis","t":"crispr-screen","d":"FASTQ","p":3}
+{"f":"nanopore-analysis","t":"data-inspection","d":"BAM, FASTQ","p":0}
+{"f":"nanopore-analysis","t":"denovo-assembly","d":"FASTQ","p":187}
+{"f":"nanopore-analysis","t":"fusion-detection","d":"BAM, FASTQ","p":0}
+{"f":"nanopore-analysis","t":"isoform-analysis","d":"BAM, FASTQ","p":8}
+{"f":"nanopore-analysis","t":"metagenome-binning","d":"BAM","p":12}
+{"f":"nanopore-analysis","t":"microbiome-profiling","d":"FASTQ","p":72}
+{"f":"nanopore-analysis","t":"rnaseq-alignment","d":"FASTQ","p":38}
+{"f":"nanopore-analysis","t":"somatic-variants","d":"BAM","p":3}
+{"f":"nanopore-analysis","t":"starsolo","d":"FASTQ","p":4}
+{"f":"nanopore-analysis","t":"structural-variants","d":"BAM","p":0}
+{"f":"nanopore-analysis","t":"variant-calling","d":"BAM","p":55}
+{"f":"nanopore-analysis","t":"wgs-alignment","d":"FASTQ","p":332}
+{"f":"oligo-design","t":"golden-gate-assembly","d":"PRIMER_LIST, SEQUENCE","p":0}
+{"f":"opentargets-query","t":"clinicaltrials-query","d":"DRUG_DATA","p":0}
+{"f":"opentargets-query","t":"pathway-enrichment","d":"GENE_LIST","p":0}
+{"f":"opentargets-query","t":"string-query","d":"GENE_LIST","p":0}
+{"f":"opentargets-query","t":"survival-analysis","d":"GENE_LIST","p":0}
+{"f":"pdb-query","t":"binding-site-detection","d":"PDB","p":0}
+{"f":"pdb-query","t":"md-simulation","d":"PDB","p":0}
+{"f":"pdb-query","t":"molecular-docking","d":"PDB","p":0}
+{"f":"pdb-query","t":"protein-ligand-interaction","d":"PDB","p":0}
+{"f":"pdb-query","t":"virtual-screening","d":"PDB","p":0}
+{"f":"protein-ligand-interaction","t":"admet-prediction","d":"SDF, SMILES","p":0}
+{"f":"protein-ligand-interaction","t":"binding-site-detection","d":"PDB","p":0}
+{"f":"protein-ligand-interaction","t":"compound-analysis","d":"SDF, SMILES","p":0}
+{"f":"protein-ligand-interaction","t":"lead-optimization","d":"SDF, SMILES","p":0}
+{"f":"protein-ligand-interaction","t":"ligand-preparation","d":"SDF, SMILES","p":0}
+{"f":"protein-ligand-interaction","t":"md-simulation","d":"PDB","p":0}
+{"f":"protein-ligand-interaction","t":"molecular-docking","d":"PDB, SDF, SMILES","p":0}
+{"f":"protein-ligand-interaction","t":"pubchem-query","d":"SMILES","p":0}
+{"f":"protein-ligand-interaction","t":"virtual-screening","d":"PDB, SDF, SMILES","p":0}
+{"f":"proteomics","t":"pathway-enrichment","d":"GENE_LIST","p":68}
+{"f":"proteomics","t":"string-query","d":"GENE_LIST, PROTEIN_LIST","p":18}
+{"f":"proteomics","t":"survival-analysis","d":"GENE_LIST","p":6}
+{"f":"pubchem-query","t":"admet-prediction","d":"SDF, SMILES","p":11}
+{"f":"pubchem-query","t":"compound-analysis","d":"SDF, SMILES","p":0}
+{"f":"pubchem-query","t":"lead-optimization","d":"SDF, SMILES","p":0}
+{"f":"pubchem-query","t":"ligand-preparation","d":"SDF, SMILES","p":0}
+{"f":"pubchem-query","t":"molecular-docking","d":"SDF, SMILES","p":48}
+{"f":"pubchem-query","t":"protein-ligand-interaction","d":"SDF","p":0}
+{"f":"pubchem-query","t":"virtual-screening","d":"SDF, SMILES","p":9}
+{"f":"rna-velocity","t":"batch-correction","d":"H5AD","p":0}
+{"f":"rna-velocity","t":"cell-type-annotation","d":"H5AD","p":0}
+{"f":"rna-velocity","t":"cellchat","d":"H5AD","p":0}
+{"f":"rna-velocity","t":"cellphonedb","d":"H5AD","p":0}
+{"f":"rna-velocity","t":"citeseq","d":"H5AD","p":0}
+{"f":"rna-velocity","t":"data-inspection","d":"H5AD","p":0}
+{"f":"rna-velocity","t":"multi-omics-integration","d":"H5AD","p":0}
+{"f":"rna-velocity","t":"scanpy","d":"H5AD","p":7}
+{"f":"rna-velocity","t":"scenic","d":"H5AD","p":0}
+{"f":"rna-velocity","t":"seurat","d":"H5AD","p":10}
+{"f":"rna-velocity","t":"signac","d":"H5AD","p":0}
+{"f":"rna-velocity","t":"spatial-transcriptomics","d":"H5AD","p":4}
+{"f":"rna-velocity","t":"trajectory-analysis","d":"H5AD","p":6}
+{"f":"rnaseq-alignment","t":"archr","d":"BAM","p":3}
+{"f":"rnaseq-alignment","t":"atacseq","d":"BAM","p":76}
+{"f":"rnaseq-alignment","t":"batch-correction","d":"COUNT_MATRIX","p":27}
+{"f":"rnaseq-alignment","t":"cellphonedb","d":"COUNT_MATRIX","p":0}
+{"f":"rnaseq-alignment","t":"chipseq","d":"BAM","p":80}
+{"f":"rnaseq-alignment","t":"citeseq","d":"COUNT_MATRIX","p":0}
+{"f":"rnaseq-alignment","t":"cnv-analysis","d":"BAM","p":5}
+{"f":"rnaseq-alignment","t":"crispr-screen","d":"COUNT_MATRIX","p":9}
+{"f":"rnaseq-alignment","t":"data-inspection","d":"BAM, COUNT_MATRIX","p":0}
+{"f":"rnaseq-alignment","t":"differential-expression","d":"COUNT_MATRIX","p":457}
+{"f":"rnaseq-alignment","t":"dtu-analysis","d":"COUNT_MATRIX","p":12}
+{"f":"rnaseq-alignment","t":"fusion-detection","d":"BAM","p":14}
+{"f":"rnaseq-alignment","t":"isoform-analysis","d":"BAM","p":172}
+{"f":"rnaseq-alignment","t":"metagenome-binning","d":"BAM","p":0}
+{"f":"rnaseq-alignment","t":"multi-omics-integration","d":"COUNT_MATRIX","p":3}
+{"f":"rnaseq-alignment","t":"scanpy","d":"COUNT_MATRIX","p":24}
+{"f":"rnaseq-alignment","t":"seurat","d":"COUNT_MATRIX","p":69}
+{"f":"rnaseq-alignment","t":"somatic-variants","d":"BAM","p":18}
+{"f":"rnaseq-alignment","t":"spatial-transcriptomics","d":"COUNT_MATRIX","p":5}
+{"f":"rnaseq-alignment","t":"structural-variants","d":"BAM","p":3}
+{"f":"rnaseq-alignment","t":"variant-calling","d":"BAM","p":108}
+{"f":"rnaseq-alignment","t":"wgcna","d":"COUNT_MATRIX","p":48}
+{"f":"scanpy","t":"batch-correction","d":"H5AD","p":35}
+{"f":"scanpy","t":"cell-type-annotation","d":"CLUSTER_DATA, H5AD","p":7}
+{"f":"scanpy","t":"cellchat","d":"CLUSTER_DATA, H5AD","p":5}
+{"f":"scanpy","t":"cellphonedb","d":"H5AD","p":5}
+{"f":"scanpy","t":"citeseq","d":"H5AD","p":8}
+{"f":"scanpy","t":"data-inspection","d":"H5AD","p":0}
+{"f":"scanpy","t":"multi-omics-integration","d":"H5AD","p":4}
+{"f":"scanpy","t":"pathway-enrichment","d":"GENE_LIST","p":17}
+{"f":"scanpy","t":"rna-velocity","d":"H5AD","p":7}
+{"f":"scanpy","t":"scenic","d":"H5AD","p":10}
+{"f":"scanpy","t":"seurat","d":"H5AD","p":63}
+{"f":"scanpy","t":"signac","d":"H5AD","p":0}
+{"f":"scanpy","t":"spatial-transcriptomics","d":"H5AD","p":17}
+{"f":"scanpy","t":"string-query","d":"GENE_LIST","p":0}
+{"f":"scanpy","t":"survival-analysis","d":"GENE_LIST","p":4}
+{"f":"scanpy","t":"trajectory-analysis","d":"CLUSTER_DATA, H5AD","p":16}
+{"f":"scenic","t":"pathway-enrichment","d":"GENE_LIST","p":14}
+{"f":"scenic","t":"string-query","d":"GENE_LIST","p":0}
+{"f":"scenic","t":"survival-analysis","d":"GENE_LIST","p":3}
+{"f":"seurat","t":"batch-correction","d":"RDS","p":111}
+{"f":"seurat","t":"cell-type-annotation","d":"CLUSTER_DATA, RDS","p":85}
+{"f":"seurat","t":"cellchat","d":"CLUSTER_DATA, RDS","p":49}
+{"f":"seurat","t":"pathway-enrichment","d":"GENE_LIST","p":122}
+{"f":"seurat","t":"scenic","d":"RDS","p":22}
+{"f":"seurat","t":"string-query","d":"GENE_LIST","p":6}
+{"f":"seurat","t":"survival-analysis","d":"GENE_LIST","p":17}
+{"f":"seurat","t":"trajectory-analysis","d":"CLUSTER_DATA, RDS","p":77}
+{"f":"signac","t":"batch-correction","d":"H5AD","p":7}
+{"f":"signac","t":"cell-type-annotation","d":"H5AD","p":0}
+{"f":"signac","t":"cellchat","d":"H5AD","p":0}
+{"f":"signac","t":"cellphonedb","d":"H5AD","p":0}
+{"f":"signac","t":"citeseq","d":"H5AD","p":0}
+{"f":"signac","t":"data-inspection","d":"H5AD","p":0}
+{"f":"signac","t":"multi-omics-integration","d":"H5AD","p":0}
+{"f":"signac","t":"pathway-enrichment","d":"GENE_LIST","p":4}
+{"f":"signac","t":"rna-velocity","d":"H5AD","p":0}
+{"f":"signac","t":"scanpy","d":"H5AD","p":0}
+{"f":"signac","t":"scenic","d":"H5AD","p":3}
+{"f":"signac","t":"seurat","d":"H5AD","p":21}
+{"f":"signac","t":"spatial-transcriptomics","d":"H5AD","p":0}
+{"f":"signac","t":"string-query","d":"GENE_LIST","p":0}
+{"f":"signac","t":"survival-analysis","d":"GENE_LIST","p":0}
+{"f":"signac","t":"trajectory-analysis","d":"H5AD","p":0}
+{"f":"somatic-variants","t":"clinical-variant","d":"VCF","p":0}
+{"f":"somatic-variants","t":"clinvar-query","d":"VCF","p":15}
+{"f":"somatic-variants","t":"cnv-analysis","d":"VCF","p":11}
+{"f":"somatic-variants","t":"data-inspection","d":"VCF","p":0}
+{"f":"somatic-variants","t":"gwas-analysis","d":"VCF","p":5}
+{"f":"somatic-variants","t":"pathway-enrichment","d":"GENE_LIST","p":3}
+{"f":"somatic-variants","t":"string-query","d":"GENE_LIST","p":0}
+{"f":"somatic-variants","t":"survival-analysis","d":"GENE_LIST","p":3}
+{"f":"somatic-variants","t":"variant-annotation","d":"BCF, VCF","p":59}
+{"f":"spatial-transcriptomics","t":"batch-correction","d":"H5AD","p":3}
+{"f":"spatial-transcriptomics","t":"cell-type-annotation","d":"H5AD","p":0}
+{"f":"spatial-transcriptomics","t":"cellchat","d":"H5AD","p":0}
+{"f":"spatial-transcriptomics","t":"cellphonedb","d":"H5AD","p":0}
+{"f":"spatial-transcriptomics","t":"citeseq","d":"H5AD","p":3}
+{"f":"spatial-transcriptomics","t":"data-inspection","d":"H5AD","p":0}
+{"f":"spatial-transcriptomics","t":"multi-omics-integration","d":"H5AD","p":0}
+{"f":"spatial-transcriptomics","t":"rna-velocity","d":"H5AD","p":0}
+{"f":"spatial-transcriptomics","t":"scanpy","d":"H5AD","p":19}
+{"f":"spatial-transcriptomics","t":"scenic","d":"H5AD","p":0}
+{"f":"spatial-transcriptomics","t":"seurat","d":"H5AD","p":21}
+{"f":"spatial-transcriptomics","t":"signac","d":"H5AD","p":0}
+{"f":"spatial-transcriptomics","t":"trajectory-analysis","d":"H5AD","p":4}
+{"f":"starsolo","t":"batch-correction","d":"COUNT_MATRIX, H5AD","p":42}
+{"f":"starsolo","t":"cell-type-annotation","d":"H5AD","p":22}
+{"f":"starsolo","t":"cellchat","d":"H5AD","p":5}
+{"f":"starsolo","t":"cellphonedb","d":"COUNT_MATRIX, H5AD","p":0}
+{"f":"starsolo","t":"citeseq","d":"COUNT_MATRIX, H5AD","p":10}
+{"f":"starsolo","t":"crispr-screen","d":"COUNT_MATRIX","p":0}
+{"f":"starsolo","t":"data-inspection","d":"COUNT_MATRIX, H5AD","p":0}
+{"f":"starsolo","t":"differential-expression","d":"COUNT_MATRIX","p":28}
+{"f":"starsolo","t":"dtu-analysis","d":"COUNT_MATRIX","p":0}
+{"f":"starsolo","t":"multi-omics-integration","d":"COUNT_MATRIX, H5AD","p":0}
+{"f":"starsolo","t":"rna-velocity","d":"H5AD","p":11}
+{"f":"starsolo","t":"scanpy","d":"COUNT_MATRIX, H5AD","p":44}
+{"f":"starsolo","t":"scenic","d":"H5AD","p":0}
+{"f":"starsolo","t":"seurat","d":"COUNT_MATRIX, H5AD","p":188}
+{"f":"starsolo","t":"signac","d":"H5AD","p":9}
+{"f":"starsolo","t":"spatial-transcriptomics","d":"COUNT_MATRIX, H5AD","p":7}
+{"f":"starsolo","t":"trajectory-analysis","d":"H5AD","p":14}
+{"f":"starsolo","t":"wgcna","d":"COUNT_MATRIX","p":0}
+{"f":"string-query","t":"pathway-enrichment","d":"GENE_LIST","p":106}
+{"f":"string-query","t":"survival-analysis","d":"GENE_LIST","p":21}
+{"f":"structural-variants","t":"clinical-variant","d":"VCF","p":0}
+{"f":"structural-variants","t":"clinvar-query","d":"VCF","p":13}
+{"f":"structural-variants","t":"cnv-analysis","d":"VCF","p":9}
+{"f":"structural-variants","t":"data-inspection","d":"VCF","p":0}
+{"f":"structural-variants","t":"gwas-analysis","d":"VCF","p":0}
+{"f":"structural-variants","t":"somatic-variants","d":"VCF","p":12}
+{"f":"structural-variants","t":"variant-annotation","d":"VCF","p":17}
+{"f":"trajectory-analysis","t":"batch-correction","d":"H5AD, RDS","p":7}
+{"f":"trajectory-analysis","t":"cell-type-annotation","d":"H5AD, RDS","p":4}
+{"f":"trajectory-analysis","t":"cellchat","d":"H5AD, RDS","p":12}
+{"f":"trajectory-analysis","t":"cellphonedb","d":"H5AD","p":4}
+{"f":"trajectory-analysis","t":"citeseq","d":"H5AD","p":3}
+{"f":"trajectory-analysis","t":"data-inspection","d":"H5AD","p":0}
+{"f":"trajectory-analysis","t":"multi-omics-integration","d":"H5AD","p":0}
+{"f":"trajectory-analysis","t":"rna-velocity","d":"H5AD","p":7}
+{"f":"trajectory-analysis","t":"scanpy","d":"H5AD","p":11}
+{"f":"trajectory-analysis","t":"scenic","d":"H5AD, RDS","p":10}
+{"f":"trajectory-analysis","t":"seurat","d":"H5AD","p":40}
+{"f":"trajectory-analysis","t":"signac","d":"H5AD","p":0}
+{"f":"trajectory-analysis","t":"spatial-transcriptomics","d":"H5AD","p":4}
+{"f":"variant-annotation","t":"clinical-variant","d":"VARIANT_INFO, VCF","p":0}
+{"f":"variant-annotation","t":"clinvar-query","d":"VCF","p":109}
+{"f":"variant-annotation","t":"cnv-analysis","d":"VCF","p":7}
+{"f":"variant-annotation","t":"data-inspection","d":"VCF","p":0}
+{"f":"variant-annotation","t":"gwas-analysis","d":"VCF","p":45}
+{"f":"variant-annotation","t":"pathway-enrichment","d":"GENE_LIST","p":26}
+{"f":"variant-annotation","t":"somatic-variants","d":"VCF","p":19}
+{"f":"variant-annotation","t":"string-query","d":"GENE_LIST","p":0}
+{"f":"variant-annotation","t":"survival-analysis","d":"GENE_LIST","p":7}
+{"f":"variant-calling","t":"archr","d":"BAM","p":0}
+{"f":"variant-calling","t":"atacseq","d":"BAM","p":9}
+{"f":"variant-calling","t":"chipseq","d":"BAM","p":3}
+{"f":"variant-calling","t":"clinical-variant","d":"VCF","p":0}
+{"f":"variant-calling","t":"clinvar-query","d":"VCF","p":75}
+{"f":"variant-calling","t":"cnv-analysis","d":"BAM, VCF","p":14}
+{"f":"variant-calling","t":"data-inspection","d":"BAM, VCF","p":0}
+{"f":"variant-calling","t":"fusion-detection","d":"BAM","p":5}
+{"f":"variant-calling","t":"gwas-analysis","d":"VCF","p":91}
+{"f":"variant-calling","t":"isoform-analysis","d":"BAM","p":17}
+{"f":"variant-calling","t":"metagenome-binning","d":"BAM","p":0}
+{"f":"variant-calling","t":"somatic-variants","d":"BAM, VCF","p":125}
+{"f":"variant-calling","t":"structural-variants","d":"BAM","p":52}
+{"f":"variant-calling","t":"variant-annotation","d":"BCF, VCF","p":260}
+{"f":"viral-metagenomics","t":"bacterial-pangenome","d":"FASTA","p":0}
+{"f":"viral-metagenomics","t":"denovo-assembly","d":"FASTA","p":7}
+{"f":"viral-metagenomics","t":"metagenome-binning","d":"FASTA","p":6}
+{"f":"viral-metagenomics","t":"microbiome-profiling","d":"FASTA","p":8}
+{"f":"viral-metagenomics","t":"oligo-design","d":"FASTA","p":0}
+{"f":"viral-metagenomics","t":"phylogenetic-tree","d":"FASTA","p":6}
+{"f":"viral-metagenomics","t":"rnaseq-alignment","d":"FASTA","p":3}
+{"f":"viral-metagenomics","t":"wgs-alignment","d":"FASTA","p":18}
+{"f":"virtual-screening","t":"admet-prediction","d":"SDF","p":22}
+{"f":"virtual-screening","t":"compound-analysis","d":"SDF","p":0}
+{"f":"virtual-screening","t":"lead-optimization","d":"SDF","p":0}
+{"f":"virtual-screening","t":"ligand-preparation","d":"SDF","p":0}
+{"f":"virtual-screening","t":"molecular-docking","d":"SDF","p":31}
+{"f":"virtual-screening","t":"protein-ligand-interaction","d":"SDF","p":0}
+{"f":"wgcna","t":"pathway-enrichment","d":"GENE_LIST","p":397}
+{"f":"wgcna","t":"string-query","d":"GENE_LIST","p":103}
+{"f":"wgcna","t":"survival-analysis","d":"GENE_LIST","p":72}
+{"f":"wgs-alignment","t":"archr","d":"BAM","p":10}
+{"f":"wgs-alignment","t":"atacseq","d":"BAM","p":148}
+{"f":"wgs-alignment","t":"chipseq","d":"BAM","p":288}
+{"f":"wgs-alignment","t":"cnv-analysis","d":"BAM","p":9}
+{"f":"wgs-alignment","t":"data-inspection","d":"BAM","p":0}
+{"f":"wgs-alignment","t":"fusion-detection","d":"BAM","p":6}
+{"f":"wgs-alignment","t":"isoform-analysis","d":"BAM","p":132}
+{"f":"wgs-alignment","t":"metagenome-binning","d":"BAM","p":70}
+{"f":"wgs-alignment","t":"somatic-variants","d":"BAM, CRAM","p":126}
+{"f":"wgs-alignment","t":"structural-variants","d":"BAM, CRAM","p":39}
+{"f":"wgs-alignment","t":"variant-calling","d":"BAM, CRAM","p":765}

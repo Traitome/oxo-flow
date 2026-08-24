@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::commands::print_banner;
 
@@ -261,6 +261,47 @@ const EMBEDDED_GALLERY: &[(&str, &str)] = &[
     ),
 ];
 
+/// Auxiliary files (scripts, report templates) referenced by gallery
+/// workflows, embedded with the same include_str! mirroring so `template`
+/// copies them next to the generated workflow. Keys are gallery-relative
+/// paths — the canonical sources in `examples/gallery/` (the drift-guard
+/// test compares both lists and contents against that directory).
+const EMBEDDED_GALLERY_AUX: &[(&str, &str)] = &[
+    (
+        "scripts/report.py",
+        include_str!("../../templates/aux/scripts/report.py"),
+    ),
+    (
+        "scripts/generate_report.py",
+        include_str!("../../templates/aux/scripts/generate_report.py"),
+    ),
+    (
+        "scripts/seurat_analysis.R",
+        include_str!("../../templates/aux/scripts/seurat_analysis.R"),
+    ),
+    (
+        "templates/sc_report.Rmd",
+        include_str!("../../templates/aux/templates/sc_report.Rmd"),
+    ),
+];
+
+/// Which templates reference which auxiliary files (by template stem).
+const TEMPLATE_AUX_FILES: &[(&str, &[&str])] = &[
+    (
+        "09_single_cell_rnaseq",
+        &["scripts/seurat_analysis.R", "templates/sc_report.Rmd"],
+    ),
+    ("11_conditional_workflow", &["scripts/report.py"]),
+    (
+        "14_paired_experiment_control",
+        &["scripts/generate_report.py"],
+    ),
+    (
+        "15_paired_experiment_control_pairs",
+        &["scripts/generate_report.py"],
+    ),
+];
+
 /// Match an embedded template by exact stem or `_<name>` suffix (the same
 /// rules the filesystem scan used); exact matches win.
 fn find_embedded_template<'a>(
@@ -374,6 +415,49 @@ fn list_templates() -> Result<()> {
 // Apply a single template (copy + name substitution)
 // ---------------------------------------------------------------------------
 
+/// Copy the auxiliary files (scripts/report templates) a template
+/// references next to the generated workflow. Returns the copied
+/// gallery-relative paths. An existing file is only left untouched when
+/// its content matches the embedded copy, so generating two templates that
+/// share a script into the same directory stays safe.
+fn copy_template_aux(template_stem: &str, dest_dir: &Path) -> Result<Vec<String>> {
+    let Some((_, aux_files)) = TEMPLATE_AUX_FILES
+        .iter()
+        .find(|(stem, _)| *stem == template_stem)
+    else {
+        return Ok(Vec::new());
+    };
+    let mut copied = Vec::new();
+    for rel_path in *aux_files {
+        let (_, content) = EMBEDDED_GALLERY_AUX
+            .iter()
+            .find(|(path, _)| path == rel_path)
+            .ok_or_else(|| anyhow::anyhow!("embedded aux file {rel_path} not found"))?;
+        let dest = dest_dir.join(rel_path);
+        if dest.exists() {
+            let existing = std::fs::read_to_string(&dest)
+                .with_context(|| format!("cannot read {}", dest.display()))?;
+            if existing != *content {
+                anyhow::bail!(
+                    "{} already exists and differs from the template's copy — \
+                     remove it or choose a different output location",
+                    dest.display()
+                );
+            }
+            copied.push(rel_path.to_string());
+            continue;
+        }
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("cannot create {}", parent.display()))?;
+        }
+        std::fs::write(&dest, content)
+            .with_context(|| format!("cannot write {}", dest.display()))?;
+        copied.push(rel_path.to_string());
+    }
+    Ok(copied)
+}
+
 fn apply_template(template_name: &str, output: Option<PathBuf>) -> Result<()> {
     let (template_stem, content) = match find_embedded_template(EMBEDDED_GALLERY, template_name) {
         Some(found) => found,
@@ -390,10 +474,13 @@ fn apply_template(template_name: &str, output: Option<PathBuf>) -> Result<()> {
     // Substitute the `name` field
     let new_content = substitute_workflow_name(content, &new_name);
 
-    // Write to specified output path, or current directory with template name
+    // Write to specified output path, or current directory with template name.
+    // A trailing slash (or backslash) is an explicit directory intent, even
+    // when the directory does not exist yet.
     let output_path = match output {
         Some(p) => {
-            if p.is_dir() {
+            let lossy = p.to_string_lossy();
+            if p.is_dir() || lossy.ends_with('/') || lossy.ends_with('\\') {
                 p.join(format!("{}.oxoflow", new_name))
             } else {
                 p
@@ -412,8 +499,21 @@ fn apply_template(template_name: &str, output: Option<PathBuf>) -> Result<()> {
         );
     }
 
+    // Create the destination directory when it does not exist yet (covers
+    // both `-o projects/new/` and `-o projects/new.oxoflow`).
+    if let Some(parent) = output_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("cannot create {}", parent.display()))?;
+    }
+
     std::fs::write(&output_path, new_content)
         .with_context(|| format!("cannot write {}", output_path.display()))?;
+
+    let copied_aux =
+        copy_template_aux(template_stem, output_path.parent().unwrap_or(Path::new("")))
+            .with_context(|| format!("cannot copy auxiliary files for template {template_stem}"))?;
 
     eprintln!();
     eprintln!(
@@ -422,6 +522,9 @@ fn apply_template(template_name: &str, output: Option<PathBuf>) -> Result<()> {
         template_stem
     );
     eprintln!("  {}", output_path.display());
+    for rel in copied_aux {
+        eprintln!("  {}", rel.dimmed());
+    }
     eprintln!();
     eprintln!("{}  To run this workflow:", "Next steps:".bold().cyan());
     eprintln!("    oxo-flow run {}", output_path.display());
@@ -549,6 +652,85 @@ mod tests {
             let disk = std::fs::read_to_string(disk_dir.join(format!("{stem}.oxoflow"))).unwrap();
             assert_eq!(content, disk, "embedded content for {stem} diverged");
         }
+
+        // Auxiliary files (scripts/, templates/) must stay in sync too —
+        // comparing the full sorted (path, content) lists covers both
+        // additions/removals and content drift.
+        let mut disk_aux: Vec<(String, String)> = Vec::new();
+        for sub in ["scripts", "templates"] {
+            let sub_dir = disk_dir.join(sub);
+            if !sub_dir.is_dir() {
+                continue;
+            }
+            for entry in std::fs::read_dir(&sub_dir).unwrap().filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let rel = format!("{sub}/{}", path.file_name().unwrap().to_string_lossy());
+                disk_aux.push((rel, std::fs::read_to_string(&path).unwrap()));
+            }
+        }
+        disk_aux.sort();
+        let mut embedded_aux: Vec<(String, String)> = EMBEDDED_GALLERY_AUX
+            .iter()
+            .map(|(path, content)| (path.to_string(), content.to_string()))
+            .collect();
+        embedded_aux.sort();
+        assert_eq!(
+            embedded_aux, disk_aux,
+            "embedded aux files diverged from examples/gallery/scripts and \
+             examples/gallery/templates — update EMBEDDED_GALLERY_AUX and \
+             crates/oxo-flow-cli/templates/aux/"
+        );
+    }
+
+    #[test]
+    fn apply_template_copies_aux_files() {
+        let dir = tempfile::tempdir().unwrap();
+
+        apply_template("09_single_cell_rnaseq", Some(dir.path().to_path_buf())).unwrap();
+        assert!(dir.path().join("scripts/seurat_analysis.R").exists());
+        assert!(dir.path().join("templates/sc_report.Rmd").exists());
+
+        apply_template(
+            "14_paired_experiment_control",
+            Some(dir.path().to_path_buf()),
+        )
+        .unwrap();
+        assert!(dir.path().join("scripts/generate_report.py").exists());
+
+        // 15 shares scripts/generate_report.py with 14: re-writing the same
+        // content must succeed, not bail.
+        apply_template(
+            "15_paired_experiment_control_pairs",
+            Some(dir.path().to_path_buf()),
+        )
+        .unwrap();
+
+        // Templates without aux files copy nothing extra.
+        apply_template("01_hello_world", Some(dir.path().to_path_buf())).unwrap();
+    }
+
+    #[test]
+    fn apply_template_treats_trailing_slash_output_as_directory() {
+        // `-o projects/pipeline/` (nonexistent, trailing slash) must be
+        // treated as a directory intent, not as a literal file path.
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("projects").join("new-pipeline");
+        let out = format!("{}/", target.to_string_lossy());
+        apply_template("01_hello_world", Some(PathBuf::from(out))).unwrap();
+        let workflows: Vec<_> = std::fs::read_dir(&target)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "oxoflow"))
+            .collect();
+        assert_eq!(
+            workflows.len(),
+            1,
+            "trailing-slash output must contain exactly one generated workflow"
+        );
     }
 
     #[test]

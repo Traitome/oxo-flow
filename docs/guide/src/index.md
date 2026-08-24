@@ -135,7 +135,7 @@ memory = "8G"
 name = "bwa_align"
 input = ["{sample}_R1.fastq.gz", "{sample}_R2.fastq.gz"]
 output = ["aligned/{sample}.bam"]
-environment = { docker = "biocontainers/bwa:0.7.17" }
+environment = { docker = "quay.io/biocontainers/bwa:0.7.19--h577a1d6_1" }
 shell = "bwa mem -t {threads} {config.reference} {input} | samtools sort -o {output}"
 
 [rules.resources]

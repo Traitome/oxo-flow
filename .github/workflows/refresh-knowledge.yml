@@ -1,0 +1,120 @@
+# Automated refresh of the embedded AI knowledge data
+# (crates/oxo-flow-ai/src/knowledge/*.jsonl + knowledge_meta.json).
+# Operational notes: 1st+16th of each month 03:00 UTC (cron is UTC) or manual
+# dispatch. scripts/refresh-knowledge/*.py are stdlib-only python3, idempotent
+# (rewrite data only on change); a failing script is tolerated (other sources
+# still refresh), reported via ::error, and named in the PR body. No changes ->
+# green run with a notice; changes -> refresh-knowledge/<date> branch, commit of
+# data + meta files only, PR with label `automated` + per-source count summary
+# from knowledge_meta.json. Release safety: ci.yml sync-version gates dispatch
+# releases on 35-day freshness of auto:true sources (2x the 16-day cadence).
+name: Knowledge Refresh
+
+on:
+  schedule:
+    - cron: "0 3 1,16 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: knowledge-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: Refresh embedded knowledge
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run refresh scripts
+        shell: bash
+        run: |
+          set -uo pipefail
+          FAILED=""
+          if [ ! -d scripts/refresh-knowledge ] || [ -z "$(ls -A scripts/refresh-knowledge)" ]; then
+            echo "::error::scripts/refresh-knowledge/ is missing or empty - nothing to refresh"; exit 1
+          fi
+          for script in scripts/refresh-knowledge/*.py; do
+            [ -f "$script" ] || continue
+            echo "::group::Running ${script}"
+            if timeout 600 python3 "$script"; then
+              echo "OK: ${script}"
+            else
+              rc=$?
+              echo "::error::Refresh script failed: ${script} (exit ${rc})"
+              FAILED="${FAILED:+${FAILED} }${script}"
+            fi
+            echo "::endgroup::"
+          done
+          echo "FAILED_SCRIPTS=${FAILED}" >> "$GITHUB_ENV"
+
+      - name: Check for data changes
+        id: changes
+        shell: bash
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "::notice::No knowledge data changes - nothing to do"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::group::Changed files"
+            git diff --stat
+            git status --porcelain
+            echo "::endgroup::"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create knowledge refresh PR
+        if: steps.changes.outputs.changed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          DATE="$(date -u +%Y-%m-%d)"
+          BRANCH="refresh-knowledge/${DATE}"
+          META="crates/oxo-flow-ai/src/knowledge/knowledge_meta.json"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Contract: scripts only ever touch the knowledge data + meta files.
+          git add crates/oxo-flow-ai/src/knowledge/
+          if git diff --cached --quiet; then
+            echo "::notice::Scripts ran but no knowledge data changed - nothing to commit"
+            exit 0
+          fi
+          DIFF_STAT="$(git diff --cached --stat)"
+          SUMMARY="$(python3 - "$META" <<'PY'
+          import json, subprocess, sys
+          path = sys.argv[1]
+          def counts(meta):
+              raw = meta.get("sources")
+              items = raw.items() if isinstance(raw, dict) else (((s.get("name"), s) for s in raw) if isinstance(raw, list) else ())
+              return {n: s["count"] for n, s in items if n and isinstance(s, dict) and "count" in s}
+          try:
+              old = counts(json.loads(subprocess.run(["git", "show", "HEAD:" + path], capture_output=True, text=True, check=True).stdout))
+          except (subprocess.CalledProcessError, json.JSONDecodeError):
+              old = {}
+          new = counts(json.load(open(path)))
+          if not new:
+              print("(knowledge_meta.json carries no per-source counts)")
+          for name, n in new.items():
+              print(f"- {name}: {old.get(name)} -> {n} entries" if old.get(name) not in (None, n) else f"- {name}: {n} entries")
+          PY
+          )"
+          git checkout -B "${BRANCH}"
+          git commit -m "chore(knowledge): automatic knowledge refresh ${DATE}"
+          git push -u --force-with-lease origin "${BRANCH}"
+          FAILED_NOTE=""
+          [ -n "${FAILED_SCRIPTS:-}" ] && \
+            FAILED_NOTE="$(printf '\n> Failed refresh scripts (see workflow log): %s\n' "${FAILED_SCRIPTS}")"
+          BODY="$(printf 'Automated refresh of the embedded knowledge data (run: %s).\n\nPer-source entry counts (from `knowledge_meta.json`):\n%s\n\n```\n%s\n```\n%s' "$DATE" "$SUMMARY" "$DIFF_STAT" "${FAILED_NOTE}")"
+          gh label create automated --description "PRs from the Knowledge Refresh workflow" 2>/dev/null \
+            || echo "::warning::Could not create 'automated' label (exists already or permission denied)"
+          gh pr create \
+            --base "${{ github.event.repository.default_branch }}" \
+            --head "${BRANCH}" \
+            --title "chore(knowledge): automatic knowledge refresh ${DATE}" \
+            --body "${BODY}" \
+            --label automated

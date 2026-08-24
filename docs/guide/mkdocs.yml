@@ -144,6 +144,7 @@ nav:
       - Generate Reports: how-to/generate-reports.md
       - Experiment-Control Pairing: how-to/experiment-control-pairing.md
       - Cohort Sample Groups: how-to/cohort-sample-groups.md
+      - Concurrent Runs: how-to/concurrent-runs.md
       - Conditional Rules: how-to/conditional-rules.md
       - China Mirrors: how-to/china-mirrors.md
       - Editor Setup: how-to/editor-setup.md
@@ -196,6 +197,7 @@ nav:
       - Web System Architecture: reference/web-system-architecture.md
       - AI Translation Layer: reference/ai-translation.md
       - AI-Powered CLI: reference/ai-cli.md
+      - Evaluate the AI Features: reference/ai-eval.md
       - Custom Skills: reference/custom-skills.md
       - Diagnostics Engine: reference/diagnostics-engine.md
       - Cloud Storage: reference/cloud-storage.md

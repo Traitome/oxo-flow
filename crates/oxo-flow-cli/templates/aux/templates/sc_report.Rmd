@@ -1,0 +1,37 @@
+---
+title: "`r params$sample` — Single-Cell Report"
+output: html_document
+params:
+  sample: "sample1"
+  analysis_dir: "analysis/sample1"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+suppressPackageStartupMessages(library(Seurat))
+seu <- readRDS(file.path(params$analysis_dir, "seurat_object.rds"))
+```
+
+# Sample summary
+
+- Sample: `r params$sample`
+- Cells: `r ncol(seu)`
+- Genes detected: `r nrow(seu)`
+
+# UMAP
+
+```{r, out.width="90%"}
+DimPlot(seu, reduction = "umap", label = TRUE)
+```
+
+# Cluster composition
+
+```{r}
+knitr::kable(table(Idents(seu)), col.names = c("Cluster", "Cells"))
+```
+
+# QC overview
+
+```{r, out.width="90%"}
+VlnPlot(seu, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+```

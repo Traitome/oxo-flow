@@ -353,9 +353,25 @@ impl Tool for LookupTool {
         })?;
         let limit = args["limit"].as_u64().unwrap_or(10).min(20) as usize;
 
-        Ok(crate::knowledge::bioconda::format_search_results(
-            query, limit,
-        ))
+        let mut results = crate::knowledge::bioconda::format_search_results(query, limit);
+        // When Bioconda has no match, extend the answer with the merged
+        // registry (nf-core modules, commercial tools, bio.tools overlay).
+        if results.starts_with("No Bioconda") {
+            let registry = crate::knowledge::registry::format_registry_results(query, limit);
+            if !registry.is_empty() {
+                results.push('\n');
+                results.push_str(&registry);
+            }
+        }
+        // Freshness note (data date + record count) so the agent can weigh
+        // how current the embedded database is.
+        let freshness = crate::knowledge::meta::embedded_meta().and_then(|m| {
+            crate::knowledge::meta::freshness_line_for(m, "bioconda_tools", chrono::Utc::now())
+        });
+        Ok(match freshness {
+            Some(line) => format!("{results}\n{line}"),
+            None => results,
+        })
     }
 }
 
@@ -532,6 +548,20 @@ async fn lookup_skill_handles_missing_query() {
     let tool = LookupSkillTool::new();
     let result = tool.execute(r#"{}"#).await;
     assert!(result.is_err());
+}
+
+/// When the build embeds knowledge_meta.json (issue #153), lookup_tool
+/// responses carry a freshness note: data date + record count.
+#[tokio::test]
+#[cfg(knowledge_meta_embedded)]
+async fn lookup_tool_appends_freshness_line() {
+    let tool = LookupTool::new();
+    let result = tool.execute(r#"{"query": "bwa"}"#).await.unwrap();
+    assert!(
+        result.contains("Data: bioconda_tools generated"),
+        "freshness line missing: {result}"
+    );
+    assert!(result.contains("records"), "record count missing: {result}");
 }
 
 #[tokio::test]
