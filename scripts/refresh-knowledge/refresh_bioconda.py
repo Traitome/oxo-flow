@@ -11,6 +11,9 @@ identify command-line bioinformatics tools:
   - known non-CLI     : snakemake-wrapper-utils
   - summary keywords  : "python library", "r package", "api client", ...
 
+with a curated TOOL_ALLOWLIST of user-facing analysis packages (Seurat,
+DADA2, DESeq2, ...) that overrides the library-prefix drop.
+
 Output (JSONL, compact {n, v, t, p} — identical schema to the shipped
 bioconda_tools.jsonl):
 
@@ -67,9 +70,49 @@ LIBRARY_SUMMARY_KEYWORDS = [
 ]
 KNOWN_NON_CLI = {"snakemake-wrapper-utils"}
 
+# User-facing analysis packages under library prefixes. The prefix filters
+# drop R/Bioconductor names wholesale, but these are the PRIMARY tools of
+# their domains (invoked via `Rscript -e ...` or their own CLIs), and the
+# AI knowledge base must be able to ground queries like "single-cell
+# clustering in R" or "ASV inference for 16S". Curated by domain.
+TOOL_ALLOWLIST = frozenset(
+    [
+        # single-cell / spatial
+        "r-seurat",
+        "r-harmony",
+        "r-monocle3",
+        "bioconductor-singlecellexperiment",
+        "bioconductor-scater",
+        "bioconductor-dropletutils",
+        # 16S / microbiome
+        "bioconductor-dada2",
+        "bioconductor-phyloseq",
+        "r-qiime2r",
+        # differential expression / genomics
+        "bioconductor-deseq2",
+        "bioconductor-edger",
+        "bioconductor-limma",
+        "bioconductor-tximport",
+        "bioconductor-tximeta",
+        # methylation
+        "bioconductor-methylkit",
+        "bioconductor-minfi",
+        # ChIP-seq / ATAC-seq
+        "bioconductor-chipseeker",
+        "bioconductor-diffbind",
+        "r-signac",
+        "r-archr",
+        # reporting (invoked from rules via Rscript -e "rmarkdown::render(...)")
+        "r-rmarkdown",
+        "r-knitr",
+    ]
+)
+
 
 def classify_package(name: str, meta: dict) -> tuple[bool, str]:
-    """Mirror of the oxo-call-extends classify_package()."""
+    """Mirror of the oxo-call-extends classify_package(), plus allowlist."""
+    if name in TOOL_ALLOWLIST:
+        return True, "curated tool allowlist (library prefix overridden)"
     for prefix in LIBRARY_PREFIXES:
         if name.startswith(prefix):
             return False, f"library prefix: {prefix}"
