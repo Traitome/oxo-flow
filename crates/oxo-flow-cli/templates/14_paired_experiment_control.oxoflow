@@ -79,7 +79,10 @@ input = [
     "trimmed/EXP_01_R2.fq.gz",
 ]
 output = ["aligned/EXP_01.sorted.bam"]
-shell = "bwa-mem2 mem -t {threads} -R '@RG\tID:EXP_01\tSM:EXP_01\tPL:ILLUMINA' {config.reference_fasta} {input[0]} {input[1]} | samtools sort -@ 4 -o {output[0]}"
+shell = """
+rg=$(printf '@RG\tID:%s\tSM:%s\tPL:ILLUMINA' EXP_01 EXP_01)
+bwa-mem2 mem -t {threads} -R "$rg" {config.reference_fasta} {input[0]} {input[1]} | samtools sort -@ 4 -o {output[0]}
+"""
 
 [rules.resources]
 threads = 16
@@ -95,7 +98,10 @@ input = [
     "trimmed/CTRL_01_R2.fq.gz",
 ]
 output = ["aligned/CTRL_01.sorted.bam"]
-shell = "bwa-mem2 mem -t {threads} -R '@RG\tID:EXP_01\tSM:EXP_01\tPL:ILLUMINA' {config.reference_fasta} {input[0]} {input[1]} | samtools sort -@ 4 -o {output[0]}"
+shell = """
+rg=$(printf '@RG\tID:%s\tSM:%s\tPL:ILLUMINA' CTRL_01 CTRL_01)
+bwa-mem2 mem -t {threads} -R "$rg" {config.reference_fasta} {input[0]} {input[1]} | samtools sort -@ 4 -o {output[0]}
+"""
 
 [rules.resources]
 threads = 16
@@ -111,7 +117,7 @@ output = [
     "dedup/EXP_01.dedup.bam",
     "dedup/EXP_01.metrics.txt",
 ]
-shell = "gatk MarkDuplicates -I {input[0]} -O {output[0]} -M {output[1]}"
+shell = "gatk MarkDuplicates --VALIDATION_STRINGENCY SILENT -I {input[0]} -O {output[0]} -M {output[1]}"
 
 [rules.resources]
 threads = 4
@@ -127,7 +133,7 @@ output = [
     "dedup/CTRL_01.dedup.bam",
     "dedup/CTRL_01.metrics.txt",
 ]
-shell = "gatk MarkDuplicates -I {input[0]} -O {output[0]} -M {output[1]}"
+shell = "gatk MarkDuplicates --VALIDATION_STRINGENCY SILENT -I {input[0]} -O {output[0]} -M {output[1]}"
 
 [rules.resources]
 threads = 4
@@ -140,7 +146,7 @@ conda = "envs/gatk.yaml"
 name = "bqsr_experiment"
 input = ["dedup/EXP_01.dedup.bam"]
 output = ["recal/EXP_01.recal.bam"]
-shell = "gatk BaseRecalibrator -I {input[0]} -R {config.reference_fasta} --known-sites {config.known_sites} -O recal/EXP_01.recal.table && gatk ApplyBQSR -I {input[0]} -R /data/references/GRCh38/genome.fa --bqsr-recal-file recal/EXP_01.recal.table -O {output[0]}"
+shell = "gatk BaseRecalibrator --read-validation-stringency SILENT -I {input[0]} -R {config.reference_fasta} --known-sites {config.known_sites} -O recal/EXP_01.recal.table && gatk ApplyBQSR -I {input[0]} -R /data/references/GRCh38/genome.fa --bqsr-recal-file recal/EXP_01.recal.table -O {output[0]}"
 
 [rules.resources]
 threads = 4
@@ -153,7 +159,7 @@ conda = "envs/gatk.yaml"
 name = "bqsr_control"
 input = ["dedup/CTRL_01.dedup.bam"]
 output = ["recal/CTRL_01.recal.bam"]
-shell = "gatk BaseRecalibrator -I {input[0]} -R {config.reference_fasta} --known-sites {config.known_sites} -O recal/CTRL_01.recal.table && gatk ApplyBQSR -I {input[0]} -R /data/references/GRCh38/genome.fa --bqsr-recal-file recal/CTRL_01.recal.table -O {output[0]}"
+shell = "gatk BaseRecalibrator --read-validation-stringency SILENT -I {input[0]} -R {config.reference_fasta} --known-sites {config.known_sites} -O recal/CTRL_01.recal.table && gatk ApplyBQSR -I {input[0]} -R /data/references/GRCh38/genome.fa --bqsr-recal-file recal/CTRL_01.recal.table -O {output[0]}"
 
 [rules.resources]
 threads = 4
@@ -169,7 +175,7 @@ input = [
     "recal/CTRL_01.recal.bam",
 ]
 output = ["variants/EXP_01.mutect2.vcf.gz"]
-shell = "gatk Mutect2 -I {input[0]} -I {input[1]} -normal CTRL_01 -R {config.reference_fasta} -O {output[0]}"
+shell = "gatk Mutect2 --read-validation-stringency SILENT -I {input[0]} -I {input[1]} -normal CTRL_01 -R {config.reference_fasta} -O {output[0]}"
 
 [rules.resources]
 threads = 4
@@ -196,7 +202,7 @@ conda = "envs/gatk.yaml"
 name = "haplotype_caller"
 input = ["recal/CTRL_01.recal.bam"]
 output = ["variants/CTRL_01.g.vcf.gz"]
-shell = "gatk HaplotypeCaller -I {input[0]} -R {config.reference_fasta} -O {output[0]} -ERC GVCF"
+shell = "gatk HaplotypeCaller --read-validation-stringency SILENT -I {input[0]} -R {config.reference_fasta} -O {output[0]} -ERC GVCF"
 description = "Variant calling for control sample"
 
 [rules.resources]

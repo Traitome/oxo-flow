@@ -27,7 +27,10 @@ input = [
     "raw/sample_R2.fq.gz",
 ]
 output = ["aligned/sample.sorted.bam"]
-shell = "bwa mem -t {threads} -R '@RG\tID:sample\tSM:sample\tPL:ILLUMINA' {config.reference} {input[0]} {input[1]} | samtools sort -o {output[0]}"
+shell = """
+rg=$(printf '@RG\tID:%s\tSM:%s\tPL:ILLUMINA' sample sample)
+bwa mem -t {threads} -R "$rg" {config.reference} {input[0]} {input[1]} | samtools sort -o {output[0]}
+"""
 
 [rules.resources]
 threads = 8
@@ -75,7 +78,7 @@ conda = "envs/mosdepth.yaml"
 name = "haplotype_caller"
 input = ["aligned/sample.sorted.bam"]
 output = ["variants/sample.g.vcf.gz"]
-shell = "gatk HaplotypeCaller -I {input[0]} -R {config.reference} -O {output[0]} -ERC GVCF"
+shell = "gatk HaplotypeCaller --read-validation-stringency SILENT -I {input[0]} -R {config.reference} -O {output[0]} -ERC GVCF"
 
 [rules.resources]
 threads = 4

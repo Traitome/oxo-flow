@@ -62,7 +62,10 @@ input = [
     "trimmed/{experiment}_R2.fq.gz",
 ]
 output = ["aligned/{experiment}.sorted.bam"]
-shell = "bwa-mem2 mem -t {threads} -R '@RG\tID:{experiment}\tSM:{experiment}\tPL:ILLUMINA' {config.reference_fasta} {input[0]} {input[1]} | samtools sort -@ 4 -o {output[0]}"
+shell = """
+rg=$(printf '@RG\tID:%s\tSM:%s\tPL:ILLUMINA' '{experiment}' '{experiment}')
+bwa-mem2 mem -t {threads} -R "$rg" {config.reference_fasta} {input[0]} {input[1]} | samtools sort -@ 4 -o {output[0]}
+"""
 
 [rules.resources]
 threads = 16
@@ -78,7 +81,10 @@ input = [
     "trimmed/{control}_R2.fq.gz",
 ]
 output = ["aligned/{control}.sorted.bam"]
-shell = "bwa-mem2 mem -t {threads} -R '@RG\tID:{experiment}\tSM:{experiment}\tPL:ILLUMINA' {config.reference_fasta} {input[0]} {input[1]} | samtools sort -@ 4 -o {output[0]}"
+shell = """
+rg=$(printf '@RG\tID:%s\tSM:%s\tPL:ILLUMINA' '{control}' '{control}')
+bwa-mem2 mem -t {threads} -R "$rg" {config.reference_fasta} {input[0]} {input[1]} | samtools sort -@ 4 -o {output[0]}
+"""
 
 [rules.resources]
 threads = 16
@@ -94,7 +100,7 @@ output = [
     "dedup/{experiment}.dedup.bam",
     "dedup/{experiment}.metrics.txt",
 ]
-shell = "gatk MarkDuplicates -I {input[0]} -O {output[0]} -M {output[1]}"
+shell = "gatk MarkDuplicates --VALIDATION_STRINGENCY SILENT -I {input[0]} -O {output[0]} -M {output[1]}"
 
 [rules.resources]
 threads = 4
@@ -110,7 +116,7 @@ output = [
     "dedup/{control}.dedup.bam",
     "dedup/{control}.metrics.txt",
 ]
-shell = "gatk MarkDuplicates -I {input[0]} -O {output[0]} -M {output[1]}"
+shell = "gatk MarkDuplicates --VALIDATION_STRINGENCY SILENT -I {input[0]} -O {output[0]} -M {output[1]}"
 
 [rules.resources]
 threads = 4
@@ -124,7 +130,7 @@ name = "bqsr_experiment"
 input = ["dedup/{experiment}.dedup.bam"]
 output = ["recal/{experiment}.recal.bam"]
 shell = """
-  gatk BaseRecalibrator -I {input[0]} -R {config.reference_fasta} --known-sites {config.known_sites} -O recal/{experiment}.recal.table && gatk ApplyBQSR -I {input[0]} -R {config.reference_fasta} --bqsr-recal-file recal/{experiment}.recal.table -O {output[0]}
+  gatk BaseRecalibrator --read-validation-stringency SILENT -I {input[0]} -R {config.reference_fasta} --known-sites {config.known_sites} -O recal/{experiment}.recal.table && gatk ApplyBQSR -I {input[0]} -R {config.reference_fasta} --bqsr-recal-file recal/{experiment}.recal.table -O {output[0]}
 """
 
 [rules.resources]
@@ -139,7 +145,7 @@ name = "bqsr_control"
 input = ["dedup/{control}.dedup.bam"]
 output = ["recal/{control}.recal.bam"]
 shell = """
-  gatk BaseRecalibrator -I {input[0]} -R {config.reference_fasta} --known-sites {config.known_sites} -O recal/{control}.recal.table && gatk ApplyBQSR -I {input[0]} -R {config.reference_fasta} --bqsr-recal-file recal/{control}.recal.table -O {output[0]}
+  gatk BaseRecalibrator --read-validation-stringency SILENT -I {input[0]} -R {config.reference_fasta} --known-sites {config.known_sites} -O recal/{control}.recal.table && gatk ApplyBQSR -I {input[0]} -R {config.reference_fasta} --bqsr-recal-file recal/{control}.recal.table -O {output[0]}
 """
 
 [rules.resources]
@@ -158,7 +164,7 @@ input = [
 output = ["variants/{pair_id}.mutect2.vcf.gz"]
 shell = """
   # Production runs should also pass --germline-resource and --panel-of-normals
-  gatk Mutect2 -I {input[0]} -I {input[1]} -normal {control} -R {config.reference_fasta} -O {output[0]}
+  gatk Mutect2 --read-validation-stringency SILENT -I {input[0]} -I {input[1]} -normal {control} -R {config.reference_fasta} -O {output[0]}
 """
 
 [rules.resources]
