@@ -1044,3 +1044,23 @@ jobs:
             echo "Deploying dev version"
             mike deploy --push dev
           fi
+
+      - name: Preserve landing page + static assets at the Pages root
+        run: |
+          # mike's tree replaces the branch root; the hand-authored landing
+          # page and the static docs/ assets must be re-laid after every
+          # deploy (issue #176: keep /oxo-flow/ the landing, versions live
+          # under /latest/, /dev/, /<tag>/).
+          mkdir -p /tmp/pages-extra
+          cp -r docs/index.html docs/CHANGE_CONTROL.md docs/VALIDATION_PROTOCOL.md \
+            docs/schema docs/superpowers /tmp/pages-extra/
+          git fetch origin gh-pages
+          git checkout gh-pages
+          cp /tmp/pages-extra/index.html index.html
+          cp /tmp/pages-extra/CHANGE_CONTROL.md CHANGE_CONTROL.md
+          cp /tmp/pages-extra/VALIDATION_PROTOCOL.md VALIDATION_PROTOCOL.md
+          cp -r /tmp/pages-extra/schema schema
+          cp -r /tmp/pages-extra/superpowers superpowers
+          git add -A
+          git commit -m "chore: preserve landing page + static assets (${GITHUB_SHA:0:7})" \
+            && git push origin gh-pages
