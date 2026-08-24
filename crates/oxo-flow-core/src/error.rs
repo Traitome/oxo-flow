@@ -47,7 +47,6 @@ pub enum OxoFlowError {
     #[error("rule not found: '{name}'")]
     RuleNotFound {
         name: String,
-        #[allow(dead_code)]
         available_rules: Vec<String>,
     },
 

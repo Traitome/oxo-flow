@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { lazy, Suspense } from 'react';
 import Layout from './components/Layout';
+import { useI18n } from './context/I18n';
 
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const PipelineEditor = lazy(() => import('./pages/PipelineEditor'));
@@ -16,8 +17,9 @@ const Clusters = lazy(() => import('./pages/Clusters'));
 const Share = lazy(() => import('./pages/Share'));
 
 function PageFallback() {
+  const { t } = useI18n();
   return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '50vh' }}>
-    <span style={{ color: 'var(--color-text-tertiary)', fontSize: '0.9rem' }}>Loading...</span>
+    <span style={{ color: 'var(--color-text-tertiary)', fontSize: '0.9rem' }}>{t('common.loading')}</span>
   </div>;
 }
 

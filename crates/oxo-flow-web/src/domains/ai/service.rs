@@ -34,7 +34,7 @@ const MAX_CACHE_ENTRIES: usize = 128;
 const MAX_CORRECTION_ROUNDS: u32 = 3;
 
 /// Extract TOML content from an AI response string.
-/// Looks for ```toml code fences first, then raw [workflow] content.
+/// Looks for ```toml code fences first, then raw `[workflow]` content.
 fn extract_toml(response: &str) -> Option<String> {
     if let Some(start) = response.find("```toml") {
         let start = start + 7;

@@ -48,12 +48,12 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
   // Sync messages to session context whenever they change
   useEffect(() => {
     session.setChatMessages(context, messages);
-  }, [messages, context]);
+  }, [messages, context, session]);
 
   // Set chat context on mount
   useEffect(() => {
     session.setChatContext(context);
-  }, [context]);
+  }, [context, session]);
 
   // Detect whether the server has a working AI provider so we can surface a
   // friendly fallback instead of a raw env-var error.

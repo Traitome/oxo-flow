@@ -160,7 +160,7 @@ pub enum Commands {
         /// Enable AI error recovery on rule failure.
         #[arg(long)]
         ai_recover: bool,
-        /// Maximum AI retries (overrides [ai] config).
+        /// Maximum AI retries (overrides `[ai]` config).
         #[arg(long = "ai-max-retries", value_name = "N")]
         ai_max_retries: Option<u32>,
         /// Filter to a subset of samples: `first:N` or explicit names
@@ -215,7 +215,7 @@ pub enum Commands {
         /// Enable AI error recovery on rule failure.
         #[arg(long)]
         ai_recover: bool,
-        /// Maximum AI retries (overrides [ai] config).
+        /// Maximum AI retries (overrides `[ai]` config).
         #[arg(long = "ai-max-retries", value_name = "N")]
         ai_max_retries: Option<u32>,
         #[arg(
@@ -268,7 +268,7 @@ pub enum Commands {
         /// Enable AI-powered analysis of the workflow.
         #[arg(long)]
         ai: bool,
-        /// Maximum AI analysis rounds (overrides [ai] config).
+        /// Maximum AI analysis rounds (overrides `[ai]` config).
         #[arg(long = "ai-max-retries", value_name = "N")]
         ai_max_retries: Option<u32>,
         /// Filter to a subset of samples: `first:N` or explicit names
@@ -285,7 +285,7 @@ pub enum Commands {
             help = "Working directory to resolve paths against (default: the workflow file's directory)"
         )]
         workdir: Option<PathBuf>,
-        /// Execution profile name, loaded from profiles/<NAME>.toml — the
+        /// Execution profile name, loaded from `profiles/<NAME>.toml` — the
         /// SAME merge semantics as `run` (profile values fill in missing
         /// config keys), so the preview matches what run would execute.
         #[arg(long)]
@@ -294,22 +294,22 @@ pub enum Commands {
         /// mirrors the run flag; the preview lists required builds otherwise.
         #[arg(long)]
         skip_ref_build: bool,
-        /// Set a workflow config value (overrides [config] defaults).
+        /// Set a workflow config value (overrides `[config]` defaults).
         /// Repeatable — same forms as `run` (issue #77 parity).
         #[arg(
             long = "arg",
             value_name = "KEY=VALUE",
-            help = "Set a workflow config value (overrides [config] defaults). Repeatable."
+            help = "Set a workflow config value (overrides `[config]` defaults). Repeatable."
         )]
         args: Vec<String>,
         /// Direct config overrides in the same trailing positional form
         /// `run` accepts: KEY=VALUE or --KEY=VALUE; --KEY VALUE (space
-        /// form) for declared [config] keys — unknown --flags are rejected.
+        /// form) for declared `[config]` keys — unknown --flags are rejected.
         #[arg(
             value_name = "KEY=VALUE",
             trailing_var_arg = true,
             allow_hyphen_values = true,
-            help = "Direct config overrides: KEY=VALUE or --KEY=VALUE; --KEY VALUE (space form) is accepted for declared [config] keys — unknown --flags are rejected"
+            help = "Direct config overrides: KEY=VALUE or --KEY=VALUE; --KEY VALUE (space form) is accepted for declared `[config]` keys — unknown --flags are rejected"
         )]
         config_overrides: Vec<String>,
         /// Force re-execution of this run's rules (ignore up-to-date
@@ -383,7 +383,7 @@ pub enum Commands {
     /// Run without args for quick status.
     /// Use 'ai test' for comprehensive self-test.
     /// Use 'ai setup' for interactive wizard.
-    /// Use 'ai explain <workflow>' for a three-layer explanation
+    /// Use `ai explain <workflow>` for a three-layer explanation
     /// (overview → per-step detail → scientific review).
     #[command(name = "ai")]
     Ai {

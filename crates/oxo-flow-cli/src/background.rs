@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 /// Build the detached child's argv from the foreground process's full
-/// argument list (`std::env::args_os()`, argv[0] included): drop argv[0]
+/// argument list (`std::env::args_os()`, `argv[0]` included): drop `argv[0]`
 /// (the spawn replaces it with [`std::env::current_exe`]) and every exact
 /// `--background` token. Exact-token removal is safe because this helper
 /// only runs after clap parsed `background = true` — the flag was consumed

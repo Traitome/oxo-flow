@@ -34,7 +34,7 @@ export default function Clusters() {
       .then(setClusters)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : t('clusters.loadFailed')));
   };
-  useEffect(reload, []);
+  useEffect(reload, [t]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();

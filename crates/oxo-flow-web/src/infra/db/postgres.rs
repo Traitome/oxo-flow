@@ -407,6 +407,7 @@ impl StorageBackend for PostgresBackend {
             user_id: run.user_id.clone(),
             pipeline_id: run.pipeline_id.clone(),
             pipeline_snapshot: run.pipeline_snapshot.clone(),
+            workflow_name: run.workflow_name.clone(),
             status: run.status.clone(),
             phase: run.phase.clone(),
             pid: run.pid,
@@ -421,12 +422,13 @@ impl StorageBackend for PostgresBackend {
         };
 
         sqlx::query(
-            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, status, phase, pid, workdir, started_at, finished_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, pid, workdir, started_at, finished_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
         )
         .bind(&row.id)
         .bind(&row.user_id)
         .bind(&row.pipeline_id)
         .bind(&row.pipeline_snapshot)
+        .bind(&row.workflow_name)
         .bind(&row.status)
         .bind(&row.phase)
         .bind(row.pid)

@@ -1,6 +1,6 @@
 //! Normalized QC metrics protocol and the filesystem scanner that discovers
 //! tool output files and attributes their metrics to samples (issue #83
-//! P1-5). The six tool-specific parsers live in [`adapters`].
+//! P1-5). The six tool-specific parsers live in `adapters`.
 //!
 //! Every adapter returns metrics in a stable, adapter-defined order; every
 //! metric carries an optional QC flag derived from fixed thresholds. The

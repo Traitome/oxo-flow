@@ -470,10 +470,10 @@ export default function PipelineEditor() {
               >
                 {leftCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
               </button>
-              <button className="btn-sm" onClick={handleUndo} title={t('editor.undo')}>
+              <button className="btn-sm" onClick={handleUndo} title={t('editor.undo')} aria-label={t('editor.undo')}>
                 <Undo2 size={14} />
               </button>
-              <button className="btn-sm" onClick={handleRedo} title={t('editor.redo')}>
+              <button className="btn-sm" onClick={handleRedo} title={t('editor.redo')} aria-label={t('editor.redo')}>
                 <Redo2 size={14} />
               </button>
               {dagJson && (

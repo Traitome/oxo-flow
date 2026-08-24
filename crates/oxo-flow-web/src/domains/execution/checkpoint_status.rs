@@ -4,7 +4,7 @@
 //! rule completes. This module reads that state directly — it is the single
 //! source of truth for which rules completed or failed, with per-rule wall
 //! time from the benchmark records. Currently-running rules are surfaced by
-//! matching the CLI's "Running: <rule>" lines in execution.log (valid only
+//! matching the CLI's `Running: <rule>` lines in execution.log (valid only
 //! while the run is live). There is no web-side state to drift.
 
 use std::collections::{HashMap, HashSet};

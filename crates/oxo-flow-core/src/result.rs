@@ -454,8 +454,8 @@ impl ResultExtractorRegistry {
 // Convenience: scan a run directory for output records
 // ---------------------------------------------------------------------------
 
-/// Scan the output files listed in a [`WorkflowConfig`] for a completed run
-/// and produce [`OutputRecord`]s with extracted metrics.
+/// Scan the output files listed in a [`crate::config::WorkflowConfig`] for a
+/// completed run and produce [`OutputRecord`]s with extracted metrics.
 ///
 /// This is called after a workflow run completes to index its outputs.
 pub fn scan_run_outputs<P: AsRef<Path>>(

@@ -201,7 +201,7 @@ export default function RuleInspector({ ruleName, rule, onSave, onClose }: RuleI
             onChange={(e) => setListItem(key, i, e.target.value)}
             placeholder={key === 'input' ? t('inspector.inputPlaceholder') : t('inspector.outputPlaceholder')}
           />
-          <button type="button" className="btn-sm" onClick={() => removeListItem(key, i)} title={t('inspector.remove')}>
+          <button type="button" className="btn-sm" onClick={() => removeListItem(key, i)} title={t('inspector.remove')} aria-label={t('inspector.remove')}>
             <X size={12} />
           </button>
         </div>

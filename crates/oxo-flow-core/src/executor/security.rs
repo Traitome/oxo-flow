@@ -173,7 +173,7 @@ pub fn sanitize_shell_command(cmd: &str) -> Vec<String> {
 /// Returns Ok(()) if safe, Err if dangerous patterns are detected.
 ///
 /// Uses category-based regex matching against compiled patterns defined in
-/// [`DANGER_CATEGORIES`] to detect destructive commands such as:
+/// `DANGER_CATEGORIES` to detect destructive commands such as:
 /// - Recursive deletion of root or home (`rm -rf /`, `rm -rf ~`)
 /// - Filesystem destruction (`mkfs`, `mkswap`, `dd` to block devices)
 /// - Permission escalation (`chmod 777 /`, `chmod -R 777`)

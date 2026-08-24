@@ -50,7 +50,7 @@ make ci
 - `docs/guide/src/reference/web-system-architecture.md` — Web system architecture
 - `docs/guide/src/reference/architecture.md` — Overall system architecture
 - `docs/guide/src/reference/ai-cli.md` — Complete AI CLI reference
-- `docs/schema/openapi.yaml` — OpenAPI 3.1 schema
+- `GET /api/openapi.json` — OpenAPI 3.1 schema generated at runtime
 - `docs/schema/oxoflow-v1.schema.json` — Workflow format JSON Schema
 
 ## 🌐 Web System (AI-Native API)
@@ -229,6 +229,6 @@ oxo-flow run workflow.oxoflow --ai-recover --ai-max-retries 3
 
 ### Key Components
 - `components/Layout.tsx` — Sidebar navigation + main content outlet
-- `components/DagView.tsx` — Interactive DAG using Cytoscape.js
+- `components/WorkflowCanvas.tsx` — Interactive DAG using React Flow + d3-dag
 - `api/client.ts` — Typed API client with structured error handling
 - `api/types.ts` — TypeScript types matching the Rust API responses

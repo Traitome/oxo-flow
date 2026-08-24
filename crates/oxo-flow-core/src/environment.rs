@@ -1263,7 +1263,10 @@ impl EnvironmentResolver {
     /// (live evidence: rnaseq S1/S2 race left `-fq` right after `+fq` in
     /// the env history and an empty env marked ready).
     pub fn setup_lock(&self, key: &str) -> Arc<tokio::sync::Mutex<()>> {
-        let mut locks = self.setup_locks.lock().unwrap();
+        let mut locks = self
+            .setup_locks
+            .lock()
+            .expect("environment cache mutex poisoned");
         locks.entry(key.to_string()).or_default().clone()
     }
 
@@ -1298,7 +1301,10 @@ impl EnvironmentResolver {
     /// recreate-retry.
     pub fn teardown_command(&self, env_spec: &EnvironmentSpec) -> Result<Option<String>> {
         let key = self.cache_key(env_spec);
-        let origins = self.setup_origins.lock().unwrap();
+        let origins = self
+            .setup_origins
+            .lock()
+            .expect("environment cache mutex poisoned");
         match origins.get(&key) {
             None => {
                 tracing::warn!(
@@ -1334,7 +1340,7 @@ impl EnvironmentResolver {
     fn record_setup(&self, key: &str, pre_existed: bool) {
         self.setup_origins
             .lock()
-            .unwrap()
+            .expect("environment cache mutex poisoned")
             .insert(key.to_string(), pre_existed);
     }
 

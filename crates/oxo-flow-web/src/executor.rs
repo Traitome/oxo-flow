@@ -588,7 +588,7 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
 /// by polling the `.exit-code` record (written by the wrapper shell the
 /// moment the CLI exits — the primary signal) and process liveness (the
 /// fallback for a process killed without a record). Finalization goes
-/// through [`finalize_run`] so semantics match the live wait path exactly.
+/// through `finalize_run` so semantics match the live wait path exactly.
 pub fn resume_monitoring(run_id: String, pid: i32, workdir: PathBuf) {
     // Crash-recovery re-attach also samples resources and tails the log
     // (issue #82 P1-2 / P1-18).

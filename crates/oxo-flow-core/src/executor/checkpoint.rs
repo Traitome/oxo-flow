@@ -128,8 +128,8 @@ pub struct RuleRunRecord {
     /// resolved). Absent in legacy checkpoints.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
-    /// Tail of the rule's stderr (see [`STDERR_TAIL_CHARS`]) for failure
-    /// diagnosis. Absent when the rule produced no stderr.
+    /// Tail of the rule's stderr (see the `STDERR_TAIL_CHARS` constant) for
+    /// failure diagnosis. Absent when the rule produced no stderr.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stderr_tail: Option<String>,
 }
@@ -165,7 +165,7 @@ pub struct CheckpointState {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workdir: Option<String>,
     /// Output file checksums for provenance verification.
-    /// Maps relative output file path → "sha256:<hex>".
+    /// Maps relative output file path → `sha256:<hex>`.
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub checksums: HashMap<String, String>,
@@ -177,7 +177,7 @@ pub struct CheckpointState {
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub config_snapshot: HashMap<String, String>,
     /// Per-rule structural fingerprints at completion time.
-    /// Maps rule name → "sha256:<hex>" of the fields that determine rule
+    /// Maps rule name → `sha256:<hex>` of the fields that determine rule
     /// output content (shell, script, inputs, outputs, envvars, params,
     /// conditions, environment). A mismatch invalidates the rule and its
     /// downstream (issue #62).

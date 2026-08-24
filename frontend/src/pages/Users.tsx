@@ -38,7 +38,7 @@ export default function Users() {
       .then(setUsers)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : t('users.loadFailed')));
   };
-  useEffect(reload, []);
+  useEffect(reload, [t]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
