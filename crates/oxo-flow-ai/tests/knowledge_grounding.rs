@@ -32,6 +32,12 @@ const WELL_KNOWN_TOOLS: &[&str] = &[
     "subread",
     "picard",
     "bismark",
+    // R/Bioconductor analysis packages (TOOL_ALLOWLIST in
+    // scripts/refresh-knowledge/refresh_bioconda.py must keep these in
+    // the table — they are the primary tools of their domains).
+    "r-seurat",
+    "bioconductor-dada2",
+    "bioconductor-deseq2",
 ];
 
 fn plausible_semver(version: &str) -> bool {

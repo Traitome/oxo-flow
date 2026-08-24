@@ -1,12 +1,12 @@
 {
   "sources": {
     "bioconda_tools": {
-      "count": 6433,
+      "count": 6470,
       "url": "https://conda.anaconda.org/bioconda/channeldata.json",
-      "excluded": 6213,
+      "excluded": 6191,
       "description": "",
       "data_file": "bioconda_tools.jsonl",
-      "generated_at": "2026-08-23T16:00:36Z",
+      "generated_at": "2026-08-24T03:55:33Z",
       "auto": true
     },
     "skills_index": {
@@ -85,5 +85,5 @@
       "auto": true
     }
   },
-  "generated_at": "2026-08-23T16:44:04Z"
+  "generated_at": "2026-08-24T03:55:33Z"
 }
