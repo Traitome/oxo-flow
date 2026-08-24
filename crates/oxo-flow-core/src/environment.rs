@@ -507,6 +507,36 @@ impl EnvironmentBackend for MambaBackend {
 #[derive(Debug, Default)]
 pub struct DockerBackend;
 
+/// The quay.io retry target for a bare Docker image name, if any.
+///
+/// Biocontainers publishes on quay.io, not Docker Hub, so the common
+/// patterns `biocontainers/<tool>:<tag>` and bare `<tool>:<tag>` 404 on
+/// Docker Hub. The retry only fires after a failed `docker pull` — an
+/// explicitly registry-qualified spec (quay.io/…, docker.io/…,
+/// localhost:5000/…) or a multi-segment path is pulled verbatim.
+fn quay_biocontainers_fallback(spec: &str) -> Option<String> {
+    let image = spec.split('@').next().unwrap_or(spec); // strip digest: name@sha256:…
+    // Strip the tag, but only when the colon starts a tag — a colon whose
+    // suffix contains '/' belongs to a host:port registry prefix
+    // (localhost:5000/team/tool:1.0), which must be left intact.
+    let name = match image.rsplit_once(':') {
+        Some((head, tail)) if !tail.is_empty() && !tail.contains('/') => head,
+        _ => image,
+    };
+    let segments: Vec<&str> = name.split('/').collect();
+    if segments
+        .first()
+        .is_some_and(|s| s.contains('.') || s.contains(':'))
+    {
+        return None; // registry-qualified: quay.io/…, docker.io/…, host:port/…
+    }
+    match segments.as_slice() {
+        [_single] => Some(format!("quay.io/biocontainers/{spec}")),
+        ["biocontainers", _rest] => Some(format!("quay.io/{spec}")),
+        _ => None,
+    }
+}
+
 impl EnvironmentBackend for DockerBackend {
     fn name(&self) -> &str {
         "docker"
@@ -550,8 +580,17 @@ impl EnvironmentBackend for DockerBackend {
         // `docker pull`s of the same image race in the daemon (live:
         // fastqc x2 -> "failed to lease content: NotFound"). The
         // per-key env lock serializes the truly-missing case.
+        //
+        // Bare image names that 404 on Docker Hub get one quay.io
+        // retry (biocontainers publishes there, not on Docker Hub —
+        // see quay_biocontainers_fallback). Explicit registries are
+        // never shadowed.
+        let mut pull = format!("docker pull {spec}");
+        if let Some(fallback) = quay_biocontainers_fallback(spec) {
+            pull.push_str(&format!(" || docker pull {fallback}"));
+        }
         Ok(format!(
-            "docker image inspect {spec} >/dev/null 2>&1 || docker pull {spec}"
+            "docker image inspect {spec} >/dev/null 2>&1 || {pull}"
         ))
     }
 
@@ -1664,7 +1703,54 @@ mod tests {
         let cmd = backend.setup_command("biocontainers/bwa:0.7.17").unwrap();
         assert_eq!(
             cmd,
-            "docker image inspect biocontainers/bwa:0.7.17 >/dev/null 2>&1 || docker pull biocontainers/bwa:0.7.17"
+            "docker image inspect biocontainers/bwa:0.7.17 >/dev/null 2>&1 || \
+             docker pull biocontainers/bwa:0.7.17 || \
+             docker pull quay.io/biocontainers/bwa:0.7.17"
+        );
+    }
+
+    #[test]
+    fn docker_setup_command_falls_back_to_quay_for_bare_names() {
+        let backend = DockerBackend;
+        // Bare single-name specs (a common bioinformatics pattern) retry
+        // against quay.io/biocontainers after a docker.io failure.
+        let cmd = backend.setup_command("bwa:0.7.19").unwrap();
+        assert!(
+            cmd.contains("docker pull bwa:0.7.19 || docker pull quay.io/biocontainers/bwa:0.7.19"),
+            "bare name must get the quay.io/biocontainers fallback: {cmd}"
+        );
+    }
+
+    #[test]
+    fn docker_setup_command_has_no_fallback_for_registry_qualified_specs() {
+        let backend = DockerBackend;
+        // Explicit registries must never be shadowed by a fallback.
+        let cmd = backend
+            .setup_command("quay.io/nf-core/cellranger:7.1.0")
+            .unwrap();
+        assert_eq!(
+            cmd.matches("docker pull").count(),
+            1,
+            "explicit quay spec must not get a second (fallback) pull: {cmd}"
+        );
+        assert!(
+            cmd.ends_with("docker pull quay.io/nf-core/cellranger:7.1.0"),
+            "explicit quay spec must be pulled verbatim: {cmd}"
+        );
+        // Local registries (host:port) and multi-segment paths also stay verbatim.
+        let cmd = backend
+            .setup_command("localhost:5000/team/tool:1.0")
+            .unwrap();
+        assert!(
+            !cmd.contains("quay.io/biocontainers"),
+            "local registry: {cmd}"
+        );
+        let cmd = backend
+            .setup_command("docker.io/library/ubuntu:22.04")
+            .unwrap();
+        assert!(
+            !cmd.contains("quay.io/biocontainers"),
+            "docker.io explicit: {cmd}"
         );
     }
 

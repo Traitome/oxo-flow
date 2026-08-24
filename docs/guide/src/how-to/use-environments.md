@@ -75,6 +75,15 @@ Images are pulled on first use. If you need offline operation, pre-pull images:
 docker pull quay.io/biocontainers/bwa:0.7.19--h577a1d6_1
 ```
 
+Bare image names get one automatic retry against quay.io after a Docker
+Hub miss — Biocontainers publishes on quay.io, not Docker Hub:
+
+- `biocontainers/bwa:0.7.17` → retried as `quay.io/biocontainers/bwa:0.7.17`
+- `bwa:0.7.17` (single name) → retried as `quay.io/biocontainers/bwa:0.7.17`
+
+Explicit registries (`quay.io/…`, `docker.io/…`, `localhost:5000/…`) are
+pulled verbatim and never shadowed by the retry.
+
 ---
 
 ## Singularity / Apptainer
