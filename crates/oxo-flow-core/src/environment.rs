@@ -585,9 +585,17 @@ impl EnvironmentBackend for DockerBackend {
         // retry (biocontainers publishes there, not on Docker Hub —
         // see quay_biocontainers_fallback). Explicit registries are
         // never shadowed.
+        //
+        // A successful fallback pull is re-tagged with the original
+        // spec: `docker run` re-resolves bare names against docker.io
+        // even when the quay image exists locally, so without the tag
+        // the run step would fail with the same 404 (live-verified on
+        // tx-ubuntu).
         let mut pull = format!("docker pull {spec}");
         if let Some(fallback) = quay_biocontainers_fallback(spec) {
-            pull.push_str(&format!(" || docker pull {fallback}"));
+            pull.push_str(&format!(
+                " || (docker pull {fallback} && docker tag {fallback} {spec})"
+            ));
         }
         Ok(format!(
             "docker image inspect {spec} >/dev/null 2>&1 || {pull}"
@@ -1705,7 +1713,24 @@ mod tests {
             cmd,
             "docker image inspect biocontainers/bwa:0.7.17 >/dev/null 2>&1 || \
              docker pull biocontainers/bwa:0.7.17 || \
-             docker pull quay.io/biocontainers/bwa:0.7.17"
+             (docker pull quay.io/biocontainers/bwa:0.7.17 && \
+             docker tag quay.io/biocontainers/bwa:0.7.17 biocontainers/bwa:0.7.17)"
+        );
+    }
+
+    #[test]
+    fn docker_fallback_pull_is_retagged_with_the_original_spec() {
+        // `docker run` re-resolves bare names against docker.io even when
+        // the quay image exists locally — the fallback pull must re-tag so
+        // the run step finds the image under the original spec.
+        let backend = DockerBackend;
+        let cmd = backend.setup_command("bwa:0.7.19").unwrap();
+        assert!(
+            cmd.contains(
+                "docker pull quay.io/biocontainers/bwa:0.7.19 \
+                 && docker tag quay.io/biocontainers/bwa:0.7.19 bwa:0.7.19"
+            ),
+            "fallback pull must be re-tagged with the original spec: {cmd}"
         );
     }
 
@@ -1716,7 +1741,7 @@ mod tests {
         // against quay.io/biocontainers after a docker.io failure.
         let cmd = backend.setup_command("bwa:0.7.19").unwrap();
         assert!(
-            cmd.contains("docker pull bwa:0.7.19 || docker pull quay.io/biocontainers/bwa:0.7.19"),
+            cmd.contains("docker pull bwa:0.7.19 || (docker pull quay.io/biocontainers/bwa:0.7.19"),
             "bare name must get the quay.io/biocontainers fallback: {cmd}"
         );
     }
