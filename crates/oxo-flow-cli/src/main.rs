@@ -417,7 +417,12 @@ pub enum Commands {
     Graph {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
-        #[arg(short = 'f', long, default_value = "ascii", help = "Output format")]
+        #[arg(
+            short = 'f',
+            long,
+            default_value = "ascii",
+            help = "Output format: ascii, dot, dot-clustered, tree, mermaid, metro"
+        )]
         format: String,
         #[arg(short = 'o', long, help = "Output file path")]
         output: Option<PathBuf>,

@@ -137,6 +137,10 @@ oxo-flow run my-pipeline.oxoflow -j 8
 oxo-flow graph my-pipeline.oxoflow -f dot > dag.dot
 dot -Tpng dag.dot -o dag.png
 
+# Export a transit-map-style diagram via nf-metro
+oxo-flow graph my-pipeline.oxoflow -f metro -o pipeline.mmd
+nf-metro render pipeline.mmd -o pipeline.svg
+
 # Generate an HTML report
 oxo-flow report my-pipeline.oxoflow -f html -o report.html
 ```

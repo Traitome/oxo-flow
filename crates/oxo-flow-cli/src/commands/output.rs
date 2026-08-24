@@ -38,6 +38,8 @@ pub fn handle_graph(
         "dot" => Ok(dag.to_dot()),
         "dot-clustered" => dag.to_dot_clustered().map_err(|e| anyhow::anyhow!(e)),
         "tree" => dag.to_ascii_tree().map_err(|e| anyhow::anyhow!(e)),
+        "mermaid" => Ok(dag.to_mermaid()),
+        "metro" => dag.to_metro(&config.rules).map_err(|e| anyhow::anyhow!(e)),
         _ => Err(anyhow::anyhow!("unsupported graph format: {}", format)),
     }?;
 

@@ -24,7 +24,7 @@ oxo-flow graph [OPTIONS] <WORKFLOW>
 
 | Option | Short | Description |
 |---|---|---|
-| `--format <FORMAT>` | `-f` | Output format: `ascii` (terminal), `dot` (Graphviz), `dot-clustered` (level-grouped), `tree` (indented tree). Default: `ascii` |
+| `--format <FORMAT>` | `-f` | Output format: `ascii` (terminal), `dot` (Graphviz), `dot-clustered` (level-grouped), `tree` (indented tree), `mermaid` (Mermaid `graph LR`), `metro` (nf-metro metro map). Default: `ascii` |
 | `--output <FILE>` | `-o` | Save output to a file (useful for dot/svg generation) |
 | `--expanded` | | Show the DAG after wildcard/sample/scatter expansion (the actual runtime DAG) |
 | `--verbose` | `-v` | Enable debug-level logging |
@@ -67,6 +67,24 @@ oxo-flow graph pipeline.oxoflow -f dot -o graph.dot
 
 ```bash
 oxo-flow graph pipeline.oxoflow -f dot-clustered -o clustered.dot
+```
+
+### Export a Mermaid diagram
+
+`mermaid` emits standard Mermaid `graph LR` — no `%%metro` directives — so it renders directly on GitHub, in VS Code, and in any Mermaid renderer:
+
+```bash
+oxo-flow graph pipeline.oxoflow -f mermaid -o pipeline.mmd
+```
+
+### Export an nf-metro metro map
+
+`metro` emits an [nf-metro](https://github.com/seqeralabs/nf-metro) definition — Mermaid `graph LR` extended with `%%metro` line/section directives — that renders as a transit-map-style SVG. Rules are grouped into colored "lines" by their analysis stage (inferred from shell keywords, or set explicitly via each rule's `tags`):
+
+```bash
+oxo-flow graph pipeline.oxoflow -f metro -o pipeline.mmd
+pip install nf-metro
+nf-metro render pipeline.mmd -o pipeline.svg
 ```
 
 ### View the expanded runtime DAG
@@ -168,6 +186,55 @@ digraph workflow {
   "transform" -> "summarize";
 }
 ```
+
+### Mermaid
+
+The `mermaid` format emits standard Mermaid `graph LR` — a node per rule, an
+edge per dependency:
+
+```mermaid
+graph LR
+    n0["generate_data"]
+    n1["transform"]
+    n2["summarize"]
+    n0 --> n1
+    n1 --> n2
+```
+
+This renders directly in any Mermaid renderer (GitHub, VS Code, MkDocs) with no
+extra tooling.
+
+### Metro map (nf-metro)
+
+The `metro` format emits an
+[nf-metro](https://github.com/seqeralabs/nf-metro) definition — Mermaid
+`graph LR` extended with `%%metro` directives — that renders as a
+transit-map-style SVG:
+
+```mmd
+%%metro line: generic | Analysis | #79706E
+
+graph LR
+    n0["generate_data"]
+    n1["transform"]
+    n2["summarize"]
+    n0 -->|generic| n1
+    n1 -->|generic| n2
+```
+
+Each rule is assigned a *stage* that becomes a colored "metro line":
+
+- **Explicit**: the rule's first `tags` entry (e.g. `tags = ["align"]`),
+  normalized through a small synonym table (`alignment` → `align`, etc.).
+  Unknown tags become their own custom line.
+- **Inferred**: keyword matching against the rule's `shell`/`script`
+  commands — `fastqc`/`fastp` → QC/trim, `bwa`/`STAR` → align,
+  `featureCounts`/`salmon` → quantify, `gatk`/`bcftools call` → variant,
+  `multiqc` → report, and so on — with no match falling back to `generic`.
+
+With more than one stage, stations are grouped into `subgraph` sections (one
+per stage) and cross-stage edges are placed outside the sections as nf-metro
+requires.
 
 ---
 

@@ -531,6 +531,160 @@ impl WorkflowDag {
         )
     }
 
+    /// Export the DAG as a plain Mermaid `graph LR` definition.
+    ///
+    /// Unlike [`Self::to_metro`], this emits standard Mermaid only (no
+    /// `%%metro` directives), so it renders directly on GitHub, in VS Code,
+    /// and in any Mermaid-compatible renderer without nf-metro.
+    pub fn to_mermaid(&self) -> String {
+        let mut out = String::from("graph LR\n");
+        for node in self.nodes_by_rule_index() {
+            out.push_str(&format!(
+                "    n{}[\"{}\"]\n",
+                node.index(),
+                self.graph[node].name
+            ));
+        }
+        for (src, dst) in self.sorted_edges() {
+            out.push_str(&format!("    n{} --> n{}\n", src.index(), dst.index()));
+        }
+        out
+    }
+
+    /// Export the DAG as an nf-metro "metro map" definition.
+    ///
+    /// Output is a Mermaid `graph LR` subset extended with `%%metro`
+    /// directives (colored lines and stage sections), renderable to a
+    /// transit-map-style SVG by
+    /// [`nf-metro`](https://github.com/seqeralabs/nf-metro):
+    ///
+    /// ```text
+    /// oxo-flow graph workflow.oxoflow -f metro -o workflow.mmd
+    /// nf-metro render workflow.mmd -o workflow.svg
+    /// ```
+    ///
+    /// Each rule becomes a station; each dependency becomes an edge carrying
+    /// the *source* rule's stage line. Stages are inferred per rule (see
+    /// [`crate::stage`]); distinct stages become distinct sections.
+    pub fn to_metro(&self, rules: &[Rule]) -> Result<String> {
+        // Stage per node (fallback "generic" when `rule_index` is out of
+        // range — cannot happen for a DAG built from `rules`, but stay total).
+        let mut node_stage: HashMap<NodeIndex, String> = HashMap::new();
+        for node in self.graph.node_indices() {
+            let stage = rules
+                .get(self.graph[node].rule_index)
+                .map(crate::stage::detect_stage)
+                .unwrap_or_else(|| "generic".to_string());
+            node_stage.insert(node, stage);
+        }
+
+        let nodes = self.nodes_by_rule_index();
+        let edges = self.sorted_edges();
+
+        // Stages in first-appearance order (deterministic).
+        let mut stages: Vec<String> = Vec::new();
+        for node in &nodes {
+            let stage = &node_stage[node];
+            if !stages.iter().any(|s| s == stage) {
+                stages.push(stage.clone());
+            }
+        }
+
+        let mut out = String::new();
+
+        // Line definitions.
+        for stage in &stages {
+            out.push_str(&format!(
+                "%%metro line: {} | {} | {}\n",
+                sanitize_metro_id(stage),
+                crate::stage::stage_display(stage),
+                crate::stage::stage_color(stage),
+            ));
+        }
+        out.push('\n');
+        out.push_str("graph LR\n");
+
+        let multi_stage = stages.len() > 1;
+
+        // Stations. With multiple stages, wrap each stage's stations in a
+        // section (`subgraph`) and place intra-stage edges inside it. Edges
+        // that cross sections must follow every `end` block (nf-metro rule),
+        // so we collect those and emit them last.
+        let mut inter_stage_edges: Vec<(NodeIndex, NodeIndex)> = Vec::new();
+
+        for stage in &stages {
+            if multi_stage {
+                out.push_str(&format!(
+                    "    subgraph {} [{}]\n",
+                    sanitize_metro_id(stage),
+                    crate::stage::stage_display(stage)
+                ));
+            }
+
+            for node in nodes.iter().filter(|n| &node_stage[n] == stage) {
+                out.push_str(&format!(
+                    "        n{}[\"{}\"]\n",
+                    node.index(),
+                    self.graph[*node].name
+                ));
+            }
+
+            for &(src, dst) in &edges {
+                if node_stage[&src] != *stage {
+                    continue;
+                }
+                if node_stage[&dst] == *stage {
+                    // Intra-stage edge — inside this section.
+                    let indent = if multi_stage { "        " } else { "    " };
+                    out.push_str(&format!(
+                        "{indent}n{} -->|{}| n{}\n",
+                        src.index(),
+                        sanitize_metro_id(&node_stage[&src]),
+                        dst.index()
+                    ));
+                } else {
+                    // Edge leaving this stage — emit after all sections.
+                    inter_stage_edges.push((src, dst));
+                }
+            }
+
+            if multi_stage {
+                out.push_str("    end\n");
+            }
+        }
+
+        // Inter-stage edges.
+        for (src, dst) in inter_stage_edges {
+            out.push_str(&format!(
+                "    n{} -->|{}| n{}\n",
+                src.index(),
+                sanitize_metro_id(&node_stage[&src]),
+                dst.index()
+            ));
+        }
+
+        Ok(out)
+    }
+
+    /// Node indices ordered by the rule's position in the workflow file —
+    /// deterministic output for tests and diffs.
+    fn nodes_by_rule_index(&self) -> Vec<NodeIndex> {
+        let mut nodes: Vec<NodeIndex> = self.graph.node_indices().collect();
+        nodes.sort_by_key(|&n| self.graph[n].rule_index);
+        nodes
+    }
+
+    /// Edge endpoints ordered by `(source rule index, target rule index)`.
+    fn sorted_edges(&self) -> Vec<(NodeIndex, NodeIndex)> {
+        let mut edges: Vec<(NodeIndex, NodeIndex)> = self
+            .graph
+            .edge_indices()
+            .map(|e| self.graph.edge_endpoints(e).expect("edge endpoints exist"))
+            .collect();
+        edges.sort_by_key(|&(s, d)| (self.graph[s].rule_index, self.graph[d].rule_index));
+        edges
+    }
+
     /// Returns whether a given output pattern is produced by any rule.
     pub fn has_producer(&self, output: &str) -> bool {
         self.output_to_node.contains_key(output)
@@ -715,6 +869,25 @@ fn looks_like_directory(path: &str) -> bool {
             !KNOWN_FILE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
         }
     }
+}
+
+/// Sanitize a stage name into a safe nf-metro/Mermaid identifier (line ID or
+/// section ID): non-alphanumeric characters become underscores.
+fn sanitize_metro_id(s: &str) -> String {
+    let mut out: String = s
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if out.is_empty() {
+        out = "stage".to_string();
+    }
+    out
 }
 
 /// Complexity metrics for a workflow DAG.
@@ -1895,5 +2068,91 @@ mod tests {
         let c = make_rule("cons", vec!["results/other.txt"], vec!["out.txt"]);
         let dag = WorkflowDag::from_rules(&[p, c]).unwrap();
         assert!(dag.dependencies("cons").unwrap().is_empty());
+    }
+
+    // ---- Mermaid / metro export tests -------------------------------------
+
+    #[test]
+    fn mermaid_export_has_nodes_and_edges() {
+        let rules = vec![
+            make_rule("a", vec!["in.txt"], vec!["mid.txt"]),
+            make_rule("b", vec!["mid.txt"], vec!["out.txt"]),
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let mmd = dag.to_mermaid();
+        assert!(mmd.starts_with("graph LR\n"));
+        assert!(mmd.contains("n0[\"a\"]"));
+        assert!(mmd.contains("n1[\"b\"]"));
+        assert!(mmd.contains("n0 --> n1"));
+        // Plain Mermaid must not carry %%metro directives.
+        assert!(!mmd.contains("%%metro"));
+    }
+
+    #[test]
+    fn metro_export_single_stage_is_flat() {
+        // `make_rule` uses `echo <name>` shells — no stage keywords — so both
+        // rules collapse to the generic line and no section is emitted.
+        let rules = vec![
+            make_rule("a", vec!["in.txt"], vec!["mid.txt"]),
+            make_rule("b", vec!["mid.txt"], vec!["out.txt"]),
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let mmd = dag.to_metro(&rules).unwrap();
+        assert!(mmd.contains("%%metro line: generic | Analysis | #79706E"));
+        assert!(mmd.contains("graph LR"));
+        assert!(mmd.contains("n0[\"a\"]"));
+        assert!(mmd.contains("n0 -->|generic| n1"));
+        assert!(!mmd.contains("subgraph"));
+    }
+
+    #[test]
+    fn metro_export_multi_stage_emits_sections() {
+        let mut qc = make_rule("fastqc", vec!["reads.fq"], vec!["reads_fastqc.html"]);
+        qc.shell = Some("fastqc reads.fq".to_string());
+        let mut align = make_rule("align", vec!["reads.fq"], vec!["mapped.bam"]);
+        align.shell = Some("bwa mem ref.fa reads.fq > mapped.sam".to_string());
+        let rules = vec![qc, align];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let mmd = dag.to_metro(&rules).unwrap();
+        assert!(mmd.contains("%%metro line: qc | Read QC | #4C78A8"));
+        assert!(mmd.contains("%%metro line: align | Alignment | #54A24B"));
+        assert!(mmd.contains("subgraph qc [Read QC]"));
+        assert!(mmd.contains("subgraph align [Alignment]"));
+    }
+
+    #[test]
+    fn metro_export_cross_stage_edge_follows_sections() {
+        // qc → trim dependency: the edge must carry the source (qc) line and
+        // appear after all `end` blocks (nf-metro's inter-section rule).
+        let mut qc = make_rule("fastqc", vec!["reads.fq"], vec!["reads_fastqc.html"]);
+        qc.shell = Some("fastqc reads.fq".to_string());
+        let mut trim = make_rule("trim", vec!["reads_fastqc.html"], vec!["trimmed.fq"]);
+        trim.shell = Some("fastp -i reads.fastq.gz".to_string());
+        let rules = vec![qc, trim];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let mmd = dag.to_metro(&rules).unwrap();
+        assert!(mmd.contains("n0 -->|qc| n1"));
+        let last_end = mmd
+            .rfind("    end\n")
+            .expect("multi-stage map has sections");
+        let edge_pos = mmd.rfind("-->|qc|").expect("cross-stage edge exists");
+        assert!(
+            edge_pos > last_end,
+            "cross-stage edge must follow all `end` blocks:\n{mmd}"
+        );
+    }
+
+    #[test]
+    fn metro_export_explicit_tag_overrides_inference() {
+        // The rule's `tags` categorize it as QC even though its shell says
+        // `bwa` (an aligner) — explicit tags win over keyword inference.
+        let mut rule = make_rule("align_as_qc", vec!["reads.fq"], vec!["out.bam"]);
+        rule.shell = Some("bwa mem ref.fa reads.fq".to_string());
+        rule.tags = vec!["qc".to_string()];
+        let rules = vec![rule];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let mmd = dag.to_metro(&rules).unwrap();
+        assert!(mmd.contains("%%metro line: qc | Read QC | #4C78A8"));
+        assert!(!mmd.contains("%%metro line: align"));
     }
 }
