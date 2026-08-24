@@ -63,7 +63,7 @@ Knowledge freshness:
 - `lookup_tool` responses carry the same data date and record count as a
   freshness note, so agents can weigh how current the embedded database is.
 - See "Embedded Knowledge Freshness" in the
-  [AI CLI reference](https://traitome.github.io/oxo-flow/documentation/reference/ai-cli/)
+  [AI CLI reference](https://traitome.github.io/oxo-flow/latest/reference/ai-cli/)
   for the update cadence, the update GitHub Action, and the gate details.
 
 ## The `--ai` flag on other commands
