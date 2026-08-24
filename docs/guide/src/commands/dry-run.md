@@ -266,7 +266,7 @@ instances at runtime are listed under the `reentry` section of `--json`
 ## Output
 
 ```
-oxo-flow v0.14.1 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.15.0 — Rust-native bioinformatics pipeline engine
 DAG: (dry-run) 3 rules would execute
   1. generate_data
      threads=1

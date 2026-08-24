@@ -52,7 +52,7 @@ oxo-flow lint pipeline.oxoflow --strict
 ## Output
 
 ```
-oxo-flow v0.14.1 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.15.0 — Rust-native bioinformatics pipeline engine
   warning [W003]: rule has no description (rule: bwa_align)
     hint: add a `description` field to the rule
   warning [W004]: rule has a shell command but no log file specified (rule: bwa_align)
@@ -71,7 +71,7 @@ when `oxo-flow run` is invoked without an explicit `-t`, so marking the
 final leaf rules (like `fastqc` above) makes them part of the default
 run — see [Workflow Format: Priority and Targeting](../reference/workflow-format.md#priority-and-targeting).
 W025 flags the deprecated rule-level `threads = N` / `memory = "8G"`
-fields (removed in v0.4.0 in favor of `[rules.resources]`) so old
+fields (removed in v0.15.0 in favor of `[rules.resources]`) so old
 workflows surface the migration instead of silently keeping their old
 settings — see [Workflow Format: Rule resources](../reference/workflow-format.md#rule-resources).
 

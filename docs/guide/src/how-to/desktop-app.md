@@ -188,10 +188,10 @@ tarballs (built by CI, not by hand):
 ### Install from a tarball
 
 ```bash
-curl -LO https://github.com/Traitome/oxo-flow/releases/download/v0.14.1/oxo-flow-v0.14.1-x86_64-unknown-linux-gnu.tar.gz
-curl -LO https://github.com/Traitome/oxo-flow/releases/download/v0.14.1/SHA256SUMS.txt
+curl -LO https://github.com/Traitome/oxo-flow/releases/download/v0.15.0/oxo-flow-v0.15.0-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/Traitome/oxo-flow/releases/download/v0.15.0/SHA256SUMS.txt
 sha256sum -c SHA256SUMS.txt --ignore-missing   # verify before you run it
-tar xzf oxo-flow-v0.14.1-x86_64-unknown-linux-gnu.tar.gz
+tar xzf oxo-flow-v0.15.0-x86_64-unknown-linux-gnu.tar.gz
 sudo install -m 755 oxo-flow /usr/local/bin/oxo-flow
 ```
 

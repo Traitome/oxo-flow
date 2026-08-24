@@ -59,7 +59,7 @@ $ oxo-flow validate examples/gallery/02_file_pipeline.oxoflow
 
 ```bash
 $ oxo-flow dry-run examples/gallery/02_file_pipeline.oxoflow
-oxo-flow v0.14.1 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.15.0 — Rust-native bioinformatics pipeline engine
 DAG: (dry-run) 3 rules would execute
   1. generate_data
      threads=1
