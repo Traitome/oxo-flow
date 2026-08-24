@@ -55,7 +55,7 @@ threads = 8
 memory = "16G"
 
 [rules.environment]
-docker = "biocontainers/bwa-mem2:2.2.1"
+docker = "quay.io/biocontainers/bwa-mem2:2.2.1--he70b90d_8"
 
 [[rules]]
 name = "analyze_results"

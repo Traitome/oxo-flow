@@ -41,7 +41,7 @@ threads = 16
 memory = "64G"
 
 [rules.environment]
-docker = "10xgenomics/cellranger:7.1.0"
+docker = "quay.io/nf-core/cellranger:7.1.0"
 
 [[rules]]
 name = "clustering_analysis"

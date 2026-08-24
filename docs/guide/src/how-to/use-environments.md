@@ -53,7 +53,7 @@ shell = "bwa mem ref.fa reads.fastq.gz | samtools sort -o aligned.bam"
 ```toml
 [[rules]]
 name = "align"
-environment = { docker = "biocontainers/bwa:0.7.17--h7132678_3" }
+environment = { docker = "quay.io/biocontainers/bwa:0.7.19--h577a1d6_1" }
 shell = "bwa mem ref.fa reads.fastq.gz | samtools sort -o aligned.bam"
 ```
 
@@ -72,7 +72,7 @@ oxo-flow automatically mounts the working directory into the container. Input an
 Images are pulled on first use. If you need offline operation, pre-pull images:
 
 ```bash
-docker pull biocontainers/bwa:0.7.17--h7132678_3
+docker pull quay.io/biocontainers/bwa:0.7.19--h577a1d6_1
 ```
 
 ---
@@ -84,7 +84,7 @@ docker pull biocontainers/bwa:0.7.17--h7132678_3
 ```toml
 [[rules]]
 name = "align"
-environment = { singularity = "docker://biocontainers/bwa:0.7.17--h7132678_3" }
+environment = { singularity = "docker://quay.io/biocontainers/bwa:0.7.19--h577a1d6_1" }
 shell = "bwa mem ref.fa reads.fastq.gz > aligned.sam"
 ```
 
