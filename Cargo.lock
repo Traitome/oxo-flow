@@ -2848,6 +2848,7 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
+ "tokio-stream",
  "toml",
  "uuid",
  "zstd",

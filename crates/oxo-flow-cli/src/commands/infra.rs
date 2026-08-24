@@ -360,6 +360,45 @@ pub fn handle_license(path: Option<std::path::PathBuf>, json: bool) -> Result<()
 
 /// Generate an environment spec (conda YAML or pixi TOML) from a
 /// natural-language description using the AI provider + built-in tool table.
+/// Pre-resolve tools mentioned in a natural-language description against
+/// the embedded Bioconda database (`env create --ai`).
+///
+/// Generic stop words and short fragments are filtered before matching,
+/// and only NAME-level matches (the tool name contains the word) are
+/// injected — summary-only matches are too loose. Returns (name, version,
+/// summary) triples, deduplicated.
+fn match_description_tools(description: &str) -> Vec<(String, String, String)> {
+    const STOP_WORDS: &[&str] = &[
+        "and", "the", "for", "with", "using", "into", "from", "your", "pipeline", "workflow",
+        "analysis", "data", "files", "output", "input", "all", "new", "this", "that", "via",
+        "then", "also", "based", "need", "want", "please",
+    ];
+    let mut matched = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for word in description
+        .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
+        .filter(|w| w.len() >= 3 && !STOP_WORDS.contains(&w.to_ascii_lowercase().as_str()))
+    {
+        let word_lower = word.to_ascii_lowercase();
+        for tool in oxo_flow_ai::knowledge::bioconda::search_tools(word, 3) {
+            // Keep only matches where the tool name actually contains the
+            // word — summary-only matches are too loose to inject.
+            if !tool.name.to_ascii_lowercase().contains(&word_lower) {
+                continue;
+            }
+            if seen.insert(tool.name.clone()) {
+                let summary = if tool.summary.is_empty() {
+                    "(no description)".to_string()
+                } else {
+                    tool.summary.clone()
+                };
+                matched.push((tool.name.clone(), tool.version.clone(), summary));
+            }
+        }
+    }
+    matched
+}
+
 async fn create_env_from_ai(
     description: &std::path::Path,
     name: Option<String>,
@@ -381,46 +420,11 @@ async fn create_env_from_ai(
     println!("  Backend: {}", if is_pixi { "pixi" } else { "conda" });
     println!("  Description: {description}\n");
 
-    // Pre-resolve tools mentioned in the description against the embedded
-    // Bioconda database — inject real names + current versions so the model
-    // pins accurately instead of guessing. Generic words and loose summary
-    // matches are filtered out so unrelated tools don't pollute the prompt.
-    const STOP_WORDS: &[&str] = &[
-        "and", "the", "for", "with", "using", "into", "from", "your", "pipeline", "workflow",
-        "analysis", "data", "files", "output", "input", "all", "new", "this", "that", "via",
-        "then", "also", "based", "need", "want", "please",
-    ];
-    let mut matched = String::new();
-    let mut seen = std::collections::HashSet::new();
-    for word in description
-        .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
-        .filter(|w| w.len() >= 3 && !STOP_WORDS.contains(&w.to_ascii_lowercase().as_str()))
-    {
-        let word_lower = word.to_ascii_lowercase();
-        for tool in oxo_flow_ai::knowledge::bioconda::search_tools(word, 3) {
-            // Keep only matches where the tool name actually contains the
-            // word — summary-only matches are too loose to inject.
-            if !tool.name.to_ascii_lowercase().contains(&word_lower) {
-                continue;
-            }
-            if seen.insert(tool.name.clone()) {
-                matched.push_str(&format!(
-                    "- {} {} — {}\n",
-                    tool.name,
-                    tool.version,
-                    if tool.summary.is_empty() {
-                        "(no description)"
-                    } else {
-                        &tool.summary
-                    }
-                ));
-            }
-        }
-    }
+    let matched = match_description_tools(&description);
     if !matched.is_empty() {
         eprintln!("{}", "  Matched Bioconda tools:".bold().cyan());
-        for line in matched.lines() {
-            eprintln!("    {line}");
+        for (name, version, summary) in &matched {
+            eprintln!("    - {name} {version} — {summary}");
         }
     }
 
@@ -457,9 +461,13 @@ Rules:
 "#,
             oxo_flow_ai::knowledge::builtin::format_tool_table(),
             if matched.is_empty() {
-                "(none matched)"
+                "(none matched)".to_string()
             } else {
-                &matched
+                matched
+                    .iter()
+                    .map(|(n, v, s)| format!("- {n} {v} — {s}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
             }
         )
     } else {
@@ -495,9 +503,13 @@ Rules:
 "#,
             oxo_flow_ai::knowledge::builtin::format_tool_table(),
             if matched.is_empty() {
-                "(none matched)"
+                "(none matched)".to_string()
             } else {
-                &matched
+                matched
+                    .iter()
+                    .map(|(n, v, s)| format!("- {n} {v} — {s}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
             }
         )
     };
@@ -591,4 +603,65 @@ fn extract_toml(response: &str) -> Option<String> {
         return Some(response[pos..].trim().to_string());
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Stop words and short fragments must not match anything.
+    #[test]
+    fn description_matching_filters_stop_words_and_short_words() {
+        let matched = match_description_tools("please align with using fastp for the data");
+        assert!(
+            matched.iter().any(|(name, _, _)| name == "fastp"),
+            "fastp must be matched: {matched:?}"
+        );
+        for (name, _, _) in &matched {
+            assert_ne!(name, "and");
+            assert_ne!(name, "using");
+            assert_ne!(name, "the");
+        }
+    }
+
+    /// Only NAME-level matches are injected: a query word that only
+    /// appears in a summary must not pull the tool in.
+    #[test]
+    fn description_matching_requires_name_level_hit() {
+        let matched = match_description_tools("trimming");
+        for (name, _, _) in &matched {
+            assert!(
+                name.to_ascii_lowercase().contains("trim"),
+                "name-level match required, got {name}"
+            );
+        }
+    }
+
+    /// The same tool mentioned twice contributes once.
+    #[test]
+    fn description_matching_deduplicates_tools() {
+        let matched = match_description_tools("fastp fastp fastp");
+        let fastp_hits: Vec<_> = matched.iter().filter(|(n, _, _)| n == "fastp").collect();
+        assert_eq!(fastp_hits.len(), 1, "fastp must appear once: {matched:?}");
+    }
+
+    /// A known tool mentioned in the description resolves to a pinned
+    /// version from the embedded database.
+    #[test]
+    fn description_matching_pins_versions_from_knowledge_base() {
+        let matched = match_description_tools("trim adapters with fastp and index with samtools");
+        let fastp = matched.iter().find(|(n, _, _)| n == "fastp").unwrap();
+        assert!(
+            !fastp.1.is_empty(),
+            "fastp must carry a version: {matched:?}"
+        );
+        assert!(
+            !fastp.2.is_empty(),
+            "fastp must carry a summary: {matched:?}"
+        );
+        assert!(
+            matched.iter().any(|(n, _, _)| n == "samtools"),
+            "samtools must be matched: {matched:?}"
+        );
+    }
 }
