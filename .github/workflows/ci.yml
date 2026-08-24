@@ -288,6 +288,21 @@ jobs:
           git push origin "$TAG_NAME"
           echo "Tag $TAG_NAME created at $TARGET_SHA"
 
+      # Tag-push releases (a tag pushed directly, no dispatch): the tag must
+      # reference the synced tree the steps above commit (version bump +
+      # CHANGELOG), because publish-crates checks out by tag name and fails
+      # its version-match check against pre-bump versions. The tag is moved
+      # to HEAD exactly once per release; a re-fire with an already-synced
+      # tag exits early above ("Version already synced") and never reaches
+      # this step, so the tag stays put.
+      - name: Re-point tag to the synced commit (tag-push releases)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push --force origin "HEAD:refs/tags/${RELEASE_TAG}"
+          echo "Tag ${RELEASE_TAG} re-pointed to $(git rev-parse HEAD)"
+
   # ─── Quality gate: fmt + clippy + tests ────────────────────────────────────
   test:
     name: Test (fmt, clippy, test)
