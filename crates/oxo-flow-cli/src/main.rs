@@ -359,7 +359,11 @@ pub enum Commands {
             help = "Template name or natural-language description (with --ai)"
         )]
         template: Option<String>,
-        #[arg(short = 'o', long, help = "Output file path")]
+        #[arg(
+            short = 'o',
+            long,
+            help = "Output file or directory (a trailing slash forces a directory)"
+        )]
         output: Option<PathBuf>,
         /// Enable AI-powered workflow generation from natural language.
         #[arg(long)]

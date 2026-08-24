@@ -474,10 +474,13 @@ fn apply_template(template_name: &str, output: Option<PathBuf>) -> Result<()> {
     // Substitute the `name` field
     let new_content = substitute_workflow_name(content, &new_name);
 
-    // Write to specified output path, or current directory with template name
+    // Write to specified output path, or current directory with template name.
+    // A trailing slash (or backslash) is an explicit directory intent, even
+    // when the directory does not exist yet.
     let output_path = match output {
         Some(p) => {
-            if p.is_dir() {
+            let lossy = p.to_string_lossy();
+            if p.is_dir() || lossy.ends_with('/') || lossy.ends_with('\\') {
                 p.join(format!("{}.oxoflow", new_name))
             } else {
                 p
@@ -494,6 +497,15 @@ fn apply_template(template_name: &str, output: Option<PathBuf>) -> Result<()> {
              Remove it first or choose a different name.",
             output_path.display()
         );
+    }
+
+    // Create the destination directory when it does not exist yet (covers
+    // both `-o projects/new/` and `-o projects/new.oxoflow`).
+    if let Some(parent) = output_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("cannot create {}", parent.display()))?;
     }
 
     std::fs::write(&output_path, new_content)
@@ -698,6 +710,27 @@ mod tests {
 
         // Templates without aux files copy nothing extra.
         apply_template("01_hello_world", Some(dir.path().to_path_buf())).unwrap();
+    }
+
+    #[test]
+    fn apply_template_treats_trailing_slash_output_as_directory() {
+        // `-o projects/pipeline/` (nonexistent, trailing slash) must be
+        // treated as a directory intent, not as a literal file path.
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("projects").join("new-pipeline");
+        let out = format!("{}/", target.to_string_lossy());
+        apply_template("01_hello_world", Some(PathBuf::from(out))).unwrap();
+        let workflows: Vec<_> = std::fs::read_dir(&target)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "oxoflow"))
+            .collect();
+        assert_eq!(
+            workflows.len(),
+            1,
+            "trailing-slash output must contain exactly one generated workflow"
+        );
     }
 
     #[test]
