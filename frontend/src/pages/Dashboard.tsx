@@ -117,7 +117,7 @@ export default function Dashboard() {
       {/* Quick templates + recent runs */}
       <div className="dashboard-grid">
         <div className="dash-card">
-          <h3 className="dash-card-title">Templates</h3>
+          <h3 className="dash-card-title">{t('dashboard.templatesCard')}</h3>
           <div className="quick-templates">
             {quickTemplates.map((tpl) => (
               <button key={tpl.id} className="qt-btn" onClick={() => navigate(`/editor?template=${tpl.id}`)}>
@@ -125,7 +125,7 @@ export default function Dashboard() {
                 <span className="qt-cat">{tpl.category}</span>
               </button>
             ))}
-            <Link to="/pipelines" className="qt-btn qt-more">View all templates →</Link>
+            <Link to="/pipelines" className="qt-btn qt-more">{t('dashboard.viewAllTemplates')}</Link>
           </div>
         </div>
         <div className="dash-card">
@@ -134,14 +134,14 @@ export default function Dashboard() {
             <div className="empty-state">{t('dashboard.noRuns')}</div>
           ) : (
             <table className="run-table">
-              <thead><tr><th>Workflow</th><th>Status</th><th>Started</th><th></th></tr></thead>
+              <thead><tr><th>{t('dashboard.workflow')}</th><th>{t('dashboard.status')}</th><th>{t('dashboard.started')}</th><th></th></tr></thead>
               <tbody>
                 {runs.slice(0, 5).map((r) => (
                   <tr key={r.id}>
                     <td>{r.workflow_name ?? r.id.slice(0, 8)}</td>
                     <td><span className={`status-badge ${r.status}`}>{r.status}</span></td>
                     <td>{r.started_at ? new Date(r.started_at).toLocaleString(getLocale(lang)) : '-'}</td>
-                    <td><Link to={`/runs/${r.id}`} className="view-link">View</Link></td>
+                    <td><Link to={`/runs/${r.id}`} className="view-link">{t('dashboard.view')}</Link></td>
                   </tr>
                 ))}
               </tbody>
@@ -152,18 +152,18 @@ export default function Dashboard() {
 
       {/* Compact system strip — data kept, prominence reduced */}
       <div className="stat-grid" style={{ marginTop: '1rem', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
-        <StatCard value={health?.version || '-'} label="Version" />
-        <StatCard value={runs.length} label="Total Runs" />
-        <StatCard value={activeRuns} label="Active" valueStyle={{ color: activeRuns > 0 ? 'var(--color-warning)' : 'var(--color-success)' }} />
-        <StatCard value={sys ? `${sys.os}/${sys.arch}` : '-'} label="Platform" />
+        <StatCard value={health?.version || '-'} label={t('dashboard.version')} />
+        <StatCard value={runs.length} label={t('dashboard.totalRuns')} />
+        <StatCard value={activeRuns} label={t('dashboard.active')} valueStyle={{ color: activeRuns > 0 ? 'var(--color-warning)' : 'var(--color-success)' }} />
+        <StatCard value={sys ? `${sys.os}/${sys.arch}` : '-'} label={t('dashboard.platform')} />
         {health?.resources && (
-          <StatCard value={`${Math.round(health.resources.memory_used_pct * 100)}%`} label="Memory" />
+          <StatCard value={`${Math.round(health.resources.memory_used_pct * 100)}%`} label={t('dashboard.memory')} />
         )}
       </div>
 
       {/* Quick access to the AI chat stays one click away */}
       <div style={{ marginTop: '1rem', fontSize: '0.8rem', color: 'var(--color-text-tertiary)' }}>
-        <Bot size={13} style={{ verticalAlign: '-2px' }} /> {t('dashboard.ai')} — <Link to="/chat" style={{ color: 'var(--color-primary)' }}>open the AI chat</Link>
+        <Bot size={13} style={{ verticalAlign: '-2px' }} /> {t('dashboard.ai')} — <Link to="/chat" style={{ color: 'var(--color-primary)' }}>{t('dashboard.openAiChat')}</Link>
       </div>
     </div>
   );

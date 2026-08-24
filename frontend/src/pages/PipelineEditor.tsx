@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useRef, lazy, Suspense } from 'react';
-import { Play, CheckCircle, AlertCircle, Undo2, Redo2, Save, Wand2, Blocks } from 'lucide-react';
+import { Play, CheckCircle, AlertCircle, Undo2, Redo2, Save, Wand2, Blocks, Maximize2, Minimize2, PanelLeftOpen, PanelLeftClose } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import type { DagJson, KnowledgeTool } from '../api/types';
@@ -45,7 +45,7 @@ type LeftTab = 'assistant' | 'palette' | 'history';
 
 export default function PipelineEditor() {
   const session = usePipelineSession();
-  const { lang } = useI18n();
+  const { lang, t } = useI18n();
   const locale = getLocale(lang);
   const [toml, setToml] = useState(() => session.state.pipelineToml || DEFAULT_TOML);
   const [dagJson, setDagJson] = useState<DagJson | null>(() => session.state.dagData);
@@ -66,9 +66,27 @@ export default function PipelineEditor() {
   const [viewMode, setViewMode] = useState<'guided' | 'canvas'>(() =>
     localStorage.getItem('oxo_editor_mode') === 'canvas' ? 'canvas' : 'guided',
   );
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+  const toggleFullscreen = () => {
+    const next = !fullscreen;
+    setFullscreen(next);
+    if (next && !document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => { /* ignore */ });
+    } else if (!next && document.fullscreenElement) {
+      document.exitFullscreen().catch(() => { /* ignore */ });
+    }
+  };
   const switchViewMode = (mode: 'guided' | 'canvas') => {
     localStorage.setItem('oxo_editor_mode', mode);
     setViewMode(mode);
+  };
+
+  // Guided mode has no canvas toolbar, so expose the same Run/Dry-Run entry
+  // points and switch the user into Canvas + TOML before opening the dialog.
+  const openRunDialogFromGuided = () => {
+    switchViewMode('canvas');
+    setShowRunDialog(true);
   };
   const [revisions, setRevisions] = useState<Array<{ id: string; version: string; actor: string; created_at: string }> | null>(null);
   const navigate = useNavigate();
@@ -265,20 +283,18 @@ export default function PipelineEditor() {
     if (!savedPipelineId) {
       return (
         <div className="empty-state" style={{ padding: '1rem 0' }}>
-          Save the pipeline to enable version history — every save and
-          update snapshots the previous version, and you can load or roll
-          back to any of them here.
+          {t('editor.history.empty')}
         </div>
       );
     }
-    if (revisions === null) return <div className="empty-state">Loading history…</div>;
+    if (revisions === null) return <div className="empty-state">{t('editor.history.loading')}</div>;
     if (revisions.length === 0) {
-      return <div className="empty-state">No revisions recorded yet.</div>;
+      return <div className="empty-state">{t('editor.history.noSnapshots')}</div>;
     }
     return (
       <div>
         <div style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)', marginBottom: '8px' }}>
-          {revisions.length} snapshot{revisions.length === 1 ? '' : 's'} (newest first)
+          {t('editor.history.snapshots').replace('{{count}}', String(revisions.length))}
         </div>
         {revisions.map((r) => (
           <div key={r.id} className="dash-card" style={{ marginBottom: '8px', padding: '8px' }}>
@@ -295,16 +311,16 @@ export default function PipelineEditor() {
                   setToml(snap.toml_content);
                   session.setRunResult({ message: `Loaded snapshot ${r.id.slice(0, 8)} into the editor — Save to keep it`, type: 'success' });
                 } catch { /* ignore */ }
-              }}>Load</button>
+              }}>{t('editor.history.load')}</button>
               <button className="btn-sm" onClick={async () => {
-                if (!window.confirm(`Roll this pipeline back to the snapshot from ${new Date(r.created_at).toLocaleString(locale)}? A new revision will record the current version first.`)) return;
+                if (!window.confirm(t('editor.history.rollbackConfirm').replace('{{time}}', new Date(r.created_at).toLocaleString(locale)))) return;
                 try {
                   await api.rollbackPipeline(savedPipelineId, r.id);
                   setToml((await api.getPipeline(savedPipelineId)).toml_content);
                   api.listRevisions(savedPipelineId).then(setRevisions);
                   session.setRunResult({ message: 'Rolled back — the current version was preserved as a revision', type: 'success' });
                 } catch { /* ignore */ }
-              }}>Rollback</button>
+              }}>{t('editor.history.rollback')}</button>
             </div>
           </div>
         ))}
@@ -344,27 +360,45 @@ export default function PipelineEditor() {
   return (
     <div className="page">
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-        <h1 className="page-title" style={{ margin: 0 }}>Pipeline Editor</h1>
+        <h1 className="page-title" style={{ margin: 0 }}>{t('editor.title')}</h1>
         <div className="row" style={{ gap: '4px' }}>
           <button
             className={viewMode === 'guided' ? 'btn-run' : 'btn-sm'}
             onClick={() => switchViewMode('guided')}
-            title="Form-based rule cards — no TOML needed"
+            title={t('editor.guidedTooltip')}
           >
-            🧭 Guided
+            {t('editor.guided')}
           </button>
           <button
             className={viewMode === 'canvas' ? 'btn-run' : 'btn-sm'}
             onClick={() => switchViewMode('canvas')}
-            title="Canvas graph + raw TOML"
+            title={t('editor.canvasTooltip')}
           >
-            ⚡ Canvas + TOML
+            {t('editor.canvas')}
           </button>
         </div>
       </div>
 
       {viewMode === 'guided' && (
         <div style={{ marginTop: '1rem' }}>
+          <div className="action-row">
+            <button
+              className="btn-sm"
+              onClick={openRunDialogFromGuided}
+              disabled={running || !validation?.valid}
+              title="Preview the execution plan without running anything"
+            >
+              <CheckCircle size={14} /> Dry-Run
+            </button>
+            <button
+              className="btn-run"
+              onClick={openRunDialogFromGuided}
+              disabled={running || !validation?.valid}
+              title="Switch to Canvas mode and run this pipeline"
+            >
+              <Play size={16} /> Run
+            </button>
+          </div>
           <GuidedRuleBuilder toml={toml} onChange={(v) => setToml(v)} />
         </div>
       )}
@@ -375,8 +409,8 @@ export default function PipelineEditor() {
           nothing. */}
       {viewMode === 'canvas' && (
       <Suspense fallback={<div className="empty-state">Loading editor…</div>}>
-      <div className="editor-layout">
-        <div className="left-rail">
+      <div className={`editor-layout ${leftCollapsed ? 'editor-layout--left-collapsed' : ''} ${fullscreen ? 'editor-layout--fullscreen' : ''}`}>
+        <div className={`left-rail ${leftCollapsed ? 'left-rail--collapsed' : ''}`}>
           <div className="left-rail-tabs" role="tablist">
             <button
               role="tab"
@@ -384,7 +418,7 @@ export default function PipelineEditor() {
               className={`left-rail-tab ${leftTab === 'palette' ? 'active' : ''}`}
               onClick={() => setLeftTab('palette')}
             >
-              <Blocks size={14} /> Tools
+              <Blocks size={14} /> {t('editor.tools')}
             </button>
             <button
               role="tab"
@@ -392,7 +426,7 @@ export default function PipelineEditor() {
               className={`left-rail-tab ${leftTab === 'assistant' ? 'active' : ''}`}
               onClick={() => setLeftTab('assistant')}
             >
-              <Wand2 size={14} /> Assistant
+              <Wand2 size={14} /> {t('editor.assistant')}
             </button>
             <button
               role="tab"
@@ -403,7 +437,7 @@ export default function PipelineEditor() {
                 setRevisions(null);
               }}
             >
-              🕘 History
+              🕘 {t('editor.history')}
             </button>
           </div>
           <div className="left-rail-body">
@@ -426,17 +460,25 @@ export default function PipelineEditor() {
 
         <div className="dag-panel">
           <div className="panel-header">
-            <span>Pipeline DAG</span>
+            <span>{t('editor.panel.dag')}</span>
             <div className="panel-actions">
-              <button className="btn-sm" onClick={handleUndo} title="Undo">
+              <button
+                className="btn-sm"
+                title={leftCollapsed ? t('editor.expandLeft') : t('editor.collapseLeft')}
+                aria-label={leftCollapsed ? t('editor.expandLeft') : t('editor.collapseLeft')}
+                onClick={() => setLeftCollapsed((v) => !v)}
+              >
+                {leftCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
+              </button>
+              <button className="btn-sm" onClick={handleUndo} title={t('editor.undo')}>
                 <Undo2 size={14} />
               </button>
-              <button className="btn-sm" onClick={handleRedo} title="Redo">
+              <button className="btn-sm" onClick={handleRedo} title={t('editor.redo')}>
                 <Redo2 size={14} />
               </button>
               {dagJson && (
                 <span className="dag-counts">
-                  {dagJson.nodes.length} nodes, {dagJson.edges.length} edges
+                  {t('editor.nodesCount').replace('{{nodes}}', String(dagJson.nodes.length)).replace('{{edges}}', String(dagJson.edges.length))}
                 </span>
               )}
             </div>
@@ -451,35 +493,43 @@ export default function PipelineEditor() {
           />
           <div className="canvas-legend">
             <span className="legend-item">
-              <span className="legend-line legend-declared" /> depends_on (editable)
+              <span className="legend-line legend-declared" /> {t('editor.legend.depends')}
             </span>
             <span className="legend-item">
-              <span className="legend-line legend-file" /> file-inferred (edit input/output paths to change)
+              <span className="legend-line legend-file" /> {t('editor.legend.file')}
             </span>
-            <span className="legend-hint">Double-click a node to edit it · drag handles to connect · Del removes</span>
+            <span className="legend-hint">{t('editor.legend.hint')}</span>
           </div>
         </div>
 
         <div className="editor-panel">
           <div className="panel-header">
-            <span>Workflow TOML</span>
+            <span>{t('editor.panel.toml')}</span>
             <div className="panel-actions">
+              <button
+                className="btn-sm"
+                title={fullscreen ? t('editor.exitFullscreen') : t('editor.enterFullscreen')}
+                aria-label={fullscreen ? t('editor.exitFullscreen') : t('editor.enterFullscreen')}
+                onClick={toggleFullscreen}
+              >
+                {fullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+              </button>
               {validation && (
                 <button
                   className={`val-badge ${validation.valid ? 'valid' : 'invalid'}`}
                   style={{ background: 'transparent', border: 'none', cursor: validation.valid ? 'default' : 'pointer' }}
                   onClick={() => setShowErrors((v) => !v)}
-                  title={validation.valid ? 'Workflow is valid' : 'Show validation errors'}
+                  title={validation.valid ? t('editor.validation.tooltip.valid') : t('editor.validation.tooltip.invalid')}
                 >
                   {validation.valid ? <CheckCircle size={14} /> : <AlertCircle size={14} />}
-                  {validation.valid ? ' Valid' : `${validation.errors.length} error(s)`}
+                  {validation.valid ? ` ${t('editor.validation.valid')}` : ` ${t('editor.validation.errors').replace('{{count}}', String(validation.errors.length))}`}
                 </button>
               )}
               <button onClick={handleSave} className="btn-sm" style={{ background: 'transparent', border: '1px solid var(--color-border)' }}>
-                <Save size={14} /> Save
+                <Save size={14} /> {t('editor.save')}
               </button>
               <button onClick={() => setShowRunDialog(true)} disabled={running || !validation?.valid} className="btn-run">
-                <Play size={16} /> {running ? 'Starting...' : 'Run'}
+                <Play size={16} /> {running ? t('editor.starting') : t('editor.run')}
               </button>
             </div>
           </div>
@@ -492,7 +542,7 @@ export default function PipelineEditor() {
                     <button className="btn-sm" style={{ fontSize: '0.7rem' }}
                       title="Jump to this line in the editor"
                       onClick={() => setHighlightLine(e.line!)}>
-                      line {e.line}
+                      {t('editor.errors.line').replace('{{line}}', String(e.line))}
                     </button>
                   )}
                   <div className="validation-error-body">
@@ -500,7 +550,7 @@ export default function PipelineEditor() {
                       {e.rule ? <strong>{e.rule}: </strong> : null}
                       {e.message}
                     </div>
-                    {e.suggestion && <div className="validation-error-suggestion">→ {e.suggestion}</div>}
+                    {e.suggestion && <div className="validation-error-suggestion">{t('editor.errors.suggestion').replace('{{suggestion}}', e.suggestion)}</div>}
                   </div>
                 </div>
               ))}

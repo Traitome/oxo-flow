@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { api } from '../api/client';
 import Glossary from './Glossary';
+import { useI18n } from '../context/I18n';
 
 interface RuleCard {
   name: string;
@@ -62,6 +63,7 @@ function cardsToToml(cards: RuleCard[], workflowName: string, workflowVersion: s
 }
 
 export default function GuidedRuleBuilder({ toml, onChange }: GuidedRuleBuilderProps) {
+  const { t } = useI18n();
   const [cards, setCards] = useState<RuleCard[]>([]);
   const [workflowName, setWorkflowName] = useState('my-pipeline');
   const [workflowVersion, setWorkflowVersion] = useState('0.1.0');
@@ -128,12 +130,12 @@ export default function GuidedRuleBuilder({ toml, onChange }: GuidedRuleBuilderP
     <div>
       <div className="guided-meta">
         <label className="field" style={{ minWidth: 220 }}>
-          <Glossary term="pipeline">Workflow name</Glossary>
+          <Glossary term="pipeline">{t('guided.workflowName')}</Glossary>
           <input className="mono" value={workflowName}
             onChange={(e) => { setWorkflowName(e.target.value); emitMeta(e.target.value, workflowVersion); }} />
         </label>
         <label className="field" style={{ width: 110 }}>
-          Version
+          {t('guided.version')}
           <input value={workflowVersion}
             onChange={(e) => { setWorkflowVersion(e.target.value); emitMeta(workflowName, e.target.value); }} />
         </label>
@@ -142,84 +144,82 @@ export default function GuidedRuleBuilder({ toml, onChange }: GuidedRuleBuilderP
       {cards.map((card, index) => (
         <div key={index} className="dash-card" style={{ marginBottom: '0.75rem' }}>
           <div className="row" style={{ marginBottom: '0.6rem', flexWrap: 'nowrap' }}>
-            <span className="tag" style={{ fontWeight: 700 }}>Rule {index + 1}</span>
+            <span className="tag" style={{ fontWeight: 700 }}>{t('guided.ruleNumber').replace('{{n}}', String(index + 1))}</span>
             <input
               className="search-input mono"
               style={{ flex: 1, minWidth: 120 }}
-              placeholder="rule name (e.g. fastp_trim)"
+              placeholder={t('guided.ruleNamePlaceholder')}
               value={card.name}
               onChange={(e) => patchCard(index, { name: e.target.value })}
-              aria-label={`Rule ${index + 1} name`}
+              aria-label={t('guided.ruleNameAria').replace('{{n}}', String(index + 1))}
             />
-            <button className="icon-btn danger" title="Remove rule" aria-label={`Remove rule ${index + 1}`}
+            <button className="icon-btn danger" title={t('guided.removeRule')} aria-label={t('guided.removeRuleAria').replace('{{n}}', String(index + 1))}
               onClick={() => updateCards(cards.filter((_, i) => i !== index))}>
               <Trash2 size={13} />
             </button>
           </div>
 
           <label className="field" style={{ marginBottom: '0.6rem' }}>
-            <Glossary term="rule">Command</Glossary>
+            <Glossary term="rule">{t('guided.command')}</Glossary>
             <textarea
               className="mono"
               rows={2}
               style={{ resize: 'vertical' }}
-              placeholder="fastp -i {sample}.fq -o clean_{sample}.fq"
+              placeholder={t('guided.commandPlaceholder')}
               value={card.shell}
               onChange={(e) => patchCard(index, { shell: e.target.value })}
-              aria-label={`Rule ${index + 1} command`}
+              aria-label={t('guided.commandAria').replace('{{n}}', String(index + 1))}
             />
           </label>
 
           <div className="rule-fields">
             <label className="field">
-              <span>Inputs <span className="muted">(comma-separated, <Glossary term="wildcard">wildcards</Glossary> ok)</span></span>
+              <span>{t('guided.inputs')} <span className="muted">{t('guided.inputsHint')}</span></span>
               <input className="mono"
                 value={card.inputs.join(', ')}
                 onChange={(e) => patchCard(index, { inputs: splitList(e.target.value) })}
-                aria-label={`Rule ${index + 1} inputs`} />
+                aria-label={t('guided.inputsAria').replace('{{n}}', String(index + 1))} />
             </label>
             <label className="field">
-              Outputs
+              {t('guided.outputs')}
               <input className="mono"
                 value={card.outputs.join(', ')}
                 onChange={(e) => patchCard(index, { outputs: splitList(e.target.value) })}
-                aria-label={`Rule ${index + 1} outputs`} />
+                aria-label={t('guided.outputsAria').replace('{{n}}', String(index + 1))} />
             </label>
             <label className="field">
-              Threads
+              {t('guided.threads')}
               <input type="number" min={1}
                 value={card.threads}
                 onChange={(e) => patchCard(index, { threads: e.target.value })}
-                aria-label={`Rule ${index + 1} threads`} />
+                aria-label={t('guided.threadsAria').replace('{{n}}', String(index + 1))} />
             </label>
             <label className="field">
-              Memory
+              {t('guided.memory')}
               <input
-                placeholder="e.g. 4GB"
+                placeholder={t('guided.memoryPlaceholder')}
                 value={card.memory}
                 onChange={(e) => patchCard(index, { memory: e.target.value })}
-                aria-label={`Rule ${index + 1} memory`} />
+                aria-label={t('guided.memoryAria').replace('{{n}}', String(index + 1))} />
             </label>
             <label className="field">
-              Environment
+              {t('guided.environment')}
               <input className="mono"
-                placeholder="system | bioconda::fastp | conda::env"
+                placeholder={t('guided.environmentPlaceholder')}
                 value={card.environment}
                 onChange={(e) => patchCard(index, { environment: e.target.value })}
-                aria-label={`Rule ${index + 1} environment`} />
+                aria-label={t('guided.environmentAria').replace('{{n}}', String(index + 1))} />
             </label>
           </div>
         </div>
       ))}
 
       <button className="btn-sm" onClick={() => updateCards([...cards, { ...EMPTY_CARD }])}>
-        <Plus size={13} /> Add rule
+        <Plus size={13} /> {t('guided.addRule')}
       </button>
 
       <p className="muted" style={{ marginTop: '0.75rem' }}>
-        Every change is converted to workflow TOML immediately — switch to the canvas view to
-        see the <Glossary term="pipeline">pipeline</Glossary> graph or fine-tune advanced
-        options like <Glossary term="depends_on">depends_on</Glossary>.
+        {t('guided.hint')}
       </p>
     </div>
   );

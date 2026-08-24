@@ -157,6 +157,7 @@ impl Modify for SecurityAddon {
         crate::domains::observability::handlers::system_info,
         crate::domains::observability::handlers::runtime_metrics,
         crate::domains::observability::handlers::quota_status,
+        crate::domains::observability::handlers::update_quota_status,
         crate::domains::observability::handlers::get_audit_logs,
         crate::domains::observability::handlers::get_webhook_config,
         crate::domains::observability::handlers::put_webhook_config,

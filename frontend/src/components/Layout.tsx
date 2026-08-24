@@ -8,12 +8,13 @@ import { useServerVersion, fetchServerHealth } from '../api/version';
 import { useI18n } from '../context/I18n';
 
 function LicenseFooterLabel() {
+  const { t } = useI18n();
   const [label, setLabel] = useState<string>('');
   useEffect(() => {
     api.licenseStatus()
-      .then((l) => setLabel(l.license_type ? `${l.license_type} license` : 'academic license'))
-      .catch(() => setLabel('academic license'));
-  }, []);
+      .then((l) => setLabel(l.license_type ? t('layout.license').replace('{{type}}', l.license_type) : t('layout.academicLicense')))
+      .catch(() => setLabel(t('layout.academicLicense')));
+  }, [t]);
   return <span>{label}</span>;
 }
 
@@ -38,12 +39,14 @@ const nav: NavItem[] = [
 
 type ServerStatus = 'checking' | 'ok' | 'degraded' | 'down';
 
-const STATUS_TITLES: Record<ServerStatus, string> = {
-  checking: 'Checking server status...',
-  ok: 'Server connected',
-  degraded: 'Server degraded',
-  down: 'Server unreachable',
-};
+function useStatusTitles(t: (key: string) => string): Record<ServerStatus, string> {
+  return {
+    checking: t('status.checking'),
+    ok: t('status.ok'),
+    degraded: t('status.degraded'),
+    down: t('status.down'),
+  };
+}
 
 const STATUS_POLL_MS = 30000;
 
@@ -51,6 +54,7 @@ export default function Layout() {
   const [menuOpen, setMenuOpen] = useState(false);
   const version = useServerVersion();
   const { t, lang, setLang } = useI18n();
+  const STATUS_TITLES = useStatusTitles(t);
   const [theme, setThemeState] = useState<string>(
     () => localStorage.getItem('oxo_theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'),
   );
@@ -83,6 +87,19 @@ export default function Layout() {
   const [serverStatus, setServerStatus] = useState<ServerStatus>('checking');
   const session = usePipelineSession();
 
+  const handleSkipToContent = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    e.preventDefault();
+    const main = document.getElementById('main-content');
+    if (!main) return;
+    main.focus({ preventScroll: false });
+    main.scrollIntoView({ behavior: 'smooth' });
+    const previousTitle = document.title;
+    document.title = `${t('skip.toContent')} – ${previousTitle.replace(/^[^–]+ – /, '')}`;
+    window.setTimeout(() => {
+      document.title = previousTitle;
+    }, 1200);
+  };
+
   useEffect(() => {
     let cancelled = false;
     const check = async (fresh: boolean) => {
@@ -100,10 +117,17 @@ export default function Layout() {
 
   return (
     <div className="app-shell">
+      <a
+        href="#main-content"
+        className="skip-link"
+        onClick={handleSkipToContent}
+      >
+        {t('skip.toContent')}
+      </a>
       {/* Header */}
       <header className="app-header">
         <div className="header-left">
-          <button className="mobile-menu-btn" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle menu">
+          <button className="mobile-menu-btn" onClick={() => setMenuOpen(!menuOpen)} aria-label={t('layout.toggleMenu')}>
             {menuOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
           <FlaskConical size={20} />
@@ -123,7 +147,7 @@ export default function Layout() {
             {t('lang.toggle')}
           </button>
           <button className="btn-sm" onClick={toggleTheme}
-            title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}>
+            title={theme === 'dark' ? t('theme.light') : t('theme.dark')}>
             {theme === 'dark' ? '☀️' : '🌙'}
           </button>
           <span id="header-status" role="status" aria-label={STATUS_TITLES[serverStatus]} className={`status-dot ${serverStatus}`} title={STATUS_TITLES[serverStatus]} />
@@ -143,7 +167,7 @@ export default function Layout() {
               <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
                 <Icon size={18} /><span>{t(key)}</span>
                 {key === 'nav.runs' && session.state.activeRunId && (
-                  <span style={{ marginLeft: 'auto', width: 6, height: 6, borderRadius: '50%', background: 'var(--color-primary)', animation: 'pulse 1.5s infinite' }} title="Active run" />
+                  <span style={{ marginLeft: 'auto', width: 6, height: 6, borderRadius: '50%', background: 'var(--color-primary)', animation: 'pulse 1.5s infinite' }} title={t('layout.activeRun')} />
                 )}
               </NavLink>
             ))}
@@ -157,7 +181,7 @@ export default function Layout() {
           </div>
         </aside>
 
-        <main className="main-content">
+        <main id="main-content" tabIndex={-1} className="main-content">
           <ResultNotification />
           <Outlet />
         </main>
@@ -165,8 +189,8 @@ export default function Layout() {
 
       {/* Footer */}
       <footer className="app-footer">
-        <span>{version ? `oxo-flow v${version}` : 'oxo-flow'} — Academic License. Free for academic use. Commercial use requires authorization.</span>
-        <span>Contact: w_shixiang@163.com</span>
+        <span>{version ? `oxo-flow v${version}` : 'oxo-flow'} — {t('footer.tagline')}</span>
+        <span>{t('footer.contact')}: w_shixiang@163.com</span>
       </footer>
     </div>
   );

@@ -73,9 +73,19 @@ Returns real-time resource metrics: CPU%, memory (used/total/swap), active workf
 
 ### Audit Logs
 ```
-GET /api/audit?days=7
+GET /api/audit?days=7&page=1&per_page=50
 ```
-Returns structured audit entries: `{ entries: [{ timestamp, user, action, resource, result }], days }`. **Team/hpc modes: admin-only** (the trail spans every user's actions; personal mode keeps the localhost trust model).
+Returns paginated structured audit entries:
+```json
+{
+  "entries": [{ "timestamp", "user", "action", "resource", "result" }],
+  "days": 7,
+  "page": 1,
+  "per_page": 50,
+  "total": 128
+}
+```
+`page` defaults to 1 and `per_page` defaults to 50 (max 500). **Team/hpc modes: admin-only** (the trail spans every user's actions; personal mode keeps the localhost trust model).
 
 ### Server-Sent Events
 ```
@@ -487,7 +497,15 @@ immediate.
 
 Runs pre-flight the quota tracker with the workflow's declared threads and
 memory; over-limit requests get `429 QUOTA_EXCEEDED` with the violation
-list. Usage is visible at `GET /api/quota`.
+list.
+
+```
+GET  /api/quota           # current limits and usage
+PUT  /api/quota           # update limits (admin-only outside personal mode)
+```
+
+`PUT /api/quota` accepts `{ max_concurrent_runs, max_total_threads, max_total_memory_mb, max_runs_per_day }`.
+Usage is visible at `GET /api/quota`.
 
 ## Cluster Connections & Remote Execution
 

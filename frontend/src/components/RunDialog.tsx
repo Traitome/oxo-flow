@@ -45,7 +45,7 @@ export default function RunDialog({ onClose, onSubmit }: RunDialogProps) {
     <Modal onClose={onClose} labelledBy="run-dialog-title">
       <div className="inspector-header">
         <h3 id="run-dialog-title">{t('run.title')}</h3>
-        <button className="btn-sm" onClick={onClose} title="Close" aria-label="Close">
+        <button className="btn-sm" onClick={onClose} title={t('run.close')} aria-label={t('run.close')}>
           <X size={14} />
         </button>
       </div>
@@ -102,9 +102,7 @@ export default function RunDialog({ onClose, onSubmit }: RunDialogProps) {
           </label>
         )}
         <p className="run-dialog-hint">
-          Dry-Run produces the execution plan without running anything — the
-          engine's checkpoint rules decide what would re-run. Start with a
-          dry-run, then execute.
+          {t('run.hint')}
         </p>
       </div>
       <div className="modal-actions">
@@ -119,7 +117,7 @@ export default function RunDialog({ onClose, onSubmit }: RunDialogProps) {
           <CheckCircle size={14} /> {t('run.dryRun')}
         </button>
         <button className="btn-run" onClick={() => onSubmit(false, options())}>
-          <Play size={14} /> Run
+          <Play size={14} /> {t('run.runBtn')}
         </button>
       </div>
     </Modal>

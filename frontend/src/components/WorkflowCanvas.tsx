@@ -13,15 +13,17 @@ import {
   type Edge,
   type Node,
   type NodeProps,
+  type NodeTypes,
 } from '@xyflow/react';
 import { graphStratify, sugiyama } from 'd3-dag';
 import '@xyflow/react/dist/style.css';
 import { LayoutGrid } from 'lucide-react';
 import type { DagJson } from '../api/types';
+import { useI18n } from '../context/I18n';
 
 // ── Node card: a terminal snippet, because the subject's vernacular is code ──
 
-type RuleNodeData = Record<string, unknown> & {
+interface RuleNodeData extends Record<string, unknown> {
   label: string;
   environment: string;
   shell: string;
@@ -31,7 +33,7 @@ type RuleNodeData = Record<string, unknown> & {
   transform?: boolean;
   /** called on double-click (editable canvas only) */
   onEdit?: (name: string) => void;
-};
+}
 
 const ENV_LABELS: Record<string, string> = {
   system: 'system',
@@ -43,12 +45,22 @@ const ENV_LABELS: Record<string, string> = {
   modules: 'modules',
 };
 
-function RuleNodeCard({ data, selected }: NodeProps) {
+function RuleNodeCard({ data, selected }: NodeProps<Node<RuleNodeData>>) {
   const d = data as RuleNodeData;
+  const { t } = useI18n();
   return (
     <div
       className={`rf-rule-node ${d.status ? `node-status-${d.status}` : ''} ${selected ? 'selected' : ''}`}
+      role="button"
+      tabIndex={0}
+      aria-label={t('canvas.editRuleAria').replace('{{name}}', d.label)}
       onDoubleClick={(e) => {
+        e.stopPropagation();
+        d.onEdit?.(d.label);
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
         e.stopPropagation();
         d.onEdit?.(d.label);
       }}
@@ -57,7 +69,7 @@ function RuleNodeCard({ data, selected }: NodeProps) {
       <Handle type="target" position={Position.Left} className="rf-handle" />
       <div className="rf-rule-name">
         {d.label}
-        {d.transform && <span className="rf-transform-badge" title="Transform rule (split → map → combine)">⇄</span>}
+        {d.transform && <span className="rf-transform-badge" title={t('canvas.transformTitle')}>⇄</span>}
       </div>
       <div className="rf-rule-meta">
         <span className={`rf-env-dot rf-env-${d.environment}`} aria-hidden />
@@ -70,7 +82,7 @@ function RuleNodeCard({ data, selected }: NodeProps) {
   );
 }
 
-const nodeTypes = { rule: RuleNodeCard };
+const nodeTypes = { rule: RuleNodeCard } satisfies NodeTypes;
 
 // ── d3-dag auto-layout (layered Sugiyama; left-to-right) ──
 
@@ -145,6 +157,7 @@ export default function WorkflowCanvas({
   statusById,
   context = 'editor',
 }: WorkflowCanvasProps) {
+  const { t } = useI18n();
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<RuleNodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const lastNodeSet = useRef('');
@@ -249,7 +262,7 @@ export default function WorkflowCanvas({
   }, [dag, scopeKey, setNodes]);
 
   if (!dag || dag.nodes.length === 0) {
-    return <div className="empty-state">Enter valid TOML to see the DAG</div>;
+    return <div className="empty-state">{t('canvas.empty')}</div>;
   }
 
   return (
@@ -282,8 +295,8 @@ export default function WorkflowCanvas({
         {!editable && <MiniMap pannable zoomable className="rf-minimap" />}
       </ReactFlow>
       {context === 'editor' && (
-        <button className="rf-layout-btn" onClick={applyLayout} title="Auto-layout the DAG">
-          <LayoutGrid size={14} /> Auto layout
+        <button className="rf-layout-btn" onClick={applyLayout} title={t('canvas.autoLayoutTitle')}>
+          <LayoutGrid size={14} /> {t('canvas.autoLayout')}
         </button>
       )}
     </div>

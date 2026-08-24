@@ -24,7 +24,7 @@ export default function Login() {
       localStorage.setItem('oxo_user_id', username.trim());
       navigate('/');
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Login failed');
+      setError(err instanceof Error ? err.message : t('login.failed'));
     } finally {
       setLoading(false);
     }
@@ -58,10 +58,7 @@ export default function Login() {
             <KeyRound size={14} /> {loading ? t('login.signingIn') : t('login.submit')}
           </button>
           <p className="run-dialog-hint">
-            Credentials come from OXO_FLOW_ADMIN_PASSWORD / OXO_FLOW_USER_PASSWORD
-            / OXO_FLOW_VIEWER_PASSWORD, or from accounts created on the Users
-            page. Team/HPC servers require a session for protected endpoints;
-            personal mode does not need a login.
+            {t('login.hint')}
           </p>
         </form>
       </div>

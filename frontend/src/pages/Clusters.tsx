@@ -2,6 +2,15 @@ import { useEffect, useState } from 'react';
 import { Trash2, Server, Activity } from 'lucide-react';
 import { api } from '../api/client';
 import type { ClusterInfo } from '../api/types';
+import { useI18n } from '../context/I18n';
+
+// Defensive sanitizer for probe errors: if the backend leaks a hostname or
+// IP address in an error message, replace it with a generic token before
+// displaying it in the UI.
+const HOST_OR_IP_RE = /\b(?:\d{1,3}\.){3}\d{1,3}\b|(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b/g;
+function sanitizeClusterError(text: string): string {
+  return text.replace(HOST_OR_IP_RE, '[redacted]');
+}
 
 // Cluster connections (SSH endpoints) — the "app anywhere, cluster
 // elsewhere" configuration surface: define remote servers/clusters,
@@ -9,6 +18,7 @@ import type { ClusterInfo } from '../api/types';
 // them. Definitions can also be seeded from the platform config file
 // (oxo-flow.web.toml [[clusters]]), imported idempotently at startup.
 export default function Clusters() {
+  const { t } = useI18n();
   const [clusters, setClusters] = useState<ClusterInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -22,7 +32,7 @@ export default function Clusters() {
     api
       .listClusters()
       .then(setClusters)
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to load clusters'));
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : t('clusters.loadFailed')));
   };
   useEffect(reload, []);
 
@@ -42,38 +52,42 @@ export default function Clusters() {
         remote_dir: form.remote_dir.trim() || undefined,
         enabled: true,
       });
-      setNotice(`Cluster "${form.name.trim()}" saved.`);
+      setNotice(t('clusters.saved').replace('{{name}}', form.name.trim()));
       setForm({ ...form, id: '', name: '', ssh_host: '', ssh_user: '', ssh_key: '', remote_dir: '' });
       reload();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to save cluster');
+      setError(err instanceof Error ? err.message : t('clusters.saveFailed'));
     }
   };
 
   const handleProbe = async (id: string) => {
-    setProbeResults((prev) => ({ ...prev, [id]: { ok: false, text: 'Probing…' } }));
+    setProbeResults((prev) => ({ ...prev, [id]: { ok: false, text: t('clusters.probing') } }));
     try {
       const r = await api.probeCluster(id);
       const text = r.ok
-        ? `${r.hostname ?? ''} · scheduler: ${r.scheduler ?? 'none'}${r.version ? ` · ${r.version}` : ''} · ${r.duration_ms}ms`
-        : `Failed: ${r.error ?? 'unknown error'}`;
+        ? t('clusters.probeResult')
+            .replace('{{hostname}}', r.hostname ?? '')
+            .replace('{{scheduler}}', r.scheduler ?? 'none')
+            .replace('{{version}}', r.version ? ` · ${r.version}` : '')
+            .replace('{{duration}}', String(r.duration_ms))
+        : sanitizeClusterError(t('clusters.probeFailed').replace('{{error}}', r.error ?? t('common.unknownError')));
       setProbeResults((prev) => ({ ...prev, [id]: { ok: r.ok, text } }));
     } catch (err: unknown) {
       setProbeResults((prev) => ({
         ...prev,
-        [id]: { ok: false, text: err instanceof Error ? err.message : 'Probe failed' },
+        [id]: { ok: false, text: sanitizeClusterError(err instanceof Error ? err.message : t('clusters.loadFailed')) },
       }));
     }
   };
 
   const handleDelete = async (id: string, name: string) => {
-    if (!window.confirm(`Remove cluster "${name}"?`)) return;
+    if (!window.confirm(t('clusters.removeConfirm').replace('{{name}}', name))) return;
     try {
       await api.deleteCluster(id);
-      setNotice(`Cluster "${name}" removed.`);
+      setNotice(t('clusters.removed').replace('{{name}}', name));
       reload();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to remove cluster');
+      setError(err instanceof Error ? err.message : t('clusters.removeFailed'));
     }
   };
 
@@ -86,36 +100,32 @@ export default function Clusters() {
 
   return (
     <div className="page">
-      <h1 className="page-title">Clusters & Servers</h1>
-      <p className="page-subtitle">
-        SSH endpoints for remote clusters and servers — the web app can run
-        anywhere while execution targets these machines. The probe verifies
-        connectivity and detects the scheduler on the remote.
-      </p>
+      <h1 className="page-title">{t('clusters.title')}</h1>
+      <p className="page-subtitle">{t('clusters.subtitle')}</p>
 
       {notice && <div className="tool-palette-hint">{notice}</div>}
       {error && <div className="tool-palette-hint error">{error}</div>}
 
       <form onSubmit={handleSave} className="login-form" style={{ maxWidth: 860, margin: '0 0 1.5rem' }}>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {field('ID (stable key)', form.id, (v) => setForm({ ...form, id: v }), 'lab-slurm')}
-          {field('Name', form.name, (v) => setForm({ ...form, name: v }), 'Lab SLURM cluster')}
-          {field('SSH host', form.ssh_host, (v) => setForm({ ...form, ssh_host: v }), 'login.lab.example.edu')}
-          {field('SSH port', form.ssh_port, (v) => setForm({ ...form, ssh_port: v }), '22')}
-          {field('SSH user', form.ssh_user, (v) => setForm({ ...form, ssh_user: v }), 'bioinf')}
-          {field('SSH key path', form.ssh_key, (v) => setForm({ ...form, ssh_key: v }), '~/.ssh/id_ed25519')}
+          {field(t('clusters.id'), form.id, (v) => setForm({ ...form, id: v }), 'lab-slurm')}
+          {field(t('clusters.name'), form.name, (v) => setForm({ ...form, name: v }), 'Lab SLURM cluster')}
+          {field(t('clusters.sshHost'), form.ssh_host, (v) => setForm({ ...form, ssh_host: v }), 'login.lab.example.edu')}
+          {field(t('clusters.sshPort'), form.ssh_port, (v) => setForm({ ...form, ssh_port: v }), '22')}
+          {field(t('clusters.sshUser'), form.ssh_user, (v) => setForm({ ...form, ssh_user: v }), 'bioinf')}
+          {field(t('clusters.sshKey'), form.ssh_key, (v) => setForm({ ...form, ssh_key: v }), '~/.ssh/id_ed25519')}
           <label className="inspector-field" style={{ flex: 1, minWidth: 130 }}>
-            <span>Scheduler</span>
+            <span>{t('clusters.scheduler')}</span>
             <select value={form.scheduler} onChange={(e) => setForm({ ...form, scheduler: e.target.value })}>
               {['auto', 'slurm', 'pbs', 'lsf', 'sge'].map((s) => (
                 <option key={s} value={s}>{s}</option>
               ))}
             </select>
           </label>
-          {field('Remote dir', form.remote_dir, (v) => setForm({ ...form, remote_dir: v }), '~/oxo-flow-jobs')}
+          {field(t('clusters.remoteDir'), form.remote_dir, (v) => setForm({ ...form, remote_dir: v }), '~/oxo-flow-jobs')}
         </div>
         <button className="btn-run" type="submit" disabled={!form.id.trim() || !form.name.trim() || !form.ssh_host.trim()}>
-          <Server size={14} /> Save cluster
+          <Server size={14} /> {t('clusters.save')}
         </button>
       </form>
 
@@ -123,10 +133,10 @@ export default function Clusters() {
         <table className="data-table">
           <thead>
             <tr>
-              <th>Cluster</th>
-              <th>Endpoint</th>
-              <th>Scheduler</th>
-              <th>Probe</th>
+              <th>{t('clusters.table.cluster')}</th>
+              <th>{t('clusters.table.endpoint')}</th>
+              <th>{t('clusters.table.scheduler')}</th>
+              <th>{t('clusters.table.probe')}</th>
               <th></th>
             </tr>
           </thead>
@@ -150,12 +160,12 @@ export default function Clusters() {
                     </span>
                   ) : (
                     <button className="btn-sm" onClick={() => handleProbe(c.id)}>
-                      <Activity size={13} /> Probe
+                      <Activity size={13} /> {t('clusters.probe')}
                     </button>
                   )}
                 </td>
                 <td>
-                  <button className="icon-btn danger" title={`Remove ${c.name}`} aria-label={`Remove ${c.name}`} onClick={() => handleDelete(c.id, c.name)}>
+                  <button className="icon-btn danger" title={t('clusters.removeConfirm').replace('{{name}}', c.name)} aria-label={t('clusters.removeConfirm').replace('{{name}}', c.name)} onClick={() => handleDelete(c.id, c.name)}>
                     <Trash2 size={14} />
                   </button>
                 </td>
@@ -164,7 +174,7 @@ export default function Clusters() {
             {clusters.length === 0 && (
               <tr>
                 <td colSpan={5} style={{ textAlign: 'center', opacity: 0.6 }}>
-                  No clusters configured — add one above, or seed from oxo-flow.web.toml [[clusters]]
+                  {t('clusters.empty')}
                 </td>
               </tr>
             )}

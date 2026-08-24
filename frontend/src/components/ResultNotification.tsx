@@ -1,10 +1,12 @@
 import { usePipelineSession } from '../context/PipelineSession';
 import { X, ExternalLink } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { useI18n } from '../context/I18n';
 
 export default function ResultNotification() {
   const session = usePipelineSession();
   const navigate = useNavigate();
+  const { t } = useI18n();
   const result = session.state.lastRunResult;
   if (!result) return null;
 
@@ -29,11 +31,11 @@ export default function ResultNotification() {
       {result.runId && (
         <button className="btn-sm" style={{ background: 'transparent', border: `1px solid ${border}`, color }}
           onClick={() => navigate(`/runs/${result.runId}`)}>
-          <ExternalLink size={12} /> View
+          <ExternalLink size={12} /> {t('result.view')}
         </button>
       )}
       <button className="btn-sm" style={{ background: 'transparent', border: 'none', color, padding: '2px 4px', cursor: 'pointer' }}
-        onClick={() => session.setRunResult(null)} title="Dismiss" aria-label="Dismiss">
+        onClick={() => session.setRunResult(null)} title={t('result.dismiss')} aria-label={t('result.dismiss')}>
         <X size={14} />
       </button>
     </div>

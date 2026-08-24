@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { apiUrl } from '../api/client';
+import { useI18n } from '../context/I18n';
 
 interface Endpoint {
   method: string; path: string; summary: string; tags: string[];
@@ -20,6 +21,7 @@ function fetchOpenApiSpec(): Promise<Record<string, unknown>> {
 }
 
 export default function ApiDocs() {
+  const { t } = useI18n();
   const [spec, setSpec] = useState<Record<string, unknown> | null>(null);
   const [endpoints, setEndpoints] = useState<Endpoint[]>([]);
   const [search, setSearch] = useState('');
@@ -60,25 +62,25 @@ export default function ApiDocs() {
 
   return (
     <div className="page">
-      <h1 className="page-title">API Reference</h1>
+      <h1 className="page-title">{t('apiDocs.title')}</h1>
       <p className="page-subtitle" style={{ marginBottom: '1rem' }}>
         {endpoints.length > 0
-          ? `All ${endpoints.length} endpoints across ${tags.length} domains. `
-          : 'OpenAPI 3.1 spec with all documented endpoints. '}
-        Spec available at{' '}
+          ? `${t('apiDocs.endpointsCount').replace('{{count}}', String(endpoints.length)).replace('{{domains}}', String(tags.length))} `
+          : `${t('apiDocs.subtitle')} `}
+        {t('apiDocs.specLink')}{' '}
         <a href={openApiUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--color-primary)' }}>{openApiUrl}</a>.
       </p>
 
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
         <input
-          type="text" placeholder="Search endpoints..." value={search}
+          type="text" placeholder={t('apiDocs.searchPlaceholder')} value={search}
           onChange={(e) => setSearch(e.target.value)}
           style={{ flex: 1, minWidth: '200px', padding: '0.5rem 0.75rem', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', fontSize: '0.9rem', background: 'var(--color-bg)', color: 'var(--color-text)' }}
         />
         <select value={selectedTag} onChange={(e) => setSelectedTag(e.target.value)}
           style={{ padding: '0.5rem', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', fontSize: '0.9rem', background: 'var(--color-bg)', color: 'var(--color-text)' }}>
-          <option value="">All Domains</option>
-          {tags.map((t) => (<option key={t} value={t}>{t}</option>))}
+          <option value="">{t('apiDocs.allDomains')}</option>
+          {tags.map((tag) => (<option key={tag} value={tag}>{tag}</option>))}
         </select>
       </div>
 
@@ -93,11 +95,11 @@ export default function ApiDocs() {
         ))}
       </div>
 
-      {filtered.length === 0 && <div className="empty-state">No endpoints match</div>}
+      {filtered.length === 0 && <div className="empty-state">{t('apiDocs.empty')}</div>}
 
       {spec && (
         <details style={{ marginTop: '2rem' }}>
-          <summary style={{ cursor: 'pointer', fontSize: '0.85rem', color: 'var(--color-text-secondary)' }}>Raw OpenAPI Spec</summary>
+          <summary style={{ cursor: 'pointer', fontSize: '0.85rem', color: 'var(--color-text-secondary)' }}>{t('apiDocs.rawSpec')}</summary>
           <pre style={{ background: 'var(--color-bg-tertiary)', padding: '1rem', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem', fontFamily: 'var(--font-mono)', maxHeight: '400px', overflow: 'auto', marginTop: '0.5rem' }}>
             {JSON.stringify(spec, null, 2)}
           </pre>

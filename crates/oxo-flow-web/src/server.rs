@@ -503,6 +503,10 @@ pub fn build_router(mode: &str) -> Router {
         .route("/api/audit", get(observability::handlers::get_audit_logs))
         .route("/api/quota", get(observability::handlers::quota_status))
         .route(
+            "/api/quota",
+            put(observability::handlers::update_quota_status),
+        )
+        .route(
             "/api/webhook",
             get(observability::handlers::get_webhook_config),
         )

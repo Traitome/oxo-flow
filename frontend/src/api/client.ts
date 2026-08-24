@@ -82,7 +82,10 @@ export const api = {
   health: () => get<HealthResponse>('/api/health'),
   system: () => get<SystemInfo>('/api/system'),
   metrics: () => get<RuntimeMetrics>('/api/metrics'),
-  audit: (days = 7) => get<AuditLogResponse>(`/api/audit?days=${days}`),
+  audit: (days = 7, page = 1, perPage = 50) =>
+    get<AuditLogResponse>(`/api/audit?days=${days}&page=${page}&per_page=${perPage}`),
+  updateQuota: (config: { max_concurrent_runs: number; max_total_threads: number; max_total_memory_mb: number; max_runs_per_day: number }) =>
+    put<{ updated: boolean; limits: typeof config }>('/api/quota', config),
   listClusters: () => get<ClusterInfo[]>('/api/clusters'),
   upsertCluster: (cluster: ClusterUpsert) => post<ClusterInfo>('/api/clusters', cluster),
   deleteCluster: (id: string) => del<{ deleted: string }>(`/api/clusters/${id}`),

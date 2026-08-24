@@ -82,6 +82,9 @@ pub struct AuditLogQuery {
 pub struct AuditLogResponse {
     pub entries: Vec<AuditEntry>,
     pub days: u8,
+    pub page: u32,
+    pub per_page: u32,
+    pub total: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
@@ -238,10 +241,14 @@ mod tests {
                 result: "success".into(),
             }],
             days: 7,
+            page: 1,
+            per_page: 50,
+            total: 1,
         };
         let json = serde_json::to_string(&resp).unwrap();
         let back: AuditLogResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(back.days, 7);
+        assert_eq!(back.total, 1);
     }
 
     #[test]

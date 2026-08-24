@@ -17,10 +17,10 @@ type LandingState =
 export default function Share() {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
-  const { lang } = useI18n();
+  const { lang, t } = useI18n();
   const locale = getLocale(lang);
   const [state, setState] = useState<LandingState>(() =>
-    token ? { phase: 'loading' } : { phase: 'error', message: 'Missing share token.' },
+    token ? { phase: 'loading' } : { phase: 'error', message: t('share.missingToken') },
   );
   const [importing, setImporting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -31,10 +31,10 @@ export default function Share() {
       .shareLanding(token)
       .then((data) => setState({ phase: 'ready', data }))
       .catch((err: unknown) => {
-        const msg = err instanceof ApiError ? err.message : 'Share not found or expired.';
+        const msg = err instanceof ApiError ? err.message : t('share.notFound');
         setState({ phase: 'error', message: msg });
       });
-  }, [token]);
+  }, [token, t]);
 
   const handleImport = async () => {
     if (!token) return;
@@ -44,10 +44,10 @@ export default function Share() {
       // the token locally.
       const url = `oxo+https://${window.location.host}/share/${token}`;
       const result = await api.importPipeline(url);
-      setNotice(`Imported as a new pipeline.`);
+      setNotice(t('share.imported'));
       navigate(`/editor?pipeline=${result.pipeline_id}`);
     } catch {
-      setNotice('Import failed — you may need to sign in first.');
+      setNotice(t('share.importFailed'));
       navigate('/login');
     } finally {
       setImporting(false);
@@ -57,14 +57,13 @@ export default function Share() {
   return (
     <div className="page" style={{ maxWidth: 760, margin: '0 auto', padding: '2rem 1rem' }}>
       <div style={{ marginBottom: '1.5rem' }}>
-        <h1 style={{ fontSize: '1.5rem', marginBottom: '0.25rem' }}>oxo-flow · Shared Pipeline</h1>
+        <h1 style={{ fontSize: '1.5rem', marginBottom: '0.25rem' }}>oxo-flow · {t('share.title')}</h1>
         <p style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)' }}>
-          A pipeline shared from an oxo-flow workspace. You can inspect it here and import it
-          into your own workspace to run it.
+          {t('share.subtitle')}
         </p>
       </div>
 
-      {state.phase === 'loading' && <div className="empty-state">Loading shared pipeline…</div>}
+      {state.phase === 'loading' && <div className="empty-state">{t('share.loading')}</div>}
 
       {state.phase === 'error' && (
         <div className="empty-state" style={{ color: 'var(--color-error)' }}>{state.message}</div>
@@ -77,18 +76,18 @@ export default function Share() {
               <div>
                 <h2 style={{ fontSize: '1.15rem' }}>{state.data.pipeline.name}</h2>
                 <div style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>
-                  Version {state.data.pipeline.version}
+                  {t('dashboard.version')} {state.data.pipeline.version}
                   {' · '}{state.data.pipeline.rules_count} rule{state.data.pipeline.rules_count === 1 ? '' : 's'}
-                  {state.data.owner ? ` · shared by ${state.data.owner}` : ''}
+                  {state.data.owner ? ` · ${t('pipelines.share')} ${state.data.owner}` : ''}
                 </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'flex-end' }}>
                 <button className="btn-run" onClick={handleImport} disabled={importing}>
-                  {importing ? 'Importing…' : '⬇ Import into my workspace'}
+                  {importing ? t('share.importing') : t('share.import')}
                 </button>
                 {state.data.expires_at && (
                   <span style={{ fontSize: '0.75rem', color: 'var(--color-text-tertiary)' }}>
-                    expires {new Date(state.data.expires_at).toLocaleDateString(locale)}
+                    {t('share.expires').replace('{{date}}', new Date(state.data.expires_at).toLocaleDateString(locale))}
                   </span>
                 )}
               </div>
@@ -97,7 +96,7 @@ export default function Share() {
 
           {state.data.recent_run && (
             <div className="dash-card" style={{ marginTop: '0.75rem' }}>
-              <h4 style={{ fontSize: '0.85rem', marginBottom: '6px' }}>Most recent run</h4>
+              <h4 style={{ fontSize: '0.85rem', marginBottom: '6px' }}>{t('share.recentRun')}</h4>
               <span className={`status-badge ${state.data.recent_run.status}`}>
                 {state.data.recent_run.status}
               </span>
@@ -110,7 +109,7 @@ export default function Share() {
           )}
 
           <div className="dash-card" style={{ marginTop: '0.75rem' }}>
-            <h4 style={{ fontSize: '0.85rem', marginBottom: '6px' }}>Pipeline shape</h4>
+            <h4 style={{ fontSize: '0.85rem', marginBottom: '6px' }}>{t('share.pipelineShape')}</h4>
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
               {state.data.dag.map((rule, i) => (
                 <span key={rule} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -122,7 +121,7 @@ export default function Share() {
           </div>
 
           <details className="dash-card" style={{ marginTop: '0.75rem' }}>
-            <summary style={{ cursor: 'pointer', fontSize: '0.85rem' }}>View pipeline definition (TOML)</summary>
+            <summary style={{ cursor: 'pointer', fontSize: '0.85rem' }}>{t('share.viewToml')}</summary>
             <pre className="log-view" style={{ marginTop: '8px', maxHeight: 320 }}>
               {state.data.toml_content}
             </pre>
