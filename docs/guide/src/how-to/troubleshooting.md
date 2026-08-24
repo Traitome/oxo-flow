@@ -155,7 +155,7 @@ convention.
 **Solution**:
 
 1. Check that Docker is installed and running: `docker info`
-2. Verify the image reference: `docker pull biocontainers/bwa:0.7.17`
+2. Verify the image reference: `docker pull quay.io/biocontainers/bwa:0.7.19--h577a1d6_1`
 3. Check for authentication if using private registries
 
 ### HPC modules not available
