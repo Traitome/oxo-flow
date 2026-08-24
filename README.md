@@ -11,7 +11,7 @@
 [![Crates.io](https://img.shields.io/crates/v/oxo-flow-core?label=crates.io&style=flat-square)](https://crates.io/crates/oxo-flow-core)
 [![bioconda](https://anaconda.org/bioconda/oxo-flow-cli/badges/version.svg)](https://bioconda.github.io/recipes/oxo-flow-cli/README.html)
 [![MSRV](https://img.shields.io/badge/MSRV-1.97.1-orange?style=flat-square)](rust-toolchain.toml)
-[![Docs](https://img.shields.io/badge/docs-guide-blue?style=flat-square)](https://traitome.github.io/oxo-flow/documentation/)
+[![Docs](https://img.shields.io/badge/docs-guide-blue?style=flat-square)](https://traitome.github.io/oxo-flow/latest/)
 [![License](https://img.shields.io/badge/license-Apache%202.0%20%7C%20Dual-blue?style=flat-square)](#license)
 [![Rust](https://img.shields.io/badge/rust-2024_edition-orange?style=flat-square)](https://doc.rust-lang.org/edition-guide/)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey?style=flat-square)](#quick-start)
@@ -21,7 +21,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/Traitome/oxo-flow?style=flat-square)](https://github.com/Traitome/oxo-flow/stargazers)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Traitome/oxo-flow)
 
-[Documentation](https://traitome.github.io/oxo-flow/documentation/) · [Workflow Gallery](https://traitome.github.io/oxo-flow/documentation/gallery/) · [Community](https://oxo-flow-community.github.io/) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+[Documentation](https://traitome.github.io/oxo-flow/latest/) · [Workflow Gallery](https://traitome.github.io/oxo-flow/latest/gallery/) · [Community](https://oxo-flow-community.github.io/) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
 </div>
 
@@ -70,7 +70,7 @@ oxo-flow is built on five principles:
 
 ## Workflow Gallery
 
-Learn oxo-flow incrementally with curated, validated example workflows — from a one-rule hello-world to production-grade pipelines. Every workflow passes `oxo-flow validate` and is tested in CI. See the [Workflow Gallery](https://traitome.github.io/oxo-flow/documentation/gallery/) for the full catalog with detailed explanations, DAG visualizations, and CLI output.
+Learn oxo-flow incrementally with curated, validated example workflows — from a one-rule hello-world to production-grade pipelines. Every workflow passes `oxo-flow validate` and is tested in CI. See the [Workflow Gallery](https://traitome.github.io/oxo-flow/latest/gallery/) for the full catalog with detailed explanations, DAG visualizations, and CLI output.
 
 ## Quick Start
 
@@ -200,11 +200,11 @@ shell = "bwa-mem2 mem -t {threads} {config.reference} {input[0]} {input[1]} | sa
 docker = "biocontainers/bwa-mem2:2.2.1"
 ```
 
-Wildcards like `{sample}` expand automatically via input file discovery. Features include reference directory conventions, environment groups, optional rules, and directory inputs. See the full [Workflow Format Specification](https://traitome.github.io/oxo-flow/documentation/reference/workflow-format/) for details.
+Wildcards like `{sample}` expand automatically via input file discovery. Features include reference directory conventions, environment groups, optional rules, and directory inputs. See the full [Workflow Format Specification](https://traitome.github.io/oxo-flow/latest/reference/workflow-format/) for details.
 
 ## CLI Commands
 
-The `oxo-flow` binary provides **29 subcommands** covering the complete workflow lifecycle. See the full [CLI Reference](https://traitome.github.io/oxo-flow/documentation/commands/run/) for details.
+The `oxo-flow` binary provides **29 subcommands** covering the complete workflow lifecycle. See the full [CLI Reference](https://traitome.github.io/oxo-flow/latest/commands/run/) for details.
 
 | Category | Commands |
 |----------|----------|
@@ -215,11 +215,11 @@ The `oxo-flow` binary provides **29 subcommands** covering the complete workflow
 | **Deployment** | `serve`, `cluster`, `publish`, `pull` |
 | **AI & System** | `ai`, `completions`, `license` |
 
-See the full [CLI Reference](https://traitome.github.io/oxo-flow/documentation/commands/run/) for detailed usage of each subcommand.
+See the full [CLI Reference](https://traitome.github.io/oxo-flow/latest/commands/run/) for detailed usage of each subcommand.
 
 ## Web API
 
-The `oxo-flow serve` command starts an [axum](https://github.com/tokio-rs/axum)-powered REST server with **50+ endpoints** across 7 domains (observability, pipeline, execution, AI, auth, data, ops). Full API reference at the [OpenAPI 3.1 spec](https://traitome.github.io/oxo-flow/documentation/reference/api/).
+The `oxo-flow serve` command starts an [axum](https://github.com/tokio-rs/axum)-powered REST server with **50+ endpoints** across 7 domains (observability, pipeline, execution, AI, auth, data, ops). Full API reference at the [OpenAPI 3.1 spec](https://traitome.github.io/oxo-flow/latest/reference/api/).
 
 
 oxo-flow is organized as a Cargo workspace with four crates:
@@ -285,17 +285,17 @@ oxo-flow serve --mode hpc --scheduler slurm
 
 ## Documentation
 
-Comprehensive documentation is available at **[traitome.github.io/oxo-flow/documentation/](https://traitome.github.io/oxo-flow/documentation/)**.
+Comprehensive documentation is available at **[traitome.github.io/oxo-flow/latest/](https://traitome.github.io/oxo-flow/latest/)**.
 
 ### 📖 Documentation Quick Links
 
 | If you are... | Recommended Start |
 |---|---|
-| **New to oxo-flow** | [Quick Start](https://traitome.github.io/oxo-flow/documentation/tutorials/quickstart/) · [First Workflow](https://traitome.github.io/oxo-flow/documentation/tutorials/first-workflow/) |
-| **A Bioinformatician** | [Workflow Gallery](https://traitome.github.io/oxo-flow/documentation/gallery/) |
-| **A Pipeline Engineer** | [Workflow Format Specification](https://traitome.github.io/oxo-flow/documentation/reference/workflow-format/) · [CLI Reference](https://traitome.github.io/oxo-flow/documentation/commands/run/) |
-| **A DevOps/Cloud Admin** | [Environment Management](https://traitome.github.io/oxo-flow/documentation/tutorials/environment-management/) · [Running on Cluster](https://traitome.github.io/oxo-flow/documentation/how-to/run-on-cluster/) |
-| **A Bioinformatics Core** | [Workflow Gallery](https://traitome.github.io/oxo-flow/documentation/gallery/) · [Environment Management](https://traitome.github.io/oxo-flow/documentation/tutorials/environment-management/) |
+| **New to oxo-flow** | [Quick Start](https://traitome.github.io/oxo-flow/latest/tutorials/quickstart/) · [First Workflow](https://traitome.github.io/oxo-flow/latest/tutorials/first-workflow/) |
+| **A Bioinformatician** | [Workflow Gallery](https://traitome.github.io/oxo-flow/latest/gallery/) |
+| **A Pipeline Engineer** | [Workflow Format Specification](https://traitome.github.io/oxo-flow/latest/reference/workflow-format/) · [CLI Reference](https://traitome.github.io/oxo-flow/latest/commands/run/) |
+| **A DevOps/Cloud Admin** | [Environment Management](https://traitome.github.io/oxo-flow/latest/tutorials/environment-management/) · [Running on Cluster](https://traitome.github.io/oxo-flow/latest/how-to/run-on-cluster/) |
+| **A Bioinformatics Core** | [Workflow Gallery](https://traitome.github.io/oxo-flow/latest/gallery/) · [Environment Management](https://traitome.github.io/oxo-flow/latest/tutorials/environment-management/) |
 
 MkDocs source lives under [`docs/guide/src/`](docs/guide/src/).
 
@@ -378,7 +378,7 @@ If you use oxo-flow in academic research, please cite:
 
 - 🐛 **Bug reports** — [GitHub Issues](https://github.com/Traitome/oxo-flow/issues) (use [bug report template](.github/ISSUE_TEMPLATE/bug_report.md))
 - 💡 **Feature requests** — [GitHub Issues](https://github.com/Traitome/oxo-flow/issues) (use [feature request template](.github/ISSUE_TEMPLATE/feature_request.md))
-- 📖 **Documentation** — [traitome.github.io/oxo-flow/documentation/](https://traitome.github.io/oxo-flow/documentation/)
+- 📖 **Documentation** — [traitome.github.io/oxo-flow/latest/](https://traitome.github.io/oxo-flow/latest/)
 - ❓ **Questions** — [Ask DeepWiki](https://deepwiki.com/Traitome/oxo-flow)
 
 ### 🧪 Real-World Feedback

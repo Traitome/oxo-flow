@@ -231,7 +231,7 @@ pub async fn ai_setup_command() -> Result<()> {
         println!("  Or edit the config file directly:");
         println!("    {}", "~/.oxo-flow/ai_config.json".dimmed());
         println!();
-        println!("  See docs: https://traitome.github.io/oxo-flow/documentation/reference/ai-cli/");
+        println!("  See docs: https://traitome.github.io/oxo-flow/latest/reference/ai-cli/");
         return Ok(());
     }
 

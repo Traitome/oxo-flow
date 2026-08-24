@@ -1,5 +1,5 @@
 site_name: "oxo-flow"
-site_url: https://traitome.github.io/oxo-flow/documentation/
+site_url: https://traitome.github.io/oxo-flow/
 site_description: "oxo-flow Documentation — Rust-native bioinformatics pipeline engine"
 repo_url: https://github.com/Traitome/oxo-flow
 repo_name: Traitome/oxo-flow
@@ -95,6 +95,11 @@ markdown_extensions:
   - tables
 
 extra:
+  version:
+    # mike-based doc versioning (issue #176): every release tag gets a
+    # frozen version, `latest` aliases the newest release, main pushes
+    # update `dev`. The Material theme renders the version selector.
+    provider: mike
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/Traitome/oxo-flow
