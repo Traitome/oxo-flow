@@ -67,7 +67,7 @@ output = ["results/{sample}.sc_report.html"]
 description = "Generate single-cell analysis report"
 shell = """
 mkdir -p results
-Rscript -e "rmarkdown::render('templates/sc_report.Rmd', output_file='{output[0]}')"
+Rscript -e "rmarkdown::render('templates/sc_report.Rmd', output_file='{output[0]}', params=list(sample='{sample}', analysis_dir='analysis/{sample}/'))"
 """
 
 [rules.environment]
