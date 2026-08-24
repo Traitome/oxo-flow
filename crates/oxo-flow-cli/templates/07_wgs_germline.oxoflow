@@ -52,7 +52,8 @@ output = ["aligned/{sample}.sorted.bam"]
 description = "Paired-end alignment with BWA-MEM2 and coordinate sorting"
 shell = """
 mkdir -p aligned
-bwa-mem2 mem -M -t {threads} -R '@RG\tID:{sample}\tSM:{sample}\tLB:WGS\tPL:ILLUMINA\tPU:{sample}' \
+rg=$(printf '@RG\tID:%s\tSM:%s\tLB:WGS\tPL:ILLUMINA\tPU:%s' '{sample}' '{sample}' '{sample}')
+bwa-mem2 mem -M -t {threads} -R "$rg" \
     {config.reference} {input[0]} {input[1]} \
     | samtools sort -@ 4 -m 2G -o {output[0]}
 samtools index {output[0]}
@@ -74,7 +75,7 @@ output = ["dedup/{sample}.dedup.bam", "dedup/{sample}.dedup.metrics.txt"]
 description = "Mark PCR and optical duplicates"
 shell = """
 mkdir -p dedup
-gatk MarkDuplicates \
+gatk MarkDuplicates --VALIDATION_STRINGENCY SILENT \
     -I {input[0]} \
     -O {output[0]} \
     -M {output[1]} \
@@ -95,14 +96,14 @@ output = ["bqsr/{sample}.recal.bam"]
 description = "Base quality score recalibration (BQSR)"
 shell = """
 mkdir -p bqsr
-gatk BaseRecalibrator \
+gatk BaseRecalibrator --read-validation-stringency SILENT \
     -I {input[0]} -R {config.reference} \
     --known-sites {config.known_sites} \
     --known-sites {config.thousand_g} \
     --known-sites {config.known_indels} \
     -O bqsr/{sample}.recal_data.table
 
-gatk ApplyBQSR \
+gatk ApplyBQSR --read-validation-stringency SILENT \
     -I {input[0]} -R {config.reference} \
     --bqsr-recal-file bqsr/{sample}.recal_data.table \
     -O {output[0]}
@@ -122,7 +123,7 @@ output = ["variants/{sample}.g.vcf.gz"]
 description = "Per-sample variant calling in GVCF mode"
 shell = """
 mkdir -p variants
-gatk HaplotypeCaller \
+gatk HaplotypeCaller --read-validation-stringency SILENT \
     -I {input[0]} -R {config.reference} \
     -O {output[0]} \
     -ERC GVCF \

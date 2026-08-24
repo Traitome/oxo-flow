@@ -36,7 +36,8 @@ output = ["wgs_aligned/{sample}.sorted.bam"]
 description = "WGS read alignment with BWA-MEM2"
 shell = """
 mkdir -p wgs_aligned
-bwa-mem2 mem -M -t {threads} -R '@RG\tID:{sample}\tSM:{sample}\tLB:WGS\tPL:ILLUMINA' \
+rg=$(printf '@RG\tID:%s\tSM:%s\tLB:WGS\tPL:ILLUMINA' '{sample}' '{sample}')
+bwa-mem2 mem -M -t {threads} -R "$rg" \
     {config.reference} {input[0]} {input[1]} \
     | samtools sort -@ 4 -o {output[0]}
 samtools index {output[0]}

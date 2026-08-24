@@ -80,7 +80,8 @@ input = [
 ]
 output = ["aligned/{sample}.sorted.bam"]
 shell = '''
-bwa-mem2 mem -t {threads} -R '@RG\tID:{sample}\tSM:{sample}\tPL:ILLUMINA' {config.reference} {input[0]} {input[1]} | samtools sort -@ 4 -o {output[0]}
+rg=$(printf '@RG\tID:%s\tSM:%s\tPL:ILLUMINA' '{sample}' '{sample}')
+bwa-mem2 mem -t {threads} -R "$rg" {config.reference} {input[0]} {input[1]} | samtools sort -@ 4 -o {output[0]}
 samtools index {output[0]}
 '''
 description = "Read alignment to reference genome"
@@ -102,7 +103,7 @@ output = [
     "dedup/{sample}.metrics.txt",
 ]
 shell = """
-gatk MarkDuplicates -I {input[0]} -O {output[0]} -M {output[1]} --CREATE_INDEX true
+gatk MarkDuplicates --VALIDATION_STRINGENCY SILENT -I {input[0]} -O {output[0]} -M {output[1]} --CREATE_INDEX true
 """
 description = "Mark PCR duplicate reads"
 
@@ -118,7 +119,7 @@ name = "base_recalibrator"
 input = ["dedup/{sample}.dedup.bam"]
 output = ["recal/{sample}.recal_data.table"]
 shell = """
-gatk BaseRecalibrator -I {input[0]} -R {config.reference} --known-sites {config.known_sites} -O {output[0]}
+gatk BaseRecalibrator --read-validation-stringency SILENT -I {input[0]} -R {config.reference} --known-sites {config.known_sites} -O {output[0]}
 """
 description = "Base quality score recalibration table"
 
@@ -137,7 +138,7 @@ input = [
 ]
 output = ["recal/{sample}.recal.bam"]
 shell = """
-gatk ApplyBQSR -I {input[0]} -R {config.reference} --bqsr-recal-file {input[1]} -O {output[0]}
+gatk ApplyBQSR --read-validation-stringency SILENT -I {input[0]} -R {config.reference} --bqsr-recal-file {input[1]} -O {output[0]}
 """
 description = "Apply base quality score recalibration"
 
@@ -153,7 +154,7 @@ name = "haplotype_caller"
 input = ["recal/{sample}.recal.bam"]
 output = ["variants/{sample}.g.vcf.gz"]
 shell = """
-gatk HaplotypeCaller -R {config.reference} -I {input[0]} -O {output[0]} -ERC GVCF --native-pair-hmm-threads {threads}
+gatk HaplotypeCaller --read-validation-stringency SILENT -R {config.reference} -I {input[0]} -O {output[0]} -ERC GVCF --native-pair-hmm-threads {threads}
 """
 description = "Germline variant calling"
 
