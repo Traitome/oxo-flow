@@ -100,8 +100,14 @@ impl Orchestrator {
             if let Some(tool_calls) = &response.tool_calls
                 && !tool_calls.is_empty()
             {
-                // Record assistant's tool call request
-                messages.push(Message::assistant_with_tools(tool_calls.clone()));
+                // Record assistant's tool call request, preserving any
+                // reasoning content that must be echoed back on later turns
+                // (DeepSeek-style reasoning models require this).
+                let rc = response.reasoning_content.as_deref().unwrap_or("");
+                messages.push(Message::assistant_with_tools_and_reasoning(
+                    tool_calls.clone(),
+                    rc,
+                ));
 
                 if let Some(sink) = &mut sink {
                     sink(AgentEvent::Status("executing tools".into()));
@@ -239,10 +245,14 @@ impl Orchestrator {
                         validation.errors.join("\n")
                     );
                     messages.push(Message::user(&feedback));
-                    messages.push(Message::assistant(&format!(
-                        "The previous output failed validation. Here are the issues:\n{}",
-                        validation.errors.join("\n")
-                    )));
+                    let rc = response.reasoning_content.as_deref().unwrap_or("");
+                    messages.push(Message::assistant_with_reasoning(
+                        &format!(
+                            "The previous output failed validation. Here are the issues:\n{}",
+                            validation.errors.join("\n")
+                        ),
+                        rc,
+                    ));
                     // Continue loop — model will fix
                     continue;
                 }

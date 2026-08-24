@@ -479,6 +479,7 @@ fn parse_claude_response(json: &serde_json::Value) -> Result<AiResponse, AiError
 
     Ok(AiResponse {
         content,
+        reasoning_content: None,
         tool_calls: if tool_calls.is_empty() {
             None
         } else {
@@ -548,6 +549,11 @@ impl OpenAiBackend {
                     },
                     "content": m.content,
                 });
+                // DeepSeek reasoning models require the assistant's reasoning
+                // content to be echoed back verbatim on subsequent calls.
+                if let Some(ref rc) = m.reasoning_content {
+                    obj["reasoning_content"] = serde_json::Value::String(rc.clone());
+                }
                 if let Some(ref tc) = m.tool_calls {
                     obj["tool_calls"] = tool_calls_to_openai(tc);
                 }
@@ -633,6 +639,10 @@ fn parse_openai_response(json: &serde_json::Value, label: &str) -> Result<AiResp
 
     let message = &choice["message"];
     let content = message["content"].as_str().map(String::from);
+    let reasoning_content = message["reasoning_content"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(String::from);
     let finish_reason = choice["finish_reason"]
         .as_str()
         .unwrap_or("stop")
@@ -651,6 +661,7 @@ fn parse_openai_response(json: &serde_json::Value, label: &str) -> Result<AiResp
 
     Ok(AiResponse {
         content,
+        reasoning_content,
         tool_calls,
         usage,
         finish_reason,
@@ -768,6 +779,7 @@ impl OllamaBackend {
 
         Ok(AiResponse {
             content,
+            reasoning_content: None,
             tool_calls: None, // Ollama tool support varies by model; start with text-only
             usage: Usage::default(), // Ollama doesn't report token counts
             finish_reason: if done { "stop".into() } else { "length".into() },
@@ -891,6 +903,7 @@ impl OpenAiBackend {
             Message {
                 role: MessageRole::System,
                 content: system.to_string(),
+                reasoning_content: None,
                 tool_calls: None,
                 tool_call_id: None,
                 name: None,
@@ -898,6 +911,7 @@ impl OpenAiBackend {
             Message {
                 role: MessageRole::User,
                 content: user.to_string(),
+                reasoning_content: None,
                 tool_calls: None,
                 tool_call_id: None,
                 name: None,
