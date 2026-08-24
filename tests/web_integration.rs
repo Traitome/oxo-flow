@@ -1263,10 +1263,17 @@ async fn team_mode_run_ownership_isolation() {
     let bob = server.login(&client, "bob", "user-secret").await;
 
     // Alice creates a run — the row must be attributed to alice's users.id.
+    // A slow shell keeps the run executing while the admin cancel below
+    // lands: ISO_WORKFLOW completes in milliseconds and on fast runners
+    // the cancel then hits an already-terminal run (409 flake, seen in
+    // the v0.15.0 tag CI).
+    const SLOW: &str = "[workflow]\nname = \"iso-slow\"\n\n\
+         [[rules]]\nname = \"wait\"\noutput = [\"later.txt\"]\n\
+         shell = \"sleep 30; echo hi > {output}\"\n";
     let created: serde_json::Value = client
         .post(format!("{base}/api/runs"))
         .bearer_auth(&alice)
-        .json(&serde_json::json!({"toml_content": ISO_WORKFLOW}))
+        .json(&serde_json::json!({"toml_content": SLOW}))
         .send()
         .await
         .unwrap()
