@@ -715,12 +715,13 @@ impl StorageBackend for SqliteBackend {
         };
 
         sqlx::query(
-            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, status, phase, pid, workdir, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, pid, workdir, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&row.id)
         .bind(&row.user_id)
         .bind(&row.pipeline_id)
         .bind(&row.pipeline_snapshot)
+        .bind(&row.workflow_name)
         .bind(&row.status)
         .bind(&row.phase)
         .bind(row.pid)

@@ -586,93 +586,13 @@ pub struct ApiError {
     pub body: ErrorResponse,
 }
 
-#[allow(dead_code)]
 impl ApiError {
-    /// Map an HTTP status code to a machine-readable error code.
-    fn code_for_status(status: StatusCode) -> &'static str {
-        match status {
-            StatusCode::BAD_REQUEST => "BAD_REQUEST",
-            StatusCode::UNAUTHORIZED => "AUTH_REQUIRED",
-            StatusCode::NOT_FOUND => "NOT_FOUND",
-            StatusCode::UNPROCESSABLE_ENTITY => "UNPROCESSABLE_ENTITY",
-            StatusCode::TOO_MANY_REQUESTS => "RATE_LIMITED",
-            StatusCode::INTERNAL_SERVER_ERROR => "INTERNAL_ERROR",
-            StatusCode::CONFLICT => "CONFLICT",
-            _ => "UNKNOWN_ERROR",
-        }
-    }
-
-    /// Create an ApiError with an inferred code from the HTTP status.
-    fn new(status: StatusCode, message: impl Into<String>) -> Self {
-        Self {
-            status,
-            body: ErrorResponse {
-                code: Self::code_for_status(status).to_string(),
-                message: message.into(),
-                detail: None,
-                suggestion: None,
-            },
-        }
-    }
-
-    /// Create a BAD_REQUEST error.
-    fn bad_request(error: impl Into<String>, detail: impl Into<Option<String>>) -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            body: ErrorResponse {
-                code: "BAD_REQUEST".to_string(),
-                message: error.into(),
-                detail: detail.into(),
-                suggestion: None,
-            },
-        }
-    }
-
-    /// Create an UNPROCESSABLE_ENTITY error.
-    fn unprocessable(error: impl Into<String>, detail: impl Into<Option<String>>) -> Self {
-        Self {
-            status: StatusCode::UNPROCESSABLE_ENTITY,
-            body: ErrorResponse {
-                code: "UNPROCESSABLE_ENTITY".to_string(),
-                message: error.into(),
-                detail: detail.into(),
-                suggestion: None,
-            },
-        }
-    }
-
-    /// Create an UNAUTHORIZED error.
-    fn unauthorized(error: impl Into<String>, detail: impl Into<Option<String>>) -> Self {
-        Self {
-            status: StatusCode::UNAUTHORIZED,
-            body: ErrorResponse {
-                code: "AUTH_REQUIRED".to_string(),
-                message: error.into(),
-                detail: detail.into(),
-                suggestion: None,
-            },
-        }
-    }
-
     /// Create a NOT_FOUND error.
     fn not_found(error: impl Into<String>, detail: impl Into<Option<String>>) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
             body: ErrorResponse {
                 code: "NOT_FOUND".to_string(),
-                message: error.into(),
-                detail: detail.into(),
-                suggestion: None,
-            },
-        }
-    }
-
-    /// Create an INTERNAL_SERVER_ERROR.
-    fn internal_error(error: impl Into<String>, detail: impl Into<Option<String>>) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            body: ErrorResponse {
-                code: "INTERNAL_ERROR".to_string(),
                 message: error.into(),
                 detail: detail.into(),
                 suggestion: None,

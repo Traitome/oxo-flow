@@ -111,7 +111,7 @@ fn gcs_signature(secret: &str, string_to_sign: &str) -> String {
     let result = mac.finalize();
     let code_bytes = result.into_bytes();
     use base64::Engine;
-    base64::engine::general_purpose::STANDARD.encode(&code_bytes)
+    base64::engine::general_purpose::STANDARD.encode(code_bytes)
 }
 
 /// Build the `Date` header value in RFC 1123 format.

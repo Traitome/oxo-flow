@@ -104,6 +104,7 @@ pub struct QcIndicator {
     pub description: String,
 }
 
+/// Pass/warn/fail/info classification for QC metrics.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum QcStatusLevel {

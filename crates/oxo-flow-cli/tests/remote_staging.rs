@@ -22,7 +22,7 @@ use oxo_flow_core::storage::{StorageBackend, StoragePath};
 
 /// Env for child `oxo-flow` processes, or `None` when the live gate is off.
 fn live_env() -> Option<Vec<(&'static str, String)>> {
-    if std::env::var("OXO_S3_E2E").map_or(false, |v| v == "1") {
+    if std::env::var("OXO_S3_E2E").is_ok_and(|v| v == "1") {
         Some(vec![
             (
                 "AWS_ENDPOINT_URL",

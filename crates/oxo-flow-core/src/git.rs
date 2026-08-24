@@ -54,7 +54,7 @@ pub fn find_repo_root(path: &std::path::Path) -> Option<std::path::PathBuf> {
 }
 
 /// Classify a pinned ref: a full 40-hex commit SHA must be fetched by SHA —
-/// `git clone --branch <sha>` fails with "Remote branch <sha> not found
+/// `git clone --branch <sha>` fails with "Remote branch `<sha>` not found
 /// upstream" because SHAs are not advertised refs. Anything else (branch,
 /// tag, short SHA) goes through the regular `--branch` clone.
 pub fn is_full_sha(git_ref: &str) -> bool {
@@ -271,7 +271,7 @@ fn refresh_pinned(dest: &std::path::Path, git_ref: &str) -> std::io::Result<()> 
 /// truncated checkout — that must not poison the cache permanently).
 /// Full-SHA pins are immutable: no re-fetch on activation — a commit
 /// force-pushed away upstream must not break a locally complete checkout —
-/// only the readability guard. Serialized across processes by [`CloneLock`].
+/// only the readability guard. Serialized across processes by `CloneLock`.
 pub fn ensure_pinned(repo_url: &str, git_ref: &str, dest: &std::path::Path) -> std::io::Result<()> {
     let _lock = CloneLock::acquire(dest)?;
     if !dest.join(".git").exists() {

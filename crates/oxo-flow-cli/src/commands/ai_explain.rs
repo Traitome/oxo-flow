@@ -50,7 +50,7 @@ pub struct GraphRef {
     pub node_id: String,
     pub node_name: String,
     pub overview: String,
-    /// Formatted upstream/downstream transitions ("X via [BAM] — N papers").
+    /// Formatted upstream/downstream transitions ("X via `[BAM]` — N papers").
     pub transitions: Vec<String>,
 }
 

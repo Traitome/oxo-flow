@@ -535,7 +535,7 @@ const TRANSLATIONS: Record<Lang, Record<string, string>> = {
     'footer.contact': 'Contact',
     'common.dismiss': 'click to dismiss',
     'common.saving': 'Saving...',
-    'common.loading': 'Loading...',
+    'common.loading': 'Loading…',
     'common.loadFailed': 'Failed to load: {{error}}',
     'common.unknownError': 'Unknown error',
   },

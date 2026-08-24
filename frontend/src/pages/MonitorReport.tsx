@@ -80,7 +80,7 @@ export default function MonitorReport() {
     // A row click means the user wants the detail — bring it into view
     // instead of leaving it below a long list (issue #79 P2).
     requestAnimationFrame(() => detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
-  }, []);
+  }, [session]);
 
   // Abort in-flight detail loads when the page unmounts.
   useEffect(() => () => selectAbort.current?.abort(), []);

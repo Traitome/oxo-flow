@@ -96,7 +96,7 @@ export default function Settings() {
     api.webhookConfig().then(setWebhook).catch(() => {});
     api.listApiKeys().then(setApiKeys).catch(() => setApiKeys([]));
 
-  }, []);
+  }, [t]);
 
   const handleSave = async () => {
     setSaving(true); setTestResult(null);

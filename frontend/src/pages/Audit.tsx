@@ -31,7 +31,7 @@ export default function Audit() {
       .audit(days, page, perPage)
       .then(setData)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : t('audit.loadFailed')));
-  }, [days, page, perPage]);
+  }, [days, page, perPage, t]);
 
   const totalPages = useMemo(() => {
     if (!data) return 1;

@@ -1132,7 +1132,7 @@ fn resolve_provider(provider_env: &str, saved: Option<(&str, &str, &str, &str)>)
 /// Canonical AI config path — `~/.oxo-flow/ai_config.json` (matches the
 /// `AiConfig` loader docs in config.rs and the skills dir convention).
 /// The legacy `~/.config/oxo-flow/ai_config.json` location is still READ
-/// as a migration fallback (see [`legacy_ai_config_path`]) until the
+/// as a migration fallback (see `legacy_ai_config_path`) until the
 /// user's next `ai setup` rewrites it.
 pub fn ai_config_path() -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());

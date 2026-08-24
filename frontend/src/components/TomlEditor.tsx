@@ -60,6 +60,9 @@ export default function TomlEditor({ value, onChange, readOnly, highlightLine }:
       viewRef.current?.destroy();
       viewRef.current = null;
     };
+    // Editor is intentionally initialized once per mount; recreating it on
+    // prop changes would destroy cursor state and is handled by effects below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Jump to the failing line when a validation error is clicked (issue

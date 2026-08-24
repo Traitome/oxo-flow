@@ -1155,6 +1155,7 @@ fn expand_command_text_fields(
     expanded.on_failure = source.on_failure.as_deref().map(&expand);
 }
 
+/// A named collection of samples with optional metadata wildcards.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SampleGroup {
     /// Group name (available as `{group}`).

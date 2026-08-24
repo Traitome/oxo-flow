@@ -944,7 +944,7 @@ fn sorted_map_keys(maps: &[&HashMap<String, String>]) -> Vec<String> {
     keys
 }
 
-/// Abbreviate a "sha256:<hex>" checksum for diff lines.
+/// Abbreviate a `sha256:<hex>` checksum for diff lines.
 fn short_checksum(value: &str) -> String {
     let bare = value.strip_prefix("sha256:").unwrap_or(value);
     let end = bare.len().min(12);

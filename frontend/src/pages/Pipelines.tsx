@@ -181,10 +181,10 @@ export default function Pipelines() {
                         <button className="btn-sm" onClick={() => handleExport(p.id, 'singularity')} title={t('pipelines.exportSingularity')}>
                           <Download size={13} /> {t('pipelines.exportSingularity')}
                         </button>
-                        <button className="btn-sm" onClick={() => handleShare(p.id)} title={t('pipelines.share')}>
+                        <button className="btn-sm" onClick={() => handleShare(p.id)} title={t('pipelines.share')} aria-label={t('pipelines.share')}>
                           <Share2 size={13} />
                         </button>
-                        <button className="btn-sm btn-error" onClick={() => handleDelete(p.id, p.name)} title={t('pipelines.delete')}>
+                        <button className="btn-sm btn-error" onClick={() => handleDelete(p.id, p.name)} title={t('pipelines.delete')} aria-label={t('pipelines.delete')}>
                           <Trash2 size={13} />
                         </button>
                       </span>

@@ -27,7 +27,7 @@ impl AiRuntime {
     /// Initialize AI runtime with full scope config resolution.
     ///
     /// Resolution chain: env vars → global config → project .oxo-flow/ai.toml →
-    /// workflow [ai] section → CLI overrides.
+    /// workflow `[ai]` section → CLI overrides.
     pub async fn new(
         workflow_path: Option<&Path>,
         project_dir: Option<&Path>,

@@ -73,7 +73,7 @@ run — see [Workflow Format: Priority and Targeting](../reference/workflow-form
 W025 flags the deprecated rule-level `threads = N` / `memory = "8G"`
 fields (removed in v0.15.0 in favor of `[rules.resources]`) so old
 workflows surface the migration instead of silently keeping their old
-settings — see [Workflow Format: Rule resources](../reference/workflow-format.md#rule-resources).
+settings — see [Workflow Format: Rule resources](../reference/workflow-format.md#resources-extended).
 
 ---
 

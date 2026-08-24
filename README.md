@@ -37,7 +37,7 @@ oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It 
 - 🔀 **DAG engine** — Automatic dependency resolution, topological ordering, and parallel execution with resource-aware scheduling (CPU, memory, GPU, disk) across local and cluster backends (SLURM, PBS, SGE, LSF)
 - 📦 **8 environment backends** — conda, mamba, pixi, docker, singularity, venv, system, and HPC modules — with per-rule isolation
 - ⚡ **Rust performance** — Fearless concurrency, zero-cost abstractions, `#![forbid(unsafe_code)]` in core and web crates
-- 🌐 **Professional Web UI** — React 19 SPA with DAG visualization (React Flow + d3-dag), TOML editor (CodeMirror 6), AI chat, and Vega-Lite charts
+- 🌐 **Professional Web UI** — React 19 SPA with DAG visualization (React Flow + d3-dag), TOML editor (CodeMirror 6), and AI chat
 - 📊 **Built-in reporting** — HTML/JSON/Markdown/PDF reports with execution summaries, failure diagnosis, resource metrics, and checkpoint-verified file manifests; QC metrics parsed from real tool outputs (fastp, flagstat, STAR, featureCounts, bcftools, kraken2), R-friendly TSV export (`--r-data`), and a JSON report snapshot auto-written after every run
 - 🔒 **Security hardened** — Shell injection prevention, path traversal protection, secret scanning, and per-IP rate limiting
 - 🗄️ **Checkpoint & resume** — JSON-persisted execution state; resume interrupted workflows from the last completed rule
@@ -56,7 +56,7 @@ oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It 
 | **Cluster backends** | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF, k8s |
 | **Security** | Shell sanitization, path traversal prevention, rate limiting | Limited | Limited |
 | **AI Companion** | Built-in — generate, refine, diagnose, interpret | Not built-in | Not built-in |
-| **Testing** | 1,530+ tests (unit, integration, doc) | pytest-based | Varied |
+| **Testing** | ~2,270 tests (unit, integration, doc) | pytest-based | Varied |
 
 ## Design Principles
 
@@ -219,7 +219,7 @@ See the full [CLI Reference](https://traitome.github.io/oxo-flow/latest/commands
 
 ## Web API
 
-The `oxo-flow serve` command starts an [axum](https://github.com/tokio-rs/axum)-powered REST server with **50+ endpoints** across 7 domains (observability, pipeline, execution, AI, auth, data, ops). Full API reference at the [OpenAPI 3.1 spec](https://traitome.github.io/oxo-flow/latest/reference/api/).
+The `oxo-flow serve` command starts an [axum](https://github.com/tokio-rs/axum)-powered REST server with **100+ endpoints** across 9 domains (observability, pipeline, execution, AI, auth, collaboration, data, chat, clusters). Full API reference at the [OpenAPI 3.1 spec](https://traitome.github.io/oxo-flow/latest/reference/api/).
 
 
 oxo-flow is organized as a Cargo workspace with four crates:
