@@ -1225,6 +1225,18 @@ version = "1.0"
         // NOT skip it either — it stays NeverCompleted.
         let dir = tempfile::tempdir().unwrap();
         let (config, dag, order, wildcard_values) = fixture(dir.path());
+        // Deterministic freshness: the fixture writes inputs and outputs
+        // back to back, and on filesystems with coarse timestamp
+        // granularity the strict `>` comparison in `file_is_newer` flips
+        // (CI flake: trim_cohort_S1 stayed NeverCompleted). Age the inputs
+        // so the pre-created outputs are unambiguously newer.
+        let older = std::time::SystemTime::now() - std::time::Duration::from_secs(10);
+        for f in ["raw/S1.fq", "raw/S2.fq"] {
+            let p = dir.path().join(f);
+            let file = std::fs::OpenOptions::new().write(true).open(p).unwrap();
+            file.set_times(std::fs::FileTimes::new().set_modified(older))
+                .unwrap();
+        }
         let ck = CheckpointState::new();
         let preview = run_preview(&ck, &config, &dag, &order, dir.path(), &wildcard_values);
         assert_eq!(preview.plan.len(), 5);
