@@ -48,6 +48,41 @@ required), `000` = unreachable, `403` = blocked.
 - **Docker**: `https://docker.1ms.run` — the three university mirrors are
   discontinued; do not copy old tutorials that reference them.
 
+## Container registry mirrors (`OXO_REGISTRY_MIRRORS`)
+
+Container images in workflows reference their upstream registries
+(`docker://uhrigs/arriba:2.4.0`, `ghcr.io/…`, `quay.io/…`) — that's what
+keeps workflow files portable. On networks where those registries are
+unreachable, map them to local mirror endpoints **without touching the
+workflow file**:
+
+```bash
+export OXO_REGISTRY_MIRRORS="docker.io=mirror.example.com;registry-1.docker.io=mirror.example.com;ghcr.io=mirror-ghcr.example.com;quay.io=mirror-quay.example.com"
+```
+
+- Semicolon-separated `host=mirror` pairs; host matching is
+  case-insensitive and port-agnostic (`localhost:5000/…` is never
+  rewritten).
+- A first path segment without a dot or colon (`uhrigs/arriba`) is the
+  docker.io *namespace* and follows the docker.io mapping, keeping its
+  full path.
+- Applies to the singularity/apptainer backend (pull target and `exec`
+  URI) and to registry-qualified docker specs. The Docker backend's bare
+  names still resolve through the daemon's own `registry-mirrors`.
+- The derived local SIF name and the environment cache key keep the
+  **original** spec, so an image keeps one identity whether a box goes
+  through a mirror or not.
+- This is box-local transport configuration — mirror hosts never belong
+  in committed workflow files.
+
+```yaml
+# .oxoflow rule fragment — unchanged on mirrored boxes
+[[rules]]
+name = "arriba_fusion"
+singularity = "docker://uhrigs/arriba:2.4.0"
+shell = "arriba ..."
+```
+
 ## Caveats
 
 - The probe runs from the developer machine, whose DNS resolves to the
