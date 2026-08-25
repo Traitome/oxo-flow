@@ -1584,6 +1584,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#wildcard-scoped-conditions-wildcardkey" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Wildcard-scoped conditions (wildcard.&lt;key&gt;)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#logical-operators" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3799,6 +3810,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#wildcard-scoped-conditions-wildcardkey" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Wildcard-scoped conditions (wildcard.&lt;key&gt;)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#logical-operators" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3903,52 +3925,96 @@
 <h3 id="file-existence">File existence<a class="headerlink" href="#file-existence" title="Permanent link">#</a></h3>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">when</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'file_exists("panel_of_controls.vcf.gz")'</span>
 </span></code></pre></div>
+<h3 id="wildcard-scoped-conditions-wildcardkey">Wildcard-scoped conditions (<code>wildcard.&lt;key&gt;</code>)<a class="headerlink" href="#wildcard-scoped-conditions-wildcardkey" title="Permanent link">#</a></h3>
+<p>Conditions can reference the pair/group expansion context through the
+<code>wildcard.</code> prefix — the same values that drive <code>{pair_id}</code>, <code>{experiment}</code>,
+<code>{control}</code> and <code>{sample}</code> fan-out:</p>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">when</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"wildcard.control != ''"</span><span class="w">     </span><span class="c1"># only pairs with a control sample</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">when</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"wildcard.control == ''"</span><span class="w">     </span><span class="c1"># tumor-only pairs</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">when</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"wildcard.group == 'case' &amp;&amp; config.min_coverage &gt;= 20"</span>
+</span></code></pre></div>
+<p>Unlike <code>config.</code> conditions, <code>wildcard.</code> conditions are evaluated <strong>per
+expansion instance at DAG build time</strong> — a non-matching instance never
+enters the DAG (snakemake-style per-sample morphing), rather than being
+planned and skipped at execution. A rule whose pair/group scope is
+expressed only in <code>when</code> (no <code>{pair_id}</code>/<code>{sample}</code> in its paths) still
+fans out per combo.</p>
+<p>Notes:</p>
+<ul>
+<li><code>control</code>/<code>normal</code>/<code>tumor</code> are always present — a pair without a control
+  expands them to the empty string, so <code>wildcard.control != ''</code> exactly
+  separates paired from tumor-only pairs.</li>
+<li>Optional wildcards (<code>experiment_type</code>, <code>tumor_type</code>) expand to the empty
+  string when unset.</li>
+<li><code>config.</code> conditions keep the execution-time flow (planned, then skipped
+  when false); the two scopes compose with <code>&amp;&amp;</code>.</li>
+<li><code>{key}</code> placeholders inside <code>when</code> are not substituted — use the
+  <code>wildcard.&lt;key&gt;</code> form.</li>
+</ul>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">[workflow]</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="c1"># samplesheet.csv: one row with Normal fastqs, one without</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">pairs_file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"samplesheet.csv"</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="k">[[rules]]</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="n">name</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"paired_mapping"</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="n">when</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"wildcard.control != ''"</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="n">input</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"reads/{pair_id}.fq.gz"</span><span class="p">]</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"bam/{pair_id}.paired.bam"</span><span class="p">]</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="n">shell</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"mapper --paired {input[0]} -o {output[0]}"</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="k">[[rules]]</span>
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="n">name</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"tumor_only_mapping"</span>
+</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="n">when</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"wildcard.control == ''"</span>
+</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a><span class="n">input</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"reads/{pair_id}.fq.gz"</span><span class="p">]</span>
+</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"bam/{pair_id}.tumor_only.bam"</span><span class="p">]</span>
+</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a><span class="n">shell</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"mapper --tumor-only {input[0]} -o {output[0]}"</span>
+</span></code></pre></div>
 <h3 id="logical-operators">Logical operators<a class="headerlink" href="#logical-operators" title="Permanent link">#</a></h3>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">when</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"config.run_qc &amp;&amp; config.min_coverage &gt;= 20"</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">when</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'config.mode == "WGS" || config.mode == "WES"'</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">when</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'(config.run_annotation &amp;&amp; config.min_coverage &gt;= 20) || config.force_annotate'</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">when</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"config.run_qc &amp;&amp; config.min_coverage &gt;= 20"</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">when</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'config.mode == "WGS" || config.mode == "WES"'</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">when</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'(config.run_annotation &amp;&amp; config.min_coverage &gt;= 20) || config.force_annotate'</span>
 </span></code></pre></div>
 <h2 id="practical-example">Practical Example<a class="headerlink" href="#practical-example" title="Permanent link">#</a></h2>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">[config]</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">sequencing_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"WGS"</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">run_qc</span><span class="w">          </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">min_coverage</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="mi">35</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="n">target_bed</span><span class="w">      </span><span class="o">=</span><span class="w"> </span><span class="s2">""</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="k">[[rules]]</span>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="c1"># No `when` — always runs</span>
-</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/sample_R1.fq.gz"</span><span class="p">]</span>
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/sample.bam"</span><span class="p">]</span>
-</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"bwa mem ref.fa {input[0]} &gt; {output[0]}"</span>
-</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>
-</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="k">[[rules]]</span>
-</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a><span class="n">name</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc"</span>
-</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a><span class="n">when</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"config.run_qc"</span>
-</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/sample_R1.fq.gz"</span><span class="p">]</span>
-</span><span id="__span-6-18"><a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"qc/fastqc.html"</span><span class="p">]</span>
-</span><span id="__span-6-19"><a id="__codelineno-6-19" name="__codelineno-6-19" href="#__codelineno-6-19"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc {input[0]} -o qc/"</span>
-</span><span id="__span-6-20"><a id="__codelineno-6-20" name="__codelineno-6-20" href="#__codelineno-6-20"></a>
-</span><span id="__span-6-21"><a id="__codelineno-6-21" name="__codelineno-6-21" href="#__codelineno-6-21"></a><span class="k">[[rules]]</span>
-</span><span id="__span-6-22"><a id="__codelineno-6-22" name="__codelineno-6-22" href="#__codelineno-6-22"></a><span class="n">name</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"wgs_coverage"</span>
-</span><span id="__span-6-23"><a id="__codelineno-6-23" name="__codelineno-6-23" href="#__codelineno-6-23"></a><span class="n">when</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s1">'config.sequencing_mode == "WGS"'</span>
-</span><span id="__span-6-24"><a id="__codelineno-6-24" name="__codelineno-6-24" href="#__codelineno-6-24"></a><span class="n">input</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/sample.bam"</span><span class="p">]</span>
-</span><span id="__span-6-25"><a id="__codelineno-6-25" name="__codelineno-6-25" href="#__codelineno-6-25"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"qc/coverage.txt"</span><span class="p">]</span>
-</span><span id="__span-6-26"><a id="__codelineno-6-26" name="__codelineno-6-26" href="#__codelineno-6-26"></a><span class="n">shell</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"mosdepth qc/sample aligned/sample.bam"</span>
-</span><span id="__span-6-27"><a id="__codelineno-6-27" name="__codelineno-6-27" href="#__codelineno-6-27"></a>
-</span><span id="__span-6-28"><a id="__codelineno-6-28" name="__codelineno-6-28" href="#__codelineno-6-28"></a><span class="k">[[rules]]</span>
-</span><span id="__span-6-29"><a id="__codelineno-6-29" name="__codelineno-6-29" href="#__codelineno-6-29"></a><span class="n">name</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"wes_coverage"</span>
-</span><span id="__span-6-30"><a id="__codelineno-6-30" name="__codelineno-6-30" href="#__codelineno-6-30"></a><span class="n">when</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s1">'config.sequencing_mode == "WES" &amp;&amp; config.target_bed != ""'</span>
-</span><span id="__span-6-31"><a id="__codelineno-6-31" name="__codelineno-6-31" href="#__codelineno-6-31"></a><span class="n">input</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/sample.bam"</span><span class="p">]</span>
-</span><span id="__span-6-32"><a id="__codelineno-6-32" name="__codelineno-6-32" href="#__codelineno-6-32"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"qc/coverage.txt"</span><span class="p">]</span>
-</span><span id="__span-6-33"><a id="__codelineno-6-33" name="__codelineno-6-33" href="#__codelineno-6-33"></a><span class="n">shell</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"mosdepth --by {config.target_bed} qc/sample aligned/sample.bam"</span>
-</span><span id="__span-6-34"><a id="__codelineno-6-34" name="__codelineno-6-34" href="#__codelineno-6-34"></a>
-</span><span id="__span-6-35"><a id="__codelineno-6-35" name="__codelineno-6-35" href="#__codelineno-6-35"></a><span class="k">[[rules]]</span>
-</span><span id="__span-6-36"><a id="__codelineno-6-36" name="__codelineno-6-36" href="#__codelineno-6-36"></a><span class="n">name</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"annotate"</span>
-</span><span id="__span-6-37"><a id="__codelineno-6-37" name="__codelineno-6-37" href="#__codelineno-6-37"></a><span class="n">when</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"config.run_qc &amp;&amp; config.min_coverage &gt;= 20"</span>
-</span><span id="__span-6-38"><a id="__codelineno-6-38" name="__codelineno-6-38" href="#__codelineno-6-38"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"variants/sample.vcf.gz"</span><span class="p">]</span>
-</span><span id="__span-6-39"><a id="__codelineno-6-39" name="__codelineno-6-39" href="#__codelineno-6-39"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"annotated/sample.vcf.gz"</span><span class="p">]</span>
-</span><span id="__span-6-40"><a id="__codelineno-6-40" name="__codelineno-6-40" href="#__codelineno-6-40"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"vep --input_file {input[0]} --output_file {output[0]}"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="k">[config]</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">sequencing_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"WGS"</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">run_qc</span><span class="w">          </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="n">min_coverage</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="mi">35</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="n">target_bed</span><span class="w">      </span><span class="o">=</span><span class="w"> </span><span class="s2">""</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="k">[[rules]]</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="c1"># No `when` — always runs</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/sample_R1.fq.gz"</span><span class="p">]</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/sample.bam"</span><span class="p">]</span>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"bwa mem ref.fa {input[0]} &gt; {output[0]}"</span>
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>
+</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="k">[[rules]]</span>
+</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a><span class="n">name</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc"</span>
+</span><span id="__span-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a><span class="n">when</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"config.run_qc"</span>
+</span><span id="__span-8-17"><a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/sample_R1.fq.gz"</span><span class="p">]</span>
+</span><span id="__span-8-18"><a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"qc/fastqc.html"</span><span class="p">]</span>
+</span><span id="__span-8-19"><a id="__codelineno-8-19" name="__codelineno-8-19" href="#__codelineno-8-19"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc {input[0]} -o qc/"</span>
+</span><span id="__span-8-20"><a id="__codelineno-8-20" name="__codelineno-8-20" href="#__codelineno-8-20"></a>
+</span><span id="__span-8-21"><a id="__codelineno-8-21" name="__codelineno-8-21" href="#__codelineno-8-21"></a><span class="k">[[rules]]</span>
+</span><span id="__span-8-22"><a id="__codelineno-8-22" name="__codelineno-8-22" href="#__codelineno-8-22"></a><span class="n">name</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"wgs_coverage"</span>
+</span><span id="__span-8-23"><a id="__codelineno-8-23" name="__codelineno-8-23" href="#__codelineno-8-23"></a><span class="n">when</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s1">'config.sequencing_mode == "WGS"'</span>
+</span><span id="__span-8-24"><a id="__codelineno-8-24" name="__codelineno-8-24" href="#__codelineno-8-24"></a><span class="n">input</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/sample.bam"</span><span class="p">]</span>
+</span><span id="__span-8-25"><a id="__codelineno-8-25" name="__codelineno-8-25" href="#__codelineno-8-25"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"qc/coverage.txt"</span><span class="p">]</span>
+</span><span id="__span-8-26"><a id="__codelineno-8-26" name="__codelineno-8-26" href="#__codelineno-8-26"></a><span class="n">shell</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"mosdepth qc/sample aligned/sample.bam"</span>
+</span><span id="__span-8-27"><a id="__codelineno-8-27" name="__codelineno-8-27" href="#__codelineno-8-27"></a>
+</span><span id="__span-8-28"><a id="__codelineno-8-28" name="__codelineno-8-28" href="#__codelineno-8-28"></a><span class="k">[[rules]]</span>
+</span><span id="__span-8-29"><a id="__codelineno-8-29" name="__codelineno-8-29" href="#__codelineno-8-29"></a><span class="n">name</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"wes_coverage"</span>
+</span><span id="__span-8-30"><a id="__codelineno-8-30" name="__codelineno-8-30" href="#__codelineno-8-30"></a><span class="n">when</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s1">'config.sequencing_mode == "WES" &amp;&amp; config.target_bed != ""'</span>
+</span><span id="__span-8-31"><a id="__codelineno-8-31" name="__codelineno-8-31" href="#__codelineno-8-31"></a><span class="n">input</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/sample.bam"</span><span class="p">]</span>
+</span><span id="__span-8-32"><a id="__codelineno-8-32" name="__codelineno-8-32" href="#__codelineno-8-32"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"qc/coverage.txt"</span><span class="p">]</span>
+</span><span id="__span-8-33"><a id="__codelineno-8-33" name="__codelineno-8-33" href="#__codelineno-8-33"></a><span class="n">shell</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"mosdepth --by {config.target_bed} qc/sample aligned/sample.bam"</span>
+</span><span id="__span-8-34"><a id="__codelineno-8-34" name="__codelineno-8-34" href="#__codelineno-8-34"></a>
+</span><span id="__span-8-35"><a id="__codelineno-8-35" name="__codelineno-8-35" href="#__codelineno-8-35"></a><span class="k">[[rules]]</span>
+</span><span id="__span-8-36"><a id="__codelineno-8-36" name="__codelineno-8-36" href="#__codelineno-8-36"></a><span class="n">name</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"annotate"</span>
+</span><span id="__span-8-37"><a id="__codelineno-8-37" name="__codelineno-8-37" href="#__codelineno-8-37"></a><span class="n">when</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"config.run_qc &amp;&amp; config.min_coverage &gt;= 20"</span>
+</span><span id="__span-8-38"><a id="__codelineno-8-38" name="__codelineno-8-38" href="#__codelineno-8-38"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"variants/sample.vcf.gz"</span><span class="p">]</span>
+</span><span id="__span-8-39"><a id="__codelineno-8-39" name="__codelineno-8-39" href="#__codelineno-8-39"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"annotated/sample.vcf.gz"</span><span class="p">]</span>
+</span><span id="__span-8-40"><a id="__codelineno-8-40" name="__codelineno-8-40" href="#__codelineno-8-40"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"vep --input_file {input[0]} --output_file {output[0]}"</span>
 </span></code></pre></div>
 <p>With <code>sequencing_mode = "WGS"</code> and <code>run_qc = true</code> and <code>min_coverage = 35</code>:</p>
 <ul>
@@ -3960,7 +4026,7 @@
 </ul>
 <h2 id="checking-which-rules-will-run">Checking Which Rules Will Run<a class="headerlink" href="#checking-which-rules-will-run" title="Permanent link">#</a></h2>
 <p>Use <code>oxo-flow dry-run</code> to preview the execution plan:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>my-pipeline.oxoflow
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>my-pipeline.oxoflow
 </span></code></pre></div>
 <p>Note that dry-run does <strong>not</strong> evaluate <code>when</code> conditions — all rules appear in
 the plan. <code>when</code> is evaluated at execution time: rules whose condition is false

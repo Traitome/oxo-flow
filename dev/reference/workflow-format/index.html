@@ -6794,6 +6794,11 @@ Use shell conditionals or declarative <code>[config]</code> entries to handle th
 <td>File existence test</td>
 </tr>
 <tr>
+<td><code>wildcard.&lt;key&gt; == "value"</code></td>
+<td><code>wildcard.control != ""</code></td>
+<td>Per-instance pair/group wildcard comparison (<code>pair_id</code>, <code>experiment</code>, <code>control</code>, <code>tumor</code>, <code>normal</code>, <code>experiment_type</code>, <code>tumor_type</code>, <code>group</code>, <code>sample</code>, pair metadata keys) — evaluated per expansion combo at DAG build time; non-matching instances never enter the DAG (snakemake-style morphing)</td>
+</tr>
+<tr>
 <td><code>!&lt;expr&gt;</code></td>
 <td><code>!config.skip</code></td>
 <td>Logical NOT</td>
