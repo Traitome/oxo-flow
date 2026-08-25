@@ -4781,9 +4781,11 @@ much completed work stays protected.</p>
    resource requirements are reasonable.</p>
 </li>
 <li>
-<p><strong>Use streaming / caching</strong>: the <code>pipe</code> and <code>cache_key</code> rule fields are
-   parsed but their execution features are not wired up yet — do not rely
-   on them for performance.</p>
+<p><strong>Use caching</strong>: a rule with <code>cache_key</code> reuses its outputs from the
+   content cache when the key, inputs, outputs, and rendered command hash
+   identically to a previous run — bump the key when a dependency's
+   behavior changes without touching the declared inputs. (<code>pipe</code> is
+   parsed but not wired up yet — do not rely on it.)</p>
 </li>
 </ol>
 <h3 id="memory-issues-with-large-workflows">Memory issues with large workflows<a class="headerlink" href="#memory-issues-with-large-workflows" title="Permanent link">#</a></h3>

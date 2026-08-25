@@ -4709,7 +4709,7 @@ carry metadata:</p>
 <tr>
 <td><code>sensitive</code></td>
 <td>Bool</td>
-<td>Mask the value as <code>***</code> in captured rule output, recorded commands, checkpoint/report snapshots, and error summaries — before they reach the web UI or AI recovery (default: <code>false</code>). Values shorter than 4 characters are not masked, and structured or derived forms of the value (JSON/base64) pass through — exact-match masking only</td>
+<td>Mask the value as <code>***</code> in captured rule output, recorded commands, checkpoint/report snapshots, and error summaries — before they reach the web UI or AI recovery (default: <code>false</code>). Every non-empty value is masked; values of 4+ characters also mask their base64, percent-encoded, and JSON-escaped forms</td>
 </tr>
 <tr>
 <td><code>type</code></td>
@@ -5296,7 +5296,7 @@ disk space matters.</p>
 <td><code>cache_key</code></td>
 <td>String</td>
 <td>No</td>
-<td>Accepted for compatibility but NOT yet consulted by the scheduler (validate raises W026) — content-addressed reuse is not active (issue #194)</td>
+<td>Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run (issue #194 §2.3)</td>
 </tr>
 <tr>
 <td><code>input_function</code></td>
@@ -6100,14 +6100,14 @@ and duplicate edges are deduplicated.</p>
 <tr>
 <td><code>cache_key</code></td>
 <td>String</td>
-<td>Accepted for compatibility but not yet consulted by the scheduler (validate raises W026; issue #194)</td>
+<td>Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run (issue #194 §2.3)</td>
 </tr>
 </tbody>
 </table>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a><span class="k">[[rules]]</span>
 </span><span id="__span-40-2"><a id="__codelineno-40-2" name="__codelineno-40-2" href="#__codelineno-40-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"variant_call"</span>
 </span><span id="__span-40-3"><a id="__codelineno-40-3" name="__codelineno-40-3" href="#__codelineno-40-3"></a><span class="n">group</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"variant_calling"</span><span class="w">       </span><span class="c1"># Submit as a group on cluster</span>
-</span><span id="__span-40-4"><a id="__codelineno-40-4" name="__codelineno-40-4" href="#__codelineno-40-4"></a><span class="n">cache_key</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"vc_v2.0"</span><span class="w">           </span><span class="c1"># Cache key for output reuse</span>
+</span><span id="__span-40-4"><a id="__codelineno-40-4" name="__codelineno-40-4" href="#__codelineno-40-4"></a><span class="n">cache_key</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"vc_v2.0"</span><span class="w">           </span><span class="c1"># Content cache key — outputs are reused when content is identical</span>
 </span></code></pre></div>
 <h3 id="dynamic-input-resolution">Dynamic Input Resolution<a class="headerlink" href="#dynamic-input-resolution" title="Permanent link">#</a></h3>
 <table>

@@ -4911,7 +4911,25 @@ flags these with warning W019).</p>
   (outputs beyond the hash cap keep the mtime comparison).</li>
 <li>Rule timeouts and aborts terminate the rule subtree with a <strong>SIGTERM
   grace period</strong> (10s) before escalating to SIGKILL, so well-behaved
-  tools get a chance to flush state.</li>
+  tools get a chance to flush state; descendants spawned during the
+  grace window are caught by a re-scan before the KILL sweep.</li>
+<li>Scratch outputs move back to the workdir <strong>atomically even across
+  filesystems</strong>: the copy lands in a temp sibling, is fsynced, renamed
+  into place, and the parent directory fsynced — a crash leaves either
+  nothing or the complete output, never a truncated one.</li>
+<li>Input manifests are <strong>re-verified after each rule completes</strong>: if an
+  external writer changed an input mid-run, the run warns loudly and the
+  next run re-executes the rule instead of trusting outputs built from a
+  mixed file state.</li>
+<li>Uploaded remote outputs are <strong>verified against the local file</strong> before
+  the rule is recorded as complete (size always; md5 when the store
+  exposes a comparable digest — S3 single-part ETag or GCS <code>md5Hash</code>).</li>
+<li>Rules with <code>cache_key</code> participate in <strong>content-addressed reuse</strong>: a
+  cache entry whose key-plus-inputs-plus-command identity matches a
+  previous run is restored instead of executing the shell (see
+  <a href="../workflow-format/">workflow format</a> for the participation limits).</li>
+<li>Declared sensitive values are masked in captured output in <strong>plaintext
+  and encoded forms</strong> (base64, percent-encoding, JSON string escaping).</li>
 <li>Failed-rule aside files (<code>.oxo-failed</code>) age out automatically after
   7 days; the environment cache cleanup is recursive.</li>
 </ul>
