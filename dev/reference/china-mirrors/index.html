@@ -2922,6 +2922,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#container-registry-mirrors-oxo_registry_mirrors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Container registry mirrors (OXO_REGISTRY_MIRRORS)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#caveats" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3649,6 +3660,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#container-registry-mirrors-oxo_registry_mirrors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Container registry mirrors (OXO_REGISTRY_MIRRORS)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#caveats" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3806,6 +3828,36 @@ required), <code>000</code> = unreachable, <code>403</code> = blocked.</p>
 <li><strong>Docker</strong>: <code>https://docker.1ms.run</code> — the three university mirrors are
   discontinued; do not copy old tutorials that reference them.</li>
 </ul>
+<h2 id="container-registry-mirrors-oxo_registry_mirrors">Container registry mirrors (<code>OXO_REGISTRY_MIRRORS</code>)<a class="headerlink" href="#container-registry-mirrors-oxo_registry_mirrors" title="Permanent link">#</a></h2>
+<p>Container images in workflows reference their upstream registries
+(<code>docker://uhrigs/arriba:2.4.0</code>, <code>ghcr.io/…</code>, <code>quay.io/…</code>) — that's what
+keeps workflow files portable. On networks where those registries are
+unreachable, map them to local mirror endpoints <strong>without touching the
+workflow file</strong>:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OXO_REGISTRY_MIRRORS</span><span class="o">=</span><span class="s2">"docker.io=mirror.example.com;registry-1.docker.io=mirror.example.com;ghcr.io=mirror-ghcr.example.com;quay.io=mirror-quay.example.com"</span>
+</span></code></pre></div>
+<ul>
+<li>Semicolon-separated <code>host=mirror</code> pairs; host matching is
+  case-insensitive and port-agnostic (<code>localhost:5000/…</code> is never
+  rewritten).</li>
+<li>A first path segment without a dot or colon (<code>uhrigs/arriba</code>) is the
+  docker.io <em>namespace</em> and follows the docker.io mapping, keeping its
+  full path.</li>
+<li>Applies to the singularity/apptainer backend (pull target and <code>exec</code>
+  URI) and to registry-qualified docker specs. The Docker backend's bare
+  names still resolve through the daemon's own <code>registry-mirrors</code>.</li>
+<li>The derived local SIF name and the environment cache key keep the
+  <strong>original</strong> spec, so an image keeps one identity whether a box goes
+  through a mirror or not.</li>
+<li>This is box-local transport configuration — mirror hosts never belong
+  in committed workflow files.</li>
+</ul>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># .oxoflow rule fragment — unchanged on mirrored boxes</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="p p-Indicator">[[</span><span class="nv">rules</span><span class="p p-Indicator">]]</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="l l-Scalar l-Scalar-Plain">name = "arriba_fusion"</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="l l-Scalar l-Scalar-Plain">singularity = "docker://uhrigs/arriba:2.4.0"</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="l l-Scalar l-Scalar-Plain">shell = "arriba ..."</span>
+</span></code></pre></div>
 <h2 id="caveats">Caveats<a class="headerlink" href="#caveats" title="Permanent link">#</a></h2>
 <ul>
 <li>The probe runs from the developer machine, whose DNS resolves to the
