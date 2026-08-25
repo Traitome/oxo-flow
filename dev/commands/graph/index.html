@@ -4168,8 +4168,10 @@
 <h3 id="export-an-nf-metro-metro-map">Export an nf-metro metro map<a class="headerlink" href="#export-an-nf-metro-metro-map" title="Permanent link">#</a></h3>
 <p><code>metro</code> emits an <a href="https://github.com/seqeralabs/nf-metro">nf-metro</a> definition — Mermaid <code>graph LR</code> extended with <code>%%metro</code> line/section directives — that renders as a transit-map-style SVG. Rules are grouped into colored "lines" by their analysis stage (inferred from shell keywords, or set explicitly via each rule's <code>tags</code>):</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>metro<span class="w"> </span>-o<span class="w"> </span>pipeline.mmd
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>pip<span class="w"> </span>install<span class="w"> </span>nf-metro
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>nf-metro<span class="w"> </span>render<span class="w"> </span>pipeline.mmd<span class="w"> </span>-o<span class="w"> </span>pipeline.svg
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="c1"># Render locally (requires nf-metro) or paste the .mmd content into the</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="c1"># online playground at https://seqeralabs.github.io/nf-metro/latest/playground/</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>pip<span class="w"> </span>install<span class="w"> </span>nf-metro
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>nf-metro<span class="w"> </span>render<span class="w"> </span>pipeline.mmd<span class="w"> </span>-o<span class="w"> </span>pipeline.svg
 </span></code></pre></div>
 <h3 id="view-the-expanded-runtime-dag">View the expanded runtime DAG<a class="headerlink" href="#view-the-expanded-runtime-dag" title="Permanent link">#</a></h3>
 <p>By default, <code>graph</code> shows the template DAG — one node per <code>[[rules]]</code> block, with every declared dataflow edge included (<code>input</code> paths and <code>expand_inputs</code> patterns alike). Use <code>--expanded</code> to show the actual runtime DAG after wildcard, sample, and scatter expansion: each generated task becomes its own node (rule names get a <code>_&lt;group&gt;_&lt;sample&gt;</code> or <code>_&lt;pair_id&gt;</code> suffix). Catalog pages render the template DAG — it is the stable overview; the expanded view is the full runtime truth.</p>
@@ -4268,7 +4270,10 @@ extra tooling.</p>
 <p>The <code>metro</code> format emits an
 <a href="https://github.com/seqeralabs/nf-metro">nf-metro</a> definition — Mermaid
 <code>graph LR</code> extended with <code>%%metro</code> directives — that renders as a
-transit-map-style SVG:</p>
+transit-map-style SVG. You can render it locally with <code>nf-metro render</code>
+or paste the <code>.mmd</code> content into the
+<a href="https://seqeralabs.github.io/nf-metro/latest/playground/">nf-metro online playground</a>
+to preview it without installing anything:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>%%metro line: generic | Analysis | #79706E
 </span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>
 </span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>graph LR
