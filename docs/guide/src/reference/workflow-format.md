@@ -268,7 +268,7 @@ samples   = { required = true, type = "path", must_exist = true }
 | `default` | String | Default value when not provided via CLI |
 | `required` | Bool | If `true`, the value must be provided at runtime (default: `false`) |
 | `help` | String | Human-readable description shown in error messages |
-| `sensitive` | Bool | Mask the value as `***` in captured rule output, recorded commands, checkpoint/report snapshots, and error summaries — before they reach the web UI or AI recovery (default: `false`). Values shorter than 4 characters are not masked, and structured or derived forms of the value (JSON/base64) pass through — exact-match masking only |
+| `sensitive` | Bool | Mask the value as `***` in captured rule output, recorded commands, checkpoint/report snapshots, and error summaries — before they reach the web UI or AI recovery (default: `false`). Every non-empty value is masked; values of 4+ characters also mask their base64, percent-encoded, and JSON-escaped forms |
 | `type` | String | Expected value type for validation: `"string"`, `"int"`, `"float"`, `"bool"`, `"path"` |
 | `choices` | Array of String | Allowed values (requires `type = "string"`) |
 | `range` | String | Numeric range `"min..max"` (requires `type = "int"` or `"float"`) |
@@ -545,7 +545,7 @@ memory = "32G"
 | `benchmark` | String | No | Benchmark output path for performance data |
 | `log` | String | No | Log file path for rule execution output |
 | `group` | String | No | Job group label for cluster submission grouping |
-| `cache_key` | String | No | Accepted for compatibility but NOT yet consulted by the scheduler (validate raises W026) — content-addressed reuse is not active (issue #194) |
+| `cache_key` | String | No | Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run (issue #194 §2.3) |
 | `input_function` | String | No | Dynamic input resolver function name |
 | `rule_metadata` | Table | No | Arbitrary domain-specific metadata (assay, organism, etc.) |
 | `env_group` | String | No | Reference to a named environment in `[env_groups]` |
@@ -1088,13 +1088,13 @@ benchmark = "benchmarks/align_{sample}.tsv"
 | Field | Type | Description |
 |-------|------|-------------|
 | `group` | String | Job group label for cluster submission grouping |
-| `cache_key` | String | Accepted for compatibility but not yet consulted by the scheduler (validate raises W026; issue #194) |
+| `cache_key` | String | Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run (issue #194 §2.3) |
 
 ```toml
 [[rules]]
 name = "variant_call"
 group = "variant_calling"       # Submit as a group on cluster
-cache_key = "vc_v2.0"           # Cache key for output reuse
+cache_key = "vc_v2.0"           # Content cache key — outputs are reused when content is identical
 ```
 
 ### Dynamic Input Resolution
