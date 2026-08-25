@@ -507,6 +507,58 @@ impl EnvironmentBackend for MambaBackend {
 #[derive(Debug, Default)]
 pub struct DockerBackend;
 
+/// Rewrite registry hosts through box-local mirror configuration.
+///
+/// `OXO_REGISTRY_MIRRORS` maps upstream registry hosts to local mirror
+/// endpoints, `;`-separated: `"docker.io=mirror.example.com;ghcr.io=mirror-ghcr.example.com"`.
+/// Applied to `docker://<host>/<path>` URIs (singularity/apptainer) and to
+/// registry-qualified docker specs (`<host>/<path>`). A first path segment
+/// without a dot or colon (`uhrigs/arriba`) is the docker.io namespace and
+/// follows the docker.io mapping. This is box-local *transport*
+/// configuration only — workflow files never change (mirror neutrality),
+/// and cache keys keep the original spec so an image keeps one identity
+/// across boxes.
+pub(crate) fn mirrored_spec(spec: &str) -> String {
+    mirrored_spec_with(spec, std::env::var("OXO_REGISTRY_MIRRORS").ok().as_deref())
+}
+
+fn mirrored_spec_with(spec: &str, mirrors_env: Option<&str>) -> String {
+    let Some(mirrors) = mirrors_env.filter(|v| !v.trim().is_empty()) else {
+        return spec.to_string();
+    };
+    let map: Vec<(String, String)> = mirrors
+        .split(';')
+        .filter_map(|pair| {
+            let (k, v) = pair.trim().split_once('=')?;
+            Some((k.trim().to_ascii_lowercase(), v.trim().to_string()))
+        })
+        .collect();
+    // Only docker:// URIs are rewritten; other schemes (https:// depot
+    // links, library://, oras://) pass through untouched — their scheme
+    // prefix must never be mistaken for a docker.io namespace.
+    let (scheme, rest) = match spec.split_once("://") {
+        Some(("docker", r)) => ("docker://", r),
+        Some(_) => return spec.to_string(),
+        None => ("", spec),
+    };
+    let Some((host, path)) = rest.split_once('/') else {
+        return spec.to_string();
+    };
+    let host_key = host.split(':').next().unwrap_or(host);
+    // A first segment without a dot/colon (`uhrigs/arriba`) is a docker.io
+    // NAMESPACE, not a registry — the mirror must keep the full original
+    // path so the namespace survives the rewrite.
+    let is_namespace = !host_key.contains('.') && !host_key.contains(':');
+    let lookup = if is_namespace { "docker.io" } else { host_key };
+    match map.iter().find(|(k, _)| k == &lookup.to_ascii_lowercase()) {
+        Some((_, mirror)) => {
+            let rewritten_path = if is_namespace { rest } else { path };
+            format!("{scheme}{mirror}/{rewritten_path}")
+        }
+        None => spec.to_string(),
+    }
+}
+
 /// The quay.io retry target for a bare Docker image name, if any.
 ///
 /// Biocontainers publishes on quay.io, not Docker Hub, so the common
@@ -561,6 +613,7 @@ impl EnvironmentBackend for DockerBackend {
         // daemon ("the working directory '.' is invalid").
         let workdir = absolute_host_path(workdir);
         let escaped_cmd = escape_for_sh_single_quote(command);
+        let spec = mirrored_spec(spec);
 
         let mut mem_arg = String::new();
         if let Some(res) = resources
@@ -591,8 +644,9 @@ impl EnvironmentBackend for DockerBackend {
         // even when the quay image exists locally, so without the tag
         // the run step would fail with the same 404 (live-verified on
         // tx-ubuntu).
+        let spec = mirrored_spec(spec);
         let mut pull = format!("docker pull {spec}");
-        if let Some(fallback) = quay_biocontainers_fallback(spec) {
+        if let Some(fallback) = quay_biocontainers_fallback(&spec) {
             pull.push_str(&format!(
                 " || (docker pull {fallback} && docker tag {fallback} {spec})"
             ));
@@ -670,6 +724,7 @@ impl EnvironmentBackend for SingularityBackend {
         // Same as docker: --bind sources must be absolute host paths.
         let workdir = absolute_host_path(workdir);
         let escaped_cmd = escape_for_sh_single_quote(command);
+        let spec = mirrored_spec(spec);
 
         Ok(format!(
             "{} exec --bind {workdir}:{workdir} {spec} sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'",
@@ -698,8 +753,13 @@ impl EnvironmentBackend for SingularityBackend {
         //   never fires and every rule re-pulls (issue #162). Only %3A
         //   is decoded on purpose: decoding %2F would introduce path
         //   separators into the segment-derived filename.
+        // The SIF name derives from the ORIGINAL spec's final segment (the
+        // registry host is not part of it), so the local-cache guard keeps
+        // matching across mirrored and direct boxes; only the pull target
+        // is rewritten through the box's mirrors.
+        let pull_spec = mirrored_spec(spec);
         Ok(format!(
-            "case '{spec}' in *://*) IMG=$(printf '%s' '{spec}' | sed 's#^docker://##; s#.*/##; s#%3A#:#g; s#%3a#:#g; s#:#_#g'); case \"$IMG\" in *.sif) ;; *) IMG=\"$IMG.sif\" ;; esac; [ -f \"$IMG\" ] || {b} pull \"$IMG\" {spec} ;; *) [ -f '{spec}' ] || {{ echo \"singularity spec '{spec}' is neither a pull URI nor an existing file\" >&2; exit 1; }} ;; esac",
+            "case '{spec}' in *://*) IMG=$(printf '%s' '{spec}' | sed 's#^docker://##; s#.*/##; s#%3A#:#g; s#%3a#:#g; s#:#_#g'); case \"$IMG\" in *.sif) ;; *) IMG=\"$IMG.sif\" ;; esac; [ -f \"$IMG\" ] || {b} pull \"$IMG\" {pull_spec} ;; *) [ -f '{spec}' ] || {{ echo \"singularity spec '{spec}' is neither a pull URI nor an existing file\" >&2; exit 1; }} ;; esac",
             b = self.binary,
         ))
     }
@@ -1915,6 +1975,79 @@ mod tests {
     fn singularity_cache_key() {
         let backend = SingularityBackend::new();
         assert_eq!(backend.cache_key("image.sif"), "singularity:image.sif");
+    }
+
+    // ── Registry mirror rewriting ────────────────────────────────────
+
+    #[test]
+    fn mirrored_spec_rewrites_docker_uri_hosts() {
+        let mirrors = Some(
+            "docker.io=m.example.com;registry-1.docker.io=m.example.com;ghcr.io=m-ghcr.example.com;quay.io=m-quay.example.com",
+        );
+        assert_eq!(
+            mirrored_spec_with("docker://uhrigs/arriba:2.4.0", mirrors),
+            "docker://m.example.com/uhrigs/arriba:2.4.0"
+        );
+        assert_eq!(
+            mirrored_spec_with("docker://registry-1.docker.io/uhrigs/arriba:2.4.0", mirrors),
+            "docker://m.example.com/uhrigs/arriba:2.4.0"
+        );
+        assert_eq!(
+            mirrored_spec_with("docker://ghcr.io/nf-core/tool:1.0", mirrors),
+            "docker://m-ghcr.example.com/nf-core/tool:1.0"
+        );
+        assert_eq!(
+            mirrored_spec_with("docker://quay.io/biocontainers/fastqc:0.12.1", mirrors),
+            "docker://m-quay.example.com/biocontainers/fastqc:0.12.1"
+        );
+    }
+
+    #[test]
+    fn mirrored_spec_rewrites_registry_qualified_docker_specs() {
+        let mirrors = Some("docker.io=m.example.com;ghcr.io=m-ghcr.example.com");
+        assert_eq!(
+            mirrored_spec_with("docker.io/uhrigs/arriba:2.4.0", mirrors),
+            "m.example.com/uhrigs/arriba:2.4.0"
+        );
+        assert_eq!(
+            mirrored_spec_with("ghcr.io/nf-core/tool:1.0", mirrors),
+            "m-ghcr.example.com/nf-core/tool:1.0"
+        );
+        // Bare docker names are the docker.io namespace and follow its mapping.
+        assert_eq!(
+            mirrored_spec_with("biocontainers/fastqc:0.12.1", mirrors),
+            "m.example.com/biocontainers/fastqc:0.12.1"
+        );
+    }
+
+    #[test]
+    fn mirrored_spec_leaves_unknown_hosts_and_disabled_config_alone() {
+        let mirrors = Some("docker.io=m.example.com");
+        assert_eq!(
+            mirrored_spec_with("docker://docker.elastic.co/beats/filebeat:8.0", mirrors),
+            "docker://docker.elastic.co/beats/filebeat:8.0"
+        );
+        assert_eq!(
+            mirrored_spec_with("docker://quay.io/biocontainers/fastqc:0.12.1", None),
+            "docker://quay.io/biocontainers/fastqc:0.12.1"
+        );
+        assert_eq!(
+            mirrored_spec_with("docker://uhrigs/arriba:2.4.0", Some("")),
+            "docker://uhrigs/arriba:2.4.0"
+        );
+        // Non-docker schemes pass through — their scheme prefix must never
+        // be treated as a docker.io namespace (live: https depot URIs).
+        assert_eq!(
+            mirrored_spec_with(
+                "https://depot.galaxyproject.org/singularity/gatk4%3A4.6.2.0--py310hdfd78af_1",
+                mirrors
+            ),
+            "https://depot.galaxyproject.org/singularity/gatk4%3A4.6.2.0--py310hdfd78af_1"
+        );
+        assert_eq!(
+            mirrored_spec_with("library://sylabsed/examples/lolcow", mirrors),
+            "library://sylabsed/examples/lolcow"
+        );
     }
 
     // ── VenvBackend ────────────────────────────────────────────────
