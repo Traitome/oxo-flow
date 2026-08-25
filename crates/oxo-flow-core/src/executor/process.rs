@@ -292,6 +292,11 @@ pub struct ExecutorConfig {
     /// hook on its own line (issue #92), e.g. `set -euo pipefail`.
     /// Opt-in: `None` keeps the historical exact command text.
     pub shell_prelude: Option<String>,
+    /// Shared checkpoint state (issue #194 B2): the freshness gate reads
+    /// recorded provenance checksums from it to decide reuse by CONTENT
+    /// identity instead of mtime. `None` (tests, cluster paths) keeps the
+    /// mtime-only gate.
+    pub checkpoint: Option<Arc<Mutex<super::checkpoint::CheckpointState>>>,
 }
 
 impl Default for ExecutorConfig {
@@ -314,6 +319,7 @@ impl Default for ExecutorConfig {
             storage_resolver: StorageResolver::with_local(),
             sensitive_values: Vec::new(),
             shell_prelude: None,
+            checkpoint: None,
         }
     }
 }
@@ -1263,9 +1269,20 @@ impl LocalExecutor {
         // Freshness gate: outputs up-to-date. For remote outputs the
         // uploaded objects are authoritative for existence — a locally
         // cached upload stage is not proof the cloud still has the file.
+        // Recorded provenance checksums tighten the gate (issue #194 B2):
+        // content identity wins over mtime when digests are available.
+        let freshness_checksums = match &self.config.checkpoint {
+            Some(ck) => Some(ck.lock().await.checksums.clone()),
+            None => None,
+        };
         if !self.config.force_rerun
             && !self.config.force_rules.contains(&rule.name)
-            && super::checkpoint::should_skip_rule(&rule, &self.config.workdir, wildcard_values)
+            && super::checkpoint::should_skip_rule_with_checksums(
+                &rule,
+                &self.config.workdir,
+                wildcard_values,
+                freshness_checksums.as_ref(),
+            )
             && self.remote_outputs_present(&uploads).await
         {
             // A 0-byte "up to date" output is usually a failed attempt's

@@ -156,6 +156,53 @@ fn aside_path(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
+/// Retention policy for `.oxo-failed` aside files (issue #194 C2): a run
+/// start removes aside files older than this many days so failure evidence
+/// ages out instead of accumulating indefinitely.
+pub const OXOX_FAILED_RETENTION_DAYS: u64 = 7;
+
+/// Remove `.oxo-failed` aside files older than `max_age_days` anywhere
+/// under `workdir` (production passes [`OXOX_FAILED_RETENTION_DAYS`]).
+/// Called once at run start; best-effort with a count — cleanup must never
+/// block a run.
+pub fn cleanup_stale_failed_asides(workdir: &Path, max_age_days: u64) -> usize {
+    use std::collections::VecDeque;
+    let max_age = std::time::Duration::from_secs(max_age_days * 24 * 3600);
+    let now = std::time::SystemTime::now();
+    let mut removed = 0usize;
+    let mut queue: VecDeque<PathBuf> = VecDeque::from([workdir.to_path_buf()]);
+    while let Some(dir) = queue.pop_front() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                // Never descend into the engine's own state dir — asides
+                // live next to workflow outputs, not inside .oxo-flow.
+                if path.file_name().and_then(|n| n.to_str()) == Some(".oxo-flow") {
+                    continue;
+                }
+                queue.push_back(path);
+            } else if path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(".oxo-failed"))
+                && std::fs::metadata(&path)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|modified| now.duration_since(modified).ok())
+                    .is_some_and(|age| age > max_age)
+                && std::fs::remove_file(&path).is_ok()
+            {
+                tracing::debug!(file = %path.display(), "removed stale .oxo-failed aside (retention)");
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,5 +348,24 @@ mod tests {
         let rule = rule_with_outputs(&["results/{sample}.txt"]);
         let values = HashMap::new();
         assert!(snapshot_outputs(&rule, dir.path(), &values).is_empty());
+    }
+
+    #[test]
+    fn cleanup_stale_failed_asides_removes_aged_evidence_and_spares_fresh() {
+        // issue #194 C2: retention with max_age_days = 0 removes every
+        // `.oxo-failed` aside (all files are older than an instant-old
+        // threshold), spares non-aside files, and does not descend into
+        // `.oxo-flow`.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("results")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".oxo-flow")).unwrap();
+        std::fs::write(dir.path().join("results/a.txt.oxo-failed"), "x").unwrap();
+        std::fs::write(dir.path().join("results/b.txt"), "keep").unwrap();
+        std::fs::write(dir.path().join(".oxo-flow/secret.oxo-failed"), "keep").unwrap();
+        let removed = cleanup_stale_failed_asides(dir.path(), 0);
+        assert_eq!(removed, 1, "only the results aside is aged out");
+        assert!(!dir.path().join("results/a.txt.oxo-failed").exists());
+        assert!(dir.path().join("results/b.txt").exists());
+        assert!(dir.path().join(".oxo-flow/secret.oxo-failed").exists());
     }
 }

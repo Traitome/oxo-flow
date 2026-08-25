@@ -103,7 +103,12 @@ impl RssSampler {
                                 return;
                             }
                             let snapshot: Vec<(u32, Arc<TrackedProcess>)> = {
-                                let guard = tracked.lock().expect("rss sampler lock");
+                                // A poisoned lock must not panic the sampler
+                                // thread (issue #194 §3.5) — the worst case
+                                // is one skipped tick, not a lost sampler.
+                                let guard = tracked
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                                 if guard.is_empty() {
                                     continue;
                                 }

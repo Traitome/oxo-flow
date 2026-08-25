@@ -877,6 +877,23 @@ pub fn lint_format(
             });
         }
 
+        // W026: `cache_key` is accepted but not yet consulted (issue #194
+        // M2). The field parses so old workflows keep validating, but the
+        // scheduler never reads it — silence would let authors believe
+        // content-addressed reuse is active when it is not.
+        if rule.cache_key.is_some() {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Info,
+                message: "rule declares `cache_key`, which is accepted for compatibility but \
+                          not yet consulted by the scheduler — content-addressed reuse is not \
+                          active (issue #194)"
+                    .to_string(),
+                rule: Some(rule.name.clone()),
+                code: "W026".to_string(),
+                suggestion: None,
+            });
+        }
+
         // W006: Naming convention (should use snake_case)
         if rule.name.contains('-') {
             diagnostics.push(Diagnostic {
@@ -3869,6 +3886,42 @@ mod tests {
             "the old suggestion ('add depends_on to every consumer') could not silence \
              the warning once dependents skip it: {suggestion}"
         );
+    }
+
+    // ---- W026: cache_key accepted but not consulted (issue #194 M2) ----
+
+    #[test]
+    fn lint_w026_flags_unimplemented_cache_key() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            output = ["out.txt"]
+            shell = "echo hi > out.txt"
+            cache_key = "my-content-key"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        let w026 = diagnostics.iter().find(|d| d.code == "W026");
+        assert!(
+            w026.is_some_and(|d| d.rule.as_deref() == Some("step1")),
+            "cache_key must raise W026: {diagnostics:?}"
+        );
+        // A workflow without cache_key stays silent.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            output = ["out.txt"]
+            shell = "echo hi > out.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(!diagnostics.iter().any(|d| d.code == "W026"));
     }
 
     // ---- W025: Deprecated rule-level threads/memory (issue #142 M12) ----

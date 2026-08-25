@@ -26,6 +26,32 @@ fn config_placeholder_values(config: &HashMap<String, toml::Value>) -> HashMap<S
         .collect()
 }
 
+/// Emit one progress narrative line to BOTH the console (stderr, exactly
+/// as before) and the tracing stream — the tracing copy is what the
+/// archived run log preserves (issue #194 B1). Colors live in the console
+/// form; the log side gets the same text and strips ANSI at write time.
+///
+/// Background runs skip the tracing copy: their stderr is already
+/// redirected onto the run log, so a second copy would duplicate the line
+/// (issue #194 A3).
+fn progress_narrate(msg: std::fmt::Arguments<'_>) {
+    eprintln!("{msg}");
+    if std::env::var_os("OXO_FLOW_STDERR_ALREADY_REDIRECTED").is_none() {
+        tracing::info!(target: "progress", message = %msg.to_string());
+    }
+}
+
+/// Emit a structured [`ExecutionEvent`] as one JSON line in the tracing
+/// stream (issue #194 B3): the event schema stops being dead code and the
+/// run log gains a machine-readable execution timeline alongside the prose.
+/// Background runs skip it for the same reason as [`progress_narrate`] —
+/// the redirected stderr already carries the line exactly once.
+fn emit_execution_event(event: oxo_flow_core::executor::ExecutionEvent) {
+    if std::env::var_os("OXO_FLOW_STDERR_ALREADY_REDIRECTED").is_none() {
+        tracing::info!(target: "execution_event", "{}", event.to_json_log());
+    }
+}
+
 /// Print the config-change impact summary (issue #62).
 ///
 /// Distinguishes the full invalidation set (checkpoint mutation; includes
@@ -290,22 +316,47 @@ fn validate_config_value(
     Ok(())
 }
 
-/// Remove files in the environment cache that have not been touched for
-/// `max_age_days` (issue #75). Returns the number of files removed.
+/// Remove entries in the environment cache that have not been touched for
+/// `max_age_days` (issue #75; recursive since #194 C1 — subdirectories
+/// were previously never aged out). Returns the number of entries removed.
 fn cleanup_cache_dir(cache_dir: &std::path::Path, max_age_days: u64) -> usize {
     let max_age = std::time::Duration::from_secs(max_age_days * 24 * 3600);
     let now = std::time::SystemTime::now();
     let mut removed = 0;
-    if let Ok(entries) = std::fs::read_dir(cache_dir) {
+    let mut stack = vec![cache_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file()
-                && let Ok(metadata) = std::fs::metadata(&path)
-                && let Ok(modified) = metadata.modified()
-                && let Ok(age) = now.duration_since(modified)
-                && age > max_age
-                && std::fs::remove_file(&path).is_ok()
-            {
+            let is_file = path.is_file();
+            if !is_file && !path.is_dir() {
+                continue;
+            }
+            let Ok(metadata) = std::fs::metadata(&path) else {
+                continue;
+            };
+            let Ok(modified) = metadata.modified() else {
+                continue;
+            };
+            let Ok(age) = now.duration_since(modified) else {
+                continue;
+            };
+            if age <= max_age {
+                // Young entries may still contain aged descendants; only
+                // descend into directories that are themselves young.
+                if !is_file {
+                    stack.push(path);
+                }
+                continue;
+            }
+            let ok = if is_file {
+                std::fs::remove_file(&path).is_ok()
+            } else {
+                std::fs::remove_dir_all(&path).is_ok()
+            };
+            if ok {
                 removed += 1;
             }
         }
@@ -711,11 +762,21 @@ pub async fn run_command(
             .unwrap_or("(not inside a git repository)"),
         effective_workdir_log.display(),
     );
-    let _run_log_guard = match crate::logging::activate_run_log(&run_log_path, &run_log_header) {
-        Ok(guard) => Some(guard),
-        Err(e) => {
-            tracing::warn!(error = %e, path = %run_log_path.display(), "failed to open run log; continuing without file logging");
-            None
+    // Background runs (issue #194 A3): `spawn_detached` already redirected
+    // this process's stdout/stderr onto the run log, so arming the tracing
+    // tee here would write every event TWICE into the same file. In that
+    // mode the header is printed to stderr (→ the redirect) and the tee is
+    // skipped entirely; foreground runs arm the tee as before.
+    let _run_log_guard = if std::env::var_os("OXO_FLOW_STDERR_ALREADY_REDIRECTED").is_some() {
+        eprintln!("{run_log_header}");
+        None
+    } else {
+        match crate::logging::activate_run_log(&run_log_path, &run_log_header) {
+            Ok(guard) => Some(guard),
+            Err(e) => {
+                tracing::warn!(error = %e, path = %run_log_path.display(), "failed to open run log; continuing without file logging");
+                None
+            }
         }
     };
     tracing::info!(
@@ -734,6 +795,10 @@ pub async fn run_command(
         dag.execution_order_for_targets(&target_refs)
             .with_context(|| "failed to resolve target rules")?
     };
+    emit_execution_event(oxo_flow_core::executor::ExecutionEvent::WorkflowStarted {
+        workflow_name: config.workflow.name.clone(),
+        total_rules: order.len(),
+    });
     eprintln!(
         "{} {} rules in execution order",
         "DAG:".bold().green(),
@@ -754,6 +819,20 @@ pub async fn run_command(
         .as_ref()
         .unwrap_or(&workdir_default)
         .join(".oxo-flow/checkpoint.json");
+    // Retention for failed-output aside files (issue #194 C2): stale
+    // `.oxo-failed` evidence ages out at run start instead of accumulating
+    // forever. Best-effort — cleanup must never block the run.
+    let stale_asides = oxo_flow_core::executor::output_invalidation::cleanup_stale_failed_asides(
+        workdir.as_ref().unwrap_or(&workdir_default),
+        oxo_flow_core::executor::output_invalidation::OXOX_FAILED_RETENTION_DAYS,
+    );
+    if stale_asides > 0 {
+        tracing::info!(
+            count = stale_asides,
+            "removed stale .oxo-failed aside files (retention)"
+        );
+    }
+
     let checkpoint: Arc<Mutex<CheckpointState>> = if checkpoint_path.exists() {
         Arc::new(Mutex::new(
             CheckpointState::load_from_file(&checkpoint_path).unwrap_or_default(),
@@ -1008,6 +1087,9 @@ pub async fn run_command(
     // redirects, nohup, CI, or schedulers. When that happens, fall back to plain
     // eprintln lines so the run is never silent.
     let is_tty = std::io::IsTerminal::is_terminal(&std::io::stderr());
+    // Background runs redirect stderr onto the run log (issue #194 A3):
+    // the bar's redraw sequences would land in the file as ANSI garbage.
+    let stderr_redirected = std::env::var_os("OXO_FLOW_STDERR_ALREADY_REDIRECTED").is_some();
 
     let progress = indicatif::ProgressBar::new(order.len() as u64);
     progress.set_style(
@@ -1017,6 +1099,12 @@ pub async fn run_command(
             )?
             .progress_chars("#>-"),
     );
+    if !is_tty || stderr_redirected {
+        // Draw into the void instead of stderr: no bar output, but every
+        // set_message/set_position call stays valid (message lines are
+        // printed separately via progress_narrate when !is_tty).
+        progress.set_draw_target(indicatif::ProgressDrawTarget::hidden());
+    }
 
     let timeout_secs: u64 = if timeout == "0" {
         0
@@ -1142,6 +1230,9 @@ pub async fn run_command(
         // Shared with the manifest snapshot resolver so staging and
         // invalidation always see the same backends (issue #80 item 2).
         storage_resolver: crate::commands::run_preview::storage_resolver(),
+        // The freshness gate reads recorded provenance checksums from the
+        // live checkpoint (issue #194 B2).
+        checkpoint: Some(checkpoint.clone()),
     };
 
     // Fail fast if any rule's declared request can never fit an explicit
@@ -1893,8 +1984,12 @@ pub async fn run_command(
 
             progress.set_message(format!("executing {}", rule_name));
             if !is_tty {
-                eprintln!("  {} {}", "Running:".bold().cyan(), rule_name);
+                progress_narrate(format_args!("  {} {}", "Running:".bold().cyan(), rule_name));
             }
+            emit_execution_event(oxo_flow_core::executor::ExecutionEvent::RuleStarted {
+                rule: rule_name.clone(),
+                command: None,
+            });
 
             let typed_config = config.config.clone();
             // Register the task name BEFORE the spawn: the closure moves
@@ -1933,8 +2028,18 @@ pub async fn run_command(
 
                         if record.status == oxo_flow_core::executor::JobStatus::Success {
                             success_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            emit_execution_event(oxo_flow_core::executor::ExecutionEvent::RuleCompleted {
+                                rule: rule_name.clone(),
+                                status: oxo_flow_core::executor::JobStatus::Success,
+                                duration_ms: (duration * 1000.0) as u64,
+                            });
                             if !is_tty {
-                                eprintln!("  {} {} ({:.1}s)", "✓".green(), rule_name, duration);
+                                progress_narrate(format_args!(
+                                    "  {} {} ({:.1}s)",
+                                    "✓".green(),
+                                    rule_name,
+                                    duration
+                                ));
                             }
                             let benchmark =
                                 oxo_flow_core::executor::checkpoint::BenchmarkRecord {
@@ -2013,7 +2118,7 @@ pub async fn run_command(
                             if let Some(code) = record.exit_code {
                                 err_msg.push_str(&format!("\nexit code: {}", code));
                             }
-                            eprintln!("  {} {}", "✗".red(), err_msg);
+                            progress_narrate(format_args!("  {} {}", "✗".red(), err_msg));
                             // Always record: keep_going needs the final
                             // listing, non-required failures are listed in
                             // either mode, and the AI recovery path must be
@@ -2086,6 +2191,11 @@ pub async fn run_command(
                             max_rss_mb: None,
                             cpu_seconds: None,
                         };
+                        emit_execution_event(oxo_flow_core::executor::ExecutionEvent::RuleCompleted {
+                            rule: rule_name.clone(),
+                            status: oxo_flow_core::executor::JobStatus::Failed,
+                            duration_ms: 0,
+                        });
                         let mut ck = checkpoint.lock().await;
                         ck.record_run(&record);
                         ck.mark_failed(&rule_name);
@@ -2093,7 +2203,12 @@ pub async fn run_command(
                             tracing::warn!("Failed to save checkpoint: {e}");
                         }
                         if !keep_going {
-                            eprintln!("  {} rule '{}' failed: {}", "✗".red(), rule_name, e);
+                            progress_narrate(format_args!(
+                                "  {} rule '{}' failed: {}",
+                                "✗".red(),
+                                rule_name,
+                                e
+                            ));
                         }
                         // Always record: keep_going needs the final
                         // listing, non-required failures are listed in
@@ -2474,23 +2589,29 @@ pub async fn run_command(
         }
     }
 
+    emit_execution_event(oxo_flow_core::executor::ExecutionEvent::WorkflowCompleted {
+        total_duration_ms: run_started.elapsed().as_millis() as u64,
+        succeeded: success_count,
+        failed: fail_count,
+        skipped: skipped_count,
+    });
     if non_required_fail_count > 0 {
-        eprintln!(
+        progress_narrate(format_args!(
             "\n{} {} succeeded, {} skipped, {} failed, {} non-required failed",
             "Done:".bold(),
             success_count,
             skipped_count,
             fail_count,
             non_required_fail_count
-        );
+        ));
     } else {
-        eprintln!(
+        progress_narrate(format_args!(
             "\n{} {} succeeded, {} skipped, {} failed",
             "Done:".bold(),
             success_count,
             skipped_count,
             fail_count
-        );
+        ));
     }
 
     // Automatic report snapshot (issue #83 P1-14): capture the final
@@ -4200,9 +4321,25 @@ pub async fn resume_command(
 #[cfg(test)]
 mod tests {
     use super::{
-        age_ready_list, known_modules_hint, parse_cli_overrides, substitute_source_placeholder,
+        age_ready_list, cleanup_cache_dir, known_modules_hint, parse_cli_overrides,
+        substitute_source_placeholder,
     };
     use std::collections::HashSet;
+
+    #[test]
+    fn cleanup_cache_dir_is_recursive() {
+        // issue #194 C1: nested directories age out too (max_age_days = 0
+        // makes everything eligible immediately).
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("sub").join("deeper");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(dir.path().join("old.txt"), "x").unwrap();
+        std::fs::write(nested.join("old-too.txt"), "y").unwrap();
+        let removed = cleanup_cache_dir(dir.path(), 0);
+        assert_eq!(removed, 2, "file + one nested directory removed");
+        assert!(!dir.path().join("old.txt").exists());
+        assert!(!dir.path().join("sub").exists());
+    }
 
     fn declared(keys: &[&str]) -> HashSet<String> {
         keys.iter().map(|k| k.to_string()).collect()

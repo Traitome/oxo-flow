@@ -545,7 +545,7 @@ memory = "32G"
 | `benchmark` | String | No | Benchmark output path for performance data |
 | `log` | String | No | Log file path for rule execution output |
 | `group` | String | No | Job group label for cluster submission grouping |
-| `cache_key` | String | No | Content-based cache key for output reuse |
+| `cache_key` | String | No | Accepted for compatibility but NOT yet consulted by the scheduler (validate raises W026) — content-addressed reuse is not active (issue #194) |
 | `input_function` | String | No | Dynamic input resolver function name |
 | `rule_metadata` | Table | No | Arbitrary domain-specific metadata (assay, organism, etc.) |
 | `env_group` | String | No | Reference to a named environment in `[env_groups]` |
@@ -1088,7 +1088,7 @@ benchmark = "benchmarks/align_{sample}.tsv"
 | Field | Type | Description |
 |-------|------|-------------|
 | `group` | String | Job group label for cluster submission grouping |
-| `cache_key` | String | Content-based cache key for reusing previous outputs |
+| `cache_key` | String | Accepted for compatibility but not yet consulted by the scheduler (validate raises W026; issue #194) |
 
 ```toml
 [[rules]]

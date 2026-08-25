@@ -1077,7 +1077,12 @@ async fn main() -> Result<()> {
     };
     let cli = Cli::from_arg_matches(&matches)?;
 
-    if cli.no_color || std::env::var_os("NO_COLOR").is_some() {
+    if cli.no_color
+        || std::env::var_os("NO_COLOR").is_some()
+        // Background runs redirect stderr onto the run log (issue #194 A3):
+        // colors would land in the file as ANSI escapes.
+        || std::env::var_os("OXO_FLOW_STDERR_ALREADY_REDIRECTED").is_some()
+    {
         colored::control::set_override(false);
     }
 
@@ -1088,12 +1093,16 @@ async fn main() -> Result<()> {
     } else {
         "info"
     };
+    // Background runs redirect stderr onto the run log (issue #194 A3):
+    // the fmt layer must not paint ANSI escapes into the file.
+    let stderr_redirected = std::env::var_os("OXO_FLOW_STDERR_ALREADY_REDIRECTED").is_some();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_level)),
         )
         .with_target(false)
+        .with_ansi(!stderr_redirected)
         // Logs go to stderr so machine-readable stdout (graph DOT output,
         // --json, pipes into dot/other tools) stays clean.
         .with_writer(crate::logging::TeeWriter)
