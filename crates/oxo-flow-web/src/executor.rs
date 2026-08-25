@@ -746,19 +746,33 @@ async fn append_metrics(workdir: &std::path::Path, line: &str, existing_lines: u
 
     if existing_lines < MAX_METRICS_LINES {
         use tokio::io::AsyncWriteExt;
-        let Ok(mut file) = tokio::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .await
-        else {
-            return existing_lines;
-        };
-        return if file.write_all(format!("{line}\n").as_bytes()).await.is_ok() {
-            existing_lines + 1
-        } else {
-            existing_lines
-        };
+        // One retry absorbs transient open failures under parallel load
+        // (CI flake: append_metrics_appends_below_cap saw the second
+        // append silently dropped — the old code swallowed open errors).
+        for attempt in 0..2 {
+            let Ok(mut file) = tokio::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .await
+            else {
+                if attempt == 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    continue;
+                }
+                tracing::warn!(
+                    "failed to open metrics file {} for append — dropping one metrics line",
+                    path.display()
+                );
+                return existing_lines;
+            };
+            return if file.write_all(format!("{line}\n").as_bytes()).await.is_ok() {
+                existing_lines + 1
+            } else {
+                existing_lines
+            };
+        }
+        unreachable!("the loop always returns");
     }
 
     // Over the cap: trim to the newest MAX_METRICS_LINES and rewrite once.

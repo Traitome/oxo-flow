@@ -1077,5 +1077,11 @@ jobs:
           cp -r /tmp/pages-extra/schema schema
           cp -r /tmp/pages-extra/superpowers superpowers
           git add -A
-          git commit -m "chore: preserve landing page + static assets (${GITHUB_SHA:0:7})" \
-            && git push origin gh-pages
+          # The tree is often unchanged (idempotent re-runs, deploy-only
+          # changes) — an empty commit fails the job for no reason.
+          if git diff --cached --quiet; then
+            echo "landing page + static assets already in place — nothing to commit"
+          else
+            git commit -m "chore: preserve landing page + static assets (${GITHUB_SHA:0:7})" \
+              && git push origin gh-pages
+          fi
