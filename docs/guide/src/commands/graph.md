@@ -83,6 +83,8 @@ oxo-flow graph pipeline.oxoflow -f mermaid -o pipeline.mmd
 
 ```bash
 oxo-flow graph pipeline.oxoflow -f metro -o pipeline.mmd
+# Render locally (requires nf-metro) or paste the .mmd content into the
+# online playground at https://seqeralabs.github.io/nf-metro/latest/playground/
 pip install nf-metro
 nf-metro render pipeline.mmd -o pipeline.svg
 ```
@@ -209,7 +211,10 @@ extra tooling.
 The `metro` format emits an
 [nf-metro](https://github.com/seqeralabs/nf-metro) definition — Mermaid
 `graph LR` extended with `%%metro` directives — that renders as a
-transit-map-style SVG:
+transit-map-style SVG. You can render it locally with `nf-metro render`
+or paste the `.mmd` content into the
+[nf-metro online playground](https://seqeralabs.github.io/nf-metro/latest/playground/)
+to preview it without installing anything:
 
 ```mmd
 %%metro line: generic | Analysis | #79706E
