@@ -699,7 +699,7 @@ impl EnvironmentBackend for SingularityBackend {
         //   is decoded on purpose: decoding %2F would introduce path
         //   separators into the segment-derived filename.
         Ok(format!(
-            "case '{spec}' in *://*) IMG=$(printf '%s' '{spec}' | sed 's#^docker://##; s#.*/##; s#%3A#:#g; s#%3a#:#g; s#:#_#g'); case \"$IMG\" in *.sif) ;; *) IMG=\"$IMG.sif\" ;; esac; [ -f \"$IMG\" ] || {b} pull {spec} ;; *) [ -f '{spec}' ] || {{ echo \"singularity spec '{spec}' is neither a pull URI nor an existing file\" >&2; exit 1; }} ;; esac",
+            "case '{spec}' in *://*) IMG=$(printf '%s' '{spec}' | sed 's#^docker://##; s#.*/##; s#%3A#:#g; s#%3a#:#g; s#:#_#g'); case \"$IMG\" in *.sif) ;; *) IMG=\"$IMG.sif\" ;; esac; [ -f \"$IMG\" ] || {b} pull \"$IMG\" {spec} ;; *) [ -f '{spec}' ] || {{ echo \"singularity spec '{spec}' is neither a pull URI nor an existing file\" >&2; exit 1; }} ;; esac",
             b = self.binary,
         ))
     }
@@ -1827,7 +1827,7 @@ mod tests {
     fn singularity_setup_command() {
         let backend = SingularityBackend::new();
         let cmd = backend.setup_command("docker://ubuntu:22.04").unwrap();
-        assert!(cmd.contains(" pull docker://ubuntu:22.04"));
+        assert!(cmd.contains(r#" pull "$IMG" docker://ubuntu:22.04"#));
         // inspect-first guard for the SIF naming
         assert!(cmd.starts_with("case 'docker://ubuntu:22.04' in *://*)"));
         assert!(cmd.contains("IMG=$(printf '%s' 'docker://ubuntu:22.04'"));
@@ -1853,6 +1853,26 @@ mod tests {
             "a final segment already ending in .sif must not get a second .sif: {cmd}"
         );
         assert!(cmd.contains("[ -f \"$IMG\" ] || "));
+    }
+
+    #[test]
+    fn singularity_setup_pulls_into_the_derived_artifact_name() {
+        // %-encoded HTTP URIs (issue #185): apptainer writes the URI's
+        // raw final segment (delly%3A1.7.2--h4d20210_0, no .sif) when
+        // pulling without an output argument, so the derived-name
+        // existence guard never matches and a second rule re-pulls —
+        // and apptainer refuses to overwrite the stale artifact, killing
+        // the run (live: clindet SV_delly_mini on tx-ubuntu). The pull
+        // must write into $IMG explicitly so check and artifact agree.
+        let backend = SingularityBackend::new();
+        let cmd = backend
+            .setup_command("https://depot.galaxyproject.org/singularity/delly%3A1.7.2--h4d20210_0")
+            .unwrap();
+        assert!(
+            cmd.contains(r#"[ -f "$IMG" ] || "#)
+                && cmd.contains(r#" pull "$IMG" https://depot.galaxyproject.org/singularity/delly%3A1.7.2--h4d20210_0"#),
+            "the pull must write into the derived $IMG name: {cmd}"
+        );
     }
 
     #[test]
