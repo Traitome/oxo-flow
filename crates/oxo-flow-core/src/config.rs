@@ -1476,6 +1476,13 @@ pub struct WorkflowConfig {
     /// serialized — user TOML cannot set it.
     #[serde(skip)]
     pub expansion_values: HashMap<String, crate::wildcard::WildcardValues>,
+
+    /// Populated by [`WorkflowConfig::expand_wildcards`] (pair fan-out)
+    /// and consumed the same way: `{pair_id}` (and the other pair
+    /// wildcards) inside an `expand_inputs` pattern resolve to the
+    /// instance's own pair. Never serialized — user TOML cannot set it.
+    #[serde(skip)]
+    pub expansion_pairs: HashMap<String, crate::wildcard::WildcardValues>,
     /// Instance → template rule name for every fan-out expansion (issue #74
     /// phase 3): the cluster driver groups instances into job arrays by
     /// their TEMPLATE, never by guessing name suffixes. Never serialized.
@@ -2988,6 +2995,7 @@ impl WorkflowConfig {
         // config that was expanded before.
         self.expansion_samples.clear();
         self.expansion_values.clear();
+        self.expansion_pairs.clear();
 
         // Validate [[values]] tables: non-empty names/values, unique names,
         // and no collisions with built-in wildcards (a rule referencing
@@ -3271,6 +3279,10 @@ impl WorkflowConfig {
                         }
                         self.expansion_samples
                             .insert(expanded.name.clone(), involved);
+                        // Per-instance pair/group bindings for expand_inputs
+                        // pattern resolution (see the field docs).
+                        self.expansion_pairs
+                            .insert(expanded.name.clone(), combo.clone());
 
                         if !value_combo.is_empty() {
                             self.expansion_values
@@ -3414,6 +3426,10 @@ impl WorkflowConfig {
                             .collect();
                         self.expansion_samples
                             .insert(expanded.name.clone(), involved);
+                        // Per-instance pair/group bindings for expand_inputs
+                        // pattern resolution (see the field docs).
+                        self.expansion_pairs
+                            .insert(expanded.name.clone(), combo.clone());
 
                         if !value_combo.is_empty() {
                             self.expansion_values
@@ -3827,6 +3843,20 @@ impl WorkflowConfig {
                 let bindings = self.expansion_values.get(&rule.name).cloned();
                 if let Some(bindings) = &bindings {
                     for (name, value) in bindings {
+                        variables
+                            .entry(name.clone())
+                            .or_insert_with(|| vec![value.clone()]);
+                    }
+                }
+
+                // Same per-instance binding for pair wildcards: `{pair_id}`
+                // (and the other pair keys) inside an expand pattern resolve
+                // to THIS instance's pair, so a per-pair gather rule picks up
+                // its own pair's files only (snakemake-style; the
+                // cohort-level `pair_id = "config.pairs_list"` variable form
+                // still wins when declared explicitly).
+                if let Some(pair_bindings) = self.expansion_pairs.get(&rule.name) {
+                    for (name, value) in pair_bindings {
                         variables
                             .entry(name.clone())
                             .or_insert_with(|| vec![value.clone()]);
@@ -7366,6 +7396,65 @@ shell = "true"
                 "calls/CASE_001.vcf.gz".to_string(),
                 "calls/CASE_002.vcf.gz".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn expand_inputs_bare_pair_id_binds_per_instance() {
+        // A rule that fans out per pair (its input/output carry {pair_id})
+        // and gathers with a bare {pair_id} inside the expand pattern:
+        // each instance must pick up ITS OWN pair's files only — the
+        // snakemake-style per-sample semantics (paired/tumor-only sinks).
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("perpair.oxoflow");
+        std::fs::write(
+            &workflow_path,
+            r#"
+            [workflow]
+            name = "perpair"
+
+            [[pairs]]
+            pair_id = "p1"
+            experiment = "t1"
+            control = "n1"
+
+            [[pairs]]
+            pair_id = "p2"
+            experiment = "t2"
+
+            [[rules]]
+            name = "gather_pair"
+            input = ["reads/{pair_id}.fq"]
+            expand_inputs = [
+                { pattern = "calls/{pair_id}.vcf.gz", variables = {} }
+            ]
+            output = ["done/{pair_id}.done"]
+            shell = "touch {output[0]}"
+            "#,
+        )
+        .unwrap();
+
+        let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+
+        let p1 = config
+            .rules
+            .iter()
+            .find(|r| r.name == "gather_pair_p1")
+            .expect("p1 instance survives");
+        let p2 = config
+            .rules
+            .iter()
+            .find(|r| r.name == "gather_pair_p2")
+            .expect("p2 instance survives");
+        assert_eq!(
+            p1.input.to_vec(),
+            vec!["reads/p1.fq".to_string(), "calls/p1.vcf.gz".to_string()]
+        );
+        assert_eq!(
+            p2.input.to_vec(),
+            vec!["reads/p2.fq".to_string(), "calls/p2.vcf.gz".to_string()]
         );
     }
 
