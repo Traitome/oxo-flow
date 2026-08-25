@@ -50,6 +50,10 @@ const KEYWORDS: &[(&str, &str)] = &[
     ("variant", "bcftools call"),
     ("variant", "bcftools mpileup"),
     ("variant", "gatk"),
+    // Alignment-adjacent BAM processing (MarkDuplicates is the hub rule
+    // most downstream stages consume — staging it as align keeps the
+    // stage flow acyclic, live: community rnaseq).
+    ("align", "picard"),
     // Annotation.
     ("annotate", "snpeff"),
     ("annotate", "snpsift"),
@@ -58,13 +62,18 @@ const KEYWORDS: &[(&str, &str)] = &[
     // Quantification.
     ("quantify", "featurecounts"),
     ("quantify", "htseq"),
-    ("quantify", "salmon"),
+    ("quantify", "salmon quant"),
     ("quantify", "kallisto"),
     ("quantify", "rsem"),
     ("quantify", "stringtie"),
     // Alignment.
     ("align", "bwa"),
-    ("align", "star"),
+    ("align", "star "),
+    ("align", "samtools sort"),
+    ("align", "samtools index"),
+    ("align", "samtools stats"),
+    ("align", "samtools flagstat"),
+    ("align", "samtools idxstats"),
     ("align", "hisat2"),
     ("align", "minimap2"),
     ("align", "bowtie"),
@@ -77,10 +86,13 @@ const KEYWORDS: &[(&str, &str)] = &[
     // QC.
     ("qc", "fastqc"),
     ("qc", "fastq_screen"),
+    ("qc", "qualimap"),
+    ("qc", "fq_lint"),
+    ("qc", "fq lint"),
+    ("qc", "fqlint"),
     // Merge / concatenation (substring " cat"/" merge"/" concat" to avoid
     // matching "scatter" or "concatenate" noise).
     ("merge", "samtools merge"),
-    ("merge", "samtools cat"),
     ("merge", "bcftools merge"),
     ("merge", "bcftools concat"),
     ("merge", "picard merge"),

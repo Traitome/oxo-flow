@@ -566,6 +566,154 @@ impl WorkflowDag {
     /// Each rule becomes a station; each dependency becomes an edge carrying
     /// the *source* rule's stage line. Stages are inferred per rule (see
     /// [`crate::stage`]); distinct stages become distinct sections.
+    /// Break stage-level cycles by demoting inferred stages to "generic".
+    ///
+    /// The rule DAG is acyclic by construction, but the coarse stage labels can
+    /// make the stage flow circular (e.g. a mark-duplicates hub rule staged
+    /// differently from its consumers). Rules carrying an explicit `tags` stage
+    /// keep it (user intent wins); everything else may be demoted until the
+    /// stage graph is acyclic. Deterministic: each iteration removes one rule
+    /// from a non-generic stage, so the loop terminates.
+    fn break_stage_cycles(
+        graph: &DiGraph<DagNode, ()>,
+        rules: &[Rule],
+        node_stage: &mut HashMap<NodeIndex, String>,
+    ) {
+        loop {
+            // Stage-level edges, deduplicated.
+            let mut stage_edges: std::collections::HashSet<(String, String)> =
+                std::collections::HashSet::new();
+            for edge in graph.edge_indices() {
+                let (src, dst) = graph.edge_endpoints(edge).unwrap();
+                let s = node_stage[&src].clone();
+                let d = node_stage[&dst].clone();
+                if s != d {
+                    stage_edges.insert((s, d));
+                }
+            }
+
+            // Find one cycle in the stage graph (DFS with a path stack).
+            fn dfs(
+                current: &str,
+                edges: &std::collections::HashSet<(String, String)>,
+                stack: &mut Vec<String>,
+                on_stack: &mut std::collections::HashSet<String>,
+                visited: &mut std::collections::HashSet<String>,
+            ) -> Option<Vec<(String, String)>> {
+                if !on_stack.insert(current.to_string()) {
+                    // Cycle found: the segment from current..end of stack.
+                    let start = stack.iter().position(|s| s == current).unwrap_or(0);
+                    let cycle: Vec<(String, String)> = stack[start..]
+                        .windows(2)
+                        .map(|w| (w[0].clone(), w[1].clone()))
+                        .collect();
+                    let cycle = if cycle.is_empty() {
+                        vec![(current.to_string(), current.to_string())]
+                    } else {
+                        cycle
+                    };
+                    // Close the loop back to current.
+                    let mut cycle = cycle;
+                    if let Some(last) = stack.last()
+                        && *last != current
+                    {
+                        cycle.push((last.clone(), current.to_string()));
+                    }
+                    return Some(cycle);
+                }
+                if !visited.insert(current.to_string()) {
+                    on_stack.remove(current);
+                    return None;
+                }
+                stack.push(current.to_string());
+                for (s, d) in edges {
+                    if s == current
+                        && let Some(found) = dfs(d, edges, stack, on_stack, visited)
+                    {
+                        return Some(found);
+                    }
+                }
+                stack.pop();
+                on_stack.remove(current);
+                None
+            }
+
+            let mut cycle: Option<Vec<(String, String)>> = None;
+            let mut visited = std::collections::HashSet::new();
+            let all_stages: std::collections::HashSet<String> = stage_edges
+                .iter()
+                .flat_map(|(s, d)| [s.clone(), d.clone()])
+                .collect();
+            for start in all_stages {
+                let mut stack = Vec::new();
+                let mut on_stack = std::collections::HashSet::new();
+                if let Some(found) = dfs(
+                    &start,
+                    &stage_edges,
+                    &mut stack,
+                    &mut on_stack,
+                    &mut visited,
+                ) {
+                    cycle = Some(found);
+                    break;
+                }
+            }
+
+            let Some(cycle) = cycle else {
+                return; // acyclic — done
+            };
+
+            // Demote one inferred rule participating in the cycle: the source
+            // rule of the first cycle edge whose stage is not "generic".
+            let mut demoted = false;
+            for (s, d) in &cycle {
+                if *s == "generic" {
+                    continue;
+                }
+                for edge in graph.edge_indices() {
+                    let (a, b) = graph.edge_endpoints(edge).unwrap();
+                    if node_stage[&a] != *s || node_stage[&b] != *d {
+                        continue;
+                    }
+                    let rule_idx = graph[a].rule_index;
+                    let explicitly_tagged = rules.get(rule_idx).is_some_and(|r| !r.tags.is_empty());
+                    if !explicitly_tagged {
+                        node_stage.insert(a, "generic".to_string());
+                        demoted = true;
+                        break;
+                    }
+                }
+                if demoted {
+                    break;
+                }
+            }
+            if !demoted {
+                // Every participant is explicitly tagged or already generic —
+                // renderability beats stage fidelity: demote the first
+                // non-generic participant regardless.
+                for (s, _d) in &cycle {
+                    if *s == "generic" {
+                        continue;
+                    }
+                    for edge in graph.edge_indices() {
+                        let (a, _b) = graph.edge_endpoints(edge).unwrap();
+                        if node_stage[&a] == *s {
+                            node_stage.insert(a, "generic".to_string());
+                            demoted = true;
+                            break;
+                        }
+                    }
+                    if demoted {
+                        break;
+                    }
+                }
+            }
+            if !demoted {
+                return; // unreachable in practice; avoid an infinite loop
+            }
+        }
+    }
+
     pub fn to_metro(&self, rules: &[Rule]) -> Result<String> {
         // Stage per node (fallback "generic" when `rule_index` is out of
         // range — cannot happen for a DAG built from `rules`, but stay total).
@@ -577,6 +725,12 @@ impl WorkflowDag {
                 .unwrap_or_else(|| "generic".to_string());
             node_stage.insert(node, stage);
         }
+
+        // nf-metro rejects cyclic layouts: a hub rule staged differently
+        // from its consumers can make the STAGE flow circular even though
+        // the rule DAG is acyclic (live: community rnaseq). Demote inferred
+        // stages until the stage graph admits a topological order.
+        Self::break_stage_cycles(&self.graph, rules, &mut node_stage);
 
         let nodes = self.nodes_by_rule_index();
         let edges = self.sorted_edges();
