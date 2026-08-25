@@ -1347,6 +1347,78 @@ impl LocalExecutor {
             validate_path_safety(&self.config.workdir, &output_pattern)?;
         }
 
+        // Content-addressed reuse (issue #194 §2.3): when the rule declares
+        // `cache_key`, its outputs are not already fresh, and no forced
+        // re-run is requested, an existing cache entry whose identity
+        // matches the current inputs, outputs, and rendered command is
+        // restored instead of executing the shell. Remote outputs and
+        // chunk-cleanup rules never participate; cache failures degrade to
+        // normal execution (reuse is an optimization, never a gate).
+        let cache_manifest = if rule.cache_key.is_none()
+            || self.config.force_rerun
+            || self.config.force_rules.contains(&rule.name)
+            || !uploads.is_empty()
+            || rule.cleanup_chunks
+        {
+            None
+        } else {
+            match super::checkpoint::snapshot_input_manifest(
+                &rule,
+                &self.config.workdir,
+                wildcard_values,
+                &self.config.storage_resolver,
+            ) {
+                Ok(manifest) => Some(manifest.unwrap_or_default()),
+                Err(e) => {
+                    tracing::debug!(
+                        rule = %rule.name,
+                        error = %e,
+                        "input manifest unavailable — content cache lookup skipped"
+                    );
+                    None
+                }
+            }
+        };
+        let cache_plan = cache_manifest.as_ref().and_then(|manifest| {
+            let command = resolved_commands.first().map(String::as_str)?;
+            let key =
+                super::content_cache::cache_entry_key(&rule, wildcard_values, command, manifest)?;
+            Some((
+                key.clone(),
+                super::content_cache::cache_entry_dir(&self.config.workdir, &rule.name, &key),
+            ))
+        });
+        if let Some((_, entry_dir)) = &cache_plan {
+            match super::content_cache::restore_outputs(
+                &rule,
+                &self.config.workdir,
+                wildcard_values,
+                entry_dir,
+            )
+            .await
+            {
+                Ok(true) => {
+                    tracing::info!(
+                        rule = %rule.name,
+                        cache_key = rule.cache_key.as_deref().unwrap_or(""),
+                        "restored outputs from content cache"
+                    );
+                    record.status = JobStatus::Success;
+                    record.skip_reason = Some("restored from content cache".to_string());
+                    record.finished_at = Some(Utc::now());
+                    return Ok(record);
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        rule = %rule.name,
+                        error = %e,
+                        "content cache restore failed — executing instead"
+                    );
+                }
+            }
+        }
+
         // Warn if GPU is requested but running on local executor (no GPU scheduling)
         if rule.resources.gpu_spec.is_some() {
             tracing::warn!(
@@ -1730,6 +1802,29 @@ impl LocalExecutor {
                         }
                         true
                     };
+                // Best-effort populate (issue #194 §2.3): a later run with
+                // identical content skips the shell entirely. Failure only
+                // warns — caching must never fail a successful rule.
+                if let (Some((key, entry_dir)), Some(manifest)) = (&cache_plan, &cache_manifest)
+                    && let Some(command) = resolved_commands.first()
+                    && let Err(e) = super::content_cache::populate_outputs(
+                        &rule,
+                        &self.config.workdir,
+                        wildcard_values,
+                        entry_dir,
+                        manifest,
+                        command,
+                        key,
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        rule = %rule.name,
+                        error = %e,
+                        "content cache populate failed"
+                    );
+                }
+
                 // Scratch is transient: a fully successful rule drops it.
                 // Failures (command, validation, upload) keep it around for
                 // debugging, and the error message names its path.
@@ -1855,6 +1950,16 @@ impl LocalExecutor {
                 .map_err(|e| OxoFlowError::Execution {
                     rule: rule_name.to_string(),
                     message: format!("failed to upload remote output '{}': {e}", remote.raw),
+                })?;
+            // Post-upload verification (issue #194 §2.11): the remote copy
+            // must match the local file before the rule is checkpointed as
+            // complete — a silently truncated transfer would otherwise be
+            // recorded as a healthy output.
+            crate::storage::verify_upload(backend.as_ref(), local, remote)
+                .await
+                .map_err(|e| OxoFlowError::Execution {
+                    rule: rule_name.to_string(),
+                    message: format!("verification of remote output '{}' failed: {e}", remote.raw),
                 })?;
         }
         Ok(())
@@ -2072,7 +2177,7 @@ fn create_rule_dir(path: &Path, rule: &Rule, what: &str) -> Result<()> {
 /// Directory-name-safe rule names: alphanumerics plus `. _ -` survive,
 /// everything else becomes `_` (rule names admit `:` per `Rule::validate`,
 /// which is not a safe directory character everywhere).
-fn sanitize_dir_component(name: &str) -> String {
+pub(super) fn sanitize_dir_component(name: &str) -> String {
     name.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
@@ -2144,22 +2249,92 @@ pub(super) fn fixup_container_wrapper(
     format!("{fixed}{rest}")
 }
 
-/// Move a file or directory, falling back to copy+delete when a plain
-/// rename fails (e.g. scratch and workdir live on different filesystems).
+/// Move a file or directory, falling back to an atomic copy+delete when a
+/// plain rename fails (e.g. scratch and workdir live on different
+/// filesystems).
+///
+/// The fallback is crash-safe (issue #194 §2.5): content lands in a
+/// temporary sibling of `dest` on the DESTINATION filesystem, is fsynced,
+/// then renamed into place with the parent directory fsynced. A crash at
+/// any point leaves either nothing at `dest` or the complete copy — never
+/// a truncated output, which the direct copy this replaced could leave
+/// behind when the run died mid-copy.
 async fn move_path(src: &Path, dest: &Path) -> std::io::Result<()> {
     match tokio::fs::rename(src, dest).await {
         Ok(()) => Ok(()),
         Err(_) => {
-            copy_tree(src, dest)?;
+            copy_tree_atomic(src, dest)?;
             remove_tree(src).await
         }
+    }
+}
+
+/// Copy a file or directory tree onto `dest` atomically: into a temporary
+/// sibling first, fsync, rename over the target, fsync the parent dir.
+pub(super) fn copy_tree_atomic(src: &Path, dest: &Path) -> std::io::Result<()> {
+    let tmp = sibling_tmp_path(dest);
+    if let Err(e) = copy_tree(src, &tmp) {
+        discard_tmp(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = sync_path(&tmp) {
+        discard_tmp(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = std::fs::rename(&tmp, dest) {
+        discard_tmp(&tmp);
+        return Err(e);
+    }
+    sync_parent_dir(dest)
+}
+
+/// `{dest}.oxo-tmp` — a sibling of the destination, so the final rename
+/// never crosses filesystems. Concurrent moves to the same destination do
+/// not occur (scratch dirs are per-instance unique), so the fixed suffix
+/// cannot collide.
+fn sibling_tmp_path(dest: &Path) -> PathBuf {
+    let mut name = dest
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    name.push(".oxo-tmp");
+    dest.with_file_name(name)
+}
+
+/// Best-effort removal of a failed atomic-copy temporary path (file or
+/// directory) — cleanup failure must never mask the original error.
+fn discard_tmp(path: &Path) {
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_dir_all(path);
+}
+
+/// fsync a path's contents. Opening a directory handle is not portable
+/// (Windows), so a failed open of a directory degrades to a debug note
+/// instead of failing the move.
+fn sync_path(path: &Path) -> std::io::Result<()> {
+    match std::fs::File::open(path) {
+        Ok(file) => file.sync_all(),
+        Err(e) if path.is_dir() => {
+            tracing::debug!(path = %path.display(), error = %e, "skipping fsync of directory (unsupported on this platform)");
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// fsync the parent directory so the rename itself is durable; on
+/// platforms that cannot open a directory handle this is best-effort.
+fn sync_parent_dir(path: &Path) -> std::io::Result<()> {
+    match path.parent() {
+        Some(parent) => sync_path(parent),
+        None => Ok(()),
     }
 }
 
 /// Recursively copy a file or directory tree (synchronous: output moves
 /// touch bounded local files; `std::fs` avoids an infinitely sized future
 /// that a recursive `async fn` would need to box).
-fn copy_tree(src: &Path, dest: &Path) -> std::io::Result<()> {
+pub(super) fn copy_tree(src: &Path, dest: &Path) -> std::io::Result<()> {
     let meta = std::fs::metadata(src)?;
     if meta.is_dir() {
         std::fs::create_dir_all(dest)?;
@@ -2196,20 +2371,69 @@ async fn remove_tree(path: &Path) -> std::io::Result<()> {
 /// (checkpoint, report, AI recovery, web). Every NON-EMPTY value is
 /// masked — 3-character credentials are rare but real, and masking has no
 /// false-positive cost for keys the user declared sensitive (issue #136).
-/// Structured forms of a secret (JSON/YAML serialization, base64) do not
-/// match the exact value and pass through — the documented limitation of
-/// exact-match masking.
+/// Values of [`MASK_VARIANT_MIN_LEN`]+ characters also mask their encoded
+/// forms — base64 (standard and URL-safe), percent-encoding, and JSON
+/// string escaping — so a secret embedded in structured output is
+/// redacted too (issue #194 §1.4).
 pub fn mask_sensitive(text: &str, values: &[String]) -> String {
     if text.is_empty() || values.is_empty() {
         return text.to_string();
     }
     let mut masked = text.to_string();
     for value in values {
-        if !value.is_empty() {
-            masked = masked.replace(value.as_str(), "***");
+        if value.is_empty() {
+            continue;
+        }
+        masked = masked.replace(value.as_str(), "***");
+        if value.len() >= MASK_VARIANT_MIN_LEN {
+            for variant in sensitive_variants(value) {
+                masked = masked.replace(&variant, "***");
+            }
         }
     }
     masked
+}
+
+/// Values shorter than this only mask in plaintext form: their encoded
+/// variants are too collision-prone to redact (a 3-char secret
+/// base64-encodes to a 4-char token that can appear legitimately in a
+/// log). The plaintext itself is still masked per the issue #136 policy.
+const MASK_VARIANT_MIN_LEN: usize = 4;
+
+/// Encoded forms of a secret that surface in structured output: base64
+/// (standard and URL-safe, padding kept), percent-encoding, and the
+/// JSON-string form without its surrounding quotes (issue #194 §1.4).
+fn sensitive_variants(value: &str) -> Vec<String> {
+    use base64::Engine as _;
+    let mut variants = vec![
+        base64::engine::general_purpose::STANDARD.encode(value.as_bytes()),
+        base64::engine::general_purpose::URL_SAFE.encode(value.as_bytes()),
+        percent_encode(value),
+    ];
+    if let Ok(json) = serde_json::to_string(value) {
+        variants.push(json.trim_matches('"').to_string());
+    }
+    variants
+}
+
+/// RFC 3986 percent-encoding: unreserved characters stay literal, every
+/// other byte becomes `%XX` (uppercase hex).
+fn percent_encode(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(*byte as char);
+            }
+            _ => {
+                out.push('%');
+                out.push(HEX[(byte >> 4) as usize] as char);
+                out.push(HEX[(byte & 0x0F) as usize] as char);
+            }
+        }
+    }
+    out
 }
 
 fn push_stderr_note(record: &mut JobRecord, note: &str) {
@@ -2796,6 +3020,115 @@ mod tests {
         // Empty input and empty value list are no-ops.
         assert_eq!(mask_sensitive("plain", &[]), "plain");
         assert_eq!(mask_sensitive("plain", &["".to_string()]), "plain");
+    }
+
+    #[test]
+    fn mask_sensitive_redacts_encoded_variants() {
+        // Expected encodings cross-checked against Python
+        // base64/urllib.parse.quote/json.dumps (issue #194 §1.4).
+        let values = vec!["s3cr*t!".to_string(), "say\"hi".to_string()];
+        let text = concat!(
+            "plain s3cr*t! b64 czNjcip0IQ== url s3cr%2At%21 ",
+            "plain2 say\"hi b64 c2F5Imhp url say%22hi json say\\\"hi"
+        );
+        let masked = mask_sensitive(text, &values);
+        assert_eq!(
+            masked,
+            "plain *** b64 *** url *** plain2 *** b64 *** url *** json ***"
+        );
+        assert!(!masked.contains("czNjcip0IQ=="));
+        assert!(!masked.contains("c2F5Imhp"));
+        assert!(!masked.contains("%2A"));
+        assert!(!masked.contains("%22"));
+    }
+
+    #[test]
+    fn mask_sensitive_keeps_short_values_plaintext_only() {
+        // Below MASK_VARIANT_MIN_LEN the encoded forms are too
+        // collision-prone to redact ("ab" base64-encodes to "YWI=" — a
+        // token that can appear in any log); the plaintext still masks.
+        let text = "ab here, b64 YWI= stays";
+        assert_eq!(
+            mask_sensitive(text, &["ab".to_string()]),
+            "*** here, b64 YWI= stays"
+        );
+    }
+
+    #[test]
+    fn percent_encode_keeps_unreserved_and_encodes_the_rest() {
+        assert_eq!(percent_encode("s3cr*t!"), "s3cr%2At%21");
+        assert_eq!(percent_encode("a b/c+d~.-_"), "a%20b%2Fc%2Bd~.-_");
+        assert_eq!(percent_encode("plain"), "plain");
+        assert_eq!(percent_encode(""), "");
+    }
+
+    // ── Cross-filesystem atomic output moves (issue #194 §2.5) ─────────
+
+    fn block_on<F: std::future::Future>(future: F) -> F::Output {
+        tokio::runtime::Runtime::new().unwrap().block_on(future)
+    }
+
+    #[test]
+    fn move_path_renames_within_one_filesystem() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("a");
+        let dest = dir.path().join("b");
+        std::fs::write(&src, b"content").expect("write src");
+        block_on(move_path(&src, &dest)).expect("move");
+        assert_eq!(std::fs::read(&dest).expect("read dest"), b"content");
+        assert!(!src.exists(), "source removed after rename");
+    }
+
+    #[test]
+    fn copy_tree_atomic_writes_complete_content_and_leaves_no_tmp() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("a");
+        let dest = dir.path().join("b");
+        std::fs::write(&src, b"content").expect("write src");
+        copy_tree_atomic(&src, &dest).expect("atomic copy");
+        assert_eq!(std::fs::read(&dest).expect("read dest"), b"content");
+        assert!(
+            !dir.path().join("b.oxo-tmp").exists(),
+            "the temporary sibling is gone — no .oxo-tmp litter"
+        );
+    }
+
+    #[test]
+    fn copy_tree_atomic_copies_directories_recursively() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("tree");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("f1"), b"one").unwrap();
+        std::fs::create_dir(src.join("sub")).unwrap();
+        std::fs::write(src.join("sub").join("f2"), b"two").unwrap();
+        let dest = dir.path().join("moved");
+        copy_tree_atomic(&src, &dest).expect("atomic dir copy");
+        assert_eq!(std::fs::read(dest.join("f1")).unwrap(), b"one");
+        assert_eq!(std::fs::read(dest.join("sub").join("f2")).unwrap(), b"two");
+        assert!(!dir.path().join("moved.oxo-tmp").exists());
+    }
+
+    #[test]
+    fn copy_tree_atomic_replaces_existing_dest() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("a");
+        let dest = dir.path().join("b");
+        std::fs::write(&src, b"new").unwrap();
+        std::fs::write(&dest, b"old").unwrap();
+        copy_tree_atomic(&src, &dest).expect("atomic copy over existing dest");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+    }
+
+    #[test]
+    fn move_path_missing_source_errors_and_leaves_no_tmp() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("missing");
+        let dest = dir.path().join("dest");
+        // Plain rename fails (ENOENT), the copy fallback fails too — the
+        // error surfaces and no temporary sibling remains.
+        block_on(move_path(&src, &dest)).expect_err("missing src must fail");
+        assert!(!dest.exists());
+        assert!(!dir.path().join("dest.oxo-tmp").exists(), "no tmp litter");
     }
 
     fn executor_with(max_threads: u32, max_memory_mb: u64) -> LocalExecutor {

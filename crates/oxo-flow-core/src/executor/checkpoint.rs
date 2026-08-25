@@ -64,30 +64,67 @@ pub fn manifests_match(recorded: &[InputManifestEntry], current: &[InputManifest
     recorded
         .iter()
         .zip(current)
-        .all(|(r, c)| match (&r.remote, &c.remote) {
-            // Local entries: the existing size+mtime(+sha256) policy.
-            (None, None) => {
-                r.path == c.path
-                    && r.size == c.size
-                    && match &r.hash {
-                        Some(rec_hash) => c.hash.as_deref() == Some(rec_hash.as_str()),
-                        None => r.mtime_nanos == c.mtime_nanos,
-                    }
+        .all(|(r, c)| entry_matches(r, c))
+}
+
+/// Whether one manifest entry still describes the current file state.
+fn entry_matches(recorded: &InputManifestEntry, current: &InputManifestEntry) -> bool {
+    match (&recorded.remote, &current.remote) {
+        // Local entries: the existing size+mtime(+sha256) policy.
+        (None, None) => {
+            recorded.path == current.path
+                && recorded.size == current.size
+                && match &recorded.hash {
+                    Some(rec_hash) => current.hash.as_deref() == Some(rec_hash.as_str()),
+                    None => recorded.mtime_nanos == current.mtime_nanos,
+                }
+        }
+        // Remote entries (issue #78 P2): scheme+key+size+etag. When neither
+        // side has an etag, size is the only identity left (documented
+        // conservative-for-availability fallback).
+        (Some(rr), Some(rc)) => {
+            rr.scheme == rc.scheme
+                && rr.key == rc.key
+                && rr.size == rc.size
+                && match (&rr.etag, &rc.etag) {
+                    (Some(a), Some(b)) => a == b,
+                    _ => true,
+                }
+        }
+        _ => false,
+    }
+}
+
+/// Human-readable description of what changed between a recorded manifest
+/// and the current file set — `"<path> (changed)"`, `"<path> (added)"`,
+/// `"<path> (removed)"` — the explanatory side of [`manifests_match`]
+/// (issue #194 §2.10: post-run re-verification reports WHICH inputs moved).
+pub fn manifest_changes(
+    recorded: &[InputManifestEntry],
+    current: &[InputManifestEntry],
+) -> Vec<String> {
+    let mut changes = Vec::new();
+    let recorded_by_path: HashMap<&str, &InputManifestEntry> =
+        recorded.iter().map(|e| (e.path.as_str(), e)).collect();
+    let current_by_path: HashMap<&str, &InputManifestEntry> =
+        current.iter().map(|e| (e.path.as_str(), e)).collect();
+
+    for (path, recorded_entry) in &recorded_by_path {
+        match current_by_path.get(path) {
+            Some(current_entry) if !entry_matches(recorded_entry, current_entry) => {
+                changes.push(format!("{path} (changed)"));
             }
-            // Remote entries (issue #78 P2): scheme+key+size+etag. When neither
-            // side has an etag, size is the only identity left (documented
-            // conservative-for-availability fallback).
-            (Some(rr), Some(rc)) => {
-                rr.scheme == rc.scheme
-                    && rr.key == rc.key
-                    && rr.size == rc.size
-                    && match (&rr.etag, &rc.etag) {
-                        (Some(a), Some(b)) => a == b,
-                        _ => true,
-                    }
-            }
-            _ => false,
-        })
+            Some(_) => {}
+            None => changes.push(format!("{path} (removed)")),
+        }
+    }
+    for path in current_by_path.keys() {
+        if !recorded_by_path.contains_key(path) {
+            changes.push(format!("{path} (added)"));
+        }
+    }
+    changes.sort();
+    changes
 }
 
 /// Performance metrics recorded after executing a rule.
@@ -1486,6 +1523,37 @@ mod tests {
         }];
         // Content identical: an mtime-only touch no longer invalidates.
         assert!(manifests_match(&recorded, &current));
+    }
+
+    #[test]
+    fn manifest_changes_lists_added_removed_and_changed_paths() {
+        fn local(path: &str, size: u64, mtime: i128, hash: Option<&str>) -> InputManifestEntry {
+            InputManifestEntry {
+                path: path.to_string(),
+                size,
+                mtime_nanos: mtime,
+                hash: hash.map(str::to_string),
+                remote: None,
+            }
+        }
+        let recorded = vec![
+            local("a.txt", 10, 100, Some("sha256:aaa")),
+            local("b.txt", 20, 200, Some("sha256:bbb")),
+            local("gone.txt", 5, 50, None),
+        ];
+        let current = vec![
+            // mtime moved but the content hash matches — not a change.
+            local("a.txt", 10, 999, Some("sha256:aaa")),
+            // Same path, different content — a real change.
+            local("b.txt", 20, 200, Some("sha256:CHANGED")),
+            local("new.txt", 1, 1, None),
+        ];
+        let changes = manifest_changes(&recorded, &current);
+        assert_eq!(
+            changes,
+            vec!["b.txt (changed)", "gone.txt (removed)", "new.txt (added)"]
+        );
+        assert!(!manifests_match(&recorded, &current));
     }
 
     #[tokio::test]

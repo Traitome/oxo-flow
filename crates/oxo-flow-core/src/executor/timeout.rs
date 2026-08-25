@@ -4,8 +4,9 @@
 pub const SIGTERM_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Kill a process and all its descendants (deepest first), gracefully:
-/// SIGTERM the whole subtree, poll [`SIGTERM_GRACE`] for survivors, then
-/// SIGKILL whatever remains.
+/// SIGTERM the whole subtree, poll [`SIGTERM_GRACE`] for survivors,
+/// re-scan for descendants spawned during the window, then SIGKILL
+/// whatever remains.
 ///
 /// Rules deliberately run inside the caller's process group (see
 /// `process::execute_rule` — "one run = one process group"), so a timeout
@@ -15,36 +16,19 @@ pub const SIGTERM_GRACE: std::time::Duration = std::time::Duration::from_secs(10
 /// that detached from the group. Only available on Unix systems.
 #[cfg(unix)]
 pub fn kill_process_tree(pid: u32) -> std::io::Result<()> {
+    kill_process_tree_with_grace(pid, SIGTERM_GRACE)
+}
+
+/// [`kill_process_tree`] with an explicit grace window (tests use a short
+/// one; production passes [`SIGTERM_GRACE`]).
+#[cfg(unix)]
+pub fn kill_process_tree_with_grace(pid: u32, grace: std::time::Duration) -> std::io::Result<()> {
     use nix::errno::Errno;
     use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid;
 
     let root = Pid::from_raw(pid as i32);
-
-    // Snapshot parent→child links, then walk outward from the root pid.
-    let mut system = sysinfo::System::new();
-    system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-
-    let mut targets: Vec<Pid> = vec![root];
-    loop {
-        let mut found = false;
-        for (child_pid, proc) in system.processes() {
-            let child = Pid::from_raw(child_pid.as_u32() as i32);
-            if targets.contains(&child) {
-                continue;
-            }
-            if let Some(parent) = proc.parent() {
-                let parent = Pid::from_raw(parent.as_u32() as i32);
-                if targets.contains(&parent) {
-                    targets.push(child);
-                    found = true;
-                }
-            }
-        }
-        if !found {
-            break;
-        }
-    }
+    let mut targets = collect_descendants(root);
 
     // Deepest first: children die before their parents so no subtree can be
     // re-parented into init and survive the kill.
@@ -62,7 +46,7 @@ pub fn kill_process_tree(pid: u32) -> std::io::Result<()> {
     signal_subtree(Signal::SIGTERM, &targets)?;
 
     // Poll the grace window; a process that honors TERM gets to flush.
-    let deadline = std::time::Instant::now() + SIGTERM_GRACE;
+    let deadline = std::time::Instant::now() + grace;
     loop {
         let alive = {
             let mut s = sysinfo::System::new();
@@ -86,12 +70,56 @@ pub fn kill_process_tree(pid: u32) -> std::io::Result<()> {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
+    // Re-snapshot before escalating (issue #194 §3.4): a descendant
+    // spawned after the first walk — whose spawner survived the TERM sweep
+    // and is therefore still reachable through live parent links — missed
+    // the TERM signal; it must not miss the KILL sweep too. Descendants
+    // whose spawner died and re-parented into init are unreachable by
+    // design (the documented limit of parent-chain killing).
+    let refreshed = collect_descendants(root);
+    for p in refreshed {
+        if !targets.contains(&p) {
+            targets.push(p);
+        }
+    }
+
     tracing::debug!(
         pid = pid,
         targets = targets.len(),
         "process subtree survived SIGTERM grace; escalating to SIGKILL"
     );
     signal_subtree(Signal::SIGKILL, &targets)
+}
+
+/// Snapshot parent→child links and walk outward from `root` to collect
+/// every descendant pid (including `root` itself).
+#[cfg(unix)]
+fn collect_descendants(root: nix::unistd::Pid) -> Vec<nix::unistd::Pid> {
+    use nix::unistd::Pid;
+    let mut system = sysinfo::System::new();
+    system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+
+    let mut targets: Vec<Pid> = vec![root];
+    loop {
+        let mut found = false;
+        for (child_pid, proc) in system.processes() {
+            let child = Pid::from_raw(child_pid.as_u32() as i32);
+            if targets.contains(&child) {
+                continue;
+            }
+            if let Some(parent) = proc.parent() {
+                let parent = Pid::from_raw(parent.as_u32() as i32);
+                if targets.contains(&parent) {
+                    targets.push(child);
+                    found = true;
+                }
+            }
+        }
+        if !found {
+            break;
+        }
+    }
+    targets
 }
 
 /// Stub for non-Unix systems (no process group support).
@@ -205,6 +233,60 @@ mod tests {
             "the TERM trap never ran — the subtree was killed without grace"
         );
         assert!(!process_exists(sh_pid), "shell survived the tree kill");
+    }
+
+    #[test]
+    fn kill_process_tree_reaches_descendants_spawned_during_the_grace_window() {
+        // issue #194 §3.4: a grandchild spawned AFTER the initial
+        // snapshot, whose spawner ignores SIGTERM and is still alive at
+        // escalation time, must be caught by the re-scan before SIGKILL.
+        // The old single-snapshot walk let it survive.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spawner_pidfile = dir.path().join("spawner.pid");
+        let grandchild_pidfile = dir.path().join("grandchild.pid");
+        let script = format!(
+            "trap '' TERM; (trap '' TERM; echo $$ > {spawner}; sleep 0.5; sleep 30 & echo $! > {grandchild}; wait) & wait",
+            spawner = spawner_pidfile.display(),
+            grandchild = grandchild_pidfile.display(),
+        );
+        let mut sh = Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sh");
+        let sh_pid = sh.id();
+
+        // Wait for the TERM-ignoring spawner subshell to record its pid.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !spawner_pidfile.exists() && std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(50));
+        }
+        assert!(spawner_pidfile.exists(), "spawner pid file never appeared");
+
+        // Grace of 1.2s: the grandchild spawns at +0.5s, inside the window.
+        kill_process_tree_with_grace(sh_pid, Duration::from_millis(1200))
+            .expect("tree kill with grace");
+
+        // The shell and spawner are gone…
+        let _ = sh.wait();
+        assert!(!process_exists(sh_pid), "shell survived the tree kill");
+
+        // …and the late grandchild was caught by the re-scan.
+        let grandchild_pid = std::fs::read_to_string(&grandchild_pidfile)
+            .expect("grandchild pid file")
+            .trim()
+            .parse::<u32>()
+            .expect("valid pid");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while process_exists(grandchild_pid) && std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            !process_exists(grandchild_pid),
+            "grandchild spawned during the grace window survived the kill"
+        );
     }
 
     #[test]

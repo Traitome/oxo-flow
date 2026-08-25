@@ -370,7 +370,7 @@
         "format_hint": { "type": "array", "items": { "type": "string" }, "description": "File format hints (e.g., 'bam', 'vcf')" },
         "pipe": { "type": "boolean", "default": false, "description": "Enable FIFO streaming mode" },
         "checksum": { "type": "string", "enum": ["md5", "sha256"], "description": "Output integrity verification algorithm" },
-        "cache_key": { "type": "string", "description": "Content-based cache key for output reuse" },
+        "cache_key": { "type": "string", "description": "Content-based cache key: enables content-addressed output reuse across runs (issue #194)" },
         "input_function": { "type": "string", "description": "Dynamic input resolver function name" },
         "benchmark": { "type": "string", "description": "Benchmark output path for performance data" },
         "log": { "type": "string", "description": "Log file path for execution output" },

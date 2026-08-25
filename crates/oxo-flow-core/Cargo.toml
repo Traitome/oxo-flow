@@ -12,7 +12,7 @@ description = "Core library for the oxo-flow bioinformatics pipeline engine"
 default = ["container", "webhook", "report", "cluster"]
 # Cloud storage backends (opt-in)
 s3-storage = ["aws-sdk-s3", "dep:aws-config"]
-gcs-storage = ["dep:sha1", "dep:base64", "dep:md-5"]
+gcs-storage = ["dep:sha1"]
 # Optional modules - compile-time feature gates for minimal builds
 container = []
 webhook = []
@@ -45,8 +45,8 @@ aws-sdk-s3 = { version = "1", optional = true }
 aws-config = { version = "1", optional = true }
 hmac = { workspace = true }
 sha1 = { workspace = true, optional = true }
-base64 = { workspace = true, optional = true }
-md-5 = { workspace = true, optional = true }
+base64 = { workspace = true }
+md-5 = { workspace = true }
 # File locking (.oxo-flow/lock) is cross-platform; available_space (scheduler)
 # is unix-only and stays inside cfg(unix) code.
 fs2 = { workspace = true }

@@ -326,9 +326,11 @@ much completed work stays protected.
 2. **Check resource constraints**: Use `oxo-flow debug` to verify that
    resource requirements are reasonable.
 
-3. **Use streaming / caching**: the `pipe` and `cache_key` rule fields are
-   parsed but their execution features are not wired up yet — do not rely
-   on them for performance.
+3. **Use caching**: a rule with `cache_key` reuses its outputs from the
+   content cache when the key, inputs, outputs, and rendered command hash
+   identically to a previous run — bump the key when a dependency's
+   behavior changes without touching the declared inputs. (`pipe` is
+   parsed but not wired up yet — do not rely on it.)
 
 ### Memory issues with large workflows
 
