@@ -1476,6 +1476,13 @@ pub struct WorkflowConfig {
     /// serialized — user TOML cannot set it.
     #[serde(skip)]
     pub expansion_values: HashMap<String, crate::wildcard::WildcardValues>,
+
+    /// Populated by [`WorkflowConfig::expand_wildcards`] (pair fan-out)
+    /// and consumed the same way: `{pair_id}` (and the other pair
+    /// wildcards) inside an `expand_inputs` pattern resolve to the
+    /// instance's own pair. Never serialized — user TOML cannot set it.
+    #[serde(skip)]
+    pub expansion_pairs: HashMap<String, crate::wildcard::WildcardValues>,
     /// Instance → template rule name for every fan-out expansion (issue #74
     /// phase 3): the cluster driver groups instances into job arrays by
     /// their TEMPLATE, never by guessing name suffixes. Never serialized.
@@ -2945,6 +2952,30 @@ impl WorkflowConfig {
     /// pairs with the same `pair_id`), or if a pair/group is defined but no
     /// rules reference its wildcards (this is not an error—those pairs are
     /// simply ignored).
+    /// Build the `wildcard.<key>` evaluation context for one expansion combo.
+    ///
+    /// Optional pair wildcards (`experiment_type`, `tumor_type`) are filled
+    /// with empty strings so `wildcard.experiment_type != ''` predicates see
+    /// a definite value instead of the permissive fallthrough.
+    fn expansion_when_context(combo: &crate::wildcard::WildcardValues) -> HashMap<String, String> {
+        let mut ctx: HashMap<String, String> =
+            combo.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        for key in [
+            "pair_id",
+            "experiment",
+            "control",
+            "tumor",
+            "normal",
+            "experiment_type",
+            "tumor_type",
+            "group",
+            "sample",
+        ] {
+            ctx.entry(key.to_string()).or_default();
+        }
+        ctx
+    }
+
     pub fn expand_wildcards(&mut self) -> Result<()> {
         // Preserve the unexpanded templates on first expansion — checkpoint
         // re-entry (issue #78 P3) re-expands from them with merged values.
@@ -2964,6 +2995,7 @@ impl WorkflowConfig {
         // config that was expanded before.
         self.expansion_samples.clear();
         self.expansion_values.clear();
+        self.expansion_pairs.clear();
 
         // Validate [[values]] tables: non-empty names/values, unique names,
         // and no collisions with built-in wildcards (a rule referencing
@@ -3069,11 +3101,17 @@ impl WorkflowConfig {
             // substitute per instance when the rule fans out, but never start
             // a fan-out themselves (cloning on a hook-only wildcard would
             // duplicate the whole rule execution, and `${name}` bash
-            // spellings inside script would false-trigger).
+            // spellings inside script would false-trigger). `when` joins the
+            // trigger set: a rule whose pair/group scope is expressed only in
+            // `when` (snakemake-style per-sample DAG morphing, e.g.
+            // `when = "wildcard.control != ''"`) still fans out per combo.
             let mut all_text: Vec<&str> = rule.input.iter().map(String::as_str).collect();
             all_text.extend(rule.output.iter().map(String::as_str));
             if let Some(ref shell) = rule.shell {
                 all_text.push(shell);
+            }
+            if let Some(ref when) = rule.when {
+                all_text.push(when);
             }
 
             let uses_pair_wildcard = !pair_combos.is_empty()
@@ -3171,6 +3209,29 @@ impl WorkflowConfig {
                             continue;
                         }
 
+                        // Per-instance `when` filtering (snakemake-style DAG
+                        // morphing): conditions referencing `wildcard.<key>`
+                        // resolve against this combo and non-matching
+                        // instances never enter the DAG. Conditions without
+                        // wildcard references keep the execution-time flow.
+                        if let Some(ref when) = rule.when
+                            && when.contains("wildcard.")
+                        {
+                            let config_values: HashMap<String, toml::Value> = self
+                                .config
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+                            let combo_values = Self::expansion_when_context(&combo);
+                            if !crate::executor::process::evaluate_condition_with_wildcards(
+                                when,
+                                &config_values,
+                                &combo_values,
+                            ) {
+                                continue;
+                            }
+                        }
+
                         let suffix = pair_combo.get("pair_id").cloned().unwrap_or_else(|| {
                             pair_combo.values().cloned().collect::<Vec<_>>().join("_")
                         });
@@ -3218,6 +3279,10 @@ impl WorkflowConfig {
                         }
                         self.expansion_samples
                             .insert(expanded.name.clone(), involved);
+                        // Per-instance pair/group bindings for expand_inputs
+                        // pattern resolution (see the field docs).
+                        self.expansion_pairs
+                            .insert(expanded.name.clone(), combo.clone());
 
                         if !value_combo.is_empty() {
                             self.expansion_values
@@ -3247,6 +3312,26 @@ impl WorkflowConfig {
                             .is_err()
                         {
                             continue;
+                        }
+
+                        // Per-instance `when` filtering (snakemake-style DAG
+                        // morphing) — see the pair branch above.
+                        if let Some(ref when) = rule.when
+                            && when.contains("wildcard.")
+                        {
+                            let config_values: HashMap<String, toml::Value> = self
+                                .config
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+                            let combo_values = Self::expansion_when_context(&merged);
+                            if !crate::executor::process::evaluate_condition_with_wildcards(
+                                when,
+                                &config_values,
+                                &combo_values,
+                            ) {
+                                continue;
+                            }
                         }
 
                         let group = combo.get("group").map(String::as_str).unwrap_or("group");
@@ -3341,6 +3426,10 @@ impl WorkflowConfig {
                             .collect();
                         self.expansion_samples
                             .insert(expanded.name.clone(), involved);
+                        // Per-instance pair/group bindings for expand_inputs
+                        // pattern resolution (see the field docs).
+                        self.expansion_pairs
+                            .insert(expanded.name.clone(), combo.clone());
 
                         if !value_combo.is_empty() {
                             self.expansion_values
@@ -3363,6 +3452,26 @@ impl WorkflowConfig {
                     if validate_wildcard_constraints_compiled(combo, &compiled_constraints).is_err()
                     {
                         continue;
+                    }
+
+                    // Per-instance `when` filtering (snakemake-style DAG
+                    // morphing) — see the pair branch above.
+                    if let Some(ref when) = rule.when
+                        && when.contains("wildcard.")
+                    {
+                        let config_values: HashMap<String, toml::Value> = self
+                            .config
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        let combo_values = Self::expansion_when_context(combo);
+                        if !crate::executor::process::evaluate_condition_with_wildcards(
+                            when,
+                            &config_values,
+                            &combo_values,
+                        ) {
+                            continue;
+                        }
                     }
 
                     let new_name = format!(
@@ -3734,6 +3843,20 @@ impl WorkflowConfig {
                 let bindings = self.expansion_values.get(&rule.name).cloned();
                 if let Some(bindings) = &bindings {
                     for (name, value) in bindings {
+                        variables
+                            .entry(name.clone())
+                            .or_insert_with(|| vec![value.clone()]);
+                    }
+                }
+
+                // Same per-instance binding for pair wildcards: `{pair_id}`
+                // (and the other pair keys) inside an expand pattern resolve
+                // to THIS instance's pair, so a per-pair gather rule picks up
+                // its own pair's files only (snakemake-style; the
+                // cohort-level `pair_id = "config.pairs_list"` variable form
+                // still wins when declared explicitly).
+                if let Some(pair_bindings) = self.expansion_pairs.get(&rule.name) {
+                    for (name, value) in pair_bindings {
                         variables
                             .entry(name.clone())
                             .or_insert_with(|| vec![value.clone()]);
@@ -7277,6 +7400,65 @@ shell = "true"
     }
 
     #[test]
+    fn expand_inputs_bare_pair_id_binds_per_instance() {
+        // A rule that fans out per pair (its input/output carry {pair_id})
+        // and gathers with a bare {pair_id} inside the expand pattern:
+        // each instance must pick up ITS OWN pair's files only — the
+        // snakemake-style per-sample semantics (paired/tumor-only sinks).
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("perpair.oxoflow");
+        std::fs::write(
+            &workflow_path,
+            r#"
+            [workflow]
+            name = "perpair"
+
+            [[pairs]]
+            pair_id = "p1"
+            experiment = "t1"
+            control = "n1"
+
+            [[pairs]]
+            pair_id = "p2"
+            experiment = "t2"
+
+            [[rules]]
+            name = "gather_pair"
+            input = ["reads/{pair_id}.fq"]
+            expand_inputs = [
+                { pattern = "calls/{pair_id}.vcf.gz", variables = {} }
+            ]
+            output = ["done/{pair_id}.done"]
+            shell = "touch {output[0]}"
+            "#,
+        )
+        .unwrap();
+
+        let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+
+        let p1 = config
+            .rules
+            .iter()
+            .find(|r| r.name == "gather_pair_p1")
+            .expect("p1 instance survives");
+        let p2 = config
+            .rules
+            .iter()
+            .find(|r| r.name == "gather_pair_p2")
+            .expect("p2 instance survives");
+        assert_eq!(
+            p1.input.to_vec(),
+            vec!["reads/p1.fq".to_string(), "calls/p1.vcf.gz".to_string()]
+        );
+        assert_eq!(
+            p2.input.to_vec(),
+            vec!["reads/p2.fq".to_string(), "calls/p2.vcf.gz".to_string()]
+        );
+    }
+
+    #[test]
     fn filter_samples_syncs_injected_pairs_list() {
         // --samples filtering drops pairs whose side samples are excluded;
         // config.pairs_list must follow (mirrors the samples_list rewrite).
@@ -8347,6 +8529,81 @@ shell = "true"
                 "assemble_assembler_spades".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn when_wildcard_scope_filters_instances_per_pair() {
+        // Snakemake-style DAG morphing: one pair has a control, the other is
+        // tumor-only. `wildcard.control` predicates keep exactly the matching
+        // instance of each rule — the paired rule survives only for the
+        // paired sample and vice versa.
+        let toml = r#"
+            [workflow]
+            name = "t"
+
+            [[pairs]]
+            pair_id = "p1"
+            experiment = "t1"
+            control = "n1"
+
+            [[pairs]]
+            pair_id = "p2"
+            experiment = "t2"
+
+            [[rules]]
+            name = "paired_step"
+            input = ["reads/{pair_id}.fq"]
+            output = ["out/{pair_id}.bam"]
+            when = "wildcard.control != ''"
+            shell = "touch {output[0]}"
+
+            [[rules]]
+            name = "unpaired_step"
+            input = ["reads/{pair_id}.fq"]
+            output = ["out/{pair_id}.vcf"]
+            when = "wildcard.control == ''"
+            shell = "touch {output[0]}"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.expand_wildcards().unwrap();
+
+        let mut names: Vec<String> = config.rules.iter().map(|r| r.name.clone()).collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["paired_step_p1".to_string(), "unpaired_step_p2".to_string()]
+        );
+    }
+
+    #[test]
+    fn when_wildcard_scope_only_filters_when_referencing_wildcards() {
+        // Conditions without `wildcard.` references keep the legacy
+        // execution-time flow: the instance survives expansion (it will be
+        // marked "condition evaluated to false" at execution).
+        let toml = r#"
+            [workflow]
+            name = "t"
+
+            [config]
+            gate = false
+
+            [[pairs]]
+            pair_id = "p1"
+            experiment = "t1"
+            control = "n1"
+
+            [[rules]]
+            name = "config_gated"
+            input = ["reads/{pair_id}.fq"]
+            output = ["out/{pair_id}.bam"]
+            when = "config.gate"
+            shell = "touch {output[0]}"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.expand_wildcards().unwrap();
+
+        assert_eq!(config.rules.len(), 1, "config-only when survives expansion");
+        assert_eq!(config.rules[0].name, "config_gated_p1");
     }
 
     #[test]

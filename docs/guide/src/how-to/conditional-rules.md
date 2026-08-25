@@ -50,6 +50,57 @@ when = "config.dry_run == false"
 when = 'file_exists("panel_of_controls.vcf.gz")'
 ```
 
+### Wildcard-scoped conditions (`wildcard.<key>`)
+
+Conditions can reference the pair/group expansion context through the
+`wildcard.` prefix — the same values that drive `{pair_id}`, `{experiment}`,
+`{control}` and `{sample}` fan-out:
+
+```toml
+when = "wildcard.control != ''"     # only pairs with a control sample
+when = "wildcard.control == ''"     # tumor-only pairs
+when = "wildcard.group == 'case' && config.min_coverage >= 20"
+```
+
+Unlike `config.` conditions, `wildcard.` conditions are evaluated **per
+expansion instance at DAG build time** — a non-matching instance never
+enters the DAG (snakemake-style per-sample morphing), rather than being
+planned and skipped at execution. A rule whose pair/group scope is
+expressed only in `when` (no `{pair_id}`/`{sample}` in its paths) still
+fans out per combo.
+
+Notes:
+
+- `control`/`normal`/`tumor` are always present — a pair without a control
+  expands them to the empty string, so `wildcard.control != ''` exactly
+  separates paired from tumor-only pairs.
+- Optional wildcards (`experiment_type`, `tumor_type`) expand to the empty
+  string when unset.
+- `config.` conditions keep the execution-time flow (planned, then skipped
+  when false); the two scopes compose with `&&`.
+- `{key}` placeholders inside `when` are not substituted — use the
+  `wildcard.<key>` form.
+
+```toml
+[workflow]
+# samplesheet.csv: one row with Normal fastqs, one without
+pairs_file = "samplesheet.csv"
+
+[[rules]]
+name   = "paired_mapping"
+when   = "wildcard.control != ''"
+input  = ["reads/{pair_id}.fq.gz"]
+output = ["bam/{pair_id}.paired.bam"]
+shell  = "mapper --paired {input[0]} -o {output[0]}"
+
+[[rules]]
+name   = "tumor_only_mapping"
+when   = "wildcard.control == ''"
+input  = ["reads/{pair_id}.fq.gz"]
+output = ["bam/{pair_id}.tumor_only.bam"]
+shell  = "mapper --tumor-only {input[0]} -o {output[0]}"
+```
+
 ### Logical operators
 
 ```toml

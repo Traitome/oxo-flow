@@ -1668,6 +1668,7 @@ shell = "fastqc {input[0]} -o qc/"
 | `config.<key> == true\|false` | `config.skip == false` | Boolean equality |
 | `config.<key> > N` | `config.min_cov >= 20` | Numeric comparison (`>`, `>=`, `<`, `<=`) |
 | `file_exists("path")` | `file_exists("panel.bed")` | File existence test |
+| `wildcard.<key> == "value"` | `wildcard.control != ""` | Per-instance pair/group wildcard comparison (`pair_id`, `experiment`, `control`, `tumor`, `normal`, `experiment_type`, `tumor_type`, `group`, `sample`, pair metadata keys) — evaluated per expansion combo at DAG build time; non-matching instances never enter the DAG (snakemake-style morphing) |
 | `!<expr>` | `!config.skip` | Logical NOT |
 | `<expr> && <expr>` | `config.run_qc && config.min_cov >= 20` | Logical AND |
 | `<expr> \|\| <expr>` | `config.wgs \|\| config.wes` | Logical OR |
