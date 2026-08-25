@@ -5031,8 +5031,14 @@ background process and returns to the shell immediately:</p>
   lock, report snapshots, and resume semantics are unchanged.</li>
 <li>The child's stdout and stderr are redirected to the run log
   (<code>--log-file</code> if given, otherwise <code>.oxo-flow/logs/oxo-flow.log</code> in the
-  workdir) — the tracing stream lands there too, so the log records the
-  whole run.</li>
+  workdir). In this mode the tracing tee is skipped on purpose — the
+  redirect already captures everything, and a second writer would
+  duplicate every line (issue #194 A3).</li>
+<li>The run log archives BOTH the structured tracing stream AND the
+  user-facing progress narrative (<code>Running:</code> / <code>✓</code> / <code>Done:</code>) plus one
+  JSON line per execution event (<code>workflow_started</code>, <code>rule_started</code>,
+  <code>rule_completed</code>, <code>workflow_completed</code>) — the whole run is replayable
+  from the single file (issue #194 B1/B3).</li>
 <li>The child's pid is written to <code>.oxo-flow/background.pid</code> in the workdir
   (also shown in the summary).</li>
 <li>The child gets its own process group, so it survives terminal close and

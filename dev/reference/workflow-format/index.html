@@ -5296,7 +5296,7 @@ disk space matters.</p>
 <td><code>cache_key</code></td>
 <td>String</td>
 <td>No</td>
-<td>Content-based cache key for output reuse</td>
+<td>Accepted for compatibility but NOT yet consulted by the scheduler (validate raises W026) — content-addressed reuse is not active (issue #194)</td>
 </tr>
 <tr>
 <td><code>input_function</code></td>
@@ -6100,7 +6100,7 @@ and duplicate edges are deduplicated.</p>
 <tr>
 <td><code>cache_key</code></td>
 <td>String</td>
-<td>Content-based cache key for reusing previous outputs</td>
+<td>Accepted for compatibility but not yet consulted by the scheduler (validate raises W026; issue #194)</td>
 </tr>
 </tbody>
 </table>

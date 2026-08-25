@@ -4898,6 +4898,23 @@ flags these with warning W019).</p>
    <code>.oxo-flow/checkpoint.json</code> (see
    <a href="../../commands/run/#input-changes-and-manifest-invalidation">Input changes and manifest invalidation</a>)</li>
 </ol>
+<p><strong>Durability &amp; reuse guarantees</strong> (issue #194):</p>
+<ul>
+<li>The checkpoint is written <strong>atomically</strong> — serialized to a sibling
+  <code>.tmp</code>, fsynced, renamed over the target, then the parent directory is
+  fsynced. A crash or power loss leaves either the previous state or the
+  complete new one, never a truncated file.</li>
+<li>With <code>--provenance</code>, recorded output checksums participate in the
+  freshness gate: when every output of a rule has a recorded digest,
+  reuse is decided by <strong>content identity</strong>, not mtime — a <code>touch</code> or
+  clock skew cannot fake freshness, and diverging content re-executes
+  (outputs beyond the hash cap keep the mtime comparison).</li>
+<li>Rule timeouts and aborts terminate the rule subtree with a <strong>SIGTERM
+  grace period</strong> (10s) before escalating to SIGKILL, so well-behaved
+  tools get a chance to flush state.</li>
+<li>Failed-rule aside files (<code>.oxo-failed</code>) age out automatically after
+  7 days; the environment cache cleanup is recursive.</li>
+</ul>
 <h3 id="why-does-my-workflow-have-so-many-dependencies">"Why does my workflow have so many dependencies?"<a class="headerlink" href="#why-does-my-workflow-have-so-many-dependencies" title="Permanent link">#</a></h3>
 <ul>
 <li>Each file-based input→output match creates one edge. A merge rule consuming outputs from 3 parallel branches will have 3 incoming edges</li>
