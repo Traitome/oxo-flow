@@ -714,6 +714,81 @@ fn evaluate_condition_typed_float_comparison() {
 }
 
 #[test]
+fn evaluate_condition_wildcard_context_unpaired_control() {
+    use super::process::evaluate_condition_with_wildcards;
+
+    let config = HashMap::new();
+    let mut combo = HashMap::new();
+    combo.insert("pair_id".to_string(), "mini".to_string());
+    combo.insert("control".to_string(), String::new());
+
+    assert!(!evaluate_condition_with_wildcards(
+        "wildcard.control != ''",
+        &config,
+        &combo
+    ));
+    assert!(evaluate_condition_with_wildcards(
+        "wildcard.control == ''",
+        &config,
+        &combo
+    ));
+    assert!(evaluate_condition_with_wildcards(
+        "wildcard.pair_id == 'mini' && wildcard.control == ''",
+        &config,
+        &combo
+    ));
+}
+
+#[test]
+fn evaluate_condition_wildcard_context_paired_control() {
+    use super::process::evaluate_condition_with_wildcards;
+
+    let config = HashMap::new();
+    let mut combo = HashMap::new();
+    combo.insert("pair_id".to_string(), "mini".to_string());
+    combo.insert("control".to_string(), "mini-NC".to_string());
+
+    assert!(evaluate_condition_with_wildcards(
+        "wildcard.control != ''",
+        &config,
+        &combo
+    ));
+    assert!(!evaluate_condition_with_wildcards(
+        "wildcard.control == ''",
+        &config,
+        &combo
+    ));
+    // config and wildcard scopes compose
+    let mut config2 = HashMap::new();
+    config2.insert("cnv_enabled".to_string(), toml::Value::Boolean(true));
+    assert!(evaluate_condition_with_wildcards(
+        "config.cnv_enabled && wildcard.control != ''",
+        &config2,
+        &combo
+    ));
+}
+
+#[test]
+fn evaluate_condition_wildcard_context_missing_key_is_permissive() {
+    use super::process::evaluate_condition_with_wildcards;
+
+    // Execution-time evaluation has no combo context — wildcard predicates
+    // must not veto an instance that expansion already kept.
+    let config = HashMap::new();
+    let empty = HashMap::new();
+    assert!(evaluate_condition_with_wildcards(
+        "wildcard.control != ''",
+        &config,
+        &empty
+    ));
+    assert!(evaluate_condition_with_wildcards(
+        "wildcard.unknown_key == 'x'",
+        &config,
+        &empty
+    ));
+}
+
+#[test]
 fn validate_shell_safety_blocks_dangerous_deletion() {
     assert!(validate_shell_safety("rm -rf /").is_err());
 }

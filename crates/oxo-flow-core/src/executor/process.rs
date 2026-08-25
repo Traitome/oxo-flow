@@ -2448,10 +2448,25 @@ fn render_wildcard_value(value: &str) -> String {
 }
 
 pub fn evaluate_condition(condition: &str, config_values: &HashMap<String, toml::Value>) -> bool {
-    evaluate_condition_inner(condition.trim(), config_values)
+    evaluate_condition_with_wildcards(condition, config_values, &HashMap::new())
 }
 
-fn evaluate_condition_inner(s: &str, config_values: &HashMap<String, toml::Value>) -> bool {
+/// Condition evaluation with a pair/group wildcard context (the expansion
+/// combo). `wildcard.<key>` predicates resolve against this map; with no
+/// context they evaluate permissively (see `evaluate_condition_inner`).
+pub fn evaluate_condition_with_wildcards(
+    condition: &str,
+    config_values: &HashMap<String, toml::Value>,
+    wildcard_values: &HashMap<String, String>,
+) -> bool {
+    evaluate_condition_inner(condition.trim(), config_values, wildcard_values)
+}
+
+fn evaluate_condition_inner(
+    s: &str,
+    config_values: &HashMap<String, toml::Value>,
+    wildcard_values: &HashMap<String, String>,
+) -> bool {
     let s = s.trim();
     if s.is_empty() || s == "true" {
         return true;
@@ -2460,18 +2475,18 @@ fn evaluate_condition_inner(s: &str, config_values: &HashMap<String, toml::Value
         return false;
     }
     if s.starts_with('(') && s.ends_with(')') && balanced_parens(s) {
-        return evaluate_condition_inner(&s[1..s.len() - 1], config_values);
+        return evaluate_condition_inner(&s[1..s.len() - 1], config_values, wildcard_values);
     }
     if let Some(idx) = find_top_level_op(s, "||") {
-        return evaluate_condition_inner(&s[..idx], config_values)
-            || evaluate_condition_inner(&s[idx + 2..], config_values);
+        return evaluate_condition_inner(&s[..idx], config_values, wildcard_values)
+            || evaluate_condition_inner(&s[idx + 2..], config_values, wildcard_values);
     }
     if let Some(idx) = find_top_level_op(s, "&&") {
-        return evaluate_condition_inner(&s[..idx], config_values)
-            && evaluate_condition_inner(&s[idx + 2..], config_values);
+        return evaluate_condition_inner(&s[..idx], config_values, wildcard_values)
+            && evaluate_condition_inner(&s[idx + 2..], config_values, wildcard_values);
     }
     if let Some(rest) = s.strip_prefix('!') {
-        return !evaluate_condition_inner(rest.trim(), config_values);
+        return !evaluate_condition_inner(rest.trim(), config_values, wildcard_values);
     }
     if let Some(inner) = s
         .strip_prefix("file_exists(")
@@ -2487,6 +2502,9 @@ fn evaluate_condition_inner(s: &str, config_values: &HashMap<String, toml::Value
             if let Some(key) = lhs.strip_prefix("config.") {
                 return compare_config_value(config_values.get(key), op, rhs);
             }
+            if let Some(key) = lhs.strip_prefix("wildcard.") {
+                return compare_wildcard_value(wildcard_values.get(key), op, rhs);
+            }
         }
     }
     if let Some(key) = s.strip_prefix("config.") {
@@ -2497,6 +2515,15 @@ fn evaluate_condition_inner(s: &str, config_values: &HashMap<String, toml::Value
             Some(toml::Value::Float(f)) => *f != 0.0,
             Some(_) => true,
             None => false,
+        };
+    }
+    if let Some(key) = s.strip_prefix("wildcard.") {
+        // Permissive when the key is absent: execution-time evaluation has no
+        // pair/group context (expansion already filtered the instances), and
+        // an unknown key behaves like the unconditional fallthrough below.
+        return match wildcard_values.get(key) {
+            Some(v) => !v.is_empty() && v != "false" && v != "0",
+            None => true,
         };
     }
     true
@@ -2605,6 +2632,39 @@ fn compare_config_value(val: Option<&toml::Value>, op: &str, rhs: &str) -> bool 
             }
         }
         _ => false,
+    }
+}
+
+/// Compare a pair/group wildcard value (a string from the expansion combo)
+/// against a literal in a `when` condition. Permissive on a missing key:
+/// execution-time evaluation has no combo context (expansion already
+/// filtered the instances), so an absent key defers to the caller's
+/// fallthrough.
+fn compare_wildcard_value(val: Option<&String>, op: &str, rhs: &str) -> bool {
+    let Some(v) = val else { return true };
+    let rhs = rhs.trim_matches('"').trim_matches('\'');
+    match op {
+        "==" => v == rhs,
+        "!=" => v != rhs,
+        _ => {
+            if let (Ok(a), Ok(b)) = (v.parse::<f64>(), rhs.parse::<f64>()) {
+                match op {
+                    ">=" => a >= b,
+                    "<=" => a <= b,
+                    ">" => a > b,
+                    "<" => a < b,
+                    _ => false,
+                }
+            } else {
+                match op {
+                    ">=" => v.as_str() >= rhs,
+                    "<=" => v.as_str() <= rhs,
+                    ">" => v.as_str() > rhs,
+                    "<" => v.as_str() < rhs,
+                    _ => false,
+                }
+            }
+        }
     }
 }
 
