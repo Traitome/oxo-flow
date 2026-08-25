@@ -105,8 +105,14 @@ fn rule_outputs_exist_fresh(
     rule: &oxo_flow_core::rule::Rule,
     workdir: &Path,
     wildcard_values: &HashMap<String, String>,
+    checksums: Option<&HashMap<String, String>>,
 ) -> bool {
-    oxo_flow_core::executor::checkpoint::should_skip_rule(rule, workdir, wildcard_values)
+    oxo_flow_core::executor::checkpoint::should_skip_rule_with_checksums(
+        rule,
+        workdir,
+        wildcard_values,
+        checksums,
+    )
 }
 
 /// Storage resolver for manifest snapshots and remote staging: local by
@@ -308,10 +314,9 @@ pub fn preview_run_plan(
             // the executor freshness gate, so config invalidation wins here.
             if config_invalidated.contains(name) {
                 RuleStatus::ConfigInvalidated
-            } else if config
-                .get_rule(name)
-                .is_some_and(|rule| rule_outputs_exist_fresh(rule, workdir, wildcard_values))
-            {
+            } else if config.get_rule(name).is_some_and(|rule| {
+                rule_outputs_exist_fresh(rule, workdir, wildcard_values, Some(&ck.checksums))
+            }) {
                 // `run` applies the executor freshness gate to rules with
                 // no checkpoint entry: up-to-date outputs skip even without
                 // a completion record (issue #77 parity — crash leftovers).

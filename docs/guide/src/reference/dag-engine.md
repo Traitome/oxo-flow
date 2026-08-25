@@ -404,6 +404,23 @@ flags these with warning W019).
    `.oxo-flow/checkpoint.json` (see
    [Input changes and manifest invalidation](../commands/run.md#input-changes-and-manifest-invalidation))
 
+**Durability & reuse guarantees** (issue #194):
+
+- The checkpoint is written **atomically** — serialized to a sibling
+  `.tmp`, fsynced, renamed over the target, then the parent directory is
+  fsynced. A crash or power loss leaves either the previous state or the
+  complete new one, never a truncated file.
+- With `--provenance`, recorded output checksums participate in the
+  freshness gate: when every output of a rule has a recorded digest,
+  reuse is decided by **content identity**, not mtime — a `touch` or
+  clock skew cannot fake freshness, and diverging content re-executes
+  (outputs beyond the hash cap keep the mtime comparison).
+- Rule timeouts and aborts terminate the rule subtree with a **SIGTERM
+  grace period** (10s) before escalating to SIGKILL, so well-behaved
+  tools get a chance to flush state.
+- Failed-rule aside files (`.oxo-failed`) age out automatically after
+  7 days; the environment cache cleanup is recursive.
+
 ### "Why does my workflow have so many dependencies?"
 
 - Each file-based input→output match creates one edge. A merge rule consuming outputs from 3 parallel branches will have 3 incoming edges

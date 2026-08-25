@@ -62,6 +62,41 @@ fn oxo_flow_web_cmd() -> Command {
 
 // ─── Pilot subset (--samples) & forced re-run (--rerun) ─────────────────────
 
+/// The archived run log carries BOTH the user-facing progress narrative
+/// (issue #194 B1: `Running:` / `Done:`) and the structured execution
+/// events (B3: workflow_started / rule_completed JSON lines).
+#[test]
+fn cli_run_log_archives_progress_narrative_and_execution_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("narr.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"narr\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"step\"\noutput = [\"out.txt\"]\nshell = \"echo done > {output}\"\n",
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "run failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let log = fs::read_to_string(dir.path().join(".oxo-flow/logs/oxo-flow.log")).unwrap();
+    assert!(
+        log.contains("Running:") && log.contains("Done:"),
+        "the archived log must keep the progress narrative:\n{log}"
+    );
+    assert!(
+        log.contains("\"event\":\"workflow_started\"")
+            && log.contains("\"event\":\"rule_completed\"")
+            && log.contains("\"event\":\"workflow_completed\""),
+        "the archived log must carry the structured execution events:\n{log}"
+    );
+}
+
 /// `run --json` carries a per-rule `resources` array (issue #163): the
 /// report's Benchmarks data — wall time, sampled peak RSS, CPU seconds,
 /// retries — machine-readably, on the completed path.

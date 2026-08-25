@@ -132,32 +132,67 @@ impl Drop for RunLogGuard {
 /// armed; stderr + the active run log file once [`activate_run_log`] runs.
 /// File write failures are reported once to stderr and the tee degrades to
 /// stderr-only — a logging hiccup never fails the run.
+///
+/// Single-writer design (issue #194 A2): every `Tee` writes through the ONE
+/// file handle in the slot, serialized by the slot mutex — no per-event
+/// `try_clone`, no concurrent writes from parallel rule tasks.
 pub struct TeeWriter;
 
 impl<'a> MakeWriter<'a> for TeeWriter {
-    type Writer = Box<dyn Write + 'a>;
+    type Writer = Tee<'a>;
 
     fn make_writer(&'a self) -> Self::Writer {
-        let file = slot()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .as_ref()
-            .and_then(|f| f.try_clone().ok());
-        match file {
-            Some(f) => Box::new(Tee {
-                stderr: io::stderr(),
-                file: Some(f),
-            }),
-            None => Box::new(io::stderr()),
+        Tee {
+            stderr: io::stderr(),
+            slot: slot(),
         }
     }
 }
 
 static FILE_WRITE_ERROR_REPORTED: AtomicBool = AtomicBool::new(false);
 
-struct Tee {
+pub struct Tee<'a> {
     stderr: io::Stderr,
-    file: Option<File>,
+    slot: &'a Arc<Mutex<Option<File>>>,
+}
+
+impl Write for Tee<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        // stderr first (outside the lock): the console is the primary
+        // surface and must never wait on the log file.
+        let _ = self.stderr.write(buf);
+        let mut slot = self
+            .slot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match slot.as_mut() {
+            Some(f) => match write_plain(f, buf) {
+                Ok(()) => Ok(buf.len()),
+                Err(e) => {
+                    if !FILE_WRITE_ERROR_REPORTED.swap(true, Ordering::Relaxed) {
+                        eprintln!(
+                            "warning: run log write failed ({e}); file logging disabled for this run"
+                        );
+                        *slot = None;
+                    }
+                    Ok(buf.len())
+                }
+            },
+            None => Ok(buf.len()),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let _ = self.stderr.flush();
+        let mut slot = self
+            .slot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match slot.as_mut() {
+            Some(f) => f.flush(),
+            None => Ok(()),
+        }
+    }
 }
 
 /// Write `buf` to `out` with ANSI CSI escape sequences stripped — run-log
@@ -184,32 +219,6 @@ fn write_plain(out: &mut File, buf: &[u8]) -> io::Result<()> {
         }
     }
     out.write_all(&plain)
-}
-
-impl Write for Tee {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let _ = self.stderr.write(buf);
-        if let Some(f) = &mut self.file
-            && let Err(e) = write_plain(f, buf)
-        {
-            if !FILE_WRITE_ERROR_REPORTED.swap(true, Ordering::Relaxed) {
-                let _ = writeln!(
-                    self.stderr,
-                    "warning: run log write failed ({e}); continuing without file logging"
-                );
-            }
-            self.file = None;
-        }
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        let _ = self.stderr.flush();
-        if let Some(f) = &mut self.file {
-            f.flush()?;
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -293,10 +302,9 @@ mod tests {
         let dir = scratch("ansi");
         let log = dir.join("run.log");
         let _guard = activate_run_log(&log, "").unwrap();
-        let file = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
         let mut tee = Tee {
             stderr: io::stderr(),
-            file: Some(file),
+            slot: slot(),
         };
         tee.write_all(b"\x1b[2m2026-08-21T14:54:11Z\x1b[0m \x1b[32m INFO\x1b[0m rule started\n")
             .unwrap();

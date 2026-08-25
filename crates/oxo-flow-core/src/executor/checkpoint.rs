@@ -368,6 +368,12 @@ impl CheckpointState {
     }
 
     /// Save checkpoint state to a file.
+    ///
+    /// Atomic (issue #194 A1): serialize to a sibling `*.tmp`, fsync it,
+    /// rename over the target (atomic on POSIX), then fsync the parent
+    /// directory so the rename itself survives a crash. A power failure can
+    /// no longer leave a truncated `checkpoint.json` — readers see either
+    /// the previous state or the complete new one.
     pub fn save_to_file(&self, path: &Path) -> Result<()> {
         let parent = crate::parent_dir(path);
         if parent != std::path::Path::new(".") {
@@ -376,8 +382,27 @@ impl CheckpointState {
             })?;
         }
         let json = self.to_json()?;
-        std::fs::write(path, json).map_err(|e| OxoFlowError::Config {
-            message: format!("failed to save checkpoint to {}: {e}", path.display()),
+        let tmp_path = path.with_extension("json.tmp");
+        let write_result = (|| -> std::io::Result<()> {
+            let mut f = std::fs::File::create(&tmp_path)?;
+            use std::io::Write;
+            f.write_all(json.as_bytes())?;
+            f.sync_all()?;
+            drop(f);
+            std::fs::rename(&tmp_path, path)?;
+            // fsync the parent directory so the rename is durable (POSIX).
+            if let Ok(dir) = std::fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+            Ok(())
+        })();
+        write_result.map_err(|e| {
+            // Never leave a partial tmp file behind for the next attempt to
+            // trip over; the real checkpoint (old or new) is what matters.
+            let _ = std::fs::remove_file(&tmp_path);
+            OxoFlowError::Config {
+                message: format!("failed to save checkpoint to {}: {e}", path.display()),
+            }
         })
     }
 
@@ -900,6 +925,23 @@ pub fn should_skip_rule(
     workdir: &Path,
     wildcard_values: &HashMap<String, String>,
 ) -> bool {
+    should_skip_rule_with_checksums(rule, workdir, wildcard_values, None)
+}
+
+/// [`should_skip_rule`] with provenance checksums (issue #194 B2).
+///
+/// When `checksums` holds a recorded content hash for EVERY expanded output
+/// of the rule, freshness requires the CURRENT content to match — mtime
+/// alone no longer decides (a `touch` or clock skew cannot fake reuse).
+/// Two honest fallbacks keep the old behavior: any output beyond the hash
+/// cap (no re-verifiable digest), and rules with no recorded checksums at
+/// all, both degrade to the mtime comparison.
+pub fn should_skip_rule_with_checksums(
+    rule: &Rule,
+    workdir: &Path,
+    wildcard_values: &HashMap<String, String>,
+    checksums: Option<&HashMap<String, String>>,
+) -> bool {
     if rule.output.is_empty() {
         return false;
     }
@@ -929,6 +971,43 @@ pub fn should_skip_rule(
     if !all_outputs_exist {
         return false;
     }
+
+    // Checksum path (issue #194 B2): taken only when EVERY output has both a
+    // recorded hash AND a re-computable digest (small-file cap). Content
+    // identity then decides; a divergence re-executes even when mtime looks
+    // fresh. Missing records or over-cap outputs degrade to the mtime path.
+    if let Some(map) = checksums
+        && expanded_outputs.iter().all(|o| map.contains_key(o))
+    {
+        let mut digests = Vec::with_capacity(expanded_outputs.len());
+        let mut all_verifiable = true;
+        for o in &expanded_outputs {
+            let path = workdir.join(o);
+            let Ok(md) = std::fs::metadata(&path) else {
+                all_verifiable = false;
+                break;
+            };
+            match content_hash_if_small(&path, &md) {
+                Some(d) => digests.push(d),
+                None => {
+                    all_verifiable = false;
+                    break;
+                }
+            }
+        }
+        if all_verifiable {
+            let all_match = expanded_outputs
+                .iter()
+                .zip(&digests)
+                .all(|(o, current)| map.get(o).is_some_and(|recorded| recorded == current));
+            if all_match {
+                return true;
+            }
+            // Content diverged — even if mtime looks fresh, re-execute.
+            return false;
+        }
+    }
+
     if expanded_inputs.is_empty() {
         return true; // No inputs to check freshness against
     }
@@ -1026,6 +1105,102 @@ mod tests {
     use crate::storage::{RemoteStat, StorageBackend, StoragePath, StorageResolver, StorageScheme};
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn checkpoint_save_is_atomic_and_leaves_no_tmp() {
+        // issue #194 A1: the save goes through a sibling tmp + rename, so a
+        // failed save never leaves a partial tmp behind and a successful one
+        // yields a fully-parseable document.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("checkpoint.json");
+        let mut ck = CheckpointState::default();
+        ck.completed_rules.insert("rule_a".to_string());
+        ck.save_to_file(&path).unwrap();
+        assert!(path.exists());
+        assert!(!dir.path().join("checkpoint.json.tmp").exists());
+        let loaded = CheckpointState::load_from_file(&path).unwrap();
+        assert!(loaded.completed_rules.contains("rule_a"));
+        // A second save overwrites cleanly.
+        ck.completed_rules.insert("rule_b".to_string());
+        ck.save_to_file(&path).unwrap();
+        let loaded = CheckpointState::load_from_file(&path).unwrap();
+        assert!(loaded.completed_rules.contains("rule_b"));
+        assert!(!dir.path().join("checkpoint.json.tmp").exists());
+    }
+
+    #[test]
+    fn checkpoint_save_failure_cleans_tmp() {
+        // Rename fails when the target path is a directory: the error must
+        // surface AND the tmp sibling must be removed (no litter).
+        let dir = tempfile::tempdir().unwrap();
+        let target_dir = dir.path().join("checkpoint.json");
+        std::fs::create_dir(&target_dir).unwrap();
+        let ck = CheckpointState::default();
+        assert!(ck.save_to_file(&target_dir).is_err());
+        assert!(!dir.path().join("checkpoint.json.tmp").exists());
+    }
+
+    #[test]
+    fn checksum_aware_skip_uses_content_identity_over_mtime() {
+        // issue #194 B2: with a recorded checksum for every output, a fresh
+        // mtime alone must NOT decide reuse — matching content skips even
+        // when the input is newer (touch), diverging content re-executes
+        // even when mtimes look fresh.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("in.txt"), "input").unwrap();
+        std::fs::write(dir.path().join("out.txt"), "content-v1").unwrap();
+        let rule = crate::rule::Rule {
+            name: "r".to_string(),
+            input: vec!["in.txt".to_string()].into(),
+            output: vec!["out.txt".to_string()].into(),
+            ..Default::default()
+        };
+        let recorded: HashMap<String, String> = [(
+            "out.txt".to_string(),
+            format!("sha256:{}", sha256_hex(b"content-v1")),
+        )]
+        .into_iter()
+        .collect();
+
+        // Input made NEWER than the output (mtime path would re-execute):
+        // the recorded checksum matches, so the skip still holds.
+        filetime_touch_newer(dir.path().join("in.txt"));
+        assert!(
+            should_skip_rule_with_checksums(&rule, dir.path(), &HashMap::new(), Some(&recorded)),
+            "matching content must skip even when the input mtime is newer"
+        );
+
+        // Content diverged (simulated rewrite): even fresh mtimes must
+        // re-execute.
+        std::fs::write(dir.path().join("out.txt"), "content-v2").unwrap();
+        assert!(
+            !should_skip_rule_with_checksums(&rule, dir.path(), &HashMap::new(), Some(&recorded)),
+            "diverging content must re-execute despite fresh-looking mtime"
+        );
+    }
+
+    /// SHA-256 hex for the test above (the production hash is
+    /// `compute_file_checksum`; hashing bytes directly keeps the test free
+    /// of file-format coupling).
+    fn sha256_hex(bytes: &[u8]) -> String {
+        use sha2::Digest;
+        let digest = sha2::Sha256::digest(bytes);
+        digest.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// Bump `path`'s mtime forward one second (test helper; production
+    /// never mutates mtimes).
+    fn filetime_touch_newer(path: std::path::PathBuf) {
+        let md = std::fs::metadata(&path).unwrap();
+        let modified = md.modified().unwrap();
+        let future = modified + std::time::Duration::from_secs(2);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(future)
+            .unwrap();
+    }
 
     /// In-memory cloud backend with a mutable etag per key — the semantic
     /// proof for issue #78 P2 (same-size remote rewrites invalidate).

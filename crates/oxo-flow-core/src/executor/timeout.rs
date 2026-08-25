@@ -1,4 +1,11 @@
-/// Kill a process and all its descendants (deepest first).
+/// Grace period between SIGTERM and SIGKILL for subtree kills (issue #194
+/// A4): long-running tools (aligners, databases) get a chance to flush
+/// state and exit cleanly before the engine escalates.
+pub const SIGTERM_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Kill a process and all its descendants (deepest first), gracefully:
+/// SIGTERM the whole subtree, poll [`SIGTERM_GRACE`] for survivors, then
+/// SIGKILL whatever remains.
 ///
 /// Rules deliberately run inside the caller's process group (see
 /// `process::execute_rule` — "one run = one process group"), so a timeout
@@ -41,17 +48,50 @@ pub fn kill_process_tree(pid: u32) -> std::io::Result<()> {
 
     // Deepest first: children die before their parents so no subtree can be
     // re-parented into init and survive the kill.
-    for p in targets.iter().rev() {
-        match kill(*p, Signal::SIGKILL) {
-            Ok(()) => {}
-            // Already exited between the snapshot and the signal — fine.
-            Err(Errno::ESRCH) => {}
-            Err(e) => return Err(std::io::Error::other(e.to_string())),
+    let signal_subtree = |sig: Signal, targets: &[Pid]| -> std::io::Result<()> {
+        for p in targets.iter().rev() {
+            match kill(*p, sig) {
+                Ok(()) => {}
+                // Already exited between the snapshot and the signal — fine.
+                Err(Errno::ESRCH) => {}
+                Err(e) => return Err(std::io::Error::other(e.to_string())),
+            }
         }
+        Ok(())
+    };
+    signal_subtree(Signal::SIGTERM, &targets)?;
+
+    // Poll the grace window; a process that honors TERM gets to flush.
+    let deadline = std::time::Instant::now() + SIGTERM_GRACE;
+    loop {
+        let alive = {
+            let mut s = sysinfo::System::new();
+            s.refresh_processes(sysinfo::ProcessesToUpdate::All, false);
+            targets.iter().any(|p| {
+                s.process(sysinfo::Pid::from_u32(p.as_raw() as u32))
+                    .is_some()
+            })
+        };
+        if !alive {
+            tracing::debug!(
+                pid = pid,
+                targets = targets.len(),
+                "process subtree exited on SIGTERM"
+            );
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
-    tracing::debug!(pid = pid, killed = targets.len(), "killed process subtree");
-    Ok(())
+    tracing::debug!(
+        pid = pid,
+        targets = targets.len(),
+        "process subtree survived SIGTERM grace; escalating to SIGKILL"
+    );
+    signal_subtree(Signal::SIGKILL, &targets)
 }
 
 /// Stub for non-Unix systems (no process group support).
@@ -127,6 +167,44 @@ mod tests {
         // …while the caller (this test binary) is untouched — the old
         // group-kill strategy would have killed us here.
         assert!(process_exists(std::process::id()));
+    }
+
+    #[test]
+    fn kill_process_tree_delivers_sigterm_before_escalating() {
+        // issue #194 A4: a TERM-honoring child must observe SIGTERM (and get
+        // its cleanup chance) instead of being SIGKILLed outright.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let marker = dir.path().join("got-term");
+        let pidfile = dir.path().join("child.pid");
+        let script = format!(
+            "trap 'echo term > {marker}; exit 0' TERM; echo $$ > {pidfile}; sleep 30",
+            marker = marker.display(),
+            pidfile = pidfile.display(),
+        );
+        let mut sh = Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sh");
+        let sh_pid = sh.id();
+
+        // Wait for the shell to record its pid.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !pidfile.exists() && std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(50));
+        }
+        assert!(pidfile.exists(), "child pid file never appeared");
+
+        kill_process_tree(sh_pid).expect("tree kill");
+        let _ = sh.wait();
+
+        assert!(
+            marker.exists(),
+            "the TERM trap never ran — the subtree was killed without grace"
+        );
+        assert!(!process_exists(sh_pid), "shell survived the tree kill");
     }
 
     #[test]

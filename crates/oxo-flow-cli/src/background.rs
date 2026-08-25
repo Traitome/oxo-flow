@@ -118,6 +118,11 @@ fn spawn_detached(args: &[OsString], log_path: &Path) -> io::Result<Child> {
     let mut command = Command::new(std::env::current_exe()?);
     command
         .args(args)
+        // The child must NOT arm the tracing tee: its stderr already lands
+        // in this log, and a second writer would duplicate every event
+        // (issue #194 A3). The flag routes the child to the redirect-only
+        // path in `run_command`.
+        .env("OXO_FLOW_STDERR_ALREADY_REDIRECTED", "1")
         .stdout(Stdio::from(log.try_clone()?))
         .stderr(Stdio::from(log));
     #[cfg(unix)]

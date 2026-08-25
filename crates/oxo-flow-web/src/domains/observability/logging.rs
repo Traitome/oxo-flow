@@ -19,6 +19,10 @@ static LOG_DIR: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None
 static EVENT_WRITER: std::sync::OnceLock<Mutex<Option<BufWriter<File>>>> =
     std::sync::OnceLock::new();
 
+/// Size cap for `events.jsonl` (issue #194 B4): at startup a larger file
+/// rotates to `events.jsonl.1` and a fresh stream begins.
+const EVENTS_LOG_MAX_BYTES: u64 = 10 * 1024 * 1024;
+
 /// Append one structured event line to events.jsonl (issue #81: the file
 /// was created at startup but nothing ever wrote to it — audit events now
 /// feed the structured stream alongside the DB rows).
@@ -49,8 +53,19 @@ pub fn init_logging(log_dir: &Path) -> Result<(), String> {
         *dir = Some(log_dir.to_path_buf());
     }
 
-    // Open the structured event log
+    // Open the structured event log. Size-capped with a single rotated
+    // backup (issue #194 B4): when the current file already exceeds the
+    // cap, shift it to `events.jsonl.1` and start fresh — the event stream
+    // never grows without bound and keeps one prior generation for
+    // post-incident inspection.
     let event_log = log_dir.join("events.jsonl");
+    if let Ok(md) = std::fs::metadata(&event_log)
+        && md.len() > EVENTS_LOG_MAX_BYTES
+    {
+        let backup = log_dir.join("events.jsonl.1");
+        let _ = std::fs::remove_file(&backup);
+        let _ = std::fs::rename(&event_log, &backup);
+    }
     let file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -83,6 +98,23 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         init_logging(dir.path()).expect("should init");
         assert!(dir.path().join("events.jsonl").exists());
+        reset_log_dir();
+    }
+
+    #[test]
+    fn test_init_logging_rotates_oversized_events_log() {
+        // issue #194 B4: a pre-existing events.jsonl beyond the cap shifts
+        // to events.jsonl.1 at startup and a fresh stream begins.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("events.jsonl"),
+            "x".repeat((EVENTS_LOG_MAX_BYTES + 1) as usize),
+        )
+        .unwrap();
+        init_logging(dir.path()).expect("should init");
+        assert!(dir.path().join("events.jsonl.1").exists());
+        let fresh = std::fs::metadata(dir.path().join("events.jsonl")).unwrap();
+        assert!(fresh.len() <= EVENTS_LOG_MAX_BYTES);
         reset_log_dir();
     }
 

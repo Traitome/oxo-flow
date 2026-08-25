@@ -926,8 +926,9 @@ pub struct Rule {
 
     /// Content-based cache key override.
     ///
-    /// When set, the scheduler uses this key (along with input checksums) to
-    /// determine if cached outputs can be reused, enabling content-addressed caching.
+    /// Accepted for schema/parser compatibility but NOT yet consulted by the
+    /// scheduler — content-addressed reuse is not active (issue #194 M2;
+    /// `validate` raises W026 so authors are not misled).
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_key: Option<String>,
