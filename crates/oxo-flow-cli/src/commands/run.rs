@@ -30,16 +30,26 @@ fn config_placeholder_values(config: &HashMap<String, toml::Value>) -> HashMap<S
 /// as before) and the tracing stream — the tracing copy is what the
 /// archived run log preserves (issue #194 B1). Colors live in the console
 /// form; the log side gets the same text and strips ANSI at write time.
+///
+/// Background runs skip the tracing copy: their stderr is already
+/// redirected onto the run log, so a second copy would duplicate the line
+/// (issue #194 A3).
 fn progress_narrate(msg: std::fmt::Arguments<'_>) {
     eprintln!("{msg}");
-    tracing::info!(target: "progress", message = %msg.to_string());
+    if std::env::var_os("OXO_FLOW_STDERR_ALREADY_REDIRECTED").is_none() {
+        tracing::info!(target: "progress", message = %msg.to_string());
+    }
 }
 
 /// Emit a structured [`ExecutionEvent`] as one JSON line in the tracing
 /// stream (issue #194 B3): the event schema stops being dead code and the
 /// run log gains a machine-readable execution timeline alongside the prose.
+/// Background runs skip it for the same reason as [`progress_narrate`] —
+/// the redirected stderr already carries the line exactly once.
 fn emit_execution_event(event: oxo_flow_core::executor::ExecutionEvent) {
-    tracing::info!(target: "execution_event", "{}", event.to_json_log());
+    if std::env::var_os("OXO_FLOW_STDERR_ALREADY_REDIRECTED").is_none() {
+        tracing::info!(target: "execution_event", "{}", event.to_json_log());
+    }
 }
 
 /// Print the config-change impact summary (issue #62).
@@ -1077,6 +1087,9 @@ pub async fn run_command(
     // redirects, nohup, CI, or schedulers. When that happens, fall back to plain
     // eprintln lines so the run is never silent.
     let is_tty = std::io::IsTerminal::is_terminal(&std::io::stderr());
+    // Background runs redirect stderr onto the run log (issue #194 A3):
+    // the bar's redraw sequences would land in the file as ANSI garbage.
+    let stderr_redirected = std::env::var_os("OXO_FLOW_STDERR_ALREADY_REDIRECTED").is_some();
 
     let progress = indicatif::ProgressBar::new(order.len() as u64);
     progress.set_style(
@@ -1086,6 +1099,12 @@ pub async fn run_command(
             )?
             .progress_chars("#>-"),
     );
+    if !is_tty || stderr_redirected {
+        // Draw into the void instead of stderr: no bar output, but every
+        // set_message/set_position call stays valid (message lines are
+        // printed separately via progress_narrate when !is_tty).
+        progress.set_draw_target(indicatif::ProgressDrawTarget::hidden());
+    }
 
     let timeout_secs: u64 = if timeout == "0" {
         0
