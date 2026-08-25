@@ -128,6 +128,116 @@ pub struct RemoteStat {
 }
 
 // ---------------------------------------------------------------------------
+// Post-upload verification (issue #194 §2.11): after an upload, the remote
+// store is asked what it holds and its identity is compared with the local
+// file — a silently truncated transfer would otherwise be checkpointed as
+// complete.
+// ---------------------------------------------------------------------------
+
+/// Verify a just-uploaded object against the local file it came from:
+/// size always, content digest when the remote store exposes a comparable
+/// one (S3 single-part ETag = md5 hex; GCS `md5Hash` = base64 md5).
+///
+/// Composite identities (S3 multipart ETags, `hash-N`) and objects without
+/// a digest are skipped with a debug note — they are not comparable to a
+/// plain md5. Any comparable mismatch is an [`OxoFlowError::Integrity`]
+/// error: the remote copy cannot be trusted and the rule must fail.
+pub async fn verify_upload(
+    backend: &dyn StorageBackend,
+    local: &Path,
+    remote: &StoragePath,
+) -> Result<()> {
+    let Some(stat) = backend.head(remote).await? else {
+        tracing::debug!(remote = %remote.raw, "uploaded object has no HEAD result — skipping verification");
+        return Ok(());
+    };
+
+    let local_size = tokio::fs::metadata(local).await?.len();
+    if stat.size != local_size {
+        return Err(OxoFlowError::Integrity {
+            message: format!(
+                "uploaded object '{}' reports {} bytes but the local file is {local_size}",
+                remote.raw, stat.size
+            ),
+            failed_files: vec![remote.raw.clone()],
+        });
+    }
+
+    let Some(etag) = stat.etag.as_deref() else {
+        tracing::debug!(remote = %remote.raw, "remote store reported no content digest — skipping checksum verification");
+        return Ok(());
+    };
+
+    match remote.scheme {
+        StorageScheme::S3 => {
+            // Multipart/SSE etags (`hash-N`) are not md5 digests — nothing
+            // local to compare against a plain md5, so skip rather than
+            // fail a healthy upload.
+            if !is_md5_hex(etag) {
+                tracing::debug!(remote = %remote.raw, etag, "composite S3 etag is not a plain md5 — skipping checksum verification");
+                return Ok(());
+            }
+            let local_md5 = md5_hex_of_file(local).await?;
+            if !local_md5.eq_ignore_ascii_case(etag) {
+                return Err(upload_mismatch(remote, &local_md5, etag));
+            }
+        }
+        StorageScheme::Gcs => {
+            let local_md5 = md5_base64_of_file(local).await?;
+            if local_md5 != etag {
+                return Err(upload_mismatch(remote, &local_md5, etag));
+            }
+        }
+        StorageScheme::Local => {}
+    }
+    Ok(())
+}
+
+/// A 32-char hex md5 digest (what a single-part S3 ETag is).
+fn is_md5_hex(s: &str) -> bool {
+    s.len() == 32 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn upload_mismatch(remote: &StoragePath, local_digest: &str, remote_digest: &str) -> OxoFlowError {
+    OxoFlowError::Integrity {
+        message: format!(
+            "uploaded object '{}' checksum mismatch: remote reports {remote_digest}, local file computes {local_digest}",
+            remote.raw
+        ),
+        failed_files: vec![remote.raw.clone()],
+    }
+}
+
+/// Streamed md5 of a local file, hex-encoded (the S3 single-part ETag form).
+async fn md5_hex_of_file(path: &Path) -> std::io::Result<String> {
+    Ok(hex::encode(md5_of_file(path).await?))
+}
+
+/// Streamed md5 of a local file, base64-encoded (the GCS `md5Hash` form).
+async fn md5_base64_of_file(path: &Path) -> std::io::Result<String> {
+    use base64::Engine as _;
+    Ok(base64::engine::general_purpose::STANDARD.encode(md5_of_file(path).await?))
+}
+
+/// Streamed md5 of a local file in bounded chunks (outputs can be large;
+/// never buffer the whole file).
+async fn md5_of_file(path: &Path) -> std::io::Result<[u8; 16]> {
+    use md5::Digest as _;
+    use tokio::io::AsyncReadExt as _;
+    let mut hasher = md5::Md5::new();
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher.finalize().into())
+}
+
+// ---------------------------------------------------------------------------
 // Engine-managed staging paths and the etag-keyed download cache (issue #80
 // item 2). Staged files live under `.oxo-flow/staged/` — engine-internal,
 // invisible to checkpoints, safe to delete (a later run re-downloads).
@@ -395,6 +505,152 @@ impl Default for StorageResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A backend stub whose only live method is `head` — everything else
+    /// is unreachable in upload-verification tests.
+    struct HeadOnlyBackend {
+        stat: std::sync::Mutex<Option<RemoteStat>>,
+    }
+
+    #[async_trait::async_trait]
+    impl StorageBackend for HeadOnlyBackend {
+        async fn exists(&self, _path: &StoragePath) -> Result<bool> {
+            unreachable!("exists")
+        }
+        async fn head(&self, _path: &StoragePath) -> Result<Option<RemoteStat>> {
+            Ok(self.stat.lock().unwrap().clone())
+        }
+        async fn read_to_string(&self, _path: &StoragePath) -> Result<String> {
+            unreachable!("read_to_string")
+        }
+        async fn write(&self, _path: &StoragePath, _data: &[u8]) -> Result<()> {
+            unreachable!("write")
+        }
+        async fn stage(&self, _path: &StoragePath, _workdir: &Path) -> Result<PathBuf> {
+            unreachable!("stage")
+        }
+        async fn upload(&self, _local: &Path, _remote: &StoragePath) -> Result<()> {
+            unreachable!("upload")
+        }
+        fn name(&self) -> &'static str {
+            "head-only-test"
+        }
+    }
+
+    fn remote_uri(raw: &str) -> StoragePath {
+        StoragePath::parse(raw)
+    }
+
+    #[test]
+    fn is_md5_hex_accepts_plain_digests_only() {
+        assert!(is_md5_hex("5d41402abc4b2a76b9719d911017c592"));
+        assert!(is_md5_hex("5D41402ABC4B2A76B9719D911017C592"));
+        assert!(!is_md5_hex("5d41402abc4b2a76b9719d911017c592-2")); // multipart
+        assert!(!is_md5_hex("5d41402abc4b2a76b9719d911017c59")); // short
+        assert!(!is_md5_hex("5d41402abc4b2a76b9719d911017c59z")); // non-hex
+    }
+
+    #[test]
+    fn md5_file_digests_match_known_vectors() {
+        // md5("hello") = 5d41402abc4b2a76b9719d911017c592 (hex) /
+        // XUFAKrxLKna5cZ2REBfFkg== (base64).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("hello.txt");
+        std::fs::write(&file, b"hello").expect("write file");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        assert_eq!(
+            rt.block_on(md5_hex_of_file(&file)).expect("hex digest"),
+            "5d41402abc4b2a76b9719d911017c592"
+        );
+        assert_eq!(
+            rt.block_on(md5_base64_of_file(&file)).expect("b64 digest"),
+            "XUFAKrxLKna5cZ2REBfFkg=="
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_upload_passes_when_s3_etag_matches_local_md5() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("out.txt");
+        std::fs::write(&file, b"hello").expect("write file");
+        let backend = HeadOnlyBackend {
+            stat: std::sync::Mutex::new(Some(RemoteStat {
+                size: 5,
+                etag: Some("5d41402abc4b2a76b9719d911017c592".to_string()),
+            })),
+        };
+        verify_upload(&backend, &file, &remote_uri("s3://b/out.txt"))
+            .await
+            .expect("matching etag must pass");
+    }
+
+    #[tokio::test]
+    async fn verify_upload_fails_when_s3_etag_diverges() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("out.txt");
+        std::fs::write(&file, b"hello").expect("write file");
+        let backend = HeadOnlyBackend {
+            stat: std::sync::Mutex::new(Some(RemoteStat {
+                size: 5,
+                etag: Some("00000000000000000000000000000000".to_string()),
+            })),
+        };
+        let err = verify_upload(&backend, &file, &remote_uri("s3://b/out.txt"))
+            .await
+            .expect_err("diverging etag must fail");
+        assert!(matches!(err, OxoFlowError::Integrity { .. }), "err: {err}");
+    }
+
+    #[tokio::test]
+    async fn verify_upload_skips_composite_s3_etags() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("out.txt");
+        std::fs::write(&file, b"hello").expect("write file");
+        let backend = HeadOnlyBackend {
+            stat: std::sync::Mutex::new(Some(RemoteStat {
+                size: 5,
+                etag: Some("5d41402abc4b2a76b9719d911017c592-2".to_string()),
+            })),
+        };
+        // A multipart etag is not comparable to a plain md5 — a healthy
+        // upload must not be failed over it.
+        verify_upload(&backend, &file, &remote_uri("s3://b/out.txt"))
+            .await
+            .expect("composite etag is skipped, not an error");
+    }
+
+    #[tokio::test]
+    async fn verify_upload_fails_on_size_mismatch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("out.txt");
+        std::fs::write(&file, b"hello").expect("write file");
+        let backend = HeadOnlyBackend {
+            stat: std::sync::Mutex::new(Some(RemoteStat {
+                size: 3, // truncated transfer
+                etag: None,
+            })),
+        };
+        let err = verify_upload(&backend, &file, &remote_uri("s3://b/out.txt"))
+            .await
+            .expect_err("size mismatch must fail even without a digest");
+        assert!(matches!(err, OxoFlowError::Integrity { .. }), "err: {err}");
+    }
+
+    #[tokio::test]
+    async fn verify_upload_passes_for_gcs_base64_md5() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("out.txt");
+        std::fs::write(&file, b"hello").expect("write file");
+        let backend = HeadOnlyBackend {
+            stat: std::sync::Mutex::new(Some(RemoteStat {
+                size: 5,
+                etag: Some("XUFAKrxLKna5cZ2REBfFkg==".to_string()),
+            })),
+        };
+        verify_upload(&backend, &file, &remote_uri("gs://b/out.txt"))
+            .await
+            .expect("matching gcs md5Hash must pass");
+    }
 
     #[test]
     fn parse_local_path() {

@@ -924,11 +924,16 @@ pub struct Rule {
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub rule_metadata: HashMap<String, toml::Value>,
 
-    /// Content-based cache key override.
+    /// Content-based cache key (issue #194 §2.3).
     ///
-    /// Accepted for schema/parser compatibility but NOT yet consulted by the
-    /// scheduler — content-addressed reuse is not active (issue #194 M2;
-    /// `validate` raises W026 so authors are not misled).
+    /// When set, the rule participates in content-addressed output reuse:
+    /// the executor hashes this key together with the expanded outputs,
+    /// the rendered command, and the content identity of every resolved
+    /// input; on a later run with a matching identity the cached outputs
+    /// are restored and the shell is skipped. Local inputs over 64 MiB and
+    /// remote objects without an etag cannot be content-addressed — such
+    /// instances silently execute instead of reusing. See
+    /// `executor/content_cache.rs`.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_key: Option<String>,

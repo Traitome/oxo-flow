@@ -877,23 +877,6 @@ pub fn lint_format(
             });
         }
 
-        // W026: `cache_key` is accepted but not yet consulted (issue #194
-        // M2). The field parses so old workflows keep validating, but the
-        // scheduler never reads it — silence would let authors believe
-        // content-addressed reuse is active when it is not.
-        if rule.cache_key.is_some() {
-            diagnostics.push(Diagnostic {
-                severity: Severity::Info,
-                message: "rule declares `cache_key`, which is accepted for compatibility but \
-                          not yet consulted by the scheduler — content-addressed reuse is not \
-                          active (issue #194)"
-                    .to_string(),
-                rule: Some(rule.name.clone()),
-                code: "W026".to_string(),
-                suggestion: None,
-            });
-        }
-
         // W006: Naming convention (should use snake_case)
         if rule.name.contains('-') {
             diagnostics.push(Diagnostic {
@@ -3888,10 +3871,12 @@ mod tests {
         );
     }
 
-    // ---- W026: cache_key accepted but not consulted (issue #194 M2) ----
+    // ---- cache_key is now consulted (issue #194 §2.3) — the former W026 ----
+    // lint was removed when content-addressed reuse became real; a rule
+    // declaring `cache_key` must stay lint-silent.
 
     #[test]
-    fn lint_w026_flags_unimplemented_cache_key() {
+    fn lint_cache_key_is_consulted_and_silent() {
         let toml = r#"
             [workflow]
             name = "test"
@@ -3904,24 +3889,10 @@ mod tests {
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
         let diagnostics = lint_format(&config, None);
-        let w026 = diagnostics.iter().find(|d| d.code == "W026");
         assert!(
-            w026.is_some_and(|d| d.rule.as_deref() == Some("step1")),
-            "cache_key must raise W026: {diagnostics:?}"
+            !diagnostics.iter().any(|d| d.code == "W026"),
+            "W026 was removed with the cache_key implementation: {diagnostics:?}"
         );
-        // A workflow without cache_key stays silent.
-        let toml = r#"
-            [workflow]
-            name = "test"
-
-            [[rules]]
-            name = "step1"
-            output = ["out.txt"]
-            shell = "echo hi > out.txt"
-        "#;
-        let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config, None);
-        assert!(!diagnostics.iter().any(|d| d.code == "W026"));
     }
 
     // ---- W025: Deprecated rule-level threads/memory (issue #142 M12) ----

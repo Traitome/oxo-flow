@@ -2019,7 +2019,7 @@ pub async fn run_command(
                     .await;
 
                 match result {
-                    Ok(record) => {
+                    Ok(mut record) => {
                         let duration = record
                             .finished_at
                             .and_then(|f| record.started_at.map(|s| f.signed_duration_since(s)))
@@ -2034,12 +2034,22 @@ pub async fn run_command(
                                 duration_ms: (duration * 1000.0) as u64,
                             });
                             if !is_tty {
-                                progress_narrate(format_args!(
-                                    "  {} {} ({:.1}s)",
-                                    "✓".green(),
-                                    rule_name,
-                                    duration
-                                ));
+                                if record.skip_reason.as_deref()
+                                    == Some("restored from content cache")
+                                {
+                                    progress_narrate(format_args!(
+                                        "  {} {} (restored from content cache)",
+                                        "↺".cyan(),
+                                        rule_name,
+                                    ));
+                                } else {
+                                    progress_narrate(format_args!(
+                                        "  {} {} ({:.1}s)",
+                                        "✓".green(),
+                                        rule_name,
+                                        duration
+                                    ));
+                                }
                             }
                             let benchmark =
                                 oxo_flow_core::executor::checkpoint::BenchmarkRecord {
@@ -2052,6 +2062,54 @@ pub async fn run_command(
                                     cpu_seconds: record.cpu_seconds,
                                     retries: record.retries,
                                 };
+                            // Post-run manifest re-verification
+                            // (issue #194 §2.10): an external writer
+                            // touching an input mid-run is invisible to the
+                            // pre-run snapshot alone. Re-snapshot now; on
+                            // any change, warn loudly and keep the PRE-run
+                            // manifest recorded — the next run's comparison
+                            // then sees the mismatch and re-executes this
+                            // rule instead of serving outputs built from a
+                            // mixed file state.
+                            let post_manifest = oxo_flow_core::executor::checkpoint::snapshot_input_manifest(
+                                &rule,
+                                workdir_actual.as_ref(),
+                                &wildcard_values,
+                                &crate::commands::run_preview::storage_resolver(),
+                            )
+                            .ok()
+                            .flatten();
+                            if let (Some(pre), Some(post)) = (&input_manifest, &post_manifest) {
+                                let changes =
+                                    oxo_flow_core::executor::checkpoint::manifest_changes(
+                                        pre, post,
+                                    );
+                                if !changes.is_empty() {
+                                    let note = format!(
+                                        "\n[oxo-flow] WARNING: an input changed while this rule was running ({}); outputs may be inconsistent — the next run will re-execute this rule",
+                                        changes.join(", ")
+                                    );
+                                    tracing::warn!(
+                                        rule = %rule_name,
+                                        changes = ?changes,
+                                        "input changed while the rule was running; outputs may be inconsistent"
+                                    );
+                                    if let Some(ref mut stderr) = record.stderr {
+                                        stderr.push_str(&oxo_flow_core::executor::process::mask_sensitive(
+                                            &note,
+                                            &sensitive_values,
+                                        ));
+                                    } else {
+                                        record.stderr = Some(
+                                            oxo_flow_core::executor::process::mask_sensitive(
+                                                &note,
+                                                &sensitive_values,
+                                            ),
+                                        );
+                                    }
+                                }
+                            }
+
                             let mut ck = checkpoint.lock().await;
                             ck.record_run(&record);
                             ck.mark_completed(&rule_name, benchmark);
