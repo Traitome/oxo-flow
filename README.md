@@ -139,6 +139,8 @@ dot -Tpng dag.dot -o dag.png
 
 # Export a transit-map-style diagram via nf-metro
 oxo-flow graph my-pipeline.oxoflow -f metro -o pipeline.mmd
+# Render locally (requires nf-metro) or paste the .mmd content into the
+# online playground: https://seqeralabs.github.io/nf-metro/latest/playground/
 nf-metro render pipeline.mmd -o pipeline.svg
 
 # Generate an HTML report

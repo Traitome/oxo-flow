@@ -542,7 +542,7 @@ impl WorkflowDag {
             out.push_str(&format!(
                 "    n{}[\"{}\"]\n",
                 node.index(),
-                self.graph[node].name
+                sanitize_mermaid_label(&self.graph[node].name)
             ));
         }
         for (src, dst) in self.sorted_edges() {
@@ -597,7 +597,7 @@ impl WorkflowDag {
             out.push_str(&format!(
                 "%%metro line: {} | {} | {}\n",
                 sanitize_metro_id(stage),
-                crate::stage::stage_display(stage),
+                sanitize_mermaid_text(&crate::stage::stage_display(stage)),
                 crate::stage::stage_color(stage),
             ));
         }
@@ -605,6 +605,7 @@ impl WorkflowDag {
         out.push_str("graph LR\n");
 
         let multi_stage = stages.len() > 1;
+        let inner_indent = if multi_stage { "        " } else { "    " };
 
         // Stations. With multiple stages, wrap each stage's stations in a
         // section (`subgraph`) and place intra-stage edges inside it. Edges
@@ -617,15 +618,15 @@ impl WorkflowDag {
                 out.push_str(&format!(
                     "    subgraph {} [{}]\n",
                     sanitize_metro_id(stage),
-                    crate::stage::stage_display(stage)
+                    sanitize_mermaid_text(&crate::stage::stage_display(stage))
                 ));
             }
 
             for node in nodes.iter().filter(|n| &node_stage[n] == stage) {
                 out.push_str(&format!(
-                    "        n{}[\"{}\"]\n",
+                    "{inner_indent}n{}[\"{}\"]\n",
                     node.index(),
-                    self.graph[*node].name
+                    sanitize_mermaid_label(&self.graph[*node].name)
                 ));
             }
 
@@ -635,9 +636,8 @@ impl WorkflowDag {
                 }
                 if node_stage[&dst] == *stage {
                     // Intra-stage edge — inside this section.
-                    let indent = if multi_stage { "        " } else { "    " };
                     out.push_str(&format!(
-                        "{indent}n{} -->|{}| n{}\n",
+                        "{inner_indent}n{} -->|{}| n{}\n",
                         src.index(),
                         sanitize_metro_id(&node_stage[&src]),
                         dst.index()
@@ -888,6 +888,39 @@ fn sanitize_metro_id(s: &str) -> String {
         out = "stage".to_string();
     }
     out
+}
+
+/// Sanitize text that appears inside a Mermaid quoted node label
+/// (`["text"]`). Replaces syntax meta-characters with safe, readable
+/// alternatives so output renders reliably in both standard Mermaid and
+/// nf-metro (which does not unescape HTML entities).
+fn sanitize_mermaid_label(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '"' => '\'',
+            '[' => '(',
+            ']' => ')',
+            '|' => '/',
+            '\n' | '\r' => ' ',
+            c => c,
+        })
+        .collect()
+}
+
+/// Sanitize text that appears in metro `%%metro line` directives or
+/// `subgraph` titles. Brackets are stripped to spaces because subgraph
+/// titles do not tolerate parentheses, while pipes are replaced with
+/// slashes so the field separators stay intact.
+fn sanitize_mermaid_text(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '"' => '\'',
+            '[' | ']' => ' ',
+            '|' => '/',
+            '\n' | '\r' => ' ',
+            c => c,
+        })
+        .collect()
 }
 
 /// Complexity metrics for a workflow DAG.
@@ -2154,5 +2187,90 @@ mod tests {
         let mmd = dag.to_metro(&rules).unwrap();
         assert!(mmd.contains("%%metro line: qc | Read QC | #4C78A8"));
         assert!(!mmd.contains("%%metro line: align"));
+    }
+
+    #[test]
+    fn mermaid_export_escapes_special_characters_in_rule_names() {
+        let mut a = make_rule("a", vec![], vec!["mid.txt"]);
+        a.name = "rule\"with\"quotes".to_string();
+        let mut b = make_rule("b", vec!["mid.txt"], vec!["out.txt"]);
+        b.name = "rule[bracket]".to_string();
+        let rules = vec![a, b];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let mmd = dag.to_mermaid();
+        // Double quotes must not terminate the label early.
+        assert!(
+            mmd.contains("n0[\"rule'with'quotes\"]"),
+            "escaped rule name not found in:\n{mmd}"
+        );
+        // Brackets must not terminate the label early.
+        assert!(
+            mmd.contains("n1[\"rule(bracket)\"]"),
+            "escaped bracket not found in:\n{mmd}"
+        );
+    }
+
+    #[test]
+    fn metro_export_escapes_special_characters_in_rule_and_stage_names() {
+        let mut a = make_rule("a", vec![], vec!["mid.txt"]);
+        a.name = "rule|with|pipes".to_string();
+        a.tags = vec!["stage]bracket".to_string()];
+        let mut b = make_rule("b", vec!["mid.txt"], vec!["out.txt"]);
+        b.name = "rule\"quote\"".to_string();
+        b.tags = vec!["stage|pipe".to_string()];
+        let rules = vec![a, b];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let mmd = dag.to_metro(&rules).unwrap();
+        // Line directive field separators must survive display names.
+        assert!(
+            mmd.contains("%%metro line: stage_bracket | stage bracket | "),
+            "escaped stage bracket not in line directive:\n{mmd}"
+        );
+        assert!(
+            mmd.contains("%%metro line: stage_pipe | stage/pipe | "),
+            "escaped stage pipe not in line directive:\n{mmd}"
+        );
+        // Subgraph title brackets must not terminate early.
+        assert!(
+            mmd.contains("subgraph stage_bracket [stage bracket]"),
+            "escaped subgraph title not found:\n{mmd}"
+        );
+        assert!(
+            mmd.contains("subgraph stage_pipe [stage/pipe]"),
+            "escaped subgraph pipe title not found:\n{mmd}"
+        );
+        // Node labels must escape quotes and pipes.
+        assert!(
+            mmd.contains("n0[\"rule/with/pipes\"]"),
+            "escaped pipe in node label not found:\n{mmd}"
+        );
+        assert!(
+            mmd.contains("n1[\"rule'quote'\"]"),
+            "escaped quote in node label not found:\n{mmd}"
+        );
+    }
+
+    #[test]
+    fn metro_export_single_stage_indentation_is_consistent() {
+        let rules = vec![
+            make_rule("a", vec!["in.txt"], vec!["mid.txt"]),
+            make_rule("b", vec!["mid.txt"], vec!["out.txt"]),
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let mmd = dag.to_metro(&rules).unwrap();
+        let lines: Vec<&str> = mmd.lines().collect();
+        let station_line = lines
+            .iter()
+            .find(|l| l.contains("n0[\"a\"]"))
+            .expect("station line exists");
+        let edge_line = lines
+            .iter()
+            .find(|l| l.contains("n0 -->|generic| n1"))
+            .expect("edge line exists");
+        assert_eq!(
+            station_line.len() - station_line.trim_start().len(),
+            edge_line.len() - edge_line.trim_start().len(),
+            "single-stage station and edge must share the same indentation:\n{mmd}"
+        );
     }
 }
