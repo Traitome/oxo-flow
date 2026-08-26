@@ -6040,8 +6040,8 @@ and duplicate edges are deduplicated.</p>
 <tbody>
 <tr>
 <td><code>optional</code></td>
-<td>Boolean</td>
-<td>If <code>true</code>, missing inputs become warnings instead of errors</td>
+<td>Boolean or <code>"any"</code></td>
+<td><code>true</code>: the rule is skipped (no error) when ANY declared input is missing — literal globs count as missing only when they match nothing. <code>"any"</code>: the rule runs when AT LEAST ONE declared input exists and is skipped only when none do — the alternative-input pattern, e.g. a consumer that accepts whichever mapper/aligner wrote the file. <code>false</code> (default): every input must exist</td>
 </tr>
 <tr>
 <td><code>required</code></td>
@@ -6054,7 +6054,21 @@ and duplicate edges are deduplicated.</p>
 </span><span id="__span-38-2"><a id="__codelineno-38-2" name="__codelineno-38-2" href="#__codelineno-38-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"experimental"</span>
 </span><span id="__span-38-3"><a id="__codelineno-38-3" name="__codelineno-38-3" href="#__codelineno-38-3"></a><span class="n">optional</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">     </span><span class="c1"># Skip if input data is absent</span>
 </span><span id="__span-38-4"><a id="__codelineno-38-4" name="__codelineno-38-4" href="#__codelineno-38-4"></a><span class="n">required</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span><span class="w">    </span><span class="c1"># Failure is reported but does not fail the run</span>
+</span><span id="__span-38-5"><a id="__codelineno-38-5" name="__codelineno-38-5" href="#__codelineno-38-5"></a>
+</span><span id="__span-38-6"><a id="__codelineno-38-6" name="__codelineno-38-6" href="#__codelineno-38-6"></a><span class="k">[[rules]]</span>
+</span><span id="__span-38-7"><a id="__codelineno-38-7" name="__codelineno-38-7" href="#__codelineno-38-7"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"filter_bam"</span>
+</span><span id="__span-38-8"><a id="__codelineno-38-8" name="__codelineno-38-8" href="#__codelineno-38-8"></a><span class="c1"># Run when any of the mapper-specific BAMs exists (bwa writes *_PE.mapped.bam,</span>
+</span><span id="__span-38-9"><a id="__codelineno-38-9" name="__codelineno-38-9" href="#__codelineno-38-9"></a><span class="c1"># bwamem/bt2/circularmapper write {sample}.mapped.bam); skip only when none do.</span>
+</span><span id="__span-38-10"><a id="__codelineno-38-10" name="__codelineno-38-10" href="#__codelineno-38-10"></a><span class="n">optional</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"any"</span>
+</span><span id="__span-38-11"><a id="__codelineno-38-11" name="__codelineno-38-11" href="#__codelineno-38-11"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-38-12"><a id="__codelineno-38-12" name="__codelineno-38-12" href="#__codelineno-38-12"></a><span class="w">    </span><span class="s2">"results/mapping/bwa/{sample}_PE.mapped.bam"</span><span class="p">,</span>
+</span><span id="__span-38-13"><a id="__codelineno-38-13" name="__codelineno-38-13" href="#__codelineno-38-13"></a><span class="w">    </span><span class="s2">"results/mapping/bwa/{sample}.mapped.bam"</span><span class="p">,</span>
+</span><span id="__span-38-14"><a id="__codelineno-38-14" name="__codelineno-38-14" href="#__codelineno-38-14"></a><span class="w">    </span><span class="s2">"results/mapping/bt2/{sample}.mapped.bam"</span><span class="p">,</span>
+</span><span id="__span-38-15"><a id="__codelineno-38-15" name="__codelineno-38-15" href="#__codelineno-38-15"></a><span class="p">]</span>
 </span></code></pre></div>
+<p>When a rule is skipped because none of its optional inputs exist, non-optional
+dependents are skipped too ("blocked by skipped upstream dependency") instead of
+executing a doomed shell command on missing files.</p>
 <h3 id="logging-and-benchmarking">Logging and Benchmarking<a class="headerlink" href="#logging-and-benchmarking" title="Permanent link">#</a></h3>
 <table>
 <thead>
