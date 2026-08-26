@@ -6365,6 +6365,10 @@ operator's <code>combine</code> stage instead (gallery 10).</p>
 <td><code>{config.*}</code></td>
 <td>Value from the <code>[config]</code> section (plain value, declared default, or CLI override)</td>
 </tr>
+<tr>
+<td><code>{wildcard.*}</code></td>
+<td>Per-instance binding under the same grammar as <code>when</code> conditions — sample-group <code>metadata</code> keys (e.g. <code>{wildcard.umi1_pattern}</code>) and expansion keys. Unbound keys render as their literal brace token</td>
+</tr>
 </tbody>
 </table>
 <p><strong>Why the effective pair exists</strong> — <code>{threads}</code>/<code>{memory}</code> render the
