@@ -1486,7 +1486,7 @@ samples = ["CASE_001", "CASE_002"]
 |---|---|---|---|
 | `name` | String | **Yes** | Group name |
 | `samples` | Array of strings | **Yes** | Sample identifiers in this group |
-| `metadata` | Table | No | Arbitrary group-level metadata |
+| `metadata` | Table | No | Arbitrary group-level metadata; each key is available as a wildcard in paths, shells, and `when` conditions (`wildcard.<key>`) |
 
 Any rule that references `{sample}` or `{group}` is expanded once per `(group, sample)` pair across all groups.
 
@@ -1668,11 +1668,32 @@ shell = "fastqc {input[0]} -o qc/"
 | `config.<key> == true\|false` | `config.skip == false` | Boolean equality |
 | `config.<key> > N` | `config.min_cov >= 20` | Numeric comparison (`>`, `>=`, `<`, `<=`) |
 | `file_exists("path")` | `file_exists("panel.bed")` | File existence test |
-| `wildcard.<key> == "value"` | `wildcard.control != ""` | Per-instance pair/group wildcard comparison (`pair_id`, `experiment`, `control`, `tumor`, `normal`, `experiment_type`, `tumor_type`, `group`, `sample`, pair metadata keys) — evaluated per expansion combo at DAG build time; non-matching instances never enter the DAG (snakemake-style morphing) |
+| `wildcard.<key> == "value"` | `wildcard.control != ""` | Per-instance pair/group wildcard comparison (`pair_id`, `experiment`, `control`, `tumor`, `normal`, `experiment_type`, `tumor_type`, `group`, `sample`, plus any `metadata` keys declared on `[[pairs]]` / `[[sample_groups]]` and `[[values]]` table names) — evaluated per expansion combo at DAG build time; non-matching instances never enter the DAG (snakemake-style morphing) |
 | `!<expr>` | `!config.skip` | Logical NOT |
 | `<expr> && <expr>` | `config.run_qc && config.min_cov >= 20` | Logical AND |
 | `<expr> \|\| <expr>` | `config.wgs \|\| config.wes` | Logical OR |
 | `(<expr>)` | `(config.a && config.b) \|\| config.c` | Grouping |
+
+### Unbound wildcard keys evaluate false
+
+A `wildcard.<key>` predicate whose key has **no binding** for an instance —
+e.g. a group that declares no `input_type` metadata while another group
+does — evaluates to **false** for *every* operator (`==`, `!=`, `>`, `<`,
+…, and bare truthiness alike). The condition is not met, so that instance
+never runs. This keeps a rule like
+`when = "wildcard.input_type == 'srr'"` scoped to the SRA cohort even when
+other cohorts omit the key entirely.
+
+> **Note:** this is a behavioral contract, not an oversight. An unbound
+> comparison historically evaluated `true`, which ran SRA-download rules
+> against literal `{accession}` placeholders for FASTQ cohorts (live
+> incident). `oxo-flow lint` flags `when` references to keys no pair/group
+> can ever bind as a **W027** warning — such rules never run.
+
+Per-instance wildcard bindings (including metadata keys) are baked into a
+kept rule's `when` at expansion time, so the execution-time re-check
+re-evaluates the exact same per-instance verdict; config-only predicates
+continue to gate at execution as before.
 
 ### Example
 

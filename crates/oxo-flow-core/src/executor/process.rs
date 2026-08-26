@@ -1159,7 +1159,13 @@ impl LocalExecutor {
                         .or_insert_with(|| toml::Value::String(v.clone()));
                 }
             }
-            if !evaluate_condition(condition, &config_values) {
+            // `wildcard.<key>` predicates resolve against the same
+            // wildcard_values map the caller rendered this rule with.
+            // Expansion-time per-instance filtering bakes each kept
+            // instance's bindings into its `when`, so an unbound key here
+            // genuinely cannot be met (false — rule skipped), never a
+            // kept instance's veto.
+            if !evaluate_condition_with_wildcards(condition, &config_values, wildcard_values) {
                 record.status = JobStatus::Skipped;
                 record.skip_reason = Some("condition evaluated to false".to_string());
                 record.finished_at = Some(Utc::now());
@@ -2665,7 +2671,7 @@ fn absolute_path(root: Option<&Path>, path: &str) -> String {
 /// Callers (CLI/web) stringify TOML config arrays as `["a", "b"]` literals;
 /// shells need the space-joined form (`a b`), matching the multi-value
 /// semantics of `{input}`. Scalar values pass through unchanged.
-fn render_wildcard_value(value: &str) -> String {
+pub(crate) fn render_wildcard_value(value: &str) -> String {
     // Cheap guard: TOML array literals always start with '['.
     if value.starts_with('[') {
         let wrapped = format!("_x = {value}");
@@ -2693,8 +2699,11 @@ pub fn evaluate_condition(condition: &str, config_values: &HashMap<String, toml:
 }
 
 /// Condition evaluation with a pair/group wildcard context (the expansion
-/// combo). `wildcard.<key>` predicates resolve against this map; with no
-/// context they evaluate permissively (see `evaluate_condition_inner`).
+/// combo). `wildcard.<key>` predicates resolve against this map; a key
+/// absent from it evaluates false (the condition cannot be met) — the
+/// expansion-time instance filter relies on this, and expansion bakes
+/// per-instance values into kept rules' `when` so the execution-time
+/// re-check never vetoes a kept instance (see `compare_wildcard_value`).
 pub fn evaluate_condition_with_wildcards(
     condition: &str,
     config_values: &HashMap<String, toml::Value>,
@@ -2746,6 +2755,15 @@ fn evaluate_condition_inner(
             if let Some(key) = lhs.strip_prefix("wildcard.") {
                 return compare_wildcard_value(wildcard_values.get(key), op, rhs);
             }
+            // Literal-vs-literal comparison: produced by expansion-time
+            // when baking (per-instance wildcard values substituted into
+            // the condition), so the execution-time re-check re-evaluates
+            // the same per-instance verdict with no wildcard context.
+            if let Some(l) = strip_quotes(lhs)
+                && let Some(r) = strip_quotes(rhs)
+            {
+                return compare_strings(l, r, op);
+            }
         }
     }
     if let Some(key) = s.strip_prefix("config.") {
@@ -2759,12 +2777,15 @@ fn evaluate_condition_inner(
         };
     }
     if let Some(key) = s.strip_prefix("wildcard.") {
-        // Permissive when the key is absent: execution-time evaluation has no
-        // pair/group context (expansion already filtered the instances), and
-        // an unknown key behaves like the unconditional fallthrough below.
+        // Truthiness of a wildcard binding. An absent key is false — an
+        // unbound wildcard reference means the condition cannot be met
+        // (W027 warns about keys no instance can ever bind). Instances
+        // expansion kept are baked with their per-instance values, so this
+        // strict rule only vetoes rules whose wildcard reference is
+        // genuinely unresolvable.
         return match wildcard_values.get(key) {
             Some(v) => !v.is_empty() && v != "false" && v != "0",
-            None => true,
+            None => false,
         };
     }
     true
@@ -2877,18 +2898,41 @@ fn compare_config_value(val: Option<&toml::Value>, op: &str, rhs: &str) -> bool 
 }
 
 /// Compare a pair/group wildcard value (a string from the expansion combo)
-/// against a literal in a `when` condition. Permissive on a missing key:
-/// execution-time evaluation has no combo context (expansion already
-/// filtered the instances), so an absent key defers to the caller's
-/// fallthrough.
+/// against a literal in a `when` condition. An unbound key evaluates to
+/// **false** for every operator — a `when` referencing a wildcard that has
+/// no binding cannot be met, so the rule must not run (live incident:
+/// snparcher's `wildcard.input_type == 'srr'` fired for a fastq cohort
+/// whose group metadata declared no `input_type`, running `download_sra`
+/// against a literal `{accession}`). Expansion-time instance filtering
+/// relies on this, and the execution-time re-check re-evaluates baked
+/// per-instance values instead of relying on missing-key fallthrough.
 fn compare_wildcard_value(val: Option<&String>, op: &str, rhs: &str) -> bool {
-    let Some(v) = val else { return true };
+    let Some(v) = val else { return false };
     let rhs = rhs.trim_matches('"').trim_matches('\'');
     match op {
         "==" => v == rhs,
         "!=" => v != rhs,
+        _ => compare_strings(v, rhs, op),
+    }
+}
+
+/// Numeric-first, then lexicographic comparison used by the wildcard and
+/// literal comparison paths of `when` evaluation (numeric values compare
+/// numerically so baked `'7' > '10'` is false, matching shell intuition).
+fn compare_strings(a: &str, b: &str, op: &str) -> bool {
+    match op {
+        "==" => a == b,
+        "!=" => a != b,
         _ => {
-            if let (Ok(a), Ok(b)) = (v.parse::<f64>(), rhs.parse::<f64>()) {
+            if let (Ok(x), Ok(y)) = (a.parse::<f64>(), b.parse::<f64>()) {
+                match op {
+                    ">=" => x >= y,
+                    "<=" => x <= y,
+                    ">" => x > y,
+                    "<" => x < y,
+                    _ => false,
+                }
+            } else {
                 match op {
                     ">=" => a >= b,
                     "<=" => a <= b,
@@ -2896,16 +2940,19 @@ fn compare_wildcard_value(val: Option<&String>, op: &str, rhs: &str) -> bool {
                     "<" => a < b,
                     _ => false,
                 }
-            } else {
-                match op {
-                    ">=" => v.as_str() >= rhs,
-                    "<=" => v.as_str() <= rhs,
-                    ">" => v.as_str() > rhs,
-                    "<" => v.as_str() < rhs,
-                    _ => false,
-                }
             }
         }
+    }
+}
+
+/// Strip a fully quoted string literal (`'v'` or `"v"`) to its content.
+/// Returns `None` when the input is not an exact quoted literal.
+fn strip_quotes(s: &str) -> Option<&str> {
+    let first = s.as_bytes().first()?;
+    let last = s.as_bytes().last()?;
+    match (first, last) {
+        (b'\'', b'\'') | (b'"', b'"') if s.len() >= 2 => Some(&s[1..s.len() - 1]),
+        _ => None,
     }
 }
 

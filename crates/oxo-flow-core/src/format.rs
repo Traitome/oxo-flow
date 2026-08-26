@@ -14,6 +14,11 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 
+/// Matches a `wildcard.<key>` reference inside a `when` expression (the
+/// per-instance pair/group binding vocabulary, including metadata keys).
+static WHEN_WILDCARD_REF_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"wildcard\.(\w+)").expect("valid when-wildcard regex"));
+
 /// Current .oxoflow format specification version.
 pub const FORMAT_VERSION: &str = "1.0";
 
@@ -1208,6 +1213,39 @@ pub fn lint_format(
             }
         }
 
+        // W027: `when` references a wildcard key no instance can ever bind
+        // (issue #85 live incident: snparcher's
+        // `when = "wildcard.input_type == 'srr'"` fired for a fastq cohort
+        // whose group metadata declared no `input_type` — the unbound
+        // comparison used to evaluate TRUE, running `download_sra` against
+        // a literal `{accession}`). Unbound comparisons now evaluate
+        // false, so a key outside the bindable vocabulary (standard
+        // pair/group keys, declared metadata, [[values]] names) makes the
+        // rule never run — worth a warning, never an error: metadata can
+        // arrive at run time via a pairs/sample_groups file.
+        if let Some(ref when) = rule.when
+            && WHEN_WILDCARD_REF_RE.is_match(when)
+        {
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for cap in WHEN_WILDCARD_REF_RE.captures_iter(when) {
+                let key = cap[1].to_string();
+                if declared_wildcards.contains(&key) || !seen.insert(key.clone()) {
+                    continue;
+                }
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    message: format!(
+                        "when references 'wildcard.{key}' but no [[pairs]]/[[sample_groups]]/[[values]] can bind it — the condition evaluates false and the rule never runs"
+                    ),
+                    rule: Some(rule.name.clone()),
+                    code: "W027".to_string(),
+                    suggestion: Some(
+                        "declare the key in a [[pairs]]/[[sample_groups]] metadata table or a [[values]] table, or check the spelling".to_string(),
+                    ),
+                });
+            }
+        }
+
         // W024: expandable wildcard with no declared source (issue #142 H3).
         // A `{sample}`/`{group}`/pair wildcard the engine can never expand —
         // no sample_pattern, [[sample_groups]], [[pairs]], [[values]], or
@@ -2084,6 +2122,89 @@ mod tests {
         assert_eq!(w024[0].severity, Severity::Warning);
         assert_eq!(w024[0].rule.as_deref(), Some("gen"));
         assert!(w024[0].suggestion.is_some());
+    }
+
+    #[test]
+    fn lint_when_unbound_wildcard_key_fires_w027() {
+        // Issue #85: a `when` referencing `wildcard.<key>` that no pair/
+        // group metadata or [[values]] table can bind now evaluates false
+        // (the rule never runs) — the lint must say so instead of the
+        // incident repeating silently.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "download_sra"
+            output = ["raw/{sample}.fq"]
+            when = "wildcard.input_type == 'srr'"
+            shell = "echo hi"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        let w027: Vec<&Diagnostic> = diagnostics.iter().filter(|d| d.code == "W027").collect();
+        assert_eq!(
+            w027.len(),
+            1,
+            "one W027 for unbound 'input_type', got: {diagnostics:?}"
+        );
+        assert!(w027[0].message.contains("input_type"));
+        assert_eq!(w027[0].severity, Severity::Warning);
+        assert_eq!(w027[0].rule.as_deref(), Some("download_sra"));
+    }
+
+    #[test]
+    fn lint_when_bindable_wildcard_keys_are_silent() {
+        // Standard pair/group keys, declared metadata keys, and [[values]]
+        // names are all bindable per instance — no W027.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1"]
+            metadata = { input_type = "srr" }
+
+            [[pairs]]
+            pair_id = "P1"
+            experiment = "T1"
+            control = "N1"
+            metadata = { source = "sra" }
+
+            [[values]]
+            name = "assembler"
+            values = ["spades"]
+
+            [[rules]]
+            name = "sra_download"
+            input = ["raw/{sample}.fq"]
+            output = ["out/{sample}.fq"]
+            when = "wildcard.input_type == 'srr'"
+            shell = "echo {input}"
+
+            [[rules]]
+            name = "pair_step"
+            input = ["reads/{pair_id}.fq"]
+            output = ["out/{pair_id}.bam"]
+            when = "wildcard.control != '' && wildcard.source == 'sra'"
+            shell = "echo {input}"
+
+            [[rules]]
+            name = "value_step"
+            input = ["x_{assembler}.txt"]
+            output = ["y_{assembler}.txt"]
+            when = "wildcard.assembler == 'spades'"
+            shell = "echo {input}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        let w027: Vec<&Diagnostic> = diagnostics.iter().filter(|d| d.code == "W027").collect();
+        assert_eq!(
+            w027.len(),
+            0,
+            "declared metadata and values keys must not fire W027: {diagnostics:?}"
+        );
     }
 
     #[test]

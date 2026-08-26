@@ -769,23 +769,159 @@ fn evaluate_condition_wildcard_context_paired_control() {
 }
 
 #[test]
-fn evaluate_condition_wildcard_context_missing_key_is_permissive() {
+fn evaluate_condition_wildcard_context_missing_key_is_false() {
     use super::process::evaluate_condition_with_wildcards;
 
-    // Execution-time evaluation has no combo context — wildcard predicates
-    // must not veto an instance that expansion already kept.
+    // An unbound wildcard key cannot meet the condition: every operator
+    // evaluates false (issue #85 — snparcher's
+    // `when = "wildcard.input_type == 'srr'"` fired for a fastq cohort
+    // with no `input_type` binding and ran `download_sra` against a
+    // literal `{accession}`).
     let config = HashMap::new();
     let empty = HashMap::new();
-    assert!(evaluate_condition_with_wildcards(
+    assert!(!evaluate_condition_with_wildcards(
         "wildcard.control != ''",
         &config,
         &empty
     ));
-    assert!(evaluate_condition_with_wildcards(
+    assert!(!evaluate_condition_with_wildcards(
         "wildcard.unknown_key == 'x'",
         &config,
         &empty
     ));
+    assert!(!evaluate_condition_with_wildcards(
+        "wildcard.unknown_key != 'x'",
+        &config,
+        &empty
+    ));
+    assert!(!evaluate_condition_with_wildcards(
+        "wildcard.unknown_key > '1'",
+        &config,
+        &empty
+    ));
+    // Bare truthiness of an unbound key is false too (matches
+    // `config.missing`), and a bound key still works.
+    assert!(!evaluate_condition_with_wildcards(
+        "wildcard.unknown_key",
+        &config,
+        &empty
+    ));
+    let mut combo = HashMap::new();
+    combo.insert("unknown_key".to_string(), "x".to_string());
+    assert!(evaluate_condition_with_wildcards(
+        "wildcard.unknown_key",
+        &config,
+        &combo
+    ));
+    assert!(evaluate_condition_with_wildcards(
+        "wildcard.unknown_key == 'x'",
+        &config,
+        &combo
+    ));
+}
+
+#[test]
+fn evaluate_condition_literal_comparisons_compare_for_real() {
+    use super::process::evaluate_condition_with_wildcards;
+
+    // Expansion-time when baking substitutes per-instance wildcard values
+    // into the kept rule's `when` as quoted literals; the execution-time
+    // re-check must compare them properly (including under `!`).
+    let config = HashMap::new();
+    let empty = HashMap::new();
+    assert!(evaluate_condition_with_wildcards(
+        "'srr' == 'srr'",
+        &config,
+        &empty
+    ));
+    assert!(!evaluate_condition_with_wildcards(
+        "'srr' == 'fastq'",
+        &config,
+        &empty
+    ));
+    assert!(evaluate_condition_with_wildcards(
+        "'srr' != 'fastq'",
+        &config,
+        &empty
+    ));
+    assert!(evaluate_condition_with_wildcards(
+        "'2' > '1' && '1' <= '2'",
+        &config,
+        &empty
+    ));
+    assert!(!evaluate_condition_with_wildcards(
+        "!('srr' == 'srr')",
+        &config,
+        &empty
+    ));
+    // Baked wildcard parts compose with config predicates.
+    let mut config = HashMap::new();
+    config.insert("gate".to_string(), toml::Value::Boolean(true));
+    assert!(evaluate_condition_with_wildcards(
+        "config.gate && 'srr' == 'srr'",
+        &config,
+        &empty
+    ));
+    config.insert("gate".to_string(), toml::Value::Boolean(false));
+    assert!(!evaluate_condition_with_wildcards(
+        "config.gate && 'srr' == 'srr'",
+        &config,
+        &empty
+    ));
+}
+
+#[tokio::test]
+async fn execute_rule_skipped_when_wildcard_key_unbound() {
+    let config = ExecutorConfig {
+        max_jobs: 1,
+        dry_run: false,
+        workdir: std::env::temp_dir(),
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+
+    // A `when` referencing a wildcard key with no binding cannot be met:
+    // the rule is skipped (never executed) for every operator — ==, !=, >.
+    for condition in [
+        r#"wildcard.missing == "x""#,
+        r#"wildcard.missing != "x""#,
+        "wildcard.missing > '1'",
+    ] {
+        let mut rule = make_rule("unbound_when", "echo never");
+        rule.when = Some(condition.to_string());
+        let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+        assert_eq!(
+            record.status,
+            JobStatus::Skipped,
+            "condition {condition:?} with an unbound wildcard key must skip the rule"
+        );
+        assert_eq!(
+            record.skip_reason.as_deref(),
+            Some("condition evaluated to false")
+        );
+    }
+
+    // A bound wildcard key still gates normally: matching value runs,
+    // non-matching value skips.
+    let mut rule = make_rule("bound_when", "echo hi");
+    rule.when = Some(r#"wildcard.k == "v""#.to_string());
+    let mut values = HashMap::new();
+    values.insert("k".to_string(), "v".to_string());
+    let record = executor.execute_rule(&rule, &values).await.unwrap();
+    assert_eq!(
+        record.status,
+        JobStatus::Success,
+        "bound wildcard.k == 'v' must run"
+    );
+
+    let mut values = HashMap::new();
+    values.insert("k".to_string(), "other".to_string());
+    let record = executor.execute_rule(&rule, &values).await.unwrap();
+    assert_eq!(
+        record.status,
+        JobStatus::Skipped,
+        "bound wildcard.k == 'v' with k = 'other' must skip"
+    );
 }
 
 #[test]
