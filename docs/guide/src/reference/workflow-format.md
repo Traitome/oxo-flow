@@ -1059,7 +1059,7 @@ target = true   # Included when running without -t
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `optional` | Boolean | If `true`, missing inputs become warnings instead of errors |
+| `optional` | Boolean or `"any"` | `true`: the rule is skipped (no error) when ANY declared input is missing — literal globs count as missing only when they match nothing. `"any"`: the rule runs when AT LEAST ONE declared input exists and is skipped only when none do — the alternative-input pattern, e.g. a consumer that accepts whichever mapper/aligner wrote the file. `false` (default): every input must exist |
 | `required` | Boolean | If `false`, a failure of this rule does not fail the run: the failure is recorded and listed, its dependents are blocked, and the run exits 0 (best-effort / continue-on-error, e.g. QC steps). Defaults to `true` — required failures fail the run (or, with `--keep-going`, keep it running but still exit non-zero with the failures listed: keep-going changes scheduling, never the verdict) |
 
 ```toml
@@ -1067,7 +1067,22 @@ target = true   # Included when running without -t
 name = "experimental"
 optional = true     # Skip if input data is absent
 required = false    # Failure is reported but does not fail the run
+
+[[rules]]
+name = "filter_bam"
+# Run when any of the mapper-specific BAMs exists (bwa writes *_PE.mapped.bam,
+# bwamem/bt2/circularmapper write {sample}.mapped.bam); skip only when none do.
+optional = "any"
+input = [
+    "results/mapping/bwa/{sample}_PE.mapped.bam",
+    "results/mapping/bwa/{sample}.mapped.bam",
+    "results/mapping/bt2/{sample}.mapped.bam",
+]
 ```
+
+When a rule is skipped because none of its optional inputs exist, non-optional
+dependents are skipped too ("blocked by skipped upstream dependency") instead of
+executing a doomed shell command on missing files.
 
 ### Logging and Benchmarking
 

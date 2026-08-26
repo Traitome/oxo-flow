@@ -122,7 +122,7 @@ pub async fn stage_remote_io(
                 tracing::debug!(input = %expanded, staged = %rel, "staged remote input");
                 input_map.insert(pattern, rel);
             }
-            Err(e) if rule.optional => {
+            Err(e) if rule.optional.is_optional() => {
                 tracing::warn!(
                     input = %expanded,
                     error = %e,
@@ -397,7 +397,7 @@ output = { result = "s3://b/out.txt" }
     async fn missing_optional_input_marks_skip_candidate() {
         let (resolver, _) = resolver_with("s3://b/other.fq", b"x", "e1");
         let mut rule = rule_with(r#"["s3://b/gone.fq"]"#);
-        rule.optional = true;
+        rule.optional = crate::rule::OptionalMode::All(true);
         let dir = tempfile::tempdir().unwrap();
         let prep = stage_remote_io(&rule, dir.path(), &HashMap::new(), &resolver)
             .await

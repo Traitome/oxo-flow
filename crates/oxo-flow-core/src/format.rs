@@ -518,7 +518,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                 if !generated_by_upstream {
                     let is_absolute = input.starts_with('/');
                     // Optional rules treat missing inputs as warnings, not errors
-                    let severity = if rule.optional {
+                    let severity = if rule.optional.is_optional() {
                         Severity::Warning
                     } else if is_absolute {
                         Severity::Error
@@ -535,7 +535,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                             "W020".to_string()
                         },
                         suggestion: Some(
-                            if rule.optional {
+                            if rule.optional.is_optional() {
                                 "this rule is optional — missing input will cause it to be skipped at execution time"
                             } else if is_absolute {
                                 "verify the absolute file path; this file must exist before workflow execution"

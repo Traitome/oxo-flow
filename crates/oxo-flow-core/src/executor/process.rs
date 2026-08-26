@@ -1193,7 +1193,7 @@ impl LocalExecutor {
         .await
         {
             Ok(Some(prep)) => {
-                if prep.missing_optional_input && rule.optional {
+                if prep.missing_optional_input && rule.optional.is_optional() {
                     record.status = JobStatus::Skipped;
                     record.skip_reason = Some("optional inputs missing".to_string());
                     record.finished_at = Some(Utc::now());

@@ -929,27 +929,38 @@ pub fn optional_inputs_missing(
     workdir: &Path,
     wildcard_values: &HashMap<String, String>,
 ) -> bool {
-    if !rule.optional || rule.input.is_empty() {
+    if !rule.optional.is_optional() || rule.input.is_empty() {
         return false;
     }
+    let any_mode = rule.optional.is_any();
     for input in rule.input.to_vec() {
         let expanded = expand_config_in_path(&input, wildcard_values);
         if expanded.contains('{') {
-            continue; // engine wildcard — assume present
-        }
-        if is_glob_pattern(&expanded) {
-            let pattern = workdir.join(&expanded);
-            let matched = glob::glob(&pattern.to_string_lossy())
-                .map(|paths| paths.filter_map(|p| p.ok()).next().is_some())
-                .unwrap_or(false);
-            if !matched {
-                return true;
+            // Engine wildcard — assume present. In "any" mode one assumed
+            // present is enough to run the rule.
+            if any_mode {
+                return false;
             }
-        } else if !workdir.join(&expanded).exists() {
-            return true;
+            continue;
+        }
+        let exists = if is_glob_pattern(&expanded) {
+            let pattern = workdir.join(&expanded);
+            glob::glob(&pattern.to_string_lossy())
+                .map(|paths| paths.filter_map(|p| p.ok()).next().is_some())
+                .unwrap_or(false)
+        } else {
+            workdir.join(&expanded).exists()
+        };
+        if any_mode {
+            if exists {
+                return false; // at least one input exists — run
+            }
+        } else if !exists {
+            return true; // "all" mode — any missing input skips the rule
         }
     }
-    false
+    // "any" mode: none of the inputs existed — skip.
+    any_mode
 }
 
 /// Check if a rule should be skipped based on output freshness.
@@ -1982,7 +1993,16 @@ mod optional_tests {
         Rule {
             name: name.to_string(),
             input: FilePatterns::List(inputs.iter().map(|s| s.to_string()).collect()),
-            optional: true,
+            optional: crate::rule::OptionalMode::All(true),
+            ..Default::default()
+        }
+    }
+
+    fn rule_optional_any(name: &str, inputs: &[&str]) -> Rule {
+        Rule {
+            name: name.to_string(),
+            input: FilePatterns::List(inputs.iter().map(|s| s.to_string()).collect()),
+            optional: crate::rule::OptionalMode::Any,
             ..Default::default()
         }
     }
@@ -2018,7 +2038,7 @@ mod optional_tests {
         let rule = Rule {
             name: "r".to_string(),
             input: FilePatterns::List(vec!["missing.txt".to_string()]),
-            optional: false,
+            optional: crate::rule::OptionalMode::All(false),
             ..Default::default()
         };
         assert!(!optional_inputs_missing(&rule, &dir, &HashMap::new()));
@@ -2053,6 +2073,48 @@ mod optional_tests {
         let mut values = HashMap::new();
         values.insert("config.datadir".to_string(), "real".to_string());
         assert!(!optional_inputs_missing(&rule, &dir, &values));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── "any" mode (alternative-input pattern, issue #200) ────────────────
+
+    #[test]
+    fn all_mode_skips_when_one_of_several_inputs_is_missing() {
+        // Regression guard: optional = true keeps "skip when ANY input is
+        // missing" (e.g. chipseq macs3 whose control BAM may not exist).
+        let dir = wd("allmulti");
+        std::fs::create_dir_all(dir.join("data")).unwrap();
+        std::fs::write(dir.join("data/a.txt"), "x").unwrap();
+        let rule = rule_optional("r", &["data/a.txt", "data/b.txt"]);
+        assert!(optional_inputs_missing(&rule, &dir, &HashMap::new()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn any_mode_runs_when_one_of_several_inputs_exists() {
+        // live: eager's samtools_filter across mapper naming schemes —
+        // only the configured mapper's BAM exists, yet the rule must run.
+        let dir = wd("anyone");
+        std::fs::create_dir_all(dir.join("data")).unwrap();
+        std::fs::write(dir.join("data/b.txt"), "x").unwrap();
+        let rule = rule_optional_any("r", &["data/a.txt", "data/b.txt", "data/c.txt"]);
+        assert!(!optional_inputs_missing(&rule, &dir, &HashMap::new()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn any_mode_skips_when_no_input_exists() {
+        let dir = wd("anynone");
+        let rule = rule_optional_any("r", &["data/a.txt", "data/b.txt"]);
+        assert!(optional_inputs_missing(&rule, &dir, &HashMap::new()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn any_mode_with_engine_wildcard_runs() {
+        let dir = wd("anyengine");
+        let rule = rule_optional_any("r", &["out/{sample}.txt"]);
+        assert!(!optional_inputs_missing(&rule, &dir, &HashMap::new()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
