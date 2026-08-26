@@ -25,6 +25,11 @@ use std::sync::LazyLock;
 static VALUES_NS_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\{values\.(\w+)\}").expect("valid values-namespace regex"));
 
+/// Matches a `wildcard.<key>` reference inside a `when` expression (the
+/// per-instance pair/group binding vocabulary, including metadata keys).
+static WHEN_WILDCARD_REF_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"wildcard\.(\w+)").expect("valid when-wildcard regex"));
+
 fn is_defaults_empty(d: &Defaults) -> bool {
     d.threads.is_none() && d.memory.is_none() && d.environment.is_none()
 }
@@ -2956,7 +2961,8 @@ impl WorkflowConfig {
     ///
     /// Optional pair wildcards (`experiment_type`, `tumor_type`) are filled
     /// with empty strings so `wildcard.experiment_type != ''` predicates see
-    /// a definite value instead of the permissive fallthrough.
+    /// a definite value (missing keys otherwise evaluate false). Metadata
+    /// keys flow in through the combo itself.
     fn expansion_when_context(combo: &crate::wildcard::WildcardValues) -> HashMap<String, String> {
         let mut ctx: HashMap<String, String> =
             combo.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -2974,6 +2980,71 @@ impl WorkflowConfig {
             ctx.entry(key.to_string()).or_default();
         }
         ctx
+    }
+
+    /// Resolve a kept instance's `when` wildcard references to that
+    /// instance's own bindings, so the execution-time re-check re-evaluates
+    /// the same per-instance verdict without a wildcard context.
+    ///
+    /// - `wildcard.<key>` as a comparison operand → the bound value as a
+    ///   quoted literal (the evaluator compares literals properly).
+    /// - a bare `wildcard.<key>` (truthiness position) → the literal
+    ///   `true`/`false` for the bound value.
+    /// - keys absent from the combo are left untouched: they were
+    ///   non-decisive for a kept instance, and the strict unbound→false
+    ///   semantics at execution mirror the expansion-time verdict.
+    ///
+    /// Without this, the strict missing-key semantics added to the `when`
+    /// evaluator would veto every fan-out instance at execution time (no
+    /// pair/group context exists there) — the live snparcher incident was
+    /// the reverse failure: an unbound key evaluated TRUE at expansion.
+    fn bake_wildcard_when(when: &str, combo: &crate::wildcard::WildcardValues) -> String {
+        // Longest-first so `>=` wins over `>`, `==`/`!=` are not confused
+        // with `=`/`!` (which are not comparison operators here).
+        const OPS: &[&str] = &[">=", "<=", "==", "!=", ">", "<"];
+
+        let mut result = String::with_capacity(when.len());
+        let mut cursor = 0usize;
+        for cap in WHEN_WILDCARD_REF_RE.captures_iter(when) {
+            let m = cap.get(0).expect("full match");
+            let key = cap.get(1).expect("key group").as_str();
+            let (start, end) = (m.start(), m.end());
+            result.push_str(&when[cursor..start]);
+
+            // Non-space context around the token decides its position.
+            let after = when[end..]
+                .find(|c: char| !c.is_whitespace())
+                .map(|i| &when[end + i..])
+                .unwrap_or_default();
+            let before = when[..start].trim_end();
+
+            match combo.get(key) {
+                // Comparison operand → quoted literal of the bound value.
+                Some(value)
+                    if OPS
+                        .iter()
+                        .any(|op| after.starts_with(op) || before.ends_with(op)) =>
+                {
+                    let rendered = crate::executor::process::render_wildcard_value(value);
+                    if rendered.contains('\'') {
+                        result.push_str(&format!("\"{rendered}\""));
+                    } else {
+                        result.push_str(&format!("'{rendered}'"));
+                    }
+                }
+                // Bare truthiness position → literal true/false.
+                Some(value) => {
+                    let truthy = !value.is_empty() && value != "false" && value != "0";
+                    result.push_str(if truthy { "true" } else { "false" });
+                }
+                // Unbound: leave the token for the strict execution-time
+                // evaluator (false — same verdict as expansion).
+                None => result.push_str(&when[start..end]),
+            }
+            cursor = end;
+        }
+        result.push_str(&when[cursor..]);
+        result
     }
 
     pub fn expand_wildcards(&mut self) -> Result<()> {
@@ -3250,6 +3321,16 @@ impl WorkflowConfig {
                         let mut expanded = rule.clone();
                         expanded.name = new_name;
 
+                        // Bake the per-instance wildcard bindings into the
+                        // `when` (the instance survived filtering above), so
+                        // the execution-time re-check re-evaluates this same
+                        // verdict with no wildcard context.
+                        if let Some(ref when) = rule.when
+                            && when.contains("wildcard.")
+                        {
+                            expanded.when = Some(Self::bake_wildcard_when(when, &combo));
+                        }
+
                         // Expand input/output/shell/log patterns
                         expanded.input = expand_rule_patterns(&rule.input, &combo);
                         expanded.output = expand_rule_patterns(&rule.output, &combo);
@@ -3351,6 +3432,15 @@ impl WorkflowConfig {
 
                         let mut expanded = rule.clone();
                         expanded.name = new_name;
+
+                        // Bake the per-instance wildcard bindings into the
+                        // `when` (the instance survived filtering above) —
+                        // see the pair branch for the rationale.
+                        if let Some(ref when) = rule.when
+                            && when.contains("wildcard.")
+                        {
+                            expanded.when = Some(Self::bake_wildcard_when(when, &merged));
+                        }
 
                         expanded.input = rule
                             .input
@@ -3487,6 +3577,15 @@ impl WorkflowConfig {
 
                     let mut expanded = rule.clone();
                     expanded.name = new_name.clone();
+
+                    // Bake the per-instance wildcard bindings into the
+                    // `when` (the instance survived filtering above) — see
+                    // the pair branch for the rationale.
+                    if let Some(ref when) = rule.when
+                        && when.contains("wildcard.")
+                    {
+                        expanded.when = Some(Self::bake_wildcard_when(when, combo));
+                    }
 
                     // Structure-preserving expansion (List / Map / Dir).
                     expanded.input = expand_rule_patterns(&rule.input, combo);
@@ -8573,6 +8672,235 @@ shell = "true"
             names,
             vec!["paired_step_p1".to_string(), "unpaired_step_p2".to_string()]
         );
+    }
+
+    #[test]
+    fn when_group_metadata_key_filters_instances() {
+        // Live snparcher incident (issue #85): `when = "wildcard.input_type
+        // == 'srr'"` must keep only the SRA cohort. The fastq cohort's
+        // group declares no `input_type` metadata, so the key is unbound in
+        // its combos — the unbound comparison is false and the SRA rule
+        // never enters the DAG for fastq samples.
+        let toml = r#"
+            [workflow]
+            name = "t"
+
+            [[sample_groups]]
+            name = "sra_cohort"
+            samples = ["s1", "s2"]
+            [sample_groups.metadata]
+            input_type = "srr"
+
+            [[sample_groups]]
+            name = "fastq_cohort"
+            samples = ["f1"]
+
+            [[rules]]
+            name = "download_sra"
+            input = []
+            output = ["raw/{sample}/{sample}_1.fastq.gz"]
+            when = "wildcard.input_type == 'srr'"
+            shell = "touch {output[0]}"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.expand_wildcards().unwrap();
+
+        let mut names: Vec<String> = config.rules.iter().map(|r| r.name.clone()).collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                "download_sra_sra_cohort_s1".to_string(),
+                "download_sra_sra_cohort_s2".to_string()
+            ],
+            "only the SRA-cohort instances survive; the fastq cohort has no input_type binding"
+        );
+    }
+
+    #[test]
+    fn when_group_metadata_key_never_bound_filters_all_instances() {
+        // No group declares `input_type` anywhere: every instance's
+        // comparison is unbound → false → the rule never enters the DAG.
+        let toml = r#"
+            [workflow]
+            name = "t"
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["s1"]
+
+            [[rules]]
+            name = "download_sra"
+            input = []
+            output = ["raw/{sample}.fq"]
+            when = "wildcard.input_type == 'srr'"
+            shell = "touch {output[0]}"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.expand_wildcards().unwrap();
+
+        assert!(
+            config.rules.is_empty(),
+            "an unbound wildcard key in when must filter every instance"
+        );
+    }
+
+    #[test]
+    fn when_pair_metadata_key_filters_instances() {
+        // Pair metadata keys participate in when evaluation the same way
+        // group metadata does.
+        let toml = r#"
+            [workflow]
+            name = "t"
+
+            [[pairs]]
+            pair_id = "p1"
+            experiment = "e1"
+            control = "c1"
+            [pairs.metadata]
+            source = "sra"
+
+            [[pairs]]
+            pair_id = "p2"
+            experiment = "e2"
+
+            [[rules]]
+            name = "sra_step"
+            input = ["reads/{pair_id}.fq"]
+            output = ["out/{pair_id}.sra.txt"]
+            when = "wildcard.source == 'sra'"
+            shell = "touch {output[0]}"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.expand_wildcards().unwrap();
+
+        let mut names: Vec<String> = config.rules.iter().map(|r| r.name.clone()).collect();
+        names.sort();
+        assert_eq!(names, vec!["sra_step_p1".to_string()]);
+    }
+
+    #[test]
+    fn when_wildcard_baked_into_kept_instance() {
+        // Kept instances bake their per-instance bindings into `when` so
+        // the execution-time re-check (no wildcard context there) re-
+        // evaluates the same verdict instead of vetoing or re-running.
+        let toml = r#"
+            [workflow]
+            name = "t"
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["s1"]
+            [sample_groups.metadata]
+            input_type = "srr"
+
+            [[rules]]
+            name = "download_sra"
+            input = []
+            output = ["raw/{sample}.fq"]
+            when = "wildcard.input_type == 'srr'"
+            shell = "touch {output[0]}"
+        "#;
+        let mut config = WorkflowConfig::parse(toml).unwrap();
+        config.expand_wildcards().unwrap();
+
+        assert_eq!(config.rules.len(), 1);
+        let baked = config.rules[0].when.as_deref().expect("when survives");
+        assert_eq!(baked, "'srr' == 'srr'");
+        // And it evaluates true with no wildcard context, so execution
+        // never vetoes the kept instance.
+        assert!(crate::executor::process::evaluate_condition(
+            baked,
+            &HashMap::new()
+        ));
+    }
+
+    #[test]
+    fn bake_wildcard_when_resolves_bindings_by_position() {
+        let mut combo = crate::wildcard::WildcardValues::new();
+        combo.insert("input_type".to_string(), "srr".to_string());
+        combo.insert("control".to_string(), String::new());
+        combo.insert("feature".to_string(), "on".to_string());
+
+        // Comparison operands (either side) become quoted literals.
+        assert_eq!(
+            WorkflowConfig::bake_wildcard_when("wildcard.input_type == 'srr'", &combo),
+            "'srr' == 'srr'"
+        );
+        assert_eq!(
+            WorkflowConfig::bake_wildcard_when("'srr' != wildcard.input_type", &combo),
+            "'srr' != 'srr'"
+        );
+        // Bare truthiness becomes true/false literals (handles `!`).
+        assert_eq!(
+            WorkflowConfig::bake_wildcard_when("wildcard.feature", &combo),
+            "true"
+        );
+        assert_eq!(
+            WorkflowConfig::bake_wildcard_when("!wildcard.feature", &combo),
+            "!true"
+        );
+        assert_eq!(
+            WorkflowConfig::bake_wildcard_when("wildcard.control == ''", &combo),
+            "'' == ''"
+        );
+        // Mixed with config predicates and unbound keys (left untouched:
+        // strict unbound→false at execution matches the expansion verdict).
+        assert_eq!(
+            WorkflowConfig::bake_wildcard_when(
+                "config.gate && wildcard.input_type == 'srr'",
+                &combo
+            ),
+            "config.gate && 'srr' == 'srr'"
+        );
+        assert_eq!(
+            WorkflowConfig::bake_wildcard_when(
+                "wildcard.input_type == 'srr' || wildcard.unbound_key == 'x'",
+                &combo
+            ),
+            "'srr' == 'srr' || wildcard.unbound_key == 'x'"
+        );
+        // Every baked kept-instance form re-evaluates true with no context:
+        // a `!=` form survives expansion only when the value differs from
+        // the literal, and `!wildcard.feature` only when the value is falsy
+        // (both baking to true forms, checked below). The config gate keeps
+        // its own semantics.
+        let mut fastq = crate::wildcard::WildcardValues::new();
+        fastq.insert("input_type".to_string(), "fastq".to_string());
+        assert_eq!(
+            WorkflowConfig::bake_wildcard_when("'srr' != wildcard.input_type", &fastq),
+            "'srr' != 'fastq'"
+        );
+        let mut off = crate::wildcard::WildcardValues::new();
+        off.insert("feature".to_string(), String::new()); // falsy → kept
+        assert_eq!(
+            WorkflowConfig::bake_wildcard_when("!wildcard.feature", &off),
+            "!false"
+        );
+        let empty = HashMap::new();
+        for baked in [
+            "'srr' == 'srr'",
+            "'srr' != 'fastq'",
+            "true",
+            "!false",
+            "'' == ''",
+        ] {
+            assert!(
+                crate::executor::process::evaluate_condition(baked, &empty),
+                "baked form {baked:?} must re-evaluate true for a kept instance"
+            );
+        }
+        let mut config = HashMap::new();
+        config.insert("gate".to_string(), toml::Value::Boolean(true));
+        assert!(crate::executor::process::evaluate_condition(
+            "config.gate && 'srr' == 'srr'",
+            &config
+        ));
+        config.insert("gate".to_string(), toml::Value::Boolean(false));
+        assert!(!crate::executor::process::evaluate_condition(
+            "config.gate && 'srr' == 'srr'",
+            &config
+        ));
     }
 
     #[test]
