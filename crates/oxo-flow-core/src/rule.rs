@@ -38,6 +38,67 @@ impl AutoScale {
     }
 }
 
+/// How a rule treats missing inputs (`optional = ...` in the workflow).
+///
+/// TOML forms: `optional = true` / `optional = false` map to [`OptionalMode::All`]
+/// (default false), `optional = "any"` maps to [`OptionalMode::Any`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OptionalMode {
+    /// `true`/`false`: every declared input must exist; a rule declared
+    /// `optional = true` is skipped when ANY input is missing.
+    All(bool),
+    /// `"any"`: run when at least one declared input exists; skip only
+    /// when none do (alternative-input pattern).
+    Any,
+}
+
+impl Default for OptionalMode {
+    fn default() -> Self {
+        Self::All(false)
+    }
+}
+
+impl OptionalMode {
+    /// Whether the rule may be skipped at execution time for missing inputs.
+    #[must_use]
+    pub fn is_optional(self) -> bool {
+        !matches!(self, Self::All(false))
+    }
+
+    /// Whether the alternative-input ("any") mode is active.
+    #[must_use]
+    pub fn is_any(self) -> bool {
+        matches!(self, Self::Any)
+    }
+}
+
+/// `skip_serializing_if` helper for [`Rule::optional`].
+fn optional_is_false(value: &OptionalMode) -> bool {
+    matches!(value, OptionalMode::All(false))
+}
+
+impl Serialize for OptionalMode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::All(b) => serializer.serialize_bool(*b),
+            Self::Any => serializer.serialize_str("any"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for OptionalMode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = toml::Value::deserialize(deserializer)?;
+        match value {
+            toml::Value::Boolean(b) => Ok(Self::All(b)),
+            toml::Value::String(s) if s == "any" => Ok(Self::Any),
+            other => Err(serde::de::Error::custom(format!(
+                "optional must be true, false, or \"any\" — got {other}"
+            ))),
+        }
+    }
+}
+
 /// Parse a duration string like "5s", "30s", "2m", "1h", "1d" into seconds.
 ///
 /// Returns `None` if the format is invalid or would overflow.
@@ -698,13 +759,18 @@ pub struct Rule {
     #[serde(skip_serializing_if = "is_false")]
     pub target: bool,
 
-    /// Whether this rule is optional (skip if inputs missing).
+    /// How the rule treats missing inputs.
     ///
-    /// When true, the rule is skipped if any input files don't exist.
-    /// Useful for optional analysis steps that may not apply to all samples.
-    #[serde(default)]
-    #[serde(skip_serializing_if = "is_false")]
-    pub optional: bool,
+    /// - `false` (default): every declared input must exist (hard inputs).
+    /// - `true`: the rule is skipped when ANY declared input is missing —
+    ///   useful for optional analysis steps that may not apply to all samples.
+    /// - `"any"`: the rule runs when AT LEAST ONE declared input exists and
+    ///   is skipped only when none do — the alternative-input pattern, e.g.
+    ///   a consumer that accepts whichever mapper/aligner wrote the file
+    ///   (live: nf-core/eager's samtools_filter across bwa/bwamem/bt2/
+    ///   circularmapper naming schemes).
+    #[serde(default, skip_serializing_if = "optional_is_false")]
+    pub optional: OptionalMode,
 
     /// Group label for grouping jobs on cluster execution.
     #[serde(default)]
@@ -1605,6 +1671,50 @@ mod tests {
 
         let rule: Rule = toml::from_str(toml_str).unwrap();
         assert_eq!(rule.when.as_deref(), Some("config.enable_qc"));
+    }
+
+    #[test]
+    fn rule_optional_parses_bool_and_any_modes() {
+        for (toml_str, expected) in [
+            (
+                "name = \"a\"\noutput = [\"x\"]\nshell = \"echo x\"",
+                OptionalMode::All(false),
+            ),
+            (
+                "name = \"a\"\noutput = [\"x\"]\nshell = \"echo x\"\noptional = true",
+                OptionalMode::All(true),
+            ),
+            (
+                "name = \"a\"\noutput = [\"x\"]\nshell = \"echo x\"\noptional = \"any\"",
+                OptionalMode::Any,
+            ),
+        ] {
+            let rule: Rule = toml::from_str(toml_str).unwrap();
+            assert_eq!(rule.optional, expected, "toml: {toml_str}");
+        }
+    }
+
+    #[test]
+    fn rule_optional_rejects_unknown_string() {
+        let toml_str = "name = \"a\"\noutput = [\"x\"]\nshell = \"echo x\"\noptional = \"yes\"";
+        let err = toml::from_str::<Rule>(toml_str).unwrap_err().to_string();
+        assert!(
+            err.contains("optional must be true, false, or \"any\""),
+            "err: {err}"
+        );
+    }
+
+    #[test]
+    fn rule_optional_serializes_any_as_string() {
+        let rule = Rule {
+            name: "a".to_string(),
+            output: FilePatterns::List(vec!["x".to_string()]),
+            shell: Some("echo x".to_string()),
+            optional: OptionalMode::Any,
+            ..Default::default()
+        };
+        let toml_str = toml::to_string(&rule).unwrap();
+        assert!(toml_str.contains("optional = \"any\""), "toml: {toml_str}");
     }
 
     #[test]

@@ -1290,6 +1290,13 @@ pub async fn run_command(
     let skipped_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let failed_rules_set: Arc<Mutex<std::collections::HashSet<String>>> =
         Arc::new(Mutex::new(std::collections::HashSet::new()));
+    // Rules skipped at execution time without producing outputs (e.g.
+    // "optional inputs missing"). Non-optional dependents are blocked from
+    // running on them — the declared input files can never exist, so
+    // executing them would just produce a missing-file shell error
+    // (issue #200, live: eager's samtools_flagstat after a skipped filter).
+    let skipped_no_output: Arc<Mutex<std::collections::HashSet<String>>> =
+        Arc::new(Mutex::new(std::collections::HashSet::new()));
     let failures: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
     // Rules that never ran because an upstream dependency failed, paired with the
     // dependency that blocked them. Reported separately from genuine failures so
@@ -1916,16 +1923,34 @@ pub async fn run_command(
             *waited_rounds.entry(name.clone()).or_insert(0) += AGING_STEP;
         }
         for rule_name in &to_submit {
-            // Skip rules blocked by a failed upstream dependency.
-            let blocked_by = {
+            // Skip rules blocked by a failed — or no-output-skipped — upstream
+            // dependency. Optional rules are exempt: they evaluate their own
+            // inputs and skip gracefully when they're absent (issue #200).
+            let rule_is_optional = config
+                .get_rule(rule_name)
+                .is_some_and(|r| r.optional.is_optional());
+            let blocked_by = if rule_is_optional {
+                None
+            } else {
                 let frs = failed_rules_set.lock().await;
-                dag.dependencies(rule_name)
-                    .ok()
-                    .and_then(|deps| deps.into_iter().find(|d| frs.contains(d.as_str())))
+                let sno = skipped_no_output.lock().await;
+                dag.dependencies(rule_name).ok().and_then(|deps| {
+                    deps.into_iter()
+                        .find(|d| frs.contains(d.as_str()) || sno.contains(d.as_str()))
+                })
             };
             if let Some(dep) = blocked_by {
                 skipped_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                {
+                // Propagate transitively: this rule produced nothing, so its
+                // own dependents are blocked the same way.
+                let dep_skipped = {
+                    let sno = skipped_no_output.lock().await;
+                    sno.contains(dep.as_str())
+                };
+                if dep_skipped {
+                    let mut sno = skipped_no_output.lock().await;
+                    sno.insert(rule_name.clone());
+                } else {
                     let mut frs = failed_rules_set.lock().await;
                     frs.insert(rule_name.clone());
                 }
@@ -1942,15 +1967,23 @@ pub async fn run_command(
                     command: None,
                     retries: 0,
                     timeout: None,
-                    skip_reason: Some("blocked by failed upstream dependency".into()),
+                    skip_reason: Some(
+                        if dep_skipped {
+                            "blocked by skipped upstream dependency"
+                        } else {
+                            "blocked by failed upstream dependency"
+                        }
+                        .into(),
+                    ),
                     max_rss_mb: None,
                     cpu_seconds: None,
                 });
                 if !is_tty {
                     eprintln!(
-                        "  {} {} (blocked by failed dependency)",
+                        "  {} {} (blocked by {} dependency)",
                         "⊘".yellow(),
-                        rule_name
+                        rule_name,
+                        if dep_skipped { "skipped" } else { "failed" }
                     );
                 }
                 progress.inc(1);
@@ -1971,6 +2004,7 @@ pub async fn run_command(
             let checkpoint = checkpoint.clone();
             let checkpoint_path = checkpoint_path.clone();
             let failed_rules_set = failed_rules_set.clone();
+            let skipped_no_output = skipped_no_output.clone();
             let failures = failures.clone();
             let success_count = success_count.clone();
             let fail_count = fail_count.clone();
@@ -2133,6 +2167,13 @@ pub async fn run_command(
                             (rule_name, oxo_flow_core::executor::JobStatus::Success, record)
                         } else if record.status == oxo_flow_core::executor::JobStatus::Skipped {
                             skipped_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            if record.skip_reason.as_deref() == Some("optional inputs missing") {
+                                // No outputs will exist — block non-optional
+                                // dependents instead of letting them run into
+                                // a missing-file shell error (issue #200).
+                                let mut sno = skipped_no_output.lock().await;
+                                sno.insert(rule_name.clone());
+                            }
                             // Surface the executor's skip reason (condition
                             // false, optional inputs missing, outputs
                             // up-to-date) — otherwise a submitted rule that

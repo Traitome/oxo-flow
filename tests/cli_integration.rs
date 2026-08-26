@@ -8137,6 +8137,109 @@ fn cli_optional_rule_skips_when_inputs_missing() {
     );
 }
 
+/// `optional = "any"` rules run when at least one alternative input exists
+/// and skip only when none do (issue #200, live: eager's mapper-specific BAM
+/// naming). `optional = true` keeps skip-when-ANY-missing semantics.
+#[test]
+fn cli_optional_any_runs_when_one_alternative_exists() {
+    // One of several alternative inputs exists -> the rule runs.
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("any200.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"any200\"\n\n\
+         [[rules]]\nname = \"pick\"\n\
+         input = [\"data/a.txt\", \"data/b.txt\"]\n\
+         output = [\"picked.txt\"]\noptional = \"any\"\n\
+         shell = \"cat data/a.txt data/b.txt > picked.txt 2>/dev/null || true\"\n",
+    )
+    .unwrap();
+    fs::create_dir(dir.path().join("data")).unwrap();
+    fs::write(dir.path().join("data/b.txt"), "B").unwrap();
+    let run = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "any-mode run must succeed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("Running: pick"),
+        "any-mode rule must run when one alternative exists"
+    );
+    assert!(dir.path().join("picked.txt").exists());
+
+    // No alternative exists -> the rule skips with a clear reason.
+    let dir2 = tempfile::tempdir().unwrap();
+    let wf2 = dir2.path().join("any200b.oxoflow");
+    fs::write(
+        &wf2,
+        "[workflow]\nname = \"any200b\"\n\n\
+         [[rules]]\nname = \"pick\"\n\
+         input = [\"data/a.txt\", \"data/b.txt\"]\n\
+         output = [\"picked.txt\"]\noptional = \"any\"\n\
+         shell = \"cat data/a.txt data/b.txt > picked.txt\"\n",
+    )
+    .unwrap();
+    let run2 = oxo_flow_cmd()
+        .args(["run", wf2.to_str().unwrap()])
+        .current_dir(dir2.path())
+        .output()
+        .unwrap();
+    assert!(run2.status.success());
+    let stderr2 = String::from_utf8_lossy(&run2.stderr);
+    assert!(
+        stderr2.contains("optional inputs missing"),
+        "any-mode rule must skip when no alternative exists: {stderr2}"
+    );
+    assert!(!dir2.path().join("picked.txt").exists());
+}
+
+/// When an optional rule skips without producing outputs, non-optional
+/// dependents are skipped too instead of executing a doomed shell command
+/// on missing files (issue #200).
+#[test]
+fn cli_optional_skip_blocks_nonoptional_dependents() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("block200.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"block200\"\n\n\
+         [[rules]]\nname = \"baseline\"\noutput = [\"base.txt\"]\n\
+         shell = \"echo base > base.txt\"\n\n\
+         [[rules]]\nname = \"optional_step\"\ninput = [\"data/absent.txt\"]\n\
+         output = [\"opt.txt\"]\noptional = true\n\
+         shell = \"cp data/absent.txt opt.txt\"\n\n\
+         [[rules]]\nname = \"consumer\"\ninput = [\"opt.txt\"]\n\
+         output = [\"cons.txt\"]\n\
+         shell = \"cp opt.txt cons.txt\"\n",
+    )
+    .unwrap();
+    let run = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "run with skipped upstream must succeed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("blocked by skipped dependency"),
+        "dependent must be blocked, not executed: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Running: consumer"),
+        "blocked dependent must not run its shell: {stderr}"
+    );
+    assert!(!dir.path().join("cons.txt").exists());
+}
+
 /// Hook commands expand {config.x} / {input} / {output} placeholders like
 /// the main shell command (issue #75).
 #[test]

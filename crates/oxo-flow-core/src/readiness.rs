@@ -94,7 +94,7 @@ pub fn compute_readiness(config: &WorkflowConfig, base_dir: &std::path::Path) ->
     for rule in &config.rules {
         // Optional rules are skipped by the executor when their inputs are
         // absent, so they must not block readiness.
-        if rule.optional {
+        if rule.optional.is_optional() {
             continue;
         }
         let scoped: &[String] = config
