@@ -1260,6 +1260,7 @@ Built-in placeholders use the same syntax but have reserved meanings:
 | `{effective_memory_mb}` | Declared memory clamped to the machine's total memory, as an integer number of MB — the tool-facing heap budget. Use it for JVM flags (`-Xmx{effective_memory_mb}m`, `-Xms…`) so tools size themselves to the box instead of OOM-ing on hardcoded HPC values (`-Xmx29491M` class). Unset memory renders as the machine's full total |
 | `{log}` | Path of the rule's `log` field (every instance wildcard — `{sample}`, `{pair_id}`, `{assembler}` … — and `{config.x}` are expanded per instance; the parent directory is created automatically) |
 | `{config.*}` | Value from the `[config]` section (plain value, declared default, or CLI override) |
+| `{wildcard.*}` | Per-instance binding under the same grammar as `when` conditions — sample-group `metadata` keys (e.g. `{wildcard.umi1_pattern}`) and expansion keys. Unbound keys render as their literal brace token |
 
 **Why the effective pair exists** — `{threads}`/`{memory}` render the
 *declared* values, which keep the pool semantics (an over-capacity rule

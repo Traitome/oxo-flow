@@ -2605,7 +2605,19 @@ fn render_shell_command_inner(
         };
         expanded = expanded.replace(&format!("{{params.{key}}}"), &string_val);
     }
-    expanded = super::expand_to_fixed_point(&expanded, wildcard_values, render_wildcard_value);
+    // `wildcard.<key>` placeholders: per-instance bindings (sample-group
+    // metadata, expansion keys) live in wildcard_values as BARE keys (the
+    // condition evaluator strips the prefix at lookup). Register the
+    // prefixed aliases so shells can use the same `wildcard.<key>` grammar
+    // as `when` conditions (live: rnaseq's umitools rule needed the
+    // samplesheet umi1_pattern in its shell).
+    let mut shell_values = wildcard_values.clone();
+    for (key, value) in wildcard_values {
+        if !key.starts_with("config.") && !key.starts_with("wildcard.") {
+            shell_values.insert(format!("wildcard.{key}"), value.clone());
+        }
+    }
+    expanded = super::expand_to_fixed_point(&expanded, &shell_values, render_wildcard_value);
     // Residual-placeholder guard: an unresolved ENGINE-known placeholder
     // (sample/config/input/output/…) reaching a shell or script arg is a
     // correctness defect — the rule executes with a literal brace token.
@@ -3446,5 +3458,49 @@ mod tests {
                 .expect("waiter task joins")
                 .expect("waiter must acquire from the single notification");
         });
+    }
+
+    #[test]
+    fn wildcard_placeholders_render_in_shells() {
+        // Per-instance bindings (e.g. sample-group metadata) render in
+        // shells under the same `wildcard.<key>` grammar as when-conditions
+        // (live: rnaseq's umitools rule needed the samplesheet umi1_pattern
+        // in its shell).
+        let rule = Rule {
+            name: "umi_extract".to_string(),
+            shell: Some("umi_tools --bc-pattern {wildcard.umi1_pattern}".to_string()),
+            ..Default::default()
+        };
+        let mut values = HashMap::new();
+        values.insert("umi1_pattern".to_string(), "NNNNNN".to_string());
+        values.insert("sample".to_string(), "S1".to_string());
+        values.insert("config.tag".to_string(), "x".to_string());
+        let rendered = render_shell_command(
+            rule.shell.as_deref().unwrap(),
+            &rule,
+            &values,
+            crate::scheduler::ResourceLimits {
+                threads: 8,
+                memory_mb: 16_384,
+            },
+        );
+        assert_eq!(rendered, "umi_tools --bc-pattern NNNNNN");
+        // Unbound wildcard keys stay literal (the residual-placeholder guard
+        // flags engine-known names; unknown dynamic keys pass through).
+        let rule2 = Rule {
+            name: "r2".to_string(),
+            shell: Some("tool --flag {wildcard.not_bound}".to_string()),
+            ..Default::default()
+        };
+        let rendered2 = render_shell_command(
+            rule2.shell.as_deref().unwrap(),
+            &rule2,
+            &values,
+            crate::scheduler::ResourceLimits {
+                threads: 8,
+                memory_mb: 16_384,
+            },
+        );
+        assert_eq!(rendered2, "tool --flag {wildcard.not_bound}");
     }
 }
