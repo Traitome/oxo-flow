@@ -6594,7 +6594,7 @@ per combination:</p>
 <td><code>metadata</code></td>
 <td>Table</td>
 <td>No</td>
-<td>Arbitrary group-level metadata</td>
+<td>Arbitrary group-level metadata; each key is available as a wildcard in paths, shells, and <code>when</code> conditions (<code>wildcard.&lt;key&gt;</code>)</td>
 </tr>
 </tbody>
 </table>
@@ -6796,7 +6796,7 @@ Use shell conditionals or declarative <code>[config]</code> entries to handle th
 <tr>
 <td><code>wildcard.&lt;key&gt; == "value"</code></td>
 <td><code>wildcard.control != ""</code></td>
-<td>Per-instance pair/group wildcard comparison (<code>pair_id</code>, <code>experiment</code>, <code>control</code>, <code>tumor</code>, <code>normal</code>, <code>experiment_type</code>, <code>tumor_type</code>, <code>group</code>, <code>sample</code>, pair metadata keys) — evaluated per expansion combo at DAG build time; non-matching instances never enter the DAG (snakemake-style morphing)</td>
+<td>Per-instance pair/group wildcard comparison (<code>pair_id</code>, <code>experiment</code>, <code>control</code>, <code>tumor</code>, <code>normal</code>, <code>experiment_type</code>, <code>tumor_type</code>, <code>group</code>, <code>sample</code>, plus any <code>metadata</code> keys declared on <code>[[pairs]]</code> / <code>[[sample_groups]]</code> and <code>[[values]]</code> table names) — evaluated per expansion combo at DAG build time; non-matching instances never enter the DAG (snakemake-style morphing)</td>
 </tr>
 <tr>
 <td><code>!&lt;expr&gt;</code></td>
@@ -6820,6 +6820,25 @@ Use shell conditionals or declarative <code>[config]</code> entries to handle th
 </tr>
 </tbody>
 </table>
+<h3 id="unbound-wildcard-keys-evaluate-false">Unbound wildcard keys evaluate false<a class="headerlink" href="#unbound-wildcard-keys-evaluate-false" title="Permanent link">#</a></h3>
+<p>A <code>wildcard.&lt;key&gt;</code> predicate whose key has <strong>no binding</strong> for an instance —
+e.g. a group that declares no <code>input_type</code> metadata while another group
+does — evaluates to <strong>false</strong> for <em>every</em> operator (<code>==</code>, <code>!=</code>, <code>&gt;</code>, <code>&lt;</code>,
+…, and bare truthiness alike). The condition is not met, so that instance
+never runs. This keeps a rule like
+<code>when = "wildcard.input_type == 'srr'"</code> scoped to the SRA cohort even when
+other cohorts omit the key entirely.</p>
+<blockquote>
+<p><strong>Note:</strong> this is a behavioral contract, not an oversight. An unbound
+comparison historically evaluated <code>true</code>, which ran SRA-download rules
+against literal <code>{accession}</code> placeholders for FASTQ cohorts (live
+incident). <code>oxo-flow lint</code> flags <code>when</code> references to keys no pair/group
+can ever bind as a <strong>W027</strong> warning — such rules never run.</p>
+</blockquote>
+<p>Per-instance wildcard bindings (including metadata keys) are baked into a
+kept rule's <code>when</code> at expansion time, so the execution-time re-check
+re-evaluates the exact same per-instance verdict; config-only predicates
+continue to gate at execution as before.</p>
 <h3 id="example_2">Example<a class="headerlink" href="#example_2" title="Permanent link">#</a></h3>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-68-1"><a id="__codelineno-68-1" name="__codelineno-68-1" href="#__codelineno-68-1"></a><span class="k">[config]</span>
 </span><span id="__span-68-2"><a id="__codelineno-68-2" name="__codelineno-68-2" href="#__codelineno-68-2"></a><span class="n">run_annotation</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
