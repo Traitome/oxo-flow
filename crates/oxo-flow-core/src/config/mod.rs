@@ -114,6 +114,85 @@ impl WorkflowConfig {
         self.rules.iter().find(|r| r.name == name)
     }
 
+    /// Per-instance wildcard bindings: the union of the `[[values]]`
+    /// table bindings and the `[[pairs]]` bindings for this instance
+    /// name (runtime-discovered fan-out reconstruction, issue #227 item 5).
+    pub(crate) fn instance_bindings(&self, name: &str) -> crate::wildcard::WildcardValues {
+        let mut bindings = crate::wildcard::WildcardValues::new();
+        if let Some(values) = self.expansion_values.get(name) {
+            bindings.extend(values.clone());
+        }
+        if let Some(pairs) = self.expansion_pairs.get(name) {
+            bindings.extend(pairs.clone());
+        }
+        bindings
+    }
+
+    /// The output_pattern producer (template) that owns the fresh wildcard
+    /// a consumer references, or `None` when the rule is not an
+    /// output_pattern consumer. Works for both template names and
+    /// expanded instance names.
+    pub fn output_pattern_producer_of(&self, rule_name: &str) -> Option<String> {
+        // Deferred consumers live in the pending set, not in `rules`.
+        let rule = self.get_rule(rule_name).or_else(|| {
+            self.pending_output_pattern
+                .iter()
+                .find(|r| r.name == rule_name)
+        })?;
+        // `consumer_scan_text` excludes the rule's OWN output_pattern, so a
+        // pure producer (no fresh refs in its consumer fields) resolves to
+        // None; a chained rule (consumer AND producer) resolves to the
+        // producer it consumes.
+        let refs = consumer_scan_text(rule);
+        // Invert the fresh-wildcard → producer map, then take the first
+        // producer whose vocabulary appears in the consumer's scan text.
+        self.output_pattern_producers
+            .iter()
+            .find(|(wildcard, _)| {
+                refs.iter()
+                    .any(|text| text.contains(&format!("{{{}}}", wildcard)))
+            })
+            .map(|(_, producer)| producer.clone())
+    }
+
+    /// Pending (not yet runtime-instantiated) consumers of a producer —
+    /// used for declaration-order diagnosis and failure attribution.
+    pub fn pending_output_pattern_consumers_of(&self, producer: &str) -> Vec<String> {
+        // The producer TEMPLATE may no longer be in `rules` (it was
+        // replaced by its instances when it fanned out over bound
+        // wildcards like `{sample}`) — its pattern lives in
+        // `rule_templates`, which retains every template.
+        let producer_wildcards: Vec<String> = self
+            .rule_templates
+            .iter()
+            .find(|r| r.name == producer)
+            .and_then(|r| r.output_pattern.as_deref())
+            .map(crate::wildcard::extract_wildcards)
+            .or_else(|| {
+                self.get_rule(producer)
+                    .and_then(|r| r.output_pattern.as_deref())
+                    .map(crate::wildcard::extract_wildcards)
+            })
+            .unwrap_or_default();
+        if producer_wildcards.is_empty() {
+            return Vec::new();
+        }
+        self.pending_output_pattern
+            .iter()
+            .filter(|consumer| {
+                // A pending consumer references the producer's fresh
+                // wildcard vocabulary in one of its scanned fields.
+                let refs = consumer_scan_text(consumer);
+                refs.iter().any(|text| {
+                    producer_wildcards
+                        .iter()
+                        .any(|w| text.contains(&format!("{{{w}}}")))
+                })
+            })
+            .map(|r| r.name.clone())
+            .collect()
+    }
+
     /// Get a config value by key.
     pub fn get_config_value(&self, key: &str) -> Option<&toml::Value> {
         self.config.get(key)

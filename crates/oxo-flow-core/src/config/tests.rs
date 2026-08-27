@@ -5530,3 +5530,550 @@ fn input_groups_group_by_meta_unknown_column_errors() {
         "error should name the unknown column: {err}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// output_pattern (runtime-discovered fan-out, issue #227 item 5)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn output_pattern_config_parses() {
+    // `output_pattern` declares files whose enumeration happens at RUNTIME
+    // (filesystem scan after the producer instance completes). A fresh
+    // wildcard `{part}` combines with an existing `{sample}` wildcard.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("parts.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "parts"
+
+        [[rules]]
+        name = "split"
+        output_pattern = "results/chunks/{sample}_{part}.txt"
+        shell = "mkdir -p results/chunks && echo x > results/chunks/S1_a.txt"
+
+        [[rules]]
+        name = "collect"
+        input = ["results/chunks/{sample}_{part}.txt"]
+        output = ["results/merged/{sample}_{part}.txt"]
+        shell = "cat {input} > {output}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+
+    let split = config
+        .rules
+        .iter()
+        .find(|r| r.name == "split")
+        .expect("split rule");
+    assert_eq!(
+        split.output_pattern.as_deref(),
+        Some("results/chunks/{sample}_{part}.txt")
+    );
+    // The consumer references the fresh wildcard: not instantiated at plan
+    // time (empty domain), but tracked as a pending consumer.
+    assert!(
+        config.rules.iter().all(|r| r.name != "collect"),
+        "consumer of a fresh wildcard must not be instantiated at plan time"
+    );
+    assert_eq!(
+        config.pending_output_pattern_consumers_of("split"),
+        vec!["collect".to_string()]
+    );
+    // The producer records itself under the fresh wildcard name.
+    assert_eq!(
+        config.output_pattern_producer_of("collect").as_deref(),
+        Some("split")
+    );
+}
+
+#[test]
+fn output_pattern_and_output_mutually_exclusive_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("both.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "both"
+
+        [[rules]]
+        name = "split"
+        output = ["results/chunks/a.txt"]
+        output_pattern = "results/chunks/{part}.txt"
+        shell = "mkdir -p results/chunks && echo x > results/chunks/a.txt"
+        "#,
+    )
+    .unwrap();
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    let err = config.expand_wildcards().unwrap_err();
+    assert!(
+        err.to_string().contains("output_pattern")
+            && err.to_string().contains("output")
+            && err.to_string().contains("mutually exclusive"),
+        "error should call out the mutual exclusion: {err}"
+    );
+}
+
+#[test]
+fn output_pattern_rejects_transform_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("transform.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "transform"
+
+        [[rules]]
+        name = "split"
+        output_pattern = "results/chunks/{part}.txt"
+        transform = { split = { by = "part", values = ["a", "b"] }, map = "echo {part} > chunk", combine = { shell = "cat" } }
+        "#,
+    )
+    .unwrap();
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    let err = config.expand_wildcards().unwrap_err();
+    assert!(
+        err.to_string().contains("transform"),
+        "transform rules cannot declare output_pattern: {err}"
+    );
+}
+
+#[test]
+fn output_pattern_fresh_consumer_declared_before_producer_warns() {
+    // Declaration order matters: the fan-out pass can only attach a
+    // consumer to a producer that is known at plan time. A consumer that
+    // references the fresh wildcard BEFORE the producer is declared gets a
+    // warning, not an error — the producer may still be found later.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("order.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "order"
+
+        [[rules]]
+        name = "collect"
+        input = ["results/chunks/{sample}_{part}.txt"]
+        output = ["results/merged/{sample}_{part}.txt"]
+        shell = "cat {input} > {output}"
+
+        [[rules]]
+        name = "split"
+        output_pattern = "results/chunks/{sample}_{part}.txt"
+        shell = "mkdir -p results/chunks && echo x > results/chunks/S1_a.txt"
+        "#,
+    )
+    .unwrap();
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    // Warning, not error: expand succeeds and the consumer is still
+    // attached to the producer once the producer's declaration appears.
+    config.expand_wildcards().unwrap();
+    assert_eq!(
+        config.output_pattern_producer_of("collect").as_deref(),
+        Some("split")
+    );
+    assert_eq!(
+        config.pending_output_pattern_consumers_of("split"),
+        vec!["collect".to_string()]
+    );
+}
+
+#[test]
+fn output_pattern_duplicate_fresh_wildcard_errors() {
+    // One producer per fresh wildcard in v1: two rules declaring the same
+    // `{interval}` vocabulary would both claim the consumer.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("dup.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "dup"
+
+        [[rules]]
+        name = "producer_a"
+        output_pattern = "results/a/{interval}.txt"
+        shell = "mkdir -p results/a && echo a > results/a/i1.txt"
+
+        [[rules]]
+        name = "producer_b"
+        output_pattern = "results/b/{interval}.txt"
+        shell = "mkdir -p results/b && echo b > results/b/i1.txt"
+        "#,
+    )
+    .unwrap();
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    let err = config.expand_wildcards().unwrap_err();
+    assert!(
+        err.to_string().contains("interval"),
+        "error should name the duplicate fresh wildcard: {err}"
+    );
+}
+
+#[test]
+fn output_pattern_without_wildcards_errors() {
+    // A pattern that cannot enumerate anything is a configuration error.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("nowild.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "nowild"
+
+        [[rules]]
+        name = "split"
+        output_pattern = "results/chunks/all.txt"
+        shell = "mkdir -p results/chunks && echo x > results/chunks/all.txt"
+        "#,
+    )
+    .unwrap();
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    let err = config.expand_wildcards().unwrap_err();
+    assert!(
+        err.to_string().contains("wildcard"),
+        "error should explain the missing wildcard: {err}"
+    );
+}
+
+#[test]
+fn output_pattern_fanout_instantiates_consumers_from_discovered_domain() {
+    // The runtime fan-out: after the producer instance completes, its
+    // files are discovered from disk, contributed to the producer's
+    // domain, and the deferred consumer is instantiated once per
+    // discovered value with the bindings baked in.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("fanout.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "fanout"
+
+        [[rules]]
+        name = "split"
+        output_pattern = "results/chunks/{part}.txt"
+        shell = "mkdir -p results/chunks && echo x > results/chunks/1.txt"
+
+        [[rules]]
+        name = "collect"
+        input = ["results/chunks/{part}.txt"]
+        output = ["results/merged/{part}.txt"]
+        shell = "cat {input} > {output}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+    assert!(config.get_rule("split").is_some());
+    assert!(
+        config.get_rule("collect").is_none(),
+        "consumer deferred at plan time"
+    );
+
+    // Simulate the producer completing: it wrote 3 files.
+    for part in ["1", "2", "3"] {
+        let path = dir.path().join(format!("results/chunks/{part}.txt"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, part).unwrap();
+    }
+    let split = config.get_rule("split").cloned().unwrap();
+    let combos = config
+        .discover_output_pattern_files(&split, dir.path())
+        .unwrap();
+    assert_eq!(combos.len(), 3);
+    let added = config.contribute_output_pattern_domain("split", combos);
+    assert_eq!(added, 3, "all three parts are new");
+
+    let new_names = config.expand_output_pattern_consumers().unwrap();
+    assert_eq!(new_names, vec!["collect_1", "collect_2", "collect_3"]);
+
+    let c1 = config.get_rule("collect_1").expect("collect_1 instance");
+    assert_eq!(c1.input.to_vec(), vec!["results/chunks/1.txt"]);
+    assert_eq!(c1.output.to_vec(), vec!["results/merged/1.txt"]);
+    // Executor placeholders stay for execution-time rendering; only the
+    // wildcard bindings are baked.
+    assert_eq!(c1.shell.as_deref(), Some("cat {input} > {output}"));
+    assert_eq!(
+        config.expansion_templates.get("collect_1"),
+        Some(&"collect".to_string())
+    );
+    // The consumer left the pending set.
+    assert!(
+        config
+            .pending_output_pattern_consumers_of("split")
+            .is_empty()
+    );
+    // Idempotency: re-running the pass creates nothing new.
+    assert!(config.expand_output_pattern_consumers().unwrap().is_empty());
+}
+
+#[test]
+fn output_pattern_domain_unions_across_producer_samples() {
+    // Per-instance union semantics: a producer that fans out over
+    // {sample} contributes each sample's slice of the domain; the
+    // consumer is instantiated on the UNION, with the sample binding
+    // reconstructed from the producer instance that discovered the file.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("union.oxoflow");
+    for file in [
+        "results/chunks/S1_p1.txt",
+        "results/chunks/S1_p2.txt",
+        "results/chunks/S2_p1.txt",
+    ] {
+        let path = dir.path().join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, file).unwrap();
+    }
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "union"
+
+        [[sample_groups]]
+        name = "samples"
+        samples = ["S1", "S2"]
+
+        [[rules]]
+        name = "split"
+        output_pattern = "results/chunks/{sample}_{part}.txt"
+        shell = "mkdir -p results/chunks && echo x > results/chunks/S1_p1.txt"
+
+        [[rules]]
+        name = "collect"
+        input = ["results/chunks/{sample}_{part}.txt"]
+        output = ["results/merged/{sample}_{part}.txt"]
+        shell = "cat {input} > {output}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+
+    // The producer fanned out over {sample} at plan time (group-branch
+    // instance naming: name_group_sample), each instance carrying its
+    // baked slice of the pattern.
+    let s1 = config
+        .get_rule("split_samples_S1")
+        .expect("split_samples_S1 instance");
+    assert_eq!(
+        s1.output_pattern.as_deref(),
+        Some("results/chunks/S1_{part}.txt")
+    );
+    assert!(config.get_rule("collect").is_none());
+
+    // S1 completes first: contributes {p1, p2} (with the S1 binding).
+    let combos_s1 = config
+        .discover_output_pattern_files(s1, dir.path())
+        .unwrap();
+    assert_eq!(combos_s1.len(), 2);
+    config.contribute_output_pattern_domain("split", combos_s1.clone());
+
+    // S2 completes: contributes {p1} with the S2 binding.
+    let s2 = config
+        .get_rule("split_samples_S2")
+        .cloned()
+        .expect("split_samples_S2 instance");
+    let combos_s2 = config
+        .discover_output_pattern_files(&s2, dir.path())
+        .unwrap();
+    assert_eq!(combos_s2.len(), 1);
+    assert_eq!(combos_s2[0].get("sample").map(String::as_str), Some("S2"));
+    let added = config.contribute_output_pattern_domain("split", combos_s2);
+    assert_eq!(added, 1);
+    // Re-contributing the same combos is a no-op (union semantics).
+    assert_eq!(
+        config.contribute_output_pattern_domain("split", combos_s1.clone()),
+        0
+    );
+
+    // Failure attribution must survive the template being replaced by its
+    // instances: `get_rule("split")` is gone, but the pending consumers
+    // are still resolvable from the producer TEMPLATE (rule_templates).
+    assert!(config.get_rule("split").is_none());
+    assert_eq!(
+        config.pending_output_pattern_consumers_of("split"),
+        vec!["collect"]
+    );
+
+    let new_names = config.expand_output_pattern_consumers().unwrap();
+    assert_eq!(
+        new_names,
+        vec!["collect_S1_p1", "collect_S1_p2", "collect_S2_p1"]
+    );
+    let c = config.get_rule("collect_S2_p1").unwrap();
+    assert_eq!(c.input.to_vec(), vec!["results/chunks/S2_p1.txt"]);
+    assert_eq!(c.shell.as_deref(), Some("cat {input} > {output}"));
+
+    // The pending set is drained by the fan-out: no consumers left to
+    // attribute after successful instantiation.
+    assert!(
+        config
+            .pending_output_pattern_consumers_of("split")
+            .is_empty()
+    );
+}
+
+#[test]
+fn output_pattern_zero_discoveries_leaves_consumers_pending() {
+    // A producer that completed but produced no matching files contributes
+    // nothing; its consumers stay pending (instantiated only if another
+    // producer instance contributes the domain).
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("empty.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "empty"
+
+        [[rules]]
+        name = "split"
+        output_pattern = "results/chunks/{part}.txt"
+        shell = "mkdir -p results/chunks"
+
+        [[rules]]
+        name = "collect"
+        input = ["results/chunks/{part}.txt"]
+        output = ["results/merged/{part}.txt"]
+        shell = "cat {input} > {output}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+
+    let split = config.get_rule("split").cloned().unwrap();
+    let combos = config
+        .discover_output_pattern_files(&split, dir.path())
+        .unwrap();
+    assert!(combos.is_empty());
+    assert_eq!(config.contribute_output_pattern_domain("split", combos), 0);
+    assert!(config.expand_output_pattern_consumers().unwrap().is_empty());
+    // Still pending, awaiting a future contribution.
+    assert_eq!(
+        config.pending_output_pattern_consumers_of("split"),
+        vec!["collect".to_string()]
+    );
+}
+
+#[test]
+fn output_pattern_consumer_chain_bakes_output_pattern() {
+    // A rule that consumes one fresh wildcard and produces another
+    // (chain, e.g. interval scatter → per-region calls): deferred as a
+    // consumer, instantiated with its OWN output_pattern baked per
+    // discovery combo, ready to produce the next generation.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("chain.oxoflow");
+    for file in ["results/a/i1.txt", "results/a/i2.txt"] {
+        let path = dir.path().join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, file).unwrap();
+    }
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "chain"
+
+        [[rules]]
+        name = "split"
+        output_pattern = "results/a/{interval}.txt"
+        shell = "mkdir -p results/a && echo x > results/a/i1.txt"
+
+        [[rules]]
+        name = "calls"
+        input = ["results/a/{interval}.txt"]
+        output_pattern = "results/b/{interval}_{region}.txt"
+        shell = "mkdir -p results/b && cp {input} results/b/i1_r1.txt"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+    assert!(
+        config.get_rule("calls").is_none(),
+        "chained rule deferred as a consumer"
+    );
+
+    let split = config.get_rule("split").cloned().unwrap();
+    let combos = config
+        .discover_output_pattern_files(&split, dir.path())
+        .unwrap();
+    assert_eq!(combos.len(), 2);
+    config.contribute_output_pattern_domain("split", combos);
+
+    let new_names = config.expand_output_pattern_consumers().unwrap();
+    assert_eq!(new_names, vec!["calls_i1", "calls_i2"]);
+    let c = config.get_rule("calls_i1").unwrap();
+    assert_eq!(c.input.to_vec(), vec!["results/a/i1.txt"]);
+    // The chained rule's own pattern carries the consumed binding baked
+    // in; {region} stays fresh for the NEXT producer generation.
+    assert_eq!(
+        c.output_pattern.as_deref(),
+        Some("results/b/i1_{region}.txt")
+    );
+    // Its instances are producers too.
+    assert_eq!(
+        config.output_pattern_template_of("calls_i1").as_deref(),
+        Some("calls")
+    );
+}
+
+#[test]
+fn output_pattern_unrelated_wildcard_is_not_a_fresh_reference() {
+    // `{nope}` is not the producer's vocabulary: the consumer must not be
+    // deferred as an output_pattern consumer (the engine's permissive
+    // stance — unknown wildcards stay literal for later expansion; the
+    // execution-time residual guard covers engine-known names).
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("unknown.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "unknown"
+
+        [[rules]]
+        name = "split"
+        output_pattern = "results/chunks/{part}.txt"
+        shell = "mkdir -p results/chunks && echo x > results/chunks/a.txt"
+
+        [[rules]]
+        name = "collect"
+        input = ["results/chunks/{nope}.txt"]
+        output = ["results/merged/{nope}.txt"]
+        shell = "cat {input} > {output}"
+        "#,
+    )
+    .unwrap();
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+    // Not deferred: the rule stays in the plan as a regular rule.
+    assert!(config.get_rule("collect").is_some());
+    assert!(config.output_pattern_producer_of("collect").is_none());
+    assert!(
+        config
+            .pending_output_pattern_consumers_of("split")
+            .is_empty()
+    );
+}

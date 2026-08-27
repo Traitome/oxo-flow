@@ -786,6 +786,18 @@ pub struct Rule {
     #[serde(skip_serializing_if = "FilePatterns::is_empty")]
     pub output: FilePatterns,
 
+    /// Runtime-discovered output declaration (issue #227 item 5): the
+    /// files matching this pattern are enumerated by a filesystem scan
+    /// AFTER this rule's instance completes, and downstream consumers
+    /// that reference the pattern's wildcards are instantiated on the
+    /// discovered domain and inserted into the remaining plan.
+    /// Mutually exclusive with `output`; cannot be combined with
+    /// `transform` (v1 exclusion). Consumers must be declared AFTER the
+    /// producer (declaration-order constraint, warned otherwise).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_pattern: Option<String>,
+
     /// Delete the input (chunk) files after this rule succeeds.
     /// Engine-internal: set on transform combine rules when
     /// `transform.cleanup = true`. Not deserializable from TOML —
@@ -1169,6 +1181,7 @@ impl Rule {
                 suggestion: None,
             });
         }
+        self.validate_output_pattern()?;
         if let Some(threads) = self.threads
             && threads == 0
         {
@@ -1210,6 +1223,65 @@ impl Rule {
                 ),
                 rule: Some(self.name.clone()),
                 suggestion: None,
+            });
+        }
+        Ok(())
+    }
+
+    /// Shared `output_pattern` field-level validation (issue #227 item 5).
+    /// Enforced both here (API validation paths) and by
+    /// `WorkflowConfig::expand_wildcards` (the CLI run path, which does not
+    /// call per-rule `validate`).
+    pub fn validate_output_pattern(&self) -> crate::error::Result<()> {
+        let Some(ref pattern) = self.output_pattern else {
+            return Ok(());
+        };
+        if !self.output.is_empty() {
+            return Err(crate::error::OxoFlowError::Validation {
+                message: format!(
+                    "rule '{}' declares both 'output' and 'output_pattern'; \
+                     they are mutually exclusive (output_pattern is enumerated \
+                     at runtime, output at plan time)",
+                    self.name
+                ),
+                rule: Some(self.name.clone()),
+                suggestion: Some(format!(
+                    "keep 'output_pattern = \"{pattern}\"' and drop the 'output' entries"
+                )),
+            });
+        }
+        if self.transform.is_some() {
+            return Err(crate::error::OxoFlowError::Validation {
+                message: format!(
+                    "rule '{}' declares both 'transform' and 'output_pattern'; \
+                     transform sub-rules cannot be output_pattern producers (v1 exclusion)",
+                    self.name
+                ),
+                rule: Some(self.name.clone()),
+                suggestion: None,
+            });
+        }
+        if !self.input_groups.is_empty() {
+            return Err(crate::error::OxoFlowError::Validation {
+                message: format!(
+                    "rule '{}' declares both 'input_groups' and 'output_pattern'; \
+                     input_groups enumerates its instances from a plan-time disk \
+                     scan, output_pattern from a runtime scan (v1 exclusion)",
+                    self.name
+                ),
+                rule: Some(self.name.clone()),
+                suggestion: None,
+            });
+        }
+        if crate::wildcard::extract_wildcards(pattern).is_empty() {
+            return Err(crate::error::OxoFlowError::Validation {
+                message: format!(
+                    "rule '{}' output_pattern '{}' contains no wildcards; \
+                     a pattern without wildcards can never enumerate a domain",
+                    self.name, pattern
+                ),
+                rule: Some(self.name.clone()),
+                suggestion: Some("add a wildcard, e.g. 'results/chunks/{part}.txt'".to_string()),
             });
         }
         Ok(())
