@@ -48,7 +48,7 @@ oxo-flow touch pipeline.oxoflow -r bwa_align
 ## Output
 
 ```
-oxo-flow v0.15.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.16.0 — Rust-native bioinformatics pipeline engine
   ✓ sample1.bam
   ✓ sample1.bam.bai
   ✓ sample2.bam

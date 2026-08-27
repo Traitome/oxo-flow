@@ -171,7 +171,7 @@ scheduler's client commands on `PATH`.
 ### Basic Output
 
 ```
-oxo-flow v0.15.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.16.0 — Rust-native bioinformatics pipeline engine
 Cluster: Generating slurm job scripts for 5 rule instances
   ✓ cluster_scripts/fastqc.sh
   ✓ cluster_scripts/trim_reads.sh
@@ -186,7 +186,7 @@ Done: 5 scripts written to cluster_scripts
 ### With Dependencies Output
 
 ```
-oxo-flow v0.15.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.16.0 — Rust-native bioinformatics pipeline engine
 Cluster: Generating slurm job scripts for 5 rule instances
   ✓ cluster_scripts/fastqc.sh
   ✓ cluster_scripts/trim_reads.sh

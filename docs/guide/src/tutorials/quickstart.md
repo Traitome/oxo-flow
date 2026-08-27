@@ -84,7 +84,7 @@ oxo-flow dry-run my-pipeline.oxoflow
 ```
 
 ```
-oxo-flow v0.15.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.16.0 — Rust-native bioinformatics pipeline engine
 DAG: (dry-run) 2 rules would execute
   1. create_data
      threads=2
@@ -110,7 +110,7 @@ oxo-flow run my-pipeline.oxoflow
 ```
 
 ```
-oxo-flow v0.15.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.16.0 — Rust-native bioinformatics pipeline engine
 DAG: 2 rules in execution order
   1. create_data
   2. transform
@@ -159,7 +159,7 @@ oxo-flow graph my-pipeline.oxoflow
 ```
 
 ```text
-oxo-flow v0.15.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.16.0 — Rust-native bioinformatics pipeline engine
 ┌──────────────────────────────────────────────┐
 │  Workflow DAG: 2 rules, 1 dependencies       │
 │  Depth: 2, Width: 1, Critical path: 2 steps  │

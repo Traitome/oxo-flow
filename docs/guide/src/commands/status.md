@@ -54,7 +54,7 @@ oxo-flow status --timing --json
 ## Output
 
 ```
-oxo-flow v0.15.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.16.0 — Rust-native bioinformatics pipeline engine
 Status: Status for checkpoint: .oxo-flow/checkpoint.json
   Completed: 3
   Failed:    1

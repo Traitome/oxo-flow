@@ -27,7 +27,7 @@ thereby auditable to the exact workflow version that produced it.
   **report snapshots** embed `workflow_git_sha` in their JSON and show it
   in the HTML provenance section.
 - Practical guidance: **commit before you run**; tag milestones
-  (`git tag v0.15.0`) so the bare SHA has a human-readable alias in your
+  (`git tag v0.16.0`) so the bare SHA has a human-readable alias in your
   records.
 
 ## Pillar 2 — Modules: includes pin an exact commit
