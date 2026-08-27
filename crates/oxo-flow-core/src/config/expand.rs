@@ -678,11 +678,12 @@ impl WorkflowConfig {
 
                         // Per-instance `when` filtering (snakemake-style DAG
                         // morphing): conditions referencing `wildcard.<key>`
-                        // resolve against this combo and non-matching
-                        // instances never enter the DAG. Conditions without
-                        // wildcard references keep the execution-time flow.
+                        // or `{meta.<col>}` resolve against this combo and
+                        // non-matching instances never enter the DAG.
+                        // Conditions without per-instance references keep
+                        // the execution-time flow.
                         if let Some(ref when) = rule.when
-                            && when.contains("wildcard.")
+                            && (when.contains("wildcard.") || when.contains("{meta."))
                         {
                             let config_values: HashMap<String, toml::Value> = self
                                 .config
@@ -690,8 +691,16 @@ impl WorkflowConfig {
                                 .map(|(k, v)| (k.clone(), v.clone()))
                                 .collect();
                             let combo_values = Self::expansion_when_context(&combo);
+                            // Bake BOTH per-instance namespaces before
+                            // evaluation: a raw `{meta.<col>}` token hits
+                            // the evaluator's default-true fallback and
+                            // phantom instances survive planning. Baking
+                            // makes the plan-time instance set match the
+                            // execution-time verdict exactly.
+                            let baked = Self::bake_wildcard_when(when, &combo);
+                            let baked = Self::bake_meta_when(&baked, &self.metadata, &combo);
                             if !crate::executor::process::evaluate_condition_with_wildcards(
-                                when,
+                                &baked,
                                 &config_values,
                                 &combo_values,
                             ) {
@@ -717,14 +726,17 @@ impl WorkflowConfig {
                         let mut expanded = rule.clone();
                         expanded.name = new_name;
 
-                        // Bake the per-instance wildcard bindings into the
-                        // `when` (the instance survived filtering above), so
-                        // the execution-time re-check re-evaluates this same
-                        // verdict with no wildcard context.
+                        // Bake the per-instance bindings into the `when`
+                        // (the instance survived filtering above), so the
+                        // execution-time re-check re-evaluates this same
+                        // verdict with no wildcard/meta context — both
+                        // namespaces, mirroring the input_groups path.
                         if let Some(ref when) = rule.when
-                            && when.contains("wildcard.")
+                            && (when.contains("wildcard.") || when.contains("{meta."))
                         {
-                            expanded.when = Some(Self::bake_wildcard_when(when, &combo));
+                            let baked = Self::bake_wildcard_when(when, &combo);
+                            expanded.when =
+                                Some(Self::bake_meta_when(&baked, &self.metadata, &combo));
                         }
 
                         // Expand input/output/shell/log patterns
@@ -801,9 +813,12 @@ impl WorkflowConfig {
                         }
 
                         // Per-instance `when` filtering (snakemake-style DAG
-                        // morphing) — see the pair branch above.
+                        // morphing) — see the pair branch above: both
+                        // namespaces baked before evaluation so the
+                        // plan-time instance set matches the execution-time
+                        // verdict.
                         if let Some(ref when) = rule.when
-                            && when.contains("wildcard.")
+                            && (when.contains("wildcard.") || when.contains("{meta."))
                         {
                             let config_values: HashMap<String, toml::Value> = self
                                 .config
@@ -811,8 +826,10 @@ impl WorkflowConfig {
                                 .map(|(k, v)| (k.clone(), v.clone()))
                                 .collect();
                             let combo_values = Self::expansion_when_context(&merged);
+                            let baked = Self::bake_wildcard_when(when, &merged);
+                            let baked = Self::bake_meta_when(&baked, &self.metadata, &merged);
                             if !crate::executor::process::evaluate_condition_with_wildcards(
-                                when,
+                                &baked,
                                 &config_values,
                                 &combo_values,
                             ) {
@@ -838,13 +855,15 @@ impl WorkflowConfig {
                         let mut expanded = rule.clone();
                         expanded.name = new_name;
 
-                        // Bake the per-instance wildcard bindings into the
-                        // `when` (the instance survived filtering above) —
-                        // see the pair branch for the rationale.
+                        // Bake the per-instance bindings into the `when`
+                        // (the instance survived filtering above) — both
+                        // namespaces, see the pair branch for the rationale.
                         if let Some(ref when) = rule.when
-                            && when.contains("wildcard.")
+                            && (when.contains("wildcard.") || when.contains("{meta."))
                         {
-                            expanded.when = Some(Self::bake_wildcard_when(when, &merged));
+                            let baked = Self::bake_wildcard_when(when, &merged);
+                            expanded.when =
+                                Some(Self::bake_meta_when(&baked, &self.metadata, &merged));
                         }
 
                         expanded.input = rule

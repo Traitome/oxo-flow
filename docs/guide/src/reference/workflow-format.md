@@ -1894,7 +1894,7 @@ Supported multi-omics pair patterns:
 
 ## `when` — Conditional Rule Execution (WF-01)
 
-The optional `when` field on a rule contains an expression evaluated against `[config]` values. When the expression evaluates to **false** the rule is skipped at execution time (`JobStatus::Skipped`, "condition evaluated to false") — it remains in the DAG but does not run.
+The optional `when` field on a rule contains an expression evaluated against `[config]` values. When the expression evaluates to **false** the rule is skipped at execution time (`JobStatus::Skipped`, "condition evaluated to false") — it remains in the DAG but does not run. Predicates over per-instance bindings (`wildcard.<key>`, `{meta.<column>}`) are decided earlier, at plan time: non-matching instances never enter the DAG, so dry-run and `validate` counts reflect exactly what a real run would execute.
 
 ```toml
 [[rules]]
@@ -1916,6 +1916,7 @@ shell = "fastqc {input[0]} -o qc/"
 | `config.<key> > N` | `config.min_cov >= 20` | Numeric comparison (`>`, `>=`, `<`, `<=`) |
 | `file_exists("path")` | `file_exists("panel.bed")` | File existence test |
 | `wildcard.<key> == "value"` | `wildcard.control != ""` | Per-instance pair/group wildcard comparison (`pair_id`, `experiment`, `control`, `tumor`, `normal`, `experiment_type`, `tumor_type`, `group`, `sample`, plus any `metadata` keys declared on `[[pairs]]` / `[[sample_groups]]` and `[[values]]` table names) — evaluated per expansion combo at DAG build time; non-matching instances never enter the DAG (snakemake-style morphing) |
+| `{meta.<column>} == "value"` | `{meta.endedness} == 'SE'` | Per-instance sample-metadata comparison (see [Sample Metadata](#sample-metadata-metadata_file)) — baked and evaluated per instance at plan time; instances whose gate evaluates false never enter the DAG. A missing row or column renders `''` in a comparison (a closed gate) |
 | `!<expr>` | `!config.skip` | Logical NOT |
 | `<expr> && <expr>` | `config.run_qc && config.min_cov >= 20` | Logical AND |
 | `<expr> \|\| <expr>` | `config.wgs \|\| config.wes` | Logical OR |
@@ -1937,10 +1938,28 @@ other cohorts omit the key entirely.
 > incident). `oxo-flow lint` flags `when` references to keys no pair/group
 > can ever bind as a **W027** warning — such rules never run.
 
-Per-instance wildcard bindings (including metadata keys) are baked into a
-kept rule's `when` at expansion time, so the execution-time re-check
+Per-instance wildcard and `{meta.<column>}` bindings are baked into a kept
+rule's `when` at expansion time, so the execution-time re-check
 re-evaluates the exact same per-instance verdict; config-only predicates
 continue to gate at execution as before.
+
+### `{meta.<column>}` truthiness and boolean columns
+
+In a bare truthiness position (`when = "{meta.do_qc}"`) a metadata value
+bakes to `true`/`false` with shell-style truthiness: **non-empty and not
+`false` and not `0` is true** — so `"0"`, `""`, and `"false"` close the
+gate and everything else (including `"foo"`) opens it. For a strict
+boolean column, use the comparison form instead so any unexpected value
+falls through to *no override* rather than opening both branches of a
+markdup/nomarkdup pair:
+
+```toml
+# strict per-sample boolean (recommended for true/false columns)
+when = "config.mark_duplicates || {meta.mark_duplicates} == 'true'"
+```
+
+A missing row or column renders `false` in a truthiness position and `''`
+in a comparison — always a closed gate, never an unbound token.
 
 ### Example
 
