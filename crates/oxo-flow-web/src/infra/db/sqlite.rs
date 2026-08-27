@@ -622,9 +622,9 @@ impl StorageBackend for SqliteBackend {
         .map_err(|e| e.to_string())?;
 
         // Return the saved row
-        self.get_pipeline(&id)
-            .await
-            .map(|opt| opt.expect("pipeline should exist after upsert"))
+        self.get_pipeline(&id).await.and_then(|opt| {
+            opt.ok_or_else(|| "pipeline disappeared after upsert (concurrent delete?)".to_string())
+        })
     }
 
     async fn get_pipeline(&self, id: &str) -> Result<Option<models::PipelineRow>, String> {
@@ -931,9 +931,9 @@ impl StorageBackend for SqliteBackend {
         .await
         .map_err(|e| e.to_string())?;
 
-        self.get_template(&id)
-            .await
-            .map(|opt| opt.expect("template should exist after upsert"))
+        self.get_template(&id).await.and_then(|opt| {
+            opt.ok_or_else(|| "template disappeared after upsert (concurrent delete?)".to_string())
+        })
     }
 
     async fn delete_template(&self, id: &str) -> Result<(), String> {

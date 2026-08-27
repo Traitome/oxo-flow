@@ -178,13 +178,23 @@ pub fn spawn_remote_run(
             .unwrap_or_else(|| "oxo-flow-runs".into());
         let remote_dir = format!("{}/runs/{}", remote_root.trim_end_matches('/'), run_id);
 
+        // All bookkeeping below uses the legacy SQLite pool, which PostgreSQL
+        // deployments never initialize — degrade instead of panicking mid-task.
+        let Some(pool) = db::try_pool() else {
+            tracing::error!(
+                "SQLite pool unavailable (PostgreSQL backend?) — cannot track remote run {run_id}"
+            );
+            unregister_remote(&run_id);
+            return;
+        };
+
         let started = chrono::Utc::now();
         if let Err(e) = sqlx::query(
             "UPDATE runs SET status = 'running', phase = 'executing', started_at = ? WHERE id = ?",
         )
         .bind(started)
         .bind(&run_id)
-        .execute(db::pool())
+        .execute(pool)
         .await
         {
             tracing::error!("Failed to update remote run {run_id} to running: {e}");
@@ -239,7 +249,7 @@ pub fn spawn_remote_run(
             let cancelled: Option<String> =
                 sqlx::query_scalar("SELECT status FROM runs WHERE id = ? AND status = 'cancelled'")
                     .bind(&run_id)
-                    .fetch_one(db::pool())
+                    .fetch_one(pool)
                     .await
                     .ok();
             if cancelled.is_some() {
@@ -275,25 +285,30 @@ pub fn spawn_remote_run(
 
 async fn mark_failed(run_id: &str, message: &str) {
     tracing::error!("{message}");
+    // Quota release must happen even without the SQLite pool — it is
+    // in-memory state and leaking it pins resources until restart.
+    if let Some((user, threads, memory_mb)) = crate::infra::quota::release(run_id) {
+        crate::infra::quota::global_quota_tracker().record_complete(&user, threads, memory_mb);
+    }
+    let Some(pool) = db::try_pool() else {
+        tracing::error!("SQLite pool unavailable — cannot persist remote-run failure for {run_id}");
+        return;
+    };
     let end = chrono::Utc::now();
     let _ = sqlx::query(
         "UPDATE runs SET status = 'failed', phase = 'failed', finished_at = ? WHERE id = ?",
     )
     .bind(end)
     .bind(run_id)
-    .execute(db::pool())
+    .execute(pool)
     .await;
     let user_id: Option<String> = sqlx::query_scalar("SELECT user_id FROM runs WHERE id = ?")
         .bind(run_id)
-        .fetch_optional(db::pool())
+        .fetch_optional(pool)
         .await
         .unwrap_or(None);
     // Remote failure is a terminal path that bypasses finalize_run — the
-    // quota reservation must be released here too (issue: cancelled /
-    // staging-failed remote runs leaked active_runs until restart).
-    if let Some((user, threads, memory_mb)) = crate::infra::quota::release(run_id) {
-        crate::infra::quota::global_quota_tracker().record_complete(&user, threads, memory_mb);
-    }
+    // quota reservation was released above before the pool guard.
     broadcast_event_for(
         "run_failed",
         &serde_json::json!({"run_id": run_id, "status": "failed", "finished_at": end.to_rfc3339(), "error": message}),

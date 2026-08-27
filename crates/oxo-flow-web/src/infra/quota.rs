@@ -84,7 +84,10 @@ impl QuotaTracker {
     /// Check whether a user can start a new run with the given resources.
     pub fn check(&self, user_id: &str, threads: u32, memory_mb: u64) -> QuotaCheckResult {
         let config = self.config.read().unwrap().clone();
-        let mut usage_map = self.usage.lock().unwrap();
+        let mut usage_map = self
+            .usage
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let usage = usage_map.entry(user_id.to_string()).or_default();
         let mut violations = Vec::new();
 
@@ -123,7 +126,10 @@ impl QuotaTracker {
 
     /// Record a new run starting (increment counters).
     pub fn record_start(&self, user_id: &str, threads: u32, memory_mb: u64) {
-        let mut usage_map = self.usage.lock().unwrap();
+        let mut usage_map = self
+            .usage
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let usage = usage_map.entry(user_id.to_string()).or_default();
         usage.active_runs += 1;
         usage.used_threads += threads;
@@ -133,7 +139,10 @@ impl QuotaTracker {
 
     /// Record a run completing (decrement counters).
     pub fn record_complete(&self, user_id: &str, threads: u32, memory_mb: u64) {
-        let mut usage_map = self.usage.lock().unwrap();
+        let mut usage_map = self
+            .usage
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(usage) = usage_map.get_mut(user_id) {
             usage.active_runs = usage.active_runs.saturating_sub(1);
             usage.used_threads = usage.used_threads.saturating_sub(threads);
@@ -143,13 +152,19 @@ impl QuotaTracker {
 
     /// Get current usage for a user.
     pub fn get_usage(&self, user_id: &str) -> QuotaUsage {
-        let usage_map = self.usage.lock().unwrap();
+        let usage_map = self
+            .usage
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         usage_map.get(user_id).cloned().unwrap_or_default()
     }
 
     /// Reset daily counters (call at midnight or on demand).
     pub fn reset_daily(&self) {
-        let mut usage_map = self.usage.lock().unwrap();
+        let mut usage_map = self
+            .usage
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for usage in usage_map.values_mut() {
             usage.runs_today = 0;
         }

@@ -253,6 +253,14 @@ pub fn pool() -> &'static SqlitePool {
         .expect("Database pool not initialized — call init_db() first")
 }
 
+/// Obtain a reference to the global pool, or `None` when it was never
+/// initialized (PostgreSQL deployments). Background run-lifecycle tasks run
+/// under `tokio::spawn`, where a panic here would leave runs stuck in
+/// 'running' forever — those callers must degrade gracefully instead.
+pub fn try_pool() -> Option<&'static SqlitePool> {
+    DB_POOL.get()
+}
+
 /// Recover runs left in flight ('running'/'paused') after a server crash
 /// (issue #79 P1-02: the old behavior blindly marked every in-flight run
 /// failed, so a crash-restart lied about runs whose CLI kept executing).
