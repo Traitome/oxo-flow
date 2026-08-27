@@ -158,6 +158,12 @@ pub fn collect_batch_items(items: &[String], file: Option<&PathBuf>) -> Result<V
     Ok(expanded)
 }
 
+/// Quote a string as a single POSIX shell word, escaping embedded single
+/// quotes (`'` → `'\''`).
+fn shell_quote_word(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// Wrap command with environment activation.
 pub fn wrap_batch_command(cmd: &str, env_spec: &str) -> String {
     // Parse environment spec: "conda: env.yaml" or "docker: image"
@@ -170,8 +176,24 @@ pub fn wrap_batch_command(cmd: &str, env_spec: &str) -> String {
                     .unwrap_or(spec.trim());
                 format!("conda run --no-banner -n {} {}", env_name, cmd)
             }
-            "docker" => format!("docker run --rm {} sh -c '{}'", spec.trim(), cmd),
-            "singularity" => format!("singularity exec {} sh -c '{}'", spec.trim(), cmd),
+            "docker" | "singularity" => {
+                // Each whitespace-separated token of the spec is passed as one
+                // quoted argument so characters like `;` or `$(` in the TOML
+                // cannot break out of the wrapper into the surrounding shell.
+                let spec_args = spec
+                    .split_whitespace()
+                    .map(shell_quote_word)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                // The command itself is embedded inside a single-quoted `sh -c`
+                // script; escape quotes so commands containing `'` (e.g. awk
+                // programs) survive and cannot terminate the quoting early.
+                let quoted_cmd = shell_quote_word(cmd);
+                match type_.trim() {
+                    "docker" => format!("docker run --rm {spec_args} sh -c {quoted_cmd}"),
+                    _ => format!("singularity exec {spec_args} sh -c {quoted_cmd}"),
+                }
+            }
             _ => cmd.to_string(),
         }
     } else {
@@ -220,3 +242,44 @@ pub mod run_cluster;
 pub mod run_preview;
 pub mod samples;
 pub mod web;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn docker_wrapper_escapes_single_quotes() {
+        let wrapped = wrap_batch_command("awk '{print $1}'", "docker: biocontainers/samtools");
+        assert!(wrapped.starts_with("docker run --rm 'biocontainers/samtools' sh -c "));
+        // The command must survive as one quoted argument.
+        assert!(wrapped.ends_with(r#"'awk '\''{print $1}'\'''"#));
+        assert_eq!(wrapped.matches("sh -c").count(), 1);
+    }
+
+    #[test]
+    fn singularity_wrapper_escapes_injection() {
+        let wrapped = wrap_batch_command("echo ok'; rm -rf /tmp/x", "singularity: image.sif");
+        // Exact wrapping: the injected quote is escaped (`'\''`) and the
+        // trailing `; rm ...` stays inside the still-open quote, so the inner
+        // `sh -c` receives it as part of the container's command string rather
+        // than as outer-shell syntax.
+        assert_eq!(
+            wrapped,
+            r#"singularity exec 'image.sif' sh -c 'echo ok'\''; rm -rf /tmp/x'"#
+        );
+    }
+
+    #[test]
+    fn docker_spec_tokens_are_individually_quoted() {
+        let wrapped = wrap_batch_command("true", "docker: -v /a:/b --gpus all");
+        // Every token quoted separately keeps multi-arg semantics while
+        // neutralizing metacharacters inside tokens.
+        assert!(wrapped.contains("'-v' '/a:/b' '--gpus' 'all'"));
+    }
+
+    #[test]
+    fn conda_wrapper_unchanged() {
+        let wrapped = wrap_batch_command("python x.py", "conda: envs/tools.yaml");
+        assert_eq!(wrapped, "conda run --no-banner -n tools python x.py");
+    }
+}

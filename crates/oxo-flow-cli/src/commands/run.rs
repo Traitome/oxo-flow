@@ -2008,11 +2008,9 @@ pub async fn run_command(
             sched.mark_running(rule_name);
 
             // ---- spawn task (identical logic to pre-scheduler version) -----
-            let rule = config
-                .get_rule(rule_name)
-                .ok_or_else(|| anyhow::anyhow!("rule '{}' not found in workflow", rule_name))
-                .unwrap()
-                .clone();
+            let Some(rule) = config.get_rule(rule_name).cloned() else {
+                anyhow::bail!("rule '{rule_name}' not found in workflow");
+            };
             let rule_name = rule_name.clone();
             let executor = executor.clone();
             let checkpoint = checkpoint.clone();
@@ -2551,9 +2549,26 @@ pub async fn run_command(
                     match result {
                         Ok(diag) => {
                             if let Some(ref toml) = diag.modified_toml {
-                                let _ = crate::commands::ai_recover::apply_fix(
+                                // Only write AI-generated TOML when the model itself
+                                // assessed it safe AND it parses as a valid workflow.
+                                // Anything else is shown, never auto-applied — the
+                                // content can carry injected instructions just like
+                                // any other model output.
+                                if !diag.safe_to_auto_apply {
+                                    eprintln!(
+                                        "  AI fix not auto-applied: flagged unsafe by the \
+                                         safety assessment. Review the suggestion manually."
+                                    );
+                                } else if let Err(e) = oxo_flow_core::WorkflowConfig::parse(toml) {
+                                    eprintln!(
+                                        "  AI fix not auto-applied: generated TOML failed \
+                                         validation ({e}). Review the suggestion manually."
+                                    );
+                                } else if let Err(e) = crate::commands::ai_recover::apply_fix(
                                     &workflow, toml, "recovery",
-                                );
+                                ) {
+                                    eprintln!("  Failed to apply AI fix: {e}");
+                                }
                             }
                         }
                         Err(e) => eprintln!("  AI diagnosis failed: {e}"),
