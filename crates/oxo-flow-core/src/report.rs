@@ -1935,7 +1935,11 @@ impl ReportSectionGenerator for ExecutionStatusGenerator {
         ctx.checkpoint.is_some()
     }
     fn generate(&self, ctx: &ReportContext) -> Vec<ReportSection> {
-        let cp = ctx.checkpoint.unwrap();
+        // Section filters can force this generator to run without the
+        // `applicable()` gate, so the precondition is checked here too.
+        let Some(cp) = ctx.checkpoint.as_ref() else {
+            return Vec::new();
+        };
         let mut sections = Vec::new();
 
         // Deterministic order — checkpoint sets are HashSets, and reports
@@ -2713,7 +2717,11 @@ impl ReportSectionGenerator for FailureDiagnosisGenerator {
             .unwrap_or(false)
     }
     fn generate(&self, ctx: &ReportContext) -> Vec<ReportSection> {
-        let cp = ctx.checkpoint.unwrap();
+        // Section filters can force this generator to run without the
+        // `applicable()` gate, so the precondition is checked here too.
+        let Some(cp) = ctx.checkpoint.as_ref() else {
+            return Vec::new();
+        };
         let mut failed: Vec<&String> = cp.failed_rules.iter().collect();
         failed.sort_unstable();
 
