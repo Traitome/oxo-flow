@@ -4807,7 +4807,7 @@ explicit disable:</p>
 <p>The AI agent combines four embedded knowledge sources (all compiled into the binary at build time):</p>
 <ol>
 <li><strong>Tool Reference Table</strong>: 40 curated bioinformatics tools with resource allocations (threads, memory)</li>
-<li><strong>Bioconda Tool Database</strong>: 6,103 CLI tools with current versions and descriptions — queried on demand via <code>lookup_tool</code></li>
+<li><strong>Bioconda Tool Database</strong>: 6,103 curated CLI tools with current versions and descriptions (filtered from 6,470 raw registry entries; see <code>knowledge_meta.json</code>) — queried on demand via <code>lookup_tool</code></li>
 <li><strong>bioSkills Library</strong>: 562 curated Agent Skills (the emerging SKILL.md standard) with domain procedures, commands, and caveats — matched by assay type and injected into generation prompts, or queried via <code>lookup_skill</code></li>
 <li><strong>Pipeline Knowledge Graph</strong>: 79 workflow skills and 469 literature-backed data-flow transitions (BAM → VCF → annotated VCF chains) — queried via <code>lookup_pipeline</code> to design correct multi-step topologies</li>
 </ol>
