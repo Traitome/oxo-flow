@@ -130,6 +130,22 @@ pub struct WorkflowMeta {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format_version: Option<String>,
 
+    /// Shell command to run once after the whole workflow completes
+    /// successfully (no failed rules). Rendered with `{config.*}` and the
+    /// run counters `{succeeded}`/`{failed}`/`{skipped}`/`{workdir}`.
+    ///
+    /// Best-effort like rule hooks: a failing hook warns, never changes
+    /// the run status.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on_complete: Option<String>,
+
+    /// Shell command to run once after the workflow reaches a terminal
+    /// state with at least one failed rule. Same rendering as `on_complete`.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on_error: Option<String>,
+
     /// Genome build (e.g., "GRCh38", "hg38", "GRCh37").
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]

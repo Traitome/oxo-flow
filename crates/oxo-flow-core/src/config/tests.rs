@@ -1550,6 +1550,32 @@ fn filter_samples_invalid_spec() {
 }
 
 #[test]
+fn workflow_meta_hooks_parse() {
+    // Workflow-level terminal hooks (issue #227 item 1): on_complete
+    // fires after a fully successful run, on_error after any failure.
+    let toml = r#"
+        [workflow]
+        name = "test"
+        version = "1.0.0"
+        on_complete = "touch done.marker"
+        on_error = "touch error.marker"
+
+        [[rules]]
+        name = "step1"
+        shell = "echo hi"
+    "#;
+    let config = WorkflowConfig::parse(toml).unwrap();
+    assert_eq!(
+        config.workflow.on_complete.as_deref(),
+        Some("touch done.marker")
+    );
+    assert_eq!(
+        config.workflow.on_error.as_deref(),
+        Some("touch error.marker")
+    );
+}
+
+#[test]
 fn override_samples_replaces_inline_samples() {
     // `--samples` explicit names replace inline [[sample_groups]] fixture
     // names instead of filtering them — the fix for "inline samples can't

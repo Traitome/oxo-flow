@@ -186,6 +186,29 @@ author = "Your Name"
 | `sample_groups_file` | String | No | — | External TSV/JSON file defining sample groups |
 | `pairs_pattern` | String | No | — | File glob pattern for auto-discovering pairs (e.g., `"aligned/{pair_id}/{exp}_vs_{ctrl}.bam"`) |
 | `sample_pattern` | String | No | — | File glob pattern for auto-discovering samples (e.g., `"raw/{sample}_R1.fastq.gz"`) |
+| `on_complete` | String | No | — | Shell command run once after the whole workflow completes successfully (no failed rules). Rendered with `{config.*}` and the counters `{succeeded}`/`{failed}`/`{skipped}` plus `{workdir}`; runs in the workflow root with the workflow `shell_prelude`. Best-effort: a failing hook warns, never changes the run status. |
+| `on_error` | String | No | — | Shell command run once after the workflow reaches a terminal state with at least one failed rule. Same rendering and best-effort semantics as `on_complete`. |
+
+### Workflow-Level Terminal Hooks
+
+`on_complete` / `on_error` mirror the rule-level `on_success` / `on_failure`
+hooks at the whole-workflow level — the nf-core `workflow.onComplete` /
+snakemake `onerror` pattern (completion emails, cleanup, notifications):
+
+```toml
+[workflow]
+name = "my-pipeline"
+version = "1.0.0"
+on_complete = "notify 'run done: {succeeded} succeeded, {failed} failed' --tag {config.project}"
+on_error = "notify 'run FAILED: {failed} failed' --tag {config.project} && tar czf failed-run.tar.gz {workdir}/logs"
+```
+
+Both hooks run exactly once per `oxo-flow run` (the CLI) that reaches a
+terminal state (including `--keep-going` runs); `on_complete` fires only
+when no rule failed, `on_error` otherwise. The web UI executor has its
+own run loop and does not fire these hooks yet. Placeholders: every
+`[config]` key is available as `{config.<key>}`, plus `{succeeded}`,
+`{failed}`, `{skipped}`, and `{workdir}`. Unknown keys stay literal.
 
 ### Custom Interpreters (`interpreter_map`)
 
