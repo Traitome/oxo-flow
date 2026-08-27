@@ -5998,7 +5998,11 @@ producers must be declared <strong>before</strong> their <code>input_groups</cod
 the <code>keep</code> wildcard bindings come from the first sorted file only (the
 captured per-group values of every file stay available via
 <code>{input_group.*}</code>); <code>{config.x}</code> placeholders in <code>pattern</code> resolve
-against the workflow config.</p>
+against the workflow config. A producer whose output is a directory
+pattern (e.g. <code>results/star/{sample}/</code>) contributes only the directory
+path itself to the candidate pool — files inside it do not match
+<code>input_groups</code> patterns (declare the producer's files as outputs to
+group them).</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a><span class="c1"># A multiqc-style aggregator over grouped files: one instance per</span>
 </span><span id="__span-36-2"><a id="__codelineno-36-2" name="__codelineno-36-2" href="#__codelineno-36-2"></a><span class="c1"># sample, receiving every fastQC zip of that sample.</span>
 </span><span id="__span-36-3"><a id="__codelineno-36-3" name="__codelineno-36-3" href="#__codelineno-36-3"></a><span class="k">[[rules]]</span>
