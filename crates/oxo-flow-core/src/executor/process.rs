@@ -297,6 +297,11 @@ pub struct ExecutorConfig {
     /// identity instead of mtime. `None` (tests, cluster paths) keeps the
     /// mtime-only gate.
     pub checkpoint: Option<Arc<Mutex<super::checkpoint::CheckpointState>>>,
+    /// Workflow-level `wildcard_constraints` (name -> regex) copied from the
+    /// parsed config (issue #203): unconstrained wildcards fall back to the
+    /// safe default charset inside `validate_wildcard_injection`, while a
+    /// declared constraint here governs that wildcard instead.
+    pub wildcard_constraints: HashMap<String, String>,
 }
 
 impl Default for ExecutorConfig {
@@ -320,6 +325,7 @@ impl Default for ExecutorConfig {
             sensitive_values: Vec::new(),
             shell_prelude: None,
             checkpoint: None,
+            wildcard_constraints: HashMap::new(),
         }
     }
 }
@@ -1340,7 +1346,7 @@ impl LocalExecutor {
             .cloned()
             .map(|c| mask_sensitive(&c, &self.config.sensitive_values));
 
-        validate_wildcard_injection(wildcard_values)?;
+        validate_wildcard_injection(wildcard_values, &self.config.wildcard_constraints)?;
         for cmd in &resolved_commands {
             validate_shell_safety(cmd)?;
             for warning in sanitize_shell_command(cmd) {

@@ -933,7 +933,7 @@ fn validate_shell_safety_blocks_dangerous_deletion() {
 fn validate_wildcard_injection_blocks_command_substitution() {
     let mut values = HashMap::new();
     values.insert("sample".to_string(), "$(whoami)".to_string());
-    assert!(validate_wildcard_injection(&values).is_err());
+    assert!(validate_wildcard_injection(&values, &HashMap::new()).is_err());
 }
 
 // ---------------------------------------------------------------------------
@@ -1345,24 +1345,24 @@ fn validate_wildcard_injection_allows_config_keys() {
     values.insert("config.sample_name".to_string(), "$(whoami)".to_string());
     values.insert("sample".to_string(), "SAMPLE_01".to_string());
     // Config-prefixed keys should be skipped (trusted from .oxoflow file)
-    validate_wildcard_injection(&values).unwrap();
+    validate_wildcard_injection(&values, &HashMap::new()).unwrap();
 }
 
 #[test]
 fn validate_wildcard_injection_blocks_pipe_in_value() {
     let mut values = HashMap::<String, String>::new();
     values.insert("sample".to_string(), "SAMPLE_01 | echo hacked".to_string());
-    // Pipes are not currently blocked by wildcard injection (only $() and backticks)
-    // This test verifies the current behavior
-    // The pipe would be caught by validate_shell_safety on the rendered command
-    validate_wildcard_injection(&values).unwrap();
+    // Issue #203 default charset: unconstrained wildcards reject shell
+    // metacharacters outright (previously deferred to the rendered-command
+    // scan; now fail fast at the value layer).
+    assert!(validate_wildcard_injection(&values, &HashMap::new()).is_err());
 }
 
 #[test]
 fn validate_wildcard_injection_blocks_backtick_in_value() {
     let mut values = HashMap::<String, String>::new();
     values.insert("sample".to_string(), "`evil`".to_string());
-    let result = validate_wildcard_injection(&values);
+    let result = validate_wildcard_injection(&values, &HashMap::new());
     assert!(result.is_err(), "should block backtick in wildcard values");
 }
 
@@ -1370,7 +1370,7 @@ fn validate_wildcard_injection_blocks_backtick_in_value() {
 fn validate_wildcard_injection_blocks_subshell_in_value() {
     let mut values = HashMap::<String, String>::new();
     values.insert("sample".to_string(), "$(echo hacked)".to_string());
-    let result = validate_wildcard_injection(&values);
+    let result = validate_wildcard_injection(&values, &HashMap::new());
     assert!(result.is_err(), "should block $() in wildcard values");
 }
 
