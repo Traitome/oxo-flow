@@ -5138,6 +5138,9 @@ Generates Dockerfile or Singularity definition.</p>
 <hr />
 <h2 id="execution-runs">Execution &amp; Runs<a class="headerlink" href="#execution-runs" title="Permanent link">#</a></h2>
 <h3 id="create-run">Create Run<a class="headerlink" href="#create-run" title="Permanent link">#</a></h3>
+<blockquote>
+<p><strong>PostgreSQL deployments</strong>: every <code>/api/runs*</code> endpoint returns <code>503 {"code": "RUNS_REQUIRE_SQLITE", "message", "detail", "suggestion"}</code> — run execution requires a SQLite-backed server. Library/AI/auth domains remain available.</p>
+</blockquote>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>POST /api/runs
 </span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>Content-Type: application/json
 </span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>

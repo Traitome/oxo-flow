@@ -4051,6 +4051,10 @@ Choose the mode that fits your team size and infrastructure.</p>
 <td>SQLite (default) or PostgreSQL</td>
 </tr>
 <tr>
+<td>Run execution</td>
+<td>SQLite-backed servers only — with PostgreSQL the whole <code>/api/runs*</code> surface answers <code>503 RUNS_REQUIRE_SQLITE</code>; library/AI/auth keep working</td>
+</tr>
+<tr>
 <td>Auth</td>
 <td>Password env vars (<code>OXO_FLOW_ADMIN_PASSWORD</code> / <code>OXO_FLOW_USER_PASSWORD</code> / <code>OXO_FLOW_VIEWER_PASSWORD</code>) + optional ORCID/GitHub OAuth</td>
 </tr>

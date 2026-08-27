@@ -2968,6 +2968,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Wildcard Constraints (Regex)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#safe-default-character-set" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Safe Default Character Set
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3990,6 +4007,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Wildcard Constraints (Regex)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#safe-default-character-set" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Safe Default Character Set
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4274,6 +4308,9 @@
 </span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="n">read</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"[12]"</span>
 </span></code></pre></div>
 <p>If a value discovered from the filesystem does not match its constraint, it is ignored.</p>
+<h3 id="safe-default-character-set">Safe Default Character Set<a class="headerlink" href="#safe-default-character-set" title="Permanent link">#</a></h3>
+<p>Because wildcard values are substituted into shell command strings, wildcards <strong>without</strong> a declared constraint may only carry values matching <code>[A-Za-z0-9._/-]+</code> (letters, digits, dot, underscore, dash, path separator). Values outside this set fail validation before any shell runs. Direct command substitution (<code>$(</code> and backticks) is rejected unconditionally — including for constrained wildcards.</p>
+<p>If your data legitimately needs other characters, declare an explicit <code>[wildcard_constraints]</code> entry for that wildcard, or export <code>OXO_FLOW_UNSAFE_WILDCARDS=1</code> to relax the character-set layer for the process (a one-time warning is logged; the substitution floor remains enforced).</p>
 <hr />
 <h2 id="rule-name-expansion">Rule Name Expansion<a class="headerlink" href="#rule-name-expansion" title="Permanent link">#</a></h2>
 <p>When a rule is expanded from wildcards, its unique name in the DAG is modified to include the wildcard values to avoid collisions:</p>
