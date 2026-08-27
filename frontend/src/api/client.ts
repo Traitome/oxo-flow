@@ -49,11 +49,12 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 
 // Streaming POST: same base-path/auth handling as request(), but returns the
 // raw Response so callers can read SSE chunks incrementally from res.body.
-async function postStream(url: string, body: unknown): Promise<Response> {
+async function postStream(url: string, body: unknown, signal?: AbortSignal): Promise<Response> {
   const res = await fetch(apiUrl(url), {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),
+    signal,
   });
   if (!res.ok) throw await toApiError(res);
   return res;
@@ -190,7 +191,8 @@ export const api = {
   chatSessions: () => get<Array<{ id: string; title: string; updated_at: string }>>('/api/chat/sessions'),
   chatSendJson: (message: string, context?: Record<string, unknown>) => post<{ reply: string }>('/api/chat/send/json', { message, context }),
   // SSE-over-fetch stream; callers read res.body chunk by chunk.
-  chatSendStream: (message: string, context?: Record<string, unknown>) => postStream('/api/chat/send', { message, context }),
+  chatSendStream: (message: string, context?: Record<string, unknown>, opts?: { signal?: AbortSignal }) =>
+    postStream('/api/chat/send', { message, context }, opts?.signal),
 
   // ── Templates ──
   listTemplates: () => get<Template[]>('/api/templates'),
