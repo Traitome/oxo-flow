@@ -135,6 +135,68 @@ impl WorkflowConfig {
         result
     }
 
+    /// Per-instance `{meta.<column>}` substitution for `when` expressions,
+    /// mirroring [`Self::bake_wildcard_when`] so the execution-time re-check
+    /// re-evaluates the same per-instance verdict:
+    ///
+    /// - comparison operand → the metadata value as a quoted literal
+    ///   (`'SE' == 'SE'` — the evaluator's literal comparison requires
+    ///   quotes on both sides),
+    /// - bare truthiness position → `true`/`false` for the value,
+    /// - missing row OR column → `''` in a comparison (a closed gate) and
+    ///   `false` in a truthiness position — never a bare token, which the
+    ///   evaluator's default-true fallback would run.
+    fn bake_meta_when(
+        when: &str,
+        table: &crate::wildcard::MetadataTable,
+        combo: &crate::wildcard::WildcardValues,
+    ) -> String {
+        const OPS: &[&str] = &[">=", "<=", "==", "!=", ">", "<"];
+
+        let row = crate::wildcard::metadata_row_for(combo, table);
+        let mut result = String::with_capacity(when.len());
+        let mut cursor = 0usize;
+        for cap in crate::config::META_NS_RE.captures_iter(when) {
+            let m = cap.get(0).expect("full match");
+            let column = cap.get(1).expect("column group").as_str();
+            let (start, end) = (m.start(), m.end());
+            result.push_str(&when[cursor..start]);
+
+            // Non-space context around the token decides its position.
+            let after = when[end..]
+                .find(|c: char| !c.is_whitespace())
+                .map(|i| &when[end + i..])
+                .unwrap_or_default();
+            let before = when[..start].trim_end();
+            let in_comparison = OPS
+                .iter()
+                .any(|op| after.starts_with(op) || before.ends_with(op));
+
+            match row.and_then(|r| r.get(column)) {
+                // Comparison operand → quoted literal of the metadata value.
+                Some(value) if in_comparison => {
+                    let rendered = crate::executor::process::render_wildcard_value(value);
+                    if rendered.contains('\'') {
+                        result.push_str(&format!("\"{rendered}\""));
+                    } else {
+                        result.push_str(&format!("'{rendered}'"));
+                    }
+                }
+                // Bare truthiness position → literal true/false.
+                Some(value) => {
+                    let truthy = !value.is_empty() && value != "false" && value != "0";
+                    result.push_str(if truthy { "true" } else { "false" });
+                }
+                // Missing row or column: a closed gate, never a bare token.
+                None if in_comparison => result.push_str("''"),
+                None => result.push_str("false"),
+            }
+            cursor = end;
+        }
+        result.push_str(&when[cursor..]);
+        result
+    }
+
     pub fn expand_wildcards(&mut self) -> Result<()> {
         // Preserve the unexpanded templates on first expansion — checkpoint
         // re-entry (issue #78 P3) re-expands from them with merged values.
@@ -249,6 +311,12 @@ impl WorkflowConfig {
         // Wildcards that trigger group expansion
         const GROUP_WILDCARDS: &[&str] = &["group", "sample"];
 
+        // The known `{meta.<column>}` vocabulary (issue #227 item 2): the
+        // union of columns any metadata row defines. Used for the
+        // plan-time typo warning below.
+        let metadata_columns: std::collections::HashSet<String> =
+            crate::wildcard::metadata_columns(&self.metadata);
+
         let mut expanded_rules: Vec<Rule> = Vec::new();
         let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
         // Track original → expanded name mapping for depends_on resolution
@@ -289,6 +357,45 @@ impl WorkflowConfig {
             }
             if let Some(ref when) = rule.when {
                 all_text.push(when);
+            }
+
+            // `{meta.<column>}` plan-time typo check (issue #227 item 2): a
+            // column no row defines renders empty on every instance — warn
+            // once per rule+column so the author notices at plan time,
+            // matching the `{values.name}` stance (warn, never error).
+            // Free-text fields (log, script, hooks) are scanned too.
+            if !metadata_columns.is_empty() || all_text.iter().any(|t| t.contains("{meta.")) {
+                let mut meta_texts: Vec<&str> = all_text.clone();
+                if let Some(ref log) = rule.log {
+                    meta_texts.push(log);
+                }
+                for text in [
+                    &rule.script,
+                    &rule.pre_exec,
+                    &rule.on_success,
+                    &rule.on_failure,
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    meta_texts.push(text);
+                }
+                let mut warned_columns: Vec<String> = Vec::new();
+                for text in meta_texts {
+                    for cap in META_NS_RE.captures_iter(text) {
+                        let column = &cap[1];
+                        if !metadata_columns.contains(column)
+                            && !warned_columns.iter().any(|w| w == column)
+                        {
+                            tracing::warn!(
+                                rule = %rule.name,
+                                column,
+                                "rule references '{{meta.{column}}}' but no metadata row defines a column named '{column}' — the placeholder will render empty"
+                            );
+                            warned_columns.push(column.to_string());
+                        }
+                    }
+                }
             }
 
             let uses_pair_wildcard = !pair_combos.is_empty()
@@ -452,6 +559,9 @@ impl WorkflowConfig {
                         expand_command_text_fields(&mut expanded, rule, |s| {
                             expand_rule_shell(s, &combo)
                         });
+                        // Per-instance `{meta.<column>}` substitution from
+                        // the sample-like bindings (issue #227 item 2).
+                        self.apply_instance_meta(&mut expanded, &combo);
 
                         // Record which sample names this expansion belongs to
                         // (issue #63 readiness attribution).
@@ -611,6 +721,10 @@ impl WorkflowConfig {
                         expand_command_text_fields(&mut expanded, rule, |s| {
                             expand_rule_shell(s, &merged)
                         });
+                        // Per-instance `{meta.<column>}` substitution from
+                        // the instance's `{sample}` binding (issue #227
+                        // item 2).
+                        self.apply_instance_meta(&mut expanded, &merged);
 
                         // Record which sample this expansion belongs to
                         // (issue #63 readiness attribution).
@@ -707,6 +821,9 @@ impl WorkflowConfig {
                     expand_command_text_fields(&mut expanded, rule, |s| {
                         expand_rule_shell(s, combo)
                     });
+                    // Per-instance `{meta.<column>}` substitution (issue
+                    // #227 item 2) — see the pair branch.
+                    self.apply_instance_meta(&mut expanded, combo);
 
                     self.expansion_values
                         .insert(new_name.clone(), combo.clone());
@@ -1156,6 +1273,83 @@ impl WorkflowConfig {
         Ok(())
     }
 
+    /// Apply the per-instance `{meta.<column>}` substitution (issue #227
+    /// item 2) to every text field of an expanded rule — inputs, outputs,
+    /// shell, log, `when`, script, and the hooks — the same field set that
+    /// already carries per-instance substitutions.
+    ///
+    /// The instance's sample-like binding (from `combo`) selects the
+    /// metadata row; a missing row OR column renders empty, so
+    /// `when = "config.single_end_mode || {meta.endedness} == 'SE'"`-style
+    /// predicates evaluate false for samples without the data (the gate is
+    /// closed, never a literal token). Rules without any `{meta.`
+    /// reference are untouched.
+    fn apply_instance_meta(&self, expanded: &mut Rule, combo: &crate::wildcard::WildcardValues) {
+        let refers = expanded.input.iter().any(|p| p.contains("{meta."))
+            || expanded.output.iter().any(|p| p.contains("{meta."))
+            || expanded
+                .shell
+                .as_deref()
+                .is_some_and(|s| s.contains("{meta."))
+            || expanded
+                .log
+                .as_deref()
+                .is_some_and(|s| s.contains("{meta."))
+            || expanded
+                .when
+                .as_deref()
+                .is_some_and(|s| s.contains("{meta."))
+            || expanded
+                .script
+                .as_deref()
+                .is_some_and(|s| s.contains("{meta."))
+            || expanded
+                .pre_exec
+                .as_deref()
+                .is_some_and(|s| s.contains("{meta."))
+            || expanded
+                .on_success
+                .as_deref()
+                .is_some_and(|s| s.contains("{meta."))
+            || expanded
+                .on_failure
+                .as_deref()
+                .is_some_and(|s| s.contains("{meta."));
+        if !refers {
+            return;
+        }
+        let expand =
+            |text: &str| crate::wildcard::expand_meta_namespace(text, &self.metadata, combo);
+        let meta_expand_patterns = |patterns: &FilePatterns| -> FilePatterns {
+            match patterns {
+                FilePatterns::List(v) => FilePatterns::List(v.iter().map(|p| expand(p)).collect()),
+                FilePatterns::Map(m) => {
+                    FilePatterns::Map(m.iter().map(|(k, v)| (k.clone(), expand(v))).collect())
+                }
+                FilePatterns::Dir { path, pattern } => FilePatterns::Dir {
+                    path: expand(path),
+                    pattern: pattern.clone(),
+                },
+            }
+        };
+        expanded.input = meta_expand_patterns(&expanded.input);
+        expanded.output = meta_expand_patterns(&expanded.output);
+        expanded.shell = expanded.shell.as_deref().map(expand);
+        expanded.log = expanded.log.as_deref().map(expand);
+        // `when` gets the bake treatment (quoted literals in comparisons,
+        // true/false in truthiness positions) so the execution-time re-check
+        // re-evaluates this same verdict — plain substitution would leave
+        // unquoted values that the evaluator's default-true fallback runs.
+        expanded.when = expanded
+            .when
+            .as_deref()
+            .map(|w| Self::bake_meta_when(w, &self.metadata, combo));
+        expanded.script = expanded.script.as_deref().map(expand);
+        expanded.pre_exec = expanded.pre_exec.as_deref().map(expand);
+        expanded.on_success = expanded.on_success.as_deref().map(expand);
+        expanded.on_failure = expanded.on_failure.as_deref().map(expand);
+    }
+
     /// Expand one `input_groups` rule into its per-group instances (issue
     /// #227 item 3).
     ///
@@ -1203,7 +1397,46 @@ impl WorkflowConfig {
                 ),
             });
         }
-        if !pattern_wildcards.contains(&decl.group_by) {
+        // `group_by = "meta.<column>"` (issue #227 item 4): the group key
+        // comes from the per-sample metadata table instead of a pattern
+        // wildcard. The instance map binds the COLUMN name (e.g.
+        // `{antibody}`); pattern wildcards are never bound — the group's
+        // value lists are reachable as `{input_group.<wildcard>}` — so
+        // `keep` is meaningless for metadata grouping and rejected.
+        let meta_group_by: Option<&str> = decl
+            .group_by
+            .strip_prefix("meta.")
+            .filter(|column| !column.is_empty());
+        if let Some(column) = meta_group_by {
+            let known = crate::wildcard::metadata_columns(&self.metadata);
+            if !known.contains(column) {
+                return Err(OxoFlowError::Validation {
+                    message: format!(
+                        "input_groups group_by '{}' of rule '{}' references metadata column '{}' that no metadata row defines",
+                        decl.group_by, rule.name, column
+                    ),
+                    rule: Some(rule.name.clone()),
+                    suggestion: Some(
+                        "check the metadata_file columns, or use a pattern wildcard as group_by"
+                            .to_string(),
+                    ),
+                });
+            }
+            if decl.keep.is_some() {
+                return Err(OxoFlowError::Validation {
+                    message: format!(
+                        "input_groups keep of rule '{}' is not supported with group_by = '{}': \
+                         metadata-grouped instances bind only the group key ('{{{column}}}')",
+                        rule.name, decl.group_by
+                    ),
+                    rule: Some(rule.name.clone()),
+                    suggestion: Some(
+                        "use {input_group.<wildcard>} to reference the group's value lists"
+                            .to_string(),
+                    ),
+                });
+            }
+        } else if !pattern_wildcards.contains(&decl.group_by) {
             return Err(OxoFlowError::Validation {
                 message: format!(
                     "input_groups group_by '{}' of rule '{}' is not a wildcard in pattern '{}'",
@@ -1221,24 +1454,33 @@ impl WorkflowConfig {
             .filter(|w| w.as_str() != decl.group_by)
             .cloned()
             .collect();
-        let keep: Vec<String> = match &decl.keep {
-            Some(names) => {
-                for name in names {
-                    if !others.contains(name) {
-                        return Err(OxoFlowError::Validation {
-                            message: format!(
-                                "input_groups keep of rule '{}' names '{}' which is not a \
-                                 pattern wildcard (other than group_by '{}')",
-                                rule.name, name, decl.group_by
-                            ),
-                            rule: Some(rule.name.clone()),
-                            suggestion: Some(format!("keep may only list: {}", others.join(", "))),
-                        });
+        let keep: Vec<String> = if meta_group_by.is_some() {
+            // Metadata grouping binds only the column name; no pattern
+            // wildcard is bound (validation above rejects `keep`).
+            Vec::new()
+        } else {
+            match &decl.keep {
+                Some(names) => {
+                    for name in names {
+                        if !others.contains(name) {
+                            return Err(OxoFlowError::Validation {
+                                message: format!(
+                                    "input_groups keep of rule '{}' names '{}' which is not a \
+                                     pattern wildcard (other than group_by '{}')",
+                                    rule.name, name, decl.group_by
+                                ),
+                                rule: Some(rule.name.clone()),
+                                suggestion: Some(format!(
+                                    "keep may only list: {}",
+                                    others.join(", ")
+                                )),
+                            });
+                        }
                     }
+                    names.clone()
                 }
-                names.clone()
+                None => others.clone(),
             }
-            None => others.clone(),
         };
 
         // `{config.x}` placeholders resolve against the workflow config
@@ -1253,12 +1495,6 @@ impl WorkflowConfig {
         // Source 1: files already on disk under the workflow root.
         let mut candidates: Vec<(String, crate::wildcard::WildcardValues)> = Vec::new();
         for combo in crate::wildcard::discover_wildcards_from_pattern_tree(&base, &pattern)? {
-            let Some(key) = combo.get(&decl.group_by).cloned() else {
-                continue;
-            };
-            if key.is_empty() {
-                continue;
-            }
             let path = crate::wildcard::expand_pattern(&pattern, &combo)
                 .unwrap_or_else(|_| pattern.clone());
             candidates.push((path, combo));
@@ -1283,12 +1519,6 @@ impl WorkflowConfig {
             if !any {
                 continue;
             }
-            let Some(key) = combo.get(&decl.group_by) else {
-                continue;
-            };
-            if key.is_empty() {
-                continue;
-            }
             candidates.push((output.clone(), combo));
         }
 
@@ -1301,7 +1531,22 @@ impl WorkflowConfig {
             return Ok(Vec::new());
         }
 
-        // Group the (file, combo) pairs by the group_by value. Determinism
+        // The group key of a candidate: the `group_by` wildcard value, or —
+        // for `group_by = "meta.<column>"` — the metadata row's column
+        // value resolved from the combo's sample-like binding. A missing
+        // metadata row or an empty cell yields no key: the file is skipped
+        // (empty-column rows are never grouped).
+        let group_key_of = |combo: &crate::wildcard::WildcardValues| -> Option<String> {
+            match meta_group_by {
+                Some(column) => crate::wildcard::metadata_row_for(combo, &self.metadata)
+                    .and_then(|row| row.get(column))
+                    .filter(|value| !value.is_empty())
+                    .cloned(),
+                None => combo.get(&decl.group_by).cloned(),
+            }
+        };
+
+        // Group the (file, combo) pairs by the group key. Determinism
         // matters: keys sort by BTreeMap, files sort within a group, and
         // the "first occurrence" wildcard bindings come from the FIRST
         // SORTED file — never from readdir order.
@@ -1310,8 +1555,21 @@ impl WorkflowConfig {
             Vec<(String, crate::wildcard::WildcardValues)>,
         > = std::collections::BTreeMap::new();
         for (path, combo) in candidates {
-            let key = combo[&decl.group_by].clone();
+            let Some(key) = group_key_of(&combo) else {
+                continue;
+            };
+            if key.is_empty() {
+                continue;
+            }
             grouped.entry(key).or_default().push((path, combo));
+        }
+        if grouped.is_empty() {
+            tracing::warn!(
+                rule = %rule.name,
+                group_by = %decl.group_by,
+                "input_groups pattern matched files but none had a group key — the rule is not instantiated (nothing to run)"
+            );
+            return Ok(Vec::new());
         }
 
         let mut out = Vec::with_capacity(grouped.len());
@@ -1334,16 +1592,25 @@ impl WorkflowConfig {
             }
             // The instance wildcard map: the group key + the first
             // occurrence of every kept wildcard (for `{output}` etc.).
+            // Metadata grouping binds the group key under the COLUMN name
+            // (`group_by = "meta.antibody"` → `{antibody}`) and never
+            // binds pattern wildcards (`keep` is rejected above).
             let mut instance_map = crate::wildcard::WildcardValues::new();
-            instance_map.insert(decl.group_by.clone(), key.clone());
+            let key_name = meta_group_by.unwrap_or(decl.group_by.as_str());
+            instance_map.insert(key_name.to_string(), key.clone());
             for name in &keep {
                 if let Some(v) = entries[0].1.get(name) {
                     instance_map.insert(name.clone(), v.clone());
                 }
             }
             // Space-joined per-group value lists for `{input_group.<name>}`.
+            // The distinct sample values are kept for readiness attribution.
             let mut group_lists = HashMap::new();
+            let mut group_samples: Vec<String> = Vec::new();
             for (name, values) in value_lists {
+                if name == "sample" {
+                    group_samples = values.clone();
+                }
                 group_lists.insert(name, values.join(" "));
             }
 
@@ -1412,6 +1679,41 @@ impl WorkflowConfig {
                 };
                 expanded.when = Some(expand_group_text(&baked, &instance_map, &group_lists));
             }
+            // Per-instance `{meta.<column>}` substitution (issue #227 item
+            // 2): a plain group binds `{sample}` so the row lookup works;
+            // a metadata-grouped instance binds only the column name, so no
+            // row resolves and `{meta.*}` renders empty (the instance has
+            // no single sample — an ambiguous lookup must not pick one).
+            self.apply_instance_meta(&mut expanded, &instance_map);
+
+            // Metadata-grouped instances have no single pattern-wildcard
+            // binding — `{sample}` in an output is an authoring error (the
+            // instance's one binding is the column name, e.g. `{antibody}`).
+            // Fail the plan instead of running a literal token. The column
+            // name itself is exempt (a pattern may legitimately carry the
+            // same wildcard as the metadata column).
+            if let Some(column) = meta_group_by
+                && let Some(wild) = pattern_wildcards.iter().find(|w| {
+                    w.as_str() != column
+                        && expanded
+                            .output
+                            .iter()
+                            .any(|out| out.contains(&format!("{{{w}}}")))
+                })
+            {
+                return Err(OxoFlowError::Validation {
+                    message: format!(
+                        "outputs of input_groups rule '{}' use '{{{wild}}}' but metadata-grouped \
+                         instances have no single '{{{wild}}}' binding — the group key \
+                         ('{{{column}}}') is the instance's only binding",
+                        expanded.name
+                    ),
+                    rule: Some(rule.name.clone()),
+                    suggestion: Some(format!(
+                        "use '{{{column}}}' for the group key or '{{{{input_group.{wild}}}}}' for the group's values"
+                    )),
+                });
+            }
 
             // A leftover `{input_group.<name>}` means the author referenced
             // a wildcard this pattern never captures — fail the plan
@@ -1453,9 +1755,15 @@ impl WorkflowConfig {
             }
 
             // Readiness attribution (issue #63): the group key is the
-            // sample in the common case.
-            self.expansion_samples
-                .insert(expanded.name.clone(), vec![key]);
+            // sample in the common case; metadata-grouped instances
+            // attribute their group's sample values instead.
+            if meta_group_by.is_some() {
+                self.expansion_samples
+                    .insert(expanded.name.clone(), group_samples);
+            } else {
+                self.expansion_samples
+                    .insert(expanded.name.clone(), vec![key]);
+            }
             // Per-instance bindings so expand_inputs patterns referencing
             // `{sample}` / kept wildcards resolve per instance (same
             // contract as the pair/group branches).

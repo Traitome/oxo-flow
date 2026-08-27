@@ -488,6 +488,69 @@ pub fn expand_values_namespace(pattern: &str, bindings: &WildcardValues) -> Stri
     out
 }
 
+/// The per-sample metadata table: sample id → column → value
+/// (issue #227 item 2).
+pub type MetadataTable =
+    std::collections::HashMap<String, std::collections::HashMap<String, String>>;
+
+/// The sample-like instance bindings tried, in order, when resolving
+/// `{meta.<column>}` for an instance: the `{sample}` binding first (the
+/// common group/sample fan-out), then the pair vocabulary for pair
+/// workflows (rows keyed by pair_id or by experiment/control names).
+pub const METADATA_LOOKUP_KEYS: &[&str] = &["sample", "pair_id", "experiment", "control"];
+
+/// Resolve an instance's metadata row: the first non-empty sample-like
+/// binding that has a row in the table. `None` when no binding matches —
+/// the instance renders every `{meta.<column>}` reference empty.
+#[must_use]
+pub fn metadata_row_for<'a>(
+    bindings: &WildcardValues,
+    table: &'a MetadataTable,
+) -> Option<&'a std::collections::HashMap<String, String>> {
+    METADATA_LOOKUP_KEYS.iter().find_map(|key| {
+        let id = bindings.get(*key)?;
+        if id.is_empty() {
+            return None;
+        }
+        table.get(id)
+    })
+}
+
+/// The union of column names defined by any metadata row — the known
+/// `{meta.<column>}` vocabulary for plan-time typo warnings.
+#[must_use]
+pub fn metadata_columns(table: &MetadataTable) -> std::collections::HashSet<String> {
+    table.values().flat_map(|row| row.keys().cloned()).collect()
+}
+
+/// Expand `{meta.<column>}` namespace placeholders for one instance.
+///
+/// The metadata row is resolved from the instance's sample-like binding
+/// ([`metadata_row_for`]); a column present on the row substitutes its
+/// value, and a missing row OR column substitutes an empty string (the
+/// `when = "config.single_end_mode || {meta.endedness} == 'SE'"` gate
+/// therefore evaluates false for samples without the data — the gate is
+/// closed, never a literal token). Unresolvable references in rules that
+/// never fan out (no sample-like binding at all) stay untouched; the
+/// execution-time residual-placeholder guard warns about those.
+#[must_use = "expanding returns a new String"]
+pub fn expand_meta_namespace(
+    text: &str,
+    table: &MetadataTable,
+    bindings: &WildcardValues,
+) -> String {
+    if !text.contains("{meta.") {
+        return text.to_string();
+    }
+    let row = metadata_row_for(bindings, table);
+    crate::config::META_NS_RE
+        .replace_all(text, |caps: &regex::Captures| {
+            let column = &caps[1];
+            row.and_then(|r| r.get(column)).cloned().unwrap_or_default()
+        })
+        .into_owned()
+}
+
 /// Generates the Cartesian product of all wildcard value lists.
 ///
 /// Given `{"sample": ["A", "B"], "read": ["1", "2"]}`, produces:

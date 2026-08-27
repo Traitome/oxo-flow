@@ -2035,3 +2035,100 @@ async fn scratch_rule_pre_exec_runs_in_scratch_with_absolute_inputs() {
     assert!(workdir.path().join("data.txt").exists());
     assert!(scratch_entries(workdir.path()).is_empty());
 }
+
+#[tokio::test]
+async fn meta_when_gate_runs_se_and_skips_pe_instances() {
+    // methylseq-style endedness gate driven by the sample metadata table
+    // (issue #227 item 2): `single_end_mode = false` and a per-sample
+    // `endedness` column — SE instances execute, PE instances skip, and a
+    // sample with NO metadata row also skips (its placeholder rendered
+    // empty, so the `== 'SE'` predicate evaluated false).
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("raw")).unwrap();
+    for sample in ["SE1", "PE1", "X1"] {
+        std::fs::write(
+            dir.path().join(format!("raw/{sample}_R1.fastq.gz")),
+            "reads",
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        dir.path().join("samples.tsv"),
+        "sample\tendedness\nSE1\tSE\nPE1\tPE\n",
+    )
+    .unwrap();
+    let workflow_path = dir.path().join("methyl.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "methyl"
+        metadata_file = "samples.tsv"
+
+        [config]
+        single_end_mode = false
+
+        [[sample_groups]]
+        name = "control"
+        samples = ["SE1", "PE1", "X1"]
+
+        [[rules]]
+        name = "trim"
+        input = ["raw/{sample}_R1.fastq.gz"]
+        output = ["trimmed/{sample}.fq"]
+        when = "config.single_end_mode || {meta.endedness} == 'SE'"
+        shell = "cp {input[0]} {output[0]}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = crate::config::WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.expand_wildcards().unwrap();
+    let executor = LocalExecutor::new(ExecutorConfig {
+        workdir: dir.path().to_path_buf(),
+        ..Default::default()
+    });
+    let mut typed_config = HashMap::new();
+    typed_config.insert("single_end_mode".to_string(), toml::Value::Boolean(false));
+    let wildcard_values = HashMap::new();
+
+    let se1 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "trim_control_SE1")
+        .expect("SE1 instance");
+    let record = executor
+        .execute_rule_with_config(se1, &wildcard_values, &typed_config)
+        .await
+        .unwrap();
+    assert_eq!(record.status, JobStatus::Success);
+    assert!(dir.path().join("trimmed/SE1.fq").exists());
+
+    let pe1 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "trim_control_PE1")
+        .expect("PE1 instance");
+    let record = executor
+        .execute_rule_with_config(pe1, &wildcard_values, &typed_config)
+        .await
+        .unwrap();
+    assert_eq!(record.status, JobStatus::Skipped);
+    assert_eq!(
+        record.skip_reason.as_deref(),
+        Some("condition evaluated to false")
+    );
+    assert!(!dir.path().join("trimmed/PE1.fq").exists());
+
+    let x1 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "trim_control_X1")
+        .expect("X1 instance");
+    let record = executor
+        .execute_rule_with_config(x1, &wildcard_values, &typed_config)
+        .await
+        .unwrap();
+    assert_eq!(record.status, JobStatus::Skipped);
+    assert!(!dir.path().join("trimmed/X1.fq").exists());
+}
