@@ -185,7 +185,16 @@ const BAD_RUN: &str = "[workflow]\nname = \"bad\"\n\n[[rules]]\nname = \"fail\"\
 async fn sse_terminal_events_under_load() {
     let dir = tempfile::tempdir().unwrap();
     let port = free_port();
-    let mut server = spawn_server(dir.path(), port, &[("OXO_FLOW_MODE", "personal")]);
+    let mut server = spawn_server(
+        dir.path(),
+        port,
+        &[
+            ("OXO_FLOW_MODE", "personal"),
+            // This test posts 8 runs back-to-back to exercise SSE fan-out;
+            // exempt it from the dedicated run-creation rate limit (#213).
+            ("OXO_FLOW_RUNS_RATE_LIMIT", "0"),
+        ],
+    );
     wait_ready(&server.base).await;
 
     let (tx, mut rx) = mpsc::channel::<(String, String)>(64);
