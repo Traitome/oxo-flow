@@ -109,7 +109,9 @@ pub fn pattern_to_regex(pattern: &str) -> Result<Regex> {
     // A pattern may repeat the same wildcard (e.g. "consensus/{antibody}/
     // {antibody}.peaks.bed") — the regex crate forbids duplicate capture
     // names, so the first occurrence captures and later ones match
-    // anonymously (same value by construction of the pattern).
+    // anonymously. Anonymous groups alone cannot enforce that both
+    // positions hold the SAME value; the discovery walkers add a
+    // round-trip check (expand back and compare) for that guarantee.
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for mat in WILDCARD_RE.find_iter(pattern) {
@@ -283,18 +285,16 @@ pub fn discover_wildcards_from_pattern(
                         values.insert(name.clone(), m.as_str().to_string());
                     }
                 }
-                if !values.is_empty() {
-                    // Build a compact dedup key from sorted key=value pairs
-                    let mut parts: Vec<(&str, &str)> = values
-                        .iter()
-                        .map(|(k, v)| (k.as_str(), v.as_str()))
-                        .collect();
-                    parts.sort_by_key(|(k, _)| *k);
-                    let dedup_key: String =
-                        parts.iter().flat_map(|(k, v)| [k, "=", v, ","]).collect();
-                    if seen.insert(dedup_key) {
-                        results.push(values);
-                    }
+                // Round-trip guard against phantom instances: with a
+                // repeated wildcard the regex's anonymous groups may
+                // capture a DIFFERENT value than the named one (e.g.
+                // "{s}.{s}.bam" regex-matches "B.A.bam" with s="B"). A
+                // combo whose expansion differs from the matched file
+                // name can only come from such a mismatch — skip it.
+                let is_real =
+                    expand_pattern(pattern, &values).is_ok_and(|expanded| expanded == filename);
+                if !values.is_empty() && is_real && seen.insert(wildcard_combo_key(&values)) {
+                    results.push(values);
                 }
             }
         }
@@ -333,6 +333,7 @@ pub fn discover_wildcards_from_pattern_tree(
     fn walk(
         dir: &std::path::Path,
         base: &std::path::Path,
+        pattern: &str,
         re: &Regex,
         wildcard_names: &[String],
         seen: &mut HashSet<String>,
@@ -345,7 +346,7 @@ pub fn discover_wildcards_from_pattern_tree(
             let path = entry.path();
             let file_type = entry.file_type().ok();
             if file_type.is_some_and(|t| t.is_dir()) {
-                walk(&path, base, re, wildcard_names, seen, results);
+                walk(&path, base, pattern, re, wildcard_names, seen, results);
             } else if file_type.is_none_or(|t| t.is_file() || t.is_symlink()) {
                 let rel = match path.strip_prefix(base) {
                     Ok(rel) => rel,
@@ -361,23 +362,29 @@ pub fn discover_wildcards_from_pattern_tree(
                             values.insert(name.clone(), m.as_str().to_string());
                         }
                     }
-                    if !values.is_empty() {
-                        let mut parts: Vec<(&str, &str)> = values
-                            .iter()
-                            .map(|(k, v)| (k.as_str(), v.as_str()))
-                            .collect();
-                        parts.sort_by_key(|(k, _)| *k);
-                        let dedup_key: String =
-                            parts.iter().flat_map(|(k, v)| [k, "=", v, ","]).collect();
-                        if seen.insert(dedup_key) {
-                            results.push(values);
-                        }
+                    // Round-trip guard against phantom instances — same
+                    // as the flat walker: a repeated wildcard's anonymous
+                    // regex groups may capture a value different from the
+                    // named one, so only accept combos that re-expand to
+                    // the matched relative path.
+                    let is_real =
+                        expand_pattern(pattern, &values).is_ok_and(|expanded| expanded == rel_str);
+                    if !values.is_empty() && is_real && seen.insert(wildcard_combo_key(&values)) {
+                        results.push(values);
                     }
                 }
             }
         }
     }
-    walk(dir, dir, &re, &wildcard_names, &mut seen, &mut results);
+    walk(
+        dir,
+        dir,
+        pattern,
+        &re,
+        &wildcard_names,
+        &mut seen,
+        &mut results,
+    );
 
     Ok(results)
 }
@@ -1048,6 +1055,46 @@ mod tests {
             discover_wildcards_from_pattern_tree(flat.path(), "{sample}_{lane}_R1.fastq.gz")
                 .unwrap();
         assert!(results.is_empty(), "flat pattern must not scan recursively");
+    }
+
+    #[test]
+    fn discover_wildcards_from_pattern_tree_rejects_mismatched_repeated_wildcard() {
+        // A repeated wildcard must hold the SAME value at every position:
+        // "consensus/{antibody}/{antibody}.peaks.bed" may regex-match
+        // "consensus/H3K4me3/H3K27ac.peaks.bed" (the second position is an
+        // anonymous group), but that combo re-expands to a path that does
+        // not exist — it must not surface as a phantom instance. The
+        // H3K27ac phantom has NO consistent counterpart file, so dedup
+        // alone cannot hide it.
+        let dir = tempfile::tempdir().unwrap();
+        let consensus = dir.path().join("consensus");
+        std::fs::create_dir_all(consensus.join("H3K4me3")).unwrap();
+        std::fs::create_dir_all(consensus.join("H3K27ac")).unwrap();
+        std::fs::write(consensus.join("H3K4me3/H3K4me3.peaks.bed"), "").unwrap();
+        // Mixed names: the two positions disagree — must be rejected.
+        std::fs::write(consensus.join("H3K27ac/H3K4me3.peaks.bed"), "").unwrap();
+
+        let results = discover_wildcards_from_pattern_tree(
+            dir.path(),
+            "consensus/{antibody}/{antibody}.peaks.bed",
+        )
+        .unwrap();
+        let combos: Vec<_> = results.into_iter().map(|c| c["antibody"].clone()).collect();
+        assert_eq!(combos, vec!["H3K4me3".to_string()]);
+    }
+
+    #[test]
+    fn discover_wildcards_from_pattern_rejects_mismatched_repeated_wildcard() {
+        // Same guarantee for the flat walker: "{s}.{s}.bam" must not yield
+        // a combo from "B.A.bam" (captured value "B" has no consistent
+        // counterpart file, so dedup alone cannot hide the phantom).
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("A.A.bam"), "").unwrap();
+        std::fs::write(dir.path().join("B.A.bam"), "").unwrap();
+
+        let results = discover_wildcards_from_pattern(dir.path(), "{s}.{s}.bam").unwrap();
+        let combos: Vec<_> = results.into_iter().map(|c| c["s"].clone()).collect();
+        assert_eq!(combos, vec!["A".to_string()]);
     }
 
     // -----------------------------------------------------------------------

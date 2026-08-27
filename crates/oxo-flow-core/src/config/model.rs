@@ -38,6 +38,37 @@ pub(crate) static META_NS_RE: LazyLock<Regex> =
 pub(crate) static WHEN_WILDCARD_REF_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"wildcard\.(\w+)").expect("valid when-wildcard regex"));
 
+/// Matches a `config.<key>` reference inside a pair-level `when`
+/// expression — the plan-time typo guard for pair gating. TOML keys may be
+/// dotted (`config.seq.type`), so the captured name spans word chars,
+/// dots, and hyphens.
+pub(crate) static PAIR_WHEN_CONFIG_REF_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"config\.([A-Za-z_][A-Za-z0-9_.\-]*)").expect("valid pair-when config regex")
+});
+
+/// Collect the `config.<key>` references in a pair-level `when` that are
+/// NOT defined in `[config]`, deduplicated in order of first appearance.
+///
+/// The unbound→false stance (#199) is correct for rule gates, but at pair
+/// scope a false condition silently drops the pair's WHOLE rule set — so a
+/// typo (`config.extened`) deletes instances with no error. The caller
+/// warns once per pair+key at plan time, matching the `{meta.<column>}`
+/// typo-warning style (warn, never error).
+pub(crate) fn pair_when_unknown_config_keys<'a>(
+    when: &'a str,
+    config: &HashMap<String, toml::Value>,
+) -> Vec<&'a str> {
+    let mut unknown = Vec::new();
+    for cap in PAIR_WHEN_CONFIG_REF_RE.captures_iter(when) {
+        let Some(m) = cap.get(1) else { continue };
+        let key = &when[m.start()..m.end()];
+        if !config.contains_key(key) && !unknown.contains(&key) {
+            unknown.push(key);
+        }
+    }
+    unknown
+}
+
 pub(crate) fn is_defaults_empty(d: &Defaults) -> bool {
     d.threads.is_none() && d.memory.is_none() && d.environment.is_none()
 }
