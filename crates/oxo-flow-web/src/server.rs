@@ -13,6 +13,7 @@ use axum::{
 };
 
 use crate::domains::clusters;
+use crate::domains::workflow::handlers::ApiError;
 use crate::domains::*;
 use crate::infra::license::LicenseHeaderLayer;
 
@@ -281,6 +282,9 @@ pub fn build_router(mode: &str) -> Router {
         );
 
     // ---- Run routes ----
+    // Issue #207 phase 1: PostgreSQL deployments never initialize the
+    // embedded SQLite pool, so the entire runs domain is gated by one
+    // structured 503 at this router layer.
     let run_routes = Router::new()
         .route("/api/runs", post(execution::handlers::create_run))
         .route("/api/runs", get(execution::handlers::list_runs))
@@ -344,7 +348,41 @@ pub fn build_router(mode: &str) -> Router {
             "/api/runs/{id}/report/visualize",
             post(execution::handlers::visualize_report),
         )
-        .route("/api/runs/{id}/files", get(execution::files::get_run_file));
+        .route("/api/runs/{id}/files", get(execution::files::get_run_file))
+        .route_layer(axum::middleware::from_fn(require_sqlite_for_runs));
+
+    /// Structured capability boundary for PostgreSQL deployments (issue #207).
+    ///
+    /// Run lifecycle bookkeeping reads and writes through the embedded SQLite
+    /// pool, which postgres-mode servers never initialize. Gating the whole
+    /// `/api/runs*` domain at the router layer gives every run endpoint one
+    /// explicit, actionable answer instead of silent empty reads or spawn-task
+    /// degradations discovered mid-flight.
+    async fn require_sqlite_for_runs(
+        req: axum::extract::Request,
+        next: axum::middleware::Next,
+    ) -> Result<axum::response::Response, (StatusCode, axum::Json<ApiError>)> {
+        if crate::infra::db::sqlite::try_pool().is_ok() {
+            return Ok(next.run(req).await);
+        }
+        Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(ApiError {
+                code: "RUNS_REQUIRE_SQLITE".into(),
+                message: "Workflow run execution is not available on this deployment.".into(),
+                detail: Some(
+                    "Run lifecycle bookkeeping uses the embedded SQLite store; \
+                 PostgreSQL servers serve library/AI/auth features only."
+                        .into(),
+                ),
+                suggestion: Some(
+                    "Execute via `oxo-flow run` from the CLI, or use a personal-mode \
+                 server backed by SQLite."
+                        .into(),
+                ),
+            }),
+        ))
+    }
 
     // ---- File service routes (issue #82 P0-1/P0-2) ----
     let file_routes = Router::new()
