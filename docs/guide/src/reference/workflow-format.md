@@ -2305,6 +2305,13 @@ Semantics:
   deterministically named `consumer_<values>`), and the new instances are
   inserted forward into the remaining plan — forward-safety comes from
   completion ordering, not DAG topology, exactly like checkpoint re-entry.
+- Interaction with `resume`: the discovered domains are persisted
+  (persist-first, before fan-out). A resume replays the **partial**
+  persisted domain to instantiate consumers for the producer instances
+  that already succeeded; when a failed instance is retried and succeeds,
+  the fan-out is idempotent and only the new values extend the consumer
+  set — partial progress across a resume is preserved, and the final
+  consumer set equals the union of all per-instance discoveries.
 - Zero discoveries after producer success is **loud**: a warning is emitted
   and the consumers stay uninstantiated (a later producer instance may
   still contribute). A producer **failure** leaves the consumers
