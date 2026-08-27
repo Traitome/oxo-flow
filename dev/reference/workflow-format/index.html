@@ -5190,6 +5190,12 @@ disk space matters.</p>
 <td>Output file paths</td>
 </tr>
 <tr>
+<td><code>output_pattern</code></td>
+<td>String</td>
+<td>No</td>
+<td>Runtime-discovered output pattern: outputs enumerated by a filesystem scan after the rule completes; downstream consumers of its wildcard instantiate per discovered value. Mutually exclusive with <code>output</code>/<code>transform</code>/<code>input_groups</code> — see <a href="#runtime-discovered-outputs-output_pattern">Runtime-Discovered Outputs</a></td>
+</tr>
+<tr>
 <td><code>shell</code></td>
 <td>String</td>
 <td>No</td>
@@ -7413,6 +7419,63 @@ experiment-control pairs in the same round:</p>
 <li><code>dry-run</code> previews replay recorded re-entries (the preview shows the same
   static plan a run would execute) and mark checkpoint rules as possible
   re-entry points; <code>--json</code> includes a <code>reentry</code> section.</li>
+</ul>
+<h2 id="runtime-discovered-outputs-output_pattern">Runtime-Discovered Outputs (<code>output_pattern</code>)<a class="headerlink" href="#runtime-discovered-outputs-output_pattern" title="Permanent link">#</a></h2>
+<p>An <code>output_pattern</code> rule declares its outputs by <strong>filesystem pattern</strong>
+instead of a fixed <code>output</code> list: after the rule completes, the engine scans
+the working directory for files matching the pattern, and any downstream
+rule whose input references the pattern's wildcard is instantiated once per
+discovered value. This is the "checkpoint-lite" variant of re-entry — the
+discovered values come from the file system, not from a manifest the rule
+wrote (which is what makes it work for rules whose file counts are unknown
+ahead of time, e.g. interval scatters or contig-aware variant calling).</p>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-90-1"><a id="__codelineno-90-1" name="__codelineno-90-1" href="#__codelineno-90-1"></a><span class="k">[[rules]]</span>
+</span><span id="__span-90-2"><a id="__codelineno-90-2" name="__codelineno-90-2" href="#__codelineno-90-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"split"</span>
+</span><span id="__span-90-3"><a id="__codelineno-90-3" name="__codelineno-90-3" href="#__codelineno-90-3"></a><span class="n">output_pattern</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"results/chunks/{i}.txt"</span>
+</span><span id="__span-90-4"><a id="__codelineno-90-4" name="__codelineno-90-4" href="#__codelineno-90-4"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"for i in 1 2 3; do echo $i &gt; results/chunks/$i.txt; done"</span>
+</span><span id="__span-90-5"><a id="__codelineno-90-5" name="__codelineno-90-5" href="#__codelineno-90-5"></a>
+</span><span id="__span-90-6"><a id="__codelineno-90-6" name="__codelineno-90-6" href="#__codelineno-90-6"></a><span class="k">[[rules]]</span>
+</span><span id="__span-90-7"><a id="__codelineno-90-7" name="__codelineno-90-7" href="#__codelineno-90-7"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"collect"</span><span class="w">                       </span><span class="c1"># deferred: no {i} instances at plan time</span>
+</span><span id="__span-90-8"><a id="__codelineno-90-8" name="__codelineno-90-8" href="#__codelineno-90-8"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"results/chunks/{i}.txt"</span><span class="p">]</span>
+</span><span id="__span-90-9"><a id="__codelineno-90-9" name="__codelineno-90-9" href="#__codelineno-90-9"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"results/merged/{i}.txt"</span><span class="p">]</span>
+</span><span id="__span-90-10"><a id="__codelineno-90-10" name="__codelineno-90-10" href="#__codelineno-90-10"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"cat {input} &gt; {output}"</span>
+</span></code></pre></div>
+<p><code>split</code> produces <code>results/chunks/1.txt</code>, <code>results/chunks/2.txt</code>,
+<code>results/chunks/3.txt</code>; the engine instantiates <code>collect_1</code>, <code>collect_2</code>,
+<code>collect_3</code> at runtime and inserts them into the plan, so the run completes
+with all three merged files. The fresh wildcard may combine with existing
+sample wildcards — a producer fanned out over <code>{sample}</code> contributes its
+domain per sample instance, and consumers instantiate over the union.</p>
+<p>Semantics:</p>
+<ul>
+<li><code>output_pattern</code> is mutually exclusive with <code>output</code> and with <code>transform</code>
+  and <code>input_groups</code> (validation errors; v1 exclusions). The pattern needs
+  at least one wildcard — a fixed pattern can never enumerate a domain.</li>
+<li><code>{config.x}</code> in the pattern resolves from the workflow config before the
+  scan; discovered files are literals, so exact-match edge inference works
+  as usual.</li>
+<li>Plan time: a consumer referencing a fresh wildcard has an empty domain and
+  instantiates <strong>nothing</strong>; it is deferred whole (its own
+  <code>[[values]]</code>/<code>[[pairs]]</code>/sample fan-out is baked from the producer's
+  discovered bindings). A consumer declared <strong>before</strong> its producer is
+  legal but warned. Referencing two producers' fresh wildcards in one rule
+  is a v1 error; a chain — a rule that is both consumer and producer of
+  fresh wildcards — is supported.</li>
+<li>Runtime: when a producer <strong>instance</strong> completes, the engine scans its
+  pattern and unions the discovered values into the producer template's
+  domain. When <strong>all</strong> of the producer's instances have completed, the
+  deferred consumers are instantiated (one instance per domain value,
+  deterministically named <code>consumer_&lt;values&gt;</code>), and the new instances are
+  inserted forward into the remaining plan — forward-safety comes from
+  completion ordering, not DAG topology, exactly like checkpoint re-entry.</li>
+<li>Zero discoveries after producer success is <strong>loud</strong>: a warning is emitted
+  and the consumers stay uninstantiated (a later producer instance may
+  still contribute). A producer <strong>failure</strong> leaves the consumers
+  uninstantiated and the failure summary attributes them —
+  "not instantiated: producer X failed" — never a silent zero-match.</li>
+<li>Checkpoints persist the discovered domain (<code>output_pattern_domains</code>), so
+  a <code>resume</code> re-instantiates the consumers <strong>without re-running the
+  producer</strong>; re-instantiation is idempotent (same names, same plan).</li>
 </ul>
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
 <ul>
