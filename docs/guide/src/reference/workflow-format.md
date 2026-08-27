@@ -1057,7 +1057,11 @@ producers must be declared **before** their `input_groups` consumer;
 the `keep` wildcard bindings come from the first sorted file only (the
 captured per-group values of every file stay available via
 `{input_group.*}`); `{config.x}` placeholders in `pattern` resolve
-against the workflow config.
+against the workflow config. A producer whose output is a directory
+pattern (e.g. `results/star/{sample}/`) contributes only the directory
+path itself to the candidate pool — files inside it do not match
+`input_groups` patterns (declare the producer's files as outputs to
+group them).
 
 ```toml
 # A multiqc-style aggregator over grouped files: one instance per
