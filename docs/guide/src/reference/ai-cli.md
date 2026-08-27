@@ -43,7 +43,7 @@ export OXO_FLOW_AI_API_URL="http://localhost:11434"
 export OXO_FLOW_AI_MODEL="llama3"
 ```
 
-Configuration persists to `~/.config/oxo-flow/ai_config.json` after first use.
+Configuration persists to `~/.oxo-flow/ai_config.json` after first use.
 
 ### 2. Enable AI in Your Workflow
 
@@ -243,7 +243,7 @@ The provider layer treats model failures explicitly — nothing is silently drop
 
 ## Configuration
 
-### Global Config (`~/.config/oxo-flow/ai_config.json`)
+### Global Config (`~/.oxo-flow/ai_config.json`)
 
 ```json
 {
@@ -272,9 +272,13 @@ model = "deepseek-v4-flash"
 | `OXO_FLOW_AI_API_URL` | Custom API endpoint URL | (provider default) |
 | `OXO_FLOW_AI_MODEL` | Model name override | (provider default) |
 | `DEEPSEEK_API_KEY` | DeepSeek (OpenAI-compatible) | — |
+| `DEEPSEEK_BASE_URL` | Custom DeepSeek endpoint | `https://api.deepseek.com/v1/chat/completions` |
 | `ANTHROPIC_AUTH_TOKEN` | Anthropic-compatible API key | — |
+| `CLAUDE_API_KEY` | Alias for `ANTHROPIC_AUTH_TOKEN` | — |
+| `ANTHROPIC_MODEL` | Claude model override | `claude-sonnet-4-20250514` |
 | `ANTHROPIC_BASE_URL` | Custom Anthropic endpoint | `https://api.anthropic.com/v1/messages` |
 | `OPENAI_API_KEY` | OpenAI-compatible API key | — |
+| `OPENAI_MODEL` | OpenAI model override | `gpt-4o` |
 | `OPENAI_BASE_URL` | Custom OpenAI-compatible endpoint | `https://api.openai.com/v1/chat/completions` |
 | `OLLAMA_HOST` | Ollama server address (web service only; the CLI reads `OXO_FLOW_AI_API_URL`) | `http://localhost:11434` |
 

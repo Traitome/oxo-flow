@@ -207,6 +207,7 @@ crates/oxo-flow-web/src/
 │   ├── chat/              # Chat interface: intent inference
 │   ├── collaboration/     # Fork, diff, share, import
 │   ├── auth/              # Authentication + OAuth2 (ORCID, GitHub)
+│   ├── clusters/          # Remote cluster submission + monitoring
 │   └── observability/     # Health, metrics, structured logging, SSE
 ├── infra/
 │   ├── db/                # StorageBackend trait + SQLite + PostgreSQL

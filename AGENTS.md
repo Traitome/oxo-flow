@@ -10,7 +10,7 @@ This document is the primary source of truth for AI agents working on oxo-flow.
 ## 🏗️ Workspace Layout
 - `crates/oxo-flow-core`: DAG engine, executor, environment management, config, scheduling, reporting
 - `crates/oxo-flow-ai`: AI companion — provider abstraction, skill system, agent orchestration, MCP
-- `crates/oxo-flow-cli`: CLI binary (`oxo-flow`) — 29 subcommands via clap derive
+- `crates/oxo-flow-cli`: CLI binary (`oxo-flow`) — 30 subcommands via clap derive
 - `crates/oxo-flow-web`: Axum web server + React 19 SPA, 100+ OpenAPI-documented endpoints across 9 domains
 - `examples/`: Reference `.oxoflow` (TOML-based) pipeline files
 - `tests/`: Integration tests covering CLI and core functionality
@@ -67,8 +67,8 @@ The frontend is a React/TypeScript SPA built with Vite, located in `frontend/`:
 
 ```bash
 # Development mode (two terminals):
-cd frontend && npm run dev    # Vite dev server on :5173, proxies /api to :8080
-cargo run -p oxo-flow-web      # API server on :8080
+cd frontend && npm run dev    # Vite dev server on :5173, proxies /api to :3000
+cargo run -p oxo-flow-web      # API server on :3000 (default; OXO_FLOW_PORT)
 
 # Build for production:
 cd frontend && npm run build   # Outputs to frontend/dist/
@@ -99,7 +99,7 @@ docker compose up -d
 
 # Or build manually
 docker build -t oxo-flow .
-docker run -d -p 8080:8080 -v oxo-flow-data:/app/data oxo-flow
+docker run -d -p 3000:3000 -v oxo-flow-data:/app/data oxo-flow
 ```
 
 ### Environment Variables
@@ -160,7 +160,7 @@ The AI provider system supports four backends via an enum-based dispatcher:
 No provider is assumed by default — with `OXO_FLOW_AI_PROVIDER` unset,
 AI features stay disabled (config via env vars or `~/.oxo-flow/ai_config.json`).
 
-Providers are selected at startup via `OXO_FLOW_AI_PROVIDER` env var and initialized once through `AiProviderRegistry::global()`. The `try_ai_generate()` function in `handlers/ai.rs` uses the configured provider, falling back to template matching if AI is disabled or fails.
+Providers are selected at startup via `OXO_FLOW_AI_PROVIDER` env var and initialized once through `AiProviderRegistry::global()` (web crate, `src/ai_provider.rs`). Workflow generation lives in `domains/ai/service.rs` and uses the configured provider, falling back to template matching if AI is disabled or fails.
 
 ## 🤖 AI CLI Integration (v0.10.0+)
 
@@ -225,7 +225,15 @@ oxo-flow run workflow.oxoflow --ai-recover --ai-max-retries 3
 | `/` | Dashboard | Engine status, recent runs, quick actions |
 | `/editor` | Pipeline Editor | TOML editor + interactive DAG viewer + AI generate |
 | `/pipelines` | Pipeline Library | Browse and use pipeline templates |
-| `/runs` | Run Monitor | Run history, SSE live events, run details |
+| `/runs`, `/runs/:id` | Run Monitor | Run history, SSE live events, run details |
+| `/login` | Login | Sign-in for team/HPC modes |
+| `/chat` | Chat | Real-time AI copilot chat |
+| `/clusters` | Clusters | Cluster scheduler submission and monitoring |
+| `/users` | Users | User management (admin) |
+| `/audit` | Audit | Audit log browser |
+| `/settings` | Settings | Server settings and AI configuration |
+| `/docs` | API Docs | Embedded OpenAPI/Swagger viewer |
+| `/share/:token` | Share | Shared pipeline view via token |
 
 ### Key Components
 - `components/Layout.tsx` — Sidebar navigation + main content outlet
