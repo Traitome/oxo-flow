@@ -60,7 +60,7 @@ The web crate (`oxo-flow-web`) is designed as an AI-native API surface:
 - **API discovery**: `GET /api/openapi.json` returns full OpenAPI 3.1 schema
 - **Intent-driven authoring**: `POST /api/workflows/generate` maps natural language to pipelines
 - **SSE streaming**: `GET /api/events` provides real-time execution events
-- **Pagination**: List endpoints use `{data, meta: {page, per_page, total_items, total_pages}}` envelope
+- **Pagination**: `GET /api/runs` uses cursor pagination `{items, next_cursor, total}`; most other list endpoints return bare capped arrays (≤ 100); the storage layer exposes an offset-style `Paginated<T> {items, page, per_page, total_items, total_pages}` internally. There is deliberately no single uniform envelope — document per endpoint (see web-api.md)
 
 ## 🖥️ Frontend SPA
 The frontend is a React/TypeScript SPA built with Vite, located in `frontend/`:
