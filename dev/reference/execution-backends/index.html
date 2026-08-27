@@ -3842,8 +3842,16 @@ run's <code>force_rules</code> — the same bypass set the local executor receiv
 the cluster path runs. <code>tests/cluster_run_profile.rs</code> pins that combination to
 what the local executor actually executes from identical state.</p>
 <p>Real-cluster validation (SLURM scheduler matrix, version quirks) is tracked
-in the cluster testing checklist; job arrays, re-attach to in-flight jobs, and
-<code>sacct</code>-based resource feedback are follow-ups.</p>
+in the cluster testing checklist; job arrays and accounting-backed resource
+feedback have landed, re-attach to in-flight jobs is a follow-up.</p>
+<p>Accounting is read once per job as it settles, not once per poll, and feeds
+both the run directory and the checkpoint benchmarks — see
+<a href="../../commands/run/#what-a-finished-job-records">what a finished job records</a>.
+Backends report only what their store proves: SLURM reads exit code, elapsed
+time, peak RSS and total CPU from <code>sacct</code> (peak memory comes from the step
+rows, which is where SLURM puts it — the allocation row leaves it blank), PBS
+and SGE report the equivalent <code>resources_used</code> / <code>ru_*</code> fields, and LSF
+reports state alone.</p>
 <h2 id="assumptions">Assumptions<a class="headerlink" href="#assumptions" title="Permanent link">#</a></h2>
 <ul>
 <li>Outputs, workdir, and logs live on <strong>shared storage</strong> — every compute node

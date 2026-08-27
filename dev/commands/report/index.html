@@ -4862,12 +4862,15 @@ used to prefer the batch row over step rows). <code>Elapsed</code>/<code>CPUTime
 rounded up so a peak is never under-reported). A missing required column is
 a hard error — silently dropping a column would fake a complete table.</p>
 <h3 id="benchmarks-cpu-column">Benchmarks CPU column<a class="headerlink" href="#benchmarks-cpu-column" title="Permanent link">#</a></h3>
-<p>The <strong>Benchmarks</strong> table's CPU column shows <strong>sampled</strong> CPU seconds: the
-executor's sampler reads each rule process's CPU time (all its threads) at
-200 ms ticks — child processes are not accumulated. <code>-</code> means the sampler
-never observed the process: very short rules, cluster executors, or legacy
-checkpoints written before sampling existed. Peak memory is sampled the
-same way.</p>
+<p>On <strong>local</strong> runs the <strong>Benchmarks</strong> table's CPU column shows <strong>sampled</strong>
+CPU seconds: the executor's sampler reads each rule process's CPU time (all
+its threads) at 200 ms ticks — child processes are not accumulated. Peak
+memory is sampled the same way.</p>
+<p>On <strong>cluster</strong> runs both columns come from the scheduler's accounting store
+instead, read once as each job settles, and cover every step of the job.</p>
+<p><code>-</code> means neither source reported a number: very short local rules the
+sampler never observed, LSF, a cluster job whose accounting row never
+appeared, or legacy checkpoints written before sampling existed.</p>
 <h3 id="domain-auto-detection">Domain auto-detection<a class="headerlink" href="#domain-auto-detection" title="Permanent link">#</a></h3>
 <p>Workflow domains (DNA-seq, RNA-seq, epigenomics) are detected from the
 tools a workflow's commands reference, and shown in the report's workflow

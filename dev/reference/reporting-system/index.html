@@ -4232,14 +4232,23 @@ coverage. The <code>metrics</code> section and the checkpoint-derived <code>samp
 section (rule × sample success/failure grid from real expanded instance
 names) are both hidden when they have no data.</p>
 <h3 id="benchmarks-honesty">Benchmarks honesty<a class="headerlink" href="#benchmarks-honesty" title="Permanent link">#</a></h3>
-<p>The Benchmarks table's CPU column reports <strong>sampled</strong> CPU seconds: the
-executor's sampler reads each rule process's CPU time (all its threads) at
-200 ms ticks; child processes are not accumulated. <code>-</code> means the sampler
-never observed the process (very short rules, cluster executors, legacy
-checkpoints). Peak memory is sampled peak RSS over the same ticks. The
-values are measurements of a live process, not scheduler allocations, so
-they are documented — here and in the <code>report</code> command reference — as
-sampled rather than exact.</p>
+<p>The Benchmarks table's CPU column reports CPU seconds from whichever
+source ran the rule, and the two differ:</p>
+<ul>
+<li><strong>Local runs</strong> report <strong>sampled</strong> CPU seconds — the executor's sampler
+  reads each rule process's CPU time (all its threads) at 200 ms ticks;
+  child processes are not accumulated. Peak memory is sampled peak RSS over
+  the same ticks. These are measurements of a live process, not scheduler
+  allocations, so they are documented — here and in the <code>report</code> command
+  reference — as sampled rather than exact.</li>
+<li><strong>Cluster runs</strong> report what the scheduler's own accounting store
+  recorded (<code>sacct</code>/<code>qstat -f</code>/<code>qacct</code>), read once as each job settles.
+  That figure spans every step of the job rather than one sampled process.</li>
+</ul>
+<p><code>-</code> means neither source reported a number: very short local rules the
+sampler never observed, LSF (whose <code>bacct</code> columns vary too much between
+versions to parse blind), a cluster job whose accounting row never
+appeared, or legacy checkpoints.</p>
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
 <ul>
 <li><a href="../../how-to/generate-reports/">Generate Reports how-to</a> — practical guide</li>
