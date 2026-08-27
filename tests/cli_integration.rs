@@ -256,6 +256,47 @@ shell = "cat {input} > {output}"
     assert_eq!(s1, "S1-L1\nS1-L2\n");
     let s2 = fs::read_to_string(dir.path().join("merged/S2_R1.txt")).unwrap();
     assert_eq!(s2, "S2-L1\nS2-L2\n");
+
+    // The DAG edges are inferred explicitly (exact-match on the
+    // discovered literal paths) — not scheduling luck under -j 2.
+    let dot = dir.path().join("graph.dot");
+    let dry = oxo_flow_cmd()
+        .args([
+            "graph",
+            wf.to_str().unwrap(),
+            "-f",
+            "dot",
+            "-o",
+            dot.to_str().unwrap(),
+            "--expanded",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(dry.status.success(), "graph DOT failed");
+    let dot_text = fs::read_to_string(&dot).unwrap();
+    // DOT uses numeric node ids with labels; resolve the ids first.
+    let id_of = |label: &str| -> String {
+        let line = dot_text
+            .lines()
+            .find(|l| l.contains(&format!("label = \"{label}\"")))
+            .unwrap_or_else(|| panic!("no DOT node for {label}"));
+        line.split_whitespace().next().unwrap().to_string()
+    };
+    for sample in ["S1", "S2"] {
+        let consumer = id_of(&format!("lanemerge_{sample}"));
+        assert!(
+            dot_text
+                .lines()
+                .any(|l| l.starts_with(&format!("    {consumer} ->"))
+                    || l.contains(&format!("-> {consumer} "))),
+            "expected inferred edges into lanemerge_{sample}"
+        );
+        assert!(
+            dot_text.lines().any(|l| l.contains("label = \"simulate_")),
+            "expected simulate producer nodes in the expanded DOT graph"
+        );
+    }
 }
 
 /// `--samples @sheet` REPLACES inline fixture samples with the sheet's —
