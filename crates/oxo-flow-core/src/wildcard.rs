@@ -106,6 +106,11 @@ pub fn validate_wildcard_constraints(
 pub fn pattern_to_regex(pattern: &str) -> Result<Regex> {
     let mut regex_str = String::from("^");
     let mut last_end = 0;
+    // A pattern may repeat the same wildcard (e.g. "consensus/{antibody}/
+    // {antibody}.peaks.bed") — the regex crate forbids duplicate capture
+    // names, so the first occurrence captures and later ones match
+    // anonymously (same value by construction of the pattern).
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for mat in WILDCARD_RE.find_iter(pattern) {
         let literal = &pattern[last_end..mat.start()];
@@ -121,7 +126,11 @@ pub fn pattern_to_regex(pattern: &str) -> Result<Regex> {
                 ),
             })?;
         let name = &cap[1];
-        regex_str.push_str(&format!("(?P<{}>\\S+)", name));
+        if seen.insert(name.to_string()) {
+            regex_str.push_str(&format!("(?P<{}>\\S+)", name));
+        } else {
+            regex_str.push_str("(?:\\S+)");
+        }
 
         last_end = mat.end();
     }
@@ -687,6 +696,7 @@ pub fn paired_end_pattern(dir: &str, sample_pattern: &str, extension: &str) -> (
 ///         control: Some("CTRL_01".to_string()),
 ///         experiment_type: Some("lung".to_string()),
 ///         metadata: Default::default(),
+///         when: None,
 ///     },
 /// ];
 /// let combos = wildcard_combinations_from_pairs(&pairs);
@@ -972,6 +982,17 @@ mod tests {
     }
 
     #[test]
+    fn pattern_to_regex_repeated_wildcard() {
+        // "consensus/{antibody}/{antibody}.peaks.bed" repeats the wildcard
+        // — the first occurrence captures, later ones match anonymously
+        // (regex crate: no duplicate capture names).
+        let re = pattern_to_regex("consensus/{antibody}/{antibody}.peaks.bed").unwrap();
+        assert!(re.is_match("consensus/H3K4me3/H3K4me3.peaks.bed"));
+        let caps = re.captures("consensus/H3K4me3/H3K4me3.peaks.bed").unwrap();
+        assert_eq!(&caps["antibody"], "H3K4me3");
+    }
+
+    #[test]
     fn discover_wildcards_from_directory() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("SAMPLE_A_R1.fastq.gz"), "").unwrap();
@@ -1043,6 +1064,7 @@ mod tests {
                 control: Some("CTRL_01".to_string()),
                 experiment_type: Some("lung".to_string()),
                 metadata: Default::default(),
+                when: None,
             },
             ExperimentControlPair {
                 pair_id: "CASE_002".to_string(),
@@ -1050,6 +1072,7 @@ mod tests {
                 control: Some("CTRL_02".to_string()),
                 experiment_type: None,
                 metadata: Default::default(),
+                when: None,
             },
         ];
         let combos = wildcard_combinations_from_pairs(&pairs);
@@ -1081,6 +1104,7 @@ mod tests {
             control: Some("C1".to_string()),
             experiment_type: None,
             metadata: meta,
+            when: None,
         }];
         let combos = wildcard_combinations_from_pairs(&pairs);
         assert_eq!(combos[0]["patient_id"], "PT-001");

@@ -3327,6 +3327,67 @@ fn from_file_injects_pairs_list_from_pairs() {
 }
 
 #[test]
+fn pair_when_gates_fan_out_per_config_toggle() {
+    // A pair with `when` declares no rule instances while the condition is
+    // false — one static [[pairs]] table serves profile-switched sample
+    // sets (multi-sample chipseq/scrna ports gate extra pairs on a config
+    // toggle flipped by `--profile` override).
+    let toml = r#"
+        [workflow]
+        name = "test"
+        version = "1.0.0"
+
+        [config]
+        extended = false
+
+        [[pairs]]
+        pair_id = "BASE_001"
+        experiment = "EXP_01"
+        control = "CTR_01"
+
+        [[pairs]]
+        pair_id = "EXTRA_001"
+        experiment = "EXP_02"
+        control = "CTR_02"
+        when = "config.extended"
+
+        [[rules]]
+        name = "step1"
+        input = ["raw/{pair_id}.fq"]
+        output = ["out/{pair_id}.fq"]
+        shell = "cp {input[0]} {output[0]}"
+    "#;
+    let mut config = WorkflowConfig::parse(toml).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+    // Gated pair excluded: only BASE_001 fans out.
+    assert_eq!(
+        config
+            .rules
+            .iter()
+            .map(|r| r.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["step1_BASE_001"]
+    );
+
+    // Flipping the toggle includes the gated pair (re-expand from the
+    // preserved templates, the checkpoint re-entry pattern).
+    config
+        .config
+        .insert("extended".to_string(), toml::Value::Boolean(true));
+    config.rules = config.rule_templates.clone();
+    config.expand_wildcards().unwrap();
+    assert_eq!(
+        config
+            .rules
+            .iter()
+            .map(|r| r.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["step1_BASE_001", "step1_EXTRA_001"]
+    );
+}
+
+#[test]
 fn from_file_feeds_pair_members_into_samples_list() {
     // [[pairs]] members are samples too: a pairs-only workflow renders
     // {config.samples_list} as a literal before this (live: pair-driven
