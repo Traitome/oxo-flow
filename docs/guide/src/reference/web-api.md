@@ -1,4 +1,4 @@
-# Web API (v0.8+)
+# Web API
 
 oxo-flow includes a built-in REST API server for building, validating, running, and monitoring bioinformatics workflows. The server is built with [axum](https://github.com/tokio-rs/axum) and follows a **domain-driven modular monolith** architecture.
 

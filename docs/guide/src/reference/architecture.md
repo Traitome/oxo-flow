@@ -186,7 +186,7 @@ All configuration is TOML-based, parsed with `serde` and the `toml` crate. Repor
 
 ---
 
-## Web Crate Architecture (v0.8+)
+## Web Crate Architecture
 
 The `oxo-flow-web` crate follows a **domain-driven modular monolith** pattern:
 

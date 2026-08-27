@@ -289,7 +289,7 @@ model = "deepseek-v4-flash"
 The AI agent combines four embedded knowledge sources (all compiled into the binary at build time):
 
 1. **Tool Reference Table**: 40 curated bioinformatics tools with resource allocations (threads, memory)
-2. **Bioconda Tool Database**: 6,103 CLI tools with current versions and descriptions — queried on demand via `lookup_tool`
+2. **Bioconda Tool Database**: 6,103 curated CLI tools with current versions and descriptions (filtered from 6,470 raw registry entries; see `knowledge_meta.json`) — queried on demand via `lookup_tool`
 3. **bioSkills Library**: 562 curated Agent Skills (the emerging SKILL.md standard) with domain procedures, commands, and caveats — matched by assay type and injected into generation prompts, or queried via `lookup_skill`
 4. **Pipeline Knowledge Graph**: 79 workflow skills and 469 literature-backed data-flow transitions (BAM → VCF → annotated VCF chains) — queried via `lookup_pipeline` to design correct multi-step topologies
 
