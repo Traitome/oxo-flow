@@ -95,40 +95,11 @@ async fn main() -> Result<()> {
     // Print license banner on startup
     eprintln!("{}", oxo_flow_web::infra::license::license_banner_text());
 
-    // Determine effective host based on mode
+    // Determine effective host based on mode — the enforcement itself lives
+    // in `oxo_flow_web::effective_bind_host` so `oxo-flow serve` (the web
+    // library path) and this binary share one auth boundary.
     let mode_str = cli.mode.to_string();
-    fn is_loopback_host(host: &str) -> bool {
-        matches!(host, "127.0.0.1" | "::1" | "localhost")
-    }
-    let effective_host = match cli.mode {
-        ServerMode::Personal => {
-            if is_loopback_host(&cli.host) {
-                cli.host.clone()
-            } else {
-                // Personal mode has no sign-in: any non-loopback bind would
-                // expose unauthenticated management endpoints to the network.
-                tracing::warn!(
-                    "personal mode requires sign-in credentials that are not \
-                     enforced, forcing loopback bind instead of '{}'",
-                    cli.host
-                );
-                "127.0.0.1".to_string()
-            }
-        }
-        _ => {
-            if std::env::var("OXO_FLOW_DEV_MODE").as_deref() == Ok("1")
-                && !is_loopback_host(&cli.host)
-            {
-                anyhow::bail!(
-                    "OXO_FLOW_DEV_MODE=1 accepts password==username logins for \
-                     any user and is only safe on a loopback bind; refusing to \
-                     start on '{}'. Unset OXO_FLOW_DEV_MODE or bind to 127.0.0.1.",
-                    cli.host
-                );
-            }
-            cli.host.clone()
-        }
-    };
+    let effective_host = oxo_flow_web::effective_bind_host(&mode_str, &cli.host)?;
 
     tracing::info!(
         "Starting oxo-flow-web in {} mode on {}:{}",

@@ -606,12 +606,54 @@ impl IntoResponse for ApiError {
     }
 }
 
+/// The host a server should actually bind, given the requested mode and
+/// host. Single source of truth for both entry points (`oxo-flow serve`
+/// and the standalone web binary):
+///
+/// - **Personal mode has no sign-in** — a non-loopback bind would expose
+///   unauthenticated management endpoints to the network, so the bind is
+///   forced to `127.0.0.1` with a loud warning.
+/// - **`OXO_FLOW_DEV_MODE=1`** accepts `password == username` logins for
+///   any user — refusing to start on a non-loopback bind.
+pub fn effective_bind_host(mode: &str, host: &str) -> anyhow::Result<String> {
+    let dev_mode = std::env::var("OXO_FLOW_DEV_MODE").as_deref() == Ok("1");
+    effective_bind_host_with(mode, host, dev_mode)
+}
+
+/// Pure core of [`effective_bind_host`] — `dev_mode` is passed in so tests
+/// need no environment mutation.
+fn effective_bind_host_with(mode: &str, host: &str, dev_mode: bool) -> anyhow::Result<String> {
+    fn is_loopback_host(host: &str) -> bool {
+        matches!(host, "127.0.0.1" | "::1" | "localhost")
+    }
+    if mode == "personal" {
+        if is_loopback_host(host) {
+            return Ok(host.to_string());
+        }
+        tracing::warn!(
+            "personal mode requires sign-in credentials that are not \
+             enforced, forcing loopback bind instead of '{host}'"
+        );
+        return Ok("127.0.0.1".to_string());
+    }
+    if dev_mode && !is_loopback_host(host) {
+        anyhow::bail!(
+            "OXO_FLOW_DEV_MODE=1 accepts password==username logins for \
+             any user and is only safe on a loopback bind; refusing to \
+             start on '{host}'. Unset OXO_FLOW_DEV_MODE or bind to 127.0.0.1."
+        );
+    }
+    Ok(host.to_string())
+}
+
 pub async fn start_server_with_mode(
     mode: &str,
     host: &str,
     port: u16,
     base_path: &str,
 ) -> anyhow::Result<()> {
+    // Auth-boundary enforcement (shared with the standalone binary).
+    let host = effective_bind_host(mode, host)?;
     crate::db::init_db("sqlite://oxo-flow.db").await?;
     crate::db::recover_orphaned_runs().await?;
     crate::infra::db::sqlite::init_pool("sqlite://oxo-flow.db").await;
@@ -716,3 +758,38 @@ pub async fn shutdown_signal() {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+#[cfg(test)]
+mod effective_bind_host_tests {
+    use super::*;
+
+    #[test]
+    fn personal_mode_forces_loopback_for_non_loopback_hosts() {
+        assert_eq!(
+            effective_bind_host_with("personal", "0.0.0.0", false).unwrap(),
+            "127.0.0.1"
+        );
+        assert_eq!(
+            effective_bind_host_with("personal", "192.168.1.5", false).unwrap(),
+            "127.0.0.1"
+        );
+        // Loopback hosts pass through untouched.
+        assert_eq!(
+            effective_bind_host_with("personal", "127.0.0.1", false).unwrap(),
+            "127.0.0.1"
+        );
+        assert_eq!(
+            effective_bind_host_with("personal", "localhost", false).unwrap(),
+            "localhost"
+        );
+    }
+
+    #[test]
+    fn team_mode_binds_any_host_and_dev_mode_refuses_non_loopback() {
+        assert_eq!(
+            effective_bind_host_with("team", "0.0.0.0", false).unwrap(),
+            "0.0.0.0"
+        );
+        assert!(effective_bind_host_with("team", "0.0.0.0", true).is_err());
+        assert!(effective_bind_host_with("team", "127.0.0.1", true).is_ok());
+    }
+}
