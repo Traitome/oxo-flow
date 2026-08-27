@@ -8958,3 +8958,75 @@ fn cli_reference_path_migration_with_identical_content_skips_rebuild() {
         "identical content at a new path must not rebuild: {stderr}"
     );
 }
+
+// ─── Workflow-level terminal hooks (issue #227 item 1) ─────────────────────
+
+/// `on_complete` fires once after a fully successful run, `on_error` after
+/// any terminal failure — with `{config.*}`, the run counters and
+/// `{workdir}` rendered. Both paths run through the real CLI binary.
+#[test]
+fn cli_run_workflow_terminal_hooks_fire_on_both_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("hooks.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "hooks"
+version = "1.0.0"
+on_complete = "echo '{succeeded}/{failed}/{skipped}' > {workdir}/complete.marker"
+on_error = "echo '{succeeded}/{failed}/{skipped}' > {workdir}/error.marker"
+
+[config]
+explode = false
+
+[[rules]]
+name = "ok"
+output = ["hello.txt"]
+shell = "echo hi > {output}"
+
+[[rules]]
+name = "boom"
+when = "config.explode"
+output = ["boom.txt"]
+shell = "exit 7"
+"#,
+    )
+    .unwrap();
+
+    // Success path: on_complete with 1/0/1 counters.
+    let ok = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(ok.status.success(), "success-path run must exit 0");
+    let marker = dir.path().join("complete.marker");
+    assert!(marker.exists(), "on_complete must create complete.marker");
+    assert_eq!(fs::read_to_string(&marker).unwrap().trim(), "1/0/1");
+
+    // Failure path: on_error with 0/1/0 (ok is blocked by the failure).
+    fs::remove_file(dir.path().join("complete.marker")).unwrap();
+    let fail = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--arg", "explode=true"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        !fail.status.success(),
+        "failure-path run must exit non-zero"
+    );
+    let marker = dir.path().join("error.marker");
+    assert!(marker.exists(), "on_error must create error.marker");
+    // The `ok` rule either ran before the failure (1/1/0) or was blocked
+    // by it (0/1/1) — scheduling order is not deterministic; the hook's
+    // failed=1 and succeeded=0 verdict is.
+    let content = fs::read_to_string(&marker).unwrap();
+    assert!(
+        content.trim().starts_with("0/1/"),
+        "on_error counters must report 0 succeeded / 1 failed, got: {content}"
+    );
+    assert!(
+        !dir.path().join("complete.marker").exists(),
+        "on_complete must not fire on a failed run"
+    );
+}

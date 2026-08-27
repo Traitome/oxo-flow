@@ -2511,6 +2511,42 @@ async fn run_hook(cmd: &str, rule: &Rule, workdir: &std::path::Path, shell_prelu
     }
 }
 
+/// Expand `{key}` placeholders in a workflow-level hook command from an
+/// arbitrary value map (`{config.*}`, run counters, `{workdir}`). Unknown
+/// keys stay literal so a typo is visible in the executed command.
+pub fn expand_placeholders(cmd: &str, values: &HashMap<String, String>) -> String {
+    super::expand_to_fixed_point(cmd, values, render_wildcard_value)
+}
+
+/// Execute a workflow-level terminal hook (`on_complete` / `on_error`) in
+/// the workflow root. Best-effort like rule hooks: a failing hook is a
+/// warning, never a run-status change.
+pub async fn run_workflow_hook(cmd: &str, workdir: &std::path::Path, shell_prelude: Option<&str>) {
+    // Hooks take the same prelude as rule commands (issue #92).
+    let cmd = crate::config::prepend_shell_prelude(cmd, shell_prelude);
+    let child = match spawn_rule_shell(&cmd, workdir, &HashMap::new()) {
+        Ok(child) => child,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to spawn workflow hook");
+            return;
+        }
+    };
+    let result = child.wait_with_output().await;
+    match result {
+        Ok(output) if !output.status.success() => {
+            tracing::warn!(
+                code = %output.status.code().unwrap_or(-1),
+                stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                "workflow hook failed (best-effort)"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to spawn workflow hook");
+        }
+        _ => {}
+    }
+}
+
 pub fn render_shell_command(
     cmd: &str,
     rule: &Rule,
@@ -3142,6 +3178,29 @@ mod tests {
         block_on(move_path(&src, &dest)).expect("move");
         assert_eq!(std::fs::read(&dest).expect("read dest"), b"content");
         assert!(!src.exists(), "source removed after rename");
+    }
+
+    #[test]
+    fn expand_placeholders_renders_workflow_keys() {
+        // Workflow-hook placeholders (issue #227 item 1): config.* values
+        // and the run counters the CLI injects.
+        let mut values = HashMap::new();
+        values.insert("config.email".to_string(), "a@b.c".to_string());
+        values.insert("succeeded".to_string(), "3".to_string());
+        values.insert("failed".to_string(), "0".to_string());
+        let cmd = "mail -s '{succeeded}/{failed}' {config.email}";
+        let rendered = expand_placeholders(cmd, &values);
+        assert_eq!(rendered, "mail -s '3/0' a@b.c");
+    }
+
+    #[tokio::test]
+    async fn run_workflow_hook_executes_in_workdir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        run_workflow_hook("touch hooked.marker", dir.path(), None).await;
+        assert!(
+            dir.path().join("hooked.marker").exists(),
+            "workflow hook ran in the workflow root"
+        );
     }
 
     #[test]

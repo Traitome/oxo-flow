@@ -705,7 +705,7 @@ pub async fn run_command(
     let e005 = undefined_config_findings(&config);
     if !e005.is_empty() {
         if json {
-            emit_run_json_summary(json, "failed", &workflow, 0, 0, 0, 0, 0, vec![]);
+            emit_run_json_summary(json, "failed", &workflow, &RunCounts::default(), vec![]);
         }
         return Err(anyhow::anyhow!(
             "workflow references undefined config variable(s) — fix before running:\n  {}",
@@ -730,7 +730,7 @@ pub async fn run_command(
             None => {
                 // Pre-execution abort: nothing ran, but the summary
                 // contract still holds for --json (issue #142 H6).
-                emit_run_json_summary(json, "failed", &workflow, 0, 0, 0, 0, 0, vec![]);
+                emit_run_json_summary(json, "failed", &workflow, &RunCounts::default(), vec![]);
                 return Err(anyhow::anyhow!(
                     "unknown module '{m}' — known modules: {}",
                     known_modules_hint(&config.module_rules)
@@ -1180,11 +1180,13 @@ pub async fn run_command(
                 "failed"
             },
             &workflow,
-            summary.succeeded,
-            summary.skipped,
-            summary.failed,
-            summary.non_required_failed,
-            0,
+            &RunCounts {
+                succeeded: summary.succeeded,
+                skipped: summary.skipped,
+                failed: summary.failed,
+                non_required_failed: summary.non_required_failed,
+                blocked: 0,
+            },
             // Cluster per-rule resources come from sacct accounting at
             // report time, not the live checkpoint — empty here.
             vec![],
@@ -1273,7 +1275,7 @@ pub async fn run_command(
             .join("\n");
         // Pre-execution abort: nothing ran — the summary still reports
         // the failed run for --json consumers (issue #142 H6).
-        emit_run_json_summary(json, "failed", &workflow, 0, 0, 0, 0, 0, vec![]);
+        emit_run_json_summary(json, "failed", &workflow, &RunCounts::default(), vec![]);
         return Err(anyhow::anyhow!(
             "resource budget too small for {} rule(s); no rules were run:\n{}",
             breaches.len(),
@@ -1603,11 +1605,7 @@ pub async fn run_command(
                                     json,
                                     "failed",
                                     &workflow,
-                                    0,
-                                    0,
-                                    0,
-                                    0,
-                                    0,
+                                    &RunCounts::default(),
                                     vec![],
                                 );
                                 return Err(anyhow::anyhow!(
@@ -1621,11 +1619,7 @@ pub async fn run_command(
                                     json,
                                     "failed",
                                     &workflow,
-                                    0,
-                                    0,
-                                    0,
-                                    0,
-                                    0,
+                                    &RunCounts::default(),
                                     vec![],
                                 );
                                 return Err(anyhow::anyhow!(
@@ -2382,11 +2376,14 @@ pub async fn run_command(
                         json,
                         "failed",
                         &workflow,
-                        success_count.load(std::sync::atomic::Ordering::Relaxed),
-                        skipped_count.load(std::sync::atomic::Ordering::Relaxed),
-                        fail_count.load(std::sync::atomic::Ordering::Relaxed),
-                        non_required_fail_count.load(std::sync::atomic::Ordering::Relaxed),
-                        blocked.lock().await.len(),
+                        &RunCounts {
+                            succeeded: success_count.load(std::sync::atomic::Ordering::Relaxed),
+                            skipped: skipped_count.load(std::sync::atomic::Ordering::Relaxed),
+                            failed: fail_count.load(std::sync::atomic::Ordering::Relaxed),
+                            non_required_failed: non_required_fail_count
+                                .load(std::sync::atomic::Ordering::Relaxed),
+                            blocked: blocked.lock().await.len(),
+                        },
                         vec![],
                     );
                     return Err(anyhow::anyhow!(
@@ -2586,13 +2583,25 @@ pub async fn run_command(
                 json,
                 "failed",
                 &workflow,
-                success_count.load(std::sync::atomic::Ordering::Relaxed),
-                skipped_count.load(std::sync::atomic::Ordering::Relaxed),
-                fail_count.load(std::sync::atomic::Ordering::Relaxed),
-                non_required_fail_count.load(std::sync::atomic::Ordering::Relaxed),
-                blocked.lock().await.len(),
+                &RunCounts {
+                    succeeded: success_count.load(std::sync::atomic::Ordering::Relaxed),
+                    skipped: skipped_count.load(std::sync::atomic::Ordering::Relaxed),
+                    failed: fail_count.load(std::sync::atomic::Ordering::Relaxed),
+                    non_required_failed: non_required_fail_count
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                    blocked: blocked.lock().await.len(),
+                },
                 rule_resource_rows(&ck),
             );
+            // on_error fires on the plain-failure abort too (issue #227).
+            run_terminal_hook(
+                &config,
+                &workdir_actual,
+                success_count.load(std::sync::atomic::Ordering::Relaxed),
+                fail_count.load(std::sync::atomic::Ordering::Relaxed),
+                skipped_count.load(std::sync::atomic::Ordering::Relaxed),
+            )
+            .await;
             return Err(anyhow::anyhow!("workflow execution failed"));
         }
 
@@ -2756,6 +2765,17 @@ pub async fn run_command(
     {
         eprintln!("  {} Report snapshot failed: {e}", "⚠".yellow());
     }
+
+    // Workflow-level terminal hooks (issue #227 item 1): on_complete /
+    // on_error fire on every terminal path of the run loop.
+    run_terminal_hook(
+        &config,
+        &workdir_actual,
+        success_count,
+        fail_count,
+        skipped_count,
+    )
+    .await;
 
     // With --keep-going, execution continues past failures, so list every failed
     // rule (and why) in one place rather than making the user hunt for them.
@@ -2994,11 +3014,13 @@ pub async fn run_command(
             "completed"
         },
         &workflow,
-        success_count,
-        skipped_count,
-        fail_count,
-        non_required_fail_count,
-        blocked.len(),
+        &RunCounts {
+            succeeded: success_count,
+            skipped: skipped_count,
+            failed: fail_count,
+            non_required_failed: non_required_fail_count,
+            blocked: blocked.len(),
+        },
         // `checkpoint` here is the MutexGuard locked above (line ~2415);
         // Deref coercion hands rule_resource_rows the underlying state.
         rule_resource_rows(&checkpoint),
@@ -3025,15 +3047,61 @@ pub async fn run_command(
 /// document (issue #142 H6). Only emits when `--json` was requested;
 /// stdout carries nothing else, so the document is always the sole output.
 #[allow(clippy::too_many_arguments)] // matching the crate's established convention
-fn emit_run_json_summary(
-    json: bool,
-    status: &str,
-    workflow: &Path,
+/// Run the workflow-level terminal hook (`on_complete` after a fully
+/// successful run, `on_error` after any failure) on every terminal path of
+/// the run loop. Rendered with `{config.*}` plus the run counters and
+/// `{workdir}`; best-effort by design — a failing hook warns, never
+/// changes the run status (issue #227 item 1).
+async fn run_terminal_hook(
+    config: &WorkflowConfig,
+    workdir: &std::path::Path,
+    succeeded: usize,
+    failed: usize,
+    skipped: usize,
+) {
+    let hook_cmd = if failed > 0 {
+        config.workflow.on_error.as_deref()
+    } else {
+        config.workflow.on_complete.as_deref()
+    };
+    let Some(hook_cmd) = hook_cmd else {
+        return;
+    };
+    let mut values: std::collections::HashMap<String, String> = config
+        .config
+        .iter()
+        .map(|(k, v)| (format!("config.{k}"), config_value_string(v)))
+        .collect();
+    values.insert("succeeded".to_string(), succeeded.to_string());
+    values.insert("failed".to_string(), failed.to_string());
+    values.insert("skipped".to_string(), skipped.to_string());
+    values.insert("workdir".to_string(), workdir.display().to_string());
+    let rendered = oxo_flow_core::executor::process::expand_placeholders(hook_cmd, &values);
+    oxo_flow_core::executor::process::run_workflow_hook(
+        &rendered,
+        workdir,
+        config.defaults.shell_prelude.as_deref(),
+    )
+    .await;
+}
+
+/// Terminal run counters shared by the `--json` summary and the workflow
+/// terminal hooks. Grouped so the summary emitter stays under clippy's
+/// argument-count lint.
+#[derive(Default)]
+struct RunCounts {
     succeeded: usize,
     skipped: usize,
     failed: usize,
     non_required_failed: usize,
     blocked: usize,
+}
+
+fn emit_run_json_summary(
+    json: bool,
+    status: &str,
+    workflow: &Path,
+    counts: &RunCounts,
     resources: Vec<serde_json::Value>,
 ) {
     if !json {
@@ -3044,11 +3112,11 @@ fn emit_run_json_summary(
         "status": status,
         "workflow": workflow.to_string_lossy(),
         "results": serde_json::json!({
-            "succeeded": succeeded,
-            "skipped": skipped,
-            "failed": failed,
-            "non_required_failed": non_required_failed,
-            "blocked": blocked,
+            "succeeded": counts.succeeded,
+            "skipped": counts.skipped,
+            "failed": counts.failed,
+            "non_required_failed": counts.non_required_failed,
+            "blocked": counts.blocked,
         }),
         "resources": resources,
     });
