@@ -294,6 +294,85 @@ pub fn discover_wildcards_from_pattern(
     Ok(results)
 }
 
+/// Discover wildcard combinations by walking a directory TREE, matching
+/// each file's path (relative to `dir`, `/`-separated) against `pattern`.
+///
+/// The single-directory [`discover_wildcards_from_pattern`] only ever
+/// sees bare file names, so patterns with literal directory components
+/// (`results/adapterremoval/{sample}_{lane}_R1.fastq.gz`) can never
+/// match. This walker resolves those — the filesystem source of the
+/// per-sample grouping primitive (`input_groups`, issue #227 item 3).
+///
+/// Patterns WITHOUT a directory component deliberately keep the
+/// single-directory semantics (no surprise matches in nested folders),
+/// so existing `sample_pattern`-style discovery is unchanged.
+pub fn discover_wildcards_from_pattern_tree(
+    dir: &std::path::Path,
+    pattern: &str,
+) -> Result<WildcardCombinations> {
+    if !pattern.contains('/') {
+        return discover_wildcards_from_pattern(dir, pattern);
+    }
+    let re = pattern_to_regex(pattern)?;
+    let wildcard_names = extract_wildcards(pattern);
+    let mut results = Vec::new();
+    let mut seen = HashSet::new();
+
+    // Walk the tree; only files whose relative path matches the full
+    // pattern contribute. Symlinks are followed, unreadable subtrees are
+    // skipped (best-effort, matching the flat walker's stance).
+    fn walk(
+        dir: &std::path::Path,
+        base: &std::path::Path,
+        re: &Regex,
+        wildcard_names: &[String],
+        seen: &mut HashSet<String>,
+        results: &mut Vec<WildcardValues>,
+    ) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let file_type = entry.file_type().ok();
+            if file_type.is_some_and(|t| t.is_dir()) {
+                walk(&path, base, re, wildcard_names, seen, results);
+            } else if file_type.is_none_or(|t| t.is_file() || t.is_symlink()) {
+                let rel = match path.strip_prefix(base) {
+                    Ok(rel) => rel,
+                    Err(_) => continue,
+                };
+                let rel_str = rel
+                    .to_string_lossy()
+                    .replace(std::path::MAIN_SEPARATOR, "/");
+                if let Some(captures) = re.captures(&rel_str) {
+                    let mut values = WildcardValues::new();
+                    for name in wildcard_names {
+                        if let Some(m) = captures.name(name) {
+                            values.insert(name.clone(), m.as_str().to_string());
+                        }
+                    }
+                    if !values.is_empty() {
+                        let mut parts: Vec<(&str, &str)> = values
+                            .iter()
+                            .map(|(k, v)| (k.as_str(), v.as_str()))
+                            .collect();
+                        parts.sort_by_key(|(k, _)| *k);
+                        let dedup_key: String =
+                            parts.iter().flat_map(|(k, v)| [k, "=", v, ","]).collect();
+                        if seen.insert(dedup_key) {
+                            results.push(values);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    walk(dir, dir, &re, &wildcard_names, &mut seen, &mut results);
+
+    Ok(results)
+}
+
 /// Extracts wildcard names from a pattern string.
 ///
 /// # Examples
@@ -827,6 +906,51 @@ mod tests {
         let results =
             discover_wildcards_from_pattern(dir.path(), "{sample}_R{read}.fastq.gz").unwrap();
         assert!(results.len() >= 2);
+    }
+
+    #[test]
+    fn discover_wildcards_from_pattern_tree_matches_subdirectories() {
+        // The recursive walker resolves patterns with literal directory
+        // components (`results/adapterremoval/{sample}_{lane}_R1.fastq.gz`),
+        // which the single-directory walker cannot see — the engine-level
+        // input_groups primitive (issue #227 item 3) scans with this.
+        let dir = tempfile::tempdir().unwrap();
+        let raw = dir.path().join("results/adapterremoval");
+        std::fs::create_dir_all(&raw).unwrap();
+        std::fs::write(raw.join("S1_L1_R1.fastq.gz"), "").unwrap();
+        std::fs::write(raw.join("S1_L2_R1.fastq.gz"), "").unwrap();
+        std::fs::write(raw.join("S2_L1_R1.fastq.gz"), "").unwrap();
+        // A decoy outside the literal directory must not match.
+        std::fs::write(dir.path().join("S1_L9_R1.fastq.gz"), "").unwrap();
+
+        let results = discover_wildcards_from_pattern_tree(
+            dir.path(),
+            "results/adapterremoval/{sample}_{lane}_R1.fastq.gz",
+        )
+        .unwrap();
+        let mut combos: Vec<_> = results
+            .into_iter()
+            .map(|c| (c["sample"].clone(), c["lane"].clone()))
+            .collect();
+        combos.sort();
+        assert_eq!(
+            combos,
+            vec![
+                ("S1".to_string(), "L1".to_string()),
+                ("S1".to_string(), "L2".to_string()),
+                ("S2".to_string(), "L1".to_string()),
+            ]
+        );
+
+        // Patterns without a directory component keep the single-directory
+        // semantics — no surprise matches in nested folders.
+        let flat = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(flat.path().join("sub")).unwrap();
+        std::fs::write(flat.path().join("sub/S1_L1_R1.fastq.gz"), "").unwrap();
+        let results =
+            discover_wildcards_from_pattern_tree(flat.path(), "{sample}_{lane}_R1.fastq.gz")
+                .unwrap();
+        assert!(results.is_empty(), "flat pattern must not scan recursively");
     }
 
     // -----------------------------------------------------------------------

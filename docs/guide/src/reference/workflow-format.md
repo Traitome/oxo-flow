@@ -561,6 +561,7 @@ memory = "32G"
 | `checkpoint_manifest` | String | No | Path (relative to workdir, `{config.x}`-expanded) of the TOML manifest the checkpoint rule writes at runtime to declare new samples |
 | `scatter` | Table | No | Fan-out parallel execution over a variable with optional gather |
 | `expand_inputs` | Table | No | Cartesian product expansion of input patterns |
+| `input_groups` | Array of tables | No | Group files by a pattern wildcard into one per-group instance (the Nextflow `groupTuple` pattern) — see [Input Groups](#input-groups-input_groups) |
 | `priority` | Integer | No | Execution priority (higher = runs first; default: 0) |
 | `target` | Boolean | No | Mark as default target (built when no explicit `-t` given) |
 | `required` | Boolean | No | Pipeline fails if this rule fails, even without downstream deps |
@@ -1005,6 +1006,69 @@ depends_on = []  # Run first, before file-based dependencies
 name = "local_only"
 shell = "echo 'local task'"
 localrule = true  # Never submitted to HPC cluster
+```
+
+### Input Groups (`input_groups`)
+
+Group many files of one sample (or any pattern key) into a **single**
+per-key rule instance whose `{input}` renders all of them — the Nextflow
+`groupTuple` pattern. Unblocks lane-merging (`cat` a sample's lane files
+in one step), library merging, and multi-file per-sample catalog steps.
+
+```toml
+[[rules]]
+name = "lanemerge"
+input_groups = [
+    { pattern = "results/adapterremoval/{sample}_{lane}_R1.fastq.gz",
+      group_by = "sample",
+      keep = "lane" }
+]
+output = ["results/merged/{sample}_R1.fastq.gz"]
+shell = "cat {input} > {output}"
+```
+
+- `pattern` — path glob with `{wildcard}` placeholders, relative to the
+  workflow file's directory (the same root `sample_pattern` scans).
+- `group_by` — the wildcard that names each group. One instance is
+  created per discovered group value.
+- `keep` — optional restriction: which *other* pattern wildcards are
+  bound to the group's **first** (sorted) file and become available as
+  `{wildcard}` placeholders in `output`/`shell`. Omitted = all other
+  wildcards. A string or an array of strings is accepted.
+- `{input}` — all matched files of the group, space-joined in stable
+  sorted order (files sort by path; the first sorted file supplies the
+  `keep` bindings, so results never depend on readdir order).
+- `{input_group.<wildcard>}` — a captured per-group value as a list
+  (space-joined), e.g. `{input_group.lane}` renders `L1 L2`. These are
+  **lists**: use them in shell loops/commands, not as single paths.
+- Files are discovered at **plan time** from two sources: files already
+  on disk under the workflow root, and the literal outputs of upstream
+  rules — so a producer rule declared earlier in the file (e.g. a
+  per-`{sample}_{lane}` rule) flows straight into the group's `{input}`,
+  with DAG edges inferred from those plan-time-known paths.
+- Regular `input` entries coexist: group files render first, declared
+  inputs append after them in `{input}`.
+- A group key with zero files instantiates **nothing** — the rule is
+  skipped for that key with a warning (no instance = nothing to run).
+
+v1 constraints: at most **one** `input_groups` entry per rule;
+`**` recursion is not supported in `pattern` (single-level paths);
+producers must be declared **before** their `input_groups` consumer;
+the `keep` wildcard bindings come from the first sorted file only (the
+captured per-group values of every file stay available via
+`{input_group.*}`); `{config.x}` placeholders in `pattern` resolve
+against the workflow config.
+
+```toml
+# A multiqc-style aggregator over grouped files: one instance per
+# sample, receiving every fastQC zip of that sample.
+[[rules]]
+name = "multiqc"
+input_groups = [
+    { pattern = "qc/fastqc_{sample}_{replicate}.zip", group_by = "sample" }
+]
+output = ["qc/multiqc_{sample}.html"]
+shell = "multiqc {input} -o qc -n {output}"
 ```
 
 ### Retry Configuration

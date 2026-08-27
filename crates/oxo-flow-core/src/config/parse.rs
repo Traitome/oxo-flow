@@ -70,6 +70,10 @@ impl WorkflowConfig {
 
         config.extract_declarative_config()?;
 
+        // input_groups patterns resolve against the workflow root — the
+        // workflow file's parent, the same root sample_pattern scans.
+        config.base_dir = Some(crate::parent_dir(path).to_path_buf());
+
         // Format Versioning check (S5)
         const SUPPORTED_FORMAT_VERSION: &str = "1.0";
         if let Some(ref version) = config.workflow.format_version

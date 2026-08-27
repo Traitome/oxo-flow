@@ -475,6 +475,97 @@ pub struct ExpandConfig {
     pub variables: HashMap<String, String>,
 }
 
+/// Per-sample multi-file grouping (issue #227 item 3 — the groupTuple
+/// pattern): N files of one sample fan into ONE per-sample instance whose
+/// `{input}` renders all of them.
+///
+/// At plan time the engine walks the workflow root, matches `pattern`
+/// (a path glob with `{wildcard}` placeholders, `{config.x}`-expandable),
+/// and groups the matched files by the `group_by` wildcard's value. One
+/// instance is created per distinct group key; the instance's `{input}`
+/// is the group's files space-joined (sorted, stable order); its wildcard
+/// map binds the group key plus the first occurrence of every other
+/// pattern wildcard (so `{output}` etc. resolve); the full per-group
+/// value lists are exposed as `{input_group.<wildcard>}` (space-joined)
+/// for shells that need them. A key matching zero files is simply not
+/// instantiated — nothing to run.
+///
+/// The discovered files are plan-time-known literal paths, so exact-match
+/// DAG edge inference to producer outputs works (the win over the
+/// dir/glob convention). `input` and `input_groups` may coexist: the
+/// declared inputs append after the group files.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct InputGroupConfig {
+    /// Path glob with `{wildcard}` placeholders, relative to the workflow
+    /// root. Every wildcard except `group_by` may vary within a group.
+    pub pattern: String,
+
+    /// Wildcard that keys instances: one instance per distinct value.
+    pub group_by: String,
+
+    /// Other pattern wildcards whose FIRST occurrence is bound into the
+    /// instance's wildcard map (usable in `{output}` and shells). When
+    /// omitted, every other pattern wildcard is bound; wildcards not
+    /// listed here are only reachable as `{input_group.<wildcard>}` lists.
+    /// Accepts a single wildcard name (`keep = "lane"`) or a list.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "deserialize_keep_wildcards")]
+    pub keep: Option<Vec<String>>,
+}
+
+/// Deserialize `keep` from either a single wildcard name or a list.
+fn deserialize_keep_wildcards<'de, D>(de: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct KeepVisitor;
+    impl<'de> serde::de::Visitor<'de> for KeepVisitor {
+        type Value = Option<Vec<String>>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a wildcard name or a list of wildcard names")
+        }
+
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_some<D2>(self, de: D2) -> Result<Self::Value, D2::Error>
+        where
+            D2: serde::Deserializer<'de>,
+        {
+            // The present value: unwrap the Option wrapper, then accept a
+            // single name or a list of names.
+            struct KeepInner;
+            impl<'de> serde::de::Visitor<'de> for KeepInner {
+                type Value = Vec<String>;
+
+                fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    f.write_str("a wildcard name or a list of wildcard names")
+                }
+
+                fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                    Ok(vec![v.to_string()])
+                }
+
+                fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                    self,
+                    mut seq: A,
+                ) -> Result<Self::Value, A::Error> {
+                    let mut out = Vec::new();
+                    while let Some(v) = seq.next_element::<String>()? {
+                        out.push(v);
+                    }
+                    Ok(out)
+                }
+            }
+            Ok(Some(de.deserialize_any(KeepInner)?))
+        }
+    }
+    de.deserialize_option(KeepVisitor)
+}
+
 /// A collection of file patterns, which can be either a simple list or a named map.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -678,6 +769,16 @@ pub struct Rule {
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub expand_inputs: Vec<ExpandConfig>,
+
+    /// Per-sample multi-file grouping (groupTuple pattern, issue #227
+    /// item 3): files discovered on disk are grouped by the `group_by`
+    /// wildcard and each group fans into ONE instance whose `{input}`
+    /// renders all of the group's files. Consumed by
+    /// [`WorkflowConfig::expand_wildcards`]; cleared on the generated
+    /// instances so they never re-expand.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub input_groups: Vec<InputGroupConfig>,
 
     /// Output file patterns (may contain wildcards).
     /// Supports either a list `["a.txt"]` or a map `{ bam = "a.bam" }`.
