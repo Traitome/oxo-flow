@@ -3159,23 +3159,6 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Domain-Driven Module Structure (v0.8+)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#legacy-modules-deprecated-since-080" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Legacy Modules (deprecated since 0.8.0)
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
         <li class="md-nav__item">
@@ -3952,23 +3935,6 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Domain-Driven Module Structure (v0.8+)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#legacy-modules-deprecated-since-080" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Legacy Modules (deprecated since 0.8.0)
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
         <li class="md-nav__item">
@@ -4233,14 +4199,29 @@
 <td>AI translate, explain, interpret, optimize; provider dispatch (DeepSeek/Claude/OpenAI/Ollama)</td>
 </tr>
 <tr>
+<td><strong>auth</strong></td>
+<td><code>domains/auth/</code></td>
+<td>Login, session management, ORCID/GitHub OAuth2, RBAC</td>
+</tr>
+<tr>
+<td><strong>chat</strong></td>
+<td><code>domains/chat/</code></td>
+<td>Real-time AI copilot chat and streaming</td>
+</tr>
+<tr>
+<td><strong>clusters</strong></td>
+<td><code>domains/clusters/</code></td>
+<td>Remote cluster submission over SSH, job polling, result pull-back</td>
+</tr>
+<tr>
 <td><strong>collaboration</strong></td>
 <td><code>domains/collaboration/</code></td>
 <td>Fork, diff, share, import pipelines</td>
 </tr>
 <tr>
-<td><strong>auth</strong></td>
-<td><code>domains/auth/</code></td>
-<td>Login, session management, ORCID/GitHub OAuth2, RBAC</td>
+<td><strong>dag</strong></td>
+<td><code>domains/dag/</code></td>
+<td>DAG-specific types and operations</td>
 </tr>
 <tr>
 <td><strong>observability</strong></td>
@@ -4269,8 +4250,6 @@
 </tr>
 </tbody>
 </table>
-<h3 id="legacy-modules-deprecated-since-080">Legacy Modules (deprecated since 0.8.0)<a class="headerlink" href="#legacy-modules-deprecated-since-080" title="Permanent link">#</a></h3>
-<p>The <code>handlers/</code> directory contains pre-v0.8 handler modules marked <code>#[deprecated(since = "0.8.0")]</code>. These are preserved so the crate still builds (via the crate-level <code>#![allow(deprecated)]</code>), but they are <strong>not mounted in the served router</strong>: both <code>oxo-flow serve</code> and the <code>oxo-flow-web</code> binary assemble their routes exclusively from the <code>domains/*</code> modules via <code>server.rs::build_router</code>. The legacy routes (including the old <code>/api/workflows/*</code> endpoints) are not reachable on a running server and are scheduled for removal in a future release. New code should use <code>domains/*/</code> modules.</p>
 <hr />
 <h2 id="api-namespace-v08">API Namespace (v0.8+)<a class="headerlink" href="#api-namespace-v08" title="Permanent link">#</a></h2>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>/api

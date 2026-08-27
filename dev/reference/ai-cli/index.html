@@ -3280,10 +3280,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#global-config-configoxo-flowai_configjson" class="md-nav__link">
+  <a href="#global-config-oxo-flowai_configjson" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Global Config (~/.config/oxo-flow/ai_config.json)
+        Global Config (~/.oxo-flow/ai_config.json)
       
     </span>
   </a>
@@ -4227,10 +4227,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#global-config-configoxo-flowai_configjson" class="md-nav__link">
+  <a href="#global-config-oxo-flowai_configjson" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Global Config (~/.config/oxo-flow/ai_config.json)
+        Global Config (~/.oxo-flow/ai_config.json)
       
     </span>
   </a>
@@ -4554,7 +4554,7 @@ Set the provider and your API key via environment variables:</p>
 </span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OXO_FLOW_AI_API_URL</span><span class="o">=</span><span class="s2">"http://localhost:11434"</span>
 </span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OXO_FLOW_AI_MODEL</span><span class="o">=</span><span class="s2">"llama3"</span>
 </span></code></pre></div>
-<p>Configuration persists to <code>~/.config/oxo-flow/ai_config.json</code> after first use.</p>
+<p>Configuration persists to <code>~/.oxo-flow/ai_config.json</code> after first use.</p>
 <h3 id="2-enable-ai-in-your-workflow">2. Enable AI in Your Workflow<a class="headerlink" href="#2-enable-ai-in-your-workflow" title="Permanent link">#</a></h3>
 <p>Add one section to your <code>.oxoflow</code> file:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">[ai]</span>
@@ -4706,7 +4706,7 @@ explicit disable:</p>
 </ul>
 <hr />
 <h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">#</a></h2>
-<h3 id="global-config-configoxo-flowai_configjson">Global Config (<code>~/.config/oxo-flow/ai_config.json</code>)<a class="headerlink" href="#global-config-configoxo-flowai_configjson" title="Permanent link">#</a></h3>
+<h3 id="global-config-oxo-flowai_configjson">Global Config (<code>~/.oxo-flow/ai_config.json</code>)<a class="headerlink" href="#global-config-oxo-flowai_configjson" title="Permanent link">#</a></h3>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="p">{</span>
 </span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span><span class="nt">"provider"</span><span class="p">:</span><span class="w"> </span><span class="s2">"deepseek"</span><span class="p">,</span>
 </span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span><span class="nt">"model"</span><span class="p">:</span><span class="w"> </span><span class="s2">"deepseek-v4-pro"</span><span class="p">,</span>
@@ -4756,9 +4756,24 @@ explicit disable:</p>
 <td>—</td>
 </tr>
 <tr>
+<td><code>DEEPSEEK_BASE_URL</code></td>
+<td>Custom DeepSeek endpoint</td>
+<td><code>https://api.deepseek.com/v1/chat/completions</code></td>
+</tr>
+<tr>
 <td><code>ANTHROPIC_AUTH_TOKEN</code></td>
 <td>Anthropic-compatible API key</td>
 <td>—</td>
+</tr>
+<tr>
+<td><code>CLAUDE_API_KEY</code></td>
+<td>Alias for <code>ANTHROPIC_AUTH_TOKEN</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>ANTHROPIC_MODEL</code></td>
+<td>Claude model override</td>
+<td><code>claude-sonnet-4-20250514</code></td>
 </tr>
 <tr>
 <td><code>ANTHROPIC_BASE_URL</code></td>
@@ -4769,6 +4784,11 @@ explicit disable:</p>
 <td><code>OPENAI_API_KEY</code></td>
 <td>OpenAI-compatible API key</td>
 <td>—</td>
+</tr>
+<tr>
+<td><code>OPENAI_MODEL</code></td>
+<td>OpenAI model override</td>
+<td><code>gpt-4o</code></td>
 </tr>
 <tr>
 <td><code>OPENAI_BASE_URL</code></td>
