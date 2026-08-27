@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Loader2, Check, Wrench } from 'lucide-react';
+import { Send, Square, Bot, User, Loader2, Check, Wrench } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { usePipelineSession, type ChatContextType, type ChatMessage, type ChatAction } from '../context/PipelineSession';
 import { useServerVersion } from '../api/version';
@@ -45,6 +45,12 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
   const chatRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // AbortController for the in-flight chat stream (issue #214): without it a
+  // navigation away mid-stream leaked the fetch connection and kept the
+  // backend burning provider tokens for UI nobody was reading.
+  const abortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => abortRef.current?.abort(), []);
+
   // Sync messages to session context whenever they change
   useEffect(() => {
     session.setChatMessages(context, messages);
@@ -76,10 +82,16 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
     const assistantId = crypto.randomUUID();
     setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: '', agentStatus: t('chat.thinking') }]);
 
+    // Abort any stream still running (issue #214): navigation away and the
+    // stop button go through this controller too.
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+
     try {
       // Goes through the API client so the base-path prefix and the
       // Authorization header apply (team/HPC mode, --base-path deploys).
-      const resp = await api.chatSendStream(text, { intent: context });
+      const resp = await api.chatSendStream(text, { intent: context }, { signal: ac.signal });
       if (!resp.body) throw new Error("No response body");
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
@@ -155,13 +167,24 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
       }
       setAgents({});
     } catch (e: unknown) {
-      if (e instanceof ApiError && e.code === 'AI_NOT_CONFIGURED') {
-        setAiConfigured(false);
+      // Aborted streams (stop button, navigation away, re-entry) are not
+      // errors — leave whatever streamed content is already on screen.
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, agentStatus: undefined } : m));
+      } else {
+        if (e instanceof ApiError && e.code === 'AI_NOT_CONFIGURED') {
+          setAiConfigured(false);
+        }
+        const errMsg = e instanceof Error ? e.message : 'Connection error.';
+        setMessages(prev => prev.map(m =>
+          m.id === assistantId ? { ...m, content: m.content + `\n❌ ${errMsg}`, agentStatus: undefined } : m
+        ));
       }
-      const errMsg = e instanceof Error ? e.message : 'Connection error.';
-      setMessages(prev => prev.map(m =>
-        m.id === assistantId ? { ...m, content: m.content + `\n❌ ${errMsg}`, agentStatus: undefined } : m
-      ));
+    } finally {
+      // Only clear if we still own the slot — a newer request may have
+      // replaced the controller (re-entry case).
+      if (abortRef.current === ac) abortRef.current = null;
+      setAgents({});
     }
     setLoading(false);
   };
@@ -312,9 +335,24 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
           className="search-input intent-input"
           style={{ flex: 1, minWidth: 0 }}
         />
-        <button onClick={sendMessage} disabled={loading || !input.trim()} className="btn-run chat-send" aria-label={t('chat.send')}>
+        <button
+          onClick={sendMessage}
+          disabled={loading || !input.trim()}
+          className="btn-run chat-send"
+          aria-label={t('chat.send')}
+        >
           {loading ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
         </button>
+        {loading && (
+          <button
+            onClick={() => abortRef.current?.abort()}
+            className="btn-run chat-send"
+            aria-label={t('chat.stop')}
+            title={t('chat.stop')}
+          >
+            <Square size={16} />
+          </button>
+        )}
       </div>
     </div>
   );
