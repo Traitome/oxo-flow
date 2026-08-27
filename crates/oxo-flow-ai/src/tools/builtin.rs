@@ -65,6 +65,47 @@ impl Tool for ReadFileTool {
 /// Hostname suffixes treated as site-local and always blocked.
 const BLOCKED_HOST_SUFFIXES: [&str; 3] = [".localhost", ".local", ".internal"];
 
+/// Wall-clock bound for a single fetch hop, including TLS handshake.
+const FETCH_TIMEOUT_SECS: u64 = 15;
+
+fn user_agent() -> String {
+    format!(
+        "oxo-flow/{} (+https://github.com/Traitome/oxo-flow)",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
+/// Build a fetch client, optionally pinned to one screened address.
+///
+// A browser-like User-Agent: some sources (Bioconductor, GitHub raw, docs
+// sites) 403 the default reqwest UA, which sent the model into retry loops
+// during pipeline generation (issue #79 P1-10). Redirects are manual so
+// every hop re-runs the SSRF screen.
+fn fetch_client(pin: Option<(&str, std::net::SocketAddr)>) -> reqwest::Client {
+    let builder = reqwest::Client::builder()
+        .user_agent(user_agent())
+        .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
+        .redirect(reqwest::redirect::Policy::none());
+    // Pinning overrides name resolution ONLY: SNI and certificate checks
+    // still run against the hostname, so https stays verifiable.
+    let builder = match pin {
+        Some((host, addr)) => builder.resolve(host, addr),
+        None => builder,
+    };
+    builder.build().unwrap_or_else(|_| reqwest::Client::new())
+}
+
+/// A URL that passed the SSRF screen, plus optional request pinning.
+///
+/// `pin` is set whenever DNS was consulted: the screened address travels
+/// with the target so the connection goes to exactly what was vetted —
+/// closing the re-resolution window (DNS rebinding) between screening and
+/// connecting. Allowlisted hosts and literal IPs skip DNS and need no pin.
+struct ScreenedTarget {
+    url: reqwest::Url,
+    pin: Option<(String, std::net::SocketAddr)>,
+}
+
 fn parse_allowlist(raw: &str) -> Vec<String> {
     raw.split(',')
         .map(str::trim)
@@ -100,8 +141,10 @@ fn ip_is_forbidden(ip: std::net::IpAddr) -> bool {
 }
 
 /// Parse and SSRF-screen a model-supplied URL. Resolves DNS when needed so
-/// hostile names pointing into internal space are caught pre-request.
-async fn validate_public_url(raw: &str) -> Result<reqwest::Url, String> {
+/// hostile names pointing into internal space are caught pre-request; the
+/// screened resolution is pinned onto the returned target so the later
+/// connect cannot be silently re-pointed at internal space.
+async fn validate_public_url(raw: &str) -> Result<ScreenedTarget, String> {
     let url = reqwest::Url::parse(raw).map_err(|e| format!("unparseable URL: {e}"))?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err(format!(
@@ -111,7 +154,7 @@ async fn validate_public_url(raw: &str) -> Result<reqwest::Url, String> {
     }
     let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
     if allowlist().contains(&host) {
-        return Ok(url);
+        return Ok(ScreenedTarget { url, pin: None });
     }
     if host == "localhost" || BLOCKED_HOST_SUFFIXES.iter().any(|sfx| host.ends_with(sfx)) {
         return Err(format!("host {host:?} is site-local and blocked"));
@@ -124,7 +167,7 @@ async fn validate_public_url(raw: &str) -> Result<reqwest::Url, String> {
         return if ip_is_forbidden(ip) {
             Err(format!("host {ip} lies in forbidden address space"))
         } else {
-            Ok(url)
+            Ok(ScreenedTarget { url, pin: None })
         };
     }
     let port = url
@@ -145,16 +188,34 @@ async fn validate_public_url(raw: &str) -> Result<reqwest::Url, String> {
     if let Some(bad) = addrs.iter().find(|a| ip_is_forbidden(a.ip())) {
         return Err(format!("host {host} resolves to forbidden address {bad}"));
     }
-    Ok(url)
+    // Connect to the address that was screened — the first one suffices;
+    // every entry was vetted above and multi-address failover would just
+    // re-open name-resolution timing gaps we explicitly closed.
+    Ok(ScreenedTarget {
+        url,
+        pin: Some((host, addrs[0])),
+    })
 }
 
 /// GET with manual redirects (max 5 hops), re-running the SSRF screen on
-/// every Location target.
+/// every Location target. DNS-resolved hops are sent through a pinned
+/// client, so each request reaches the address that was just screened.
 async fn validated_get(client: &reqwest::Client, raw: &str) -> Result<reqwest::Response, String> {
     let mut current = validate_public_url(raw).await?;
     for _hop in 0..=5 {
-        let resp = client
-            .get(current.clone())
+        // A pinned hop builds its own short-lived client; this costs a TLS
+        // handshake per fetch/hop but model-driven fetches are rare and the
+        // guarantee is worth it. The shared client serves pin-free targets.
+        let pinned;
+        let send_client = match &current.pin {
+            Some((host, addr)) => {
+                pinned = fetch_client(Some((host.as_str(), *addr)));
+                &pinned
+            }
+            None => client,
+        };
+        let resp = send_client
+            .get(current.url.clone())
             .send()
             .await
             .map_err(|e| format!("request failed: {e}"))?;
@@ -165,6 +226,7 @@ async fn validated_get(client: &reqwest::Client, raw: &str) -> Result<reqwest::R
                 .and_then(|v| v.to_str().ok())
                 .ok_or_else(|| "redirect without Location header".to_string())?;
             let next = current
+                .url
                 .join(loc)
                 .map_err(|e| format!("bad redirect target: {e}"))?;
             current = validate_public_url(next.as_str()).await?;
@@ -184,21 +246,9 @@ pub struct FetchUrlTool {
 impl FetchUrlTool {
     pub fn new() -> Self {
         Self {
-            // A browser-like User-Agent: some sources (Bioconductor, GitHub
-            // raw, docs sites) 403 the default reqwest UA, which sent the
-            // model into retry loops during pipeline generation (issue #79
-            // P1-10). Timeouts bound hanging fetches inside the agent loop.
-            client: reqwest::Client::builder()
-                .user_agent(format!(
-                    "oxo-flow/{} (+https://github.com/Traitome/oxo-flow)",
-                    env!("CARGO_PKG_VERSION")
-                ))
-                .timeout(std::time::Duration::from_secs(15))
-                // Redirects are followed manually (see `validated_get`) so
-                // every hop re-runs the SSRF screen.
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new()),
+            // Shared client for pin-free targets; DNS-resolved hops build a
+            // short-lived pinned client per request instead (see `validated_get`).
+            client: fetch_client(None),
         }
     }
 }
