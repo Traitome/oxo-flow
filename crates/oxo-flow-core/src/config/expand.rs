@@ -209,7 +209,31 @@ impl WorkflowConfig {
         };
         use regex::Regex;
 
-        let pair_combos = wildcard_combinations_from_pairs(&self.pairs);
+        // Pair-level `when` gating (snakemake-style DAG morphing at pair
+        // scope): pairs whose `when` evaluates false declare no rule
+        // instances. The static [[pairs]] table can therefore carry
+        // profile-switched sample sets — a toggle in `config` decides
+        // which pairs fan out.
+        let config_values: HashMap<String, toml::Value> = self
+            .config
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let active_pairs: Vec<crate::config::ExperimentControlPair> = self
+            .pairs
+            .iter()
+            .filter(|pair| {
+                pair.when.as_deref().is_none_or(|when| {
+                    crate::executor::process::evaluate_condition_with_wildcards(
+                        when,
+                        &config_values,
+                        &HashMap::new(),
+                    )
+                })
+            })
+            .cloned()
+            .collect();
+        let pair_combos = wildcard_combinations_from_pairs(&active_pairs);
         let group_combos = wildcard_combinations_from_groups(&self.sample_groups);
 
         // Rebuild expansion provenance from scratch — this method may run on a

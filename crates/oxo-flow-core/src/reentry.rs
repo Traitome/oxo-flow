@@ -93,6 +93,9 @@ pub fn parse_manifest(
                 control: p.control,
                 experiment_type: p.experiment_type,
                 metadata: p.metadata,
+                // Re-entry pairs come from a saved manifest — the gate was
+                // already applied when the manifest was written.
+                when: None,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -322,6 +325,7 @@ mod tests {
             control: Some(control.into()),
             experiment_type: None,
             metadata: Default::default(),
+            when: None,
         }
     }
 

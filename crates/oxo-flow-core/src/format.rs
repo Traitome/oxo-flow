@@ -215,8 +215,24 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
         // Exception: scatter rules use scatter variables, not input wildcards
         // Exception: pairs rules use {pair_id}, {experiment}, {control} wildcards
         // Exception: sample_groups rules use {group}, {sample} wildcards
-        let input_wildcards =
+        // Exception: input_groups rules bind the pattern wildcards AND the
+        // `group_by` key — `group_by = "meta.<column>"` binds the column
+        // name like a scatter variable (issue #227 items 3-4).
+        let mut input_wildcards: Vec<String> =
             crate::wildcard::extract_wildcards_from_patterns(&rule.input.to_vec());
+        for ig in &rule.input_groups {
+            for wc in crate::wildcard::extract_wildcards(&ig.pattern) {
+                if !input_wildcards.contains(&wc) {
+                    input_wildcards.push(wc);
+                }
+            }
+            if let Some(column) = ig.group_by.strip_prefix("meta.")
+                && !column.is_empty()
+                && !input_wildcards.contains(&column.to_string())
+            {
+                input_wildcards.push(column.to_string());
+            }
+        }
         let output_wildcards =
             crate::wildcard::extract_wildcards_from_patterns(&rule.output.to_vec());
 
@@ -2057,6 +2073,41 @@ mod tests {
         assert!(
             result.errors().iter().all(|d| d.code != "E003"),
             "values-declared wildcards must be E003-exempt: {:?}",
+            result.errors()
+        );
+    }
+
+    #[test]
+    fn validate_wildcard_consistency_exempts_input_groups() {
+        // input_groups rules (issue #227 items 3-4): the pattern wildcards
+        // and the group key are bound at fan-out, so outputs may reference
+        // them without an `input` counterpart — group_by = "meta.antibody"
+        // binds the column name like a scatter variable.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "consensus"
+            input_groups = [
+                { pattern = "peaks/{sample}_peaks.broadPeak", group_by = "meta.antibody" }
+            ]
+            output = ["consensus/{antibody}/{antibody}.peaks.bed"]
+            shell = "echo {input} > {output}"
+
+            [[rules]]
+            name = "consensus_pattern_key"
+            input_groups = [
+                { pattern = "consensus/{antibody}/{antibody}.peaks.bed", group_by = "{antibody}" }
+            ]
+            output = ["counts/{antibody}.txt"]
+            shell = "wc -l {input[0]} > {output[0]}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(
+            result.errors().iter().all(|d| d.code != "E003"),
+            "input_groups-bound wildcards must be E003-exempt: {:?}",
             result.errors()
         );
     }

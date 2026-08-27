@@ -783,6 +783,19 @@ impl std::fmt::Display for ReferenceDatabase {
 /// experiment = "SAMPLE_EXP_02"
 /// control    = "SAMPLE_CTRL_02"
 /// ```
+///
+/// Pairs can be gated with a `when` condition (the same expression
+/// language as rule `when`, evaluated against `config.*` and
+/// `file_exists(...)`): a pair whose condition is false is excluded from
+/// wildcard fan-out — it declares no rule instances. This lets one static
+/// `[[pairs]]` table serve profile-switched sample sets:
+///
+/// ```toml
+/// [[pairs]]
+/// pair_id = "EXTRA_001"
+/// experiment = "SAMPLE_EXP_03"
+/// when = "config.enable_extended_cohort"
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExperimentControlPair {
     /// Unique identifier for this pair (available as `{pair_id}`).
@@ -815,6 +828,13 @@ pub struct ExperimentControlPair {
     /// Arbitrary key-value metadata; each key is available as a wildcard.
     #[serde(default)]
     pub metadata: HashMap<String, String>,
+
+    /// Optional gate condition (rule-`when` expression language, evaluated
+    /// against `config.*` / `file_exists(...)` at plan time). A pair whose
+    /// condition is false is excluded from wildcard fan-out. Default: no
+    /// gate — every pair expands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<String>,
 }
 
 /// Backward-compatible alias; prefer [`ExperimentControlPair`].
@@ -969,6 +989,7 @@ impl ExperimentControlPair {
                             control: Some(control.clone()),
                             experiment_type: wildcards.get("experiment_type").cloned(),
                             metadata: HashMap::new(),
+                            when: None,
                         };
                         pairs.push(pair);
                     }
@@ -1080,6 +1101,7 @@ impl ExperimentControlPair {
                 experiment_type: experiment_type_col
                     .and_then(|&i| record.get(i).map(|s| s.to_string())),
                 metadata,
+                when: None,
             };
             pairs.push(pair);
         }
