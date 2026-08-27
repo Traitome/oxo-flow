@@ -86,7 +86,9 @@ pub async fn batch_command(
             .clone()
             .acquire_owned()
             .await
-            .expect("semaphore should remain open during batch execution");
+            // Safe: the semaphore is never closed; acquire only fails on a
+            // closed semaphore, and we hold Arc clones for the whole run.
+            .expect("batch semaphore closed unexpectedly");
         let cmd = expand_batch_template(&template, item, nr + 1);
 
         let item_clone = item.clone();
@@ -127,7 +129,12 @@ pub async fn batch_command(
             })
             .await;
 
-            let exit_result = result.expect("spawn_blocking failed");
+            // Join failure means the blocking thread died (panic/pressure) —
+            // record it as this item's error instead of panicking the task.
+            let exit_result = match result {
+                Ok(r) => r,
+                Err(join_err) => Err(anyhow::anyhow!("batch worker crashed: {join_err}")),
+            };
 
             // Record result
             if let Ok(mut results_lock) = results_clone.lock() {
@@ -225,6 +232,19 @@ pub async fn batch_command(
     Ok(())
 }
 
+/// Render `shell = <cmd>` as a TOML table line (with a trailing blank line).
+/// Serializing through the toml crate handles backslashes, quotes and
+/// newlines correctly, unlike manual escaping which produced invalid TOML for
+/// commands containing literal `\n` or trailing `\`.
+fn format_shell_line(cmd: &str) -> Result<String> {
+    let mut table = toml::map::Map::new();
+    table.insert("shell".to_string(), toml::Value::String(cmd.to_string()));
+    let rendered = toml::to_string(&toml::Value::Table(table))
+        .with_context(|| format!("serialize shell command {cmd:?} as TOML"))?;
+    // rendered ends with one newline from the serializer.
+    Ok(format!("{rendered}\n"))
+}
+
 pub fn generate_batch_workflow(
     template: &str,
     items: &[String],
@@ -247,7 +267,7 @@ pub fn generate_batch_workflow(
         if let Some(env) = environment {
             content.push_str(&format!("environment = \"{}\"\n", env));
         }
-        content.push_str(&format!("shell = \"{}\"\n\n", cmd.replace('"', "\\\"")));
+        content.push_str(&format_shell_line(&cmd)?);
     }
 
     std::fs::write(&output_path, content)
@@ -259,4 +279,48 @@ pub fn generate_batch_workflow(
         output_path.display()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_line_roundtrips_hostile_commands() {
+        for cmd in [
+            "echo 'single'",
+            "awk '{print $1}'",
+            "printf \"tab\\there\"",
+            "echo back\\slash",
+            "trailing\\",
+            "multi\nline\ncmd",
+            "quote \" in middle",
+        ] {
+            let line = format_shell_line(cmd).expect("serialization");
+            let doc = format!("[r]\n{line}");
+            let parsed: toml::Value =
+                toml::from_str(&doc).unwrap_or_else(|e| panic!("invalid TOML for {cmd:?}: {e}"));
+            assert_eq!(
+                parsed["r"]["shell"].as_str().unwrap(),
+                cmd,
+                "roundtrip mismatch for {cmd:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_workflow_parses_with_hostile_template() {
+        let out = std::env::temp_dir().join(format!("batch-test-{}.toml", std::process::id()));
+        generate_batch_workflow(
+            "echo {}",
+            &["we\"ird".to_string(), "back\\slash".to_string()],
+            Some(&out),
+            None,
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&out).unwrap();
+        let _parsed: toml::Value = toml::from_str(&text)
+            .unwrap_or_else(|e| panic!("generated file must be valid TOML: {e}\n{text}"));
+        std::fs::remove_file(&out).ok();
+    }
 }
