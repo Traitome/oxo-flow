@@ -62,6 +62,181 @@ impl Tool for ReadFileTool {
     }
 }
 
+/// Hostname suffixes treated as site-local and always blocked.
+const BLOCKED_HOST_SUFFIXES: [&str; 3] = [".localhost", ".local", ".internal"];
+
+/// Wall-clock bound for a single fetch hop, including TLS handshake.
+const FETCH_TIMEOUT_SECS: u64 = 15;
+
+fn user_agent() -> String {
+    format!(
+        "oxo-flow/{} (+https://github.com/Traitome/oxo-flow)",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
+/// Build a fetch client, optionally pinned to one screened address.
+///
+// A browser-like User-Agent: some sources (Bioconductor, GitHub raw, docs
+// sites) 403 the default reqwest UA, which sent the model into retry loops
+// during pipeline generation (issue #79 P1-10). Redirects are manual so
+// every hop re-runs the SSRF screen.
+fn fetch_client(pin: Option<(&str, std::net::SocketAddr)>) -> reqwest::Client {
+    let builder = reqwest::Client::builder()
+        .user_agent(user_agent())
+        .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
+        .redirect(reqwest::redirect::Policy::none());
+    // Pinning overrides name resolution ONLY: SNI and certificate checks
+    // still run against the hostname, so https stays verifiable.
+    let builder = match pin {
+        Some((host, addr)) => builder.resolve(host, addr),
+        None => builder,
+    };
+    builder.build().unwrap_or_else(|_| reqwest::Client::new())
+}
+
+/// A URL that passed the SSRF screen, plus optional request pinning.
+///
+/// `pin` is set whenever DNS was consulted: the screened address travels
+/// with the target so the connection goes to exactly what was vetted —
+/// closing the re-resolution window (DNS rebinding) between screening and
+/// connecting. Allowlisted hosts and literal IPs skip DNS and need no pin.
+struct ScreenedTarget {
+    url: reqwest::Url,
+    pin: Option<(String, std::net::SocketAddr)>,
+}
+
+fn parse_allowlist(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect()
+}
+
+/// Comma-separated explicit exemptions (`OXO_FLOW_AI_FETCH_ALLOW`), applied
+/// to hostnames/IP literals verbatim before validation.
+fn allowlist() -> Vec<String> {
+    parse_allowlist(&std::env::var("OXO_FLOW_AI_FETCH_ALLOW").unwrap_or_default())
+}
+
+/// True for addresses an outbound model-driven fetch must never reach:
+/// loopback, unspecified, link-local, RFC1918 / ULA, and IPv4-mapped IPv6
+/// forms of any of those (cloud metadata endpoints live in 169.254/16).
+fn ip_is_forbidden(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr::{V4, V6};
+    let v4 = match ip {
+        V4(v4) => v4,
+        V6(v6) => match v6.to_ipv4_mapped() {
+            Some(m) => m,
+            None => {
+                return v6.is_loopback()
+                    || v6.is_unspecified()
+                    || (v6.segments()[0] & 0xffc0) == 0xfe80 // fe80::/10
+                    || (v6.segments()[0] & 0xfe00) == 0xfc00; // fc00::/7
+            }
+        },
+    };
+    v4.is_loopback() || v4.is_unspecified() || v4.is_link_local() || v4.is_private()
+}
+
+/// Parse and SSRF-screen a model-supplied URL. Resolves DNS when needed so
+/// hostile names pointing into internal space are caught pre-request; the
+/// screened resolution is pinned onto the returned target so the later
+/// connect cannot be silently re-pointed at internal space.
+async fn validate_public_url(raw: &str) -> Result<ScreenedTarget, String> {
+    let url = reqwest::Url::parse(raw).map_err(|e| format!("unparseable URL: {e}"))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(format!(
+            "scheme {:?} not allowed (http/https only)",
+            url.scheme()
+        ));
+    }
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    if allowlist().contains(&host) {
+        return Ok(ScreenedTarget { url, pin: None });
+    }
+    if host == "localhost" || BLOCKED_HOST_SUFFIXES.iter().any(|sfx| host.ends_with(sfx)) {
+        return Err(format!("host {host:?} is site-local and blocked"));
+    }
+    if let Ok(ip) = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<std::net::IpAddr>()
+    {
+        return if ip_is_forbidden(ip) {
+            Err(format!("host {ip} lies in forbidden address space"))
+        } else {
+            Ok(ScreenedTarget { url, pin: None })
+        };
+    }
+    let port = url
+        .port()
+        .unwrap_or(if url.scheme() == "https" { 443 } else { 80 });
+    let hostport = format!("{host}:{port}");
+    let addrs = tokio::task::spawn_blocking(move || {
+        std::net::ToSocketAddrs::to_socket_addrs(&hostport)
+            .map(|it| it.collect::<Vec<_>>())
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("resolver join failed: {e}"))?
+    .map_err(|e| format!("DNS resolution failed for {host}: {e}"))?;
+    if addrs.is_empty() {
+        return Err(format!("no addresses resolved for {host}"));
+    }
+    if let Some(bad) = addrs.iter().find(|a| ip_is_forbidden(a.ip())) {
+        return Err(format!("host {host} resolves to forbidden address {bad}"));
+    }
+    // Connect to the address that was screened — the first one suffices;
+    // every entry was vetted above and multi-address failover would just
+    // re-open name-resolution timing gaps we explicitly closed.
+    Ok(ScreenedTarget {
+        url,
+        pin: Some((host, addrs[0])),
+    })
+}
+
+/// GET with manual redirects (max 5 hops), re-running the SSRF screen on
+/// every Location target. DNS-resolved hops are sent through a pinned
+/// client, so each request reaches the address that was just screened.
+async fn validated_get(client: &reqwest::Client, raw: &str) -> Result<reqwest::Response, String> {
+    let mut current = validate_public_url(raw).await?;
+    for _hop in 0..=5 {
+        // A pinned hop builds its own short-lived client; this costs a TLS
+        // handshake per fetch/hop but model-driven fetches are rare and the
+        // guarantee is worth it. The shared client serves pin-free targets.
+        let pinned;
+        let send_client = match &current.pin {
+            Some((host, addr)) => {
+                pinned = fetch_client(Some((host.as_str(), *addr)));
+                &pinned
+            }
+            None => client,
+        };
+        let resp = send_client
+            .get(current.url.clone())
+            .send()
+            .await
+            .map_err(|e| format!("request failed: {e}"))?;
+        if resp.status().is_redirection() {
+            let loc = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| "redirect without Location header".to_string())?;
+            let next = current
+                .url
+                .join(loc)
+                .map_err(|e| format!("bad redirect target: {e}"))?;
+            current = validate_public_url(next.as_str()).await?;
+            continue;
+        }
+        return Ok(resp);
+    }
+    Err("too many redirects (>5)".into())
+}
+
 /// Fetch content from a URL.
 #[derive(Default)]
 pub struct FetchUrlTool {
@@ -71,18 +246,9 @@ pub struct FetchUrlTool {
 impl FetchUrlTool {
     pub fn new() -> Self {
         Self {
-            // A browser-like User-Agent: some sources (Bioconductor, GitHub
-            // raw, docs sites) 403 the default reqwest UA, which sent the
-            // model into retry loops during pipeline generation (issue #79
-            // P1-10). Timeouts bound hanging fetches inside the agent loop.
-            client: reqwest::Client::builder()
-                .user_agent(format!(
-                    "oxo-flow/{} (+https://github.com/Traitome/oxo-flow)",
-                    env!("CARGO_PKG_VERSION")
-                ))
-                .timeout(std::time::Duration::from_secs(15))
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new()),
+            // Shared client for pin-free targets; DNS-resolved hops build a
+            // short-lived pinned client per request instead (see `validated_get`).
+            client: fetch_client(None),
         }
     }
 }
@@ -122,15 +288,13 @@ impl Tool for FetchUrlTool {
             message: "missing 'url' argument".into(),
         })?;
 
-        let response = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| AiError::ToolError {
-                tool: "fetch_url".into(),
-                message: format!("request failed: {e}"),
-            })?;
+        let response =
+            validated_get(&self.client, url)
+                .await
+                .map_err(|reason| AiError::ToolError {
+                    tool: "fetch_url".into(),
+                    message: format!("blocked: {reason}"),
+                })?;
 
         let text = response.text().await.map_err(|e| AiError::ToolError {
             tool: "fetch_url".into(),
@@ -622,4 +786,75 @@ async fn lookup_pipeline_bad_action() {
     let tool = LookupPipelineTool::new();
     let result = tool.execute(r#"{"action": "bogus"}"#).await.unwrap();
     assert!(result.contains("Unknown action"));
+}
+
+#[cfg(test)]
+mod fetch_url_ssrf_tests {
+    use super::*;
+
+    #[test]
+    fn forbidden_ip_classification() {
+        for bad in [
+            "127.0.0.1",
+            "10.0.0.5",
+            "172.16.4.4",
+            "192.168.1.9",
+            "169.254.169.254",
+            "0.0.0.0",
+            "::1",
+            "fe80::1",
+            "fd00::5",
+            "::ffff:127.0.0.1",
+            "::ffff:169.254.169.254",
+        ] {
+            assert!(
+                ip_is_forbidden(bad.parse().unwrap()),
+                "{bad} must be forbidden"
+            );
+        }
+        for ok in ["8.8.8.8", "1.1.1.1", "2606:4700::1111", "172.32.0.1"] {
+            assert!(
+                !ip_is_forbidden(ok.parse().unwrap()),
+                "{ok} must be allowed"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn literal_private_ip_urls_rejected_without_dns() {
+        for url in [
+            "http://127.0.0.1:3000/api/system",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://[::ffff:10.0.0.1]/x",
+            "file:///etc/passwd",
+            "http://catalog.internal/x",
+        ] {
+            assert!(
+                validate_public_url(url).await.is_err(),
+                "{url} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn allowlist_parsing_normalizes_entries() {
+        assert_eq!(
+            parse_allowlist("Metadata.internal, example.com ,,"),
+            vec!["metadata.internal".to_string(), "example.com".to_string()]
+        );
+        assert!(parse_allowlist("").is_empty());
+    }
+
+    #[test]
+    fn non_http_schemes_rejected() {
+        // Synchronous part of validation surfaced without touching network.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let err = rt
+            .block_on(validate_public_url("ftp://example.com/x"))
+            .err()
+            .unwrap();
+        assert!(err.contains("scheme"), "got: {err}");
+    }
 }
