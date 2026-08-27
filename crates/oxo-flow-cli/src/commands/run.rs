@@ -1820,6 +1820,39 @@ pub async fn run_command(
         }
     }
 
+    // ── Runtime-discovered output_pattern replay (issue #227 item 5) ──────
+    // Persisted producer domains replay the deferred-consumer fan-out on
+    // resume: consumers instantiate from the recorded domain WITHOUT
+    // re-running the producer (its instances are already-completed, handled
+    // by the skip preprocessing below). A fresh run replays an empty record
+    // and adds nothing; `--rerun` deliberately skips it so the producer
+    // re-discovers the domain live.
+    {
+        let ck = checkpoint.lock().await;
+        if !ck.output_pattern_domains.is_empty() && !rerun {
+            config.discovered_output_patterns = ck.output_pattern_domains.clone();
+            let replayed = config.expand_output_pattern_consumers()?;
+            tracing::info!(
+                count = replayed.len(),
+                "replayed runtime-discovered output_pattern domains"
+            );
+            if !replayed.is_empty() {
+                dag = WorkflowDag::from_rules_with_config(
+                    &config.rules,
+                    &config_placeholder_values(&config.config),
+                )
+                .context("failed to rebuild workflow DAG after output_pattern replay")?;
+                order = if target.is_empty() {
+                    dag.execution_order()?
+                } else {
+                    let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
+                    dag.execution_order_for_targets(&target_refs)
+                        .with_context(|| "failed to resolve target rules")?
+                };
+            }
+        }
+    }
+
     let rule_names: Vec<String> = order.to_vec();
     let rule_name_refs: Vec<&str> = rule_names.iter().map(String::as_str).collect();
     let mut sched = oxo_flow_core::scheduler::SchedulerState::new(&rule_name_refs);
@@ -2498,6 +2531,99 @@ pub async fn run_command(
                 non_required_fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
             sched.mark_completed(record);
+        }
+
+        // ── Runtime-discovered output_pattern processing (issue #227 item 5) ─
+        // A producer instance succeeded: scan its output_pattern domain,
+        // persist it, and — once ALL of the producer's instances are
+        // completed (the domain union is final) — instantiate the deferred
+        // consumers and insert them into the remaining plan. A discovery
+        // failure fails the producer like a re-entry failure: the run aborts
+        // with attribution and the next run re-executes the producer.
+        if status == oxo_flow_core::executor::JobStatus::Success
+            && config
+                .get_rule(&completed_rule)
+                .is_some_and(|r| r.output_pattern.is_some())
+            && let Err(e) = process_output_pattern_discovery(
+                &mut config,
+                &completed_rule,
+                workdir_actual.as_ref(),
+                &mut sched,
+                &mut order,
+                &mut order_set,
+                &mut dag,
+                &checkpoint,
+                &checkpoint_path,
+            )
+            .await
+        {
+            tracing::error!(rule = %completed_rule, error = %e, "output_pattern discovery failed");
+            let record = oxo_flow_core::executor::JobRecord {
+                rule: completed_rule.clone(),
+                status: oxo_flow_core::executor::JobStatus::Failed,
+                started_at: None,
+                finished_at: None,
+                exit_code: Some(1),
+                stdout: None,
+                stderr: None,
+                command: None,
+                retries: 0,
+                timeout: None,
+                skip_reason: Some(format!("output_pattern discovery: {e}")),
+                max_rss_mb: None,
+                cpu_seconds: None,
+            };
+            {
+                let mut frs = failed_rules_set.lock().await;
+                frs.insert(completed_rule.clone());
+            }
+            {
+                let mut ck = checkpoint.lock().await;
+                ck.record_run(&record);
+                ck.mark_failed(&completed_rule);
+                if let Err(save_err) = ck.save_to_file(&checkpoint_path) {
+                    tracing::warn!("Failed to save checkpoint: {save_err}");
+                }
+            }
+            {
+                let mut f = failures.lock().await;
+                f.push((
+                    completed_rule.clone(),
+                    format!("output_pattern discovery: {e}"),
+                ));
+            }
+            fail_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            sched.mark_completed(record);
+        }
+
+        // Failure attribution for output_pattern producers (issue #227
+        // item 5): a producer that failed leaves its deferred consumers
+        // uninstantiated — name them so the failure is attributable, and
+        // record them for the failure summary.
+        if (status == oxo_flow_core::executor::JobStatus::Failed
+            || status == oxo_flow_core::executor::JobStatus::TimedOut
+            || status == oxo_flow_core::executor::JobStatus::Cancelled)
+            && let Some(producer_template) = config.output_pattern_template_of(&completed_rule)
+        {
+            let consumers = config.pending_output_pattern_consumers_of(&producer_template);
+            if !consumers.is_empty() {
+                eprintln!(
+                    "{} {} not instantiated — output_pattern producer '{}' failed",
+                    "Warning:".bold().yellow(),
+                    consumers.join(", "),
+                    producer_template
+                );
+                let mut f = failures.lock().await;
+                for c in consumers {
+                    f.push((
+                        c,
+                        format!(
+                            "not instantiated — output_pattern producer '{}' failed",
+                            producer_template
+                        ),
+                    ));
+                }
+            }
         }
 
         // Abort on first failure when not in keep_going mode.
@@ -4243,6 +4369,107 @@ async fn process_reentry(
         "checkpoint re-entry expanded the plan"
     );
     Ok(())
+}
+
+/// Runtime-discovered output fan-out (issue #227 item 5): the producer
+/// instance named `instance_name` just completed. Scan the filesystem for
+/// the files its (baked) `output_pattern` enumerates, contribute them to
+/// the producer template's accumulated domain, persist the domain to the
+/// checkpoint FIRST (so a crash resumes without re-running the producer),
+/// and — once ALL of the producer's instances are completed, so the domain
+/// union is final — instantiate the deferred consumers and insert them
+/// into the remaining plan. Forward-safety comes from completion ordering,
+/// not DAG topology: new instances join `order`/`order_set` and the DAG is
+/// rebuilt, exactly like checkpoint re-entry.
+#[allow(clippy::too_many_arguments)]
+async fn process_output_pattern_discovery(
+    config: &mut WorkflowConfig,
+    instance_name: &str,
+    workdir: &std::path::Path,
+    sched: &mut oxo_flow_core::scheduler::SchedulerState,
+    order: &mut Vec<String>,
+    order_set: &mut std::collections::HashSet<String>,
+    dag: &mut WorkflowDag,
+    checkpoint: &Arc<tokio::sync::Mutex<CheckpointState>>,
+    checkpoint_path: &std::path::Path,
+) -> anyhow::Result<Vec<String>> {
+    let Some(template) = config.output_pattern_template_of(instance_name) else {
+        return Ok(Vec::new());
+    };
+    let Some(instance) = config.get_rule(instance_name).cloned() else {
+        return Ok(Vec::new());
+    };
+
+    // 1. Scan the filesystem for this instance's output_pattern files.
+    let combos = config.discover_output_pattern_files(&instance, workdir)?;
+    if combos.is_empty() {
+        // Zero discoveries after producer success: loud, but legal — the
+        // consumers stay uninstantiated (a later instance of the same
+        // producer may still contribute the domain).
+        eprintln!(
+            "{} output_pattern '{}' of rule '{}' matched no files — \
+             downstream consumers stay uninstantiated",
+            "Warning:".bold().yellow(),
+            instance.output_pattern.as_deref().unwrap_or_default(),
+            instance_name
+        );
+        tracing::warn!(
+            rule = instance_name,
+            pattern = ?instance.output_pattern,
+            "output_pattern discovery matched no files"
+        );
+        return Ok(Vec::new());
+    }
+
+    // 2. Contribute to the template's domain (union across instances) and
+    //    persist FIRST — a crash after this point resumes without
+    //    re-running the producer.
+    config.contribute_output_pattern_domain(&template, combos.clone());
+    {
+        let mut ck = checkpoint.lock().await;
+        ck.record_output_pattern_domain(&template, combos);
+        if let Err(save_err) = ck.save_to_file(checkpoint_path) {
+            tracing::warn!("Failed to save checkpoint: {save_err}");
+        }
+    }
+
+    // 3. Gate: only instantiate consumers once ALL of the producer's
+    //    instances are completed — the domain union must be final (a
+    //    partial domain would drop values discovered later).
+    let belongs_to = |r: &Rule| {
+        r.output_pattern.is_some()
+            && (r.name == template
+                || config.expansion_templates.get(&r.name).map(String::as_str)
+                    == Some(template.as_str()))
+    };
+    let outstanding = config.rules.iter().any(|r| {
+        belongs_to(r) && sched.status(&r.name) != Some(oxo_flow_core::executor::JobStatus::Success)
+    });
+    if outstanding {
+        return Ok(Vec::new());
+    }
+
+    // 4. Instantiate the deferred consumers on the final domain.
+    let new_names = config.expand_output_pattern_consumers()?;
+    if new_names.is_empty() {
+        return Ok(Vec::new());
+    }
+    for name in &new_names {
+        sched.add_rule(name);
+        order_set.insert(name.clone());
+        order.push(name.clone());
+    }
+    *dag = WorkflowDag::from_rules_with_config(
+        &config.rules,
+        &config_placeholder_values(&config.config),
+    )
+    .context("failed to rebuild workflow DAG after output_pattern fan-out")?;
+    tracing::info!(
+        producer = template,
+        new_instances = ?new_names,
+        "output_pattern discovery expanded the plan"
+    );
+    Ok(new_names)
 }
 
 fn rule_timings(state: &CheckpointState) -> (Vec<(&str, f64)>, f64) {

@@ -542,6 +542,7 @@ memory = "32G"
 | `name` | String | **Yes** | Unique rule identifier |
 | `input` | Array of strings | **Yes** | Input file paths |
 | `output` | Array of strings | **Yes** | Output file paths |
+| `output_pattern` | String | No | Runtime-discovered output pattern: outputs enumerated by a filesystem scan after the rule completes; downstream consumers of its wildcard instantiate per discovered value. Mutually exclusive with `output`/`transform`/`input_groups` — see [Runtime-Discovered Outputs](#runtime-discovered-outputs-output_pattern) |
 | `shell` | String | No | Shell command to execute |
 | `script` | String | No | Script file path (auto-detects interpreter) |
 | `description` | String | No | Human-readable description of what this rule does |
@@ -2250,6 +2251,68 @@ Semantics:
 - `dry-run` previews replay recorded re-entries (the preview shows the same
   static plan a run would execute) and mark checkpoint rules as possible
   re-entry points; `--json` includes a `reentry` section.
+
+## Runtime-Discovered Outputs (`output_pattern`)
+
+An `output_pattern` rule declares its outputs by **filesystem pattern**
+instead of a fixed `output` list: after the rule completes, the engine scans
+the working directory for files matching the pattern, and any downstream
+rule whose input references the pattern's wildcard is instantiated once per
+discovered value. This is the "checkpoint-lite" variant of re-entry — the
+discovered values come from the file system, not from a manifest the rule
+wrote (which is what makes it work for rules whose file counts are unknown
+ahead of time, e.g. interval scatters or contig-aware variant calling).
+
+```toml
+[[rules]]
+name = "split"
+output_pattern = "results/chunks/{i}.txt"
+shell = "for i in 1 2 3; do echo $i > results/chunks/$i.txt; done"
+
+[[rules]]
+name = "collect"                       # deferred: no {i} instances at plan time
+input = ["results/chunks/{i}.txt"]
+output = ["results/merged/{i}.txt"]
+shell = "cat {input} > {output}"
+```
+
+`split` produces `results/chunks/1.txt`, `results/chunks/2.txt`,
+`results/chunks/3.txt`; the engine instantiates `collect_1`, `collect_2`,
+`collect_3` at runtime and inserts them into the plan, so the run completes
+with all three merged files. The fresh wildcard may combine with existing
+sample wildcards — a producer fanned out over `{sample}` contributes its
+domain per sample instance, and consumers instantiate over the union.
+
+Semantics:
+
+- `output_pattern` is mutually exclusive with `output` and with `transform`
+  and `input_groups` (validation errors; v1 exclusions). The pattern needs
+  at least one wildcard — a fixed pattern can never enumerate a domain.
+- `{config.x}` in the pattern resolves from the workflow config before the
+  scan; discovered files are literals, so exact-match edge inference works
+  as usual.
+- Plan time: a consumer referencing a fresh wildcard has an empty domain and
+  instantiates **nothing**; it is deferred whole (its own
+  `[[values]]`/`[[pairs]]`/sample fan-out is baked from the producer's
+  discovered bindings). A consumer declared **before** its producer is
+  legal but warned. Referencing two producers' fresh wildcards in one rule
+  is a v1 error; a chain — a rule that is both consumer and producer of
+  fresh wildcards — is supported.
+- Runtime: when a producer **instance** completes, the engine scans its
+  pattern and unions the discovered values into the producer template's
+  domain. When **all** of the producer's instances have completed, the
+  deferred consumers are instantiated (one instance per domain value,
+  deterministically named `consumer_<values>`), and the new instances are
+  inserted forward into the remaining plan — forward-safety comes from
+  completion ordering, not DAG topology, exactly like checkpoint re-entry.
+- Zero discoveries after producer success is **loud**: a warning is emitted
+  and the consumers stay uninstantiated (a later producer instance may
+  still contribute). A producer **failure** leaves the consumers
+  uninstantiated and the failure summary attributes them —
+  "not instantiated: producer X failed" — never a silent zero-match.
+- Checkpoints persist the discovered domain (`output_pattern_domains`), so
+  a `resume` re-instantiates the consumers **without re-running the
+  producer**; re-instantiation is idempotent (same names, same plan).
 
 ## See Also
 

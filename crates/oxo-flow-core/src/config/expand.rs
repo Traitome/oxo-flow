@@ -325,6 +325,70 @@ impl WorkflowConfig {
         // post-loop pass below, where producer outputs are known.
         let mut pending_input_groups: Vec<Rule> = Vec::new();
 
+        // output_pattern plan-time registration (issue #227 item 5): the
+        // FRESH wildcard vocabulary — wildcards of every declared
+        // `output_pattern` that no existing fan-out source binds (pairs,
+        // groups/{sample}, [[values]] tables). Rules referencing a fresh
+        // wildcard cannot be instantiated until the producer has run and
+        // the domain has been discovered: they are deferred to runtime.
+        // One producer per fresh wildcard (v1); chained producers (a rule
+        // consuming one fresh wildcard and producing another) are legal.
+        let mut fresh_wildcards: HashMap<String, String> = HashMap::new();
+        for rule in &self.rules {
+            if rule.output_pattern.is_none() {
+                continue;
+            }
+            rule.validate_output_pattern()?;
+            let wildcards = crate::wildcard::extract_wildcards(
+                rule.output_pattern.as_deref().unwrap_or_default(),
+            );
+            for w in wildcards {
+                if pair_wildcards.contains(&w.as_str())
+                    || GROUP_WILDCARDS.contains(&w.as_str())
+                    || self.values.iter().any(|v| v.name == w)
+                    || w.starts_with("meta.")
+                    || w.starts_with("config.")
+                {
+                    continue;
+                }
+                if let Some(prev) = fresh_wildcards.get(&w) {
+                    if prev == &rule.name {
+                        continue;
+                    }
+                    // Cross-reference (chain): a producer whose pattern
+                    // reuses an ALREADY-declared fresh wildcard is legal
+                    // only when the rule consumes it (the wildcard appears
+                    // in its inputs/shell/… and is baked per instance). A
+                    // bare redeclaration would claim the same vocabulary
+                    // for two producers.
+                    let refs = consumer_scan_text(rule);
+                    let consumes = refs.iter().any(|t| t.contains(&format!("{{{w}}}")));
+                    if !consumes {
+                        return Err(OxoFlowError::Validation {
+                            message: format!(
+                                "output_pattern rules '{prev}' and '{}' both declare the fresh \
+                                 wildcard '{{{w}}}'; one producer per fresh wildcard (v1)",
+                                rule.name
+                            ),
+                            rule: Some(rule.name.clone()),
+                            suggestion: Some(
+                                "rename one wildcard, or declare a single rule whose pattern \
+                                 covers both domains"
+                                    .to_string(),
+                            ),
+                        });
+                    }
+                    continue;
+                }
+                fresh_wildcards.insert(w.clone(), rule.name.clone());
+            }
+        }
+        self.output_pattern_producers = fresh_wildcards.clone();
+        // Rebuilt from scratch on every expansion (re-expansion included);
+        // runtime-instantiated consumers re-enter the pending set only when
+        // their domain is still empty.
+        self.pending_output_pattern.clear();
+
         for rule in &self.rules {
             if !rule.input_groups.is_empty() {
                 // Per-sample multi-file grouping (issue #227 item 3 — the
@@ -357,6 +421,15 @@ impl WorkflowConfig {
             }
             if let Some(ref when) = rule.when {
                 all_text.push(when);
+            }
+            // The fan-out TRIGGER text: `all_text` plus the rule's own
+            // `output_pattern` (issue #227 item 5). A producer fans out on
+            // its pattern's BOUND wildcards ({sample}, {assembler}, …) so
+            // every instance scans only its own slice of the filesystem;
+            // its fresh wildcard stays unbound through expansion.
+            let mut trigger_text: Vec<&str> = all_text.clone();
+            if let Some(ref op) = rule.output_pattern {
+                trigger_text.push(op);
             }
 
             // `{meta.<column>}` plan-time typo check (issue #227 item 2): a
@@ -399,14 +472,14 @@ impl WorkflowConfig {
             }
 
             let uses_pair_wildcard = !pair_combos.is_empty()
-                && all_text.iter().any(|t| {
+                && trigger_text.iter().any(|t| {
                     pair_wildcards
                         .iter()
                         .any(|w| t.contains(&format!("{{{w}}}")))
                 });
 
             let uses_group_wildcard = !group_combos.is_empty()
-                && all_text.iter().any(|t| {
+                && trigger_text.iter().any(|t| {
                     GROUP_WILDCARDS
                         .iter()
                         .any(|w| t.contains(&format!("{{{w}}}")))
@@ -424,7 +497,7 @@ impl WorkflowConfig {
                 .collect();
             let mut active_value_tables: Vec<&ValueGroup> = Vec::new();
             for table in &self.values {
-                let referenced = expand_texts.iter().any(|t| {
+                let referenced = trigger_text.iter().any(|t| {
                     t.contains(&format!("{{{}}}", table.name))
                         || t.contains(&format!("{{values.{}}}", table.name))
                 });
@@ -433,6 +506,76 @@ impl WorkflowConfig {
                 }
             }
             let uses_value_wildcard = !active_value_tables.is_empty();
+
+            // output_pattern consumer detection (issue #227 item 5): a rule
+            // referencing a fresh wildcard — in inputs, outputs, shell,
+            // `when`, or `expand_inputs` patterns (its OWN output_pattern
+            // excluded: a rule's own fresh wildcard is what it produces) —
+            // cannot be instantiated until the producer's domain has been
+            // discovered at runtime. Defer the template whole: its own
+            // pair/group/value fan-out, if any, is baked from the producer
+            // instance bindings when the domain is projected. A consumer of
+            // TWO producers' fresh wildcards is a v1 error; a rule that is
+            // both consumer and producer (chain) is legal.
+            if !fresh_wildcards.is_empty() {
+                let mut referenced: Vec<String> = Vec::new();
+                for text in &expand_texts {
+                    for w in fresh_wildcards.keys() {
+                        if text.contains(&format!("{{{w}}}")) && !referenced.contains(w) {
+                            referenced.push(w.clone());
+                        }
+                    }
+                }
+                if !referenced.is_empty() {
+                    let mut producers: Vec<&str> = Vec::new();
+                    for w in &referenced {
+                        let p = fresh_wildcards[w].as_str();
+                        if !producers.contains(&p) {
+                            producers.push(p);
+                        }
+                    }
+                    if producers.len() > 1 {
+                        return Err(OxoFlowError::Validation {
+                            message: format!(
+                                "rule '{}' references the fresh wildcards {{{}}} of \
+                                 output_pattern producers {}; one producer per consumer (v1)",
+                                rule.name,
+                                referenced.join("}, {"),
+                                producers
+                                    .iter()
+                                    .map(|p| format!("'{}'", p))
+                                    .collect::<Vec<_>>()
+                                    .join(" and ")
+                            ),
+                            rule: Some(rule.name.clone()),
+                            suggestion: Some(
+                                "split the consumer into one rule per producer".to_string(),
+                            ),
+                        });
+                    }
+                    // Declaration-order constraint: the consumer must be
+                    // declared AFTER its producer so the runtime fan-out
+                    // attribution is stable and diagnosable. Warn — the
+                    // pass still resolves (all producers are registered
+                    // upfront).
+                    let producer_name = producers[0];
+                    let producer_idx = self.rules.iter().position(|r| r.name == producer_name);
+                    let consumer_idx = self.rules.iter().position(|r| r.name == rule.name);
+                    if let (Some(p), Some(c)) = (producer_idx, consumer_idx)
+                        && p > c
+                    {
+                        tracing::warn!(
+                            rule = %rule.name,
+                            producer = producer_name,
+                            "output_pattern consumer declared BEFORE its producer; \
+                             the fan-out still resolves, but declare the producer first \
+                             for stable run attribution"
+                        );
+                    }
+                    self.pending_output_pattern.push(rule.clone());
+                    continue;
+                }
+            }
 
             // Unbound `{values.name}` namespace references have no fan-out
             // source: warn (never error — same stance as unbound `{sample}`)
@@ -552,6 +695,12 @@ impl WorkflowConfig {
                         }
                         if let Some(ref log) = rule.log {
                             expanded.log = Some(expand_rule_shell(log, &combo));
+                        }
+                        // output_pattern (issue #227 item 5): bake the
+                        // bound wildcards so each instance scans only its
+                        // own files; the fresh wildcard stays unbound.
+                        if let Some(ref op) = rule.output_pattern {
+                            expanded.output_pattern = Some(expand_rule_shell(op, &combo));
                         }
                         // Script and hooks carry the per-instance
                         // substitution too (issue #98) — same class as
@@ -713,6 +862,11 @@ impl WorkflowConfig {
                                 Some(log.clone())
                             };
                         }
+                        // output_pattern (issue #227 item 5): bake the bound
+                        // wildcards per instance (see the pair branch).
+                        if let Some(ref op) = rule.output_pattern {
+                            expanded.output_pattern = Some(expand_rule_shell(op, &merged));
+                        }
                         // Free-text command fields take the same per-instance
                         // substitution as shell/log (issue #98): script and
                         // the hooks render through the same placeholder pass
@@ -815,6 +969,11 @@ impl WorkflowConfig {
                     }
                     if let Some(ref log) = rule.log {
                         expanded.log = Some(expand_rule_shell(log, combo));
+                    }
+                    // output_pattern (issue #227 item 5): bake the bound
+                    // wildcards per instance (see the pair branch).
+                    if let Some(ref op) = rule.output_pattern {
+                        expanded.output_pattern = Some(expand_rule_shell(op, combo));
                     }
                     // Script and hooks carry the per-instance substitution
                     // too (issue #98) — same class as shell/log.
@@ -943,6 +1102,13 @@ impl WorkflowConfig {
                     if let Some(ref log) = scattered_rule.log {
                         scattered_rule.log =
                             Some(expand_pattern(log, &combo).unwrap_or_else(|_| log.clone()));
+                    }
+                    // output_pattern (issue #227 item 5): the scatter
+                    // variable joins the bound vocabulary baked into each
+                    // scattered instance's pattern.
+                    if let Some(ref op) = scattered_rule.output_pattern {
+                        scattered_rule.output_pattern =
+                            Some(expand_pattern(op, &combo).unwrap_or_else(|_| op.clone()));
                     }
                     // Script and hooks take the same substitution (issue #98):
                     // a script whose path or content depends on the scatter
@@ -1777,6 +1943,202 @@ impl WorkflowConfig {
         Ok(out)
     }
 
+    // -----------------------------------------------------------------------
+    // Runtime-discovered output fan-out (issue #227 item 5)
+    // -----------------------------------------------------------------------
+
+    /// Scan the filesystem for the files this producer instance has just
+    /// created. The instance's BAKED `output_pattern` (bound wildcards
+    /// already resolved, `{config.x}` expanded from the workflow config)
+    /// is matched against the tree rooted at `root`; every discovered
+    /// combo is merged with the instance's own bindings (`[[values]]` /
+    /// `[[pairs]]`) so the FULL wildcard map is reconstructed — the
+    /// per-sample union source for downstream consumers.
+    pub fn discover_output_pattern_files(
+        &self,
+        instance: &Rule,
+        root: &std::path::Path,
+    ) -> Result<Vec<crate::wildcard::WildcardValues>> {
+        let Some(ref pattern) = instance.output_pattern else {
+            return Ok(Vec::new());
+        };
+        let pattern = expand_config_vars_in_path(pattern, &self.config);
+        let combos = if pattern.contains('/') {
+            crate::wildcard::discover_wildcards_from_pattern_tree(root, &pattern)?
+        } else {
+            crate::wildcard::discover_wildcards_from_pattern(root, &pattern)?
+        };
+        let bindings = self.instance_bindings(&instance.name);
+        let mut full = Vec::with_capacity(combos.len());
+        for mut combo in combos {
+            for (k, v) in &bindings {
+                combo.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+            full.push(combo);
+        }
+        Ok(full)
+    }
+
+    /// Contribute a producer instance's discovered combos to the template's
+    /// accumulated domain — the UNION across producer instances, deduped
+    /// by sorted key=value. Returns the number of NEW combos added.
+    pub fn contribute_output_pattern_domain(
+        &mut self,
+        producer_template: &str,
+        combos: Vec<crate::wildcard::WildcardValues>,
+    ) -> usize {
+        let entry = self
+            .discovered_output_patterns
+            .entry(producer_template.to_string())
+            .or_default();
+        let mut added = 0;
+        for combo in combos {
+            let key = wildcard_combo_key(&combo);
+            if !entry
+                .iter()
+                .any(|existing| wildcard_combo_key(existing) == key)
+            {
+                entry.push(combo);
+                added += 1;
+            }
+        }
+        added
+    }
+
+    /// The producer TEMPLATE name a rule belongs to, when the rule is an
+    /// output_pattern producer instance (or an unexpanded producer
+    /// itself). `None` for every other rule.
+    pub fn output_pattern_template_of(&self, name: &str) -> Option<String> {
+        let rule = self.get_rule(name)?;
+        rule.output_pattern.as_ref()?;
+        Some(
+            self.expansion_templates
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| name.to_string()),
+        )
+    }
+
+    /// Instantiate every pending consumer whose producer's discovered
+    /// domain is non-empty: one instance per combo, named from the
+    /// consumer template plus the producer-pattern wildcard values in
+    /// pattern order (deterministic across runs and resume). Idempotent:
+    /// instantiated consumers leave the pending set; a re-expansion
+    /// rebuilds the pending set from templates and re-instantiates the
+    /// same names.
+    pub fn expand_output_pattern_consumers(&mut self) -> Result<Vec<String>> {
+        // Resolve each consumer's producer BEFORE draining the pending set
+        // — `output_pattern_producer_of` consults it too.
+        let producers: Vec<Option<String>> = self
+            .pending_output_pattern
+            .iter()
+            .map(|c| self.output_pattern_producer_of(&c.name))
+            .collect();
+        let pending = std::mem::take(&mut self.pending_output_pattern);
+        let mut new_names = Vec::new();
+        let mut still_pending = Vec::new();
+        for (consumer, producer) in pending.into_iter().zip(producers) {
+            let Some(producer) = producer else {
+                // Not attached to any producer (defensive): keep pending.
+                still_pending.push(consumer);
+                continue;
+            };
+            // The producer TEMPLATE's pattern wildcards drive instance
+            // naming — stable even when the producer fanned out over
+            // bound wildcards ({sample}, …).
+            let pattern_wildcards: Vec<String> = self
+                .rule_templates
+                .iter()
+                .find(|r| r.name == producer)
+                .and_then(|r| r.output_pattern.as_deref())
+                .map(crate::wildcard::extract_wildcards)
+                .unwrap_or_default();
+            if pattern_wildcards.is_empty() {
+                still_pending.push(consumer);
+                continue;
+            }
+            let Some(domain) = self.discovered_output_patterns.get(&producer) else {
+                still_pending.push(consumer);
+                continue;
+            };
+            if domain.is_empty() {
+                still_pending.push(consumer);
+                continue;
+            }
+            // The caller gates on ALL producer instances having completed,
+            // so the domain is final when this pass runs. Sort it by the
+            // pattern wildcard values so instantiation order (and the
+            // reported names) is deterministic across runs and resume —
+            // the discovery walkers see filesystem order, which is not.
+            let mut sorted: Vec<&crate::wildcard::WildcardValues> = domain.iter().collect();
+            sorted.sort_by_key(|combo| {
+                pattern_wildcards
+                    .iter()
+                    .map(|w| combo.get(w).cloned().unwrap_or_default())
+                    .collect::<Vec<String>>()
+            });
+            for combo in sorted {
+                let mut name = consumer.name.clone();
+                for w in &pattern_wildcards {
+                    name.push('_');
+                    name.push_str(&crate::wildcard::sanitize_instance_value(
+                        combo.get(w).map(String::as_str).unwrap_or_default(),
+                    ));
+                }
+                if self.rules.iter().any(|r| r.name == name) {
+                    // A previous instance of THIS consumer (post-reentry
+                    // re-expansion) is an idempotent no-op; any other
+                    // collision is a genuine naming conflict.
+                    if self
+                        .expansion_templates
+                        .get(&name)
+                        .is_some_and(|t| t == &consumer.name)
+                    {
+                        continue;
+                    }
+                    return Err(OxoFlowError::DuplicateRule { name });
+                }
+                let mut instance = consumer.clone();
+                instance.name = name.clone();
+                instance.input = expand_rule_patterns(&consumer.input, combo);
+                instance.output = expand_rule_patterns(&consumer.output, combo);
+                if let Some(ref shell) = consumer.shell {
+                    instance.shell = Some(expand_rule_shell(shell, combo));
+                }
+                if let Some(ref log) = consumer.log {
+                    instance.log = Some(expand_rule_shell(log, combo));
+                }
+                if let Some(ref op) = consumer.output_pattern {
+                    instance.output_pattern = Some(expand_rule_shell(op, combo));
+                }
+                if let Some(ref when) = consumer.when
+                    && when.contains("wildcard.")
+                {
+                    instance.when = Some(Self::bake_wildcard_when(when, combo));
+                }
+                expand_command_text_fields(&mut instance, &consumer, |s| {
+                    expand_rule_shell(s, combo)
+                });
+                self.apply_instance_meta(&mut instance, combo);
+                // Readiness attribution (issue #63): the producer-pattern
+                // wildcard bindings of this instance.
+                let samples: Vec<String> = pattern_wildcards
+                    .iter()
+                    .filter_map(|w| combo.get(w).cloned())
+                    .collect();
+                if !samples.is_empty() {
+                    self.expansion_samples.insert(name.clone(), samples);
+                }
+                self.expansion_templates
+                    .insert(name.clone(), consumer.name.clone());
+                self.rules.push(instance);
+                new_names.push(name);
+            }
+        }
+        self.pending_output_pattern = still_pending;
+        Ok(new_names)
+    }
+
     /// Resolve split values from SplitConfig.
     pub(crate) fn resolve_split_values(
         &self,
@@ -1903,4 +2265,11 @@ fn expand_group_text(
         out = out.replace(&format!("{{input_group.{name}}}"), joined);
     }
     out
+}
+
+/// Compact dedup key for a wildcard combo: sorted `key=value` parts joined
+/// by commas — the same canonical form the discovery walkers use, so a
+/// rediscovered combo can never double-contribute (issue #227 item 5).
+fn wildcard_combo_key(combo: &crate::wildcard::WildcardValues) -> String {
+    crate::wildcard::wildcard_combo_key(combo)
 }

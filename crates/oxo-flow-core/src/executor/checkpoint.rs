@@ -272,6 +272,14 @@ pub struct CheckpointState {
     /// rules without a record.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub rule_runs: HashMap<String, RuleRunRecord>,
+
+    /// Runtime-discovered output_pattern domains (issue #227 item 5):
+    /// producer template → the wildcard combos discovered after its
+    /// instances completed. Persisted so `resume` re-instantiates the
+    /// deferred consumers WITHOUT re-running the producer. Legacy
+    /// checkpoints load with an empty map.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub output_pattern_domains: HashMap<String, Vec<crate::wildcard::WildcardValues>>,
 }
 
 /// Bound on the stderr excerpt persisted per rule (issue #83 WS2). Full
@@ -309,6 +317,32 @@ impl CheckpointState {
             tombstones: HashMap::new(),
             reentries: Vec::new(),
             rule_runs: HashMap::new(),
+            output_pattern_domains: HashMap::new(),
+        }
+    }
+
+    /// Record a runtime-discovered output_pattern domain for a producer
+    /// template (issue #227 item 5): the union across the producer's
+    /// instances, deduped by sorted key=value — the same canonical form
+    /// `contribute_output_pattern_domain` uses, so repeated contributions
+    /// are idempotent.
+    pub fn record_output_pattern_domain(
+        &mut self,
+        producer_template: &str,
+        combos: Vec<crate::wildcard::WildcardValues>,
+    ) {
+        let entry = self
+            .output_pattern_domains
+            .entry(producer_template.to_string())
+            .or_default();
+        for combo in combos {
+            let key = crate::wildcard::wildcard_combo_key(&combo);
+            if !entry
+                .iter()
+                .any(|e| crate::wildcard::wildcard_combo_key(e) == key)
+            {
+                entry.push(combo);
+            }
         }
     }
 
@@ -2130,5 +2164,104 @@ mod optional_tests {
         let rule = rule_optional_any("r", &["out/{sample}.txt"]);
         assert!(!optional_inputs_missing(&rule, &dir, &HashMap::new()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn output_pattern_domains_roundtrip_and_replay() {
+        // issue #227 item 5: discovered domains persist through the
+        // checkpoint so `resume` re-instantiates consumers without
+        // re-running the producer. Round-trips serde, dedups unions, and
+        // legacy checkpoints load with an empty map.
+        use crate::wildcard::WildcardValues;
+
+        let mut state = CheckpointState::new();
+        let mut combo = WildcardValues::new();
+        combo.insert("sample".to_string(), "S1".to_string());
+        combo.insert("part".to_string(), "p1".to_string());
+        state.record_output_pattern_domain("split", vec![combo.clone()]);
+        // Union across instances: same combo again is a no-op, a new combo
+        // appends.
+        state.record_output_pattern_domain("split", vec![combo.clone()]);
+        let mut combo2 = WildcardValues::new();
+        combo2.insert("sample".to_string(), "S2".to_string());
+        combo2.insert("part".to_string(), "p1".to_string());
+        state.record_output_pattern_domain("split", vec![combo2.clone()]);
+
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(json.contains("output_pattern_domains"));
+        let loaded: CheckpointState = serde_json::from_str(&json).unwrap();
+        let domain = loaded.output_pattern_domains.get("split").unwrap();
+        assert_eq!(domain.len(), 2, "deduped union of two distinct combos");
+        assert!(domain.contains(&combo));
+        assert!(domain.contains(&combo2));
+
+        // Legacy checkpoints load empty (safe default).
+        let legacy: CheckpointState =
+            serde_json::from_str(r#"{"completed_rules":[],"failed_rules":[],"benchmarks":{}}"#)
+                .unwrap();
+        assert!(legacy.output_pattern_domains.is_empty());
+    }
+
+    #[test]
+    fn output_pattern_domain_replay_reinstantiates_consumers() {
+        // The resume path: load the persisted domain into a fresh config
+        // (producer never re-runs — it is already completed), replay the
+        // domain, and the deferred consumer re-instantiates with the same
+        // deterministic names.
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("replay.oxoflow");
+        for part in ["1", "2"] {
+            let path = dir.path().join(format!("results/chunks/{part}.txt"));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, part).unwrap();
+        }
+        std::fs::write(
+            &workflow_path,
+            r#"
+            [workflow]
+            name = "replay"
+
+            [[rules]]
+            name = "split"
+            output_pattern = "results/chunks/{part}.txt"
+            shell = "mkdir -p results/chunks && echo x > results/chunks/1.txt"
+
+            [[rules]]
+            name = "collect"
+            input = ["results/chunks/{part}.txt"]
+            output = ["results/merged/{part}.txt"]
+            shell = "cat {input} > {output}"
+            "#,
+        )
+        .unwrap();
+
+        // Run 1: producer completes, domain discovered and persisted.
+        let mut state = CheckpointState::new();
+        let mut config = crate::config::WorkflowConfig::from_file(&workflow_path).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let split = config.get_rule("split").cloned().unwrap();
+        let combos = config
+            .discover_output_pattern_files(&split, dir.path())
+            .unwrap();
+        state.record_output_pattern_domain("split", combos);
+        assert!(
+            !state
+                .output_pattern_domains
+                .get("split")
+                .unwrap()
+                .is_empty()
+        );
+
+        // Resume: a FRESH config from the same workflow (no producer re-run
+        // simulated), the persisted domain replayed into it.
+        let mut resumed = crate::config::WorkflowConfig::from_file(&workflow_path).unwrap();
+        resumed.apply_defaults();
+        resumed.expand_wildcards().unwrap();
+        resumed.discovered_output_patterns = state.output_pattern_domains.clone();
+        let new_names = resumed.expand_output_pattern_consumers().unwrap();
+        assert_eq!(new_names, vec!["collect_1", "collect_2"]);
+        let c = resumed.get_rule("collect_1").unwrap();
+        assert_eq!(c.input.to_vec(), vec!["results/chunks/1.txt"]);
     }
 }

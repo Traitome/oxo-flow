@@ -1753,6 +1753,46 @@ pub struct WorkflowConfig {
     /// when unset. Never serialized — user TOML cannot set it.
     #[serde(skip)]
     pub(crate) base_dir: Option<std::path::PathBuf>,
+
+    /// Engine-internal: runtime-discovered output fan-out (issue #227
+    /// item 5). Fresh wildcard name → producer rule template, registered
+    /// at plan time by [`WorkflowConfig::expand_wildcards`]. One producer
+    /// per fresh wildcard (v1). Never serialized — user TOML cannot set it.
+    #[serde(skip)]
+    pub output_pattern_producers: HashMap<String, String>,
+
+    /// Engine-internal: consumer rules whose inputs reference a fresh
+    /// output_pattern wildcard — deferred to RUNTIME, when the producer's
+    /// domain has been discovered. Populated at plan time by
+    /// [`WorkflowConfig::expand_wildcards`]; drained by
+    /// `expand_output_pattern_consumers`. Never serialized.
+    #[serde(skip)]
+    pub pending_output_pattern: Vec<Rule>,
+
+    /// Engine-internal: per-producer-instance-name wildcard bindings
+    /// contributed by runtime discovery — the accumulated domain union
+    /// across producer instances. Consumed by
+    /// `expand_output_pattern_consumers` (idempotent: contributed values
+    /// are never re-processed). Never serialized.
+    #[serde(skip)]
+    pub discovered_output_patterns: HashMap<String, Vec<crate::wildcard::WildcardValues>>,
+}
+
+/// The text fields of a rule that may reference wildcards — the scan set
+/// for fresh-wildcard (output_pattern) consumer detection (issue #227
+/// item 5). Mirrors the field set `expand_wildcards` expands.
+pub(crate) fn consumer_scan_text(rule: &Rule) -> Vec<String> {
+    let mut text = Vec::new();
+    text.extend(rule.input.iter().cloned());
+    text.extend(rule.output.iter().cloned());
+    text.extend(rule.expand_inputs.iter().map(|e| e.pattern.clone()));
+    if let Some(ref shell) = rule.shell {
+        text.push(shell.clone());
+    }
+    if let Some(ref when) = rule.when {
+        text.push(when.clone());
+    }
+    text
 }
 
 // ---------------------------------------------------------------------------

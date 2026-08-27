@@ -395,6 +395,19 @@ pub fn extract_wildcards(pattern: &str) -> Vec<String> {
     names
 }
 
+/// Compact dedup key for a wildcard combo: sorted `key=value` parts joined
+/// by commas — the same canonical form the discovery walkers build, so a
+/// rediscovered combo can never double-contribute (issue #227 item 5).
+#[must_use]
+pub(crate) fn wildcard_combo_key(combo: &WildcardValues) -> String {
+    let mut parts: Vec<(&str, &str)> = combo
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    parts.sort_by_key(|(k, _)| *k);
+    parts.iter().flat_map(|(k, v)| [*k, "=", *v, ","]).collect()
+}
+
 /// Expands a pattern by substituting wildcard placeholders with values.
 ///
 /// # Examples
